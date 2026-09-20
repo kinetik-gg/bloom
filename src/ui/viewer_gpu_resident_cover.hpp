@@ -16,22 +16,50 @@
 // which keeps the bounded CPU snapshot semantics identical to a direct drawPixmap.
 
 #include <QPixmap>
+#include <QString>
 #include <QWidget>
 
 #include <bloom/ui/kit/controls.hpp>
 
 namespace bloom::ui {
 
+// Alien host whose only widget child is the native CPU cover.
+//
+// Qt's QWidget::setAttribute(WA_NativeWindow) calls parentWidget()->
+// d_func()->enforceNativeChildren(), which marks EVERY child of that parent
+// native (and every child added later), unless the application-wide
+// Qt::AA_DontCreateNativeWidgetSiblings is set. Parenting the native cover
+// directly to the editor therefore promotes every editor child to a native
+// Wayland subsurface. Because a native QWidget is flushed through its parent's
+// SHM backing store, and the first flush of each newly promoted child is a fresh
+// "wayland-shm" memfd, that promotion multiplied the resident footprint.
+//
+// This host has exactly one child (the cover), so the forced-native promotion is
+// fenced to the cover. The host itself stays an alien widget: the cover sets
+// WA_DontCreateNativeAncestors before it enables WA_NativeWindow, so the eager
+// QWidgetPrivate::createWinId() ancestor walk cannot promote the host.
+class ViewerGpuCpuCoverHost final : public QWidget {
+  public:
+    explicit ViewerGpuCpuCoverHost(QWidget* parent) : QWidget(parent) {
+        setObjectName(QStringLiteral("bloomViewerGpuCpuCoverHost"));
+        setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        setAttribute(Qt::WA_NoSystemBackground, true);
+        setFocusPolicy(Qt::NoFocus);
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    }
+};
+
 class ViewerGpuCpuCover final : public kit::KLabel {
   public:
     explicit ViewerGpuCpuCover(QWidget* parent) : kit::KLabel(QString{}, parent) {
-        setAttribute(Qt::WA_NativeWindow, true);
-        // Force only this widget native so it can stack above the QWindowContainer; do NOT drag the
-        // editor/panel/top-level ancestor chain native with it. Qt's QWindowContainer explicitly
-        // honours this attribute before creating native ancestors, and every extra native ancestor
-        // is another Wayland subsurface whose parent-backed flush allocates a fresh wayland-shm
-        // buffer.
+        // Order matters. QWidget::setAttribute(WA_NativeWindow) is eager when the widget is already
+        // created: it calls QWidgetPrivate::createWinId(), which walks up and sets WA_NativeWindow
+        // on the parent unless WA_DontCreateNativeAncestors is already set. Setting the ancestor
+        // guard second would therefore already have promoted the parent chain.
         setAttribute(Qt::WA_DontCreateNativeAncestors, true);
+        // Force only this widget native so it can stack above the QWindowContainer. The alien host
+        // (above) fences Qt's sibling promotion to this cover.
+        setAttribute(Qt::WA_NativeWindow, true);
         setAttribute(Qt::WA_TransparentForMouseEvents, true);
         setAttribute(Qt::WA_NoSystemBackground, true);
         setFocusPolicy(Qt::NoFocus);

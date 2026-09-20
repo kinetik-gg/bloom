@@ -75,12 +75,15 @@ struct ViewerGpuResidentController::Impl final {
     PresentAck presentAck;
     CpuFallback cpuFallback;
     CpuCoverSnapshot coverSnapshot;
+    // The cover is parented to this alien host so Qt's WA_NativeWindow sibling enforcement only
+    // reaches the cover, never the host's parent (the editor) or the editor's other children.
+    ViewerGpuCpuCoverHost* coverHost = nullptr;
     ViewerGpuCpuCover* cover = nullptr;
     // True only while a native transition (attach/resize/resume/refusal) needs the CPU cover.
     bool coverRequired = true;
     // True once the cover pixmap holds the current CPU paint. It is captured on the hidden->visible
-    // transition only, so a retained/refused transition that keeps re-raising the cover never
-    // re-rasterizes (and never churns platform buffers) every poll tick.
+    // transition only, so a retained/refused transition that re-raises the cover does not
+    // re-rasterize the snapshot every poll tick.
     bool coverCaptured = false;
     std::function<void()> stateChanged;
     ViewerGpuPresenter::State lastReportedState = ViewerGpuPresenter::State::Uninitialized;
@@ -131,19 +134,25 @@ struct ViewerGpuResidentController::Impl final {
     }
 
     // Returns true only on the conceal->reveal transition that actually showed and restacked the
-    // cover. A cover that is already visible is left completely untouched so a stable presentation
-    // performs no native mutation.
+    // cover. A cover that is already visible is left completely untouched.
     [[nodiscard]] bool ensureCover(const QRect& rect) {
         if (!coverSnapshot) {
             return false;
         }
+        if (coverHost == nullptr) {
+            coverHost = new ViewerGpuCpuCoverHost(dependencies.containerParent);
+        }
+        if (coverHost->geometry() != rect) {
+            coverHost->setGeometry(rect);
+        }
         if (cover == nullptr) {
-            cover = new ViewerGpuCpuCover(dependencies.containerParent);
+            cover = new ViewerGpuCpuCover(coverHost);
             cover->setObjectName(QStringLiteral("bloomViewerGpuCpuCover"));
             coverCaptured = false;
         }
-        if (cover->geometry() != rect) {
-            cover->setGeometry(rect);
+        const QRect local(QPoint(0, 0), rect.size());
+        if (cover->geometry() != local) {
+            cover->setGeometry(local);
         }
         // Snapshot once per conceal->reveal transition; a cover that is merely re-raised while it
         // already holds the current paint is not re-rasterized (and a hidden ancestor cannot be
@@ -153,6 +162,9 @@ struct ViewerGpuResidentController::Impl final {
             coverCaptured = true;
         }
         if (!cover->isVisible()) {
+            if (!coverHost->isVisible()) {
+                coverHost->show();
+            }
             cover->show();
             cover->raise();
             return true;
@@ -169,6 +181,9 @@ struct ViewerGpuResidentController::Impl final {
             coverCaptured = true;
         }
         if (!cover->isVisible()) {
+            if (coverHost != nullptr && !coverHost->isVisible()) {
+                coverHost->show();
+            }
             cover->show();
             cover->raise();
         }
@@ -177,6 +192,9 @@ struct ViewerGpuResidentController::Impl final {
     void hideCover() {
         if (cover != nullptr) {
             cover->hide();
+        }
+        if (coverHost != nullptr) {
+            coverHost->hide();
         }
         // The next reveal must capture fresh paint, whatever changed while it was concealed.
         coverCaptured = false;
@@ -552,11 +570,10 @@ bool ViewerGpuResidentController::present(const runtime::PreparedPreviewFrame& f
             container->show();
         }
         // Restack the cover only on a genuine reveal transition (the cover was just shown, or the
-        // container was just mapped above it). A native child QWidget flushed through its parent's
-        // Wayland SHM backing store allocates a fresh memfd ("wayland-shm") buffer on every flush,
-        // and QWidget::raise() dirties the whole widget whenever it has to reorder. Calling it on
-        // every poll/present tick therefore grows RSS without bound even though presentation is
-        // stable; a cover that is already visible and topmost needs no restack.
+        // container was just mapped above it). QWidget::raise() is stack-order dependent: when the
+        // widget is already topmost it early-returns, but when it has to reorder it marks the whole
+        // widget dirty. A stable, already-visible, topmost cover needs no restack, so no restack is
+        // issued per present.
         if (impl_->cover != nullptr && (coverRevealed || containerRevealed)) {
             impl_->cover->raise();
         }

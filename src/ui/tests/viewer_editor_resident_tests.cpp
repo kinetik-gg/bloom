@@ -527,6 +527,85 @@ void testViewerEditorBlankCoverIsOpaqueCurrentCpuPaint(Expectations& expectation
     (void)waitUntil([&] { return scheduler.isQuiescent(); });
 }
 
+// Structural regression for the native CPU cover. Qt's QWidget::setAttribute(WA_NativeWindow)
+// calls parentWidget()->enforceNativeChildren(), which marks every child of that parent native.
+// The cover must therefore never be parented directly to the editor: a dedicated alien host (whose
+// only child is the cover) fences that promotion, and the cover sets WA_DontCreateNativeAncestors
+// before enabling WA_NativeWindow so the host and the editor chain stay alien. A repeated reveal
+// with an unchanged rect must also be stable: same cover object, no extra native children, and the
+// cover remains the host's topmost child.
+void testNativeCoverPromotionIsFencedAndStable(Expectations& expectations) {
+    QWidget root;
+    root.setObjectName(QStringLiteral("coverFenceRoot"));
+    auto* editor = new QWidget(&root);
+    editor->setObjectName(QStringLiteral("coverFenceEditor"));
+    auto* siblingA = new QWidget(editor);
+    auto* siblingB = new QWidget(editor);
+    root.resize(240, 180);
+    root.show();
+    QApplication::processEvents();
+
+    expectations.expect(!editor->testAttribute(Qt::WA_NativeWindow) && editor->internalWinId() == 0,
+                        "the editor starts alien before any cover exists");
+    expectations.expect(!siblingA->testAttribute(Qt::WA_NativeWindow) &&
+                            !siblingB->testAttribute(Qt::WA_NativeWindow),
+                        "the editor siblings start alien before any cover exists");
+
+    ui::ViewerGpuResidentController controller;
+    ui::ViewerGpuResidentController::Dependencies dependencies;
+    dependencies.containerParent = editor;
+    controller.setDependencies(std::move(dependencies));
+    controller.setCpuCoverSnapshot([] {
+        QPixmap snapshot(8, 6);
+        snapshot.fill(Qt::darkRed);
+        return snapshot;
+    });
+
+    const QRect coverRect(4, 6, 64, 48);
+    controller.revealCpuCover(coverRect);
+    QApplication::processEvents();
+
+    QWidget* cover = controller.cpuCoverForTest();
+    expectations.expect(cover != nullptr, "the CPU cover is constructed on reveal");
+    if (cover == nullptr) {
+        return;
+    }
+    expectations.expect(cover->internalWinId() != 0, "the cover itself is native");
+    expectations.expect(!editor->testAttribute(Qt::WA_NativeWindow) && editor->internalWinId() == 0,
+                        "constructing the cover does not promote the editor native");
+    expectations.expect(!siblingA->testAttribute(Qt::WA_NativeWindow) &&
+                            !siblingB->testAttribute(Qt::WA_NativeWindow),
+                        "constructing the cover does not promote the editor siblings native");
+
+    QWidget* coverHost = cover->parentWidget();
+    expectations.expect(coverHost != nullptr && coverHost != editor,
+                        "the cover is fenced behind a dedicated alien host");
+    if (coverHost == nullptr || coverHost == editor) {
+        return;
+    }
+    expectations.expect(!coverHost->testAttribute(Qt::WA_NativeWindow) &&
+                            coverHost->internalWinId() == 0,
+                        "the fence host itself stays alien");
+    const auto childrenBefore = coverHost->findChildren<QWidget*>(Qt::FindDirectChildrenOnly);
+    expectations.expect(childrenBefore.size() == 1,
+                        "the fence host contains only the native cover as a widget child");
+
+    controller.revealCpuCover(coverRect);
+    QApplication::processEvents();
+    expectations.expect(controller.cpuCoverForTest() == cover,
+                        "a repeated reveal with an unchanged rect reuses the same cover");
+    const auto childrenAfter = coverHost->findChildren<QWidget*>(Qt::FindDirectChildrenOnly);
+    expectations.expect(childrenAfter.size() == childrenBefore.size(),
+                        "a repeated reveal does not add native children to the host");
+    expectations.expect(!childrenAfter.isEmpty() && childrenAfter.last() == cover,
+                        "the cover stays the host's topmost child after a repeated reveal");
+
+    controller.concealCpuCover();
+    QApplication::processEvents();
+    expectations.expect(!controller.cpuCoverVisibleForTest(),
+                        "concealing hides the CPU cover (and its fence host)");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -536,6 +615,7 @@ int main(int argc, char** argv) {
     testResidentFrameGeometryResolvesTheSameMappingDescriptor(expectations);
     testCompositionFrameChromePaintsWithoutADevice(expectations);
     testViewerEditorBlankCoverIsOpaqueCurrentCpuPaint(expectations);
+    testNativeCoverPromotionIsFencedAndStable(expectations);
     if (expectations.failures() == 0) {
         std::cout << "PASS: actual ViewerEditor resident integration (CPU/inert gate)\n";
         return 0;
