@@ -18,8 +18,6 @@ namespace bloom::render {
 bool GpuPathCoverageImpl::createPipeline() {
     const VkDevice rawDevice = static_cast<VkDevice>(*control->device);
     const auto* dispatcher = control->device.getDispatcher();
-    // Private device fact for the flattened 2D dispatch grid.
-    maxWorkGroupCountY = control->physicalDevice.getProperties().limits.maxComputeWorkGroupCount[1];
 
     vk::ShaderModuleCreateInfo shaderInfo{};
     shaderInfo.codeSize = vulkan_detail::kPathCoverageSpirvByteCount;

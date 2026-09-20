@@ -107,7 +107,10 @@ bloom_add_test(
 # as well; a hardware-free build prints an explicit skip and --require-device fails closed.
 add_executable(bloom_render_gpu_path_coverage_test
     gpu_path_coverage_tests.cpp
-    gpu_path_coverage_fault_seam.cpp)
+    gpu_path_coverage_parity_tests.cpp
+    gpu_path_coverage_lifecycle_tests.cpp
+    gpu_path_coverage_fault_seam.cpp
+    gpu_path_coverage_test_support.hpp)
 target_link_libraries(bloom_render_gpu_path_coverage_test PRIVATE bloom_render)
 target_include_directories(bloom_render_gpu_path_coverage_test
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
