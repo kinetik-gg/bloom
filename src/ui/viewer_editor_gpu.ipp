@@ -520,6 +520,10 @@ std::uint64_t ViewerEditor::gpuNativeLastEnqueuedSequenceForTest() const noexcep
     return gpuResident_ != nullptr ? gpuResident_->nativeLastEnqueuedSequence() : 0U;
 }
 
+bool ViewerEditor::gpuCpuCoverVisibleForTest() const noexcept {
+    return gpuResident_ != nullptr && gpuResident_->cpuCoverVisibleForTest();
+}
+
 std::string ViewerEditor::gpuPresentationDiagnosticForTest() const {
     return gpuResident_ != nullptr ? gpuResident_->diagnostic() : std::string{};
 }

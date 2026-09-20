@@ -1599,6 +1599,32 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     set_tests_properties(bloom.ui.viewer_resident_interaction_native
         PROPERTIES SKIP_RETURN_CODE 77)
 
+    # Bounded native acceptance for the resident viewer surface across a DOCUMENT REPLACEMENT
+    # (File > Open / New) while a live native target exists: genuine applied present for the swapped
+    # frame, cover hidden after ack, container inside the viewer, native input activation before and
+    # after, and the CPU-only hide/show transition through a composition-less rebind. Skips with 77
+    # off a real device.
+    add_executable(bloom_ui_viewer_resident_project_swap_native_test
+        viewer_resident_project_swap_native_tests.cpp
+        gpu_service_chain_fixture.hpp
+        gpu_vertical_proof_support.hpp)
+    target_include_directories(bloom_ui_viewer_resident_project_swap_native_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    target_link_libraries(bloom_ui_viewer_resident_project_swap_native_test
+        PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
+    bloom_enable_warnings(bloom_ui_viewer_resident_project_swap_native_test)
+    bloom_enable_strict_floating_point(bloom_ui_viewer_resident_project_swap_native_test)
+    bloom_add_test(
+        NAME bloom.ui.viewer_resident_project_swap_native
+        COMMAND bloom_ui_viewer_resident_project_swap_native_test
+                ${bloom_ui_gpu_viewer_service_chain_loader_args}
+        LABELS ui gpu viewer resident native
+        TIMEOUT 300
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    )
+    set_tests_properties(bloom.ui.viewer_resident_project_swap_native
+        PROPERTIES SKIP_RETURN_CODE 77)
+
     # Final contract dependency order: the runtime native acceptance gate lists these two writer
     # fixtures in its own FIXTURES_REQUIRED (src/runtime/tests/CMakeLists.txt), because a test may
     # not set a property on a test that lives in another directory. CTest then runs, in order, the

@@ -282,6 +282,11 @@ class ViewerEditor final : public QWidget,
     [[nodiscard]] std::uint64_t gpuNativeAppliedSequenceForTest() const noexcept;
     [[nodiscard]] std::uint64_t gpuNativePresentCountForTest() const noexcept;
     [[nodiscard]] std::uint64_t gpuNativeLastEnqueuedSequenceForTest() const noexcept;
+    // Read-only native cover/container state: the native CPU cover must never stay visible once a
+    // genuine present is acknowledged (it would occlude the resident image and intercept input),
+    // and the container must be the viewer's live native child. No behavior change.
+    [[nodiscard]] bool gpuCpuCoverVisibleForTest() const noexcept;
+    [[nodiscard]] QWidget* gpuNativeContainerForTest() const noexcept { return gpuContainer_; }
     [[nodiscard]] std::string gpuPresentationDiagnosticForTest() const;
     void pollGpuResidentForTest();
     // Renders the actual cover handoff pixmap for the current CPU content (test seam).
