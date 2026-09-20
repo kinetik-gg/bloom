@@ -96,6 +96,7 @@ using bloom::runtime::executor_test::ShapeFixtureValues;
 using bloom::runtime::executor_test::twoLayerPlan;
 using bloom::runtime::executor_test::twoSolidPlan;
 using bloom::runtime::executor_test::vectorLeafPlan;
+using bloom::runtime::executor_test::wideMergePlan;
 
 using PlanPtr = std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>;
 
@@ -560,6 +561,7 @@ int main(const int argc, char** argv) {
                                    foreignDevice ? foreignDevice.device.get() : nullptr);
         testOutputCacheHitDescriptorValidation(expectations, *device.device);
         testLiveBudgetLongGraph(expectations, *device.device);
+        testWideMergeLivePeakBound(expectations, *device.device, oracle);
         testTightBudgetWithCachedInputs(expectations, *device.device);
         testAliasedInputChargedOnce(expectations, *device.device);
         testNativeOwnershipDuringTeardown(expectations, *device.device);

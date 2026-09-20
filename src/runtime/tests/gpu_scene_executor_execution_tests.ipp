@@ -381,6 +381,74 @@ void testTightBudgetWithCachedInputs(Expectations& expectations, GpuDevice& devi
                         "cached-budget: the executor is usable with a real budget");
 }
 
+// A wide merge of several DISTINCT full-size layers must stay within a live-peak bound of
+// accumulator + one foreground + the next output. The retired order planned every foreground
+// subtree first, so a full-size layer was pinned per layer until its source-over ran and a
+// six-layer merge needed roughly eight frames; the interleaved planner holds about three. The
+// bound is a measured per-step native peak (independent of hardware VMA padding), so this test
+// accepts the interleaved order and refuses the old one. The constrained run must still reach
+// Ready and match the CPU oracle pixel for pixel.
+void testWideMergeLivePeakBound(Expectations& expectations, GpuDevice& device,
+                                const CpuCompositionEvaluator& oracle) {
+    constexpr std::uint32_t kLayerCount = 6;
+    constexpr std::uint64_t kPeakFrameBound = 4;
+    const auto plan = wideMergePlan(format(256, 192), kLayerCount, 41000);
+    const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+    expectations.expect(prepared.hasValue(), "wide: the scene prepares");
+    if (!prepared) {
+        return;
+    }
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{1});
+    auto exec = GpuSceneExecutor::create(device, *cache.cache);
+    expectations.expect(cache.hasValue() && exec.hasValue(), "wide: harness created");
+    if (!cache || !exec) {
+        return;
+    }
+    const auto probe = runScene(*exec.executor, prepared.scene, kSceneBudget);
+    expectations.expect(probe.ready, "wide: the unbounded probe completes");
+    if (!probe.ready) {
+        return;
+    }
+    const auto perStepPeak = probe.countersAtReady.peakStepImageBytes;
+    expectations.expect(perStepPeak > 0, "wide: the probe measured a native per-step allocation");
+    if (perStepPeak == 0) {
+        return;
+    }
+    const auto budget = kPeakFrameBound * perStepPeak;
+    const auto run = runScene(*exec.executor, prepared.scene, budget);
+    expectations.expect(run.ready, "wide: the constrained live-peak budget is accepted");
+    if (!run.ready) {
+        return;
+    }
+    expectations.expect(run.countersAtReady.peakLiveImageBytes <= budget,
+                        "wide: the live peak stays within the constrained budget");
+    expectations.expect(run.countersAtReady.cumulativeProducedImageBytes > budget,
+                        "wide: cumulative allocation exceeds the constrained live budget");
+    expectations.expect(run.countersAtReady.intermediatePinsReleased > 0,
+                        "wide: intermediates are released at their last consumer");
+
+    auto oracleRequest = requestFor(*plan);
+    oracleRequest.bypassOperationCache = true;
+    const auto frame = oracle.evaluate(plan, oracleRequest, {});
+    expectations.expect(frame.frame() != nullptr, "wide: the CPU oracle evaluates");
+    if (frame.frame() == nullptr) {
+        return;
+    }
+    const auto& cpuImage = frame.frame()->processImage();
+    const GpuImageReadback readback = readbackResidentImage(*run.image, kReadbackBudget);
+    expectations.expect(readback.hasValue(), "wide: the test readback succeeds");
+    if (!readback) {
+        return;
+    }
+    expectations.expect(readback.pixels.size() == cpuImage.pixels().size(),
+                        "wide: the pixel count matches the CPU frame");
+    if (readback.pixels.size() != cpuImage.pixels().size()) {
+        return;
+    }
+    expectations.expect(pixelsClose(readback.pixels, cpuImage.pixels()),
+                        "wide: pixels are within the 2e-6 process gate");
+}
+
 // Two identical solids share one semantic key and resolve to the same cached image: the alias is
 // pinned under two command indexes but charged once, and the alias bytes are reported.
 void testAliasedInputChargedOnce(Expectations& expectations, GpuDevice& device) {

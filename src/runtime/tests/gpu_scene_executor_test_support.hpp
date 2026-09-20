@@ -216,6 +216,53 @@ twoLayerPlan(const CompositionFormat compositionFormat, const LayerValues values
                         Color4d{0.125, 0.375, 0.75, 0.5}, valuesB, solidWidth, solidHeight, idBase);
 }
 
+// A wide merge: `layerCount` distinct full-size solids, each through its own translation-only
+// layer, merged bottom-to-top in one CompiledMerge and then composed. Distinct colors, positions
+// and opacities keep every foreground a different real image (no semantic alias), so the graph
+// genuinely pins several full-size layers at once and exposes the merge planning order.
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+wideMergePlan(const CompositionFormat compositionFormat, const std::uint32_t layerCount,
+              const std::uint64_t idBase) {
+    std::vector<CompiledOperation> operations;
+    std::vector<CompiledMergeInput> foregrounds;
+    std::uint64_t cursor = idBase;
+    for (std::uint32_t i = 0; i < layerCount; ++i) {
+        const auto solidOperation = static_cast<std::uint32_t>(operations.size());
+        const auto level = static_cast<double>(i);
+        operations.emplace_back(CompiledSolid{
+            bloom::document::NodeId::fromRaw(cursor++),
+            {bloom::document::ParameterId::fromRaw(cursor++),
+             Color4d{0.10 + 0.13 * level, 0.20 + 0.05 * level, 0.30 + 0.07 * level, 1.0}},
+            {bloom::document::ParameterId::fromRaw(cursor++),
+             static_cast<double>(compositionFormat.width())},
+            {bloom::document::ParameterId::fromRaw(cursor++),
+             static_cast<double>(compositionFormat.height())}});
+        const auto layerId = bloom::document::LayerId::fromRaw(cursor++);
+        const LayerIds ids{bloom::document::ParameterId::fromRaw(cursor++),
+                           bloom::document::ParameterId::fromRaw(cursor++),
+                           bloom::document::ParameterId::fromRaw(cursor++),
+                           bloom::document::ParameterId::fromRaw(cursor++),
+                           bloom::document::ParameterId::fromRaw(cursor++),
+                           bloom::document::ParameterId::fromRaw(cursor++)};
+        operations.emplace_back(
+            layerOutput(bloom::document::NodeId::fromRaw(cursor++), layerId,
+                        OperationIndex::fromRaw(solidOperation), ids,
+                        LayerValues{.position = {0.5 + 1.7 * level, 0.5 + 0.9 * level},
+                                    .opacity = 0.55 + 0.05 * level}));
+        foregrounds.push_back(CompiledMergeInput{bloom::document::LayerSlotId::fromRaw(cursor++),
+                                                 layerId,
+                                                 OperationIndex::fromRaw(solidOperation + 1)});
+    }
+    const auto mergeOperation = static_cast<std::uint32_t>(operations.size());
+    operations.emplace_back(
+        CompiledMerge{bloom::document::NodeId::fromRaw(cursor++), std::move(foregrounds)});
+    operations.emplace_back(CompiledCompositionOutput{bloom::document::NodeId::fromRaw(cursor++),
+                                                      OperationIndex::fromRaw(mergeOperation)});
+    return publish(CompiledCompositionPlanDefinition{
+        bloom::document::Revision::fromRaw(7), kProjectId, kCompositionId, compositionFormat,
+        std::move(operations), OperationIndex::fromRaw(mergeOperation + 1)});
+}
+
 // One vector leaf (text/shape) -> translation-only layer -> Normal merge -> output. The leaf is
 // passed by value so callers can build the exact CompiledText/CompiledShape they need.
 [[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
