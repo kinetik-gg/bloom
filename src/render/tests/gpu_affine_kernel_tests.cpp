@@ -36,7 +36,7 @@
 
 #ifndef BLOOM_AFFINE_BILINEAR_SPV_SHA256
 #define BLOOM_AFFINE_BILINEAR_SPV_SHA256                                                           \
-    "ee28424e6b4b7d3c4e437f6ce438f75c7dfbf57e78b2a06b1e4aed1cb71f9373"
+    "3db9745132a3ee0721675dddf5f8d041f4e89eb4a2e5fed0410f80d6468facef"
 #endif
 
 namespace {

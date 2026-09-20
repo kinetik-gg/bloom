@@ -7,8 +7,8 @@
   "shader": {
     "language": "GLSL_460",
     "stage": "compute",
-    "sha256": "1648feceb9869b69f274f7b6af90770a8c6c57ac78b31d270e5735218d52ebab",
-    "spirvSha256": "ee28424e6b4b7d3c4e437f6ce438f75c7dfbf57e78b2a06b1e4aed1cb71f9373",
+    "sha256": "8b728e94e85e2d83bd7604e43062f371f0d8578d5a71f06691df30bf747fdd54",
+    "spirvSha256": "3db9745132a3ee0721675dddf5f8d041f4e89eb4a2e5fed0410f80d6468facef",
     "localSizeX": 256,
     "localSizeY": 1,
     "localSizeZ": 1
@@ -35,9 +35,9 @@
       "binding": 2,
       "kind": "storage-buffer",
       "access": "readonly",
-      "element": "BloomAffineSample",
-      "role": "host-prepared-per-pixel-basex-basey-factorx-factory",
-      "layout": "outputWidth * outputHeight elements, row major"
+      "element": "vec2",
+      "role": "compact-o1-inverse-affine-map-six-double-float-hi-lo-coefficients",
+      "layout": "vec2[6]: localX@origin, localY@origin, stepX/column, stepX/row, stepY/column, stepY/row"
     },
     {
       "set": 0,
@@ -79,20 +79,20 @@
     ]
   },
   "hostDerivation": {
-    "samples": "prepareAffineSamples(LayerTransform, outputWindow) or prepareAffineMatrixSamples(GpuAffineMatrix, sourceWindow, outputWindow): for every output pixel centre (absolute composition coordinates) compute the inverse-mapped source-local sample in Float64, then base=(int64)floor and factor=(float)(sample-base) exactly as layerTransformBilinearRow() does; the sentinel baseX==INT_MIN marks the CPU transparent branch sample<=-1.0 || >=extent on either axis",
+    "samples": "prepareAffineMap(LayerTransform, outputWindow) or prepareAffineMatrixMap(GpuAffineMatrix, outputWindow): probe the exact CPU oracle inverse (LayerTransform::inverseMap() or the composed matrix closed-form inverse) at the output origin and one local pixel step along each axis, then upload the six binary64 coefficients as error-free double-float (hi, lo) pairs. O(1) host work; the per-pixel source-local coordinate, the floor/factor reduction, the transparent range test, and the bilinear gather all run on the GPU. The GPU map is coordinate metadata only and never CPU-generated RGBA.",
     "source": "GpuImageUpload/Rgba32fImage decode is done on the CPU task thread; no media decode on the GPU owner thread",
     "opacity": "LayerTransform::opacity() for the LayerTransform form; the explicitly supplied float32 for the composed-matrix form",
-    "checked": "dispatch ceil(outputWidth*outputHeight/256); host preflights the image + per-pixel metadata budget and device limits"
+    "checked": "dispatch ceil(outputWidth*outputHeight/256); host preflights the image + O(1) metadata budget and device limits"
   },
   "contracts": {
-    "numeric": "per-finite-component abs-or-rel 2e-6 against render::layerTransformBilinearRow and the parented row; never bit-exact by claim",
+    "numeric": "per-finite-component abs-or-rel 2e-6 against render::layerTransformBilinearRow and the parented row; never bit-exact by claim. The compact map is additionally measured bit-exact in the CPU base/factor reduction on the frozen adversarial fixtures (base/factor diff 0); that is per-fixture evidence, not a universal exactness claim.",
     "arithmetic": "CPU uses std::fma(factor,end,(1-factor)*start); shader uses fma() for the same lerp; SPIR-V relaxed contraction is covered by the 2e-6 gate",
-    "sampleConvention": "kernel gathers the host-prepared per-pixel baseX/baseY/factorX/factorY; it never re-derives the affine inverse map and needs no shaderFloat64. This removes Float32 inverse-map precision loss at large output coordinates and for near-collapsed scales.",
+    "sampleConvention": "the kernel reconstructs the per-pixel source-local coordinate from six O(1) binary64 inverse-affine coefficients in portable error-free double-float (Dekker/Knuth two-sum/two-product with fma, renormalized). Every rounding-sensitive operation carries `precise`, which glslang only honors for statement-level locals: the two_sum/two_prod steps are inlined in df_add/df_mul because `precise` does not propagate through a struct return or out-parameter. SPIR-V therefore marks every error-free term NoContraction. The reduction (int)floor and single Float32 fraction reproduce the CPU rule: floor(hi+lo) is floor(hi) except when hi is integral and lo<0, and factor is the single rounding of (hi - floor) + lo. No shaderFloat64 and no 64-bit integer type.",
     "opacity": "opacity==0 writes transparent; opacity==1 skips the multiply; otherwise sampled *= opacity",
     "transparentBorder": "base +/- 1 taps outside the source data window are exact transparent black, so premultiplied interpolation produces the correct edge falloff with no unpremultiply round trip",
     "zeroScale": "a collapsed layer (scale 0 on either axis) has no inverse and is an empty layer before resampling; LayerTransform::create refuses it and this operation must not be submitted for one",
     "nonFinitePolicy": "any non-finite tap sets bit0, any nonzero subnormal tap sets bit2, a non-finite result sets bit1; on any error the output pixel is transparent and the consumer must not publish while flags[0] != 0",
     "cpuFallback": "non-finite/subnormal domains and any precision the shader cannot match stay on the CPU reference path; no silent substitution",
-    "metadataBudget": "the per-pixel sample array is O(outputWidth*outputHeight) BloomAffineSample (16 bytes each), charged against maxMetadataBytes and the per-call byteBudget; it is coordinate metadata only, never CPU-generated RGBA"
+    "metadataBudget": "the compact inverse-affine map is six binary64 coefficients (48 bytes) regardless of output extent, charged against maxMetadataBytes and the per-call byteBudget; it is coordinate metadata only, never CPU-generated RGBA"
   }
 }

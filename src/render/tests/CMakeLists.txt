@@ -319,7 +319,7 @@ target_include_directories(bloom_render_gpu_affine_kernel_test
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
 target_compile_definitions(bloom_render_gpu_affine_kernel_test
     PRIVATE
-        "BLOOM_AFFINE_BILINEAR_SPV_SHA256=\"ee28424e6b4b7d3c4e437f6ce438f75c7dfbf57e78b2a06b1e4aed1cb71f9373\"")
+        "BLOOM_AFFINE_BILINEAR_SPV_SHA256=\"3db9745132a3ee0721675dddf5f8d041f4e89eb4a2e5fed0410f80d6468facef\"")
 bloom_enable_warnings(bloom_render_gpu_affine_kernel_test)
 bloom_enable_strict_floating_point(bloom_render_gpu_affine_kernel_test)
 bloom_add_test(
@@ -342,7 +342,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     endif()
     target_compile_definitions(bloom_render_gpu_affine_test
         PRIVATE
-            "BLOOM_AFFINE_BILINEAR_SPV_SHA256=\"ee28424e6b4b7d3c4e437f6ce438f75c7dfbf57e78b2a06b1e4aed1cb71f9373\""
+            "BLOOM_AFFINE_BILINEAR_SPV_SHA256=\"3db9745132a3ee0721675dddf5f8d041f4e89eb4a2e5fed0410f80d6468facef\""
             BLOOM_AFFINE_NATIVE_TEST=1
             BLOOM_RENDER_TEST_VULKAN_BACKEND=1)
     bloom_enable_warnings(bloom_render_gpu_affine_test)

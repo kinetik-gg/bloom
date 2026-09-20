@@ -7,20 +7,26 @@
 // The CPU primitives are the oracle; this shader must stay within the documented per-component
 // 2e-6 absolute-or-relative gate (docs/architecture/gpu-backend.md), never bit-exact by claim.
 //
-// SAMPLE POINT PRECISION. A general affine inverse map is computed on the host in Float64 (the
-// exact oracle arithmetic: LayerTransform::inverseMap() or the closed-form inverse of a composed
-// 2x3 matrix) and reduced, per output pixel, to the exact CPU floor/factor pair:
-//   base  = (int64)floor(sampleLocal)
-//   factor = (float)(sampleLocal - (double)base)
-// The host emits one BloomAffineSample per output pixel and uploads it as a bounded O(outputWidth
-// * outputHeight) storage buffer. The kernel only gathers the prepared base/factor pair; it never
-// re-derives the sample point and needs no shaderFloat64. This is coordinate metadata only -- no
-// per-pixel RGBA is generated and no CPU resampling happens on the host.
+// COMPACT O(1) SAMPLE METADATA. The per-pixel integer/fraction array of the first revision is
+// gone. The host uploads six binary64 inverse-affine coefficients as one bounded 48-byte storage
+// buffer and the kernel derives each output pixel's source-local coordinate:
+//   localX(column, row) = localXAtOrigin + stepXPerColumn * column + stepXPerRow * row
+//   localY(column, row) = localYAtOrigin + stepYPerColumn * column + stepYPerRow * row
+// The host probed the exact CPU oracle (LayerTransform::inverseMap(), or the composed matrix's
+// closed-form inverse) at the output origin and one local pixel step along each axis. No
+// O(width*height) per-pixel host metadata loop runs on the successful path.
 //
-// Sample entry: { int baseX; int baseY; float factorX; float factorY; }. baseX == INT_MIN is the
-// out-of-range sentinel (the CPU's `sample.x <= -1.0 || >= width || sample.y <= -1.0 || >=
-// height` transparent branch), which yields exact transparent black for that pixel. base +/- 1
-// taps outside the source data window are transparent too.
+// PORTABLE WITHOUT shaderFloat64. The six coefficients are carried to the kernel as error-free
+// double-float (hi + lo) pairs and every coordinate arithmetic step uses the same Dekker/Knuth
+// two-sum / two-product helpers (with an explicit fma) as blend_portable.comp, giving ~48
+// significand bits on standard Float32 hardware with no Float64 and no 64-bit integer capability.
+// The reduction reproduces the CPU rule exactly for the reached domain: floor(hi + lo) is floor(hi)
+// except when hi is exactly integral and lo < 0, and factor is the single Float32 rounding of
+// (hi - floor) + lo.
+//
+// Sample reduction mirrors the CPU branch: transparent when the coordinate is not strictly inside
+// (-1, extent) on either axis; base = (int)floor(sample); factor = (float)(sample - base). base +/- 1
+// taps outside the source data window are exact transparent black.
 //
 // Arithmetic policy: the CPU interpolates with std::fma(factor, end, (1 - factor) * start); the
 // shader evaluates the same expression with GLSL fma(). Tap selection, the sample point, floor,
@@ -29,10 +35,13 @@ layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, rgba32f) uniform readonly image2D bloom_affine_input;
 layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D bloom_affine_output;
-struct BloomAffineSample { int baseX; int baseY; float factorX; float factorY; };
-layout(set = 0, binding = 2, std430) readonly buffer BloomAffineSamples {
-    BloomAffineSample samples[];
-} bloom_affine_samples;
+// Compact O(1) inverse-affine map: six double-float (hi, lo) coefficients packed as vec2 pairs.
+//   [0] localX at (column 0, row 0)      [1] localY at (column 0, row 0)
+//   [2] localX step per column           [3] localX step per row
+//   [4] localY step per column           [5] localY step per row
+layout(set = 0, binding = 2, std430) readonly buffer BloomAffineMap {
+    vec2 map[6];
+} bloom_affine_map;
 // flags[0] bit0 non-finite input, bit1 non-finite result, bit2 any nonzero subnormal input lane.
 layout(set = 0, binding = 3) buffer BloomAffineError { uint flags[]; } bloom_error;
 
@@ -75,6 +84,57 @@ vec4 bloom_fetch(int x, int y)
     return imageLoad(bloom_affine_input, ivec2(x, y));
 }
 
+// Error-free double-float: value == hi + lo. Only Float32 and fma are used (same helpers as
+// blend_portable.comp). Every rounding-sensitive operation is `precise` so the driver must not
+// contract, reassociate, or fuse it. The two_sum/two_prod steps are written inline in df_add/df_mul
+// rather than through helper out-parameters: glslang's `precise` does not propagate through a
+// struct return or an out-parameter (verified via SPIR-V: the inlined form emits NoContraction,
+// the out-parameter form emits none and the error terms are optimized away).
+struct BloomDf { float hi; float lo; };
+
+BloomDf bloom_df(float value) { return BloomDf(value, 0.0); }
+
+BloomDf bloom_df_add(BloomDf a, BloomDf b)
+{
+    precise float sum = a.hi + b.hi;
+    precise float virtualB = sum - a.hi;
+    precise float error = (a.hi - (sum - virtualB)) + (b.hi - virtualB);
+    error = error + (a.lo + b.lo);
+    precise float total = sum + error;
+    precise float totalError = (sum - (total - error)) + (error - (total - sum));
+    return BloomDf(total, totalError);
+}
+
+BloomDf bloom_df_mul(BloomDf a, BloomDf b)
+{
+    precise float product = a.hi * b.hi;
+    precise float error = fma(a.hi, b.hi, -product);
+    const float crossA = a.hi * b.lo;
+    const float crossB = a.lo * b.hi;
+    error = error + (crossA + crossB);
+    precise float total = product + error;
+    precise float totalError = (product - (total - error)) + (error - (total - product));
+    return BloomDf(total, totalError);
+}
+
+
+int bloom_df_cmp(BloomDf a, BloomDf b)
+{
+    if (a.hi != b.hi) { return a.hi < b.hi ? -1 : 1; }
+    if (a.lo != b.lo) { return a.lo < b.lo ? -1 : 1; }
+    return 0;
+}
+
+// floor(hi + lo) for a normalized pair. `hi` is a Float32, so floor(hi) is exact; `hi - floor(hi)`
+// is exact, and adding `lo` either stays in [0, 1) or crosses only when `hi` is exactly integral.
+void bloom_df_floor(BloomDf value, out precise float base, out precise float fraction)
+{
+    base = floor(value.hi);
+    fraction = (value.hi - base) + value.lo;
+    if (fraction < 0.0) { base -= 1.0; fraction = (value.hi - base) + value.lo; }
+    else if (fraction >= 1.0) { base += 1.0; fraction = (value.hi - base) + value.lo; }
+}
+
 float bloom_lerp(float start, float end, float factor)
 {
     if (factor == 0.0) { return start; }
@@ -99,6 +159,11 @@ vec4 bloom_bilerp(vec4 topLeft, vec4 topRight, vec4 bottomLeft, vec4 bottomRight
                 bloom_lerp(top.w, bottom.w, fy));
 }
 
+BloomDf bloom_map_coefficient(int index)
+{
+    return BloomDf(bloom_affine_map.map[index].x, bloom_affine_map.map[index].y);
+}
+
 void main()
 {
     uvec2 index = gl_GlobalInvocationID.xy;
@@ -114,17 +179,42 @@ void main()
         return;
     }
 
-    BloomAffineSample entry =
-        bloom_affine_samples.samples[index.y * bloom_affine_push.outputWidth + index.x];
-    if (entry.baseX == kSentinelBase) {
+    precise BloomDf column = bloom_df(float(index.x));
+    precise BloomDf row = bloom_df(float(index.y));
+    // ISOLATION TEST: hardcoded map for translation (0.3, -0.7) with output origin (-1,-1).
+    precise BloomDf localX = bloom_df_add(
+        bloom_df_add(bloom_map_coefficient(0), bloom_df_mul(bloom_map_coefficient(2), column)),
+        bloom_df_mul(bloom_map_coefficient(3), row));
+    precise BloomDf localY = bloom_df_add(
+        bloom_df_add(bloom_map_coefficient(1), bloom_df_mul(bloom_map_coefficient(4), column)),
+        bloom_df_mul(bloom_map_coefficient(5), row));
+
+    // The CPU transparent branch: sample <= -1.0 or >= extent on either axis.
+    if (bloom_df_cmp(localX, bloom_df(-1.0)) <= 0 ||
+        bloom_df_cmp(localX, bloom_df(float(bloom_affine_push.sourceWidth))) >= 0 ||
+        bloom_df_cmp(localY, bloom_df(-1.0)) <= 0 ||
+        bloom_df_cmp(localY, bloom_df(float(bloom_affine_push.sourceHeight))) >= 0) {
         imageStore(bloom_affine_output, outputLocal, transparent);
         return;
     }
 
-    vec4 topLeft = bloom_fetch(entry.baseX, entry.baseY);
-    vec4 topRight = bloom_fetch(entry.baseX + 1, entry.baseY);
-    vec4 bottomLeft = bloom_fetch(entry.baseX, entry.baseY + 1);
-    vec4 bottomRight = bloom_fetch(entry.baseX + 1, entry.baseY + 1);
+    precise float baseX = 0.0;
+    precise float baseY = 0.0;
+    precise float factorX = 0.0;
+    precise float factorY = 0.0;
+    bloom_df_floor(localX, baseX, factorX);
+    bloom_df_floor(localY, baseY, factorY);
+    int baseXi = int(baseX);
+    int baseYi = int(baseY);
+    if (baseXi == kSentinelBase) {
+        imageStore(bloom_affine_output, outputLocal, transparent);
+        return;
+    }
+
+    vec4 topLeft = bloom_fetch(baseXi, baseYi);
+    vec4 topRight = bloom_fetch(baseXi + 1, baseYi);
+    vec4 bottomLeft = bloom_fetch(baseXi, baseYi + 1);
+    vec4 bottomRight = bloom_fetch(baseXi + 1, baseYi + 1);
 
     vec4 taps[4] = vec4[4](topLeft, topRight, bottomLeft, bottomRight);
     uint errors = 0u;
@@ -137,8 +227,7 @@ void main()
         return;
     }
 
-    vec4 sampled = bloom_bilerp(topLeft, topRight, bottomLeft, bottomRight,
-                                entry.factorX, entry.factorY);
+    vec4 sampled = bloom_bilerp(topLeft, topRight, bottomLeft, bottomRight, factorX, factorY);
     if (bloom_affine_push.opacity != 1.0) {
         sampled *= bloom_affine_push.opacity;
     }

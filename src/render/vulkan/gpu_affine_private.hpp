@@ -36,6 +36,32 @@ inline constexpr std::uint32_t kAffinePushBytes = 20;
 
 static_assert(sizeof(GpuAffineSample) == 16);
 
+// Packed GPU layout of the compact O(1) inverse-affine map: six binary64 coefficients, each split
+// into an error-free (hi, lo) Float32 pair, matching the shader's `vec2 map[6]` std430 buffer. The
+// order is localX@origin, localY@origin, d(localX)/d(column), d(localX)/d(row),
+// d(localY)/d(column), d(localY)/d(row).
+struct GpuAffineMapGpu final {
+    float coefficients[12] = {};
+
+    friend bool operator==(const GpuAffineMapGpu&, const GpuAffineMapGpu&) noexcept = default;
+};
+static_assert(sizeof(GpuAffineMapGpu) == 48);
+
+[[nodiscard]] inline GpuAffineMapGpu packAffineMap(const GpuAffineMap& map) noexcept {
+    const auto split = [](const double value, float& high, float& low) noexcept {
+        high = static_cast<float>(value);
+        low = static_cast<float>(value - static_cast<double>(high));
+    };
+    GpuAffineMapGpu packed;
+    split(map.localXAtOrigin, packed.coefficients[0], packed.coefficients[1]);
+    split(map.localYAtOrigin, packed.coefficients[2], packed.coefficients[3]);
+    split(map.stepXPerColumn, packed.coefficients[4], packed.coefficients[5]);
+    split(map.stepXPerRow, packed.coefficients[6], packed.coefficients[7]);
+    split(map.stepYPerColumn, packed.coefficients[8], packed.coefficients[9]);
+    split(map.stepYPerRow, packed.coefficients[10], packed.coefficients[11]);
+    return packed;
+}
+
 // Process-global bounded quarantine accounting and teardown fuse for the affine operation. Kept
 // separate from the composite fuse so an unproved affine teardown is reported through
 // GpuAffine::teardownDrainIncomplete() rather than the composite one.
@@ -68,10 +94,10 @@ struct GpuAffine::Impl final {
     // thread or a stale generation is rejected without O(width*height) work.
     [[nodiscard]] GpuAffineDiagnostic preflightCheap();
     // Shared validation/upload/submit half used by both beginAffine() and beginAffineMatrix().
-    [[nodiscard]] GpuAffineDiagnostic
-    beginPrepared(const std::shared_ptr<const GpuImage>& source, ImageWindow outputWindow,
-                  std::span<const GpuAffineSample> preparedSamples, float opacity,
-                  std::uint64_t byteBudget);
+    [[nodiscard]] GpuAffineDiagnostic beginPrepared(const std::shared_ptr<const GpuImage>& source,
+                                                    ImageWindow outputWindow,
+                                                    const GpuAffineMap& affineMap, float opacity,
+                                                    std::uint64_t byteBudget);
 
     std::thread::id owner;
     std::shared_ptr<vulkan_detail::DeviceAllocatorState> control;
@@ -87,7 +113,7 @@ struct GpuAffine::Impl final {
 
     std::unique_ptr<GpuImage> residentImage;
     std::shared_ptr<const GpuImage> retainedSource;
-    CompositeBuffer samples;
+    CompositeBuffer map;
     CompositeBuffer status;
     void* statusMapped = nullptr;
 
