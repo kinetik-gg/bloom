@@ -46,9 +46,13 @@ enum class OcioGpuProgramError : std::uint8_t {
     IdentityShaderText,
     ResourceLimitExceeded,
     UnsupportedResourceForm,
-    // A file transform's LUT bytes are never parsed in-process; this typed boundary requires the
-    // isolated bloom-color-worker intake before a GPU program can be extracted.
+    // A file transform's LUT bytes are never parsed in-process. On a target that cannot provide the
+    // isolated bloom-color-worker (missing confinement/process supervision) this typed boundary is
+    // the honest failure instead of an in-process parse.
     ExternalLutBoundaryRequired,
+    // The caller's cancellation was observed while the isolated helper owned the request; the
+    // helper was terminated and no partial program was published.
+    Cancelled,
 };
 
 [[nodiscard]] std::string_view ocioGpuProgramErrorName(OcioGpuProgramError error) noexcept;

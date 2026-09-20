@@ -159,6 +159,14 @@ target_sources(
         ocio_cpu_input_processor.cpp
         ocio_cpu_display_frame.cpp
         ocio_gpu_program.cpp
+        ocio_gpu_program_extract.cpp
+        ocio_gpu_program_extract.hpp
+        ocio_gpu_program_serialize.cpp
+        ocio_gpu_program_serialize.hpp
+        ocio_gpu_program_sampling.cpp
+        ocio_gpu_program_transport.hpp
+        ocio_gpu_program_worker.cpp
+        ocio_gpu_program_worker.hpp
         ocio_internal.hpp
     PUBLIC
         FILE_SET HEADERS
@@ -283,10 +291,13 @@ target_link_libraries(bloom_color_video PUBLIC bloom_core)
 bloom_enable_warnings(bloom_color_video)
 bloom_enable_strict_floating_point(bloom_color_video)
 
-# External LUT parsing and execution never enter the host process.
-add_executable(bloom-color-worker lut_worker.cpp lut_file.cpp)
+# External LUT parsing and execution never enter the host process. The worker shares the trusted
+# OCIO shader-reflection codec with the host so neither duplicates the extraction logic; it only
+# ever links OCIO and the portable render value header, never a native device.
+add_executable(bloom-color-worker lut_worker.cpp lut_file.cpp ocio_gpu_program_extract.cpp
+    ocio_gpu_program_serialize.cpp)
 target_link_libraries(bloom-color-worker PRIVATE bloom_core bloom_platform_process OpenColorIO::OpenColorIO)
-target_include_directories(bloom-color-worker PRIVATE include)
+target_include_directories(bloom-color-worker PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}/../render/include")
 bloom_enable_warnings(bloom-color-worker)
 bloom_enable_strict_floating_point(bloom-color-worker)
 target_link_libraries(bloom_color_ocio PRIVATE bloom_platform_process)
@@ -310,8 +321,11 @@ if(BUILD_TESTING)
         NAMES spirv-val
         HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
         NO_DEFAULT_PATH)
-    add_executable(bloom_color_ocio_gpu_program_test tests/ocio_gpu_program_tests.cpp)
+    add_executable(bloom_color_ocio_gpu_program_test
+        tests/ocio_gpu_program_tests.cpp
+        tests/ocio_gpu_program_transport_tests.cpp)
     target_link_libraries(bloom_color_ocio_gpu_program_test PRIVATE bloom_color_ocio OpenColorIO::OpenColorIO)
+    target_include_directories(bloom_color_ocio_gpu_program_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_compile_definitions(bloom_color_ocio_gpu_program_test PRIVATE
         "BLOOM_OCIO_GPU_WRAPPER_FIXTURE=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/ocio_gpu_wrapper_fixture.comp\"")
     if(bloom_ocio_gpu_glslang_validator AND bloom_ocio_gpu_spirv_val)
@@ -329,7 +343,10 @@ if(BUILD_TESTING)
     # Native GpuOcioProgram proof. Compiles the complete wrapper+OCIO GLSL with the pinned tools
     # off the device owner thread, then runs the real Vulkan pipeline and compares against the real
     # CPU colour processors. Skips explicitly (77) when no compatible device is present.
-    add_executable(bloom_color_ocio_gpu_program_native_test tests/ocio_gpu_program_native_tests.cpp)
+    add_executable(bloom_color_ocio_gpu_program_native_test
+        tests/ocio_gpu_program_native_tests.cpp
+        tests/ocio_gpu_program_native_helpers.cpp
+        tests/ocio_gpu_program_native_file_transform_tests.cpp)
     target_link_libraries(bloom_color_ocio_gpu_program_native_test PRIVATE bloom_color_ocio OpenColorIO::OpenColorIO)
     if(bloom_ocio_gpu_glslang_validator AND bloom_ocio_gpu_spirv_val)
         target_compile_definitions(bloom_color_ocio_gpu_program_native_test PRIVATE

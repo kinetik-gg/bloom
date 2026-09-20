@@ -1,13 +1,14 @@
 #include <bloom/color/ocio_gpu_program.hpp>
 
+#include "ocio_gpu_program_extract.hpp"
+#include "ocio_gpu_program_serialize.hpp"
+#include "ocio_gpu_program_worker.hpp"
 #include "ocio_internal.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstddef>
-#include <cstring>
-#include <memory>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -19,215 +20,46 @@ namespace {
     return !id.empty() && id.size() <= 4096U && id.find('\0') == std::string_view::npos;
 }
 
-[[nodiscard]] render::OcioGpuInterpolation
-mapInterpolation(const OCIO::Interpolation value) noexcept {
-    switch (value) {
-    case OCIO::INTERP_NEAREST:
-        return render::OcioGpuInterpolation::Nearest;
-    case OCIO::INTERP_LINEAR:
-        return render::OcioGpuInterpolation::Linear;
-    case OCIO::INTERP_TETRAHEDRAL:
-        return render::OcioGpuInterpolation::Tetrahedral;
-    case OCIO::INTERP_CUBIC:
-        return render::OcioGpuInterpolation::Cubic;
-    default:
-        return render::OcioGpuInterpolation::Unknown;
-    }
-}
-
-[[nodiscard]] render::OcioGpuUniformType
-mapUniformType(const OCIO::UniformDataType value) noexcept {
-    switch (value) {
-    case OCIO::UNIFORM_DOUBLE:
-        return render::OcioGpuUniformType::Double;
-    case OCIO::UNIFORM_BOOL:
-        return render::OcioGpuUniformType::Bool;
-    case OCIO::UNIFORM_FLOAT3:
-        return render::OcioGpuUniformType::Float3;
-    case OCIO::UNIFORM_VECTOR_FLOAT:
-        return render::OcioGpuUniformType::VectorFloat;
-    case OCIO::UNIFORM_VECTOR_INT:
-        return render::OcioGpuUniformType::VectorInt;
-    default:
-        return render::OcioGpuUniformType::Unknown;
+void appendU32(std::vector<std::byte>& bytes, const std::uint32_t value) {
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        bytes.push_back(static_cast<std::byte>((value >> shift) & 0xffU));
     }
 }
 
 void appendText(std::vector<std::byte>& bytes, const std::string_view text) {
-    const auto size = static_cast<std::uint32_t>(text.size());
-    for (int shift = 24; shift >= 0; shift -= 8) {
-        bytes.push_back(static_cast<std::byte>((size >> shift) & 0xffU));
-    }
+    appendU32(bytes, static_cast<std::uint32_t>(text.size()));
     for (const char character : text) {
         bytes.push_back(static_cast<std::byte>(static_cast<unsigned char>(character)));
     }
 }
 
-[[nodiscard]] render::OcioGpuProgramError
-fillResources(const OCIO::GpuShaderDescRcPtr& description,
-              const render::OcioGpuProgramLimits& limits,
-              render::OcioGpuProgramDesc& program) noexcept {
-    program.descriptorSetIndex = description->getDescriptorSetIndex();
-    program.textureBindingStart = description->getTextureBindingStart();
-
-    const unsigned textureCount = description->getNumTextures();
-    const unsigned texture3dCount = description->getNum3DTextures();
-    if (textureCount + texture3dCount > limits.maxTextures) {
+[[nodiscard]] render::OcioGpuProgramError mapLutError(const LutError error) noexcept {
+    switch (error) {
+    case LutError::None:
+        return render::OcioGpuProgramError::None;
+    case LutError::MissingFile:
+    case LutError::ChangedFile:
+        return render::OcioGpuProgramError::InvalidRequest;
+    case LutError::UnsupportedFormat:
+    case LutError::MalformedFile:
+    case LutError::InvalidPixel:
+        return render::OcioGpuProgramError::UnsupportedResourceForm;
+    case LutError::FileTooLarge:
+    case LutError::EdgeTooLarge:
+    case LutError::HelperMemoryLimit:
         return render::OcioGpuProgramError::ResourceLimitExceeded;
+    case LutError::HelperUnavailable:
+        return render::OcioGpuProgramError::GpuProcessorUnavailable;
+    case LutError::HelperCancelled:
+        return render::OcioGpuProgramError::Cancelled;
+    case LutError::TransformBuildFailed:
+        return render::OcioGpuProgramError::TransformBuildFailed;
+    case LutError::HelperProtocolViolation:
+    case LutError::HelperDeadline:
+    case LutError::HelperTerminated:
+        return render::OcioGpuProgramError::ShaderExtractionFailed;
     }
-    std::uint64_t aggregateBytes = 0;
-    for (unsigned index = 0; index < textureCount; ++index) {
-        const char* textureName = nullptr;
-        const char* samplerName = nullptr;
-        unsigned width = 0;
-        unsigned height = 0;
-        OCIO::GpuShaderCreator::TextureType channel = OCIO::GpuShaderCreator::TEXTURE_RGB_CHANNEL;
-        OCIO::GpuShaderCreator::TextureDimensions dimensions = OCIO::GpuShaderCreator::TEXTURE_1D;
-        OCIO::Interpolation interpolation = OCIO::INTERP_UNKNOWN;
-        description->getTexture(index, textureName, samplerName, width, height, channel, dimensions,
-                                interpolation);
-        const float* values = nullptr;
-        description->getTextureValues(index, values);
-        if (textureName == nullptr || values == nullptr || width == 0 || height == 0) {
-            return render::OcioGpuProgramError::UnsupportedResourceForm;
-        }
-        render::OcioGpuTextureDesc texture;
-        texture.binding = description->getTextureShaderBindingIndex(index);
-        texture.name = textureName;
-        texture.samplerName = samplerName != nullptr ? samplerName : "";
-        texture.dimensions = dimensions == OCIO::GpuShaderCreator::TEXTURE_1D
-                                 ? render::OcioGpuTextureDimensions::OneD
-                                 : render::OcioGpuTextureDimensions::TwoD;
-        texture.channel = channel == OCIO::GpuShaderCreator::TEXTURE_RED_CHANNEL
-                              ? render::OcioGpuTextureChannel::Red
-                              : render::OcioGpuTextureChannel::Rgb;
-        texture.width = width;
-        texture.height = height;
-        texture.interpolation = mapInterpolation(interpolation);
-        const std::uint64_t channels =
-            texture.channel == render::OcioGpuTextureChannel::Red ? 1U : 3U;
-        const std::uint64_t sampleCount = static_cast<std::uint64_t>(width) * height * channels;
-        aggregateBytes += sampleCount * sizeof(float);
-        if (aggregateBytes > limits.maxAggregateLutBytes) {
-            return render::OcioGpuProgramError::ResourceLimitExceeded;
-        }
-        texture.samples.assign(values, values + sampleCount);
-        program.textures.push_back(std::move(texture));
-    }
-    for (unsigned index = 0; index < texture3dCount; ++index) {
-        const char* textureName = nullptr;
-        const char* samplerName = nullptr;
-        unsigned edgeLength = 0;
-        OCIO::Interpolation interpolation = OCIO::INTERP_UNKNOWN;
-        description->get3DTexture(index, textureName, samplerName, edgeLength, interpolation);
-        const float* values = nullptr;
-        description->get3DTextureValues(index, values);
-        if (textureName == nullptr || values == nullptr || edgeLength == 0) {
-            return render::OcioGpuProgramError::UnsupportedResourceForm;
-        }
-        if (edgeLength > limits.max3dEdge) {
-            return render::OcioGpuProgramError::ResourceLimitExceeded;
-        }
-        const std::uint64_t sampleCount =
-            static_cast<std::uint64_t>(edgeLength) * edgeLength * edgeLength * 3U;
-        aggregateBytes += sampleCount * sizeof(float);
-        if (aggregateBytes > limits.maxAggregateLutBytes) {
-            return render::OcioGpuProgramError::ResourceLimitExceeded;
-        }
-        render::OcioGpuTextureDesc texture;
-        texture.binding = description->get3DTextureShaderBindingIndex(index);
-        texture.name = textureName;
-        texture.samplerName = samplerName != nullptr ? samplerName : "";
-        texture.dimensions = render::OcioGpuTextureDimensions::ThreeD;
-        texture.channel = render::OcioGpuTextureChannel::Rgb;
-        texture.edgeLength = edgeLength;
-        texture.interpolation = mapInterpolation(interpolation);
-        texture.samples.assign(values, values + sampleCount);
-        program.textures.push_back(std::move(texture));
-    }
-
-    const unsigned uniformCount = description->getNumUniforms();
-    if (uniformCount > limits.maxUniforms) {
-        return render::OcioGpuProgramError::ResourceLimitExceeded;
-    }
-    program.uniformBufferSize = description->getUniformBufferSize();
-    if (program.uniformBufferSize > limits.maxUniformBufferBytes) {
-        return render::OcioGpuProgramError::ResourceLimitExceeded;
-    }
-    program.uniformBufferData.assign(static_cast<std::size_t>(program.uniformBufferSize),
-                                     std::byte{0});
-    const auto storeFloat = [&program](const std::size_t offset, const float value) {
-        if (offset + sizeof(float) > program.uniformBufferData.size()) {
-            return false;
-        }
-        std::memcpy(program.uniformBufferData.data() + offset, &value, sizeof(float));
-        return true;
-    };
-    for (unsigned index = 0; index < uniformCount; ++index) {
-        OCIO::GpuShaderDesc::UniformData data;
-        const char* name = description->getUniform(index, data);
-        if (name == nullptr) {
-            return render::OcioGpuProgramError::UnsupportedResourceForm;
-        }
-        render::OcioGpuUniformDesc uniform;
-        uniform.name = name;
-        uniform.type = mapUniformType(data.m_type);
-        uniform.bufferOffset = static_cast<std::uint32_t>(data.m_bufferOffset);
-        const std::size_t offset = data.m_bufferOffset;
-        switch (uniform.type) {
-        case render::OcioGpuUniformType::Double:
-            if (!storeFloat(offset, static_cast<float>(data.m_getDouble()))) {
-                return render::OcioGpuProgramError::UnsupportedResourceForm;
-            }
-            break;
-        case render::OcioGpuUniformType::Bool:
-            if (!storeFloat(offset, data.m_getBool() ? 1.0F : 0.0F)) {
-                return render::OcioGpuProgramError::UnsupportedResourceForm;
-            }
-            break;
-        case render::OcioGpuUniformType::Float3: {
-            const OCIO::Float3& value = data.m_getFloat3();
-            if (!storeFloat(offset, value[0]) || !storeFloat(offset + 4, value[1]) ||
-                !storeFloat(offset + 8, value[2])) {
-                return render::OcioGpuProgramError::UnsupportedResourceForm;
-            }
-            uniform.elementCount = 3;
-            break;
-        }
-        case render::OcioGpuUniformType::VectorFloat: {
-            uniform.elementCount = static_cast<std::uint32_t>(data.m_vectorFloat.m_getSize());
-            const float* values = data.m_vectorFloat.m_getVector();
-            if (values == nullptr) {
-                return render::OcioGpuProgramError::UnsupportedResourceForm;
-            }
-            for (std::uint32_t element = 0; element < uniform.elementCount; ++element) {
-                if (!storeFloat(offset + element * sizeof(float), values[element])) {
-                    return render::OcioGpuProgramError::UnsupportedResourceForm;
-                }
-            }
-            break;
-        }
-        case render::OcioGpuUniformType::VectorInt: {
-            uniform.elementCount = static_cast<std::uint32_t>(data.m_vectorInt.m_getSize());
-            const int* values = data.m_vectorInt.m_getVector();
-            if (values == nullptr) {
-                return render::OcioGpuProgramError::UnsupportedResourceForm;
-            }
-            for (std::uint32_t element = 0; element < uniform.elementCount; ++element) {
-                if (!storeFloat(offset + element * sizeof(float),
-                                static_cast<float>(values[element]))) {
-                    return render::OcioGpuProgramError::UnsupportedResourceForm;
-                }
-            }
-            break;
-        }
-        default:
-            return render::OcioGpuProgramError::UnsupportedResourceForm;
-        }
-        program.uniforms.push_back(std::move(uniform));
-    }
-    program.dynamicPropertyCount = description->getNumDynamicProperties();
-    return render::OcioGpuProgramError::None;
+    return render::OcioGpuProgramError::ShaderExtractionFailed;
 }
 
 [[nodiscard]] render::OcioGpuProgramResult finalize(render::OcioGpuProgramDesc program,
@@ -255,50 +87,12 @@ fillResources(const OCIO::GpuShaderDescRcPtr& description,
 extract(const OCIO::ConstProcessorRcPtr& processor, const render::OcioGpuProgramStage stage,
         const std::string_view semanticsId, std::vector<std::byte> semanticBytes,
         const core::Sha256Digest& configRevision, const render::OcioGpuProgramLimits& limits) {
-    try {
-        const auto gpuProcessor = processor->getDefaultGPUProcessor();
-        if (!gpuProcessor) {
-            return render::OcioGpuProgramResult::failure(
-                render::OcioGpuProgramError::GpuProcessorUnavailable);
-        }
-        auto description = OCIO::GpuShaderDesc::CreateShaderDesc();
-        description->setLanguage(OCIO::GPU_LANGUAGE_GLSL_VK_4_6);
-        description->setFunctionName("bloom_ocio_transform");
-        description->setResourcePrefix("bloom_ocio_");
-        gpuProcessor->extractGpuShaderInfo(description);
-
-        render::OcioGpuProgramDesc program;
-        program.functionName =
-            description->getFunctionName() != nullptr ? description->getFunctionName() : "";
-        program.resourcePrefix =
-            description->getResourcePrefix() != nullptr ? description->getResourcePrefix() : "";
-        program.stage = stage;
-        program.semanticsId = std::string(semanticsId);
-        const char* const shaderText = description->getShaderText();
-        if (shaderText == nullptr || *shaderText == '\0') {
-            return render::OcioGpuProgramResult::failure(
-                render::OcioGpuProgramError::IdentityShaderText);
-        }
-        program.shaderText = shaderText;
-        if (program.shaderText.size() > limits.maxShaderBytes) {
-            return render::OcioGpuProgramResult::failure(
-                render::OcioGpuProgramError::ResourceLimitExceeded);
-        }
-        if (const auto error = fillResources(description, limits, program);
-            error != render::OcioGpuProgramError::None) {
-            return render::OcioGpuProgramResult::failure(error);
-        }
-        program.processorCacheId = processor->getCacheID();
-        program.gpuProcessorCacheId = gpuProcessor->getCacheID();
-        program.ocioVersion = OCIO::GetVersion();
-        return finalize(std::move(program), std::move(semanticBytes), configRevision, limits);
-    } catch (const OCIO::Exception&) {
-        return render::OcioGpuProgramResult::failure(
-            render::OcioGpuProgramError::ShaderExtractionFailed);
-    } catch (const std::exception&) {
-        return render::OcioGpuProgramResult::failure(
-            render::OcioGpuProgramError::ShaderExtractionFailed);
+    auto reflected = detail::extractOcioGpuProgram(processor, stage, semanticsId, limits);
+    if (!reflected.succeeded() || !reflected.program.has_value()) {
+        return render::OcioGpuProgramResult::failure(reflected.error);
     }
+    return finalize(std::move(*reflected.program), std::move(semanticBytes), configRevision,
+                    limits);
 }
 
 } // namespace
@@ -383,24 +177,80 @@ buildOcioGpuProgramForCst(const ResolvedBloomNeutralConfig& resolved, const std:
 }
 
 render::OcioGpuProgramResult buildOcioGpuProgramForFileTransform(
-    const ResolvedBloomNeutralConfig& resolved, const std::string_view processSpaceId,
-    const core::Sha256Digest& sourceLutDigest, const std::uint32_t lutFormat,
+    const ResolvedBloomNeutralConfig& resolved, const LutFile& lutFile,
     const LutInterpolation interpolation, const LutDirection direction,
-    const std::string_view workingSpaceId, const render::OcioGpuProgramLimits& limits) noexcept {
-    static_cast<void>(resolved);
-    static_cast<void>(limits);
-    // The boundary is explicit: validate the request, then refuse in-process extraction. Arbitrary
-    // LUT bytes are parsed only by the isolated helper; no OCIO FileTransform is built here.
-    const bool validRequest =
-        validId(processSpaceId) && validId(workingSpaceId) && lutFormat >= 1 && lutFormat <= 4 &&
-        interpolation <= LutInterpolation::Best && direction <= LutDirection::Inverse &&
-        sourceLutDigest != core::Sha256Digest{};
-    if (!validRequest) {
-        return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
+    const std::string_view processSpaceId, const std::string_view workingSpaceId,
+    const render::OcioGpuProgramLimits& limits,
+    const std::function<bool()>& cancellation) noexcept {
+    try {
+        if (!validId(processSpaceId) || !validId(workingSpaceId) ||
+            static_cast<std::uint32_t>(interpolation) >
+                static_cast<std::uint32_t>(LutInterpolation::Best) ||
+            static_cast<std::uint32_t>(direction) >
+                static_cast<std::uint32_t>(LutDirection::Inverse)) {
+            return render::OcioGpuProgramResult::failure(
+                render::OcioGpuProgramError::InvalidRequest);
+        }
+        if (lutFile.error != LutError::None) {
+            return render::OcioGpuProgramResult::failure(mapLutError(lutFile.error));
+        }
+        if (lutFile.bytes.empty() || lutFile.bytes.size() > kMaximumLutBytes) {
+            return render::OcioGpuProgramResult::failure(
+                render::OcioGpuProgramError::ResourceLimitExceeded);
+        }
+        if (lutFile.format < 1 || lutFile.format > 4 || lutFile.digest == core::Sha256Digest{}) {
+            return render::OcioGpuProgramResult::failure(
+                render::OcioGpuProgramError::InvalidRequest);
+        }
+        {
+            const auto& config = resolved.impl().config();
+            const auto process = config->getColorSpace(std::string(processSpaceId).c_str());
+            const auto working = config->getColorSpace(std::string(workingSpaceId).c_str());
+            if (!process || !working || process->isData() || working->isData()) {
+                return render::OcioGpuProgramResult::failure(
+                    render::OcioGpuProgramError::UnsupportedColorSpace);
+            }
+        }
+#ifndef __linux__
+        // No confinement/process-supervision primitive: never parse LUT bytes in-process.
+        return render::OcioGpuProgramResult::failure(
+            render::OcioGpuProgramError::ExternalLutBoundaryRequired);
+#else
+        if (cancellation && cancellation()) {
+            return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::Cancelled);
+        }
+        auto extracted = detail::extractFileTransformGpuProgram(
+            lutFile.bytes, lutFile.digest, lutFile.format, interpolation, direction, cancellation);
+        if (extracted.error != LutError::None) {
+            return render::OcioGpuProgramResult::failure(mapLutError(extracted.error));
+        }
+        auto deserialized = detail::deserializeOcioGpuProgram(extracted.bytes, limits);
+        if (!deserialized.succeeded() || !deserialized.program.has_value()) {
+            return render::OcioGpuProgramResult::failure(deserialized.error);
+        }
+        auto program = std::move(*deserialized.program);
+        if (program.semanticsId != std::string(kOcioGpuFileTransformSemanticsId)) {
+            return render::OcioGpuProgramResult::failure(
+                render::OcioGpuProgramError::ShaderExtractionFailed);
+        }
+        std::vector<std::byte> semanticBytes;
+        const auto digestBytes = std::as_bytes(std::span(lutFile.digest.bytes()));
+        semanticBytes.assign(digestBytes.begin(), digestBytes.end());
+        appendU32(semanticBytes, lutFile.format);
+        appendU32(semanticBytes, static_cast<std::uint32_t>(interpolation));
+        appendU32(semanticBytes, static_cast<std::uint32_t>(direction));
+        appendText(semanticBytes, workingSpaceId);
+        appendText(semanticBytes, processSpaceId);
+        return finalize(std::move(program), std::move(semanticBytes), resolved.expectedRevision(),
+                        limits);
+#endif
+    } catch (const std::bad_alloc&) {
+        return render::OcioGpuProgramResult::failure(
+            render::OcioGpuProgramError::ResourceLimitExceeded);
+    } catch (const std::exception&) {
+        return render::OcioGpuProgramResult::failure(
+            render::OcioGpuProgramError::ShaderExtractionFailed);
     }
-    (void)kOcioGpuFileTransformSemanticsId;
-    return render::OcioGpuProgramResult::failure(
-        render::OcioGpuProgramError::ExternalLutBoundaryRequired);
 }
 
 render::OcioGpuProgramResult
