@@ -2152,6 +2152,17 @@ QRectF ViewerEditor::canvasRect() const {
                                    -bar.height() - padding);
 }
 
+QString ViewerEditor::emptyStateInvitation() const {
+    const auto* composition = session_.composition();
+    if (composition == nullptr) {
+        return tr("Create a composition to begin");
+    }
+    if (composition->graph().layerOutputs().empty()) {
+        return tr("Create a layer to begin");
+    }
+    return {};
+}
+
 void ViewerEditor::layoutStatusBar() {
     // FORMAL AMENDMENT 1: once the footer has been taken, its new owner positions it; this widget
     // no longer has a bar rect to place it in at all. Until then it fills the bottom strip
@@ -2293,15 +2304,19 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
     const QRectF surround = contentRect();
     const QRectF frame = canvasRect();
     const auto* composition = session_.composition();
+    const QString invitation = emptyStateInvitation();
 
     if (composition == nullptr) {
         // Honest empty state (decision 5): no evaluation warnings, no busywork -- a quiet,
         // product-neutral invitation. Muted ink, Ui type (Value/Geist Mono is reserved for
-        // numeric/timecode surfaces, not prose -- kit/tokens.hpp).
+        // numeric/timecode surfaces, not prose -- kit/tokens.hpp). With no composition at all the
+        // invitation names the composition; a project that has one but no layers names the layer.
         drawCanvasBackground(painter, surround, background_);
-        painter.setFont(kit::font(kit::TypeRole::Ui));
-        painter.setPen(kit::color(kit::Color::Muted));
-        painter.drawText(frame, Qt::AlignCenter, tr("Create a layer to begin"));
+        if (!invitation.isEmpty()) {
+            painter.setFont(kit::font(kit::TypeRole::Ui));
+            painter.setPen(kit::color(kit::Color::Muted));
+            painter.drawText(frame, Qt::AlignCenter, invitation);
+        }
         return;
     }
 
@@ -2315,6 +2330,13 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
     }
 
     paintViewerContent(painter);
+    // An active composition with no layers still shows its layer invitation; a composition with
+    // content (including one whose render is genuinely unsupported) shows no empty-state text.
+    if (!invitation.isEmpty()) {
+        painter.setFont(kit::font(kit::TypeRole::Ui));
+        painter.setPen(kit::color(kit::Color::Muted));
+        painter.drawText(frame, Qt::AlignCenter, invitation);
+    }
 }
 
 void ViewerEditor::paintViewerContent(QPainter& painter) {

@@ -228,6 +228,10 @@ class ViewerEditor final : public QWidget,
     [[nodiscard]] ViewTransform viewTransformForTest() const noexcept;
     [[nodiscard]] QRectF canvasRectForTest() const { return canvasRect(); }
     [[nodiscard]] QRectF contentRectForTest() const { return contentRect(); }
+    // The invitation the empty canvas paints ("Create a composition to begin" with no active
+    // composition, "Create a layer to begin" for an active composition that has no layers, empty
+    // once there is content).
+    [[nodiscard]] QString emptyStateInvitationTextForTest() const { return emptyStateInvitation(); }
     [[nodiscard]] QString statusBarReadoutTextForTest() const;
     [[nodiscard]] kit::KDropdown* zoomDropdownForTest() const noexcept;
     // Task VIEW-1's own seams, on the same terms as the four above.
@@ -314,6 +318,9 @@ class ViewerEditor final : public QWidget,
     // The whole content area: right of the tool column, above the footer. The surround fills it.
     [[nodiscard]] QRectF contentRect() const;
     [[nodiscard]] QRectF canvasRect() const;
+    // The empty-canvas invitation for the current session: composition wording when no composition
+    // is active, layer wording when an active composition has no layers, empty once it has content.
+    [[nodiscard]] QString emptyStateInvitation() const;
 
     // describe no longer belongs to this widget's own geometry.
     [[nodiscard]] QRectF statusBarRect() const;

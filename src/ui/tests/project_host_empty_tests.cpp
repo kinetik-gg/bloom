@@ -20,6 +20,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_commands.hpp>
+#include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
@@ -28,6 +29,7 @@
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
 #include <QAction>
@@ -300,6 +302,46 @@ void testEmptyWorkspaceEditorsAndFirstComposition(Expectations& expectations) {
                                 deleteCompositionAction->isEnabled(),
                             "final delete: undo restores the composition and reactivates it");
     }
+}
+
+void testBlankStatusBarNeutralThenRestores(Expectations& expectations) {
+    runtime::TaskScheduler scheduler;
+    ui::ProjectHost host(scheduler);
+    auto [document, stack] = host.liveDocumentAndStack();
+    expectations.expect(document != nullptr && stack != nullptr,
+                        "blank status: the blank host exposes a live document/stack");
+    if (document == nullptr || stack == nullptr) {
+        return;
+    }
+    ui::CompositionSession session(*document, *stack, host.lowestCompositionId());
+    ui::TaskUiBridge bridge(scheduler);
+    ui::CompositionPreviewController controller(
+        session, scheduler, bridge,
+        [](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
+           const std::vector<runtime::SnapshotParameterOverride>&, runtime::TaskContext&) {
+            return runtime::TaskResult<ui::PreviewPreparationResultHandle>::cancelled();
+        });
+    ui::WindowStatusBar strip(session, &controller, nullptr, nullptr);
+    expectations.expect(strip.colorChipTextForTest() == QStringLiteral("No composition"),
+                        "blank status: the colour chip reports no composition instead of "
+                        "Reference (unqualified)");
+    expectations.expect(strip.previewStateTextForTest().isEmpty(),
+                        "blank status: no preview-unsupported text appears without a composition");
+
+    commands::Transaction seed("Seed status composition", session.snapshot().revision());
+    seed.emplace<commands::AddComposition>("Main", document::CompositionFormat{},
+                                           core::RationalTime::fromInteger(10));
+    const auto seeded = session.executeTransaction(std::move(seed));
+    const auto id = seeded.succeeded()
+                        ? seeded.outputId<document::CompositionId>(commands::kAddCompositionOutput)
+                        : std::nullopt;
+    expectations.expect(id.has_value() && session.setComposition(*id),
+                        "blank status: creating a composition activates it");
+    QApplication::processEvents();
+    expectations.expect(strip.colorChipTextForTest() != QStringLiteral("No composition"),
+                        "status restores the ordinary colour state once a composition exists");
+    expectations.expect(!strip.previewStateTextForTest().isEmpty(),
+                        "status reports an ordinary preview state once a composition exists");
 }
 
 void testDurationDefaultsToTenSecondsInFrames(Expectations& expectations) {
@@ -601,6 +643,7 @@ int main(int argc, char** argv) {
 
     testBlankStartupOwningSession(expectations);
     testEmptyWorkspaceEditorsAndFirstComposition(expectations);
+    testBlankStatusBarNeutralThenRestores(expectations);
     testDurationDefaultsToTenSecondsInFrames(expectations);
     testFramesAtTwentyFiveAndThirtyFps(expectations);
     testFractionalSeconds(expectations);
