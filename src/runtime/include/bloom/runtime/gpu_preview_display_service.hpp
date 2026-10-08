@@ -100,8 +100,9 @@ struct GpuPreviewDisplayServiceDiagnostic final {
 };
 
 // Optional owner-thread presentation ownership. The default (Disabled) reproduces the existing
-// compute-only service exactly: the device is created without a presentation bootstrap and every
-// request takes the ordinary CPU/packed path. Wayland asks the same service device for the Wayland
+// compute-only service: the device is created without a presentation bootstrap. GPU-prepared packed
+// products remain eligible offscreen; NativeResident products require presentation. Wayland asks
+// the same service device for the Wayland
 // presentation bootstrap; the app selects it explicitly at construction (no hidden activation).
 enum class GpuPreviewDisplayServicePresentationMode : std::uint8_t {
     Disabled,
@@ -111,8 +112,8 @@ enum class GpuPreviewDisplayServicePresentationMode : std::uint8_t {
 // Cached, end-to-end counters for the resident display route. This is a bounded counter snapshot,
 // not a profiling framework: it exists so a concrete integration test can assert the resident arm
 // actually dispatched native work, hit the content cache, read nothing back, and fell back to the
-// CPU for the unsupported subset. `readbacks` is always zero on the resident route by construction
-// and is exposed precisely so a test can prove no full-frame readback happened.
+// CPU for the unsupported subset. NativeResident performs no full-frame readback; GPU-prepared
+// packed products add exactly one final display transfer, counted separately too.
 struct GpuPreviewDisplayServiceCounters final {
     // Resident scene graphs admitted to the GpuSceneExecutor. One per prepared GPU scene that
     // entered the resident native route, INCLUDING a warm-cache graph that performs zero native
@@ -123,7 +124,7 @@ struct GpuPreviewDisplayServiceCounters final {
     // (solid + covered-solid + translation + source-over + uploads). A warm content-cache hit that
     // cuts the whole subtree leaves this unchanged (zero for an identical warm request).
     std::uint64_t nativeDispatches = 0;
-    // Resident graph jobs that produced a published resident frame.
+    // Resident graph jobs that produced a published native or GPU-prepared packed frame.
     std::uint64_t residentCompletions = 0;
     // Resident graph jobs that failed, timed out, or were cancelled after admission.
     std::uint64_t residentFailures = 0;
@@ -139,14 +140,22 @@ struct GpuPreviewDisplayServiceCounters final {
     // device capability; this makes an admission mismatch observable instead of a silent
     // cpuFallbacks increase.
     std::uint64_t gpuAdmissionRefusals = 0;
-    // FULL-FRAME host readbacks performed by the resident route. Always zero: the only host read on
-    // the normal resident path is the resident display's 4-byte status word, counted separately
-    // below. This field is an explicit negative assertion hook for "no CPU buffer / no packed
-    // readback".
+    // Scene-executor readbacks plus final packed transfers. NativeResident keeps this zero; its
+    // 4-byte status reads are separate. Packed mode transfers only the final display data window.
     std::uint64_t fullFrameReadbacks = 0;
     // 4-byte resident-display status-word invalidations. One per completed resident display job;
     // this is NOT a full-frame readback.
     std::uint64_t displayStatusReads = 0;
+    // GPU-prepared packed mode only: one final RGBA8 copy, separate from native route assertions.
+    std::uint64_t packedTransfers = 0;
+    std::uint64_t packedTransferredBytes = 0;
+    std::uint64_t packedPeakTransferBytes = 0;
+    // Conservative admitted transfer ceiling, retained through scheduler detach/quarantine.
+    // Actual allocations are reported by the three retained byte fields below.
+    std::uint64_t packedReservedBytes = 0;
+    std::uint64_t packedRetainedSourceBytes = 0;
+    std::uint64_t packedRetainedStagingBytes = 0;
+    std::uint64_t packedRetainedHostBytes = 0;
     // Resident registry publications refused under byte/count budget pressure. Live leases and pins
     // are never invalidated by this; the released tokens are collected on the next owner pump.
     std::uint64_t residentLeaseRefusals = 0;
@@ -209,8 +218,11 @@ struct GpuPreviewDisplayServiceStatus final {
 // a 1 GiB scheduler request-owned capacity admits two). `nativeBudgets` bounds the native
 // pipeline's persistent buffers separately (160 MiB default). `readyStageQueueCapacity` bounds
 // stages waiting for the one native job.
+enum class GpuPreviewDisplayProductMode : std::uint8_t { NativeResident, GpuPreparedPacked };
+
 struct GpuPreviewDisplayServiceOptions final {
     bool enabled = false;
+    GpuPreviewDisplayProductMode product = GpuPreviewDisplayProductMode::NativeResident;
     std::filesystem::path loaderPath;
     // Presentation ownership. Default Disabled keeps the compute-only device exactly as before.
     GpuPreviewDisplayServicePresentationMode presentation =

@@ -251,7 +251,7 @@ makeNeutralProcessor(const bloom::color::ResolvedBloomNeutralConfig& config) {
 // general display program for the request's own project color binding (config URI, revision,
 // working space, display/view). It performs no manual preparer switch: the binding is derived from
 // the request identity exactly as the production stage does.
-[[nodiscard]] PreviewGpuSceneStageFunction generalStageFunction(
+[[nodiscard]] inline PreviewGpuSceneStageFunction generalStageFunction(
     std::shared_ptr<const bloom::runtime::CompiledCompositionPlan> plan,
     std::shared_ptr<CpuGpuSceneBuilder> builder,
     std::shared_ptr<const GpuDisplayProgramService> programService,
@@ -414,7 +414,7 @@ awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds tim
 }
 
 // True when the result carries a genuine resident frame on the requested generation.
-[[nodiscard]] bool
+[[nodiscard]] inline bool
 isResidentPrepared(const std::optional<TaskResult<PreviewPreparationResultHandle>>& r,
                    const std::uint64_t generation,
                    std::shared_ptr<const bloom::runtime::PreparedPreviewFrame>& out) {

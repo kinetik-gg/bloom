@@ -21,6 +21,9 @@ serviceWaitInterval(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
     const bool previewActive = !core->stages.empty() || core->nativeInFlight ||
                                core->residentNativeInFlight || !core->nativeReady.empty() ||
                                !core->residentNativeReady.empty();
+    if (core->packedTransferLate) {
+        return std::chrono::milliseconds(50);
+    }
     if (previewActive) {
         return std::chrono::milliseconds(2);
     }
@@ -521,6 +524,18 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
         core.counterGpuAdmissionRefusals.load(std::memory_order_relaxed);
     result.counters.fullFrameReadbacks =
         core.counterFullFrameReadbacks.load(std::memory_order_relaxed);
+    result.counters.packedTransfers = core.counterPackedTransfers.load(std::memory_order_relaxed);
+    result.counters.packedTransferredBytes =
+        core.counterPackedTransferredBytes.load(std::memory_order_relaxed);
+    result.counters.packedPeakTransferBytes =
+        core.counterPackedPeakBytes.load(std::memory_order_relaxed);
+    if (core.packedRetention) {
+        const auto retained = core.packedRetention->snapshot();
+        result.counters.packedReservedBytes = retained.reservedBytes;
+        result.counters.packedRetainedSourceBytes = retained.sourceBytes;
+        result.counters.packedRetainedStagingBytes = retained.stagingBytes;
+        result.counters.packedRetainedHostBytes = retained.hostBytes;
+    }
     result.counters.displayStatusReads =
         core.counterDisplayStatusReads.load(std::memory_order_relaxed);
     result.counters.residentLeaseRefusals =
@@ -555,8 +570,10 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
         // the startup Neutral fast path, and the CPU fallback. The packed readback qualification,
         // packed bandwidth, a fake qualification, and the raw document revision are all irrelevant.
         gpuMode = current.state == GpuPreviewDisplayServiceState::Ready && current.gpuAvailable &&
-                  !core->residentRouteTerminal && core->presentation != nullptr &&
-                  core->presentation->available && core->presentation->registry != nullptr;
+                  !core->residentRouteTerminal &&
+                  (core->options.product == GpuPreviewDisplayProductMode::GpuPreparedPacked ||
+                   (core->presentation != nullptr && core->presentation->available &&
+                    core->presentation->registry != nullptr));
     } else {
         gpuMode = current.state == GpuPreviewDisplayServiceState::Ready && current.gpuAvailable &&
                   current.qualification != nullptr && current.qualification->eligible();

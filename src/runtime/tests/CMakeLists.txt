@@ -1331,6 +1331,23 @@ endif()
 # needs a presentable (Wayland) resident route, the Vulkan backend, and the pinned tools; without a
 # device it prints an explicit skip (exit 77) and --require-device fails closed.
 if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_runtime_gpu_preview_display_service_packed_test
+        gpu_preview_display_service_packed_tests.cpp)
+    target_include_directories(bloom_runtime_gpu_preview_display_service_packed_test PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/runtime" "${PROJECT_SOURCE_DIR}/src/render/vulkan")
+    target_link_libraries(bloom_runtime_gpu_preview_display_service_packed_test PRIVATE
+        bloom_runtime_evaluator bloom_render bloom_render_display_transfer_test_faults)
+    target_compile_definitions(bloom_runtime_gpu_preview_display_service_packed_test PRIVATE
+        "BLOOM_GPU_GENERAL_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_preview_display_service_packed_test>\"")
+    include(BloomGpuShaderTools)
+    bloom_package_gpu_shader_tools(bloom_runtime_gpu_preview_display_service_packed_test)
+    bloom_enable_warnings(bloom_runtime_gpu_preview_display_service_packed_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_preview_display_service_packed_test)
+    bloom_add_test(NAME bloom.runtime.gpu_preview_display_service_packed
+        COMMAND bloom_runtime_gpu_preview_display_service_packed_test
+        LABELS runtime integration gpu color preview TIMEOUT 150)
+    set_tests_properties(bloom.runtime.gpu_preview_display_service_packed PROPERTIES SKIP_RETURN_CODE 77)
+
     add_executable(bloom_runtime_gpu_preview_display_service_general_test
         gpu_preview_display_service_general_tests.cpp
         gpu_preview_display_service_general_fixture.ipp)

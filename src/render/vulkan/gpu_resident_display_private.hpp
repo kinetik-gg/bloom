@@ -57,7 +57,7 @@ struct GpuDisplayImageImpl final {
     std::uint32_t generation = 0;
     bool deviceLost = false;
     // Set while a readback submission references this image and its completion is unproved.
-    std::atomic<bool> submissionUnretired{false};
+    mutable std::atomic<bool> submissionUnretired{false};
     std::uint64_t oracleReadbackToken = 0;
 };
 

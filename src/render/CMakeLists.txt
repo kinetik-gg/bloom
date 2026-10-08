@@ -995,6 +995,7 @@ target_sources(
             include/bloom/render/gpu_blend.hpp
             include/bloom/render/gpu_composite.hpp
             include/bloom/render/gpu_device.hpp
+            include/bloom/render/gpu_display_transfer.hpp
             include/bloom/render/gpu_image.hpp
             include/bloom/render/gpu_image_upload.hpp
             include/bloom/render/gpu_neutral_display.hpp
@@ -1040,6 +1041,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_device.cpp
         vulkan/gpu_device_bootstrap.cpp
         vulkan/gpu_device_private.hpp
+        vulkan/gpu_display_transfer.cpp
         vulkan/gpu_oracle_readback.cpp
         vulkan/gpu_oracle_readback_private.hpp
         vulkan/gpu_image_reclamation.cpp
@@ -1126,6 +1128,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
 else()
     target_sources(bloom_render PRIVATE gpu_affine_stub.cpp gpu_blend_stub.cpp
                                      gpu_composite_stub.cpp gpu_device_stub.cpp
+                                     gpu_display_transfer_stub.cpp
                                      gpu_image_upload_stub.cpp gpu_neutral_display_stub.cpp
                                      gpu_point_resample_stub.cpp
                                      gpu_ocio_program_stub.cpp
@@ -1165,6 +1168,13 @@ if(BUILD_TESTING)
         target_include_directories(bloom_render_ocio_test_faults PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/vulkan")
         bloom_enable_warnings(bloom_render_ocio_test_faults)
+
+        add_library(bloom_render_display_transfer_test_faults STATIC
+            vulkan/gpu_display_transfer_fault_test.cpp)
+        target_compile_features(bloom_render_display_transfer_test_faults PUBLIC cxx_std_20)
+        target_include_directories(bloom_render_display_transfer_test_faults PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/vulkan")
+        bloom_enable_warnings(bloom_render_display_transfer_test_faults)
 
         # Same pattern for the combined output-colour readback fault seam.
         add_library(bloom_render_output_color_readback_test_faults STATIC

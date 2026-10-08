@@ -9,6 +9,7 @@
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/render/gpu_device.hpp>
+#include <bloom/render/gpu_display_transfer.hpp>
 #include <bloom/render/gpu_neutral_display.hpp>
 #include <bloom/render/gpu_resident_display.hpp>
 #include <bloom/runtime/gpu_neutral_display_qualification.hpp>
@@ -146,6 +147,9 @@ struct PreviewDisplayServiceCore final {
     std::unique_ptr<GpuSceneCache> residentSceneCache;
     std::unique_ptr<GpuSceneExecutor> residentExecutor;
     std::unique_ptr<render::GpuResidentDisplay> residentDisplay;
+    std::unique_ptr<render::GpuDisplayTransfer> packedTransfer;
+    std::shared_ptr<const render::GpuDisplayTransferRetention> packedRetention;
+    bool packedTransferLate = false;
     // Owner-thread effective budgets after the device capacity was resolved and clamped. Seeded
     // from the configured options and never raised; the resident registry and scene cache are
     // created from these so a device that cannot host the configured route is bounded before
@@ -217,6 +221,9 @@ struct PreviewDisplayServiceCore final {
     std::atomic<std::uint64_t> counterResidentGraphJobs{0};
     std::atomic<std::uint64_t> counterNativeDispatches{0};
     std::atomic<std::uint64_t> counterResidentCompletions{0};
+    std::atomic<std::uint64_t> counterPackedTransfers{0};
+    std::atomic<std::uint64_t> counterPackedTransferredBytes{0};
+    std::atomic<std::uint64_t> counterPackedPeakBytes{0};
     std::atomic<std::uint64_t> counterResidentFailures{0};
     std::atomic<std::uint64_t> counterGpuCacheHits{0};
     std::atomic<std::uint64_t> counterGpuCacheMisses{0};
@@ -269,6 +276,8 @@ struct PreviewDisplayServiceCore final {
     std::function<std::chrono::steady_clock::time_point()> nativeClockOverride;
     std::function<render::GpuNeutralDisplayPollResult(render::GpuNeutralDisplay&)>
         nativePollOverride;
+    std::function<render::GpuDisplayTransferState(render::GpuDisplayTransfer&)>
+        packedTransferPollOverride;
     // Resident-route fault seam (test-only; never set in production). The overrides let a test
     // force a deterministic stalled/unknown-fence retirement and observe that the production
     // Retiring code retains the stage, completion and request-owned admission until the override

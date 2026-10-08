@@ -511,12 +511,14 @@ qualified display processor publishes once per session, so an entry's display id
 at most once, and when it does every earlier entry is stale. A frame whose qualification differs
 from the tag clears the cache and adopts the new one.
 
-**What is retained.** The packed RGBA8 display buffer and the identity, and NOT the Float32 process
-image it was mapped from. Playback paints the packed buffer and nothing else -- the viewer's own
-painting, its display geometry, its colour-state chip, and the direct-manipulation mapping all read
-that buffer, none of them the process image. Retaining every process image would spend four fifths
-of the budget on pixels used only by occasional reference probes. A retained frame is therefore
-about 8 MB at 1920x1080 rather than about 41 MB.
+**What is retained.** Display-only buffers and their exact identities, never the Float32 process
+image solely for replay. Host-packed products retain RGBA8 pixels; the native resident route instead
+retains an owner-bound lease charged by actual native allocation and metadata. A tight 1920×1080
+host buffer has 8,294,400 pixel bytes before metadata; native alignment may charge more.
+The new `GpuPreparedPacked` service product retains only sealed GPU-prepared host pixels and proof,
+with no native image or process frame. ROI pixel extent is its data window, distinct from the full
+display mapping. Restamps share immutable bytes/proof. Normal Viewer/cache use of this new arm
+remains pending Stage 2; core restamp evidence does not qualify warm range playback.
 
 Consumers of scene-linear pixels check `PreparedPreviewFrame::hasProcessFrame()`. The pixel probe
 reads an available bounded process frame or schedules exact one-pixel ROI evaluation for a

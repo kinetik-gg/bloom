@@ -27,6 +27,7 @@ The broader host tier and residency policy remain separate decisions under G9.
 | G3B2B | Actual displayed intent, safe CPU cover and coupled hit mapping accepted as a bounded slice | Independent private compositor pixels, strict native interaction/project replacement, focused regressions, source quality and 58 affected translation units of static analysis pass |
 | G3A | Accepted as a bounded retention/capacity slice | Independent source/artifact review, typed/live coverage regressions, measured 100-frame Full/Half native parity/warm replay, UI goldens, quality and 57 affected translation units of static analysis pass |
 | G3B resize lifecycle/status | Accepted as a narrow slice; containment remains unresolved | Independent resize completion sequence, exposed previous pixels described as Stale, native/focused/UI checks and 20 affected translation units of static analysis pass |
+| G3B packed service foundation | Accepted as a bounded core slice | Genuine offscreen GPU final transfers, exact provenance/retirement, Vulkan-disabled core build, quality and 45 affected translation units pass |
 | G3B resize containment | Pending; immediate next slice | External pixels reject native viewport and geometry-admission approaches; staged asynchronous final GPU-packed QWidget output must qualify actual layout transitions |
 | G4–G10 | Pending | No implementation or qualification claim |
 
@@ -211,6 +212,27 @@ after G2E, then G3A retention truth. The causal mechanism remains to be instrume
 
 The audit observations below describe the baseline; subsequent fixes and measured results belong
 in this checkpoint and the owning architecture documents.
+
+G3B packed-transfer Stage 1 checkpoint (2026-10-09), accepted after independent core review:
+genuine GPU scene and selected Neutral/general display processing produce sealed immutable RGBA8
+host products without WSI or CPU scene re-evaluation. Owner-thread asynchronous copy/fence polling,
+off-UI materialization, exact device/owner binding, ROI geometry, overflow-safe metadata charging,
+queued newest/cancellation and shutdown quarantine qualify. Full 1920×1080 measured source
+8,847,360 B, staging 8,294,400 B and host 8,294,400 B; Half physically reduces extent and charges.
+Shutdown preserves actual source/staging 17,141,760 B with host zero through service/Core/scheduler
+destruction, separately from its conservative admitted ceiling. Neutral/general Full, Half, ROI
+and adjustment parity, genuine native General regression, zero CPU fallback, 200 byte/proof
+restamps without new preparation/dispatch/transfer, Vulkan-disabled runtime build, required source
+quality and 45 affected translation units of static analysis pass. Initial fixture failures remain
+preserved and do not qualify behavior.
+
+This accepts the service foundation only. NativeResident remains the default; actual Viewer
+GPU-prepared/CPU-painted adoption, external panel/top-level clipping, off-UI channel derivatives,
+host-only cache retention, ROI placement and warm 100-frame widget replay remain Stage 2 gates.
+The [existing ADR](../decisions/0006-gpu-backend.md) records the bounded presentation revisit.
+Core aliases are not playback evidence; Linux controlled pixels are not sustained or cross-platform
+qualification. G3 remains incomplete. G4–G10 and G6 service-aware headroom/unconsumed-mailbox
+ownership follow-ups remain unchanged.
 
 ## Decision to make
 

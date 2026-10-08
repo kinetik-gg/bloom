@@ -489,7 +489,9 @@ GpuOcioProgramCreateResult GpuOcioProgram::create(GpuDevice& device, OcioGpuProg
         budgets.maxWorkGroupCountX, deviceLimits.limits.maxComputeWorkGroupCount[0]);
     impl->maxWorkGroupCountY = ocio_program_detail::effectiveWorkGroupCount(
         budgets.maxWorkGroupCountY, deviceLimits.limits.maxComputeWorkGroupCount[1]);
-    impl->expectedGeneration = static_cast<std::uint32_t>(device.ownershipEpoch());
+    // Image generation belongs to the exact allocator state. The process-unique ownership epoch
+    // identifies a device instance for presentation and is not this image-generation counter.
+    impl->expectedGeneration = state->generation;
     impl->desc = std::move(program);
     impl->spirv.assign(spirv.begin(), spirv.end());
     impl->cancellation = std::move(cancellation);

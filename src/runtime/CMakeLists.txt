@@ -109,6 +109,7 @@ target_sources(
         gpu_resident_preview_qualification_display.cpp
         gpu_resident_preview_qualification_internal.hpp
         gpu_preview_display_product.cpp
+        gpu_prepared_packed_preview_product.cpp
         gpu_resident_preview_product.cpp
         gpu_resident_frame_lease.cpp
         gpu_presentation_coordinator.cpp
@@ -125,6 +126,7 @@ target_sources(
         gpu_preview_display_service_loop.hpp
         gpu_preview_display_service_presentation.cpp
         gpu_preview_display_service_presentation_private.hpp
+        gpu_preview_display_service_packed_transfer.cpp
         gpu_preview_display_service_resident.cpp
         gpu_preview_display_service_resident_jobs.cpp
         gpu_preview_display_service_resident_private.hpp
@@ -175,6 +177,7 @@ target_sources(
             include/bloom/runtime/gpu_coverage_contract.hpp
             include/bloom/runtime/gpu_resident_preview_qualification.hpp
             include/bloom/runtime/gpu_preview_display_product.hpp
+            include/bloom/runtime/gpu_prepared_packed_preview_product.hpp
             include/bloom/runtime/gpu_resident_preview_product.hpp
             include/bloom/runtime/gpu_preview_display_service.hpp
             include/bloom/runtime/gpu_preview_resident_capacity.hpp

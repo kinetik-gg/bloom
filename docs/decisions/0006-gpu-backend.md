@@ -75,6 +75,30 @@ If MoltenVK is the blocker, compare Dawn's native Metal backend and a narrow nat
 behind the same Bloom interface. If Qt embedding alone is the blocker, compare a custom Vulkan
 `QWindow` with an isolated QRhiWidget adapter without changing the offscreen renderer.
 
+## Bounded Presentation Revisit — 2026-10-09
+
+The Qt embedding revisit trigger has been reached on the measured Linux/Wayland path.
+An exposed native Viewer can spill into neighboring panels during held shrink; the native
+viewport-ancestor experiment promoted the editor ancestry and lost visible output. A separate
+retire-before-layout experiment still exposed native pixels outside a shrunken top-level window.
+Neither experiment is installed as a production repair.
+
+Narrow the presentation direction to genuine GPU scene and display processing, followed by one
+asynchronous final RGBA8 transfer into immutable host storage for ordinary QWidget painting.
+Provenance must say **GPU-prepared/CPU-painted**. This adds transfer and host-storage cost; it is
+not a zero-readback resident presentation claim. No per-operation roundtrips, CPU scene
+re-evaluation labelled GPU, processing-precision change, or GPU coverage exemption is permitted.
+Native preview and all final-render routes remain required and independently qualified.
+
+The accepted Stage 1 service foundation submits and polls on the GPU owner, materializes off the
+UI thread, preserves exact identity and measured allocation accounting, and quarantines unproved
+native retirement. Viewer integration, host-only retained cache use, clipping and warm playback
+remain Stage 2 gates. The native route remains the current default until that integration qualifies.
+Public QWidget painting makes this direction feasible across Linux, macOS and Windows; current
+native evidence is Linux-only, not proof of equivalent GPU capability or performance on all three.
+Unavailable GPU preparation retains explicit CPU-fallback provenance. This bounded revisit does
+not change this ADR's working status or its cross-platform acceptance requirement.
+
 ## References
 
 - [GPU backend architecture and acceptance gate](../architecture/gpu-backend.md)

@@ -246,7 +246,7 @@ eligibility against the exact device ownership epoch and processor, the registry
 thread, the trusted expected descriptor, the native display geometry against that descriptor, the
 measured eligible interval, and the actual native allocation plus geometry inside the request budget.
 `GpuPreviewDisplayService` owns one dedicated service thread, the native device/pipeline created and
-used only on it, the scheduler GPU executor, and one outstanding native job at a time. It exposes two
+used only on it, the scheduler GPU executor, and one outstanding native job at a time. It exposes the following
 routes on that same owner thread and scheduler lease:
 
 - The packed-readback route (default constructor) composes the accepted CPU stage with the display
@@ -271,10 +271,45 @@ unretired enters an explicit `Retiring` phase that retains the stage, its comple
 native pins until retirement is actually proven. Healthy registry budget pressure is a temporary
 refusal that falls back to the CPU without invalidating live leases or pins; only an actual unproven
 retention or allocation failure latches the process-wide fuse. The bounded counter snapshot exposes
-`fullFrameReadbacks` (always zero by construction), `displayStatusReads` (the 4-byte status word),
+`fullFrameReadbacks` (zero on the native resident route; scene readbacks plus final packed
+transfers on the packed route), `displayStatusReads` (the 4-byte status word),
 cache hits/misses, fallbacks, and refusals, so a test can prove no full-frame readback occurred.
 `beginShutdown()` is non-blocking; the destructor joins the service thread and drains child/native
 ownership before releasing the lease.
+
+GPU-prepared packed service foundation (2026-10-09). The explicit `GpuPreparedPacked` product
+mode runs the genuine GPU scene and selected Neutral or general OCIO display processing, then
+copies only the final RGBA8 data window into host storage. It works without a WSI target. This is
+separate from the older CPU-stage/`GpuNeutral` display route above. The process identity remains
+`EvaluationProvider::GpuResident`; the display provider explicitly records transferred host pixels.
+The native route remains the default, and normal Viewer adoption is not yet qualified.
+
+The owner submits and polls the real fence without a GUI wait; host materialization also stays off
+the UI thread. Admission validates exact device control-block identity, allocator generation,
+owner thread and lifetime token. Numeric allocator generation alone is not device identity.
+Completed immutable products retain sealed fence evidence and weak exact-device provenance,
+not a native image, lease or Float32 process frame. Full `displayWindow` maps the composition;
+`dataWindow` determines packed ROI extent, row addressing and transferred bytes. Consumers must
+place that rectangle within the display mapping and paint ordinary background outside it.
+Display-only restamps share bytes and proof while preserving exact request/display identity.
+
+Actual source allocation, rounded staging allocation and host vector capacity are distinct from
+conservative admitted reservation ceilings. Retained product cost includes pixel/bounds capacity,
+proof, outer envelope and both owned request identity strings, with overflow refusal. Successful
+`take` moves host storage once and clears transfer retention; product/mailbox/cache ownership is
+then charged separately. One bounded active transfer and queued newest request cannot publish a
+superseded result. Cancelled or unproved work remains charged until actual fence retirement.
+Bounded shutdown quarantines only the final image/device/fence/staging, releases unrelated scene
+and host context, and preserves its independent reservation through scheduler/service destruction.
+An exited owner is explicit; future recovery is not promised.
+
+Private Linux strict core/synchronization checks qualify WSI-disabled Neutral/general Full, Half,
+ROI and adjusted output against CPU pixels with zero CPU fallback. Full 1920×1080 measured source
+8,847,360 B, staging 8,294,400 B and host 8,294,400 B. Shutdown retained the source/staging sum
+17,141,760 B with host zero after service/Core/scheduler destruction; its approximately 1 GiB
+reservation was an admission ceiling, not actual allocated memory. Two hundred restamps reused
+bytes/proof without extra preparation, dispatch or transfer. This is core reuse evidence, not
+normal Viewer/cache-100 playback, clipping, sustained performance or other-platform qualification.
 
 Resident capacity and host/device separation. The resident route sizes its one pool from the
 resolved device allocation budget, never from host RAM alone. On the device owner thread
@@ -911,9 +946,20 @@ renderer may manage its own device and swapchain instead of using `QVulkanWindow
 [QVulkanInstance](https://doc.qt.io/qt-6/qvulkaninstance.html),
 [Qt Vulkan integration](https://doc.qt.io/qt-6/qtgui-overview.html#vulkan-integration)
 
-The target is a same-device GPU copy or sample into each viewer swapchain. CPU readback remains a
-functional fallback and test path, not the normal interactive path. Multiple viewer panels share the
-render device where surface support permits and own independent swapchain state.
+The native route targets a same-device GPU copy or sample into each viewer swapchain. Multiple
+native panels share the render device where surface support permits and own independent swapchains.
+Measured held resize and top-level shrink reject this embedded route as the current clipping repair:
+197,225 neighbor pixels and 89,125 exterior pixels escaped their intended boundaries. Native-host
+and geometry-admission experiments were rejected, not installed.
+
+The [bounded ADR revisit](../decisions/0006-gpu-backend.md) therefore authorizes a final GPU RGBA8
+transfer followed by ordinary QWidget painting with explicit GPU-prepared/CPU-painted provenance.
+The asynchronous service foundation above is accepted; Viewer wiring and adoption remain pending
+external resize/move/top-level pixels, coherent outlines, actual host-only cache charges and warm
+100-frame replay. This costs staging, host storage and one final transfer for a cold product; it
+must not retain full-range native and packed duplicates. The native route and final GPU routes
+remain required. Linux measurements do not establish equivalent macOS/Windows GPU execution or
+sustained performance; the public widget path and explicit CPU fallback are the supported direction.
 
 `QRhiWidget` is useful for a comparison spike because it embeds accelerated rendering naturally in
 Qt Widgets and supports Vulkan, Metal, and Direct3D. It is not the core GPU backend. Accessing the

@@ -17,6 +17,8 @@
 namespace bloom::render {
 struct GpuNeutralDisplayReadback;
 class GpuDisplayImage;
+class GpuDisplayTransferResult;
+class GpuDevice;
 } // namespace bloom::render
 
 namespace bloom::runtime {
@@ -65,10 +67,15 @@ struct PreviewDisplayBufferView final {
     render::PackedImageLayout layout;
     std::span<const render::Rgba8> pixels;
     bool isOcioQualified = false;
+    // Packed ROI products own only this pixel extent; absent means the whole display window.
+    std::optional<render::ImageWindow> dataWindow = std::nullopt;
 };
 
 class GpuNeutralDisplayQualificationReport;
 class GpuResidentPreviewQualificationReport;
+struct GpuPreparedPackedProvenance;
+class PreviewGpuSceneStage;
+class GpuServiceGeneration;
 
 // Which execution produced a display-only frame's packed pixels. This is provenance, not a second
 // color model: the CPU reference mapper, the qualified CPU Bloom Neutral transform, and the
@@ -84,6 +91,8 @@ enum class PreviewDisplayProvider : std::uint8_t {
     CpuOcio,
     GpuNeutral,
     GpuResident,
+    // Genuine GPU scene/display preparation; one final RGBA8 transfer, ordinary widget paint.
+    GpuPreparedPacked,
 };
 
 // The provenance a display-only frame retains beside its pixels. `gpuQualification` is non-null
@@ -94,6 +103,7 @@ enum class PreviewDisplayProvider : std::uint8_t {
 struct PreviewDisplayProvenance final {
     PreviewDisplayProvider provider = PreviewDisplayProvider::CpuReference;
     std::shared_ptr<const GpuNeutralDisplayQualificationReport> gpuQualification;
+    std::shared_ptr<const GpuPreparedPackedProvenance> gpuPreparedPacked = nullptr;
 
     friend bool operator==(const PreviewDisplayProvenance&,
                            const PreviewDisplayProvenance&) = default;
@@ -111,6 +121,12 @@ class PreviewCpuStage;
 makeGpuNeutralDisplayPreview(const PreviewCpuStage& stage,
                              std::shared_ptr<const GpuNeutralDisplayQualificationReport> report,
                              render::GpuNeutralDisplayReadback&& readback) noexcept;
+
+[[nodiscard]] std::optional<PreparedPreviewFrame> makeGpuPreparedPackedPreview(
+    render::GpuDevice& device, GpuServiceGeneration serviceGeneration,
+    const PreviewGpuSceneStage& stage,
+    std::shared_ptr<const GpuResidentPreviewQualificationReport> neutralQualification,
+    render::GpuDisplayTransferResult&& transfer, std::size_t byteLimit) noexcept;
 
 namespace detail {
 
@@ -188,6 +204,12 @@ class PreviewDisplayOnlyFrame final {
     makeGpuNeutralDisplayPreview(const PreviewCpuStage& stage,
                                  std::shared_ptr<const GpuNeutralDisplayQualificationReport> report,
                                  render::GpuNeutralDisplayReadback&& readback) noexcept;
+
+    friend std::optional<PreparedPreviewFrame>
+    makeGpuPreparedPackedPreview(render::GpuDevice&, GpuServiceGeneration,
+                                 const PreviewGpuSceneStage&,
+                                 std::shared_ptr<const GpuResidentPreviewQualificationReport>,
+                                 render::GpuDisplayTransferResult&&, std::size_t) noexcept;
 
     PreviewDisplayOnlyFrame(PreviewRequestIdentity desiredIdentity,
                             ProcessFrameIdentity processIdentity,

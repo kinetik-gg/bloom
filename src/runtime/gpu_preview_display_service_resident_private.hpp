@@ -41,6 +41,7 @@ enum class ResidentNativePhase : std::uint8_t {
     None,
     Executor,
     Display,
+    Transfer,
     // A failure/deadline/cancellation/lost-generation was observed while a native submission may
     // still be unretired. The stage, its GpuTaskCompletion, its source snapshot/identity/overrides
     // and the native pins are ALL retained until retirement is proven (bounded poll) or the owned
@@ -96,6 +97,15 @@ residentDisplayPoll(const std::shared_ptr<PreviewDisplayServiceCore>& core) noex
 [[nodiscard]] std::optional<PreparedPreviewFrame>
 residentFinishFrame(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                     const PreviewDisplayStageRecord& stage, std::string& reason) noexcept;
+
+// Final packed arm. Source and parent admission are retained through native transfer/quarantine.
+[[nodiscard]] bool
+residentPackedTransferBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                            const std::shared_ptr<PreviewDisplayStageRecord>& stage,
+                            std::string& reason) noexcept;
+[[nodiscard]] std::optional<PreparedPreviewFrame>
+residentPackedTransferFinish(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                             const PreviewDisplayStageRecord& stage, std::string& reason) noexcept;
 
 // Owner thread cancellation/terminal probes.
 void residentCancelNative(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;

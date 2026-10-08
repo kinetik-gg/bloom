@@ -162,6 +162,11 @@ void publishResidentStatus(const std::shared_ptr<PreviewDisplayServiceCore>& cor
 }
 
 void retireResidentRoute(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
+    if (core->packedTransfer) {
+        core->packedTransfer->cancel();
+        core->packedTransfer
+            .reset(); // unproved source + parent admission move to bounded quarantine
+    }
     if (core->residentGeneralDisplay != nullptr) {
         core->residentGeneralDisplay->cancel();
         // Destroying the arm performs the executor's bounded drain/quarantine of retained programs.
@@ -232,8 +237,9 @@ bool residentStageIsEligible(const std::shared_ptr<PreviewDisplayServiceCore>& c
         reason = "the resident selection ran off the device owner thread";
         return false;
     }
-    if (core->presentation == nullptr || !core->presentation->available ||
-        core->presentation->registry == nullptr) {
+    if (core->options.product == GpuPreviewDisplayProductMode::NativeResident &&
+        (core->presentation == nullptr || !core->presentation->available ||
+         core->presentation->registry == nullptr)) {
         reason = "no usable presentation generation exists for the resident route";
         return false;
     }
@@ -377,6 +383,8 @@ bool residentExecutorBegin(const std::shared_ptr<PreviewDisplayServiceCore>& cor
 
 bool residentDisplayHasUnretiredSubmission(
     const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
+    if (core->packedTransfer && core->packedTransfer->hasUnretiredSubmission())
+        return true;
     if (core->residentNativeActive != nullptr &&
         residentStageIsGeneralDisplay(*core->residentNativeActive)) {
         return core->residentGeneralDisplay != nullptr &&
@@ -631,6 +639,8 @@ residentFinishFrame(const std::shared_ptr<PreviewDisplayServiceCore>& core,
 }
 
 void residentCancelNative(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
+    if (core->packedTransfer)
+        core->packedTransfer->cancel();
     if (core->residentExecutor != nullptr) {
         core->residentExecutor->cancel();
     }
@@ -647,6 +657,9 @@ bool residentOwnerDrainRequired(const std::shared_ptr<PreviewDisplayServiceCore>
 }
 
 bool residentDeviceLost(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
+    if (core->packedTransfer &&
+        core->packedTransfer->diagnostic().code == render::GpuDisplayTransferCode::DeviceLost)
+        return true;
     return (core->residentExecutor != nullptr && core->residentExecutor->deviceLost()) ||
            (core->residentDisplay != nullptr && core->residentDisplay->deviceLost()) ||
            (core->residentGeneralDisplay != nullptr && core->residentGeneralDisplay->deviceLost());
@@ -668,7 +681,9 @@ void noteResidentExecutorCounters(const std::shared_ptr<PreviewDisplayServiceCor
                                             counters.translationDispatches +
                                             counters.sourceOverDispatches + counters.uploads,
                                         std::memory_order_relaxed);
-    core->counterFullFrameReadbacks.store(counters.readbacks, std::memory_order_relaxed);
+    core->counterFullFrameReadbacks.store(
+        counters.readbacks + core->counterPackedTransfers.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
 }
 
 } // namespace bloom::runtime::detail

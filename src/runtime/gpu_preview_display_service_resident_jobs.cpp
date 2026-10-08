@@ -1,12 +1,12 @@
 // Resident-route service jobs, extracted from gpu_preview_display_service_jobs.cpp so the packed
 // and resident paths stay cohesive and reviewable. Every function here is called on the service
-// owner thread. The central safety invariant is that a stage's GpuTaskCompletion is NEVER consumed
-// (and therefore GPU request-owned admission is never released) while a native submission it
-// started may still be unretired: a failure/deadline/cancellation/lost generation moves the stage
+// owner thread. Normal operation keeps a stage's completion/admission while native work may still
+// be unretired: a failure/deadline/cancellation/lost generation moves the stage
 // into an explicit Retiring phase that retains the stage, its completion, its
 // snapshot/identity/overrides and the native pins until retirement is actually proven, or the owned
 // pipelines are destroyed on the owner thread so their destructors perform the bounded
-// drain/quarantine.
+// drain/quarantine. Bounded shutdown of final packed transfers explicitly hands physical ownership
+// to an independent, still-charged transfer reservation before releasing unrelated stage context.
 
 #include "gpu_preview_display_service_private.hpp"
 
@@ -127,9 +127,8 @@ void beginResidentRetirement(const std::shared_ptr<PreviewDisplayServiceCore>& c
     core->residentNativeInFlight = true;
 }
 
-// Retiring is done: either every native submission is proven retired, or the owned pipelines were
-// destroyed on this owner thread (their destructors performed the bounded drain/quarantine). Only
-// now may the parent completion be consumed and the request-owned admission released.
+// Normal retirement consumes parent admission only after proof. Bounded shutdown may instead hand
+// retained physical allocations to the transfer-specific independent quarantine reservation.
 void finishResidentRetirement(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                               const std::shared_ptr<PreviewDisplayStageRecord>& stage) {
     const bool cancelled = stage->cancellationRequested || stage->nativeDiscard ||
@@ -516,37 +515,97 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             beginResidentRetirement(core, stage, nativeFailure);
             return;
         }
-        // The display submission is retired (or never submitted); no unretired pin remains.
+        if (!cancelled && poll == render::GpuResidentDisplayPollResult::Ready &&
+            core->options.product == GpuPreviewDisplayProductMode::GpuPreparedPacked) {
+            std::string reason;
+            if (residentPackedTransferBegin(core, stage, reason)) {
+                stage->residentPhase = ResidentNativePhase::Transfer;
+                stage->nativeStartedAt = nativeNow(core);
+                return;
+            }
+            publishResidentJobDetail(core, "GPU packed transfer begin refused: " + reason);
+        } else {
+            // The display submission is retired (or never submitted); no unretired pin remains.
+            core->residentNativeInFlight = false;
+            core->residentNativeActive.reset();
+            stage->residentPhase = ResidentNativePhase::Done;
+            if (cancelled) {
+                if (nativeFailure) {
+                    core->counterResidentFailures.fetch_add(1, std::memory_order_relaxed);
+                }
+                completeCancelled(stage);
+                return;
+            }
+            if (poll == render::GpuResidentDisplayPollResult::Ready) {
+                std::string reason;
+                auto frame = residentFinishFrame(core, *stage, reason);
+                if (frame.has_value()) {
+                    auto prepared = PreviewPreparationResult::prepared(
+                        std::make_shared<const PreparedPreviewFrame>(std::move(*frame)));
+                    if (prepared.has_value()) {
+                        if (stage->completion.isValid()) {
+                            static_cast<void>(
+                                std::move(stage->completion)
+                                    .succeed(std::make_shared<const PreviewPreparationResult>(
+                                        std::move(*prepared))));
+                        }
+                        stage->phase = StagePhase::Done;
+                        return;
+                    }
+                }
+                if (!reason.empty()) {
+                    publishResidentJobDetail(core, "resident display frame refused: " + reason);
+                }
+            }
+        }
+        core->residentNativeInFlight = false;
+        core->residentNativeActive.reset();
+        stage->residentPhase = ResidentNativePhase::Done;
+        finishResidentImmediately(core, stage, true);
+        return;
+    }
+    case ResidentNativePhase::Transfer: {
+        const auto poll = core->packedTransfer
+                              ? (core->packedTransferPollOverride
+                                     ? core->packedTransferPollOverride(*core->packedTransfer)
+                                     : core->packedTransfer->poll())
+                              : render::GpuDisplayTransferState::Failure;
+        if (poll == render::GpuDisplayTransferState::Pending) {
+            if (cancelled ||
+                nativeNow(core) - stage->nativeStartedAt >= core->options.nativeDispatchDeadline)
+                beginResidentRetirement(core, stage, !cancelled);
+            return;
+        }
+        if (core->packedTransfer && core->packedTransfer->hasUnretiredSubmission()) {
+            beginResidentRetirement(core, stage, !cancelled);
+            return;
+        }
         core->residentNativeInFlight = false;
         core->residentNativeActive.reset();
         stage->residentPhase = ResidentNativePhase::Done;
         if (cancelled) {
-            if (nativeFailure) {
-                core->counterResidentFailures.fetch_add(1, std::memory_order_relaxed);
+            if (core->packedTransfer) {
+                core->packedTransfer->cancel();
+                static_cast<void>(core->packedTransfer->reset());
             }
             completeCancelled(stage);
             return;
         }
-        if (poll == render::GpuResidentDisplayPollResult::Ready) {
+        if (poll == render::GpuDisplayTransferState::Ready) {
             std::string reason;
-            auto frame = residentFinishFrame(core, *stage, reason);
-            if (frame.has_value()) {
+            auto frame = residentPackedTransferFinish(core, *stage, reason);
+            if (frame) {
                 auto prepared = PreviewPreparationResult::prepared(
                     std::make_shared<const PreparedPreviewFrame>(std::move(*frame)));
-                if (prepared.has_value()) {
-                    if (stage->completion.isValid()) {
-                        static_cast<void>(
-                            std::move(stage->completion)
-                                .succeed(std::make_shared<const PreviewPreparationResult>(
-                                    std::move(*prepared))));
-                    }
+                if (prepared && stage->completion.isValid()) {
+                    static_cast<void>(std::move(stage->completion)
+                                          .succeed(std::make_shared<const PreviewPreparationResult>(
+                                              std::move(*prepared))));
                     stage->phase = StagePhase::Done;
                     return;
                 }
             }
-            if (!reason.empty()) {
-                publishResidentJobDetail(core, "resident display frame refused: " + reason);
-            }
+            publishResidentJobDetail(core, "GPU packed product refused: " + reason);
         }
         finishResidentImmediately(core, stage, true);
         return;
@@ -566,6 +625,10 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
              residentExecutorHasUnretiredSubmission(core) || residentOwnerDrainRequired(core))) {
             static_cast<void>(residentExecutorPoll(core));
         }
+        if (core->packedTransfer && core->packedTransfer->hasUnretiredSubmission())
+            static_cast<void>(core->packedTransferPollOverride
+                                  ? core->packedTransferPollOverride(*core->packedTransfer)
+                                  : core->packedTransfer->poll());
         if (residentDisplayHasUnretiredSubmission(core)) {
             static_cast<void>(residentDisplayPoll(core));
         }
@@ -581,6 +644,9 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
              !residentExecutorHasUnretiredSubmission(core) && !residentOwnerDrainRequired(core));
         const bool displayRetired = !residentDisplayHasUnretiredSubmission(core);
         if (executorRetired && displayRetired) {
+            if (core->packedTransfer)
+                static_cast<void>(core->packedTransfer->reset());
+            core->packedTransferLate = false;
             finishResidentRetirement(core, stage);
             return;
         }
@@ -588,8 +654,27 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
         if (stage->residentRetirePumps >= kResidentRetirementPumpBudget) {
             // Bounded owner-thread teardown: the pipeline destructors drain/quarantine. This is the
             // only point at which an unproven fence is abandoned, and it is explicit and counted.
+            const bool transferQuarantined =
+                core->packedTransfer && core->packedTransfer->hasUnretiredSubmission();
+            if (transferQuarantined && !core->stopping.load(std::memory_order_acquire)) {
+                core->packedTransferLate = true;
+                stage->residentRetirePumps = kResidentRetirementPumpBudget;
+                return; // bounded late backoff still offers the exact owner real fence observations
+            }
             teardownTerminalResidentRoute(core);
-            finishResidentRetirement(core, stage);
+            if (transferQuarantined) {
+                publishResidentJobDetail(core,
+                                         "packed transfer quarantined on shutdown; independent "
+                                         "source/staging/host reservation survives task detach");
+                // Explicit bounded shutdown handoff: the independent reservation still charges
+                // physically quarantined allocations after task admission/context are released.
+                core->residentNativeActive.reset();
+                core->residentNativeInFlight = false;
+                stage->residentPhase = ResidentNativePhase::Done;
+                completeCancelled(stage);
+            } else {
+                finishResidentRetirement(core, stage);
+            }
             return;
         }
         return;

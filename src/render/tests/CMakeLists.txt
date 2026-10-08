@@ -341,6 +341,21 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         LABELS unit gpu render export
     )
 
+    add_executable(bloom_render_gpu_display_transfer_test gpu_display_transfer_tests.cpp)
+    target_link_libraries(bloom_render_gpu_display_transfer_test PRIVATE
+        bloom_render_display_transfer_test_faults bloom_render)
+    target_include_directories(bloom_render_gpu_display_transfer_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan" "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/include/vulkan")
+        target_include_directories(bloom_render_gpu_display_transfer_test SYSTEM PRIVATE
+            "${BLOOM_DEPENDENCY_PREFIX}/include")
+    endif()
+    bloom_enable_warnings(bloom_render_gpu_display_transfer_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_display_transfer_test)
+    bloom_add_test(NAME bloom.render.gpu_display_transfer
+        COMMAND bloom_render_gpu_display_transfer_test LABELS unit gpu render preview)
+    set_tests_properties(bloom.render.gpu_display_transfer PROPERTIES SKIP_RETURN_CODE 77)
+
     # Production combined output-colour readback: ONE submission carrying two distinct payloads
     # (process RGBA32F + encoded RGBA32F effect or RGBA8 display), process-only identity, pre-submit
     # budget refusal, and cancellation retirement.

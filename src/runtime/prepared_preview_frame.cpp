@@ -1,3 +1,4 @@
+#include <bloom/runtime/gpu_prepared_packed_preview_product.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
 
 #include <bloom/runtime/gpu_resident_preview_qualification.hpp>
@@ -97,8 +98,8 @@ PreviewDisplayOnlyFrame::create(const PreparedPreviewFrame& source,
     if (!view.has_value()) {
         return std::nullopt;
     }
-    const auto descriptor =
-        render::ReferenceDisplayBufferDescriptor::create(view->displayWindow, view->pixelAspect);
+    const auto descriptor = render::ReferenceDisplayBufferDescriptor::create(
+        view->dataWindow.value_or(view->displayWindow), view->pixelAspect);
     if (!descriptor) {
         return std::nullopt;
     }
@@ -109,10 +110,14 @@ PreviewDisplayOnlyFrame::create(const PreparedPreviewFrame& source,
         return std::nullopt;
     }
     const auto geometry = source.evaluatedBounds();
-    if (geometry.size_bytes() > pixelStorageByteLimit)
+    const auto metadata =
+        source.provenance().provider == PreviewDisplayProvider::GpuPreparedPacked
+            ? gpuPreparedPackedMetadataByteCost(source.desiredIdentity(), geometry.size())
+            : geometry.size_bytes();
+    if (metadata > pixelStorageByteLimit)
         return std::nullopt;
-    auto buffer = render::PreparedReferenceDisplayBuffer::create(
-        *descriptor.value(), view->pixels, pixelStorageByteLimit - geometry.size_bytes());
+    auto buffer = render::PreparedReferenceDisplayBuffer::create(*descriptor.value(), view->pixels,
+                                                                 pixelStorageByteLimit - metadata);
     if (!buffer) {
         return std::nullopt;
     }
@@ -132,16 +137,26 @@ PreviewDisplayOnlyFrame::displayBufferView() const noexcept {
     if (descriptor == nullptr) {
         return std::nullopt;
     }
+    const auto* packed = provenance_.gpuPreparedPacked.get();
     return PreviewDisplayBufferView{
-        .displayWindow = descriptor->displayWindow(),
+        .displayWindow =
+            packed && packed->displayWindow ? *packed->displayWindow : descriptor->displayWindow(),
         .pixelAspect = descriptor->pixelAspect(),
         .layout = descriptor->layout(),
         .pixels = buffer_.pixels(),
         .isOcioQualified = isOcioQualified(),
+        .dataWindow = packed ? std::optional(descriptor->displayWindow()) : std::nullopt,
     };
 }
 
 std::size_t PreviewDisplayOnlyFrame::displayByteCost() const noexcept {
+    if (provenance_.provider == PreviewDisplayProvider::GpuPreparedPacked) {
+        const auto metadata =
+            gpuPreparedPackedMetadataByteCost(desiredIdentity_, bounds_.capacity());
+        if (buffer_.pixels().size_bytes() > std::numeric_limits<std::size_t>::max() - metadata)
+            return std::numeric_limits<std::size_t>::max();
+        return buffer_.pixels().size_bytes() + metadata;
+    }
     return buffer_.pixels().size_bytes() + std::span(bounds_).size_bytes();
 }
 
