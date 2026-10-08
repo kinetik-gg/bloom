@@ -218,8 +218,9 @@ class ViewerGpuPresenter final : public QObject {
     // requested physical (device-pixel) extent is forwarded verbatim. The embedded QWindow is
     // resized by the host's QWindowContainer (its logical geometry is owned by the
     // editor/controller), never by this adapter; only a standalone presenter resizes its own
-    // window, from the live window ratio. present() is refused until the owner reports Active
-    // again.
+    // window, from the live window ratio. While attaching/resizing, the newest request replaces
+    // the existing bounded owner slot. present() waits for the newest completed resize sequence;
+    // an old Active snapshot, including the same extent, cannot end that gate.
     [[nodiscard]] bool requestResize(std::uint32_t deviceWidth, std::uint32_t deviceHeight);
 
     // Explicit non-blocking retire-before-UI-mutation gate. On SafeToMutate the caller may destroy

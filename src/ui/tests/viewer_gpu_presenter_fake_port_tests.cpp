@@ -146,6 +146,7 @@ struct FakePort final : ViewerGpuPort {
     GpuPresentationTargetId nextId = 1;
     std::vector<GpuBorrowedSurface> attaches;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> resizes;
+    std::vector<std::uint64_t> resizeSequences;
     std::map<GpuPresentationTargetId, GpuPresentationTargetSnapshot> snapshots;
 
     [[nodiscard]] GpuBorrowedInstanceView instanceView() const override { return view; }
@@ -178,6 +179,7 @@ struct FakePort final : ViewerGpuPort {
                                                    std::uint64_t sequence, std::uint32_t width,
                                                    std::uint32_t height) override {
         resizes.emplace_back(width, height);
+        resizeSequences.push_back(sequence);
         GpuPresentationPortResult result;
         result.target = target;
         result.sequence = sequence;
@@ -468,7 +470,10 @@ int main(int argc, char** argv) {
                                 "the embedded QWindow is not resized by the presenter");
             expectations.expect(container->parentWidget() == &embeddedHost,
                                 "the embedded container keeps its host parent across resizes");
-            // The port publishes Active again, ending the resize gate before the next request.
+            // The port publishes Active with the actual newest extent after real resize work.
+            port->snapshots[id].info.width = width;
+            port->snapshots[id].info.height = height;
+            port->snapshots[id].completedResizeSequence = port->resizeSequences.back();
             port->setState(id, GpuPresentationTargetState::Active, false);
             expectations.expect(waitForPresenter(*presenter,
                                                  [&] {
@@ -477,6 +482,48 @@ int main(int argc, char** argv) {
                                                  }),
                                 "the embedded resize settles back to Active");
         }
+
+        // Hold the owner at A while B and C arrive. This is the rapid splitter race: expected
+        // pending geometry must survive without an Active-only refusal or a late A activation.
+        const auto beforeHeld = port->resizes.size();
+        expectations.expect(presenter->requestResize(500U, 375U), "held resize A is admitted");
+        expectations.expect(presenter->requestResize(700U, 525U),
+                            "newest resize B is admitted while A is pending");
+        expectations.expect(presenter->requestResize(800U, 600U),
+                            "newest resize C replaces pending geometry without refusal");
+        expectations.expect(port->resizes.size() == beforeHeld + 3 &&
+                                port->resizes.back() == std::make_pair(800U, 600U),
+                            "the existing coalesced owner slot receives the newest extent");
+        port->snapshots[id].info.width = 500U;
+        port->snapshots[id].info.height = 375U;
+        port->snapshots[id].completedResizeSequence = port->resizeSequences[beforeHeld];
+        port->setState(id, GpuPresentationTargetState::Active, false);
+        static_cast<void>(presenter->pollNow());
+        expectations.expect(presenter->state() == ViewerGpuPresenter::State::Resizing &&
+                                !presenter->acceptingPresent(),
+                            "late A cannot activate or uncover newest C");
+        port->snapshots[id].info.width = 800U;
+        port->snapshots[id].info.height = 600U;
+        port->snapshots[id].completedResizeSequence = port->resizeSequences.back();
+        static_cast<void>(presenter->pollNow());
+        expectations.expect(presenter->state() == ViewerGpuPresenter::State::Active &&
+                                presenter->diagnostic().empty(),
+                            "only newest C ends the resize gate without a persistent failure");
+
+        expectations.expect(presenter->requestResize(500U, 375U) &&
+                                presenter->requestResize(700U, 525U) &&
+                                presenter->requestResize(500U, 375U),
+                            "A->B->A keeps a newest resize sequence despite equal final extent");
+        port->snapshots[id].info.width = 500U;
+        port->snapshots[id].info.height = 375U;
+        port->snapshots[id].completedResizeSequence = port->resizeSequences[beforeHeld];
+        static_cast<void>(presenter->pollNow());
+        expectations.expect(presenter->state() == ViewerGpuPresenter::State::Resizing,
+                            "old A dimensions cannot acknowledge newest A geometry");
+        port->snapshots[id].completedResizeSequence = port->resizeSequences.back();
+        static_cast<void>(presenter->pollNow());
+        expectations.expect(presenter->state() == ViewerGpuPresenter::State::Active,
+                            "newest A needs its own completed native resize sequence");
 
         bool called = false;
         bool safe = false;

@@ -505,12 +505,22 @@ int main(int argc, char** argv) {
             [&] { return surfaceA->window->width() == 400 && surfaceA->window->height() == 300; },
             5000),
         "the QWindow A reports the new size");
+    runCommand(Cmd::SetGate, true);
+    expectations.expect(client->resize(targetA.target, 28U, 400U, 300U).accepted(),
+                        "the first resize is admitted while the owner is held");
+    expectations.expect(client->resize(targetA.target, 29U, 500U, 375U).accepted(),
+                        "a differing intermediate resize coalesces");
     expectations.expect(client->resize(targetA.target, 30U, 400U, 300U).accepted(),
-                        "the resize is admitted");
+                        "the newest same-extent resize coalesces");
+    expectations.expect(client->status(targetA.target).completedResizeSequence == 0U,
+                        "mailbox resize admission is not native completion");
+    runCommand(Cmd::SetGate, false);
     expectations.expect(waitUntil(
                             [&] {
                                 const auto snapshot = client->status(targetA.target);
-                                return snapshot.info.width == 400U && snapshot.info.height == 300U;
+                                return snapshot.info.width == 400U &&
+                                       snapshot.info.height == 300U &&
+                                       snapshot.completedResizeSequence == 30U;
                             },
                             15'000),
                         "the target resized to match the real window extent");
@@ -518,12 +528,27 @@ int main(int argc, char** argv) {
         client->update(targetA.target, 31U, makeUpdate(lease, nullptr, 400U, 300U)).accepted(),
         "an update after resize is admitted");
     expectations.expect(waitApplied(targetA.target, 31U, 10'000), "the resized target presents");
+    expectations.expect(client->status(targetA.target).completedResizeSequence == 30U,
+                        "image publication does not overwrite completed resize sequence");
 
     // Bounded target cap: A, B and the attached C fill maxTargets=4 with the stale slot released.
+    runCommand(Cmd::SetGate, true);
     const auto targetC = attach(*surfaceC, 320U, 240U, view.epoch.value);
     expectations.expect(targetC.code == GpuPresentationPortCode::Accepted, "target C attaches");
+    expectations.expect(client->resize(targetC.target, 1U, 400U, 300U).accepted() &&
+                            client->resize(targetC.target, 2U, 320U, 240U).accepted(),
+                        "the newest geometry is admitted while attach is pending");
+    runCommand(Cmd::SetGate, false);
     expectations.expect(waitState(targetC.target, GpuPresentationTargetState::Active, 10'000),
                         "target C becomes Active");
+    expectations.expect(waitUntil(
+                            [&] {
+                                const auto snapshot = client->status(targetC.target);
+                                return snapshot.completedResizeSequence == 2U &&
+                                       snapshot.info.width == 320U && snapshot.info.height == 240U;
+                            },
+                            10'000),
+                        "attach followed by coalesced resize acknowledges genuine recreation");
     // Exercise real WSI progress with three simultaneously eligible targets across reuse cycles.
     for (std::uint64_t sequence = 100U; sequence < 108U; ++sequence) {
         runCommand(Cmd::SetGate, true);

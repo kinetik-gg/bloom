@@ -227,6 +227,10 @@ class ViewerGpuResidentController final {
     [[nodiscard]] std::shared_ptr<const runtime::PreparedPreviewFrame>
     appliedFrame() const noexcept;
     [[nodiscard]] const std::optional<ResidentAppliedDisplay>& appliedDisplay() const noexcept;
+    // Necessary native availability, independent of whether the applied publication matches the
+    // newest requested domain. An available older publication is actual displayed state (Stale).
+    // Native exposure is not an independent compositor pixel acknowledgement.
+    [[nodiscard]] bool nativeDisplayAvailable() const noexcept;
     // Whether a known native publication can safely remain exposed in the current requested domain.
     [[nodiscard]] bool canRetainAppliedDisplay() const noexcept;
     // Explicit domain clear, unlike the absence of a newly prepared adjustment candidate.

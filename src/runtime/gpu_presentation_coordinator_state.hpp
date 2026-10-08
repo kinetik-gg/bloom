@@ -95,6 +95,7 @@ struct CoordinatorState {
         std::optional<detail::GpuPresentationPendingResize> pendingResize;
         bool retirePending = false;
         std::uint64_t appliedSequence = 0;
+        std::uint64_t completedResizeSequence = 0;
         std::uint64_t rejectedSequence = 0;
         std::uint64_t presentCount = 0;
         bool nativeAcquired = false;
@@ -191,6 +192,7 @@ struct CoordinatorState {
             snapshot.id = entry.id;
             snapshot.state = state;
             snapshot.appliedSequence = entry.appliedSequence;
+            snapshot.completedResizeSequence = entry.completedResizeSequence;
             snapshot.rejectedSequence = entry.rejectedSequence;
             snapshot.presentCount = entry.presentCount;
             snapshot.surfaceSafeToDestroy = safeToDestroy;

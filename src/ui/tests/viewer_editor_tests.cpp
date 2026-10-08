@@ -337,6 +337,7 @@ void testViewerRendersQualifiedFrameAndReportsColorState(Expectations& expectati
     ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline);
     ui::ViewerEditor viewer(session, controller);
     viewer.resize(320, 240);
+    viewer.show();
     controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
 
     expectations.expect(waitUntil([&] { return isReady(controller); }),
@@ -394,6 +395,10 @@ void testViewerRendersQualifiedFrameAndReportsColorState(Expectations& expectati
             QStringLiteral("Qualified · Bloom Neutral"),
         "the window status bar's own color chip text agrees with the accessible description");
 
+    viewer.hide();
+    expectations.expect(viewer.displayedPreviewState().freshness == ui::FrameFreshness::None &&
+                            !viewer.displayedPreviewState().ownerAppliedDisplay,
+                        "a hidden Viewer does not claim its previously painted frame is displayed");
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
 

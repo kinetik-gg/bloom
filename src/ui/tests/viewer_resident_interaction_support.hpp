@@ -19,6 +19,9 @@ struct HarnessOptions final {
     bool valid = true;
     bool baseline = false;
     bool outlineProof = false;
+    bool resizeProof = false;
+    bool geometryAdmissionProof = false;
+    bool retireAvailabilityProof = false;
     bool failAfterPresent = false;
     bool transitions = false;
     bool general = false;
@@ -44,6 +47,15 @@ struct HarnessOptions final {
             options.transitions = true;
         } else if (argument == "--outline-proof") {
             options.outlineProof = true;
+        } else if (argument == "--resize-proof") {
+            options.resizeProof = true;
+        } else if (argument == "--geometry-admission-proof") {
+            options.resizeProof = true;
+            options.geometryAdmissionProof = true;
+        } else if (argument == "--retire-availability-proof") {
+            options.resizeProof = true;
+            options.geometryAdmissionProof = true;
+            options.retireAvailabilityProof = true;
         } else if (argument == "--baseline") {
             options.baseline = true;
         } else if (argument == "--trace" && index + 1 < argc) {

@@ -8,12 +8,14 @@ Updated: 2026-10-09
 
 The owner resumed execution after the G2E checkpoint. G3B outline publication and displayed-intent
 slices and G3A retention truth are accepted within the limits below. The immediate next G3B follow-up
-is Viewer resize recovery, clipping and visible-status consistency; G3 as a whole remains incomplete.
+is Viewer resize recovery and clipping. The narrow resize acknowledgement/visible-status repair is
+accepted below; the pixel containment defect remains unresolved and G3 as a whole is incomplete.
 
 Implementation proceeds sequentially from `e1086c13`. Each slice requires source review, focused
 regressions, and the applicable native/product evidence before its successor is accepted. A passing
-unit test does not complete an experience gate. The optional host tier and any contract amendment
-remain separate decisions under G9.
+unit test does not complete an experience gate. A bounded final GPU-packed transfer into QWidget
+is now authorized for the G3B layout repair, with its service reviewed before Viewer integration.
+The broader host tier and residency policy remain separate decisions under G9.
 
 | Package | State | Evidence |
 | --- | --- | --- |
@@ -24,7 +26,8 @@ remain separate decisions under G9.
 | G3B2A | Clear/discard synchronization and bounded owner WSI progress accepted as a bounded slice | Independent source review and isolated GL native checks, isolated Vulkan lifecycle/progress, CPU admission/fairness tests, Vulkan-disabled render build and changed-source static analysis pass |
 | G3B2B | Actual displayed intent, safe CPU cover and coupled hit mapping accepted as a bounded slice | Independent private compositor pixels, strict native interaction/project replacement, focused regressions, source quality and 58 affected translation units of static analysis pass |
 | G3A | Accepted as a bounded retention/capacity slice | Independent source/artifact review, typed/live coverage regressions, measured 100-frame Full/Half native parity/warm replay, UI goldens, quality and 57 affected translation units of static analysis pass |
-| G3B resize follow-up | Pending; immediate next slice | User reports refusal, blank Viewer and spill into neighboring panels during resize/reposition; visible pixels, clipping and status require a new layout-transition gate |
+| G3B resize lifecycle/status | Accepted as a narrow slice; containment remains unresolved | Independent resize completion sequence, exposed previous pixels described as Stale, native/focused/UI checks and 20 affected translation units of static analysis pass |
+| G3B resize containment | Pending; immediate next slice | External pixels reject native viewport and geometry-admission approaches; staged asynchronous final GPU-packed QWidget output must qualify actual layout transitions |
 | G4–G10 | Pending | No implementation or qualification claim |
 
 G3B1 checkpoint (2026-10-09), accepted after independent source review and focused reruns: coherent required-outline publication and exact
@@ -134,6 +137,29 @@ G3B2B captures do not qualify repeated resize/reposition during non-Active nativ
 next gate must externally prove current visible pixels and neighboring-panel clipping after layout
 changes, including held attach/resize/retirement. The running old app and unsaved session remain
 preserved; no overnight relaunch is part of this checkpoint.
+
+Narrow resize lifecycle/status checkpoint (2026-10-09), accepted after independent review:
+`completedResizeSequence` records actual native recreation separately from image `appliedSequence`.
+Newest attach/resize intent uses the existing bounded mailbox; old A acknowledgements cannot end
+an A→B→C or A→B→A gate. Native availability is separate from current-domain retention: an exposed
+old coherent publication remains descriptive as Stale during changed overlays or retirement,
+while Current requires Active and the exact publication domain. Hidden or unexposed output cannot
+advertise a displayed frame or fall through to CPU metadata occluded by a live native target.
+Real coordinator/client correlation, private held-retirement pixels and existing overlay/intent
+proofs pass with clean core/synchronization validation; focused/UI checks, unchanged DPR1/1.5
+goldens, source quality and 20 affected translation units of static analysis pass.
+
+This checkpoint **does not fix resize clipping**. The original held shrink spilled 197,225 pixels
+into a neighboring sentinel. A dedicated native QWidget viewport promoted editor ancestry and
+produced blank/stale output, so it was removed. Harness-only retirement-before-layout admission
+contained authored splitter changes, but an actual top-level shrink from 960 to 600 pixels left
+89,125 GPU/checker/outline pixels outside the new window even with retirement requested first.
+Neither experiment is installed in production. Their private raw captures remain evidence of the
+unresolved boundary, not passing experience gates. The authorized next stage transfers only the
+final GPU-prepared RGBA8 display asynchronously into budgeted host storage for ordinary QWidget
+painting, with explicit GPU-prepared/CPU-painted provenance, no CPU scene re-evaluation, retained
+native route coverage and measured warm cache reuse. Service lifetime/budget/parity review precedes
+Viewer wiring. This bounded repair does not complete G3 or G4–G10.
 
 Terminal task-input lifetime checkpoint (2026-10-09), accepted after independent review:
 CPU and blocking-I/O task publication now releases the callable's captured inputs after execution

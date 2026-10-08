@@ -20,6 +20,7 @@
 #include <bloom/ui/gpu_viewer_bootstrap.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <bloom/ui/native_surface_retirement.hpp>
 #include <bloom/ui/preview_frame_trace.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_editor.hpp>
@@ -35,6 +36,7 @@
 #include <QPointF>
 #include <QPointer>
 #include <QSettings>
+#include <QSplitter>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -57,6 +59,7 @@
 #include "viewer_resident_transition_support.hpp"
 
 #include "viewer_resident_editor_outline_proof.ipp"
+#include "viewer_resident_resize_proof.ipp"
 
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const HarnessOptions options = parseHarnessOptions(argc, argv);
@@ -128,7 +131,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
                   "the first Solid layer is created through the session command surface");
 
-    if (options.baseline || options.outlineProof || options.transitions ||
+    if (options.baseline || options.outlineProof || options.resizeProof || options.transitions ||
         options.shutdownInFlight) {
         const auto solidSelection = session.selection();
         checks.expect(
@@ -146,17 +149,17 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             session.selectLayer(*layer);
     }
 
-    TaskScheduler scheduler((options.baseline || options.outlineProof || options.transitions ||
-                             options.shutdownInFlight)
+    TaskScheduler scheduler((options.baseline || options.outlineProof || options.resizeProof ||
+                             options.transitions || options.shutdownInFlight)
                                 ? TaskSchedulerConfig::defaults()
                                 : schedulerConfig());
     const runtime::CpuReferenceDisplayPreparer displayPreparer;
     auto gpuOptions = serviceOptions(options.loader);
-    const auto frameCache = (options.baseline || options.outlineProof || options.transitions ||
-                             options.shutdownInFlight)
+    const auto frameCache = (options.baseline || options.outlineProof || options.resizeProof ||
+                             options.transitions || options.shutdownInFlight)
                                 ? std::make_shared<ui::PreviewFrameCache>()
                                 : nullptr;
-    if (options.baseline || options.outlineProof || options.transitions ||
+    if (options.baseline || options.outlineProof || options.resizeProof || options.transitions ||
         options.shutdownInFlight) {
         // Same default budget alignment as the desktop root, with no saved preference overrides.
         gpuOptions = GpuPreviewDisplayServiceOptions{};
@@ -204,8 +207,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const auto transitionGate =
         (options.transitions || options.shutdownInFlight) ? installTransitionGate(core) : nullptr;
     ui::TaskUiBridge bridge(scheduler, nullptr,
-                            (options.baseline || options.outlineProof || options.transitions ||
-                             options.shutdownInFlight)
+                            (options.baseline || options.outlineProof || options.resizeProof ||
+                             options.transitions || options.shutdownInFlight)
                                 ? ui::TaskUiBridge::defaultPollingInterval
                                 : 1ms);
     const auto cpuPipeline = ui::makeCompositionPreviewPipeline(fixture.compiler, fixture.evaluator,
@@ -235,15 +238,15 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     ui::CompositionPreviewSettings settings;
     if (!options.baseline)
         settings.pixelStorageByteLimit = kBudget;
-    if (options.baseline) {
+    if (options.baseline || options.resizeProof) {
         // Explicit initial user preference in this fixture's isolated settings directory. The
         // Viewer restores it through its production preference path, so no initial Auto->Full
         // cancellation race is smuggled into a fixed-resolution timing sample.
         QSettings().setValue(QStringLiteral("viewer/resolution"), QStringLiteral("Full"));
         settings.resolutionPolicy = runtime::PreviewResolutionPolicy::Full;
     }
-    auto trace = (options.baseline || options.outlineProof || options.transitions ||
-                  options.shutdownInFlight)
+    auto trace = (options.baseline || options.outlineProof || options.resizeProof ||
+                  options.transitions || options.shutdownInFlight)
                      ? std::make_shared<ui::PreviewFrameTrace>()
                      : nullptr;
     if (trace)
@@ -283,7 +286,13 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     layout->setContentsMargins(0, 0, 0, 0);
     auto* area =
         new ui::EditorArea(registry, "bloom.viewer", QStringLiteral("proof-viewer"), host.get());
-    layout->addWidget(area);
+    QSplitter* resizeSplitter = nullptr;
+    if (options.resizeProof) {
+        host->setWindowTitle(QStringLiteral("bloom-editor-resize-proof"));
+        resizeSplitter = makeResizeProofLayout(*host, *layout, *area);
+    } else {
+        layout->addWidget(area);
+    }
 
     std::size_t activations = 0;
     QObject::connect(area, &ui::EditorArea::activationRequested, area,
@@ -350,6 +359,17 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         const auto geometry = ui::residentFrameGeometry(*displayed);
         checks.expect(geometry.has_value() && geometry->lease.isValid(),
                       "the displayed frame carries a valid genuine native lease");
+
+        if (options.resizeProof) {
+            if (options.geometryAdmissionProof)
+                exerciseGeometryAdmissionProof(checks, *viewer, *area, *resizeSplitter, *host,
+                                               scheduler, core, client,
+                                               options.retireAvailabilityProof);
+            else
+                exerciseViewerResizeProof(checks, *viewer, *area, *resizeSplitter, *host, scheduler,
+                                          core, client);
+            return checks.failures() == 0 ? 0 : 1;
+        }
 
         if (options.baseline) {
             checks.expect(geometry && geometry->displayExtent.width() == 1920 &&

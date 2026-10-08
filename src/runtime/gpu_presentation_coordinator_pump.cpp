@@ -332,6 +332,8 @@ void CoordinatorState::drivePresent(Entry& entry) {
         }
         entry.description = description;
         entry.info = entry.native->info();
+        if (requested.sequence != 0)
+            entry.completedResizeSequence = requested.sequence;
         entry.pendingResize.reset();
         entry.lastCode = code;
         entry.state = GpuPresentationTargetState::Active;

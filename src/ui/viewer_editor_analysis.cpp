@@ -7,6 +7,7 @@
 #include <QSettings>
 #include <QStringList>
 #include <QTimer>
+#include <QWindow>
 
 namespace bloom::ui {
 
@@ -64,13 +65,19 @@ PreparedPreviewFrameHandle ViewerEditor::preparedDisplayFrame() const {
 }
 
 std::optional<ViewerDisplayDescriptor> ViewerEditor::actualDisplayDescriptor() const {
+    if (!isVisible())
+        return std::nullopt;
+    if (const auto* topLevel = window()->windowHandle(); topLevel && !topLevel->isExposed())
+        return std::nullopt;
     if (gpuResident_ && gpuResident_->cpuCoverVisible()) {
         if (cpuCoverDisplay_ &&
             (!cpuCoverDisplay_->frame || frameInCurrentDomain(cpuCoverDisplay_->frame)))
             return cpuCoverDisplay_;
         return std::nullopt;
     }
-    if (gpuResident_ && gpuResident_->hasLiveTarget() && gpuResident_->appliedDisplay()) {
+    if (gpuResident_ && gpuResident_->hasLiveTarget()) {
+        if (!gpuResident_->nativeDisplayAvailable() || !gpuResident_->appliedDisplay())
+            return std::nullopt;
         const auto& applied = *gpuResident_->appliedDisplay();
         if (!frameInCurrentDomain(applied.frame) || !applied.geometry)
             return std::nullopt;

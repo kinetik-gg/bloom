@@ -439,6 +439,24 @@ schedule only the newest still-live desired identity. Shared Failed/Unsupported 
 diagnostics remain authoritative. A ready candidate without actual publication has no displayed
 frame and reports presentation pending.
 
+Native availability and currentness are distinct. A mapped, exposed previous publication remains
+the actual displayed descriptor, labelled Stale while a changed overlay or retirement is pending.
+Currentness and safe retention additionally require Active and the exact requested domain. Hidden
+or unexposed Viewer/native/active-cover output has no actual descriptor; an unavailable live native
+surface cannot expose an old CPU-painted descriptor underneath it. Native exposure is a necessary
+availability check, not an independent compositor pixel acknowledgement.
+
+Resize completion has its own `completedResizeSequence`, advanced only after successful native
+recreation. Image `appliedSequence` continues to describe a submitted image publication. The
+presenter coalesces newest requests during attach/resize and keeps admission closed until that
+resize sequence completes, including A→B→A where matching extent alone cannot prove completion.
+Retirement takes precedence. These lifecycle checks do not solve Qt container clipping: external
+private captures still reproduce spill on held resize and top-level shrink. Native-widget viewport
+and geometry-admission experiments were rejected before production integration. The next bounded
+repair is an independently reviewed asynchronous final GPU RGBA8 transfer into ordinary QWidget
+painting; it must preserve GPU scene preparation, exact provenance/identity, budgeted host storage,
+safe cancellation/retirement and the required native rendering route.
+
 The correlated native descriptor captures frame, geometry, destination, channel/background,
 selection/removal and surface domains, logical container rectangle, and DPR before enqueue. Its
 metadata remains readable when the lease stops admitting work; it never grants reuse permission.

@@ -150,9 +150,22 @@ struct ViewerGpuResidentController::Impl final {
                appliedDisplay->devicePixelRatio == requestedSafetyDomain->devicePixelRatio;
     }
 
+    [[nodiscard]] bool nativeDisplayAvailable() const noexcept {
+        const auto* window = presenter ? presenter->window() : nullptr;
+        const auto* container = presenter ? presenter->container() : nullptr;
+        const auto state =
+            presenter ? presenter->state() : ViewerGpuPresenter::State::Uninitialized;
+        const bool visiblePublicationState = state == ViewerGpuPresenter::State::Active ||
+                                             state == ViewerGpuPresenter::State::Resizing ||
+                                             state == ViewerGpuPresenter::State::Retiring;
+        return presenter && window && window->isVisible() && window->isExposed() && container &&
+               container->isVisible() && visiblePublicationState && !coverRequired;
+    }
+
     [[nodiscard]] bool canRetainAppliedDisplay() const noexcept {
-        return presenter && presenter->state() == ViewerGpuPresenter::State::Active &&
-               !coverRequired && appliedMatchesRequestedSafetyDomain();
+        return nativeDisplayAvailable() &&
+               presenter->state() == ViewerGpuPresenter::State::Active &&
+               appliedMatchesRequestedSafetyDomain();
     }
 
     void failCpu(const std::string& message) {

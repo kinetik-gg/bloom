@@ -11,6 +11,7 @@
 #include "viewer_gpu_resident_cover.hpp"
 
 #include <QWidget>
+#include <QWindow>
 
 #include <array>
 #include <cmath>
@@ -144,7 +145,7 @@ void ViewerGpuResidentController::revealCpuCover(const QRect& containerRect,
 
 bool ViewerGpuResidentController::cpuCoverVisible() const noexcept {
     return impl_->cover != nullptr && impl_->cover->isVisible() && impl_->cover->nativeWindow() &&
-           impl_->cover->nativeWindow()->isVisible();
+           impl_->cover->nativeWindow()->isVisible() && impl_->cover->nativeWindow()->isExposed();
 }
 
 void ViewerGpuResidentController::setStateChanged(std::function<void()> callback) {
@@ -488,6 +489,10 @@ bool ViewerGpuResidentController::canRetainAppliedDisplay() const noexcept {
     return impl_->canRetainAppliedDisplay();
 }
 
+bool ViewerGpuResidentController::nativeDisplayAvailable() const noexcept {
+    return impl_->nativeDisplayAvailable();
+}
+
 void ViewerGpuResidentController::clearPublicationDomain() {
     ++impl_->removalEpoch;
     impl_->desiredPublication.reset();
@@ -507,7 +512,7 @@ QRectF ViewerGpuResidentController::appliedDestination() const noexcept {
 }
 
 bool ViewerGpuResidentController::publicationCurrent() const noexcept {
-    return impl_->desiredPublication && !impl_->coverRequired &&
+    return impl_->canRetainAppliedDisplay() && impl_->desiredPublication &&
            impl_->appliedMatchesRequestedSafetyDomain() && impl_->appliedPublicationFrame &&
            impl_->appliedPublicationGeneration == impl_->requestGeneration;
 }

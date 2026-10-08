@@ -335,9 +335,8 @@ struct ViewerGpuPresenter::Impl final {
         if (snapshot.id == target) {
             appliedSequenceValue = snapshot.appliedSequence;
             rejectedSequenceValue = snapshot.rejectedSequence;
-            if (snapshot.rejectedSequence != 0 && snapshot.rejectedSequence == lastEnqueued)
-                diagnostic = snapshot.message;
-            else if (snapshot.appliedSequence != 0 && snapshot.appliedSequence == lastEnqueued)
+            if ((snapshot.rejectedSequence != 0 && snapshot.rejectedSequence == lastEnqueued) ||
+                (snapshot.appliedSequence != 0 && snapshot.appliedSequence == lastEnqueued))
                 diagnostic = snapshot.message;
             presentCountValue = snapshot.presentCount;
         }
@@ -352,7 +351,13 @@ struct ViewerGpuPresenter::Impl final {
                 state = State::Retiring;
                 break;
             }
-            if (state == State::Resizing) {
+            if (pendingResize && snapshot.completedResizeSequence < pendingResizeSequence) {
+                // An old Active snapshot (including A->B->A geometry) cannot acknowledge the
+                // newest resize. The owner publishes separate native recreation evidence.
+                state = State::Resizing;
+                break;
+            }
+            if (pendingResize) {
                 pendingResize = false;
             }
             state = State::Active;
@@ -464,16 +469,15 @@ struct ViewerGpuPresenter::Impl final {
 
     [[nodiscard]] bool requestResize(const std::uint32_t deviceWidth,
                                      const std::uint32_t deviceHeight) {
-        if (state != State::Active || mutationPending || !attached) {
-            diagnostic = "resize refused: the target is not Active or a retire is pending";
+        if ((state != State::Active && state != State::Resizing && state != State::Attaching) ||
+            mutationPending) {
+            diagnostic = "resize refused: the target is retiring or unavailable";
             return false;
         }
         if (deviceWidth == 0U || deviceHeight == 0U) {
             diagnostic = "resize refused: a positive extent is required";
             return false;
         }
-        targetWidth = deviceWidth;
-        targetHeight = deviceHeight;
         // Only a standalone presenter owns its QWindow geometry. An embedded QWindow (hosted by the
         // editor/controller through a QWindowContainer) is sized by that container from its logical
         // contentRect with the live widget DPR; resizing it here with the stale injected config
@@ -485,17 +489,26 @@ struct ViewerGpuPresenter::Impl final {
             window->resize(static_cast<int>(logicalExtent(deviceWidth, ratio)),
                            static_cast<int>(logicalExtent(deviceHeight, ratio)));
         }
-        pendingResize = true;
-        state = State::Resizing;
+        if (!attached) {
+            // No native target exists yet; first attach consumes exactly the latest extent.
+            targetWidth = deviceWidth;
+            targetHeight = deviceHeight;
+            diagnostic.clear();
+            return true;
+        }
         const std::uint64_t sequenceValue = ++sequence;
         const runtime::GpuPresentationPortResult result =
             port->resize(target, sequenceValue, deviceWidth, deviceHeight);
         if (result.accepted()) {
+            targetWidth = deviceWidth;
+            targetHeight = deviceHeight;
+            pendingResize = true;
+            pendingResizeSequence = sequenceValue;
+            state = State::Resizing;
             lastEnqueued = sequenceValue;
+            diagnostic.clear();
             return true;
         }
-        pendingResize = false;
-        state = State::Active;
         diagnostic = result.message.empty() ? "the resize was refused" : result.message;
         return false;
     }
@@ -605,6 +618,7 @@ struct ViewerGpuPresenter::Impl final {
     bool surfaceDestroyed = false;
     bool safeToDestroy = false;
     bool pendingResize = false;
+    std::uint64_t pendingResizeSequence = 0;
     bool mutationPending = false;
     bool readyNotified = false;
     bool terminalRecordReclaimed = false;

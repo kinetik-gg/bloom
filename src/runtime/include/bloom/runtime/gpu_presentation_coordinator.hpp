@@ -178,6 +178,9 @@ struct GpuPresentationTargetSnapshot final {
         render::GpuPresentationTargetCode::PresentationUnavailable;
     render::GpuPresentationTargetInfo info{};
     std::string message;
+    // Last nonzero resize sequence whose native recreation completed. Independent of image
+    // appliedSequence: geometry completion never acknowledges submitted display pixels.
+    std::uint64_t completedResizeSequence = 0;
 };
 
 struct GpuPresentationShutdownStatus final {
