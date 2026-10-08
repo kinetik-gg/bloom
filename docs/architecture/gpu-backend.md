@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-09-20
+Updated: 2026-10-08
 
 ## Purpose
 
@@ -364,6 +364,15 @@ cross-platform Linux/macOS/Windows parity spike; Windows/macOS GPU support; and 
 XCB/Xlib/Xrandr presentation intake. The scene evaluator now prepares every current compiled pixel
 operation through one shared scene, including a requested region of interest. The qualified Linux
 prefix manifest remains pending, so this direction stays `working`.
+
+Audit checkpoint (2026-10-08). A source review of the merged implementation identified native
+buffer-usage/visibility and failure-retirement defects, repeated source verification before warm
+reuse, production scheduling delays, incomplete aggregate memory ownership, and a gap between
+prepared/cache progress and actually presented frames. Earlier pixel-parity and route evidence
+does not establish native validation cleanliness, sustained playback, or whole-application memory
+stability. The [GPU reliability and preview plan](../plans/gpu-reliability-and-preview.md) records
+the evidence, its limits, and scoped repair/qualification packages. Its redesign choices remain
+proposed; this checkpoint does not adopt them or weaken the existing coverage contract.
 
 ## Boundaries
 
