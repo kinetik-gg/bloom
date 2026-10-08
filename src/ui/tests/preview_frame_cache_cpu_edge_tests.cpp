@@ -165,6 +165,34 @@ int main(int argc, char** argv) {
         const auto keyA = PreviewFrameCacheKey::forIdentity(frameA1->desiredIdentity());
         const auto costA = PreviewFrameCache::frameByteCost(*frameA1);
 
+        // G0: the trace must report real retention decisions, including a refused zero-budget
+        // insert. A returned void insert() is never treated as proof a frame was retained.
+        auto trace = std::make_shared<bloom::ui::PreviewFrameTrace>(32);
+        PreviewFrameCache zeroCache(0);
+        zeroCache.setFrameTrace(trace);
+        zeroCache.insert(frameA1);
+        expectations.expect(zeroCache.size() == 0 && trace->events().size() == 1 &&
+                                trace->events().back().outcome ==
+                                    bloom::ui::PreviewTraceOutcome::OverBudget,
+                            "G0: zero-budget refusal is traced honestly");
+        zeroCache.setByteBudget(kBudget);
+        zeroCache.insert(frameA1);
+        expectations.expect(zeroCache.contains(keyA) &&
+                                trace->events().back().outcome ==
+                                    bloom::ui::PreviewTraceOutcome::Retained,
+                            "G0: retained means a live matching entry actually exists");
+        auto tracedIdentity = frameA1->desiredIdentity();
+        tracedIdentity.requestGeneration = 9;
+        const auto tracedHit = zeroCache.take(tracedIdentity);
+        expectations.expect(tracedHit && trace->events().back().identity.generation == 9 &&
+                                trace->events().back().outcome ==
+                                    bloom::ui::PreviewTraceOutcome::Hit,
+                            "G0: a warm cache hit records the new publication generation");
+        zeroCache.setByteBudget(0);
+        expectations.expect(trace->events().back().outcome ==
+                                bloom::ui::PreviewTraceOutcome::Removed,
+                            "G0: removal is distinct from admission");
+
         // CACHEFIX-2 CPU path: a live frame with an already-retained key is reused in place, not
         // re-charged. This is the branch the dead-entry fix must not disturb.
         PreviewFrameCache reuseCache(kBudget);

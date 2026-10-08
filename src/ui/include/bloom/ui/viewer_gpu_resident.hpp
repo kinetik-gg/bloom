@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/ui/preview_frame_trace.hpp>
+
 // Viewer-side GPU-resident presentation controller.
 //
 // This is the single cohesive helper that lets the EXISTING ViewerEditor
@@ -131,6 +133,7 @@ class ViewerGpuResidentController final {
     void setPresentationPortForTest(std::shared_ptr<ViewerGpuPort> port);
     void setInputSink(InputSink sink);
     void setPresentAck(PresentAck ack);
+    void setFrameTrace(std::shared_ptr<PreviewFrameTrace> trace);
     void setCpuFallback(CpuFallback callback);
     // A native cover widget is created (as a sibling above the native container)
     // that paints the supplied CPU snapshot until a genuine owner present

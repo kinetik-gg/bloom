@@ -57,12 +57,18 @@ FrameFreshness CompositionPreviewController::freshnessFor(
 CompositionPreviewController::CompositionPreviewController(
     CompositionSession& session, runtime::TaskScheduler& scheduler, TaskUiBridge& taskUiBridge,
     PreviewPreparationFunction preparation, const CompositionPreviewSettings& settings,
-    PreviewFrameCacheHandle frameCache, QObject* parent, PreviewPreparationSubmitter submitter)
-    : QObject(parent), session_(session), scheduler_(scheduler), taskUiBridge_(taskUiBridge),
-      preparation_(std::move(preparation)), submitter_(std::move(submitter)), settings_(settings),
+    PreviewFrameCacheHandle frameCache, QObject* parent, PreviewPreparationSubmitter submitter,
+    std::shared_ptr<PreviewFrameTrace> trace)
+    : QObject(parent), trace_(std::move(trace)), session_(session), scheduler_(scheduler),
+      taskUiBridge_(taskUiBridge), preparation_(std::move(preparation)),
+      submitter_(std::move(submitter)), settings_(settings),
       frameCache_(frameCache != nullptr
                       ? std::move(frameCache)
                       : std::make_shared<PreviewFrameCache>(settings.ramPreviewByteBudget)) {
+    if (trace_) {
+        frameCache_->setFrameTrace(trace_);
+        taskUiBridge_.setFrameTrace(trace_);
+    }
     // Pixel work follows the retained evaluation snapshot, never the live document revision: a
     // verified layout-only edit updates the UI through snapshotChanged but must not disturb a
     // single evaluated frame. Explicit refresh, display/resolution and colour changes all reach
@@ -123,6 +129,9 @@ CompositionPreviewController::CompositionPreviewController(
     // Preview presentation must not wait for the Jobs monitor's 100 ms polling interval.
     // This timer only runs while a worker is active; polling only takes a ready result.
     completionPollTimer_.setInterval(4);
+    if (trace_)
+        trace_->setPollingIntervals(taskUiBridge_.pollingInterval(),
+                                    std::chrono::milliseconds{completionPollTimer_.interval()});
     completionPollTimer_.setTimerType(Qt::PreciseTimer);
     connect(&completionPollTimer_, &QTimer::timeout, this,
             &CompositionPreviewController::consumeReadyResult);
@@ -796,6 +805,9 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         .showLook = settings_.showLook,
     };
 
+    if (trace_)
+        trace_->record(desiredIdentity, PreviewTraceStage::Desired, PreviewTraceOutcome::Requested);
+
     const auto publishTerminal = [this, &desiredIdentity,
                                   &retainedFrame](const PreviewActivity activity, QString message) {
         interactiveCadenceTimer_.stop();
@@ -986,6 +998,9 @@ void CompositionPreviewController::submitPreview(PendingRequest pendingRequest,
     }
 
     const runtime::TaskId taskId = submission.handle.id();
+    if (trace_)
+        trace_->record(desiredIdentity, PreviewTraceStage::Queued, PreviewTraceOutcome::Accepted,
+                       255, taskId.value());
     active_.emplace(
         ActiveRequest{.handle = std::move(submission.handle),
                       .desiredIdentity = desiredIdentity,
@@ -1056,6 +1071,11 @@ void CompositionPreviewController::publish(CompositionPreviewState state) {
     Q_ASSERT(state.activity != PreviewActivity::Ready ||
              state.freshness == FrameFreshness::Current);
     state_ = std::move(state);
+    if (trace_ && state_.frame) {
+        trace_->record(*state_.frame, PreviewTraceStage::Published,
+                       state_.freshness == FrameFreshness::Current ? PreviewTraceOutcome::Current
+                                                                   : PreviewTraceOutcome::Stale);
+    }
     emit stateChanged();
 }
 

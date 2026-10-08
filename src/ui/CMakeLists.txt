@@ -387,6 +387,7 @@ target_sources(
         node_editor_menus.cpp
         playback_controller.cpp
         preview_frame_cache.cpp
+        preview_frame_trace.cpp
         project_host.cpp
         ram_preview_controller.cpp
         ram_preview_pipeline.cpp
@@ -480,6 +481,7 @@ target_sources(
             include/bloom/ui/qualified_display_processor_bootstrap.hpp
             include/bloom/ui/task_monitor_model.hpp
             include/bloom/ui/task_ui_bridge.hpp
+            include/bloom/ui/preview_frame_trace.hpp
             include/bloom/ui/text_box_overlay.hpp
             include/bloom/ui/third_party_license_catalog.hpp
             include/bloom/ui/timeline_editor.hpp

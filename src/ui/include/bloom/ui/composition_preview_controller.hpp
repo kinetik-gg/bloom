@@ -131,7 +131,8 @@ class CompositionPreviewController final : public QObject {
                                  const CompositionPreviewSettings& settings = {},
                                  PreviewFrameCacheHandle frameCache = nullptr,
                                  QObject* parent = nullptr,
-                                 PreviewPreparationSubmitter submitter = {});
+                                 PreviewPreparationSubmitter submitter = {},
+                                 std::shared_ptr<PreviewFrameTrace> trace = nullptr);
     ~CompositionPreviewController() override;
 
     [[nodiscard]] const CompositionPreviewState& state() const noexcept;
@@ -146,6 +147,9 @@ class CompositionPreviewController final : public QObject {
     [[nodiscard]] bool isShuttingDown() const noexcept;
     [[nodiscard]] bool backgroundWorkAllowed() const noexcept;
     [[nodiscard]] PreviewFrameCache& frameCache() const noexcept;
+    [[nodiscard]] const std::shared_ptr<PreviewFrameTrace>& frameTrace() const noexcept {
+        return trace_;
+    }
     [[nodiscard]] PlaybackController& playbackController();
     // The identity this controller WOULD request for `time` in the live composition, which is what
     // a caller asks the cache about when it wants to know whether a frame is already there (the RAM
@@ -241,6 +245,7 @@ class CompositionPreviewController final : public QObject {
     void previewCachePurged();
 
   private:
+    std::shared_ptr<PreviewFrameTrace> trace_;
     struct ActiveRequest final {
         runtime::TaskHandle<PreviewPreparationResultHandle> handle;
         runtime::PreviewRequestIdentity desiredIdentity;

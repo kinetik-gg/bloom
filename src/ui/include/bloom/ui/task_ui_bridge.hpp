@@ -7,22 +7,29 @@
 #include <QTimer>
 
 #include <chrono>
+#include <memory>
 #include <vector>
 
 namespace bloom::ui {
+
+class PreviewFrameTrace;
 
 class TaskUiBridge final : public QObject {
     Q_OBJECT
 
   public:
+    static constexpr std::chrono::milliseconds defaultPollingInterval{100};
     explicit TaskUiBridge(runtime::TaskScheduler& scheduler, QObject* parent = nullptr,
-                          std::chrono::milliseconds pollingInterval = std::chrono::milliseconds{
-                              100});
+                          std::chrono::milliseconds pollingInterval = defaultPollingInterval);
 
     [[nodiscard]] const std::vector<runtime::TaskSnapshot>& snapshots() const noexcept;
     [[nodiscard]] const QString& monitorError() const noexcept;
     [[nodiscard]] bool isRunning() const noexcept;
     [[nodiscard]] bool isShuttingDown() const noexcept;
+    [[nodiscard]] std::chrono::milliseconds pollingInterval() const noexcept {
+        return pollingInterval_;
+    }
+    void setFrameTrace(std::shared_ptr<PreviewFrameTrace> trace) { trace_ = std::move(trace); }
 
     [[nodiscard]] bool requestCancellation(runtime::TaskId taskId) noexcept;
 
@@ -46,6 +53,7 @@ class TaskUiBridge final : public QObject {
     void assertUiThread() const;
 
     runtime::TaskScheduler& scheduler_;
+    std::shared_ptr<PreviewFrameTrace> trace_;
     QTimer pollTimer_;
     std::chrono::milliseconds pollingInterval_;
     std::vector<runtime::TaskSnapshot> snapshots_;

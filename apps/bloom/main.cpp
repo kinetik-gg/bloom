@@ -33,6 +33,7 @@
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/media_disk_cache_settings.hpp>
 #include <bloom/ui/playback_controller.hpp>
+#include <bloom/ui/preview_frame_trace.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/qualified_display_processor_bootstrap.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
@@ -53,7 +54,10 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <iostream>
 #include <memory>
+#include <thread>
 
 int main(int argc, char* argv[]) {
     QApplication application(argc, argv);
@@ -159,6 +163,12 @@ int main(int argc, char* argv[]) {
     // reference into it those objects hold (locals destruct in reverse declaration order).
     bloom::runtime::QualifiedDisplayProcessorProvider qualifiedDisplayProcessorProvider;
     bloom::ui::TaskUiBridge taskUiBridge(taskScheduler);
+    // Explicit opt-in, one bounded numeric-only buffer. The path is only an export destination;
+    // it and media locators never enter trace records. No formatting or I/O runs in UI callbacks.
+    const QString previewTraceDestination = qEnvironmentVariable("BLOOM_PREVIEW_TRACE");
+    const auto previewTrace = previewTraceDestination.isEmpty()
+                                  ? nullptr
+                                  : std::make_shared<bloom::ui::PreviewFrameTrace>();
     bloom::ui::AssetController assetController(compositionSession, projectHost, taskScheduler,
                                                taskUiBridge, mediaDiskCache.get());
     const auto updateMediaDirectory = [&] {
@@ -276,7 +286,7 @@ int main(int argc, char* argv[]) {
          .displayName = {},
          .viewName = {},
          .showLook = true},
-        previewFrameCache, nullptr, gpuPreviewDisplaySubmitter);
+        previewFrameCache, nullptr, gpuPreviewDisplaySubmitter, previewTrace);
     bloom::ui::BackgroundPreviewController backgroundPreviewController(
         compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline,
         nullptr, gpuPreviewDisplaySubmitter);
@@ -530,5 +540,23 @@ int main(int argc, char* argv[]) {
     QTimer::singleShot(0, &projectHost, &bloom::ui::ProjectHost::offerRecoveryOnStartup);
 
     // NOLINTEND(clang-analyzer-cplusplus.NewDeleteLeaks)
-    return application.exec();
+    const int result = application.exec();
+    if (previewTrace) {
+        // Recording has stopped with the event loop. The worker owns formatting and file I/O;
+        // joining here cannot stall an active viewer or hold up an event-loop publication.
+        bool exported = false;
+        std::thread writer([&] {
+            try {
+                std::ofstream output(previewTraceDestination.toStdString());
+                previewTrace->writeJson(output);
+                exported = output.good();
+            } catch (...) {
+                exported = false;
+            }
+        });
+        writer.join();
+        if (!exported)
+            std::cerr << "Preview trace export failed\n";
+    }
+    return result;
 }

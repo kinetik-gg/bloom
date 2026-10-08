@@ -1,3 +1,4 @@
+#include <bloom/ui/preview_frame_trace.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <QThread>
@@ -90,6 +91,8 @@ void TaskUiBridge::poll() {
     if (!running_) {
         return;
     }
+    if (trace_)
+        trace_->noteBridgePoll();
 
     std::vector<runtime::TaskSnapshot> next;
     bool quiescent = false;

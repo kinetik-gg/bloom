@@ -21,6 +21,8 @@ void CompositionPreviewController::consumeReadyResult() {
     if (!active_.has_value()) {
         return;
     }
+    if (trace_)
+        trace_->noteForegroundPoll();
 
     auto result = active_->handle.tryTakeResult();
     if (!result.has_value()) {
@@ -35,6 +37,23 @@ void CompositionPreviewController::consumeReadyResult() {
     }
     const auto deliveredAt = std::chrono::steady_clock::now();
     const auto& prepared = result->value();
+    if (trace_) {
+        const bool hasFrame = prepared.has_value() && *prepared && (*prepared)->frame();
+        const auto outcome =
+            result->state() == runtime::TaskState::Cancelled ? PreviewTraceOutcome::Cancelled
+            : result->state() == runtime::TaskState::Failed  ? PreviewTraceOutcome::Failed
+            : hasFrame                                       ? PreviewTraceOutcome::Accepted
+            : prepared && *prepared &&
+                    (*prepared)->status() == runtime::PreviewPreparationStatus::Unsupported
+                ? PreviewTraceOutcome::Unsupported
+                : PreviewTraceOutcome::Invalid;
+        // Delivery is the UI's observation of a terminal mailbox, not a worker/GPU timestamp.
+        trace_->record(
+            hasFrame ? (*prepared)->frame()->desiredIdentity() : completed.desiredIdentity,
+            PreviewTraceStage::Delivered, outcome,
+            hasFrame ? static_cast<std::uint8_t>((*prepared)->frame()->provenance().provider) : 255,
+            completed.handle.id().value());
+    }
     if (result->state() == runtime::TaskState::Succeeded && prepared.has_value() &&
         *prepared != nullptr && (*prepared)->frame() != nullptr &&
         (*prepared)->frame()->desiredIdentity() == completed.desiredIdentity &&
@@ -43,6 +62,9 @@ void CompositionPreviewController::consumeReadyResult() {
     }
     if (completed.playbackDeadline.has_value() &&
         (deliveredAt > *completed.playbackDeadline || !isCurrent(completed))) {
+        if (trace_)
+            trace_->record(completed.desiredIdentity, PreviewTraceStage::Delivered,
+                           PreviewTraceOutcome::Late, 255, completed.handle.id().value());
         if (completed.playbackOutstanding) {
             noteDroppedFrame();
         }

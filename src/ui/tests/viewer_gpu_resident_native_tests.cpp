@@ -268,9 +268,12 @@ void ownerMain(Shared& shared, const TestOptions& options, Expectations& expecta
 }
 
 [[nodiscard]] std::shared_ptr<const runtime::PreparedPreviewFrame>
-makeResidentFrame(const runtime::GpuResidentFrameLease& lease) {
+makeResidentFrame(const runtime::GpuResidentFrameLease& lease, const std::uint64_t generation = 1) {
     runtime::PreviewRequestIdentity identity;
-    identity.requestGeneration = 1;
+    identity.projectId = document::ProjectId::fromRaw(1);
+    identity.compositionId = document::CompositionId::fromRaw(1);
+    identity.sourceRevision = document::Revision::fromRaw(1);
+    identity.requestGeneration = generation;
     const runtime::ProcessFrameIdentity process =
         runtime::GpuResidentDisplayProductRequest{}.processIdentity;
     auto built = runtime::detail::buildResidentPreviewFrame(identity, process, lease, nullptr, {});
@@ -513,6 +516,44 @@ int main(int argc, char** argv) {
     expectations.expect(!controller->cpuCoverVisibleForTest(),
                         "concealCpuCover keeps the cover hidden");
     const int capturesAfterFirstAck = coverCaptures.load();
+    // G0: let native A apply without polling the resident controller, then enqueue B before A's
+    // acknowledgement is observed. The trace must correlate A's applied sequence to A's identity,
+    // even though B is now the newest pending request. Gating the real owner makes this ordering
+    // deterministic; no fabricated GPU or presentation snapshot is used.
+    auto trace = std::make_shared<ui::PreviewFrameTrace>(64);
+    controller->setFrameTrace(trace);
+    const auto frameA = makeResidentFrame(lease, 101);
+    const auto frameB = makeResidentFrame(lease, 102);
+    expectations.expect(frameA && frameB, "G0 correlation frames share one real native lease");
+    if (frameA && frameB) {
+        expectations.expect(controller->present(*frameA, makeRequest(320.0, 240.0)),
+                            "G0 frame A enqueued");
+        const auto sequenceA = controller->nativeLastEnqueuedSequence();
+        expectations.expect(
+            waitUntil([&] { return controller->nativeAppliedSequence() >= sequenceA; }, 20'000),
+            "G0 frame A applies without resident-controller polling");
+        runCommand(Cmd::SetGate, true);
+        expectations.expect(controller->present(*frameB, makeRequest(320.0, 240.0)),
+                            "G0 frame B enqueued");
+        const auto sequenceB = controller->nativeLastEnqueuedSequence();
+        controller->poll();
+        const auto ackA = trace->lastNativeAcknowledgement();
+        expectations.expect(sequenceB > sequenceA && ackA && ackA->sequence == sequenceA &&
+                                ackA->identity.generation == 101 &&
+                                !controller->presentationAcknowledged(),
+                            "G0 older A acknowledgement is not stamped with pending B identity");
+        runCommand(Cmd::SetGate, false);
+        expectations.expect(waitUntil(
+                                [&] {
+                                    controller->poll();
+                                    return controller->presentationAcknowledged();
+                                },
+                                20'000),
+                            "G0 frame B later receives its own acknowledgement");
+        const auto ackB = trace->lastNativeAcknowledgement();
+        expectations.expect(ackB && ackB->sequence == sequenceB && ackB->identity.generation == 102,
+                            "G0 newer B acknowledgement preserves B's submitted identity");
+    }
     // Ordinary native presents (a new frame / overlay / pan / zoom) must NOT
     // recreate the cover or re-snapshot the UI; the last acknowledged swapchain
     // image is kept until the new present.

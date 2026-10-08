@@ -239,6 +239,46 @@ The kernel provides structured snapshots and group aggregation. The implemented 
 a bounded rate, and the shared Jobs model presents textual progress without turning worker reports
 into an unbounded UI event stream.
 
+### Opt-in preview frame trace
+
+Set `BLOOM_PREVIEW_TRACE` to an output filename before launching the desktop to capture a bounded
+numeric request history. Recording uses the actual foreground controller, shared frame cache and
+resident presentation controller. The default is disabled; no record buffer is allocated then.
+Export formatting and file I/O run on a worker after the application event loop stops. The trace
+keeps at most 4096 events (a recorder may request up to 8192), overwrites oldest events and reports
+the count. It excludes media locators, text content, labels and diagnostic strings. Its intent
+fingerprint is for diagnostic correlation, not a canonical pixel cache key or security digest.
+
+Desired intent, UI-observed delivery, controller publication, actual cache outcomes, CPU painter
+submission and native mailbox submission remain separate events. Native acknowledgement correlates
+the owner's applied sequence with the identity submitted for that sequence using a bounded history;
+lost correlation is explicit. Neither a CPU painter call nor a native owner acknowledgement proves
+compositor scanout. Worker preparation timestamps, GPU timestamps, media/plan/upload substage times
+and fallback diagnostic text are currently unavailable. Polling intervals and UI poll counts are
+recorded; production defaults remain 100 ms for TaskUiBridge and 4 ms for foreground completion.
+CPU-cover visibility, native surface generation and pointer-input timestamps remain G3 probes.
+This initial trace does not prove that an acknowledged native frame is unobscured, nor does it
+qualify visible-pixel correctness or flicker.
+
+The opt-in `bloom_ui_viewer_resident_interaction_native_test --baseline --trace <filename>` fixture
+adds text with animated opacity to the existing solid/drag/undo route, evaluates Full 1920×1080
+(4:3 pixel aspect), and samples four rational times cold then warm at the same revision. Full is
+an explicit initial user preference in the fixture's isolated settings, restored through the
+actual Viewer preference path. Exact Full desired identity and native acknowledgement are
+required. Cold means first visits after service startup qualification, not cold driver/shader
+state. Warm repeats use retained frames. It uses the
+production scheduler and bridge defaults, default cache/resident budget alignment, real production
+preview factories and the editor registry. Its 960×640 host is a bounded diagnostic fixture, not a
+sustained playback benchmark or complete desktop composition-root equivalence proof. Pass `--loader`
+with the packaged Vulkan loader; unavailable native execution returns 77, or fails with
+`--require-device`. Capture the Git revision and worktree dirty state alongside the standard JSON
+trace when running the workload; analysis-time Git state is not execution provenance. The JSON
+records permit identity-correlated request-to-owner-ack wall-time analysis while preserving explicit
+missing fields. This slice does not ship a reporting tool. Native runs must be bounded by a timeout
+and memory limit. Run validation separately and retain its errors independently from
+normal performance observations; four samples establish a reproducible baseline, not a percentile
+quality gate.
+
 Diagnostics flow through an application-level sink. Workers do not open dialogs, touch status-bar
 widgets, or emit presentation-specific strings directly. The same diagnostic can therefore serve a
 panel, task monitor, headless renderer, log, or test.

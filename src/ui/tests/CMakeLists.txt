@@ -1389,6 +1389,15 @@ bloom_add_test(
 # revisions are still dropped. It builds genuine CPU reference frames and never creates a GPU device,
 # so it registers unconditionally and always runs.
 add_executable(bloom_ui_preview_frame_cache_cpu_edge_test preview_frame_cache_cpu_edge_tests.cpp)
+add_executable(bloom_ui_preview_frame_trace_test preview_frame_trace_tests.cpp)
+target_link_libraries(bloom_ui_preview_frame_trace_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_preview_frame_trace_test)
+bloom_add_test(
+    NAME bloom.ui.preview-frame-trace
+    COMMAND bloom_ui_preview_frame_trace_test
+    LABELS ui unit trace
+    TIMEOUT 30
+)
 target_link_libraries(bloom_ui_preview_frame_cache_cpu_edge_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_ui_preview_frame_cache_cpu_edge_test)
 bloom_add_test(

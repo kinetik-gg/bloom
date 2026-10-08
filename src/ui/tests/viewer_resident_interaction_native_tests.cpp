@@ -42,7 +42,9 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/gpu_viewer_bootstrap.hpp>
 #include <bloom/ui/kit/tokens.hpp>
+#include <bloom/ui/preview_frame_trace.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
@@ -63,6 +65,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -80,6 +83,8 @@ struct HarnessOptions final {
     std::filesystem::path loader;
     bool requireDevice = false;
     bool valid = true;
+    bool baseline = false;
+    std::filesystem::path trace;
 };
 
 [[nodiscard]] HarnessOptions parseHarnessOptions(const int argc, char** argv) {
@@ -90,6 +95,10 @@ struct HarnessOptions final {
             options.loader = argv[++index];
         } else if (argument == "--require-device") {
             options.requireDevice = true;
+        } else if (argument == "--baseline") {
+            options.baseline = true;
+        } else if (argument == "--trace" && index + 1 < argc) {
+            options.trace = argv[++index];
         } else {
             options.valid = false;
             return options;
@@ -251,7 +260,7 @@ struct OverlayProbe final {
 
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const HarnessOptions options = parseHarnessOptions(argc, argv);
-    if (!options.valid) {
+    if (!options.valid || (options.baseline && options.trace.empty())) {
         return 2;
     }
     QApplication application(argc, argv);
@@ -313,11 +322,40 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
                   "the first Solid layer is created through the session command surface");
 
-    TaskScheduler scheduler(schedulerConfig());
+    if (options.baseline) {
+        const auto solidSelection = session.selection();
+        checks.expect(
+            session.addTextLayer(QStringLiteral("Baseline text"), QStringLiteral("Bloom G0"), 120.0,
+                                 core::Color4d{1.0, 1.0, 1.0, 1.0}, document::Vec2d{600.0, 360.0}),
+            "baseline text is authored");
+        checks.expect(session.toggleKeyframe(document::kOpacityParameterRole),
+                      "text opacity is animated");
+        checks.expect(session.setCurrentTime(core::RationalTime::fromInteger(1)),
+                      "animation end time");
+        checks.expect(session.setSelectedOpacity(0.25), "text animation end key is authored");
+        checks.expect(session.setCurrentTime(core::RationalTime::fromInteger(0)),
+                      "animation returns to start");
+        if (const auto* layer = std::get_if<document::LayerId>(&solidSelection.primary))
+            session.selectLayer(*layer);
+    }
+
+    TaskScheduler scheduler(options.baseline ? TaskSchedulerConfig::defaults() : schedulerConfig());
     const runtime::CpuReferenceDisplayPreparer displayPreparer;
-    GpuPreviewDisplayService service(
-        scheduler, fixture.productionGpuStage(), fixture.productionCpuStage(),
-        fixture.productionCpuFallback(displayPreparer), serviceOptions(options.loader));
+    auto gpuOptions = serviceOptions(options.loader);
+    const auto frameCache = options.baseline ? std::make_shared<ui::PreviewFrameCache>() : nullptr;
+    if (options.baseline) {
+        // Same default budget alignment as the desktop root, with no saved preference overrides.
+        gpuOptions = GpuPreviewDisplayServiceOptions{};
+        gpuOptions.enabled = true;
+        gpuOptions.loaderPath = options.loader;
+        gpuOptions.presentation = runtime::GpuPreviewDisplayServicePresentationMode::Wayland;
+        const auto budgetPlan = ui::gpuResidentBudgetPlanFor(frameCache->byteBudget());
+        ui::applyGpuResidentBudgetPlan(gpuOptions, budgetPlan);
+        ui::applyGpuResidentCacheLimits(*frameCache, budgetPlan);
+    }
+    GpuPreviewDisplayService service(scheduler, fixture.productionGpuStage(),
+                                     fixture.productionCpuStage(),
+                                     fixture.productionCpuFallback(displayPreparer), gpuOptions);
 
     const bool terminal = waitUntil(
         [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; }, 90s);
@@ -342,11 +380,23 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             : runtime::detail::GpuPreviewDisplayServiceTestAccess::ownershipEpoch(*core);
     checks.expect(epoch > 0U, "the service publishes a genuine nonzero device ownership epoch");
 
-    ui::TaskUiBridge bridge(scheduler, nullptr, std::chrono::milliseconds(1));
+    ui::TaskUiBridge bridge(scheduler, nullptr,
+                            options.baseline ? ui::TaskUiBridge::defaultPollingInterval : 1ms);
     auto pipeline = ui::makeCompositionPreviewPipeline(fixture.compiler, fixture.evaluator,
                                                        displayPreparer, fixture.provider);
     ui::CompositionPreviewSettings settings;
-    settings.pixelStorageByteLimit = kBudget;
+    if (!options.baseline)
+        settings.pixelStorageByteLimit = kBudget;
+    if (options.baseline) {
+        // Explicit initial user preference in this fixture's isolated settings directory. The
+        // Viewer restores it through its production preference path, so no initial Auto->Full
+        // cancellation race is smuggled into a fixed-resolution timing sample.
+        QSettings().setValue(QStringLiteral("viewer/resolution"), QStringLiteral("Full"));
+        settings.resolutionPolicy = runtime::PreviewResolutionPolicy::Full;
+    }
+    auto trace = options.baseline ? std::make_shared<ui::PreviewFrameTrace>() : nullptr;
+    if (trace)
+        trace->setPhase(ui::PreviewTracePhase::Cold);
     ui::PreviewPreparationSubmitter submitter =
         [&service](runtime::TaskRequest request, const document::Snapshot& snap,
                    const runtime::PreviewRequestIdentity& identity, const std::size_t limit,
@@ -355,7 +405,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         return service.submit(std::move(request), snap, identity, limit, overrides);
     };
     ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline, settings,
-                                                nullptr, nullptr, submitter);
+                                                frameCache, nullptr, submitter, trace);
 
     // The production editor registry + EditorArea host the viewer and inject the live presentation
     // client exactly as the application does. EditorArea's event filter is what turns a click into
@@ -396,11 +446,27 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     }
     viewer->show();
     QApplication::processEvents();
-    controller.requestRefresh();
+    if (!options.baseline)
+        controller.requestRefresh();
 
     const auto compositionFormat = session.composition()->format();
     const bool firstResident =
-        waitForResidentRevision(controller, *viewer, session.snapshot().revision(), 30s);
+        options.baseline
+            ? waitUntil(
+                  [&] {
+                      const auto& state = controller.state();
+                      const auto& ack = trace->lastNativeAcknowledgement();
+                      return state.desiredIdentity && state.frame && isResidentFrame(state.frame) &&
+                             std::holds_alternative<runtime::CompositionFormatResolution>(
+                                 state.desiredIdentity->resolution) &&
+                             state.desiredIdentity->resolutionPolicy ==
+                                 runtime::PreviewResolutionPolicy::Full &&
+                             state.frame->desiredIdentity() == *state.desiredIdentity && ack &&
+                             ack->identity ==
+                                 ui::PreviewFrameTrace::identity(*state.desiredIdentity);
+                  },
+                  30s)
+            : waitForResidentRevision(controller, *viewer, session.snapshot().revision(), 30s);
     const auto displayed = controller.state().frame;
     checks.expect(firstResident && displayed != nullptr,
                   "the controller produced and the viewer presented a resident frame");
@@ -425,6 +491,37 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const auto geometry = ui::residentFrameGeometry(*displayed);
     checks.expect(geometry.has_value() && geometry->lease.isValid(),
                   "the displayed frame carries a valid genuine native lease");
+
+    if (options.baseline) {
+        checks.expect(geometry && geometry->displayExtent.width() == 1920 &&
+                          geometry->displayExtent.height() == 1080,
+                      "the baseline evaluates at full 1920x1080 (not an Auto proxy)");
+        const auto waitForTracedFrame = [&](const core::RationalTime expectedTime) {
+            return waitUntil(
+                [&] {
+                    const auto& desired = controller.state().desiredIdentity;
+                    const auto& ack = trace->lastNativeAcknowledgement();
+                    return desired && desired->time == expectedTime && ack &&
+                           ack->identity.generation == desired->requestGeneration &&
+                           ack->identity == ui::PreviewFrameTrace::identity(*desired);
+                },
+                30s);
+        };
+        checks.expect(waitForTracedFrame(core::RationalTime::fromInteger(0)),
+                      "the first cold frame has its own native owner acknowledgement");
+        for (const auto phase : {ui::PreviewTracePhase::Cold, ui::PreviewTracePhase::Warm}) {
+            trace->setPhase(phase);
+            for (int index = phase == ui::PreviewTracePhase::Cold ? 1 : 0; index < 4; ++index) {
+                const auto time = core::RationalTime::create(index, 24);
+                checks.expect(time && session.setCurrentTime(*time),
+                              "baseline advances exact animation time");
+                checks.expect(time && waitForTracedFrame(*time),
+                              "each time sample has an identity-matched native acknowledgement");
+            }
+        }
+        // Gesture begins at a settled frame, and remains the existing native QWindow input path.
+        trace->setPhase(ui::PreviewTracePhase::Manipulation);
+    }
 
     const QRectF displayRect = viewerDisplayRect(*viewer, compositionFormat);
     checks.expect(!displayRect.isEmpty(), "the resident composition has a non-empty display rect");
@@ -460,6 +557,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         viewer->setGpuPresentationDependencies(nullptr, nullptr, std::string{}, 1.0);
         return 1;
     }
+    const QSize nativeViewportSize = container->size();
     QWindow* nativeWindow = nativeVulkanWindow(container, host.get());
     checks.expect(nativeWindow != nullptr && nativeWindow->surfaceType() == QSurface::VulkanSurface,
                   "the presenter owns a real visible Vulkan QWindow");
@@ -551,113 +649,119 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(viewer->residentPresentationActiveForTest(),
                   "the viewer still presents the genuine resident arm after the gesture");
 
-    // A second, DISTINCT resident lease: change the Solid colour so the requested content genuinely
-    // changes. LIMIT, stated plainly: this is a live authoring edit producing a new revision and a
-    // new resident lease -- it is NOT a sequence-playback proof (no time is advanced). The genuine
-    // native proof below is the owner-published applied sequence/present count, never the mailbox
-    // admission counters. The CPU oracle proves the two requests differ; a native readback is
-    // forbidden, so this does NOT claim the presented pixels equal the oracle.
-    const auto beforeFrame = controller.state().frame;
-    const auto beforeSnapshot = session.snapshot();
-    const auto beforeIdentity =
-        beforeFrame != nullptr ? beforeFrame->desiredIdentity() : runtime::PreviewRequestIdentity{};
-    const auto beforeLease =
-        beforeFrame != nullptr && ui::residentFrameGeometry(*beforeFrame).has_value()
-            ? ui::residentFrameGeometry(*beforeFrame)->lease
-            : runtime::GpuResidentFrameLease{};
-    const std::uint64_t appliedBefore = viewer->gpuNativeAppliedSequenceForTest();
-    const std::uint64_t enqueuedBefore = viewer->gpuNativeLastEnqueuedSequenceForTest();
-    const std::uint64_t presentCountBefore = viewer->gpuNativePresentCountForTest();
-    if (hasSelectedLayer) {
-        session.selectLayer(selectedLayer);
-    }
-    checks.expect(session.setSelectedSolidColor(core::Color4d{0.95, 0.1, 0.85, 1.0}),
-                  "the Solid colour change is one document transaction");
-    checks.expect(waitForResidentRevision(controller, *viewer, session.snapshot().revision(), 30s),
-                  "a second distinct resident frame reaches the viewer");
-    const auto second = controller.state().frame;
-    checks.expect(isResidentFrame(second) && second != nullptr &&
-                      !second->displayBufferView().has_value(),
-                  "the second frame is a genuine CPU-buffer-free resident frame");
-    // Genuine native present progress: the owner must have applied a NEW enqueued present sequence
-    // (applied >= enqueued) and advanced its applied present count. The mailbox admission counters
-    // are deliberately not used here: admission is not a native present.
-    const bool secondGenuinelyPresented = waitUntil(
-        [&] {
-            const std::uint64_t enqueued = viewer->gpuNativeLastEnqueuedSequenceForTest();
-            const std::uint64_t applied = viewer->gpuNativeAppliedSequenceForTest();
-            return enqueued > enqueuedBefore && applied >= enqueued &&
-                   viewer->gpuNativePresentCountForTest() > presentCountBefore;
-        },
-        20s);
-    checks.expect(secondGenuinelyPresented,
-                  "the second resident lease was genuinely applied natively (applied >= enqueued "
-                  "and the owner present count advanced)");
-    const std::uint64_t enqueuedAfter = viewer->gpuNativeLastEnqueuedSequenceForTest();
-    const std::uint64_t appliedAfter = viewer->gpuNativeAppliedSequenceForTest();
-    checks.expect(enqueuedAfter > enqueuedBefore,
-                  "a new native present sequence was enqueued for the second frame");
-    checks.expect(appliedAfter >= enqueuedAfter,
-                  "the owner applied the second frame's enqueued present sequence");
-    checks.expect(viewer->gpuNativePresentCountForTest() > presentCountBefore,
-                  "the owner's applied present count advanced for the second frame");
-    checks.expect(appliedAfter > appliedBefore,
-                  "the owner's applied sequence advanced past the first frame");
-    if (second != nullptr) {
-        const auto secondLease = ui::residentFrameGeometry(*second);
-        checks.expect(secondLease.has_value() && secondLease->lease.isValid(),
-                      "the second resident frame carries a valid genuine native lease");
-        checks.expect(secondLease.has_value() && secondLease->lease.id() != beforeLease.id(),
-                      "the second frame is a NEW native lease, not a reused/frozen one");
-        checks.expect(second->desiredIdentity() != beforeIdentity,
-                      "the second frame's request identity actually changed");
-    }
-    // Online CPU oracle: the two requested contents differ, so a frozen re-presentation of the
-    // first is impossible.
-    {
-        const auto firstOracle = snapshotCpuReference(fixture, beforeSnapshot, beforeIdentity);
-        const auto secondOracle =
-            second != nullptr
-                ? snapshotCpuReference(fixture, session.snapshot(), second->desiredIdentity())
-                : nullptr;
-        checks.expect(firstOracle != nullptr && secondOracle != nullptr &&
-                          !samePixels(firstOracle, secondOracle),
-                      "the two resident requests resolve to genuinely different CPU content");
-        checks.expect(firstOracle != nullptr && firstOracle->displayBufferView().has_value(),
-                      "the CPU oracle for the first frame carries real pixels");
-    }
-    checks.expect(service.status().counters.fullFrameReadbacks == 0U,
-                  "the second resident frame performed no full-frame readback");
+    if (!options.baseline) {
+        // A second, DISTINCT resident lease: change the Solid colour so the requested content
+        // genuinely changes. LIMIT, stated plainly: this is a live authoring edit producing a new
+        // revision and a new resident lease -- it is NOT a sequence-playback proof (no time is
+        // advanced). The genuine native proof below is the owner-published applied sequence/present
+        // count, never the mailbox admission counters. The CPU oracle proves the two requests
+        // differ; a native readback is forbidden, so this does NOT claim the presented pixels equal
+        // the oracle.
+        const auto beforeFrame = controller.state().frame;
+        const auto beforeSnapshot = session.snapshot();
+        const auto beforeIdentity = beforeFrame != nullptr ? beforeFrame->desiredIdentity()
+                                                           : runtime::PreviewRequestIdentity{};
+        const auto beforeLease =
+            beforeFrame != nullptr && ui::residentFrameGeometry(*beforeFrame).has_value()
+                ? ui::residentFrameGeometry(*beforeFrame)->lease
+                : runtime::GpuResidentFrameLease{};
+        const std::uint64_t appliedBefore = viewer->gpuNativeAppliedSequenceForTest();
+        const std::uint64_t enqueuedBefore = viewer->gpuNativeLastEnqueuedSequenceForTest();
+        const std::uint64_t presentCountBefore = viewer->gpuNativePresentCountForTest();
+        if (hasSelectedLayer) {
+            session.selectLayer(selectedLayer);
+        }
+        checks.expect(session.setSelectedSolidColor(core::Color4d{0.95, 0.1, 0.85, 1.0}),
+                      "the Solid colour change is one document transaction");
+        checks.expect(
+            waitForResidentRevision(controller, *viewer, session.snapshot().revision(), 30s),
+            "a second distinct resident frame reaches the viewer");
+        const auto second = controller.state().frame;
+        checks.expect(isResidentFrame(second) && second != nullptr &&
+                          !second->displayBufferView().has_value(),
+                      "the second frame is a genuine CPU-buffer-free resident frame");
+        // Genuine native present progress: the owner must have applied a NEW enqueued present
+        // sequence (applied >= enqueued) and advanced its applied present count. The mailbox
+        // admission counters are deliberately not used here: admission is not a native present.
+        const bool secondGenuinelyPresented = waitUntil(
+            [&] {
+                const std::uint64_t enqueued = viewer->gpuNativeLastEnqueuedSequenceForTest();
+                const std::uint64_t applied = viewer->gpuNativeAppliedSequenceForTest();
+                return enqueued > enqueuedBefore && applied >= enqueued &&
+                       viewer->gpuNativePresentCountForTest() > presentCountBefore;
+            },
+            20s);
+        checks.expect(
+            secondGenuinelyPresented,
+            "the second resident lease was genuinely applied natively (applied >= enqueued "
+            "and the owner present count advanced)");
+        const std::uint64_t enqueuedAfter = viewer->gpuNativeLastEnqueuedSequenceForTest();
+        const std::uint64_t appliedAfter = viewer->gpuNativeAppliedSequenceForTest();
+        checks.expect(enqueuedAfter > enqueuedBefore,
+                      "a new native present sequence was enqueued for the second frame");
+        checks.expect(appliedAfter >= enqueuedAfter,
+                      "the owner applied the second frame's enqueued present sequence");
+        checks.expect(viewer->gpuNativePresentCountForTest() > presentCountBefore,
+                      "the owner's applied present count advanced for the second frame");
+        checks.expect(appliedAfter > appliedBefore,
+                      "the owner's applied sequence advanced past the first frame");
+        if (second != nullptr) {
+            const auto secondLease = ui::residentFrameGeometry(*second);
+            checks.expect(secondLease.has_value() && secondLease->lease.isValid(),
+                          "the second resident frame carries a valid genuine native lease");
+            checks.expect(secondLease.has_value() && secondLease->lease.id() != beforeLease.id(),
+                          "the second frame is a NEW native lease, not a reused/frozen one");
+            checks.expect(second->desiredIdentity() != beforeIdentity,
+                          "the second frame's request identity actually changed");
+        }
+        // Online CPU oracle: the two requested contents differ, so a frozen re-presentation of the
+        // first is impossible.
+        {
+            const auto firstOracle = snapshotCpuReference(fixture, beforeSnapshot, beforeIdentity);
+            const auto secondOracle =
+                second != nullptr
+                    ? snapshotCpuReference(fixture, session.snapshot(), second->desiredIdentity())
+                    : nullptr;
+            checks.expect(firstOracle != nullptr && secondOracle != nullptr &&
+                              !samePixels(firstOracle, secondOracle),
+                          "the two resident requests resolve to genuinely different CPU content");
+            checks.expect(firstOracle != nullptr && firstOracle->displayBufferView().has_value(),
+                          "the CPU oracle for the first frame carries real pixels");
+        }
+        checks.expect(service.status().counters.fullFrameReadbacks == 0U,
+                      "the second resident frame performed no full-frame readback");
 
-    // Delete the final layer through the viewer's own Delete key route: the composition stays valid
-    // with empty geometry, and its empty-state invitation is part of the resident overlay.
-    if (hasSelectedLayer) {
-        session.selectLayer(selectedLayer);
+        // Delete the final layer through the viewer's own Delete key route: the composition stays
+        // valid with empty geometry, and its empty-state invitation is part of the resident
+        // overlay.
+        if (hasSelectedLayer) {
+            session.selectLayer(selectedLayer);
+        }
+        const auto revisionBeforeDelete = session.snapshot().revision();
+        sendDeleteKey(*viewer);
+        checks.expect(session.timelineMerge()->entries().empty(),
+                      "Delete removes the final layer through the viewer route");
+        checks.expect(session.snapshot().revision().value() == revisionBeforeDelete.value() + 1,
+                      "the layer delete is one document transaction");
+        checks.expect(session.composition() != nullptr,
+                      "the composition itself survives deleting its final layer");
+        checks.expect(session.composition()->graph().layerOutputs().empty(),
+                      "the composition now has empty layer geometry");
+        checks.expect(
+            waitForResidentRevision(controller, *viewer, session.snapshot().revision(), 30s),
+            "a resident frame is produced for the empty composition revision");
+        {
+            const ui::ResidentPresentRequest request = viewer->buildResidentPresentRequestForTest();
+            checks.expect(!request.destination.isEmpty(),
+                          "the empty composition still yields valid display geometry");
+            const OverlayProbe probe = probeResidentOverlay(*viewer);
+            checks.expect(probe.valid, "the empty composition records a resident overlay");
+            checks.expect(probe.framePixels() >= 4U,
+                          "the empty composition still draws its composition frame border");
+            checks.expect(probe.centreInkPixels() >= 10U,
+                          "the empty composition records the 'Create a layer to begin' invitation");
+        }
     }
-    const auto revisionBeforeDelete = session.snapshot().revision();
-    sendDeleteKey(*viewer);
-    checks.expect(session.timelineMerge()->entries().empty(),
-                  "Delete removes the final layer through the viewer route");
-    checks.expect(session.snapshot().revision().value() == revisionBeforeDelete.value() + 1,
-                  "the layer delete is one document transaction");
-    checks.expect(session.composition() != nullptr,
-                  "the composition itself survives deleting its final layer");
-    checks.expect(session.composition()->graph().layerOutputs().empty(),
-                  "the composition now has empty layer geometry");
-    checks.expect(waitForResidentRevision(controller, *viewer, session.snapshot().revision(), 30s),
-                  "a resident frame is produced for the empty composition revision");
-    {
-        const ui::ResidentPresentRequest request = viewer->buildResidentPresentRequestForTest();
-        checks.expect(!request.destination.isEmpty(),
-                      "the empty composition still yields valid display geometry");
-        const OverlayProbe probe = probeResidentOverlay(*viewer);
-        checks.expect(probe.valid, "the empty composition records a resident overlay");
-        checks.expect(probe.framePixels() >= 4U,
-                      "the empty composition still draws its composition frame border");
-        checks.expect(probe.centreInkPixels() >= 10U,
-                      "the empty composition records the 'Create a layer to begin' invitation");
-    }
-
     // Retire the native surface before teardown, exactly like the production host.
     bool viewerRetired = false;
     static_cast<void>(viewer->prepareNativeSurfaceMutation(
@@ -682,6 +786,46 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     std::error_code ignored;
     std::filesystem::remove_all(mediaDirectory, ignored);
     std::filesystem::remove_all(settingsRoot, ignored);
+
+    if (trace) {
+        // Check the REAL trace produced above, not a manufactured record sequence. Every
+        // acknowledged identity must match an accepted submission for that presenter/sequence.
+        const auto events = trace->events();
+        for (const auto& ack : events) {
+            if (ack.stage != ui::PreviewTraceStage::PresentAcknowledged)
+                continue;
+            const auto matching = std::ranges::find_if(events, [&](const auto& submitted) {
+                return submitted.stage == ui::PreviewTraceStage::PresentSubmitted &&
+                       submitted.outcome == ui::PreviewTraceOutcome::Accepted &&
+                       submitted.presenter == ack.presenter && submitted.sequence == ack.sequence &&
+                       submitted.identity == ack.identity;
+            });
+            checks.expect(matching != events.end(),
+                          "native acknowledgement preserves submitted frame identity");
+        }
+        bool exported = false;
+        std::thread writer([&] {
+            std::ofstream output(options.trace);
+            trace->writeJson(output);
+            exported = output.good();
+        });
+        writer.join();
+        checks.expect(exported, "the bounded baseline trace was exported off the UI thread");
+        std::cout << "BASELINE output=1920x1080 par=4/3 host=960x640 viewport="
+                  << nativeViewportSize.width() << 'x' << nativeViewportSize.height()
+                  << " device_pixel_ratio=1 bridge_poll_ms=" << bridge.pollingInterval().count()
+                  << " foreground_poll_ms=4 scheduler=defaults resolution=Full"
+                  << " validation="
+                  << (qEnvironmentVariable("VK_INSTANCE_LAYERS").contains("validation") ? 1 : 0)
+                  << " request_byte_limit=" << settings.pixelStorageByteLimit
+                  << " cache_byte_budget=" << frameCache->byteBudget()
+                  << " native_dispatches=" << service.status().counters.nativeDispatches
+                  << " gpu_cache_hits=" << service.status().counters.gpuCacheHits
+                  << " gpu_cache_misses=" << service.status().counters.gpuCacheMisses
+                  << " cpu_fallbacks=" << service.status().counters.cpuFallbacks
+                  << " full_frame_readbacks=" << service.status().counters.fullFrameReadbacks
+                  << '\n';
+    }
 
     if (checks.failures() != 0) {
         std::cerr << "resident interaction proof: " << checks.failures()

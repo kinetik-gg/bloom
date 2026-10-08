@@ -128,6 +128,8 @@ PreviewFrameCache::take(const runtime::PreviewRequestIdentity& identity) {
             removeAt(static_cast<std::size_t>(position - entries_.begin()));
         }
         ++statistics_.misses;
+        if (trace_)
+            trace_->record(identity, PreviewTraceStage::CacheLookup, PreviewTraceOutcome::Miss);
         return nullptr;
     }
     PreparedPreviewFrameHandle frame;
@@ -147,10 +149,14 @@ PreviewFrameCache::take(const runtime::PreviewRequestIdentity& identity) {
         // identity it does not have.
         removeAt(static_cast<std::size_t>(position - entries_.begin()));
         ++statistics_.misses;
+        if (trace_)
+            trace_->record(identity, PreviewTraceStage::CacheLookup, PreviewTraceOutcome::Invalid);
         return nullptr;
     }
     std::rotate(entries_.begin(), position, position + 1);
     ++statistics_.hits;
+    if (trace_)
+        trace_->record(*frame, PreviewTraceStage::CacheLookup, PreviewTraceOutcome::Hit);
     return frame;
 }
 
@@ -166,9 +172,14 @@ void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
         // Only a live lease is retainable; an invalidated one must never enter the cache.
         if (!frame->isDisplayValid()) {
             ++statistics_.rejections;
+            if (trace_)
+                trace_->record(*frame, PreviewTraceStage::CacheRetention,
+                               PreviewTraceOutcome::Invalid);
             return;
         }
     } else if (!frame->displayBufferView().has_value()) {
+        if (trace_)
+            trace_->record(*frame, PreviewTraceStage::CacheRetention, PreviewTraceOutcome::Invalid);
         return;
     }
     const auto key = PreviewFrameCacheKey::forIdentity(frame->desiredIdentity());
@@ -176,12 +187,18 @@ void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
         // A late completion after a work-area trim must not resurrect an out-of-range entry. The
         // frame was already displayed by its caller; refusing only the retention is honest.
         ++statistics_.rangeDrops;
+        if (trace_)
+            trace_->record(*frame, PreviewTraceStage::CacheRetention,
+                           PreviewTraceOutcome::OutOfRange);
         return;
     }
     if (!provenanceAllows(key)) {
         // TEMPORAL-2B: the time-indexed session now accepts a different genuine snapshot for this
         // time, so a late completion for the changed interval is refused rather than retained.
         ++statistics_.staleDrops;
+        if (trace_)
+            trace_->record(*frame, PreviewTraceStage::CacheRetention,
+                           PreviewTraceOutcome::WrongRevision);
         return;
     }
     if (displayQualified_.has_value() && *displayQualified_ != frame->isOcioQualified()) {
@@ -205,6 +222,9 @@ void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
         if (entryIsLive(*existing)) {
             // A live entry with this key already holds the best answer; reuse it in place.
             std::rotate(entries_.begin(), existing, existing + 1);
+            if (trace_)
+                trace_->record(*frame, PreviewTraceStage::CacheRetention,
+                               PreviewTraceOutcome::Reused);
             return;
         }
         // CACHEFIX-2. A dead resident entry (an invalidated lease) can never be served, so it must
@@ -217,6 +237,9 @@ void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
     if (bytes == 0 || bytes > byteBudget_) {
         // One frame that does not fit the whole budget must not empty the cache trying.
         ++statistics_.rejections;
+        if (trace_)
+            trace_->record(*frame, PreviewTraceStage::CacheRetention,
+                           PreviewTraceOutcome::OverBudget);
         return;
     }
     // CACHEFIX-1: copying the display buffer and growing the entry vector both allocate. Under
@@ -235,6 +258,9 @@ void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
             auto retained = retainable(*frame);
             if (retained == nullptr) {
                 ++statistics_.rejections;
+                if (trace_)
+                    trace_->record(*frame, PreviewTraceStage::CacheRetention,
+                                   PreviewTraceOutcome::Invalid);
                 return;
             }
             entries_.insert(entries_.begin(), Entry{.key = key,
@@ -244,6 +270,9 @@ void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
         }
     } catch (const std::bad_alloc&) {
         ++statistics_.allocationFailures;
+        if (trace_)
+            trace_->record(*frame, PreviewTraceStage::CacheRetention,
+                           PreviewTraceOutcome::AllocationFailure);
         return;
     }
     residentBytes_ += bytes;
@@ -259,6 +288,12 @@ void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
     if (resident) {
         evictGpuResidentToLimits();
     }
+    // Opt-in only: the void insertion API is not evidence of retention. Resident sublimits can
+    // evict this very entry, so observe the existing cache key after both policies ran.
+    if (trace_)
+        trace_->record(*frame, PreviewTraceStage::CacheRetention,
+                       contains(key) ? PreviewTraceOutcome::Retained
+                                     : PreviewTraceOutcome::Rejected);
 }
 
 void PreviewFrameCache::trimToBytes(const std::size_t bytes) {
@@ -421,6 +456,14 @@ void PreviewFrameCache::evictToBudget() {
 void PreviewFrameCache::removeAt(const std::size_t index) {
     scheduleNotification();
     const Entry& entry = entries_[index];
+    if (trace_) {
+        const auto& identity =
+            entry.resident ? entry.resident->desiredIdentity() : entry.frame->desiredIdentity();
+        trace_->record(identity, PreviewTraceStage::CacheRemoval, PreviewTraceOutcome::Removed,
+                       entry.resident
+                           ? static_cast<std::uint8_t>(runtime::PreviewDisplayProvider::GpuResident)
+                           : static_cast<std::uint8_t>(entry.frame->provenance().provider));
+    }
     residentBytes_ -= entry.bytes;
     if (entry.resident != nullptr) {
         gpuResidentBytes_ -= entry.bytes;

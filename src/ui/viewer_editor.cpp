@@ -1776,6 +1776,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     // GPU-resident presentation is inert until setGpuPresentationDependencies() supplies a live
     // client. It never creates a device/thread here; the adapter owns the only native objects.
     gpuResident_ = std::make_unique<ViewerGpuResidentController>();
+    gpuResident_->setFrameTrace(previewController_.frameTrace());
     gpuResident_->setPresentAck([this](const bool presented, const std::string&) {
         // True only after the owner genuinely published a present for this request.
         residentActive_ = presented;
@@ -2396,6 +2397,14 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                             : QRectF{};
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
                     painter.drawImage(displayRect, shownImage, QRectF(shownImage.rect()));
+                    if (!coverSnapshotInProgress_ && !displayRect.isEmpty()) {
+                        if (const auto& trace = previewController_.frameTrace(); trace) {
+                            // QPainter submission, not compositor scanout. Use the actual painted
+                            // CPU fallback identity, which may differ from current desired intent.
+                            trace->record(*cpuFrame, PreviewTraceStage::CpuPaint,
+                                          PreviewTraceOutcome::Accepted);
+                        }
+                    }
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
                     paintViewerCompositionFrame(painter, displayRect);
                     if (geometry.has_value()) {

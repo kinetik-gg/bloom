@@ -12,6 +12,7 @@
 
 #include <QWidget>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -68,6 +69,15 @@ namespace {
 } // namespace
 
 struct ViewerGpuResidentController::Impl final {
+    std::shared_ptr<PreviewFrameTrace> trace;
+    PreviewTraceIdentity pendingTraceIdentity;
+    struct TraceSubmission final {
+        std::uint64_t sequence = 0;
+        PreviewTraceIdentity identity;
+    };
+    std::array<TraceSubmission, 32> traceSubmissions{};
+    std::size_t nextTraceSubmission = 0;
+    std::uint64_t tracePresenterId = 0, lastTracedAppliedSequence = 0;
     Dependencies dependencies;
     std::shared_ptr<ViewerGpuPort> port;
     std::unique_ptr<ViewerGpuPresenter> presenter;
@@ -217,6 +227,11 @@ struct ViewerGpuResidentController::Impl final {
         config.target_height = height;
         config.device_pixel_ratio =
             dependencies.devicePixelRatio > 0.0 ? dependencies.devicePixelRatio : 1.0;
+        if (trace) {
+            tracePresenterId = trace->allocatePresenterId();
+            traceSubmissions = {};
+            lastTracedAppliedSequence = 0;
+        }
         if (port != nullptr) {
             presenter = std::make_unique<ViewerGpuPresenter>(port, config);
         } else {
@@ -252,6 +267,12 @@ struct ViewerGpuResidentController::Impl final {
         ++presentAttempts;
         const bool admitted = presenter->present(pendingLease, pendingParams, std::move(overlay));
         if (!admitted) {
+            if (trace)
+                trace->record(
+                    pendingTraceIdentity, PreviewTraceStage::PresentSubmitted,
+                    PreviewTraceOutcome::Rejected,
+                    static_cast<std::uint8_t>(runtime::PreviewDisplayProvider::GpuResident), 0, 0,
+                    0, 0, tracePresenterId);
             failCpu(presenter->diagnostic());
             if (presentAck) {
                 presentAck(false, diagnostic);
@@ -260,6 +281,14 @@ struct ViewerGpuResidentController::Impl final {
         }
         ++acceptedPresents;
         enqueuedSequence = presenter->lastEnqueuedSequence();
+        if (trace) {
+            traceSubmissions[nextTraceSubmission] = {enqueuedSequence, pendingTraceIdentity};
+            nextTraceSubmission = (nextTraceSubmission + 1) % traceSubmissions.size();
+            trace->record(pendingTraceIdentity, PreviewTraceStage::PresentSubmitted,
+                          PreviewTraceOutcome::Accepted,
+                          static_cast<std::uint8_t>(runtime::PreviewDisplayProvider::GpuResident),
+                          0, enqueuedSequence, 0, 0, tracePresenterId);
+        }
         presentAcked = false;
         return true;
     }
@@ -374,6 +403,25 @@ struct ViewerGpuResidentController::Impl final {
     std::uint64_t newestOverlaySignatureForRequest = 0;
 
     void pumpPresentAck() {
+        // Trace the owner's actual applied sequence, even while a newer request is pending.
+        // Never stamp the current pending identity onto an older acknowledgement. If correlation
+        // has fallen out of this bounded map, identity remains explicitly unavailable (all zero).
+        if (trace && presenter && presenter->appliedSequence() != 0 &&
+            presenter->appliedSequence() != lastTracedAppliedSequence) {
+            const auto applied = presenter->appliedSequence();
+            PreviewTraceIdentity acknowledged;
+            for (const auto& submission : traceSubmissions) {
+                if (submission.sequence == applied) {
+                    acknowledged = submission.identity;
+                    break;
+                }
+            }
+            trace->record(acknowledged, PreviewTraceStage::PresentAcknowledged,
+                          PreviewTraceOutcome::Accepted,
+                          static_cast<std::uint8_t>(runtime::PreviewDisplayProvider::GpuResident),
+                          0, applied, applied, presenter->presentCount(), tracePresenterId);
+            lastTracedAppliedSequence = applied;
+        }
         if (presentAcked || presenter == nullptr || enqueuedSequence == 0) {
             return;
         }
@@ -431,6 +479,13 @@ void ViewerGpuResidentController::setInputSink(InputSink sink) {
 
 void ViewerGpuResidentController::setPresentAck(PresentAck ack) {
     impl_->presentAck = std::move(ack);
+}
+
+void ViewerGpuResidentController::setFrameTrace(std::shared_ptr<PreviewFrameTrace> trace) {
+    impl_->trace = std::move(trace);
+    impl_->tracePresenterId = impl_->trace ? impl_->trace->allocatePresenterId() : 0;
+    impl_->traceSubmissions = {};
+    impl_->lastTracedAppliedSequence = 0;
 }
 
 void ViewerGpuResidentController::setCpuFallback(CpuFallback callback) {
@@ -629,6 +684,8 @@ bool ViewerGpuResidentController::present(const runtime::PreparedPreviewFrame& f
     params.checkerOriginX = static_cast<float>(-request.containerRect.left());
     params.checkerOriginY = static_cast<float>(-request.containerRect.top());
     impl_->pendingLease = geometry->lease;
+    if (impl_->trace)
+        impl_->pendingTraceIdentity = PreviewFrameTrace::identity(frame.desiredIdentity());
     impl_->pendingParams = params;
     ++impl_->requestGeneration;
     impl_->newestOverlaySignatureForRequest = request.overlaySignature;

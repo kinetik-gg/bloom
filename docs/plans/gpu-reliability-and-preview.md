@@ -13,8 +13,23 @@ remain separate decisions under G9.
 
 | Package | State | Evidence |
 | --- | --- | --- |
-| G0 | In progress: bounded application trace and simple-scene baseline | Pending review |
-| G1–G10 | Pending | No implementation or qualification claim |
+| G0 | Initial instrumentation slice accepted; remaining probes attach to their owning packages | Source review, quality checks, three focused suites, native acknowledgement correlation and original interaction fixture passed |
+| G1 | In progress: native validity and mapped-memory visibility | Baseline validation failures reproduced; no repair claim yet |
+| G2–G10 | Pending | No implementation or qualification claim |
+
+G0 adds opt-in bounded numeric frame tracing and a native Full-resolution 1920 × 1080 solid/text
+fixture using four cold and four warm frame requests. The initial measured medians were 48.14 ms
+and 32.01 ms respectively, through owner acknowledgement, with four warm RAM-cache hits, no CPU
+fallback, and no full-frame readback. Device qualification precedes these samples. This small
+sample does not establish sustained playback, pointer latency, unobscured pixels, or absence of
+flicker. Worker-stage, source-I/O, surface visibility, and pointer probes remain required in the
+packages that change those paths.
+
+The same viewer fixture passed its functional assertions while reporting 41 core/synchronization
+validation errors. G1 therefore also covers instance/device extension dependency negotiation and
+the swapchain acquire-to-render-pass dependency, in addition to the resident transfer and mapped
+visibility findings. A separate resolution-transition attempt exposed cancellation recovery and
+failed-teardown behavior for G2/G4; fixed-resolution success does not qualify that transition.
 
 The audit observations below describe the baseline; subsequent fixes and measured results belong
 in this checkpoint and the owning architecture documents.

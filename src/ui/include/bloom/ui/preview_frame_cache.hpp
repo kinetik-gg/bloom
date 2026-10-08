@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/ui/preview_frame_trace.hpp>
+
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
 
@@ -160,6 +162,7 @@ class PreviewFrameCache final : public QObject {
     // frame larger than the whole budget is refused rather than allowed to evict everything for
     // itself.
     void insert(const PreparedPreviewFrameHandle& frame);
+    void setFrameTrace(std::shared_ptr<PreviewFrameTrace> trace) { trace_ = std::move(trace); }
 
     [[nodiscard]] bool contains(const PreviewFrameCacheKey& key) const;
     // Cached times for exactly this project/composition/revision/resolution/display policy.
@@ -223,6 +226,7 @@ class PreviewFrameCache final : public QObject {
     void byteBudgetChanged();
 
   private:
+    std::shared_ptr<PreviewFrameTrace> trace_;
     struct Entry;
     void scheduleNotification();
     // A resident entry is live exactly while its lease is; a CPU entry is always live. An
