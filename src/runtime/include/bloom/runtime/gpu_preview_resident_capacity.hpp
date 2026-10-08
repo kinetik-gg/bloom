@@ -66,10 +66,8 @@ inline constexpr std::uint64_t kResidentSceneDenominator = 5;
 // The resident cache references at most 4/5 of the lease ledger; the remaining 1/5 is headroom for
 // leases that are in flight or currently presented but not yet retained by the cache.
 inline constexpr std::uint64_t kResidentCacheHeadroomDenominator = 5;
-// Nominal resident frame used to turn a byte sublimit into an entry sublimit. A bound, not a claim
-// about any composition extent; the byte budget is the authoritative limit.
-inline constexpr std::uint64_t kNominalResidentFrameBytes = 8ULL * 1024ULL * 1024ULL;
-inline constexpr std::uint64_t kResidentCacheEntryFloor = 8;
+// Finite metadata limits independent of image extent. Actual native byte admission remains
+// authoritative. One eighth of the lease slots stays outside the cache for active/tombstoned work.
 inline constexpr std::uint64_t kResidentCacheEntryCeiling = 4096;
 inline constexpr std::uint64_t kResidentLeaseEntryCeiling = 4096;
 

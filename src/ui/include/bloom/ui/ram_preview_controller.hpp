@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace bloom::ui {
 
@@ -19,9 +20,7 @@ class TaskUiBridge;
 // "RAM Preview": pre-render a composition's whole frame range into the RAM preview cache, then play
 // it back from there (docs/architecture/animation-and-time.md, "RAM preview").
 //
-// The range is the composition's own [0, duration) frame indices. Bloom has no work-area range to
-// scope it to -- the timeline's work-area strip is honestly the whole duration, with no in/out
-// points in the document model -- so there is nothing narrower to offer yet.
+// The requested range is the live half-open work area, or the full duration when unset.
 //
 // TWO frames are prepared at a time, and that is the whole point of this controller's shape. The
 // previous one-frame version was correct but throughput-bound: the row-band pool finishes one frame
@@ -37,13 +36,32 @@ class TaskUiBridge;
 // accepts them), then the range is rebased and only the still-missing frames are prepared.
 //
 // This controller never starts playback itself: the transport belongs to the Timeline editor, which
-// connects to cachingFinished() and plays when the range is complete. A RAM preview with no
-// Timeline open therefore fills the cache and stops, which is the honest outcome rather than a
-// second transport.
+// connects to cachingFinished() and autoplays only a still-current fully retained range. A RAM
+// preview with no Timeline open therefore fills the cache and stops, which is the honest outcome
+// rather than a second transport.
 class RamPreviewController final : public QObject {
     Q_OBJECT
 
   public:
+    enum class Completion : std::uint8_t { Complete, PartialBudget, Cancelled, Failed };
+    struct PlayableSpan final {
+        core::RationalTime start;
+        core::RationalTime end; // exclusive
+        std::uint64_t frameCount = 0;
+        friend bool operator==(const PlayableSpan&, const PlayableSpan&) = default;
+    };
+    // Historical successful preparations this run; includes results later evicted or made stale.
+    [[nodiscard]] std::uint64_t preparedFrameCount() const noexcept { return preparedFrameCount_; }
+    // Current accepted frame-grid intersection, without cache-hit/LRU side effects.
+    [[nodiscard]] const std::vector<std::uint64_t>& retainedFrameIndices() const noexcept {
+        return retainedFrameIndices_;
+    }
+    [[nodiscard]] const std::optional<PlayableSpan>& playableSpan() const noexcept {
+        return playableSpan_;
+    }
+    [[nodiscard]] std::optional<Completion> lastCompletion() const noexcept {
+        return lastCompletion_;
+    }
     RamPreviewController(CompositionSession& session,
                          CompositionPreviewController& previewController,
                          runtime::TaskScheduler& scheduler, TaskUiBridge& taskUiBridge,
@@ -51,10 +69,12 @@ class RamPreviewController final : public QObject {
                          PreviewPreparationSubmitter submitter = {});
     ~RamPreviewController() override;
 
+    // Refresh at the autoplay boundary, including external callbacks/rebinds and expired leases.
+    [[nodiscard]] bool isFullRangeRetained();
+    [[nodiscard]] bool canAutoPlay();
     [[nodiscard]] bool isCaching() const noexcept { return caching_; }
-    // How many frames of the range reached the cache, and how many the range holds. Both are zero
-    // before the first run and are kept after one ends, so a caller can ask what the last run
-    // achieved; isCaching() is what says whether they are still moving.
+    // Live exact-grid retention and requested range size. Coverage follows cache mutations after
+    // completion too; preparedFrameCount()/lastCompletion() alone describe historical work.
     [[nodiscard]] std::uint64_t cachedFrameCount() const noexcept { return cachedFrameCount_; }
     [[nodiscard]] std::uint64_t totalFrameCount() const noexcept { return totalFrameCount_; }
     [[nodiscard]] bool isShuttingDown() const noexcept { return shuttingDown_; }
@@ -78,12 +98,10 @@ class RamPreviewController final : public QObject {
 
   signals:
     void stateChanged();
-    // True when the run finished on its own -- the whole range cached, or as much of it as the
-    // memory budget holds -- and false when it ended early (cancelled, or a frame could not be
-    // prepared). The Timeline's transport plays on true: a partly cached range is still worth
-    // playing, and the transport's own clock rule already decides frame by frame which frames it
-    // can present exactly.
-    void cachingFinished(bool completed);
+    // Complete means every exact requested key is live at completion. PartialBudget preserves
+    // useful retained samples without autoplay; Cancelled and Failed also keep live overlap.
+    // Historical completion never certifies current coverage after eviction, purge or rebind.
+    void cachingFinished(Completion outcome);
 
   private:
     // The fill engine. Lands every ready result, honours a pending range/provenance rebase once no
@@ -102,7 +120,8 @@ class RamPreviewController final : public QObject {
     [[nodiscard]] runtime::PreviewRequestIdentity identityFor(core::RationalTime time,
                                                               const document::Snapshot& snapshot);
     void consumeReadyResult();
-    void finish(bool completed);
+    void finish(Completion outcome);
+    void refreshCoverage(bool notify = true);
     void cancelAndDetachActive() noexcept;
     void publishProgress();
     // WORKAREA-1: adapt a run in progress to the live work area. A frame in flight is allowed to
@@ -133,8 +152,20 @@ class RamPreviewController final : public QObject {
     std::uint64_t nextFrameIndex_ = 0;
     std::uint64_t firstFrameIndex_ = 0;
     std::uint64_t cachedFrameCount_ = 0;
+    std::uint64_t preparedFrameCount_ = 0;
+    document::ProjectId projectId_;
+    std::vector<std::uint64_t> retainedFrameIndices_;
+    std::optional<PlayableSpan> playableSpan_;
+    std::optional<Completion> lastCompletion_;
     std::uint64_t totalFrameCount_ = 0;
     std::uint64_t generation_ = 0;
+    std::uint64_t runSerial_ = 0;
+    std::optional<Completion> retentionLoss_;
+    std::uint64_t pressureDropsObserved_ = 0;
+    std::uint64_t staleDropsObserved_ = 0;
+    std::optional<PreviewFrameCacheKey> completedProbe_;
+    core::RationalTime completedEnd_;
+    document::Revision completedRevision_;
     // The cache's eviction count when this run began. An eviction after that means the range has
     // outgrown the budget.
     std::uint64_t evictionsAtStart_ = 0;

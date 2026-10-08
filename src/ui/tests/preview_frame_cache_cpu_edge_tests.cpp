@@ -170,13 +170,17 @@ int main(int argc, char** argv) {
         auto trace = std::make_shared<bloom::ui::PreviewFrameTrace>(32);
         PreviewFrameCache zeroCache(0);
         zeroCache.setFrameTrace(trace);
-        zeroCache.insert(frameA1);
+        const auto zeroResult = zeroCache.insert(frameA1);
+        expectations.expect(zeroResult.outcome == PreviewFrameCache::InsertOutcome::RejectedBudget,
+                            "zero budget returns explicit refusal");
         expectations.expect(zeroCache.size() == 0 && trace->events().size() == 1 &&
                                 trace->events().back().outcome ==
                                     bloom::ui::PreviewTraceOutcome::OverBudget,
                             "G0: zero-budget refusal is traced honestly");
         zeroCache.setByteBudget(kBudget);
-        zeroCache.insert(frameA1);
+        expectations.expect(zeroCache.insert(frameA1).outcome ==
+                                PreviewFrameCache::InsertOutcome::Retained,
+                            "adequate budget reports actual retention");
         expectations.expect(zeroCache.contains(keyA) &&
                                 trace->events().back().outcome ==
                                     bloom::ui::PreviewTraceOutcome::Retained,
@@ -202,7 +206,9 @@ int main(int argc, char** argv) {
         auto frameA2 = cpuFrame(planA, 2);
         expectations.expect(frameA2 != nullptr, "the second same-key CPU frame is built");
         if (frameA2 != nullptr) {
-            reuseCache.insert(frameA2);
+            expectations.expect(reuseCache.insert(frameA2).outcome ==
+                                    PreviewFrameCache::InsertOutcome::AlreadyPresent,
+                                "a live duplicate reports reuse");
             expectations.expect(reuseCache.size() == 1,
                                 "CACHEFIX-2: a live same-key CPU insert keeps one entry");
             expectations.expect(reuseCache.residentBytes() == costA,
@@ -244,6 +250,18 @@ int main(int argc, char** argv) {
         if (frameA2rev != nullptr) {
             PreviewFrameCache revisionCache(kBudget);
             revisionCache.insert(frameA1);
+            for (const auto boundary : {PreviewFrameCache::InsertAllocation::Key,
+                                        PreviewFrameCache::InsertAllocation::Product,
+                                        PreviewFrameCache::InsertAllocation::Capacity}) {
+                revisionCache.failNextInsertAllocationForTesting(boundary);
+                const auto failed = revisionCache.insert(frameA2rev);
+                expectations.expect(
+                    failed.outcome == PreviewFrameCache::InsertOutcome::AllocationFailure &&
+                        revisionCache.contains(keyA) && revisionCache.size() == 1 &&
+                        revisionCache.residentBytes() == costA &&
+                        revisionCache.statistics().staleDrops == 0,
+                    "all allocation boundaries preserve the old revision and charge");
+            }
             const auto staleBefore = revisionCache.statistics().staleDrops;
             revisionCache.insert(frameA2rev);
             expectations.expect(revisionCache.size() == 1 &&

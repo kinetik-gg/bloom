@@ -12,6 +12,7 @@
 
 #include <bloom/runtime/prepared_preview_frame.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -652,9 +653,13 @@ bool GpuPreviewDisplayServiceTestAccess::sampleResidentFrameSparse(
                 done->store(true, std::memory_order_release);
                 return;
             }
+            // Test-only staging needs finite headroom for native allocation alignment. The copy
+            // still contains exactly the requested sparse pixels, and the renderer checks actual
+            // VMA bytes against this allowance before submitting it.
+            const auto sampleBudget = std::max<std::uint64_t>(
+                64ULL * 1024ULL, sampleCoordinates->size() * sizeof(render::Rgba8));
             const auto readback = render::readbackResidentDisplayImageSparse(
-                pinned.pin.image(), *sampleCoordinates,
-                sampleCoordinates->size() * sizeof(render::Rgba8));
+                pinned.pin.image(), *sampleCoordinates, sampleBudget);
             if (!readback.hasValue()) {
                 shared->diagnostic = readback.message;
                 static_cast<void>(

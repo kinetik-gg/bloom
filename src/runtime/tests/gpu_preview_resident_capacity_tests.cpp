@@ -294,6 +294,11 @@ void testNativeOwnerBootstrap(const TestOptions& options) {
 } // namespace
 
 int main(int argc, char** argv) {
+    const auto halfSequence = bloom::runtime::gpuResidentCapacityPlanConfigured(1ULL << 30);
+    if (halfSequence.cacheEntries < 100 || halfSequence.cacheEntries >= halfSequence.leaseEntries ||
+        halfSequence.leaseEntries > bloom::runtime::kResidentLeaseEntryCeiling)
+        return 1;
+
     const TestOptions options = parseOptions(argc, argv);
     testConfiguredPartition();
     testCapacityClamp();

@@ -103,6 +103,8 @@ enum class FrameFreshness : std::uint8_t {
 struct RamPreviewProgress final {
     std::uint64_t cachedFrames = 0;
     std::uint64_t totalFrames = 0;
+    std::uint64_t preparedFrames = 0;
+    std::uint64_t playableFrames = 0;
 
     friend bool operator==(const RamPreviewProgress&, const RamPreviewProgress&) = default;
 };
@@ -190,7 +192,8 @@ class CompositionPreviewController final : public QObject {
     // starts nor interprets a run.
     [[nodiscard]] const std::optional<RamPreviewProgress>& ramPreviewProgress() const noexcept;
     void beginRamPreviewProgress(std::uint64_t totalFrames);
-    void setRamPreviewProgress(std::uint64_t cachedFrames);
+    void setRamPreviewProgress(std::uint64_t cachedFrames, std::uint64_t preparedFrames = 0,
+                               std::uint64_t playableFrames = 0);
     void endRamPreviewProgress();
 
     [[nodiscard]] const CompositionPreviewSettings& settings() const noexcept;

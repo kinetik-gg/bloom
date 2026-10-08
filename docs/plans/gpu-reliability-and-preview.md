@@ -7,7 +7,8 @@ Updated: 2026-10-09
 ## Execution checkpoint
 
 The owner resumed execution after the G2E checkpoint. G3B outline publication and displayed-intent
-slices are accepted within the limits below; G3A retention truth is next.
+slices and G3A retention truth are accepted within the limits below. The immediate next G3B follow-up
+is Viewer resize recovery, clipping and visible-status consistency; G3 as a whole remains incomplete.
 
 Implementation proceeds sequentially from `e1086c13`. Each slice requires source review, focused
 regressions, and the applicable native/product evidence before its successor is accepted. A passing
@@ -22,7 +23,9 @@ remain separate decisions under G9.
 | G3B1 | Coherent outline publication accepted as a bounded slice | Native state/interaction regressions, independent compositor samples, CPU regressions and changed-source static analysis pass; G3B2A/B checkpoints follow |
 | G3B2A | Clear/discard synchronization and bounded owner WSI progress accepted as a bounded slice | Independent source review and isolated GL native checks, isolated Vulkan lifecycle/progress, CPU admission/fairness tests, Vulkan-disabled render build and changed-source static analysis pass |
 | G3B2B | Actual displayed intent, safe CPU cover and coupled hit mapping accepted as a bounded slice | Independent private compositor pixels, strict native interaction/project replacement, focused regressions, source quality and 58 affected translation units of static analysis pass |
-| G3A, G4–G10 | Pending | No implementation or qualification claim |
+| G3A | Accepted as a bounded retention/capacity slice | Independent source/artifact review, typed/live coverage regressions, measured 100-frame Full/Half native parity/warm replay, UI goldens, quality and 57 affected translation units of static analysis pass |
+| G3B resize follow-up | Pending; immediate next slice | User reports refusal, blank Viewer and spill into neighboring panels during resize/reposition; visible pixels, clipping and status require a new layout-transition gate |
+| G4–G10 | Pending | No implementation or qualification claim |
 
 G3B1 checkpoint (2026-10-09), accepted after independent source review and focused reruns: coherent required-outline publication and exact
 owner-applied metadata are implemented as a bounded slice. Deterministic delayed raster, changing
@@ -84,6 +87,53 @@ These samples do not qualify every refresh, sustained playback, desktop responsi
 monitor DPR2, or global keyboard focus. Linux native execution is locally verified; macOS/Windows
 retain the explicit CPU fallback. G3A cache truth, G4 completion/cadence and public present hooks,
 G6 aggregate memory accounting and G7 processing remain pending.
+
+G3A checkpoint (2026-10-09), accepted after independent source, fixture and artifact review:
+cache insertion reports actual retention, budget refusal, stale admission and allocation failure.
+Allocating work precedes qualification/revision pruning; failed allocation and pre-admission refusal
+preserve prior valid entries and charges. RAM preview separates requested frames, historical
+successful preparations, live exact-grid retention and the longest contiguous half-open span.
+For example, four preparations in a three-frame cache retain indices `{1,2,3}`, not all four.
+Only a still-current fully retained range autoplays; partial results preserve useful samples for
+ordinary manual playback. Expired leases refresh at a cache-owned 250 ms interval while residents
+exist, followed by the existing 50 ms coalesced notification. Coverage is projected from retained
+entries at mutation/result boundaries, not by scanning composition duration during paint.
+
+Five focused portable suites, main-window/Viewer/playback checks, whole-window DPR1/DPR1.5 goldens,
+repository quality and all 57 affected translation units of static analysis pass. Three fixture/type
+warnings were repaired without changing production behavior or pixel assertions; their affected
+translation units and changed RAM regression were rerun.
+
+The resident count policy now uses finite lazy metadata admission (3584 cache slots within the
+existing 4096 lease ceiling), with actual native bytes and device clamps authoritative. It no
+longer limits a 1 GiB GPU pool to 51 frames by assuming each display image occupies 8 MiB.
+An actual production sequence of 100 distinct 1920×1080 EXR frames retained all 100 Half products
+at 960×540: 2,458,736 bytes per retained product, 245,873,600 bytes total under a 429,496,730-byte
+cache share. Full products charge 8,848,496 bytes each. With the same 1 GiB pool, 49 preparations
+leave 48 retained indices `{1..48}` and span `[0.04 s,1.96 s)`, correctly reporting partial budget
+completion. A measured fitting 3 GiB pool retains all 100 Full products (884,849,600 bytes under
+the 1,288,490,189-byte cache share). Each complete case verifies CPU-oracle pixel parity and 200
+forward/reverse native presentations with no additional evaluation, scene dispatch or full-frame
+readback. Presentation still performs native GPU work. Core and synchronization validation are
+clean. Genuine expired admission combined with foreign eviction reports failure, not a budget
+completion. Fixtures use private/offscreen surfaces and leave the owner's app session untouched.
+
+These synthetic local uniform-colour EXR sequence checks use a private raw native target and
+150 ms pacing between presentations. They qualify display dimensions, retention admission and warm
+reuse; they do not establish TS010/heavy EXR/SMB throughput, actual playback-clock cadence,
+every-refresh continuity or desktop responsiveness. RGBA32F working
+precision and RGBA8 display storage are unchanged. Linux native execution is locally verified;
+macOS/Windows retain explicit CPU fallback. G4 cadence, G5 media workload and G6 aggregate memory
+accounting remain separate packages; G7 display ownership, G9 cache-tier decisions and G10 sustained
+workload/platform qualification are also unchanged.
+
+The owner subsequently reported `resize refused: the target is not Active or retire is pending`,
+image spill into neighboring panels and blank Viewer areas at some sizes/positions, while status
+still claimed GPU resident/current. This is the immediate G3B follow-up. The earlier settled/static
+G3B2B captures do not qualify repeated resize/reposition during non-Active native transitions. The
+next gate must externally prove current visible pixels and neighboring-panel clipping after layout
+changes, including held attach/resize/retirement. The running old app and unsaved session remain
+preserved; no overnight relaunch is part of this checkpoint.
 
 Terminal task-input lifetime checkpoint (2026-10-09), accepted after independent review:
 CPU and blocking-I/O task publication now releases the callable's captured inputs after execution

@@ -8,6 +8,7 @@
 
 #include <QThread>
 
+#include <algorithm>
 #include <limits>
 #include <utility>
 
@@ -65,6 +66,16 @@ RamPreviewController::RamPreviewController(CompositionSession& session,
     // cache.
     connect(&previewController_, &CompositionPreviewController::previewCachePurged, this,
             &RamPreviewController::cancel);
+    connect(&previewController_.frameCache(), &PreviewFrameCache::contentsChanged, this,
+            [this] { refreshCoverage(); });
+    connect(&session_, &CompositionSession::compositionChanged, this,
+            [this] { refreshCoverage(); });
+    connect(&session_, &CompositionSession::evaluationChanged, this, [this] { refreshCoverage(); });
+    connect(&session_, &CompositionSession::documentEvaluationChanged, this,
+            [this] { refreshCoverage(); });
+    connect(&session_, &CompositionSession::workAreaChanged, this, [this] { refreshCoverage(); });
+    connect(&previewController_, &CompositionPreviewController::resolutionChanged, this,
+            [this] { refreshCoverage(); });
 }
 
 RamPreviewController::~RamPreviewController() { cancelAndDetachActive(); }
@@ -83,7 +94,14 @@ void RamPreviewController::start() {
         return;
     }
 
+    ++runSerial_;
     compositionId_ = session_.compositionId();
+    projectId_ = session_.snapshot().project().id();
+    preparedFrameCount_ = 0;
+    retainedFrameIndices_.clear();
+    playableSpan_.reset();
+    retentionLoss_.reset();
+    lastCompletion_.reset();
     caching_ = true;
     rangeDirty_ = false;
     rebaseRange();
@@ -106,12 +124,12 @@ void RamPreviewController::rebaseRange() {
     // timeline.
     const auto* composition = session_.composition();
     if (composition == nullptr) {
-        finish(false);
+        finish(Completion::Failed);
         return;
     }
     const auto mapping = mappingForComposition(*composition);
     if (!mapping.has_value()) {
-        finish(false);
+        finish(Completion::Failed);
         return;
     }
     const auto range = session_.workArea();
@@ -119,18 +137,20 @@ void RamPreviewController::rebaseRange() {
     const auto endMapping =
         core::FrameTimeMapping::create(range.end, rate.numerator(), rate.denominator());
     if (!endMapping) {
-        finish(false);
+        finish(Completion::Failed);
         return;
     }
     firstFrameIndex_ = mapping->nearestFrameIndex(range.start);
     totalFrameCount_ = endMapping.value()->maximumFrameIndex() - firstFrameIndex_ + 1;
     nextFrameIndex_ = 0;
-    cachedFrameCount_ = 0;
+    refreshCoverage(false);
+    retentionLoss_.reset();
     // A range edit rebases the budget baseline too: the run's own range management must never look
     // like the eviction that ends a run.
     evictionsAtStart_ = previewController_.frameCache().statistics().evictions;
     previewController_.beginRamPreviewProgress(totalFrameCount_);
-    emit stateChanged();
+    if (caching_)
+        publishProgress();
 }
 
 void RamPreviewController::handleWorkAreaChanged() {
@@ -170,7 +190,7 @@ void RamPreviewController::cancel() {
         return;
     }
     cancelAndDetachActive();
-    finish(false);
+    finish(Completion::Cancelled);
 }
 
 void RamPreviewController::toggle() {
@@ -189,9 +209,10 @@ void RamPreviewController::beginShutdown() {
     shuttingDown_ = true;
     disconnect(&session_, nullptr, this, nullptr);
     disconnect(&previewController_, nullptr, this, nullptr);
+    disconnect(&previewController_.frameCache(), nullptr, this, nullptr);
     cancelAndDetachActive();
     if (caching_) {
-        finish(false);
+        finish(Completion::Cancelled);
     }
 }
 
@@ -218,6 +239,10 @@ void RamPreviewController::advance() {
         }
     }
 
+    if (retentionLoss_) {
+        finish(*retentionLoss_);
+        return;
+    }
     requestFrames();
     if (!caching_) {
         return;
@@ -225,8 +250,9 @@ void RamPreviewController::advance() {
 
     // Finish on the truth that every frame the range holds has actually landed, never merely
     // because the last frame was submitted: a second frame may still be preparing.
-    if (pipeline_.empty() && cachedFrameCount_ >= totalFrameCount_) {
-        finish(true);
+    if (pipeline_.empty() && nextFrameIndex_ >= totalFrameCount_) {
+        refreshCoverage();
+        finish(cachedFrameCount_ == totalFrameCount_ ? Completion::Complete : Completion::Failed);
     }
 }
 
@@ -235,15 +261,16 @@ void RamPreviewController::requestFrames() {
     if (!caching_ || shuttingDown_ || rangeDirty_) {
         return;
     }
-    while (caching_ && pipeline_.hasCapacity()) {
+    const auto serial = runSerial_;
+    while (caching_ && serial == runSerial_ && pipeline_.hasCapacity()) {
         const auto* composition = session_.composition();
         if (composition == nullptr) {
-            finish(false);
+            finish(Completion::Failed);
             return;
         }
         const auto mapping = mappingForComposition(*composition);
         if (!mapping.has_value()) {
-            finish(false);
+            finish(Completion::Failed);
             return;
         }
 
@@ -251,15 +278,16 @@ void RamPreviewController::requestFrames() {
         // range nobody has edited is immediate, and a range partly filled by ordinary playback
         // finishes the rest. A frame still in flight is stepped over rather than resubmitted; the
         // pipeline's own identity check is the guard against a duplicate on a rebase.
-        while (nextFrameIndex_ < totalFrameCount_) {
+        while (caching_ && serial == runSerial_ && !rangeDirty_ &&
+               nextFrameIndex_ < totalFrameCount_) {
             const auto frameTime = mapping->timeForFrame(firstFrameIndex_ + nextFrameIndex_);
             if (!frameTime.hasValue()) {
-                finish(false);
+                finish(Completion::Failed);
                 return;
             }
             const auto key = previewController_.cacheKeyForTime(*frameTime.value());
             if (!key.has_value()) {
-                finish(false);
+                finish(Completion::Failed);
                 return;
             }
             if (pipeline_.isInFlight(*key)) {
@@ -268,19 +296,18 @@ void RamPreviewController::requestFrames() {
             }
             if (previewController_.frameCache().contains(*key)) {
                 ++nextFrameIndex_;
-                ++cachedFrameCount_;
-                publishProgress();
                 continue;
             }
             break;
         }
-        if (nextFrameIndex_ >= totalFrameCount_) {
+        if (!caching_ || serial != runSerial_ || rangeDirty_ ||
+            nextFrameIndex_ >= totalFrameCount_) {
             return;
         }
 
         const auto frameTime = mapping->timeForFrame(firstFrameIndex_ + nextFrameIndex_);
         if (!frameTime.hasValue() || generation_ == std::numeric_limits<std::uint64_t>::max()) {
-            finish(false);
+            finish(Completion::Failed);
             return;
         }
         // TEMPORAL-2B: each submitted time resolves its own genuine snapshot.
@@ -318,7 +345,7 @@ void RamPreviewController::requestFrames() {
                 });
         }
         if (!submission.accepted()) {
-            finish(false);
+            finish(Completion::Failed);
             return;
         }
         pipeline_.add(RamPreviewPipeline::InFlight{.frameIndex = nextFrameIndex_,
@@ -331,46 +358,59 @@ void RamPreviewController::requestFrames() {
 
 bool RamPreviewController::drainResults() {
     Q_ASSERT(QThread::currentThread() == thread());
+    const auto serial = runSerial_;
     for (auto& ready : pipeline_.takeReady()) {
-        if (!caching_ || shuttingDown_) {
+        if (!caching_ || shuttingDown_ || serial != runSerial_) {
             return false;
         }
         if (ready.result.state() != runtime::TaskState::Succeeded) {
             // Cancelled or failed: the run ends and keeps whatever already reached the cache. A
             // partially cached range is still useful -- the transport simply plays the rest on the
             // elapsed-time clock and says so in the footer.
-            finish(false);
+            finish(Completion::Failed);
             return false;
         }
         const auto& value = ready.result.value();
         if (!value.has_value() || *value == nullptr ||
             (*value)->status() != runtime::PreviewPreparationStatus::Prepared ||
             (*value)->frame() == nullptr) {
-            finish(false);
+            finish(Completion::Failed);
             return false;
         }
+        ++preparedFrameCount_;
         const auto& frame = (*value)->frame();
         // Validate the out-of-order result against the CURRENT per-time evaluation snapshot and
         // frame key before it can be retained or counted. A frame whose time now resolves to a
         // different revision is a late result from an evaluation the session has left; the cache
         // would refuse it, and the run must not count it as progress. The cache still gets the
         // insert attempt so that a still-valid overlap survives the range rebase below.
+        if (frame->desiredIdentity() != ready.identity) {
+            finish(Completion::Failed);
+            return false;
+        }
         const auto identityKey = PreviewFrameCacheKey::forIdentity(frame->desiredIdentity());
         if (rangeDirty_ || !resultIsCurrent(identityKey, ready.identity)) {
             previewController_.frameCache().insert(frame);
             rangeDirty_ = true;
             continue;
         }
-        previewController_.frameCache().insert(frame);
-        ++cachedFrameCount_;
+        const auto inserted = previewController_.frameCache().insert(frame);
         publishProgress();
-        if (previewController_.frameCache().statistics().evictions != evictionsAtStart_) {
-            // The range has outgrown the memory budget. Every further frame would evict one this
-            // run has already cached, so the run stops with the prefix that fits rather than
-            // spending the rest of the range throwing away its own beginning. A sibling already in
-            // flight (at most one more) is detached instead of being allowed to churn the prefix.
+        if (!caching_ || serial != runSerial_)
+            return false;
+        if (inserted.outcome == PreviewFrameCache::InsertOutcome::RejectedStale ||
+            inserted.outcome == PreviewFrameCache::InsertOutcome::AllocationFailure ||
+            inserted.outcome == PreviewFrameCache::InsertOutcome::Invalid) {
+            finish(Completion::Failed);
+            return false;
+        }
+        if (inserted.outcome == PreviewFrameCache::InsertOutcome::RejectedBudget ||
+            retentionLoss_) {
+            // Refusal or loss of requested coverage ends this bounded fill. The live time set
+            // may have holes or may start after the requested beginning; never call it a prefix.
+            // Detach the sibling rather than churn already retained samples.
             pipeline_.cancelAllAndDetach();
-            finish(true);
+            finish(retentionLoss_.value_or(Completion::PartialBudget));
             return false;
         }
     }
@@ -411,23 +451,119 @@ void RamPreviewController::consumeReadyResult() {
     advance();
 }
 
-void RamPreviewController::finish(const bool completed) {
+void RamPreviewController::finish(const Completion outcome) {
+    const auto serial = runSerial_;
     pipeline_.cancelAllAndDetach();
     caching_ = false;
     rangeDirty_ = false;
     nextFrameIndex_ = 0;
-    // The counts are KEPT: a surface (or a test) asking what the run that just ended achieved gets
-    // the truth, and isCaching() is what says whether they are still moving. start() resets them.
+    refreshCoverage(false);
+    lastCompletion_ = outcome;
+    completedProbe_ = previewController_.cacheKeyForTime(session_.workArea().start);
+    completedEnd_ = session_.workArea().end;
+    completedRevision_ = session_.snapshot().revision();
     previewController_.endRamPreviewProgress();
+    if (serial != runSerial_ || caching_)
+        return;
     emit stateChanged();
-    emit cachingFinished(completed);
+    // A callback may synchronously start another run. Never publish the old run's completion.
+    if (serial == runSerial_ && !caching_)
+        emit cachingFinished(outcome);
 }
 
 void RamPreviewController::cancelAndDetachActive() noexcept { pipeline_.cancelAllAndDetach(); }
 
+void RamPreviewController::refreshCoverage(const bool notify) {
+    previewController_.frameCache().refreshResidentEntries();
+    std::vector<std::uint64_t> indices;
+    std::optional<PlayableSpan> span;
+    const auto* composition = session_.composition();
+    const auto probe = previewController_.cacheKeyForTime(session_.workArea().start);
+    if (composition != nullptr && probe && probe->projectId == projectId_ &&
+        session_.compositionId() == compositionId_) {
+        const auto mapping = mappingForComposition(*composition);
+        if (mapping) {
+            const auto range = session_.workArea();
+            const auto rate = composition->format().frameRate();
+            const auto endMapping =
+                core::FrameTimeMapping::create(range.end, rate.numerator(), rate.denominator());
+            if (endMapping) {
+                firstFrameIndex_ = mapping->nearestFrameIndex(range.start);
+                totalFrameCount_ = endMapping.value()->maximumFrameIndex() - firstFrameIndex_ + 1;
+            }
+            for (const auto time : previewController_.frameCache().timesFor(*probe)) {
+                if (time < range.start || time >= range.end)
+                    continue;
+                const auto index = mapping->nearestFrameIndex(time);
+                const auto exact = mapping->timeForFrame(index);
+                if (exact && *exact.value() == time)
+                    indices.push_back(index);
+            }
+            std::ranges::sort(indices);
+            indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+            for (std::size_t begin = 0; begin < indices.size();) {
+                auto end = begin + 1;
+                while (end < indices.size() && indices[end] == indices[end - 1] + 1)
+                    ++end;
+                const auto count = static_cast<std::uint64_t>(end - begin);
+                if (!span || count > span->frameCount) {
+                    const auto start = mapping->timeForFrame(indices[begin]);
+                    const auto after = mapping->timeForFrame(indices[end - 1] + 1);
+                    span = PlayableSpan{*start.value(),
+                                        after ? *after.value() : composition->duration(), count};
+                }
+                begin = end;
+            }
+        }
+    }
+    const auto statistics = previewController_.frameCache().statistics();
+    if (caching_ && !rangeDirty_ &&
+        std::ranges::any_of(retainedFrameIndices_, [&](const auto index) {
+            return !std::binary_search(indices.begin(), indices.end(), index);
+        })) {
+        retentionLoss_ = statistics.staleDrops == staleDropsObserved_ &&
+                                 (statistics.evictions != evictionsAtStart_ ||
+                                  statistics.pressureDrops != pressureDropsObserved_)
+                             ? Completion::PartialBudget
+                             : Completion::Failed;
+    }
+    evictionsAtStart_ = statistics.evictions;
+    pressureDropsObserved_ = statistics.pressureDrops;
+    staleDropsObserved_ = statistics.staleDrops;
+    if (indices == retainedFrameIndices_ && span == playableSpan_)
+        return;
+    retainedFrameIndices_ = std::move(indices);
+    playableSpan_ = span;
+    cachedFrameCount_ = retainedFrameIndices_.size();
+    if (caching_)
+        previewController_.setRamPreviewProgress(cachedFrameCount_, preparedFrameCount_,
+                                                 span ? span->frameCount : 0);
+    if (notify)
+        emit stateChanged();
+}
+
+bool RamPreviewController::isFullRangeRetained() {
+    previewController_.frameCache().refreshResidentEntries();
+    refreshCoverage(false);
+    return totalFrameCount_ != 0 && cachedFrameCount_ == totalFrameCount_ &&
+           playableSpan_.has_value() && playableSpan_->frameCount == totalFrameCount_;
+}
+
+bool RamPreviewController::canAutoPlay() {
+    return !caching_ && !shuttingDown_ && lastCompletion_ == Completion::Complete &&
+           completedRevision_ == session_.snapshot().revision() &&
+           completedEnd_ == session_.workArea().end &&
+           completedProbe_ == previewController_.cacheKeyForTime(session_.workArea().start) &&
+           isFullRangeRetained();
+}
+
 void RamPreviewController::publishProgress() {
-    previewController_.setRamPreviewProgress(cachedFrameCount_);
-    emit stateChanged();
+    const auto serial = runSerial_;
+    refreshCoverage(false);
+    previewController_.setRamPreviewProgress(cachedFrameCount_, preparedFrameCount_,
+                                             playableSpan_ ? playableSpan_->frameCount : 0);
+    if (serial == runSerial_ && caching_)
+        emit stateChanged();
 }
 
 } // namespace bloom::ui

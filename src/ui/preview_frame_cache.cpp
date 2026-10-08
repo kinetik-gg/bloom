@@ -10,6 +10,7 @@
 #include <memory>
 #include <new>
 #include <optional>
+#include <type_traits>
 #include <utility>
 
 namespace bloom::ui {
@@ -75,6 +76,9 @@ PreviewFrameCache::PreviewFrameCache(const std::size_t byteBudget,
     notificationTimer_.setSingleShot(true);
     notificationTimer_.setInterval(50);
     connect(&notificationTimer_, &QTimer::timeout, this, &PreviewFrameCache::contentsChanged);
+    residentRefreshTimer_.setInterval(250);
+    connect(&residentRefreshTimer_, &QTimer::timeout, this,
+            &PreviewFrameCache::refreshResidentEntries);
     ledger_.registerCache(
         this, byteBudget, [this] { return residentBytes(); },
         [this](const std::size_t bytes) {
@@ -160,140 +164,123 @@ PreviewFrameCache::take(const runtime::PreviewRequestIdentity& identity) {
     return frame;
 }
 
-void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
-    if (frame == nullptr) {
-        return;
+void PreviewFrameCache::allocationCheckpoint(const InsertAllocation boundary) {
+    if (insertAllocationFault_ == boundary) {
+        insertAllocationFault_ = InsertAllocation::None;
+        throw std::bad_alloc{};
     }
-    // Identify the resident arm by its honest provenance; residentFrame() is resident-only and
-    // would read an inactive variant member on a CPU frame.
+}
+
+PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
+    if (frame == nullptr)
+        return {};
+    const auto report = [&](const InsertOutcome outcome, const PreviewTraceOutcome traceOutcome,
+                            const std::uint64_t evictions = 0) {
+        if (trace_)
+            trace_->record(*frame, PreviewTraceStage::CacheRetention, traceOutcome);
+        return InsertResult{outcome, evictions};
+    };
     const bool resident =
         frame->provenance().provider == runtime::PreviewDisplayProvider::GpuResident;
-    if (resident) {
-        // Only a live lease is retainable; an invalidated one must never enter the cache.
-        if (!frame->isDisplayValid()) {
-            ++statistics_.rejections;
-            if (trace_)
-                trace_->record(*frame, PreviewTraceStage::CacheRetention,
-                               PreviewTraceOutcome::Invalid);
-            return;
-        }
-    } else if (!frame->displayBufferView().has_value()) {
-        if (trace_)
-            trace_->record(*frame, PreviewTraceStage::CacheRetention, PreviewTraceOutcome::Invalid);
-        return;
-    }
-    const auto key = PreviewFrameCacheKey::forIdentity(frame->desiredIdentity());
-    if (!workAreaAllows(key)) {
-        // A late completion after a work-area trim must not resurrect an out-of-range entry. The
-        // frame was already displayed by its caller; refusing only the retention is honest.
-        ++statistics_.rangeDrops;
-        if (trace_)
-            trace_->record(*frame, PreviewTraceStage::CacheRetention,
-                           PreviewTraceOutcome::OutOfRange);
-        return;
-    }
-    if (!provenanceAllows(key)) {
-        // TEMPORAL-2B: the time-indexed session now accepts a different genuine snapshot for this
-        // time, so a late completion for the changed interval is refused rather than retained.
-        ++statistics_.staleDrops;
-        if (trace_)
-            trace_->record(*frame, PreviewTraceStage::CacheRetention,
-                           PreviewTraceOutcome::WrongRevision);
-        return;
-    }
-    if (displayQualified_.has_value() && *displayQualified_ != frame->isOcioQualified()) {
-        // The display transform itself changed (the qualified processor became available). Every
-        // retained frame was produced by the other one, so none of them is this composition any
-        // more.
-        clear();
-    }
-    displayQualified_ = frame->isOcioQualified();
-    if (!hasProvenancePolicy()) {
-        // Standalone/no-policy fallback preserves the original conservative rule: a frame of a
-        // newer revision drops every older-revision entry of the same project, because without the
-        // session's time-indexed policy there is no way to know the two revisions are
-        // time-disjoint. The shared preview cache always installs a policy, which retains segments.
-        dropStaleRevisions(key);
-    }
-
-    const auto existing =
-        std::ranges::find_if(entries_, [&key](const Entry& entry) { return entry.key == key; });
-    if (existing != entries_.end()) {
-        if (entryIsLive(*existing)) {
-            // A live entry with this key already holds the best answer; reuse it in place.
-            std::rotate(entries_.begin(), existing, existing + 1);
-            if (trace_)
-                trace_->record(*frame, PreviewTraceStage::CacheRetention,
-                               PreviewTraceOutcome::Reused);
-            return;
-        }
-        // CACHEFIX-2. A dead resident entry (an invalidated lease) can never be served, so it must
-        // not shadow the live frame being published now. Drop it first -- which releases its byte
-        // charge and its budget/LRU slot -- and fall through to retain the incoming frame.
-        removeAt(static_cast<std::size_t>(existing - entries_.begin()));
-    }
-
-    const auto bytes = frameByteCost(*frame);
-    if (bytes == 0 || bytes > byteBudget_) {
-        // One frame that does not fit the whole budget must not empty the cache trying.
+    if (!frame->isDisplayValid()) {
         ++statistics_.rejections;
-        if (trace_)
-            trace_->record(*frame, PreviewTraceStage::CacheRetention,
-                           PreviewTraceOutcome::OverBudget);
-        return;
+        return report(InsertOutcome::RejectedStale, PreviewTraceOutcome::Invalid);
     }
-    // CACHEFIX-1: copying the display buffer and growing the entry vector both allocate. Under
-    // real memory pressure either can throw, and RETAINING a frame is an optimization -- the frame
-    // the caller is about to publish is unaffected, so a failed insert is counted and dropped
-    // rather than propagated into the render path.
     try {
-        if (resident) {
-            // The resident arm is retained by shared pointer only: no pixel copy, no native
-            // allocation, and no process image to strip.
-            entries_.insert(entries_.begin(), Entry{.key = key,
-                                                    .frame = nullptr,
-                                                    .resident = frame->residentFrame(),
-                                                    .bytes = bytes});
-        } else {
-            auto retained = retainable(*frame);
-            if (retained == nullptr) {
-                ++statistics_.rejections;
-                if (trace_)
-                    trace_->record(*frame, PreviewTraceStage::CacheRetention,
-                                   PreviewTraceOutcome::Invalid);
-                return;
-            }
-            entries_.insert(entries_.begin(), Entry{.key = key,
-                                                    .frame = std::move(retained),
-                                                    .resident = nullptr,
-                                                    .bytes = bytes});
+        allocationCheckpoint(InsertAllocation::Key);
+        auto key = PreviewFrameCacheKey::forIdentity(frame->desiredIdentity());
+        if (!workAreaAllows(key)) {
+            ++statistics_.rangeDrops;
+            return report(InsertOutcome::RejectedStale, PreviewTraceOutcome::OutOfRange);
         }
+        if (!provenanceAllows(key)) {
+            ++statistics_.staleDrops;
+            return report(InsertOutcome::RejectedStale, PreviewTraceOutcome::WrongRevision);
+        }
+        const bool qualificationChanged =
+            displayQualified_.has_value() && *displayQualified_ != frame->isOcioQualified();
+        const auto existing = std::ranges::find_if(entries_, [&key](const Entry& entry) {
+            return entry.key == key && entryIsLive(entry);
+        });
+        if (!qualificationChanged && existing != entries_.end()) {
+            std::rotate(entries_.begin(), existing, existing + 1);
+            return report(InsertOutcome::AlreadyPresent, PreviewTraceOutcome::Reused);
+        }
+        const auto bytes = frameByteCost(*frame);
+        if (bytes == 0 || bytes > byteBudget_ ||
+            (resident && (bytes > gpuResidentByteLimit_ || gpuResidentEntryLimit_ == 0))) {
+            ++statistics_.rejections;
+            return report(InsertOutcome::RejectedBudget, PreviewTraceOutcome::OverBudget);
+        }
+        // Prepare every allocating part before changing qualification, revisions or ownership.
+        allocationCheckpoint(InsertAllocation::Product);
+        Entry incoming{
+            .key = std::move(key), .frame = nullptr, .resident = nullptr, .bytes = bytes};
+        if (resident)
+            incoming.resident = frame->residentFrame();
+        else
+            incoming.frame = retainable(*frame);
+        if (!resident && incoming.frame == nullptr) {
+            // A validated display product with an unbounded strip budget can fail here only
+            // while allocating its copy; the optional factory contains that exception.
+            ++statistics_.allocationFailures;
+            return report(InsertOutcome::AllocationFailure, PreviewTraceOutcome::AllocationFailure);
+        }
+        allocationCheckpoint(InsertAllocation::Capacity);
+        entries_.reserve(entries_.size() + 1);
+        static_assert(std::is_nothrow_move_constructible_v<Entry>);
+        static_assert(std::is_nothrow_move_assignable_v<Entry>);
+        // From here the entry-vector transaction cannot allocate.
+        if (qualificationChanged)
+            clear();
+        displayQualified_ = frame->isOcioQualified();
+        if (!hasProvenancePolicy())
+            dropStaleRevisions(incoming.key);
+        for (std::size_t index = entries_.size(); index > 0; --index) {
+            if (entries_[index - 1].key == incoming.key)
+                removeAt(index - 1);
+        }
+        const auto evictionsBefore = statistics_.evictions;
+        entries_.insert(entries_.begin(), std::move(incoming));
+        // Sum only after bounding the old retained set, avoiding size_t overflow at extreme caps.
+        while (residentBytes_ > byteBudget_ - bytes && entries_.size() > 1) {
+            ++statistics_.evictions;
+            if (!entryIsLive(entries_.back()))
+                ++statistics_.staleDrops;
+            removeAt(entries_.size() - 1);
+        }
+        residentBytes_ += bytes;
+        if (resident) {
+            gpuResidentBytes_ += bytes;
+            ++gpuResidentEntries_;
+            if (!residentRefreshTimer_.isActive())
+                residentRefreshTimer_.start();
+        }
+        ++statistics_.insertions;
+        scheduleNotification();
+        evictToBudget();
+        if (resident)
+            evictGpuResidentToLimits();
+        // MRU admission fits both individual limits, but lease validity can change concurrently.
+        const bool live = !entries_.empty() && entryIsLive(entries_.front());
+        return report(live ? InsertOutcome::Retained : InsertOutcome::RejectedStale,
+                      live ? PreviewTraceOutcome::Retained : PreviewTraceOutcome::Invalid,
+                      statistics_.evictions - evictionsBefore);
     } catch (const std::bad_alloc&) {
         ++statistics_.allocationFailures;
-        if (trace_)
-            trace_->record(*frame, PreviewTraceStage::CacheRetention,
-                           PreviewTraceOutcome::AllocationFailure);
-        return;
+        return report(InsertOutcome::AllocationFailure, PreviewTraceOutcome::AllocationFailure);
     }
-    residentBytes_ += bytes;
-    if (resident) {
-        gpuResidentBytes_ += bytes;
-        ++gpuResidentEntries_;
+}
+
+void PreviewFrameCache::refreshResidentEntries() {
+    for (std::size_t index = entries_.size(); index > 0; --index) {
+        if (!entryIsLive(entries_[index - 1])) {
+            ++statistics_.staleDrops;
+            removeAt(index - 1);
+        }
     }
-    ++statistics_.insertions;
-    scheduleNotification();
-    evictToBudget();
-    // The additive resident sublimits are enforced after the overall budget, so the GPU set is
-    // bounded independently of how large the CPU cache budget is.
-    if (resident) {
-        evictGpuResidentToLimits();
-    }
-    // Opt-in only: the void insertion API is not evidence of retention. Resident sublimits can
-    // evict this very entry, so observe the existing cache key after both policies ran.
-    if (trace_)
-        trace_->record(*frame, PreviewTraceStage::CacheRetention,
-                       contains(key) ? PreviewTraceOutcome::Retained
-                                     : PreviewTraceOutcome::Rejected);
+    if (gpuResidentEntries_ == 0)
+        residentRefreshTimer_.stop();
 }
 
 void PreviewFrameCache::trimToBytes(const std::size_t bytes) {
@@ -303,6 +290,8 @@ void PreviewFrameCache::trimToBytes(const std::size_t bytes) {
     const auto limit = std::min(bytes, byteBudget_);
     while (residentBytes_ > limit && !entries_.empty()) {
         ++statistics_.pressureDrops;
+        if (!entryIsLive(entries_.back()))
+            ++statistics_.staleDrops;
         removeAt(entries_.size() - 1);
     }
 }
@@ -325,7 +314,7 @@ PreviewFrameCache::timesFor(const PreviewFrameCacheKey& probe) const {
     std::vector<core::RationalTime> times;
     auto key = probe;
     for (const auto& entry : entries_) {
-        if (!entryIsLive(entry)) {
+        if (!entryIsLive(entry) || !retains(entry.key)) {
             continue;
         }
         key.time = entry.key.time;
@@ -350,6 +339,7 @@ void PreviewFrameCache::clear() {
     residentBytes_ = 0;
     gpuResidentBytes_ = 0;
     gpuResidentEntries_ = 0;
+    residentRefreshTimer_.stop();
 }
 
 bool PreviewFrameCache::workAreaAllows(const PreviewFrameCacheKey& key) const noexcept {
@@ -449,6 +439,8 @@ void PreviewFrameCache::setRetentionRange(std::optional<RetentionRange> range) {
 void PreviewFrameCache::evictToBudget() {
     while (residentBytes_ > byteBudget_ && !entries_.empty()) {
         ++statistics_.evictions;
+        if (!entryIsLive(entries_.back()))
+            ++statistics_.staleDrops;
         removeAt(entries_.size() - 1);
     }
 }
@@ -468,6 +460,8 @@ void PreviewFrameCache::removeAt(const std::size_t index) {
     if (entry.resident != nullptr) {
         gpuResidentBytes_ -= entry.bytes;
         --gpuResidentEntries_;
+        if (gpuResidentEntries_ == 0)
+            residentRefreshTimer_.stop();
     }
     entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(index));
 }
@@ -503,6 +497,8 @@ void PreviewFrameCache::evictGpuResidentToLimits() {
         // churning every frame against the cap instead of stopping at the prefix that fits.
         ++statistics_.gpuResidentEvictions;
         ++statistics_.evictions;
+        if (!entryIsLive(entries_[victim]))
+            ++statistics_.staleDrops;
         removeAt(victim);
     }
 }

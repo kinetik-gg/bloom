@@ -501,8 +501,14 @@ int main(int argc, char* argv[]) {
                          }
                      });
     QObject::connect(&ramPreviewController, &bloom::ui::RamPreviewController::cachingFinished,
-                     &playback, [&playback](const bool completed) {
-                         if (completed) {
+                     &playback, [&](const bloom::ui::RamPreviewController::Completion outcome) {
+                         // Partial retention has no ephemeral transport range: manual playback
+                         // remains available, but only a still-current fully retained range
+                         // autoplays.
+                         if (outcome == bloom::ui::RamPreviewController::Completion::Complete &&
+                             ramPreviewController.canAutoPlay()) {
+                             static_cast<void>(compositionSession.setCurrentTime(
+                                 ramPreviewController.playableSpan()->start));
                              playback.play();
                          }
                      });

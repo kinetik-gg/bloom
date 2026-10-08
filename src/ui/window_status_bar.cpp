@@ -427,6 +427,16 @@ void WindowStatusBar::refreshPreviewCells() {
                                                       : kit::color(kit::Color::Warn));
     droppedFrames_->setPalette(droppedPalette);
 
+    if (const auto& progress = previewController_->ramPreviewProgress(); progress) {
+        cache_->setToolTip(
+            tr("%1 retained of %2 requested\n%3 prepared this run\nLongest cached span: %4 frames")
+                .arg(progress->cachedFrames)
+                .arg(progress->totalFrames)
+                .arg(progress->preparedFrames)
+                .arg(progress->playableFrames));
+    } else {
+        cache_->setToolTip({});
+    }
     const auto previewText = previewCacheText(*previewController_);
     const auto operationText =
         operationCache_ == nullptr ? QString{} : operationCacheText(*operationCache_);

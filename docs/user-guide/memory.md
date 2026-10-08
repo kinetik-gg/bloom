@@ -121,3 +121,10 @@ the relevant cache is unavailable (the disk cache is disabled, or no preview pip
 command then reports that clearly instead of silently doing nothing. The two remain independent:
 purging the preview cache does not clear decoded media, and purging the media cache does not clear
 preview frames.
+
+RAM Preview counts frames that are currently retained, including frames already cached before the
+run. Its tooltip separates frames prepared this run from retained frames and the longest cached
+span. If the range outgrows a real memory limit, caching stops with a partial result and does not
+autoplay; use Play for ordinary manual playback. Purging or later eviction removes live coverage
+without erasing the history of work already prepared. Half resolution reduces the display image
+extent and retained image bytes; actual device capacity and finite resource limits still apply.

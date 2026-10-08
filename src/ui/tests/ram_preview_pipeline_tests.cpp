@@ -350,15 +350,22 @@ void testControllerBudgetStopsBounded(Expectations& expectations) {
                                  fixture.pipelineFixture.preparation(fixture.coordinator));
     bool finishedCompleted = false;
     QObject::connect(&ram, &ui::RamPreviewController::cachingFinished, &ram,
-                     [&finishedCompleted](const bool completed) { finishedCompleted = completed; });
+                     [&finishedCompleted](const ui::RamPreviewController::Completion outcome) {
+                         finishedCompleted =
+                             outcome == ui::RamPreviewController::Completion::PartialBudget;
+                     });
     ram.start();
     expectations.expect(waitUntil([&] { return !ram.isCaching(); }),
                         "the budget-limited run ends on its own");
-    expectations.expect(ram.cachedFrameCount() == 4 && ram.totalFrameCount() == 24,
-                        "the run keeps the prefix that fits the budget and stops there");
+    expectations.expect(
+        ram.cachedFrameCount() == 3 && ram.totalFrameCount() == 24,
+        "the run reports three live retained frames after eviction, not four attempts");
     expectations.expect(fixture.frameCache->size() == 3,
                         "the cache holds exactly what its budget allows");
-    expectations.expect(finishedCompleted, "a budget-limited run still finishes");
+    expectations.expect(ram.playableSpan().has_value() && ram.playableSpan()->frameCount == 3 &&
+                            ram.retainedFrameIndices() == std::vector<std::uint64_t>{1, 2, 3},
+                        "post-insert eviction retains the actual interior span, never a prefix");
+    expectations.expect(finishedCompleted, "a budget-limited run reports partial completion");
     expectations.expect(ram.peakInFlightFrames() <= ui::RamPreviewPipeline::kMaxInFlight,
                         "the budget stop never overscheduled past the two-frame bound");
     expectations.expect(fixture.coordinator.calls() == base + 4,

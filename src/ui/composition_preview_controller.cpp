@@ -614,12 +614,19 @@ void CompositionPreviewController::beginRamPreviewProgress(const std::uint64_t t
     emit ramPreviewProgressChanged();
 }
 
-void CompositionPreviewController::setRamPreviewProgress(const std::uint64_t cachedFrames) {
+void CompositionPreviewController::setRamPreviewProgress(const std::uint64_t cachedFrames,
+                                                         const std::uint64_t preparedFrames,
+                                                         const std::uint64_t playableFrames) {
     Q_ASSERT(QThread::currentThread() == thread());
-    if (!ramPreviewProgress_.has_value() || ramPreviewProgress_->cachedFrames == cachedFrames) {
+    if (!ramPreviewProgress_)
         return;
-    }
-    ramPreviewProgress_->cachedFrames = cachedFrames;
+    auto progress = *ramPreviewProgress_;
+    progress.cachedFrames = cachedFrames;
+    progress.preparedFrames = preparedFrames;
+    progress.playableFrames = playableFrames;
+    if (progress == *ramPreviewProgress_)
+        return;
+    ramPreviewProgress_ = progress;
     emit ramPreviewProgressChanged();
 }
 

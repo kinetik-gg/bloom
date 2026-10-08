@@ -63,13 +63,12 @@ void finalizeCacheAndEntries(GpuResidentCapacityPlan& plan) noexcept {
     if (plan.cacheBytes == 0U) {
         return;
     }
-    const std::uint64_t rawEntries = plan.cacheBytes / kNominalResidentFrameBytes;
+    // Pixel size is not a metadata bound. Byte/resource admission already charges actual native
+    // allocations; reserve bounded lease slots for in-flight/presented/tombstoned products.
+    const auto entryHeadroom = kResidentLeaseEntryCeiling / 8U;
     plan.cacheEntries =
-        std::clamp(rawEntries, kResidentCacheEntryFloor, kResidentCacheEntryCeiling);
-    const std::uint64_t entryHeadroom =
-        std::max<std::uint64_t>(plan.cacheEntries / 8U, kResidentCacheEntryFloor);
-    plan.leaseEntries =
-        std::min<std::uint64_t>(plan.cacheEntries + entryHeadroom, kResidentLeaseEntryCeiling);
+        std::min(kResidentCacheEntryCeiling, kResidentLeaseEntryCeiling - entryHeadroom);
+    plan.leaseEntries = kResidentLeaseEntryCeiling;
 }
 
 } // namespace

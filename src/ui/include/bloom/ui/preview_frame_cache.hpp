@@ -87,6 +87,26 @@ class PreviewFrameCache final : public QObject {
     Q_OBJECT
 
   public:
+    enum class InsertOutcome : std::uint8_t {
+        Retained,
+        AlreadyPresent,
+        RejectedBudget,
+        RejectedStale,
+        AllocationFailure,
+        Invalid
+    };
+    struct InsertResult final {
+        InsertOutcome outcome = InsertOutcome::Invalid;
+        std::uint64_t evictions = 0;
+        [[nodiscard]] bool retained() const noexcept {
+            return outcome == InsertOutcome::Retained || outcome == InsertOutcome::AlreadyPresent;
+        }
+    };
+    // Deterministic, one-shot allocation fault seam. All boundaries precede semantic mutation.
+    enum class InsertAllocation : std::uint8_t { None, Key, Product, Capacity };
+    void failNextInsertAllocationForTesting(InsertAllocation boundary) noexcept {
+        insertAllocationFault_ = boundary;
+    }
     struct Statistics final {
         std::uint64_t hits = 0;
         std::uint64_t misses = 0;
@@ -156,18 +176,21 @@ class PreviewFrameCache final : public QObject {
     // and moves a hit to the front of the eviction order.
     [[nodiscard]] PreparedPreviewFrameHandle take(const runtime::PreviewRequestIdentity& identity);
 
-    // Retains `frame`'s DISPLAY BUFFER under its own identity's key -- the process image is dropped
-    // here, so a hit can never hand back scene-linear pixels. Drops every entry of an older
-    // revision first, then evicts least-recently-used entries until the budget is satisfied. A
-    // frame larger than the whole budget is refused rather than allowed to evict everything for
-    // itself.
-    void insert(const PreparedPreviewFrameHandle& frame);
+    // Retains display-only CPU pixels or a live opaque resident lease. All allocating work
+    // precedes qualification/revision pruning; allocation failure preserves prior entries and
+    // accounting. Pre-admission refusal also preserves them. A lease that expires after commit
+    // may report RejectedStale with actual evictions. Return final retention and the number
+    // of actual budget evictions, including eviction of earlier samples (never a promised prefix).
+    InsertResult insert(const PreparedPreviewFrameHandle& frame);
     void setFrameTrace(std::shared_ptr<PreviewFrameTrace> trace) { trace_ = std::move(trace); }
 
     [[nodiscard]] bool contains(const PreviewFrameCacheKey& key) const;
     // Cached times for exactly this project/composition/revision/resolution/display policy.
     // The probe time is ignored. UI consumers do not scan the composition's entire duration.
     [[nodiscard]] std::vector<core::RationalTime> timesFor(const PreviewFrameCacheKey& probe) const;
+    // Non-blocking owner-thread validity refresh; no native ownership crosses the boundary.
+    // Also runs every 250ms only while resident entries exist, with coalesced 50ms notifications.
+    void refreshResidentEntries();
 
     // Changing the budget evicts immediately if the new one is smaller.
     void setByteBudget(std::size_t bytes);
@@ -214,9 +237,9 @@ class PreviewFrameCache final : public QObject {
     // Empty clears the policy (retain anything) without pruning.
     void setRetentionSnapshots(std::vector<RetentionSnapshot> snapshots);
 
-    // What RETAINING one frame costs: its packed display buffer, and nothing else. Deliberately not
-    // what holding the frame costs right now -- insertion keeps the display buffer and drops the
-    // Float32 process image (see runtime::PreviewDisplayOnlyFrame).
+    // What retaining one frame costs: packed CPU display pixels/geometry or actual native lease
+    // bytes. Deliberately not what holding the frame costs right now -- insertion keeps the display
+    // buffer and drops the Float32 process image (see runtime::PreviewDisplayOnlyFrame).
     [[nodiscard]] static std::size_t
     frameByteCost(const runtime::PreparedPreviewFrame& frame) noexcept;
 
@@ -233,6 +256,9 @@ class PreviewFrameCache final : public QObject {
     // invalidated resident lease is never a hit and is never listed by contains()/timesFor().
     [[nodiscard]] static bool entryIsLive(const Entry& entry) noexcept;
     QTimer notificationTimer_;
+    QTimer residentRefreshTimer_;
+    InsertAllocation insertAllocationFault_ = InsertAllocation::None;
+    void allocationCheckpoint(InsertAllocation boundary);
     struct Entry final {
         PreviewFrameCacheKey key;
         // Display-only CPU product: the packed buffer plus its identity, never the process image it

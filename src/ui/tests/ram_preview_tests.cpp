@@ -672,16 +672,24 @@ void testRamPreviewStopsWhenTheRangeOutgrowsTheBudget(Expectations& expectations
                                         fixture.bridge, fixture.countingPipeline());
     bool finishedCompleted = false;
     QObject::connect(&ramPreview, &ui::RamPreviewController::cachingFinished, &ramPreview,
-                     [&finishedCompleted](const bool completed) { finishedCompleted = completed; });
+                     [&finishedCompleted](const ui::RamPreviewController::Completion outcome) {
+                         finishedCompleted =
+                             outcome == ui::RamPreviewController::Completion::PartialBudget;
+                     });
     ramPreview.start();
     expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }),
                         "the budget-limited run ends on its own");
-    expectations.expect(ramPreview.cachedFrameCount() == 4 && ramPreview.totalFrameCount() == 24,
-                        "the run keeps the prefix that fits the budget and stops there");
+    expectations.expect(
+        ramPreview.cachedFrameCount() == 3 && ramPreview.totalFrameCount() == 24,
+        "the run reports three live retained frames after eviction, not four attempts");
     expectations.expect(fixture.controller.frameCache().size() == 3,
                         "the cache holds exactly what its budget allows");
+    expectations.expect(
+        ramPreview.playableSpan().has_value() && ramPreview.playableSpan()->frameCount == 3 &&
+            ramPreview.retainedFrameIndices() == std::vector<std::uint64_t>{1, 2, 3},
+        "post-insert eviction retains the actual interior span, never a prefix");
     expectations.expect(finishedCompleted,
-                        "a budget-limited run still finishes, so the cached prefix is played");
+                        "a budget-limited run reports partial completion without autoplay");
 
     finishFixture(fixture, expectations);
 }
@@ -780,7 +788,9 @@ void testResolutionChangeCancelsAnActiveRamPreview(Expectations& expectations) {
                         "a RAM preview proxy is in flight");
     bool cancelled = false;
     QObject::connect(&ramPreview, &ui::RamPreviewController::cachingFinished, &fixture.bridge,
-                     [&cancelled](const bool completed) { cancelled = !completed; });
+                     [&cancelled](const ui::RamPreviewController::Completion outcome) {
+                         cancelled = outcome == ui::RamPreviewController::Completion::Cancelled;
+                     });
     fixture.controller.setDisplayedCompositionScale(0.5);
     expectations.expect(!ramPreview.isCaching() && cancelled &&
                             !fixture.controller.ramPreviewProgress().has_value(),
@@ -788,7 +798,7 @@ void testResolutionChangeCancelsAnActiveRamPreview(Expectations& expectations) {
     fixture.gate.release();
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "the new Half preview reaches ready");
-    expectations.expect(ramPreview.cachedFrameCount() == 1,
+    expectations.expect(ramPreview.cachedFrameCount() == 0,
                         "the cancelled old factor does not count or publish its in-flight frame");
     ramPreview.start();
     expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
@@ -1274,6 +1284,8 @@ void testRamRunFiniteClipRange(Expectations& expectations) {
     finishFixture(fixture, expectations);
 }
 
+#include "ram_preview_retention_truth_tests.ipp"
+
 } // namespace
 
 // CACHE-PURGE: "Purge preview cache" retires in-flight work, clears the retained frames and the
@@ -1368,6 +1380,9 @@ int main(int argc, char** argv) {
     // std::variant-carrying identities, so the standard library's own throwing paths are reachable
     // in principle and main() must not be the frame they escape from.
     try {
+        testRamRetentionAdmissionAndCompletion(expectations);
+        testRamForeignEvictionAndLiveHoles(expectations);
+        testRamOffGridAndReentrantFinish(expectations);
         testDefaultBudgetFollowsPhysicalMemory(expectations);
         testOperationCacheUnderRamPreview(expectations);
         testRamPreviewSharesResolutionAndCachesByPolicy(expectations);

@@ -542,8 +542,10 @@ The effective operation and preview budgets are shown together in the window sta
 Least-recently-used entries are evicted until each effective budget is satisfied, and a frame larger
 than the whole preview budget is refused rather than allowed to evict everything for itself. At
 about 8 MB a frame, a 2 GiB preview budget holds roughly 250 frames of a 1920x1080 composition --
-ten seconds at 24 fps -- and a RAM preview whose range does not fit stops at the first eviction and
-keeps the prefix that does.
+ten seconds at 24 fps. RAM preview stops on admission refusal or loss of an already retained
+requested sample. An eviction of unrelated policy/composition entries does not stop a fitting
+range. The surviving samples may start after the requested beginning or contain holes; they are
+never described as a retained prefix.
 
 **Invalidation is the key, and the key is the retained evaluation snapshot, not the live document
 revision.** `CompositionSession::snapshot()` and `snapshotChanged()` remain the live document and UI
@@ -641,9 +643,12 @@ handler therefore inspects the pending/active identity's own time and provenance
 displayed frame alone.
 
 **The RAM Preview command** (`Ctrl+Shift+Space`, the Composition menu, and the Timeline transport's
-own button) pre-renders the composition's work-area frame range into the cache one frame at a time, in
-the background, reporting "Caching 42/240" in the Viewer footer and cancellable with Escape, then
-asks the transport to play it. Frames already cached are counted without being rendered again, so a
+own button) prepares the composition's work-area frame range with at most two requests in flight,
+reporting "Caching 42/240" in the window status bar and cancellable with Escape. The numerator is
+currently retained exact frame-grid samples, including valid preexisting entries, rather than
+insertion attempts. Its tooltip separately reports successful preparations this run and the longest
+contiguous cached span. Only a still-current fully retained range autoplays, from its beginning;
+a budget-limited partial range stops and leaves ordinary manual work-area playback available. Frames already cached are counted without being rendered again, so a
 second RAM preview of an unedited range is immediate. The range is the persisted half-open work
 area when set, otherwise `[0, duration)`, read through `CompositionSession::workArea()`. Playback
 starts inside and loops over those same frame indices. The start frame is included and the end
@@ -696,12 +701,41 @@ Segment endpoints use `TimelineAxis`; the last ends at the composition duration.
 notifications coalesce over 50 ms, including evictions and clears, so filling a burst does not request
 one ruler repaint per frame. Revision and resolution changes remove obsolete coverage immediately.
 
+**Retention outcomes and live coverage.** Cache insertion returns `Retained`, `AlreadyPresent`,
+`RejectedBudget`, `RejectedStale`, `AllocationFailure`, or `Invalid`, after actual admission and
+budget policies. Keys, display-only products and entry capacity are prepared before qualification
+or revision pruning; failed allocation and pre-admission refusal leave earlier valid entries and
+charges intact. A lease expiring after commit may report stale rejection with actual evictions;
+the transaction does not promise to reverse concurrent native lifetime changes.
+Lookup membership does not increment hits or touch LRU. A live resident lease certifies servability,
+a CPU display buffer certifies CPU retention, and an expired lease certifies neither.
+
+RAM preview exposes requested count, historical successful preparation count, live exact retained
+indices, and the longest contiguous half-open frame-grid span separately. Ties choose the earliest
+span. `Complete`, `PartialBudget`, `Cancelled`, and `Failed` describe the run's outcome; none freezes
+live coverage after it ends. For example, preparing four frames into a three-frame cache can leave
+indices `{1,2,3}`: four preparations, three retained samples, span `[1,4)`, and partial completion.
+It does not certify frame zero or all four requested frames. Cancel/failure also preserves any
+still-valid samples, without autoplay. Completion callbacks cannot autoplay a superseded run,
+project, resolution or range.
+
+Coverage is projected from retained entries on mutation/result/rebase boundaries, not by scanning
+composition duration in a paint or getter. Cache-owned resident validity refresh runs every 250 ms
+only while resident entries exist, reading atomic lease validity without crossing native ownership.
+Expired entries are removed, and the existing 50 ms coalesced notification updates consumers;
+worst-case idle coverage latency is approximately 300 ms plus event-loop scheduling. This interim
+refresh costs one retained-entry scan per active interval, has no per-frame observer queue, retains
+no extra leases, and is stopped when the resident set becomes empty. Direct membership and the
+full-coverage autoplay boundary check lease validity immediately. Delivery cadence remains separate
+work; this timer does not replace task completion delivery.
+
 ### Playback never blocks
 
 Space and the transport button toggle the same session transport. Space belongs to the window and
 works even when every Timeline panel is hidden or replaced; focused text entry keeps the character.
 A gesture press pauses playback before its first time change. `Ctrl+Shift+Space` remains the explicit
-RAM Preview command: finish pre-rendering the range (or its budget-limited prefix), then play.
+RAM Preview command: prepare the range, then autoplay only when the entire current range remains
+retained. Partial retention does not introduce a narrower transport range or change the work area.
 
 Each due tick advances the exact session time and asks for its frame:
 

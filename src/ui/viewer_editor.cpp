@@ -2002,6 +2002,15 @@ void ViewerEditor::updateRamPreviewButton() {
     ramPreviewButton_->setToolTip(
         caching ? tr("Cancel the RAM preview being cached (Esc)")
                 : tr("RAM Preview: cache this composition, then play it (Ctrl+Shift+Space)"));
+    if (!caching &&
+        ramPreview_->lastCompletion() == RamPreviewController::Completion::PartialBudget) {
+        ramPreviewButton_->setToolTip(
+            tr("RAM Preview stopped at the memory limit: %1 of %2 frames retained.\nLongest cached "
+               "span: %3 frames. Use Play for manual playback.")
+                .arg(ramPreview_->cachedFrameCount())
+                .arg(ramPreview_->totalFrameCount())
+                .arg(ramPreview_->playableSpan() ? ramPreview_->playableSpan()->frameCount : 0));
+    }
 }
 
 void ViewerEditor::updateLoopButton() {

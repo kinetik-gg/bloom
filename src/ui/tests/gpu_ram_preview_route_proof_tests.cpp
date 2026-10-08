@@ -15,6 +15,7 @@
 #include "gpu_route_proof_harness_support.hpp"
 
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
@@ -58,6 +59,11 @@ struct HarnessOptions final {
     std::filesystem::path proofDirectory;
     bool requireDevice = false;
     bool valid = true;
+    bool sequence100 = false;
+    bool half = false;
+    bool expectPartial = false;
+    bool expireBeforeAdmission = false;
+    std::uint64_t poolBytes = 1ULL << 30;
 };
 
 [[nodiscard]] HarnessOptions parseHarnessOptions(const int argc, char** argv) {
@@ -68,6 +74,19 @@ struct HarnessOptions final {
             options.loader = argv[++index];
         } else if (argument == "--proof-dir" && index + 1 < argc) {
             options.proofDirectory = argv[++index];
+        } else if (argument == "--sequence-100-half") {
+            options.sequence100 = true;
+            options.half = true;
+        } else if (argument == "--sequence-100-full") {
+            options.sequence100 = true;
+        } else if (argument == "--pool-2gib") {
+            options.poolBytes = 2ULL << 30;
+        } else if (argument == "--pool-3gib") {
+            options.poolBytes = 3ULL << 30;
+        } else if (argument == "--expire-before-admission") {
+            options.expireBeforeAdmission = true;
+        } else if (argument == "--expect-partial") {
+            options.expectPartial = true;
         } else if (argument == "--require-device") {
             options.requireDevice = true;
         } else {
@@ -147,31 +166,76 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         return options.requireDevice ? 1 : 0;
     }
 
-    const auto duration = core::RationalTime::create(kFrameCount, kFrameRate);
+    const auto frameCount = options.sequence100 ? std::int64_t{100} : kFrameCount;
+    auto sequenceAsset = fixture.mediaAsset;
+    if (options.sequence100) {
+        sequenceAsset.kind = document::AssetKind::Sequence;
+        sequenceAsset.width = 1920;
+        sequenceAsset.height = 1080;
+        sequenceAsset.frames = 100;
+        sequenceAsset.rate = 25;
+        sequenceAsset.manifest.pattern = "ram.####.exr";
+        sequenceAsset.manifest.padding = 4;
+        sequenceAsset.manifest.first = 0;
+        sequenceAsset.manifest.last = 99;
+        for (std::int64_t index = 0; index < frameCount; ++index) {
+            const auto path = mediaDirectory / ("ram." + std::to_string(index) + ".exr");
+            const auto red = static_cast<float>(index + 1) / 128.0F;
+            writeExrRgba(
+                path, 1920, 1080,
+                std::vector<ExrPixel>(std::size_t{1920} * 1080, ExrPixel{red, 0.3F, 0.7F, 1.0F}));
+            const auto member = imageAsset(path, "RAM sequence member", 901);
+            sequenceAsset.manifest.members.push_back({index, member.locator, member.contentDigest});
+        }
+        sequenceAsset.locator = sequenceAsset.manifest.members.front().locator;
+        sequenceAsset.contentDigest = sequenceAsset.manifest.members.front().contentDigest;
+        fixture.evaluator.operationCache()->setByteBudget(std::size_t{256} * 1024 * 1024);
+    }
+    const auto duration = core::RationalTime::create(frameCount, kFrameRate);
     if (!duration.has_value()) {
         return 2;
     }
     auto newProject = document::makeNewProject("RAM Route Proof", "Main", *duration, ramFormat());
+    if (options.sequence100)
+        checks.expect(newProject.project.addAsset(sequenceAsset), "the sequence asset validates");
     const auto compositionId = newProject.initialCompositionId;
     document::Document document(std::move(newProject.project));
     commands::CommandStack commands(document);
     ui::CompositionSession session(document, commands, compositionId);
-    checks.expect(
-        session.addSolidLayer(QStringLiteral("Moving Solid"), core::Color4d{0.2, 0.4, 0.8, 1.0}),
-        "the animated RAM solid layer is created");
-    checks.expect(session.currentTime() == frameTime(0) || session.setCurrentTime(frameTime(0)),
-                  "the RAM session is at frame 0");
-    checks.expect(session.toggleKeyframe("position"), "the position keyframe is created");
-    checks.expect(session.setCurrentTime(frameTime(kFrameCount - 1)),
-                  "the RAM session moves to the last frame");
-    checks.expect(session.setSelectedPosition(12.0, 9.0), "the animated position is set");
-    checks.expect(session.setCurrentTime(frameTime(0)), "the RAM session returns to frame 0");
+    if (options.sequence100) {
+        commands::Transaction addImage("Add RAM sequence");
+        addImage.emplace<commands::AddImageLayer>(compositionId, sequenceAsset.id);
+        checks.expect(commands.execute(std::move(addImage)).succeeded(),
+                      "the genuine sequence layer is added");
+    } else {
+        checks.expect(session.addSolidLayer(QStringLiteral("Moving Solid"),
+                                            core::Color4d{0.2, 0.4, 0.8, 1.0}),
+                      "the animated RAM solid layer is created");
+        checks.expect(session.currentTime() == frameTime(0) || session.setCurrentTime(frameTime(0)),
+                      "the RAM session is at frame 0");
+        checks.expect(session.toggleKeyframe("position"), "the position keyframe is created");
+        checks.expect(session.setCurrentTime(frameTime(frameCount - 1)),
+                      "the RAM session moves to the last frame");
+        checks.expect(session.setSelectedPosition(12.0, 9.0), "the animated position is set");
+        checks.expect(session.setCurrentTime(frameTime(0)), "the RAM session returns to frame 0");
+    }
 
-    TaskScheduler scheduler(schedulerConfig());
+    auto scheduling = schedulerConfig();
+    if (options.sequence100)
+        scheduling.gpuRequestOwnedByteCapacity = 2ULL << 30;
+    TaskScheduler scheduler(scheduling);
     const runtime::CpuReferenceDisplayPreparer displayPreparer;
-    GpuPreviewDisplayService service(
-        scheduler, fixture.productionGpuStage(), fixture.productionCpuStage(),
-        fixture.productionCpuFallback(displayPreparer), serviceOptions(options.loader));
+    auto nativeOptions = serviceOptions(options.loader);
+    if (options.sequence100) {
+        const auto configured = runtime::gpuResidentCapacityPlanConfigured(options.poolBytes);
+        nativeOptions.residentLeaseBudgets = {configured.leaseBytes,
+                                              static_cast<std::size_t>(configured.leaseEntries)};
+        nativeOptions.residentSceneCacheBudgets.maxRetainedBytes = configured.sceneCacheBytes;
+        nativeOptions.previewByteAllowance = configured.requestBytes;
+    }
+    GpuPreviewDisplayService service(scheduler, fixture.productionGpuStage(),
+                                     fixture.productionCpuStage(),
+                                     fixture.productionCpuFallback(displayPreparer), nativeOptions);
     const bool terminal = waitUntil(
         [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; }, 90s);
     const auto status = service.status();
@@ -251,6 +315,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                                                        displayPreparer, fixture.provider);
     ui::CompositionPreviewSettings settings;
     settings.pixelStorageByteLimit = kBudget;
+    if (options.sequence100)
+        settings.resolutionPolicy = options.half ? runtime::PreviewResolutionPolicy::Half
+                                                 : runtime::PreviewResolutionPolicy::Full;
     const ui::PreviewPreparationSubmitter submitter =
         [&service](runtime::TaskRequest request, const document::Snapshot& snap,
                    const runtime::PreviewRequestIdentity& identity, const std::size_t limit,
@@ -259,6 +326,15 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         return service.submit(std::move(request), snap, identity, limit, overrides);
     };
     auto frameCache = std::make_shared<ui::PreviewFrameCache>();
+    const auto effective = service.status().residentCapacityPlan;
+    frameCache->setGpuResidentLimits(static_cast<std::size_t>(effective.cacheBytes),
+                                     static_cast<std::size_t>(effective.cacheEntries));
+    std::cout << "CAPACITY pool=" << effective.poolBytes << " cacheBytes=" << effective.cacheBytes
+              << " cacheEntries=" << effective.cacheEntries
+              << " leaseBytes=" << effective.leaseBytes
+              << " leaseEntries=" << effective.leaseEntries
+              << " available=" << effective.capacity.availableBytes
+              << " request=" << effective.requestBytes << '\n';
     ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline, settings,
                                                 frameCache, nullptr, submitter);
     ui::RamPreviewController ram(session, controller, scheduler, bridge, pipeline, nullptr,
@@ -267,26 +343,81 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         waitUntil([&] { return controller.state().activity != ui::PreviewActivity::Rendering; },
                   30s),
         "the foreground frame settled before the RAM run");
-    frameCache->clear();
+    if (options.expireBeforeAdmission) {
+        frameCache->setByteBudget(ui::PreviewFrameCache::frameByteCost(*controller.state().frame));
+    } else {
+        frameCache->clear();
+    }
 
     const auto beforeCold = service.status().counters;
     ram.start();
-    const bool coldComplete = waitUntil(
-        [&] {
-            return !ram.isCaching() && ram.totalFrameCount() == kFrameCount &&
-                   ram.cachedFrameCount() == ram.totalFrameCount();
-        },
-        60s);
+    if (options.expireBeforeAdmission) {
+        // Hold UI delivery while genuine production tasks finish, then invalidate their real
+        // leases through normal owner shutdown. No fake GPU product or foreign registry mutation.
+        const auto readyDeadline = std::chrono::steady_clock::now() + 30s;
+        while (!scheduler.isQuiescent() && std::chrono::steady_clock::now() < readyDeadline)
+            std::this_thread::sleep_for(1ms);
+        checks.expect(scheduler.isQuiescent(),
+                      "genuine pending RAM products settled before expiry");
+        static_cast<void>(client->retire(attached.target, 5U));
+        const auto retireDeadline = std::chrono::steady_clock::now() + 30s;
+        while (!client->status(attached.target).surfaceSafeToDestroy &&
+               std::chrono::steady_clock::now() < retireDeadline)
+            std::this_thread::sleep_for(1ms);
+        if (!client->status(attached.target).surfaceSafeToDestroy) {
+            std::cerr << "FATAL: unproved expiry-fixture surface retirement\n";
+            std::_Exit(1);
+        }
+        window->hide();
+        window.reset();
+        instance.destroy();
+        service.beginShutdown();
+        const auto stopDeadline = std::chrono::steady_clock::now() + 30s;
+        while (service.status().state != GpuPreviewDisplayServiceState::Stopped &&
+               std::chrono::steady_clock::now() < stopDeadline)
+            std::this_thread::sleep_for(1ms);
+        checks.expect(service.status().state == GpuPreviewDisplayServiceState::Stopped,
+                      "owner shutdown invalidated the genuine leases before UI admission");
+        auto foreign = *controller.cacheKeyForTime(frameTime(0));
+        foreign.resolutionPolicy = runtime::PreviewResolutionPolicy::Half;
+        const auto halfExtent = render::ImageExtent::create(960, 540);
+        foreign.resolution = runtime::ProxyResolution{*halfExtent.value()};
+        runtime::PreviewRequestIdentity foreignIdentity =
+            controller.state().frame->desiredIdentity();
+        foreignIdentity.resolutionPolicy = foreign.resolutionPolicy;
+        foreignIdentity.resolution = foreign.resolution;
+        const auto foreignFrame =
+            snapshotCpuReferenceAtResolution(fixture, session.snapshot(), foreignIdentity);
+        checks.expect(foreignFrame != nullptr, "the foreign-policy CPU oracle is genuine");
+        if (foreignFrame) {
+            const auto inserted = frameCache->insert(foreignFrame);
+            checks.expect(inserted.evictions != 0 && frameCache->statistics().staleDrops != 0,
+                          "a foreign-policy admission evicts an expired requested lease with "
+                          "explicit stale evidence");
+        }
+    }
+    const bool coldComplete = waitUntil([&] { return !ram.isCaching(); }, 120s);
     const auto afterCold = service.status().counters;
     const auto coldDispatches = afterCold.nativeDispatches - beforeCold.nativeDispatches;
-    checks.expect(coldComplete && ram.totalFrameCount() == kFrameCount,
-                  "the RAM preview cached the whole multi-frame range");
-    std::cout << "PHASE ram-service residentGraphJobs=" << afterCold.residentGraphJobs
-              << " residentCompletions=" << afterCold.residentCompletions
-              << " residentFailures=" << afterCold.residentFailures
-              << " cpuFallbacks=" << afterCold.cpuFallbacks
-              << " detail=" << service.status().residentDetail << '\n';
-    checks.expect(coldDispatches > 0U, "the cold RAM preview performed real native dispatches");
+    checks.expect(coldComplete && ram.totalFrameCount() == static_cast<std::uint64_t>(frameCount),
+                  "the requested RAM range terminates");
+    const auto expectedCompletion =
+        options.expireBeforeAdmission ? ui::RamPreviewController::Completion::Failed
+        : options.expectPartial       ? ui::RamPreviewController::Completion::PartialBudget
+                                      : ui::RamPreviewController::Completion::Complete;
+    checks.expect(ram.lastCompletion() == expectedCompletion,
+                  "RAM completion reports measured full/partial/expired admission");
+    checks.expect((options.expectPartial || options.expireBeforeAdmission) ? !ram.canAutoPlay()
+                                                                           : ram.canAutoPlay(),
+                  "only fully retained current coverage permits autoplay");
+    std::cout << "RETENTION requested=" << ram.totalFrameCount()
+              << " prepared=" << ram.preparedFrameCount() << " retained=" << ram.cachedFrameCount()
+              << " charged=" << frameCache->gpuResidentBytes();
+    if (ram.playableSpan())
+        std::cout << " spanStart=" << ram.playableSpan()->start.toSeconds()
+                  << " spanEnd=" << ram.playableSpan()->end.toSeconds()
+                  << " spanFrames=" << ram.playableSpan()->frameCount;
+    std::cout << '\n';
     checks.expect(afterCold.fullFrameReadbacks == beforeCold.fullFrameReadbacks,
                   "the cold RAM preview performed no full-frame readback");
     std::cout << "PHASE ram-cold frames=" << ram.cachedFrameCount()
@@ -314,7 +445,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
 
     std::vector<routeproof::FrameEvidence> evidence;
     std::vector<routeproof::PreparedPreviewFrameHandle> frames;
-    for (std::int64_t index = 0; index < kFrameCount; ++index) {
+    for (const auto retainedIndex : ram.retainedFrameIndices()) {
+        const auto index = static_cast<std::int64_t>(retainedIndex);
         const auto key = controller.cacheKeyForTime(frameTime(index));
         checks.expect(key.has_value(), "the cached frame has a cache key");
         if (!key.has_value()) {
@@ -330,6 +462,17 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             continue;
         }
         checks.expect(frame->isDisplayValid(), "the resident RAM lease is live");
+        const auto& lease = frame->residentFrame()->lease();
+        const auto width = options.half ? 960U : 1920U;
+        const auto height = options.half ? 540U : 1080U;
+        checks.expect(lease.width() == width && lease.height() == height,
+                      "the native retained image has the actual Full/Half dimensions");
+        checks.expect(lease.allocationBytes() >= static_cast<std::uint64_t>(width) * height * 4U,
+                      "actual native RGBA8 allocation charges cover the physical extent");
+        std::cout << "FRAME index=" << index << " width=" << lease.width()
+                  << " height=" << lease.height() << " nativeBytes=" << lease.allocationBytes()
+                  << " retainedBytes=" << ui::PreviewFrameCache::frameByteCost(*frame) << '\n';
+
         const auto reference = snapshotCpuReferenceAtResolution(
             fixture, session.evaluationSnapshotForTime(key->time), identity);
         checks.expect(reference != nullptr && reference->displayBufferView().has_value(),
@@ -363,18 +506,35 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     // native work, and every cached resident frame must actually replay through the real presenter
     // (taking it back out of the controller cache and presenting it), not merely still be held.
     const auto beforeWarm = service.status().counters;
-    ram.start();
-    const bool warmComplete =
-        waitUntil([&] { return !ram.isCaching() && ram.cachedFrameCount() == kFrameCount; }, 30s);
+    if (!options.expectPartial && !options.expireBeforeAdmission)
+        ram.start();
+    const bool warmComplete = waitUntil(
+        [&] {
+            return !ram.isCaching() &&
+                   (options.expectPartial || options.expireBeforeAdmission ||
+                    ram.cachedFrameCount() == static_cast<std::uint64_t>(frameCount));
+        },
+        30s);
     const auto afterWarm = service.status().counters;
     checks.expect(warmComplete, "the warm RAM replay completed from the cache");
+    checks.expect(afterWarm.residentGraphJobs == beforeWarm.residentGraphJobs &&
+                      afterWarm.cpuFallbacks == beforeWarm.cpuFallbacks &&
+                      (options.expectPartial || options.expireBeforeAdmission ||
+                       ram.preparedFrameCount() == 0),
+                  "warm range reuse performs zero preparation, including no CPU fallback");
     checks.expect(afterWarm.nativeDispatches == beforeWarm.nativeDispatches,
                   "the warm RAM replay performed zero additional native dispatches");
     checks.expect(afterWarm.fullFrameReadbacks == beforeWarm.fullFrameReadbacks,
                   "the warm RAM replay performed no full-frame readback");
     std::size_t replayed = 0;
     std::uint32_t sequence = 0;
-    for (std::int64_t index = 0; index < kFrameCount; ++index) {
+    auto replayIndices = ram.retainedFrameIndices();
+    if (options.sequence100) {
+        const auto forward = replayIndices;
+        replayIndices.insert(replayIndices.end(), forward.rbegin(), forward.rend());
+    }
+    for (const auto retainedIndex : replayIndices) {
+        const auto index = static_cast<std::int64_t>(retainedIndex);
         const auto key = controller.cacheKeyForTime(frameTime(index));
         if (!key.has_value()) {
             continue;
@@ -416,8 +576,14 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         ++replayed;
     }
     checks.expect(
-        replayed == kFrameCount,
+        replayed == replayIndices.size(),
         "every cached resident frame replayed through the real controller cache and presenter");
+    const auto afterPresentation = service.status().counters;
+    checks.expect(afterPresentation.residentGraphJobs == beforeWarm.residentGraphJobs &&
+                      afterPresentation.cpuFallbacks == beforeWarm.cpuFallbacks &&
+                      afterPresentation.nativeDispatches == beforeWarm.nativeDispatches &&
+                      afterPresentation.fullFrameReadbacks == beforeWarm.fullFrameReadbacks,
+                  "forward/reverse warm presentation performs zero evaluation or pixel dispatch");
     std::cout << "PHASE ram-warm cached=" << ram.cachedFrameCount()
               << " warmDispatches=" << (afterWarm.nativeDispatches - beforeWarm.nativeDispatches)
               << " replayed=" << replayed
@@ -425,14 +591,19 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
               << " sparseBytes=" << sparseBytes << " sparseSubmissions=" << sparseSubmissions
               << " productionFullFrameReadbacks=" << afterWarm.fullFrameReadbacks << '\n';
 
-    // Retire the presented target while the service owner is still alive, then destroy our window.
-    static_cast<void>(client->retire(attached.target, 5U));
-    checks.expect(
-        waitUntil([&] { return client->status(attached.target).surfaceSafeToDestroy; }, 30s),
-        "the RAM presentation target retired and its surface is safe to destroy");
-    window->hide();
-    window.reset();
-    instance.destroy();
+    // The expiry case already retired this surface before invalidating the borrowed instance.
+    if (window) {
+        static_cast<void>(client->retire(attached.target, 5U));
+        const bool safe =
+            waitUntil([&] { return client->status(attached.target).surfaceSafeToDestroy; }, 30s);
+        if (!safe) {
+            std::cerr << "FATAL: unproved RAM proof surface retirement\n";
+            std::_Exit(1);
+        }
+        window->hide();
+        window.reset();
+        instance.destroy();
+    }
 
     ram.beginShutdown();
     controller.beginShutdown();
@@ -450,6 +621,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         std::cerr << "RAM route proof: " << checks.failures()
                   << " verification failure(s); no proof written\n";
         return 1;
+    }
+    if (options.expireBeforeAdmission) {
+        checks.expect(ram.cachedFrameCount() == 0 && !ram.canAutoPlay(),
+                      "expired admission is failure with zero live coverage");
+        std::cout << "PASS: genuine expired RAM admission reports failure, not budget completion\n";
+        return checks.failures() == 0 ? 0 : 1;
     }
     const auto written = routeproof::publishPreviewProof(
         options.proofDirectory, nonce, "route.preview.ram_preview",

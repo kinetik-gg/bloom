@@ -300,6 +300,18 @@ The pool itself is still the resolved device budget clamped to the artist's ceil
 composition whose real working set exceeds that capacity is refused honestly and falls back rather
 than being claimed as supported.
 
+Resident metadata admission is independent of pixel extent. The lease registry retains its finite
+4096-entry ceiling; the cache uses at most 3584 slots, reserving 512 for in-flight, presented and
+tombstoned leases. Entries allocate lazily. A positive byte pool no longer derives a cache count by
+dividing by an assumed 8 MiB frame, and a zero pool remains disabled. Actual native allocation bytes,
+retained metadata and the owner-resolved device clamp remain authoritative. Full and Half retain
+separate resolution/policy keys: 1920×1080 and 960×540 resident RGBA8 display products respectively.
+Working images remain RGBA32F; this count-policy correction changes neither processing precision
+nor the existing lease/scene/request byte split. One hundred packed Half display images occupy
+about 198 MiB before native alignment and metadata; the actual device charges must still fit the
+cache and lease ledgers. Metadata headroom is a finite allowance, not a guarantee that arbitrary
+concurrent requests fit either byte or entry admission.
+
 Presentation lane. The qualified Linux loader is rebuilt with `BUILD_WSI_WAYLAND_SUPPORT=ON` alone
 (XCB/Xlib/Xrandr and DirectFB stay `OFF`; the Wayland branch adds no pkg-config or `DT_NEEDED` entry).
 Device bootstrap adds an opt-in presentation request that enables `VK_KHR_surface`,

@@ -27,6 +27,8 @@
 #include <bloom/ui/window_status_bar.hpp>
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
+#include <thread>
 
 #include <array>
 #include <cstddef>
@@ -568,6 +570,23 @@ int main(int argc, char** argv) {
         expectations.expect(recovered != nullptr && recovered->residentFrame() != nullptr &&
                                 recovered->residentFrame()->lease().id() == recoveryLeaseId,
                             "CACHEFIX-2: take() serves the replacement's live lease");
+
+        int notifications = 0;
+        QObject::connect(&recoveryCache, &PreviewFrameCache::contentsChanged, &recoveryCache,
+                         [&] { ++notifications; });
+        registry->invalidateAll();
+        const auto hitsBeforeRefresh = recoveryCache.statistics().hits;
+        QElapsedTimer expiryWait;
+        expiryWait.start();
+        while (expiryWait.elapsed() < 1000 && (recoveryCache.size() != 0 || notifications == 0)) {
+            QCoreApplication::processEvents();
+            std::this_thread::yield();
+        }
+        expectations.expect(
+            recoveryCache.size() == 0 && notifications > 0 &&
+                recoveryCache.statistics().hits == hitsBeforeRefresh &&
+                recoveryCache.residentBytes() == 0,
+            "bounded resident refresh releases stale coverage and notifies without a hit");
 
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " cache resident expectation(s) failed\n";
