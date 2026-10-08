@@ -279,6 +279,9 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::begin(std::shared_ptr<const Prepare
 }
 
 GpuSceneExecutorPollResult GpuSceneExecutor::poll() {
+    if (impl_ != nullptr && impl_->device != nullptr) {
+        impl_->device->reclaimReleasedImages();
+    }
     if (impl_ == nullptr) {
         return GpuSceneExecutorPollResult::Failure;
     }

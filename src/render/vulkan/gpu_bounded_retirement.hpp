@@ -34,11 +34,22 @@ template <std::size_t Capacity> class VoidResidentSlotStore final {
 
     // Acquires a free slot for `impl` before any native allocation. Returns false when the bounded
     // pool is full; the caller refuses cleanly without allocating.
-    [[nodiscard]] bool acquire(void* const impl, std::size_t& index) noexcept {
+    [[nodiscard]] bool acquire(void* const impl, std::size_t& index,
+                               std::size_t admissionLimit = Capacity) noexcept {
         std::lock_guard lock(mutex_);
+        if (admissionLimit < Capacity) {
+            std::size_t count = 0;
+            for (const auto& slot : slots_) {
+                count += slot.impl != nullptr ? 1U : 0U;
+            }
+            if (count >= admissionLimit) {
+                refusals_.fetch_add(1, std::memory_order_relaxed);
+                return false;
+            }
+        }
         for (std::size_t candidate = 0; candidate < Capacity; ++candidate) {
             if (slots_[candidate].impl == nullptr) {
-                slots_[candidate] = Slot{impl, false};
+                slots_[candidate] = Slot{.impl = impl};
                 index = candidate;
                 return true;
             }
@@ -55,6 +66,9 @@ template <std::size_t Capacity> class VoidResidentSlotStore final {
         std::lock_guard lock(mutex_);
         Slot& slot = slots_[index];
         if (slot.impl == impl) {
+            if (slot.orphaned) {
+                pending_.fetch_sub(1, std::memory_order_release);
+            }
             slot = Slot{};
         }
     }
@@ -68,7 +82,10 @@ template <std::size_t Capacity> class VoidResidentSlotStore final {
         std::lock_guard lock(mutex_);
         Slot& slot = slots_[index];
         if (slot.impl == impl) {
-            slot.orphaned = true;
+            if (!slot.orphaned) {
+                slot.orphaned = true;
+                pending_.fetch_add(1, std::memory_order_release);
+            }
         }
     }
 
@@ -104,6 +121,9 @@ template <std::size_t Capacity> class VoidResidentSlotStore final {
     // Allocation-free and noexcept: the staging array is fixed-capacity.
     template <typename OwnedFn, typename RetireFn, typename DestroyFn>
     void drainOrphans(OwnedFn&& owned, RetireFn&& retire, DestroyFn&& destroy) noexcept {
+        if (pending_.load(std::memory_order_acquire) == 0) {
+            return;
+        }
         std::array<void*, Capacity> freed{};
         std::size_t freedCount = 0;
         {
@@ -121,6 +141,7 @@ template <std::size_t Capacity> class VoidResidentSlotStore final {
                     continue;
                 }
                 void* const impl = slot.impl;
+                pending_.fetch_sub(1, std::memory_order_release);
                 slot = Slot{};
                 freed[freedCount++] = impl;
             }
@@ -131,14 +152,71 @@ template <std::size_t Capacity> class VoidResidentSlotStore final {
         }
     }
 
+    // Images retain admission and byte metadata until their destructor releases the slot AFTER
+    // native destruction. A draining marker prevents a nested/concurrent drain claiming it twice.
+    template <typename OwnedFn, typename RetireFn, typename DestroyFn>
+    void drainRetainedOrphans(OwnedFn&& owned, RetireFn&& retire, DestroyFn&& destroy) noexcept {
+        if (pending_.load(std::memory_order_acquire) == 0) {
+            return;
+        }
+        std::array<void*, Capacity> draining{};
+        std::size_t count = 0;
+        {
+            std::lock_guard lock(mutex_);
+            for (auto& slot : slots_) {
+                if (slot.impl != nullptr && slot.orphaned && !slot.draining && owned(slot.impl) &&
+                    retire(slot.impl)) {
+                    slot.draining = true;
+                    draining[count++] = slot.impl;
+                }
+            }
+        }
+        for (std::size_t index = 0; index < count; ++index) {
+            destroy(draining[index]);
+            retired_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    // Image families attach immutable owner identity and cached native allocation bytes. Metadata
+    // is updated and inspected under the same lock; diagnostics never inspect a live Vulkan Impl.
+    void setImageMetadata(void* impl, std::size_t index, const void* owner,
+                          std::uint64_t bytes) noexcept {
+        std::lock_guard lock(mutex_);
+        if (index < Capacity && slots_[index].impl == impl) {
+            slots_[index].owner = owner;
+            slots_[index].bytes = bytes;
+        }
+    }
+    void closeImageOwner(const void* owner) noexcept {
+        std::lock_guard lock(mutex_);
+        for (auto& slot : slots_) {
+            if (slot.impl != nullptr && slot.owner == owner) {
+                slot.ownerClosed = true;
+            }
+        }
+    }
+    template <typename Visitor> void inspectImageMetadata(Visitor&& visitor) const noexcept {
+        std::lock_guard lock(mutex_);
+        for (const auto& slot : slots_) {
+            if (slot.impl != nullptr) {
+                visitor(slot.owner, slot.bytes, slot.orphaned, slot.ownerClosed);
+            }
+        }
+    }
+
   private:
     struct Slot final {
         void* impl = nullptr;
         bool orphaned = false;
+        const void* owner = nullptr;
+        std::uint64_t bytes = 0;
+        bool ownerClosed = false;
+        bool draining = false;
     };
 
     mutable std::mutex mutex_;
     std::array<Slot, Capacity> slots_{};
+    std::atomic<std::size_t> pending_{0};
     std::atomic<std::uint64_t> refusals_{0};
     std::atomic<std::uint64_t> retired_{0};
 };

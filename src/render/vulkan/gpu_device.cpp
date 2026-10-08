@@ -1,8 +1,10 @@
 #include <bloom/render/gpu_device.hpp>
 
 #include "gpu_device_private.hpp"
+#include "gpu_image_reclamation_private.hpp"
 
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <limits>
@@ -44,12 +46,38 @@ GpuDevice::GpuDevice(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl
 
 GpuDevice::GpuDevice(GpuDevice&& other) noexcept = default;
 
-GpuDevice& GpuDevice::operator=(GpuDevice&& other) noexcept = default;
+GpuDevice& GpuDevice::operator=(GpuDevice&& other) noexcept {
+    if (this != &other) {
+        if (impl_ != nullptr && impl_->control != nullptr) {
+            assert(impl_->owner == std::this_thread::get_id());
+            image_detail::closeImageOwner(*impl_->control);
+        }
+        impl_ = std::move(other.impl_);
+    }
+    return *this;
+}
 
 GpuDevice::~GpuDevice() {
     if (impl_ != nullptr) {
         assert(impl_->owner == std::this_thread::get_id());
+        if (impl_->control != nullptr) {
+            image_detail::closeImageOwner(*impl_->control);
+        }
     }
+}
+
+void GpuDevice::reclaimReleasedImages() noexcept {
+    if (isOwnerThread() && impl_->control != nullptr) {
+        image_detail::drainImages(*impl_->control);
+    }
+}
+GpuImageReclamationStats GpuDevice::imageReclamationStats() const noexcept {
+    return impl_ != nullptr && impl_->control != nullptr
+               ? image_detail::imageStats(impl_->control.get())
+               : GpuImageReclamationStats{};
+}
+GpuImageReclamationStats GpuDevice::processImageReclamationStats() noexcept {
+    return image_detail::imageStats(nullptr);
 }
 
 GpuDeviceState GpuDevice::state() const noexcept {
@@ -274,6 +302,12 @@ GpuBufferInfo GpuBufferAllocation::info() const noexcept {
 }
 
 namespace vulkan_detail {
+std::uint64_t deviceOwnerLifetimeToken() noexcept {
+    static std::atomic<std::uint64_t> next{1};
+    // A new thread lifetime gets a monotonic token even if the OS recycles std::thread::id.
+    static thread_local const std::uint64_t token = next.fetch_add(1, std::memory_order_relaxed);
+    return token;
+}
 
 DynamicLibrary::DynamicLibrary(const char* path) noexcept {
 #if defined(_WIN32)

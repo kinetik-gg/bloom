@@ -28,6 +28,9 @@ struct GpuImageImpl final {
     GpuImageImpl& operator=(const GpuImageImpl&) = delete;
     ~GpuImageImpl();
 
+    std::size_t reclamationSlot = 4096;
+    // Published before slot orphan visibility; cleared only after native destruction.
+    bool retirementMarked = false;
     [[nodiscard]] bool onOwnerThread() const noexcept;
     // Releases the view then the VMA image. Never called while a submission
     // references the image; callers only release after the producing fence has

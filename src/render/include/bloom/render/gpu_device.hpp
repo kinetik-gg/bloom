@@ -155,6 +155,21 @@ struct GpuBufferInfo final {
     bool host_visible = false;
 };
 
+// Image ownership diagnostics count native allocation bytes, not aggregate VRAM or process RAM.
+// Retiring includes final releases awaiting their exact owner. Closed-owner retiring images remain
+// bounded and explicitly charged when that owner can no longer pump; no off-thread teardown occurs.
+struct GpuImageReclamationStats final {
+    std::uint64_t liveImages = 0;
+    std::uint64_t liveAllocationBytes = 0;
+    std::uint64_t retiringImages = 0;
+    std::uint64_t retiringAllocationBytes = 0;
+    std::uint64_t closedOwnerRetiringImages = 0;
+    std::uint64_t closedOwnerRetiringAllocationBytes = 0;
+    std::uint64_t capacityPerFamily = 0;
+    std::uint64_t admissionRefusals = 0;
+    std::uint64_t ownerReclaims = 0;
+};
+
 class GpuDevice;
 class GpuRendererAccess;
 
@@ -224,6 +239,12 @@ class GpuDevice final {
     // True only on the thread that created this device generation. False for a null/moved-from or
     // portable-stub device. No allocation or native call is involved.
     [[nodiscard]] bool isOwnerThread() const noexcept;
+    // Non-blocking, owner-thread-only reclaim of final image releases for this exact generation.
+    // Submission-unproved images stay charged. Compute retirement is never a WSI retirement proof.
+    void reclaimReleasedImages() noexcept;
+    [[nodiscard]] GpuImageReclamationStats imageReclamationStats() const noexcept;
+    // Includes closed generations after their GpuDevice facade has been destroyed.
+    [[nodiscard]] static GpuImageReclamationStats processImageReclamationStats() noexcept;
     [[nodiscard]] const GpuCapabilityReport& capabilityReport() const noexcept;
 
     // Owner-thread only. Resolves this generation's conservative allocation budget: the live VMA

@@ -15,7 +15,7 @@ remain separate decisions under G9.
 | --- | --- | --- |
 | G0 | Initial instrumentation slice accepted; remaining probes attach to their owning packages | Source review, quality checks, three focused suites, native acknowledgement correlation and original interaction fixture passed |
 | G1 | Accepted: native validity and mapped-memory visibility | Source review, quality/lint, real operator/display/viewer/RAM/final-route parity and validation; independent Composite/viewer reruns passed |
-| G2 | Initialization cleanup and asynchronous metadata lifetime accepted; owner reclamation next | Metadata copies share owning dispatch/fence, actual staging budgets and token-bound quarantine retirement; native parity/lifecycle/viewer/final paths and independent Composite/PointResample/retirement reruns have zero validation errors; owner reclamation and viewer cancellation remain pending |
+| G2 | Initialization cleanup, asynchronous metadata lifetime, and bounded image reclamation accepted | Native parity/lifecycle/viewer/final paths and independent retirement reruns have zero validation errors; vector coverage quarantine, oracle readback recovery, and viewer cancellation remain pending |
 | G3–G10 | Pending | No implementation or qualification claim |
 
 G0 adds opt-in bounded numeric frame tracing and a native Full-resolution 1920 × 1080 solid/text
@@ -401,6 +401,21 @@ errors, checked separately from exit status. Supervisor source review and indepe
 PointResample fault/retirement, and Composite/Blend/Affine retirement reruns passed with the real
 validation layer loaded and zero validation errors. Observed native mappings were coherent; noncoherent
 hardware execution remains unqualified. No cross-platform GPU qualification is claimed.
+
+G2C image-owner scope: each process/display image now reserves bounded owner-reclamation metadata
+before native allocation, retains actual native allocation bytes through foreign final release and
+owner destruction, and exposes closed-generation retention. Preview owner pumps and offline scene
+polling reclaim only the exact allocator/thread lifetime. The device facade's destruction or move
+replacement leaves surviving images valid; late foreign releases remain explicitly charged within
+the same fixed process ceiling. Vector coverage quarantine truth, oracle readback recovery, and the
+resolution/cancellation transition remain separate G2 work. Local native image reclamation,
+Composite CPU parity, resident-display CPU oracle, shared primitive retirement, resident viewer,
+and mixed final-render gates passed with the genuine core/synchronization validation layer loaded
+and no reported errors. Supervisor source review and independent Composite and final image
+reclamation reruns passed. Quality and affected-TU lint passed, including the final private-header
+changes. Both family
+retention-only unproved-flag tests leave exact source-proof recovery to the following oracle slice;
+no unproved retirement or pixel execution is fabricated. Cross-platform GPU remains unqualified.
 
 ### G3 — Make retention and presentation state truthful
 

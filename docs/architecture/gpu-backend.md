@@ -815,6 +815,49 @@ partway through an output with mixed hidden semantics.
 - Preview fallback or reduced precision: expose it in viewer status. Strict final output does not
   degrade silently.
 
+### Image owner reclamation (G2C)
+
+Each native RGBA32F process image and RGBA8 display image reserves one owner-reclamation slot
+before its first Vulkan allocation. Each image family has a process-wide ceiling of 4096 slots,
+chosen from the existing cache/lease entry ceilings; it does not guarantee that every maximum-size
+scene fits and does not increase any byte budget. Exhausted admission refuses image creation
+without a native allocation and recovers when the exact owner destroys retiring images.
+
+A foreign-thread final release or move-assignment replacement marks that image's already-owned
+slot retiring without allocating. The slot preserves the image implementation, co-owned allocator,
+and actual VMA allocation byte count through native destruction. Owner drains use the exact
+allocator state and a monotonic thread-lifetime token together with the thread ID, so neither a
+second device nor a recycled thread ID can reclaim the image. Preview pumps and teardown, offline
+scene polling, and device facade teardown drain these slots; an exact allocator generation with zero pending image releases takes an atomic
+fast path, even when unrelated closed generations remain quarantined. The per-image pending marker
+is published before its slot becomes retiring and decremented only after native destruction. These image drains require final shared ownership release and retain any explicitly
+unproved submission. They do not replace presentation's WSI retirement proof.
+
+Destroying or replacing a device facade closes its reclaim-owner lifecycle after a final drain.
+Existing images remain valid and co-own their allocator; their original owner may still release
+them normally. New allocation through that closed generation is refused. A subsequent foreign
+final release stays in a closed-owner quarantine: it never tears native resources down on another
+thread. This is observable through process-wide retiring image counts and native allocation bytes,
+even after the facade is gone. Repeated closed generations consume the same fixed stores and
+therefore eventually refuse admission instead of growing an unbounded hidden retained set. There
+is no automatic recovery once the original owner has stopped pumping. These diagnostics describe
+image native allocations only; aggregate resource brokerage remains G6 work.
+
+The synchronous oracle readback global quarantine/fuse and its source-image unproved flag remain
+subsequent G2 work. This image slice deliberately preserves such images, charged and bounded,
+without clearing an unproved flag from unrelated compute or presentation evidence.
+
+Local native evidence (2026-10-08): both real VMA image families passed moved final ownership,
+capacity refusal before allocation and recovery, move replacement, exact owner/device isolation,
+thread-lifetime mismatch retention, retained admission/bytes through a deterministic pre-destroy
+barrier, production preview pumping, and late closed-generation retention. Unproved-flag checks
+assert retention only; source-fence recovery remains the following oracle slice. Composite and
+resident-display CPU parity also passed with core and synchronization validation enabled and no
+reported errors. These are local native results; cross-platform GPU qualification is not claimed.
+Per-device image counts and native allocation bytes are exact; capacity, refusal, and reclaim
+counters are process-wide. A bounded capacity refusal retains the existing AllocationFailed
+operation result and its distinct cause is observable through the typed admission-refusal counter.
+
 ## Alternatives Evaluated
 
 | Option | Strengths | Why it is not the working choice |

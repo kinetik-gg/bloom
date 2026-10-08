@@ -320,8 +320,20 @@ void testRejections(Expectations& expectations, GpuDevice& device) {
         upload(*uploader.upload, std::make_shared<const Rgba32fImage>(std::move(*image2)));
     if (resident2) {
         auto foreign = std::make_shared<GpuImage>(std::move(*resident2));
-        std::thread([foreign]() mutable { foreign.reset(); }).join();
-        expectations.expect(true, "foreign-thread image destruction did not crash");
+        const auto bytes = foreign->allocationBytes();
+        const auto before = device.imageReclamationStats();
+        std::thread([last = std::move(foreign)]() mutable { last.reset(); }).join();
+        const auto pending = device.imageReclamationStats();
+        expectations.expect(pending.retiringImages == before.retiringImages + 1 &&
+                                pending.retiringAllocationBytes ==
+                                    before.retiringAllocationBytes + bytes,
+                            "foreign final image release retains exact owner and native bytes");
+        device.reclaimReleasedImages();
+        const auto reclaimed = device.imageReclamationStats();
+        expectations.expect(reclaimed.retiringImages == before.retiringImages &&
+                                reclaimed.liveImages + 1 == before.liveImages &&
+                                reclaimed.ownerReclaims == before.ownerReclaims + 1,
+                            "owner drain destroys the foreign final image exactly once");
     }
 
     // Status-flag rejection: a subnormal input lane is rejected whole-frame by the kernels.

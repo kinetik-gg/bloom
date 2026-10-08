@@ -558,6 +558,7 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
 
     auto control = std::make_shared<vulkan_detail::DeviceAllocatorState>();
     control->owner = std::this_thread::get_id();
+    control->ownerLifetimeToken = vulkan_detail::deviceOwnerLifetimeToken();
     control->loader = std::move(loader);
     control->instance = std::move(instance);
     control->physicalDevice =

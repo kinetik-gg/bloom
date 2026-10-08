@@ -30,6 +30,7 @@
 
 #include <vk_mem_alloc.h>
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -60,6 +61,8 @@ class DynamicLibrary final {
     void* handle_ = nullptr;
 };
 
+[[nodiscard]] std::uint64_t deviceOwnerLifetimeToken() noexcept;
+
 // Owns one logical device generation and its memory allocator. Destruction tears the allocator
 // down in the body, then lets the RAII members release in reverse declaration order: queue, device,
 // physical device, instance, and finally the loader. The owner thread is recorded so misuse can
@@ -73,6 +76,12 @@ struct DeviceAllocatorState final {
     ~DeviceAllocatorState();
 
     std::thread::id owner;
+    // Owner-only lifecycle flag; surviving images retain this allocator and remain valid.
+    bool imageOwnerClosed = false;
+    std::uint64_t ownerLifetimeToken = 0;
+    // Final-image release publication is allocation-free, including after facade shutdown.
+    std::atomic<std::uint64_t> pendingImageReclaims{0};
+    std::atomic<std::uint64_t> imageReclamationScans{0};
 
     DynamicLibrary loader;
     vk::raii::Instance instance{nullptr};

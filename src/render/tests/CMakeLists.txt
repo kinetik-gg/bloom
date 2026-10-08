@@ -561,6 +561,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_device.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_device_bootstrap.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_reclamation.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid_covered.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid_retirement.cpp"

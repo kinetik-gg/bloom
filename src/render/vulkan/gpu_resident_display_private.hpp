@@ -38,6 +38,9 @@ struct GpuDisplayImageImpl final {
     GpuDisplayImageImpl& operator=(const GpuDisplayImageImpl&) = delete;
     ~GpuDisplayImageImpl();
 
+    std::size_t reclamationSlot = 4096;
+    // Published before slot orphan visibility; cleared only after native destruction.
+    bool retirementMarked = false;
     [[nodiscard]] bool onOwnerThread() const noexcept;
     void destroy() noexcept;
 

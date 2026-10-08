@@ -53,6 +53,10 @@ const GpuCapabilityReport& GpuDevice::capabilityReport() const noexcept {
     return kEmptyCapabilityReport;
 }
 
+void GpuDevice::reclaimReleasedImages() noexcept {}
+GpuImageReclamationStats GpuDevice::imageReclamationStats() const noexcept { return {}; }
+GpuImageReclamationStats GpuDevice::processImageReclamationStats() noexcept { return {}; }
+
 GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept { return {}; }
 
 GpuQualification GpuDevice::qualificationFor(const GpuOperationId operation,

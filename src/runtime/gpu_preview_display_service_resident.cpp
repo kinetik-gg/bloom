@@ -198,6 +198,9 @@ void retireNativeOnOwner(const std::shared_ptr<PreviewDisplayServiceCore>& core)
     core->residentNativeInFlight = false;
     retireResidentRoute(core);
     core->display.reset();
+    if (core->device != nullptr) {
+        core->device->reclaimReleasedImages();
+    }
     if (core->presentationRetirementUnproven) {
         // A native presentation generation could not be proven retired. The process quarantine now
         // holds raw native targets that reference this device, so the device is deliberately

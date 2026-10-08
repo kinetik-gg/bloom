@@ -1,3 +1,4 @@
+#include "gpu_image_reclamation_private.hpp"
 #include "gpu_resident_display_private.hpp"
 #include "gpu_resident_display_readback_private.hpp"
 
@@ -163,6 +164,10 @@ ResidentDisplaySupport queryResidentDisplaySupport(DeviceAllocatorState& state,
 
 bool createDisplayImage(DeviceAllocatorState& state, const std::uint32_t width,
                         const std::uint32_t height, GpuDisplayImageImpl& out) {
+    if (!image_detail::reserveImage(out)) {
+        image_detail::releaseImageSlot(out);
+        return false;
+    }
     VkImageCreateInfo imageInfo;
     std::memset(&imageInfo, 0, sizeof(imageInfo));
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -184,8 +189,12 @@ bool createDisplayImage(DeviceAllocatorState& state, const std::uint32_t width,
     VmaAllocationInfo mapped{};
     if (vmaCreateImage(state.allocator, &imageInfo, &allocationInfo, &image, &allocation,
                        &mapped) != VK_SUCCESS) {
+        image_detail::releaseImageSlot(out);
         return false;
     }
+    VmaAllocationInfo nativeInfo{};
+    vmaGetAllocationInfo(state.allocator, allocation, &nativeInfo);
+    image_detail::registerImageBytes(out, static_cast<std::uint64_t>(nativeInfo.size));
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = image;
@@ -196,6 +205,7 @@ bool createDisplayImage(DeviceAllocatorState& state, const std::uint32_t width,
     if (state.device.getDispatcher()->vkCreateImageView(static_cast<VkDevice>(*state.device),
                                                         &viewInfo, nullptr, &view) != VK_SUCCESS) {
         vmaDestroyImage(state.allocator, image, allocation);
+        image_detail::releaseImageSlot(out);
         return false;
     }
     out.image = image;
@@ -207,10 +217,15 @@ bool createDisplayImage(DeviceAllocatorState& state, const std::uint32_t width,
     return true;
 }
 
-GpuDisplayImageImpl::~GpuDisplayImageImpl() { destroy(); }
+GpuDisplayImageImpl::~GpuDisplayImageImpl() {
+    destroy();
+    image_detail::releaseImageSlot(*this);
+}
 
 bool GpuDisplayImageImpl::onOwnerThread() const noexcept {
-    return state != nullptr && state->owner == std::this_thread::get_id();
+    return state != nullptr && state->owner == std::this_thread::get_id() &&
+           state->ownerLifetimeToken != 0 &&
+           state->ownerLifetimeToken == vulkan_detail::deviceOwnerLifetimeToken();
 }
 
 void GpuDisplayImageImpl::destroy() noexcept {
@@ -247,9 +262,10 @@ void GpuDisplayImage::releaseOwnedImpl() noexcept {
         return;
     }
     // Never touch Vulkan from a foreign thread and never destroy an image referenced by an
-    // unretired readback; retain the whole impl (bounded by the process fuse) instead.
+    // unretired readback; its pre-reserved bounded owner slot retains the entire impl instead.
     if (impl_->submissionUnretired || !impl_->onOwnerThread()) {
-        [[maybe_unused]] const auto* const retained = impl_.release();
+        image_detail::orphanImage(*impl_);
+        static_cast<void>(impl_.release()); // NOLINT(bugprone-unused-return-value)
         return;
     }
     impl_.reset();
