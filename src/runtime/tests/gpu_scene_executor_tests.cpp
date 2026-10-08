@@ -23,6 +23,7 @@
 // BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION (and does not ship this header) still compiles and
 // runs the parity/cache/live-budget tests; only the retirement fault tests are skipped.
 #ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
+#include "gpu_path_coverage_fault.hpp"
 #include "gpu_scene_executor_fault_injection.hpp"
 #endif
 

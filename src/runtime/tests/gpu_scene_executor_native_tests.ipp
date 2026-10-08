@@ -260,6 +260,58 @@ void testNativeRetirementContracts(Expectations& expectations, GpuDevice& device
         }
         fault::clear();
     }
+    // Production vector coverage failure must retain executor admission until its exact real
+    // submission retires. Fault injection rejects completion; it never supplies retirement proof.
+    {
+        namespace coverage = bloom::render::path_coverage_detail;
+        auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+        auto exec = GpuSceneExecutor::create(device, *cache.cache);
+        const auto vectorPlan = fractionalPlan();
+        const auto vectorScene = CpuGpuSceneBuilder{}.build(vectorPlan, requestFor(*vectorPlan));
+        expectations.expect(exec.hasValue() && vectorScene.hasValue(),
+                            "vector drain: executor and covered vector scene prepare");
+        if (exec && vectorScene) {
+            coverage::pathCoverageFault().store(
+                static_cast<std::uint8_t>(coverage::PathCoverageFault::ForceFenceTimeout));
+            static_cast<void>(exec.executor->begin(vectorScene.scene, kSceneBudget));
+            for (std::uint64_t i = 0; i < kMaxPollIterations; ++i) {
+                if (exec.executor->poll() == GpuSceneExecutorPollResult::Failure) {
+                    break;
+                }
+                std::this_thread::yield();
+            }
+            const auto retained = coverage::pathCoverageQuarantineAllocationBytes();
+            expectations.expect(
+                exec.executor->counters().coverageDispatches > 0 && retained > 0 &&
+                    exec.executor->ownerDrainRequired() &&
+                    exec.executor->diagnostic().code ==
+                        GpuSceneExecutorDiagnosticCode::NativeUnproven,
+                "vector drain: real coverage allocations and admission remain retained");
+            expectations.expect(exec.executor->takeImage() == nullptr &&
+                                    exec.executor->begin(vectorScene.scene, kSceneBudget).code ==
+                                        GpuSceneExecutorDiagnosticCode::OwnerDrainRequired,
+                                "vector drain: no output or reuse before retirement");
+            static_cast<void>(exec.executor->poll());
+            expectations.expect(exec.executor->ownerDrainRequired() &&
+                                    coverage::pathCoverageQuarantineAllocationBytes() == retained,
+                                "vector drain: repeated failed poll retains exact allocations");
+            coverage::pathCoverageFault().store(0);
+            for (std::uint64_t i = 0; i < kMaxPollIterations && exec.executor->ownerDrainRequired();
+                 ++i) {
+                static_cast<void>(exec.executor->poll());
+                std::this_thread::yield();
+            }
+            expectations.expect(!exec.executor->ownerDrainRequired() &&
+                                    coverage::pathCoverageQuarantineAllocationBytes() == 0 &&
+                                    exec.executor->takeImage() == nullptr,
+                                "vector drain: real fence proof reclaims without publication");
+            CpuCompositionEvaluator oracle;
+            expectParity(expectations, *exec.executor, oracle, vectorPlan, requestFor(*vectorPlan),
+                         "vector drain: covered-solid parity after retry", false, true);
+        }
+        coverage::pathCoverageFault().store(0);
+    }
+
 #else
     static_cast<void>(expectations);
     static_cast<void>(device);

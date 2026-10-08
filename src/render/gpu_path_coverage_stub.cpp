@@ -78,6 +78,8 @@ std::atomic<std::uint32_t>& pathCoverageMaxWorkGroupCountYOverride() noexcept {
     static std::atomic<std::uint32_t> value{0};
     return value;
 }
+std::uint64_t pathCoverageQuarantineAllocationBytes() noexcept { return 0; }
+PathCoverageAllocatorStats pathCoverageAllocatorStats(GpuDevice&) noexcept { return {}; }
 bool pathCoverageQuarantineOccupied() noexcept { return false; }
 bool retirePathCoverageQuarantineForOwner() noexcept { return false; }
 bool acquireResidentSlot(GpuPathCoverageImpl*) noexcept { return false; }

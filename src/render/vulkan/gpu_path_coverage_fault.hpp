@@ -12,6 +12,7 @@
 
 namespace bloom::render {
 struct GpuPathCoverageImpl;
+class GpuDevice;
 } // namespace bloom::render
 
 namespace bloom::render::path_coverage_detail {
@@ -28,7 +29,7 @@ enum class PathCoverageFault : std::uint8_t {
     // poll() treats the fence as unretired without waiting on the real fence, so the submission is
     // quarantined deterministically.
     ForceFenceTimeout,
-    // poll() reports device loss, proving the exact submission is released without quarantine.
+    // poll() reports injected loss only after the real fence proves completion.
     ForceDeviceLost,
 };
 
@@ -41,6 +42,12 @@ enum class PathCoverageFault : std::uint8_t {
 
 // Test/observability seams for the bounded reservation.
 [[nodiscard]] bool pathCoverageQuarantineOccupied() noexcept;
+[[nodiscard]] std::uint64_t pathCoverageQuarantineAllocationBytes() noexcept;
+struct PathCoverageAllocatorStats final {
+    std::uint64_t allocationCount = 0;
+    std::uint64_t allocationBytes = 0;
+};
+[[nodiscard]] PathCoverageAllocatorStats pathCoverageAllocatorStats(GpuDevice& device) noexcept;
 [[nodiscard]] bool retirePathCoverageQuarantineForOwner() noexcept;
 
 // Bounded resident pool. Every GpuPathCoverage native resource set (compute pipeline plus resident

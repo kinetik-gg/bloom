@@ -69,7 +69,8 @@ void orphanResidentSlot(GpuPathCoverageImpl* const impl) noexcept {
 [[nodiscard]] bool implOwnedByCurrentThread(const GpuPathCoverageImpl* const impl) noexcept {
     return impl != nullptr && impl->owner != std::thread::id{} &&
            impl->owner == std::this_thread::get_id() && impl->control != nullptr &&
-           impl->control->generation == impl->expectedGeneration;
+           impl->control->generation == impl->expectedGeneration &&
+           impl->control->ownerLifetimeToken == vulkan_detail::deviceOwnerLifetimeToken();
 }
 
 // Non-blocking. Returns true when the Impl has no live submission left to prove. Caller must have
@@ -77,6 +78,17 @@ void orphanResidentSlot(GpuPathCoverageImpl* const impl) noexcept {
 [[nodiscard]] bool retireOrphanedImplIfProven(GpuPathCoverageImpl* const impl) noexcept {
     if (impl == nullptr) {
         return true;
+    }
+    if (impl->quarantineToken != 0) {
+        std::lock_guard lock(path_coverage_detail::reservationMutex());
+        auto& slot = path_coverage_detail::reservation();
+        if (slot.state == path_coverage_detail::ReservationState::Quarantined &&
+            slot.token == impl->quarantineToken && slot.deviceState == impl->control &&
+            slot.ownerThread == impl->owner &&
+            !path_coverage_detail::retireQuarantinedLocked(slot)) {
+            return false;
+        }
+        impl->quarantineToken = 0;
     }
     if (impl->submitted) {
         if (impl->jobFence == vk::raii::Fence{nullptr}) {
@@ -114,6 +126,33 @@ std::atomic<std::uint32_t>& pathCoverageMaxWorkGroupCountYOverride() noexcept {
 bool pathCoverageQuarantineOccupied() noexcept {
     std::lock_guard lock(reservationMutex());
     return reservation().state == ReservationState::Quarantined;
+}
+std::uint64_t pathCoverageQuarantineAllocationBytes() noexcept {
+    std::lock_guard lock(reservationMutex());
+    const auto& slot = reservation();
+    if (slot.state != ReservationState::Quarantined || !isReservationOwnerLocked(slot) ||
+        slot.deviceState == nullptr ||
+        slot.deviceState->ownerLifetimeToken != vulkan_detail::deviceOwnerLifetimeToken()) {
+        return 0;
+    }
+    VmaAllocationInfo ranges{};
+    VmaAllocationInfo spans{};
+    VmaAllocationInfo mask{};
+    vmaGetAllocationInfo(slot.deviceState->allocator, slot.ranges.allocation, &ranges);
+    vmaGetAllocationInfo(slot.deviceState->allocator, slot.spans.allocation, &spans);
+    vmaGetAllocationInfo(slot.deviceState->allocator, slot.mask->allocation, &mask);
+    return ranges.size + spans.size + mask.size;
+}
+PathCoverageAllocatorStats pathCoverageAllocatorStats(GpuDevice& device) noexcept {
+    const auto state = GpuRendererAccess::state(device);
+    if (state == nullptr || state->owner != std::this_thread::get_id() ||
+        state->ownerLifetimeToken != vulkan_detail::deviceOwnerLifetimeToken()) {
+        return {};
+    }
+    VmaTotalStatistics statistics{};
+    vmaCalculateStatistics(state->allocator, &statistics);
+    return {statistics.total.statistics.allocationCount,
+            statistics.total.statistics.allocationBytes};
 }
 bool retirePathCoverageQuarantineForOwner() noexcept {
     std::lock_guard lock(reservationMutex());
@@ -284,6 +323,7 @@ bool GpuPathCoverageImpl::quarantine() noexcept {
     jobBuffer = vk::raii::CommandBuffer{nullptr};
     jobPool = vk::raii::CommandPool{nullptr};
     jobFence = vk::raii::Fence{nullptr};
+    quarantineToken = slotToken;
     slotToken = 0;
     submitted = false;
     return true;
@@ -344,6 +384,11 @@ void GpuPathCoverage::releaseImpl() noexcept {
             return;
         }
     }
+    if (hasUnretiredSubmission()) {
+        orphanResidentSlot(impl_.get());
+        [[maybe_unused]] const auto* const retained = impl_.release();
+        return;
+    }
     path_coverage_detail::releaseResidentSlot(impl_.get());
     impl_.reset();
 }
@@ -355,6 +400,18 @@ GpuPathCoveragePollResult GpuPathCoverage::poll() {
     GpuPathCoverageImpl& impl = *impl_;
     if (!impl.onOwnerThread()) {
         return GpuPathCoveragePollResult::WrongThread;
+    }
+    if (impl.quarantineToken != 0) {
+        std::lock_guard lock(path_coverage_detail::reservationMutex());
+        auto& slot = path_coverage_detail::reservation();
+        if (slot.state == path_coverage_detail::ReservationState::Quarantined &&
+            slot.token == impl.quarantineToken && slot.ownerThread == impl.owner &&
+            slot.deviceState == impl.control &&
+            !path_coverage_detail::retireQuarantinedLocked(slot)) {
+            return GpuPathCoveragePollResult::Failure;
+        }
+        impl.quarantineToken = 0;
+        return GpuPathCoveragePollResult::Failure;
     }
     if (impl.jobState == GpuPathCoverageJobState::Ready) {
         return GpuPathCoveragePollResult::Ready;
@@ -369,9 +426,7 @@ GpuPathCoveragePollResult GpuPathCoverage::poll() {
     const auto fault = static_cast<path_coverage_detail::PathCoverageFault>(
         path_coverage_detail::pathCoverageFault().load());
     VkResult status = VK_NOT_READY;
-    if (fault == path_coverage_detail::PathCoverageFault::ForceDeviceLost) {
-        status = VK_ERROR_DEVICE_LOST;
-    } else if (fault != path_coverage_detail::PathCoverageFault::ForceFenceTimeout) {
+    if (fault != path_coverage_detail::PathCoverageFault::ForceFenceTimeout) {
         const VkFence rawFence = static_cast<VkFence>(*impl.jobFence);
         status = impl.control->device.getDispatcher()->vkGetFenceStatus(
             static_cast<VkDevice>(*impl.control->device), rawFence);
@@ -397,7 +452,10 @@ GpuPathCoveragePollResult GpuPathCoverage::poll() {
                               "is retained");
         return GpuPathCoveragePollResult::Failure;
     }
-    if (status == VK_ERROR_DEVICE_LOST) {
+    // Injected loss is a diagnostic only after genuine driver retirement proof.
+    if (status == VK_ERROR_DEVICE_LOST ||
+        (status == VK_SUCCESS &&
+         fault == path_coverage_detail::PathCoverageFault::ForceDeviceLost)) {
         impl.deviceLost = true;
         impl.releaseRetired(false);
         impl.fail(GpuPathCoverageDiagnosticCode::DeviceLost, "the device was lost while polling");

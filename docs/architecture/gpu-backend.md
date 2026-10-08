@@ -89,7 +89,15 @@ co-owned until the consuming submission is proved retired, and the consume path 
 thread, exact device identity, and generation before readiness or dimensions. In-flight submissions
 are serialized by one process-wide bounded reservation claimed before any native allocation: a
 proven retirement returns it, an unproven one moves the exact submission into an owner-only
-quarantine, and admission is refused while occupied. Every producer native resource set (pipeline
+quarantine, and admission is refused while occupied. The failed producer keeps its exact
+reservation token and device identity: `hasUnretiredSubmission()` remains true until owner polling
+proves that quarantine retired. Failed polling never publishes a mask, and a stale token cannot
+retire a later job. Native access also checks the exact owner thread lifetime. Destroying a
+quarantined producer orphans its existing resident slot so descriptors and pipeline outlive the
+submission; non-blocking owner drain releases that slot only after real fence completion or actual
+driver device loss. Injected loss diagnostics require real fence completion before cleanup. The
+quarantine fuse records historical unproved retirement, independently of current slot occupancy.
+Every producer native resource set (pipeline
 plus resident mask) holds one of a fixed number of process-wide resident slots, acquired before its
 first native allocation and held until owner-thread retirement; creation is lazy, so idle producers
 allocate nothing. A producer destroyed on a foreign thread only marks its already-owned slot

@@ -174,7 +174,20 @@ bool GpuPathCoverage::isBoundTo(GpuDevice& device) const noexcept {
     return state != nullptr && state == impl_->control;
 }
 bool GpuPathCoverage::hasUnretiredSubmission() const noexcept {
-    return impl_ != nullptr && impl_->submitted;
+    if (impl_ == nullptr) {
+        return false;
+    }
+    if (impl_->submitted) {
+        return true;
+    }
+    if (impl_->quarantineToken == 0) {
+        return false;
+    }
+    std::lock_guard lock(path_coverage_detail::reservationMutex());
+    const auto& slot = path_coverage_detail::reservation();
+    return slot.state == path_coverage_detail::ReservationState::Quarantined &&
+           slot.token == impl_->quarantineToken && slot.ownerThread == impl_->owner &&
+           slot.deviceState == impl_->control;
 }
 std::uint64_t GpuPathCoverage::lastJobAllocationBytes() const noexcept {
     return impl_ != nullptr ? impl_->lastJobBytes : 0;
@@ -300,7 +313,6 @@ GpuPathCoverageDiagnostic GpuPathCoverage::begin(const GpuPathCoverageParameters
         impl.pipelineReady = true;
     }
 
-    impl.clearJob();
     // Claim the bounded reservation BEFORE any native allocation or submit.
     {
         std::lock_guard lock(path_coverage_detail::reservationMutex());
@@ -319,6 +331,7 @@ GpuPathCoverageDiagnostic GpuPathCoverage::begin(const GpuPathCoverageParameters
                         "a prior coverage submission is not retired"};
             }
         }
+        impl.clearJob();
         slot.state = path_coverage_detail::ReservationState::Reserved;
         slot.ownerThread = std::this_thread::get_id();
         ++slot.token;
@@ -326,6 +339,7 @@ GpuPathCoverageDiagnostic GpuPathCoverage::begin(const GpuPathCoverageParameters
             ++slot.token;
         }
         impl.slotToken = slot.token;
+        impl.quarantineToken = 0;
     }
 
     const auto failJob = [&](const GpuPathCoverageDiagnosticCode code,

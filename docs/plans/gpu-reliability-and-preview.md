@@ -15,7 +15,7 @@ remain separate decisions under G9.
 | --- | --- | --- |
 | G0 | Initial instrumentation slice accepted; remaining probes attach to their owning packages | Source review, quality checks, three focused suites, native acknowledgement correlation and original interaction fixture passed |
 | G1 | Accepted: native validity and mapped-memory visibility | Source review, quality/lint, real operator/display/viewer/RAM/final-route parity and validation; independent Composite/viewer reruns passed |
-| G2 | Initialization cleanup, asynchronous metadata lifetime, and bounded image reclamation accepted | Native parity/lifecycle/viewer/final paths and independent retirement reruns have zero validation errors; vector coverage quarantine, oracle readback recovery, and viewer cancellation remain pending |
+| G2 | Initialization cleanup, metadata lifetime, image reclamation, and vector quarantine repair accepted | Native parity/lifecycle/viewer/final paths and independent retirement reruns have zero validation errors; oracle readback recovery and viewer cancellation remain pending |
 | G3–G10 | Pending | No implementation or qualification claim |
 
 G0 adds opt-in bounded numeric frame tracing and a native Full-resolution 1920 × 1080 solid/text
@@ -416,6 +416,21 @@ reclamation reruns passed. Quality and affected-TU lint passed, including the fi
 changes. Both family
 retention-only unproved-flag tests leave exact source-proof recovery to the following oracle slice;
 no unproved retirement or pixel execution is fabricated. Cross-platform GPU remains unqualified.
+
+G2D1 local vector-coverage evidence (2026-10-08): the original failed producer preserves its
+exact quarantine token and device identity, reports outstanding retirement, and retires only its own
+submission through real owner fence polling. Destruction retains the existing pipeline/descriptor
+resident slot until the quarantined job retires. Native primitive tests prove actual VMA allocation
+count and bytes remain retained, cancellation publishes no mask, stale tokens cannot release newer
+jobs, and an orphaned resident reclaims exactly once after proof. The production runtime vector
+executor retains admission through unproved failure, refuses retry, then recovers genuine covered
+fill CPU parity after owner retirement. PathCoverage, CoveredSolid, and executor fault/parity gates
+passed with genuine core/synchronization validation and no reported validation errors. Supervisor
+source review and independent PathCoverage/executor reruns also passed; quality and affected-TU
+lint passed. The
+historical quarantine fuse remains latched after recovery; current retirement is reported by exact
+submission ownership. Oracle readback recovery and service cancellation/accounting remain separate
+G2 work. No cross-platform GPU qualification or complete G2 acceptance is claimed.
 
 ### G3 — Make retention and presentation state truthful
 

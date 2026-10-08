@@ -156,7 +156,8 @@ inline bool isReservationOwnerLocked(const Reservation& slot) noexcept {
 // Owner-only, non-blocking.
 inline bool retireQuarantinedLocked(Reservation& slot) noexcept {
     if (slot.state != ReservationState::Quarantined || slot.deviceState == nullptr ||
-        slot.fence == vk::raii::Fence{nullptr}) {
+        slot.fence == vk::raii::Fence{nullptr} || slot.ownerThread != std::this_thread::get_id() ||
+        slot.deviceState->ownerLifetimeToken != vulkan_detail::deviceOwnerLifetimeToken()) {
         return false;
     }
     if (static_cast<PathCoverageFault>(pathCoverageFault().load()) ==
@@ -186,7 +187,8 @@ struct GpuPathCoverageImpl final {
     ~GpuPathCoverageImpl();
 
     [[nodiscard]] bool onOwnerThread() const noexcept {
-        return control != nullptr && control->owner == std::this_thread::get_id();
+        return control != nullptr && control->owner == std::this_thread::get_id() &&
+               control->ownerLifetimeToken == vulkan_detail::deviceOwnerLifetimeToken();
     }
     void fail(const GpuPathCoverageDiagnosticCode code, std::string message) {
         jobState = GpuPathCoverageJobState::Failure;
@@ -248,6 +250,7 @@ struct GpuPathCoverageImpl final {
     std::uint64_t lastJobBytes = 0;
     bool deviceLost = false;
     std::uint64_t slotToken = 0;
+    std::uint64_t quarantineToken = 0;
     std::chrono::steady_clock::time_point submittedAt{};
     std::atomic<bool> discardRequested{false};
     GpuPathCoverageDiagnostic jobDiagnostic;
