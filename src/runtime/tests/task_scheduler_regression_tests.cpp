@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <source_location>
@@ -59,6 +60,13 @@ class Gate final {
         entered_ = true;
         condition_.notify_all();
         condition_.wait(lock, [&] { return released_ || context.isCancellationRequested(); });
+    }
+
+    void enterAndWaitUntilReleased() {
+        std::unique_lock lock(mutex_);
+        entered_ = true;
+        condition_.notify_all();
+        condition_.wait(lock, [&] { return released_; });
     }
 
     [[nodiscard]] bool waitUntilEntered() {
@@ -140,6 +148,116 @@ void expectImmediateCancellation(Expectations& expectations, const TaskHandle<in
     const auto result = handle.tryTakeResult();
     expectations.expect(result.has_value() && result->state() == TaskState::Cancelled,
                         label + " publishes a cancelled result before returning");
+}
+
+void testCompletedWorkReleasesCapturedInputs(Expectations& expectations) {
+    for (const auto executor :
+         {bloom::runtime::TaskExecutor::Cpu, bloom::runtime::TaskExecutor::BlockingIo}) {
+        TaskScheduler scheduler(testConfig(8, 8));
+        auto input = std::make_shared<const int>(73);
+        const std::weak_ptr<const int> retainedInput = input;
+        const auto submission = scheduler.submit<int>(
+            TaskRequest("Captured input completion", owner(1100), TaskPriority::Visible, executor),
+            [input = std::move(input)](TaskContext&) {
+                return TaskResult<int>::succeeded(*input);
+            });
+        expectations.expect(submission.accepted(), "captured-input completion task is admitted");
+        expectations.expect(awaitQuiescence(scheduler),
+                            "captured-input completion reaches safe terminal quiescence");
+        expectations.expect(retainedInput.expired(),
+                            "completed work releases its inputs without history eviction");
+        const auto snapshot = scheduler.snapshot(submission.handle.id());
+        expectations.expect(snapshot && snapshot->state == TaskState::Succeeded,
+                            "terminal metadata remains after captured inputs are released");
+        const auto result = submission.handle.tryTakeResult();
+        expectations.expect(result && result->state() == TaskState::Succeeded && result->value() &&
+                                *result->value() == 73,
+                            "unconsumed result survives captured-input release");
+        expectations.expect(!submission.handle.tryTakeResult(),
+                            "released-input result remains take-once");
+    }
+}
+
+void testCancelledQueuedWorkReleasesCapturedInputs(Expectations& expectations) {
+    for (const auto executor :
+         {bloom::runtime::TaskExecutor::Cpu, bloom::runtime::TaskExecutor::BlockingIo}) {
+        TaskScheduler scheduler(testConfig(8, 8));
+        Gate gate;
+        const auto blocker =
+            scheduler.submit<void>(TaskRequest("Captured-input queue gate", owner(1101),
+                                               TaskPriority::Interactive, executor),
+                                   [&gate](TaskContext& context) {
+                                       gate.enterAndWait(context);
+                                       return TaskResult<void>::succeeded();
+                                   });
+        expectations.expect(blocker.accepted() && gate.waitUntilEntered(),
+                            "captured-input queue fixture occupies its executor");
+        std::atomic_bool executed = false;
+        auto input = std::make_shared<const int>(74);
+        const std::weak_ptr<const int> retainedInput = input;
+        const auto queued =
+            scheduler.submit<int>(TaskRequest("Captured input queued cancellation", owner(1102),
+                                              TaskPriority::Visible, executor),
+                                  [input = std::move(input), &executed](TaskContext&) {
+                                      executed.store(true);
+                                      return TaskResult<int>::succeeded(*input);
+                                  });
+        expectations.expect(queued.accepted(), "captured-input queued task is admitted");
+        queued.handle.cancel();
+        const auto result = awaitResult(queued.handle);
+        expectations.expect(result && result->state() == TaskState::Cancelled && !result->value(),
+                            "queued cancellation preserves its value-free terminal result");
+        expectations.expect(!executed.load(), "queued captured-input work never executes");
+        expectations.expect(retainedInput.expired(),
+                            "queued cancellation releases inputs before the worker is available");
+        gate.release();
+        expectations.expect(awaitResult(blocker.handle).has_value() && awaitQuiescence(scheduler),
+                            "captured-input queue fixture drains");
+        const auto snapshot = scheduler.snapshot(queued.handle.id());
+        expectations.expect(snapshot && snapshot->state == TaskState::Cancelled,
+                            "queued cancellation retains terminal metadata after input release");
+    }
+}
+
+void testRunningCancellationPreservesExecutingCaptures(Expectations& expectations) {
+    for (const auto executor :
+         {bloom::runtime::TaskExecutor::Cpu, bloom::runtime::TaskExecutor::BlockingIo}) {
+        TaskScheduler scheduler(testConfig(8, 8));
+        Gate gate;
+        auto input = std::make_shared<const int>(75);
+        const std::weak_ptr<const int> retainedInput = input;
+        const auto running =
+            scheduler.submit<int>(TaskRequest("Captured input running cancellation", owner(1103),
+                                              TaskPriority::Visible, executor),
+                                  [input = std::move(input), &gate](TaskContext&) {
+                                      gate.enterAndWaitUntilReleased();
+                                      return TaskResult<int>::succeeded(*input);
+                                  });
+        expectations.expect(running.accepted() && gate.waitUntilEntered(),
+                            "running captured-input fixture enters the callable");
+        {
+            std::jthread cancelByHandle([&running] { running.handle.cancel(); });
+            std::jthread cancelByOwner(
+                [&scheduler] { static_cast<void>(scheduler.cancelOwner(owner(1103))); });
+        }
+        expectations.expect(!retainedInput.expired() && !running.handle.tryTakeResult(),
+                            "concurrent cancellation keeps executing captures alive");
+        const auto activeSnapshot = scheduler.snapshot(running.handle.id());
+        expectations.expect(activeSnapshot && activeSnapshot->state == TaskState::Running &&
+                                activeSnapshot->cancellationRequested,
+                            "running cancellation cannot publish a premature terminal snapshot");
+        gate.release();
+        const auto result = awaitResult(running.handle);
+        expectations.expect(result && result->state() == TaskState::Cancelled && !result->value(),
+                            "running cancellation takes effect after the callable returns");
+        expectations.expect(awaitQuiescence(scheduler),
+                            "running cancellation reaches safe terminal quiescence");
+        expectations.expect(retainedInput.expired(),
+                            "running cancellation releases captures at safe completion");
+        const auto snapshot = scheduler.snapshot(running.handle.id());
+        expectations.expect(snapshot && snapshot->state == TaskState::Cancelled,
+                            "running cancellation keeps its terminal history entry");
+    }
 }
 
 void testImmediateQueuedCancellationAndCapacity(Expectations& expectations) {
@@ -465,6 +583,9 @@ static_assert(bloom::runtime::TaskResultValue<std::shared_ptr<const int>>);
 
 int main() {
     Expectations expectations;
+    testCompletedWorkReleasesCapturedInputs(expectations);
+    testCancelledQueuedWorkReleasesCapturedInputs(expectations);
+    testRunningCancellationPreservesExecutingCaptures(expectations);
     testImmediateQueuedCancellationAndCapacity(expectations);
     testRunningCoalescingAndDiagnosticPreservation(expectations);
     testRejectedReplacementPreservesOldWork(expectations);

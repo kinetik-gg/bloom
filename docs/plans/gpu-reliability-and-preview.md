@@ -85,6 +85,27 @@ monitor DPR2, or global keyboard focus. Linux native execution is locally verifi
 retain the explicit CPU fallback. G3A cache truth, G4 completion/cadence and public present hooks,
 G6 aggregate memory accounting and G7 processing remain pending.
 
+Terminal task-input lifetime checkpoint (2026-10-09), accepted after independent review:
+CPU and blocking-I/O task publication now releases the callable's captured inputs after execution
+returns, or after queued removal. Cancellation of running work cannot destroy executing captures.
+Six deterministic lifetime cases fail before the change and pass after it, covering completion,
+queued cancellation and concurrent running cancellation on both executors. Typed results and
+terminal metadata remain available. The three runtime suites, changed-source formatting and eight
+runtime translation units of static analysis pass. No UI/app target was rebuilt; the seven unbuilt
+G3A files remain separate. This is a bounded ownership repair, not completion of G6.
+
+The owner reported stable outlines, then forced closure while playing animation in the accepted
+G3B2B build. Kernel and service journals establish an 8 GiB launcher-cgroup OOM kill after 6m49s,
+not an application exception. Default configured caches on the roughly 60 GiB host allowed about
+30 GiB in total, exceeding that process cap; exact allocation ownership at the kill was not traced.
+The task-capture defect is independently proven, not established as this incident's cause. Recovery
+originals and journals were preserved. The same accepted app was relaunched with a temporary
+configuration overlay setting operation and RAM-preview caches to 1 GiB each under the unchanged
+8 GiB cap, with normal recovery/data locations and no memory-high throttle. A 420-second
+nonmutating observation ended with the app alive, a 3.55 GiB service peak and no cap/OOM events.
+The user's exact workload was not measured; this does not establish sustained playback or a plateau.
+G3A resumes independently. G6 must account for service/container limits and result-mailbox ownership.
+
 G0 adds opt-in bounded numeric frame tracing and a native Full-resolution 1920 × 1080 solid/text
 fixture using four cold and four warm frame requests. The initial measured medians were 48.14 ms
 and 32.01 ms respectively, through owner acknowledgement, with four warm RAM-cache hits, no CPU
@@ -629,6 +650,14 @@ presentation target's full quarantine array can also leave later retained object
 These source-confirmed gaps require ownership records and reservation transfer, not a larger counter
 limit. Preserve the presentation engine's separate WSI retirement proof. The accepted G2 primitive,
 image, and oracle slices do not establish aggregate accounting for these other owners.
+
+The 2026-10-09 launcher incident adds two concrete audits. Derive effective process headroom from
+service/container memory limits as well as host capacity, reserving room beyond configured caches;
+host-only defaults exceeded the imposed 8 GiB process cap. Also distinguish result delivery owned
+by live handles from unnecessary history retention: terminal `TaskRecord::work` still owns its
+result mailbox, so an unconsumed result can remain until history eviction after consumer handles
+are gone. The accepted capture-release checkpoint preserves this separate result policy. Neither
+container-aware budgeting nor mailbox retirement is resolved by that checkpoint.
 
 **Slice B owns:** an explicit application-owned reservation/budget coordinator passed to the
 existing owners. Preview and export share the device allowance even before they share a device.

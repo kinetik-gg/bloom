@@ -200,6 +200,10 @@ template <TaskResultValue Value> class TypedTaskWork final : public TaskWork {
     }
 
     [[nodiscard]] TaskState publish(const TaskState requestedOutcome) noexcept override {
+        // The scheduler publishes only after execute returns, or after removing queued work.
+        // Terminal history needs the outcome and metadata, not the callable's captured inputs.
+        // Release outside the mailbox lock; an executing callable is never destroyed by cancel().
+        function_ = nullptr;
         std::lock_guard lock(mailbox_->mutex);
         if (mailbox_->result.has_value()) {
             return mailbox_->result->state();

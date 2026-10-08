@@ -122,6 +122,13 @@ Cancellation is an expected outcome, not an error. Failures contain structured d
 than only log text or exceptions. Task IDs remain useful after completion so the UI, logs, and
 support reports can correlate a visible operation with its work.
 
+CPU and blocking-I/O tasks release their callable and captured inputs when they publish a terminal
+outcome. Running cancellation only requests cancellation: the callable stays alive until execution
+returns. Queued cancellation releases it after removal from the queue, without waiting for an
+executor worker. Bounded terminal history retains metadata, and the result mailbox keeps an
+unconsumed typed result until its consumer takes it or its owners release it; history does not
+retain completed work inputs solely for diagnostics.
+
 ## Immutable Inputs And Result Publication
 
 Background tasks never retain mutable document objects, Qt widgets, or `QObject` references.
