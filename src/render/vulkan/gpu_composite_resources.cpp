@@ -110,6 +110,10 @@ bool createCompositeBuffer(DeviceAllocatorState& state, const std::uint64_t byte
     bool directMapped = false;
     if (hostVisible && initialData != nullptr && allocationInfo.pMappedData != nullptr) {
         std::memcpy(allocationInfo.pMappedData, initialData, static_cast<std::size_t>(bytes));
+        if (composite_detail::mappedMemoryVisibility(false, state.allocator, created.allocation,
+                                                     bytes) != VK_SUCCESS) {
+            return false;
+        }
         directMapped = true;
     }
     if (!directMapped && initialData != nullptr) {
@@ -137,6 +141,11 @@ bool createCompositeBuffer(DeviceAllocatorState& state, const std::uint64_t byte
             return false;
         }
         std::memcpy(stagingMapped.pMappedData, initialData, static_cast<std::size_t>(bytes));
+        if (composite_detail::mappedMemoryVisibility(false, state.allocator, stagingHandle,
+                                                     bytes) != VK_SUCCESS) {
+            vmaDestroyBuffer(state.allocator, stagingBuffer, stagingHandle);
+            return false;
+        }
 
         vk::raii::CommandPool pool{nullptr};
         vk::raii::CommandBuffer commandBuffer{nullptr};
@@ -167,6 +176,19 @@ bool createCompositeBuffer(DeviceAllocatorState& state, const std::uint64_t byte
                     VkBufferCopy copy{};
                     copy.size = bytes;
                     dispatcher->vkCmdCopyBuffer(rawBuffer, stagingBuffer, created.buffer, 1, &copy);
+                    // The completed copy still needs a memory dependency for the later shader
+                    // consumer; a host fence wait only proves retirement.
+                    VkBufferMemoryBarrier toShader{};
+                    toShader.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+                    toShader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    toShader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                    toShader.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toShader.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toShader.buffer = created.buffer;
+                    toShader.size = bytes;
+                    dispatcher->vkCmdPipelineBarrier(rawBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                                                     nullptr, 1, &toShader, 0, nullptr);
                     ok = dispatcher->vkEndCommandBuffer(rawBuffer) == VK_SUCCESS;
                 }
             }
@@ -341,7 +363,7 @@ bool GpuComposite::Impl::createPipelines() {
         return false;
     }
 
-    const std::array poolSizes{vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 4},
+    const std::array poolSizes{vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 5},
                                vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 5}};
     vk::DescriptorPoolCreateInfo poolInfo{};
     poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
@@ -659,6 +681,9 @@ GpuCompositeDiagnostic GpuComposite::beginSourceOver(const GpuSourceOverParamete
     dispatcher->vkCmdPipelineBarrier(rawCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
                                      nullptr, 1, &toRead);
+
+    composite_detail::statusToHost(*impl.control, rawCommandBuffer, impl.status.buffer,
+                                   sizeof(std::uint32_t));
 
     if (dispatcher->vkEndCommandBuffer(rawCommandBuffer) != VK_SUCCESS) {
         return compositeDiagnostic(GpuCompositeDiagnosticCode::DeviceUnavailable,

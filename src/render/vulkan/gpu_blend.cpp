@@ -229,7 +229,14 @@ GpuBlendCreateResult GpuBlend::create(GpuDevice& device, const GpuBlendBudgets& 
 
 bool GpuBlend::Impl::checkStatusFlag() {
     if (statusMapped == nullptr) {
-        return true;
+        fail(GpuBlendDiagnosticCode::DeviceUnavailable, "the kernel status has no host mapping");
+        return false;
+    }
+    if (composite_detail::mappedMemoryVisibility(true, control->allocator, status.allocation,
+                                                 sizeof(std::uint32_t)) != VK_SUCCESS) {
+        fail(GpuBlendDiagnosticCode::DeviceUnavailable,
+             "the kernel status could not be made visible to the host");
+        return false;
     }
     std::uint32_t flag = 0;
     std::memcpy(&flag, statusMapped, sizeof(flag));
@@ -492,6 +499,9 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
     dispatcher->vkCmdPipelineBarrier(rawCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
                                      nullptr, 1, &toRead);
+
+    composite_detail::statusToHost(*impl.control, rawCommandBuffer, impl.status.buffer,
+                                   sizeof(std::uint32_t));
 
     if (dispatcher->vkEndCommandBuffer(rawCommandBuffer) != VK_SUCCESS) {
         return makeDiagnostic(GpuBlendDiagnosticCode::DeviceUnavailable,

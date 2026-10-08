@@ -369,10 +369,12 @@ GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const Gpu
 
     impl.clearJob();
     impl.input = std::move(input);
-    if (!createResidentBuffer(*impl.control, inputBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0,
-                              false, impl.jobInput) ||
-        !createResidentBuffer(*impl.control, packedBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0,
-                              false, impl.jobOutput) ||
+    if (!createResidentBuffer(*impl.control, inputBytes,
+                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                              0, false, impl.jobInput) ||
+        !createResidentBuffer(*impl.control, packedBytes,
+                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                              0, false, impl.jobOutput) ||
         !createResidentBuffer(
             *impl.control, sizeof(std::uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT, true,
@@ -492,10 +494,10 @@ GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const Gpu
     hostToCompute[1].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
     hostToCompute[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
     hostToCompute[1].size = sizeof(std::uint32_t);
-    dispatcher->vkCmdPipelineBarrier(rawCommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
-                                     static_cast<std::uint32_t>(hostToCompute.size()),
-                                     hostToCompute.data(), 0, nullptr);
+    dispatcher->vkCmdPipelineBarrier(
+        rawCommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_HOST_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+        static_cast<std::uint32_t>(hostToCompute.size()), hostToCompute.data(), 0, nullptr);
 
     impl.commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *impl.pipeline);
     impl.commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *impl.pipelineLayout, 0,
@@ -516,6 +518,13 @@ GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const Gpu
                                      &pixelCount);
     const std::uint32_t groups = (pixelCount + kWorkgroupSizeX - 1U) / kWorkgroupSizeX;
     impl.commandBuffer.dispatch(groups, 1, 1);
+
+    VkBufferMemoryBarrier statusToHost = hostToCompute[1];
+    statusToHost.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    statusToHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    dispatcher->vkCmdPipelineBarrier(rawCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                     VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &statusToHost, 0,
+                                     nullptr);
 
     VkBufferMemoryBarrier packedToTransfer = hostToCompute[0];
     packedToTransfer.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;

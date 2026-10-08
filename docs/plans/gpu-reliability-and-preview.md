@@ -14,8 +14,9 @@ remain separate decisions under G9.
 | Package | State | Evidence |
 | --- | --- | --- |
 | G0 | Initial instrumentation slice accepted; remaining probes attach to their owning packages | Source review, quality checks, three focused suites, native acknowledgement correlation and original interaction fixture passed |
-| G1 | In progress: native validity and mapped-memory visibility | Baseline validation failures reproduced; no repair claim yet |
-| G2–G10 | Pending | No implementation or qualification claim |
+| G1 | Accepted: native validity and mapped-memory visibility | Source review, quality/lint, real operator/display/viewer/RAM/final-route parity and validation; independent Composite/viewer reruns passed |
+| G2 | In progress: first slice covers initialization failure cleanup | Async metadata lifetime, owner reclamation, and cancellation recovery follow separately |
+| G3–G10 | Pending | No implementation or qualification claim |
 
 G0 adds opt-in bounded numeric frame tracing and a native Full-resolution 1920 × 1080 solid/text
 fixture using four cold and four warm frame requests. The initial measured medians were 48.14 ms
@@ -25,11 +26,18 @@ sample does not establish sustained playback, pointer latency, unobscured pixels
 flicker. Worker-stage, source-I/O, surface visibility, and pointer probes remain required in the
 packages that change those paths.
 
-The same viewer fixture passed its functional assertions while reporting 41 core/synchronization
-validation errors. G1 therefore also covers instance/device extension dependency negotiation and
-the swapchain acquire-to-render-pass dependency, in addition to the resident transfer and mapped
-visibility findings. A separate resolution-transition attempt exposed cancellation recovery and
-failed-teardown behavior for G2/G4; fixed-resolution success does not qualify that transition.
+The same viewer fixture originally passed its functional assertions while reporting 41
+core/synchronization validation errors; after G1 it reports zero. G1 includes extension dependency
+negotiation, the swapchain acquire-to-render-pass dependency, resident transfer usage, mapped
+visibility, and final/oracle readback barriers. Real RAM fill/replay retained four frames with zero
+warm dispatches, and a mixed media/text 6000 × 4000 final-render fixture preserved CPU parity.
+Mapped-memory tests observe real VMA calls and injected failures, but local allocations were
+coherent: noncoherent execution and other platforms remain unqualified. See the owning
+[backend checkpoint](../architecture/gpu-backend.md) for precise limits.
+
+A separate resolution-transition attempt exposed cancellation recovery and failed-teardown
+behavior for G2/G4; fixed-resolution success does not qualify that transition. G1 does not establish
+flicker-free playback or repair the remaining scheduling, retention, and memory-ownership findings.
 
 The audit observations below describe the baseline; subsequent fixes and measured results belong
 in this checkpoint and the owning architecture documents.

@@ -9,6 +9,7 @@
 
 #include <bloom/render/gpu_composite.hpp>
 
+#include "gpu_composite_memory.hpp"
 #include "gpu_device_private.hpp"
 #include "gpu_image_private.hpp"
 #include "shaders/source_over_spirv.inc"

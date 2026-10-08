@@ -175,7 +175,14 @@ GpuAffineCreateResult GpuAffine::create(GpuDevice& device, const GpuAffineBudget
 
 bool GpuAffine::Impl::checkStatusFlag() {
     if (statusMapped == nullptr) {
-        return true;
+        fail(GpuAffineDiagnosticCode::DeviceUnavailable, "the kernel status has no host mapping");
+        return false;
+    }
+    if (composite_detail::mappedMemoryVisibility(true, control->allocator, status.allocation,
+                                                 sizeof(std::uint32_t)) != VK_SUCCESS) {
+        fail(GpuAffineDiagnosticCode::DeviceUnavailable,
+             "the kernel status could not be made visible to the host");
+        return false;
     }
     std::uint32_t flag = 0;
     std::memcpy(&flag, statusMapped, sizeof(flag));
@@ -508,6 +515,9 @@ GpuAffineDiagnostic GpuAffine::Impl::beginPrepared(const std::shared_ptr<const G
     dispatcher->vkCmdPipelineBarrier(rawCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
                                      nullptr, 1, &toRead);
+
+    composite_detail::statusToHost(*control, rawCommandBuffer, status.buffer,
+                                   sizeof(std::uint32_t));
 
     if (dispatcher->vkEndCommandBuffer(rawCommandBuffer) != VK_SUCCESS) {
         return makeDiagnostic(GpuAffineDiagnosticCode::DeviceUnavailable,

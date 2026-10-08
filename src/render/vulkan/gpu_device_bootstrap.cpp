@@ -337,6 +337,18 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     const bool platformSurfaceExtensionEnabled =
         surfaceExtensionEnabled && platformSurfaceExtensionAvailable;
 
+    // Swapchain maintenance requires its matching surface-maintenance extension and
+    // VK_KHR_get_surface_capabilities2. If absent, retain the existing present-wait fallback.
+    const bool surfaceCapabilities2Enabled =
+        surfaceExtensionEnabled &&
+        instanceExtensionAvailable(context, "VK_KHR_get_surface_capabilities2");
+    const bool surfaceMaintenanceExtEnabled =
+        surfaceCapabilities2Enabled &&
+        instanceExtensionAvailable(context, "VK_EXT_surface_maintenance1");
+    const bool surfaceMaintenanceKhrEnabled =
+        surfaceCapabilities2Enabled &&
+        instanceExtensionAvailable(context, "VK_KHR_surface_maintenance1");
+
     vk::ApplicationInfo applicationInfo;
     applicationInfo.pApplicationName = "Bloom";
     applicationInfo.applicationVersion = VK_MAKE_VERSION(0, 0, 0);
@@ -353,6 +365,15 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     }
     if (platformSurfaceExtensionEnabled) {
         instanceExtensions.push_back(platformSurfaceExtension);
+    }
+    if (surfaceCapabilities2Enabled) {
+        instanceExtensions.push_back("VK_KHR_get_surface_capabilities2");
+    }
+    if (surfaceMaintenanceExtEnabled) {
+        instanceExtensions.push_back("VK_EXT_surface_maintenance1");
+    }
+    if (surfaceMaintenanceKhrEnabled) {
+        instanceExtensions.push_back("VK_KHR_surface_maintenance1");
     }
 
     vk::InstanceCreateInfo instanceInfo;
@@ -410,11 +431,13 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     bool maintenance1ExtensionAvailable = false;
     const char* maintenance1ExtensionName = nullptr;
     if (swapchainExtensionEnabled) {
-        if (deviceExtensionAvailable(instance, selection->physicalDevice,
+        if (surfaceMaintenanceExtEnabled &&
+            deviceExtensionAvailable(instance, selection->physicalDevice,
                                      kSwapchainMaintenance1ExtName)) {
             maintenance1ExtensionAvailable = true;
             maintenance1ExtensionName = kSwapchainMaintenance1ExtName;
-        } else if (deviceExtensionAvailable(instance, selection->physicalDevice,
+        } else if (surfaceMaintenanceKhrEnabled &&
+                   deviceExtensionAvailable(instance, selection->physicalDevice,
                                             kSwapchainMaintenance1KhrName)) {
             maintenance1ExtensionAvailable = true;
             maintenance1ExtensionName = kSwapchainMaintenance1KhrName;

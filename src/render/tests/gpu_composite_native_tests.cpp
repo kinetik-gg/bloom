@@ -6,6 +6,7 @@
 // happens only for oracle assertions. Local mode pins the explicit prefix loader and requires a
 // device; --require-device fails closed.
 
+#include "gpu_composite_memory_native_tests.hpp"
 #include "gpu_composite_native_support.hpp"
 
 // The complete GpuImageImpl so local GpuImage values can be constructed/destroyed in this TU.
@@ -546,6 +547,8 @@ int main(int argc, char** argv) {
             return 0;
         }
         expectations.expect(device.device->state() == GpuDeviceState::Ready, "the device is Ready");
+        memory_proof::testPresentationBootstrap(expectations, createOptions);
+        memory_proof::run(expectations, *device.device);
         testTranslation(expectations, *device.device);
         testSourceOver(expectations, *device.device);
         testChain(expectations, *device.device);

@@ -1,3 +1,4 @@
+#include "gpu_composite_memory.hpp"
 #include "gpu_ocio_program_private.hpp"
 
 #include <cstdint>
@@ -302,6 +303,8 @@ void GpuOcioProgram::Impl::beginImpl(const bool display, std::shared_ptr<const G
                                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
                                          nullptr, 1, &toRead);
     }
+
+    composite_detail::statusToHost(state, raw, status.buffer, ocio_program_detail::kStatusBytes);
 
     if (dispatcher->vkEndCommandBuffer(raw) != VK_SUCCESS) {
         fail(GpuOcioProgramDiagnosticCode::AllocationFailed, "the command buffer could not end");

@@ -374,6 +374,37 @@ stability. The [GPU reliability and preview plan](../plans/gpu-reliability-and-p
 the evidence, its limits, and scoped repair/qualification packages. Its redesign choices remain
 proposed; this checkpoint does not adopt them or weaken the existing coverage contract.
 
+G1 native-validity repair (2026-10-08; source reviewed and locally qualified on Linux).
+Resident Neutral display buffers now declare their image-copy transfer usages, and its mixed
+host/transfer input dependency names both source stages. CompositeBuffer initialization flushes
+both direct mappings and metadata staging through allocation-relative VMA ranges; staged metadata
+also records transfer-write to shader-read visibility. Composite translation/source-over, Affine,
+and Blend make shader-written status visible to the host before their fences and invalidate the
+status word before CPU inspection. A missing mapping or failed flush/invalidate rejects output.
+General OCIO status uses the same compute-to-host dependency. Final process/combined-output
+readbacks and full/sparse pixel-oracle readbacks record transfer-to-host dependencies covering the
+exact copied destination bytes before fence retirement and invalidate. Shader identities, CPU
+semantics, single final-readback policy, and coverage requirements are unchanged.
+
+Presentation enables swapchain maintenance only with the matching EXT/KHR surface-maintenance
+instance extension and its surface-capabilities2 prerequisite. Without them, existing present-wait
+or unsupported-presentation behavior remains available. The present render pass explicitly chains
+its initial layout transition to the acquire semaphore's color-attachment-output wait stage.
+Composite's descriptor pool now reserves five storage-image descriptors for its two actual layouts.
+
+The local G1 native run reported zero core/synchronization validation errors for Neutral/general
+display, Composite/Affine/Blend CPU parity, PointResample, the production general display service,
+full-resolution viewer and original interaction fixtures, genuine RAM fill/replay, and the mixed
+media/CST/text final-render route including 6000×4000. The RAM fixture retained and replayed four
+frames with zero warm dispatches, zero CPU fallbacks, and zero production full-frame readbacks.
+Instrumented native tests call real VMA on success, check mapped allocation-relative ranges in both
+initialization paths and actual operator consumers, and inject flush/invalidate failures. Observed
+mappings were host-visible, coherent, and cached; no noncoherent memory execution was exercised.
+Present fences and present-wait were available locally; unavailable-extension fallback combinations
+and macOS/Windows GPU execution remain unqualified. These bounded results do not qualify sustained
+playback, whole-application memory stability, or G2 failure/retirement behavior. The visibility
+sequence follows the [Khronos synchronization examples](https://docs.vulkan.org/guide/latest/synchronization_examples.html).
+
 ## Boundaries
 
 ```text

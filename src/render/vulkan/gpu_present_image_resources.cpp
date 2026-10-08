@@ -340,12 +340,22 @@ bool PresentImagePipeline::ensureSwapchainResources(
         subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
         subpass.colorAttachmentCount = 1;
         subpass.pColorAttachments = &reference;
+        // Chain the initial layout transition to the acquire semaphore wait at
+        // COLOR_ATTACHMENT_OUTPUT; the implicit TOP_OF_PIPE dependency cannot do this.
+        VkSubpassDependency acquireDependency{};
+        acquireDependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+        acquireDependency.dstSubpass = 0;
+        acquireDependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        acquireDependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        acquireDependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
         VkRenderPassCreateInfo renderPassInfo{};
         renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
         renderPassInfo.attachmentCount = 1;
         renderPassInfo.pAttachments = &color;
         renderPassInfo.subpassCount = 1;
         renderPassInfo.pSubpasses = &subpass;
+        renderPassInfo.dependencyCount = 1;
+        renderPassInfo.pDependencies = &acquireDependency;
         VkRenderPass rawRenderPass = VK_NULL_HANDLE;
         if (dispatcher->vkCreateRenderPass(*control->device, &renderPassInfo, nullptr,
                                            &rawRenderPass) != VK_SUCCESS) {
