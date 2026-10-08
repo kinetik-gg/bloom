@@ -1629,6 +1629,16 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
 endif()
 
 if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_runtime_gpu_oracle_readback_test gpu_oracle_readback_tests.cpp)
+    target_link_libraries(bloom_runtime_gpu_oracle_readback_test PRIVATE bloom_runtime_evaluator
+        Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+    target_include_directories(bloom_runtime_gpu_oracle_readback_test PRIVATE ..
+        ../../render/vulkan ../../render/tests)
+    bloom_enable_warnings(bloom_runtime_gpu_oracle_readback_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_oracle_readback_test)
+    bloom_add_test(NAME bloom.runtime.gpu_oracle_readback
+        COMMAND bloom_runtime_gpu_oracle_readback_test LABELS unit gpu render TIMEOUT 120)
+    set_tests_properties(bloom.runtime.gpu_oracle_readback PROPERTIES SKIP_RETURN_CODE 77)
     add_executable(bloom_runtime_gpu_image_reclamation_test gpu_image_reclamation_tests.cpp)
     target_link_libraries(bloom_runtime_gpu_image_reclamation_test PRIVATE bloom_runtime_evaluator
         Vulkan::Headers GPUOpen::VulkanMemoryAllocator)

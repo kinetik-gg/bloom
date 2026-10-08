@@ -1040,6 +1040,8 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_device.cpp
         vulkan/gpu_device_bootstrap.cpp
         vulkan/gpu_device_private.hpp
+        vulkan/gpu_oracle_readback.cpp
+        vulkan/gpu_oracle_readback_private.hpp
         vulkan/gpu_image_reclamation.cpp
         vulkan/gpu_image.cpp
         vulkan/gpu_image_private.hpp

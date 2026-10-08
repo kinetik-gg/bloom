@@ -81,6 +81,7 @@ struct DeviceAllocatorState final {
     std::uint64_t ownerLifetimeToken = 0;
     // Final-image release publication is allocation-free, including after facade shutdown.
     std::atomic<std::uint64_t> pendingImageReclaims{0};
+    std::atomic<std::uint64_t> pendingOracleReadbacks{0};
     std::atomic<std::uint64_t> imageReclamationScans{0};
 
     DynamicLibrary loader;

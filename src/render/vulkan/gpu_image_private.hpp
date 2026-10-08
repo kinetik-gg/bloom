@@ -11,6 +11,7 @@
 
 #include "gpu_device_private.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -50,7 +51,9 @@ struct GpuImageImpl final {
     bool deviceLost = false;
     // Set while this image is referenced by a readback submission whose completion
     // is not yet proved; the owner then retains (does not destroy) the image.
-    bool submissionUnretired = false;
+    std::atomic<bool> submissionUnretired{false};
+    // Owner-only exact oracle proof identity; zero means no oracle owns the pin.
+    std::uint64_t oracleReadbackToken = 0;
 };
 
 // Device-limit/format facts needed before creating a resident image. Checked

@@ -37,43 +37,6 @@ displayReadbackFailure(const GpuDisplayImageReadbackCode code,
 
 } // namespace
 
-namespace readback_detail {
-
-// The one process-wide quarantine/fuse shared with the sparse readback TU. Defined here beside the
-// full-frame readback that owns the primary staging lifetime.
-DisplayReadbackQuarantine& displayQuarantine() {
-    static auto* const slot = new DisplayReadbackQuarantine();
-    return *slot;
-}
-std::atomic<bool>& displayFuse() {
-    static std::atomic<bool> fuse{false};
-    return fuse;
-}
-bool tryRetireDisplayQuarantine(DisplayReadbackQuarantine& slot) noexcept {
-    if (!slot.occupied) {
-        return true;
-    }
-    if (slot.state == nullptr) {
-        slot.occupied = false;
-        return true;
-    }
-    const VkFence rawFence = static_cast<VkFence>(*slot.fence);
-    const VkResult status = slot.state->device.getDispatcher()->vkGetFenceStatus(
-        static_cast<VkDevice>(*slot.state->device), rawFence);
-    if (status != VK_SUCCESS && status != VK_ERROR_DEVICE_LOST) {
-        return false;
-    }
-    slot.staging.release();
-    slot.fence = vk::raii::Fence{nullptr};
-    slot.buffer = vk::raii::CommandBuffer{nullptr};
-    slot.pool = vk::raii::CommandPool{nullptr};
-    slot.state.reset();
-    slot.occupied = false;
-    return true;
-}
-
-} // namespace readback_detail
-
 bool createResidentBuffer(DeviceAllocatorState& state, const std::uint64_t bytes,
                           const VkBufferUsageFlags usage, const VmaAllocationCreateFlags flags,
                           const bool hostVisible, ResidentBuffer& out) {
@@ -263,7 +226,7 @@ void GpuDisplayImage::releaseOwnedImpl() noexcept {
     }
     // Never touch Vulkan from a foreign thread and never destroy an image referenced by an
     // unretired readback; its pre-reserved bounded owner slot retains the entire impl instead.
-    if (impl_->submissionUnretired || !impl_->onOwnerThread()) {
+    if (!impl_->onOwnerThread() || impl_->submissionUnretired.load(std::memory_order_acquire)) {
         image_detail::orphanImage(*impl_);
         static_cast<void>(impl_.release()); // NOLINT(bugprone-unused-return-value)
         return;
@@ -312,10 +275,6 @@ const GpuDisplayImageImpl* gpuDisplayImageImpl(const GpuDisplayImage& image) noe
 
 GpuDisplayImageReadback readbackResidentDisplayImage(const GpuDisplayImage& image,
                                                      const std::uint64_t byteBudget) noexcept {
-    if (readback_detail::displayFuse().load()) {
-        return displayReadbackFailure(GpuDisplayImageReadbackCode::DeviceUnavailable,
-                                      "a prior display readback could not be retired");
-    }
     try {
         if (image.impl_ == nullptr || image.impl_->image == VK_NULL_HANDLE) {
             return displayReadbackFailure(GpuDisplayImageReadbackCode::DeviceUnavailable,
@@ -326,6 +285,7 @@ GpuDisplayImageReadback readbackResidentDisplayImage(const GpuDisplayImage& imag
             return displayReadbackFailure(GpuDisplayImageReadbackCode::WrongThread,
                                           "readback must run on the device owner thread");
         }
+        oracle_detail::drain(*impl.state);
         if (impl.deviceLost) {
             return displayReadbackFailure(GpuDisplayImageReadbackCode::DeviceLost,
                                           "the device was lost");
@@ -340,16 +300,16 @@ GpuDisplayImageReadback readbackResidentDisplayImage(const GpuDisplayImage& imag
             return displayReadbackFailure(GpuDisplayImageReadbackCode::OverBudget,
                                           "the readback exceeds the requested byte budget");
         }
-        readback_detail::DisplayReadbackQuarantine& slot = readback_detail::displayQuarantine();
-        if (!readback_detail::tryRetireDisplayQuarantine(slot)) {
+        oracle_detail::Reservation reservation(impl);
+        if (!reservation.valid()) {
             return displayReadbackFailure(GpuDisplayImageReadbackCode::DeviceUnavailable,
-                                          "a prior display readback is still unretired");
+                                          "oracle readback admission is occupied or closed");
         }
         auto& state = *impl.state;
         const VkDevice device = static_cast<VkDevice>(*state.device);
         const auto* dispatcher = state.device.getDispatcher();
 
-        readback_detail::StagingBuffer staging;
+        oracle_detail::StagingBuffer staging;
         staging.state = &state;
         VkBufferCreateInfo bufferInfo{};
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -366,6 +326,12 @@ GpuDisplayImageReadback readbackResidentDisplayImage(const GpuDisplayImage& imag
                                           "the display staging buffer could not be created");
         }
         staging.armed = true;
+        reservation.charge(static_cast<std::uint64_t>(stagingInfo.size));
+        if (stagingInfo.size > byteBudget) {
+            return displayReadbackFailure(
+                GpuDisplayImageReadbackCode::OverBudget,
+                "the actual oracle staging allocation exceeds the byte budget");
+        }
 
         vk::raii::CommandPool pool{nullptr};
         {
@@ -464,22 +430,21 @@ GpuDisplayImageReadback readbackResidentDisplayImage(const GpuDisplayImage& imag
         submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submit.commandBufferCount = 1;
         submit.pCommandBuffers = &rawCommandBuffer;
-        if (dispatcher->vkQueueSubmit(static_cast<VkQueue>(*state.computeQueue), 1, &submit,
-                                      rawFence) != VK_SUCCESS) {
+        const VkResult submitted = dispatcher->vkQueueSubmit(
+            static_cast<VkQueue>(*state.computeQueue), 1, &submit, rawFence);
+        if (submitted == VK_ERROR_DEVICE_LOST) {
+            impl.deviceLost = true;
+            return displayReadbackFailure(GpuDisplayImageReadbackCode::DeviceLost,
+                                          "the device was lost during display submit");
+        }
+        if (submitted != VK_SUCCESS) {
             return displayReadbackFailure(GpuDisplayImageReadbackCode::ReadbackFailed,
                                           "the display readback submission failed");
         }
-        const VkResult waited = dispatcher->vkWaitForFences(device, 1, &rawFence, VK_TRUE,
-                                                            kReadbackDeadlineNanoseconds);
+        const VkResult waited = oracle_detail::wait(state, rawFence, kReadbackDeadlineNanoseconds);
         if (waited != VK_SUCCESS && waited != VK_ERROR_DEVICE_LOST) {
-            slot.state = impl.state;
-            slot.staging = std::move(staging);
-            slot.pool = std::move(pool);
-            slot.buffer = std::move(commandBuffer);
-            slot.fence = std::move(fence);
-            slot.occupied = true;
-            impl.submissionUnretired = true;
-            readback_detail::displayFuse().store(true);
+            reservation.retain(std::move(staging), std::move(pool), std::move(commandBuffer),
+                               std::move(fence));
             return displayReadbackFailure(GpuDisplayImageReadbackCode::ReadbackFailed,
                                           "the display readback completion is unknown; retained");
         }

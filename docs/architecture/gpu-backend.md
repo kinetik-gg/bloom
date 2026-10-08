@@ -823,6 +823,31 @@ partway through an output with mixed hidden semantics.
 - Preview fallback or reduced precision: expose it in viewer status. Strict final output does not
   degrade silently.
 
+### Oracle readback retirement (G2D2)
+
+The full process/display and sparse display pixel oracles share exactly two process-wide native
+submission reservations, with at most one reservation per exact allocator owner. Admission precedes
+native allocation and refuses recoverably when occupied. This preserves the former aggregate
+quarantine ceiling; it adds no production preview readback. Requested transfer bytes and actual VMA
+staging allocation bytes must both fit the caller's byte budget, including sparse transfers whose
+native allocation can exceed their payload. Private diagnostics charge actual staging bytes until
+native destruction; this budget does not describe the subsequently allocated host pixel vector.
+
+An unknown completion retains command resources, staging, allocator ownership, and the exact source
+implementation's pre-reserved image slot. A synchronized source pin and a monotonic oracle token
+prevent source destruction and stale proof reuse. Only the original allocator and thread lifetime
+may query retirement. A real signalled fence clears that exact pin after native command children,
+pool, fence and staging destruction; actual driver device loss permits cleanup and invalidates the
+source, without publishing pixels. A timeout never proves loss or successful pixels.
+
+Readback retry polls retirement before checking the source pin. The normal image-owner pump also
+polls pending oracles before reclaiming released images, including a caller's foreign final release.
+An allocator with zero pending oracles avoids scanning or locking the oracle store. Facade teardown
+performs this drain before closing its owner lifecycle. Closed owners never reopen or allocate;
+unproved submissions from an exited or closed owner remain charged within the same two-slot ceiling.
+The asynchronous production final-output transfers keep their separate ownership and cancellation
+contracts.
+
 ### Image owner reclamation (G2C)
 
 Each native RGBA32F process image and RGBA8 display image reserves one owner-reclamation slot

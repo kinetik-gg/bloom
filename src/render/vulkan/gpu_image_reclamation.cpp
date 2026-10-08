@@ -1,6 +1,7 @@
 #include "gpu_bounded_retirement.hpp"
 #include "gpu_image_private.hpp"
 #include "gpu_image_reclamation_private.hpp"
+#include "gpu_oracle_readback_private.hpp"
 #include "gpu_resident_display_private.hpp"
 
 #include <atomic>
@@ -123,6 +124,7 @@ void drainImages(vulkan_detail::DeviceAllocatorState& state) noexcept {
         state.ownerLifetimeToken != vulkan_detail::deviceOwnerLifetimeToken()) {
         return;
     }
+    oracle_detail::drain(state);
     if (state.pendingImageReclaims.load(std::memory_order_acquire) == 0) {
         return;
     }

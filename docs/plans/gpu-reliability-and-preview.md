@@ -15,7 +15,7 @@ remain separate decisions under G9.
 | --- | --- | --- |
 | G0 | Initial instrumentation slice accepted; remaining probes attach to their owning packages | Source review, quality checks, three focused suites, native acknowledgement correlation and original interaction fixture passed |
 | G1 | Accepted: native validity and mapped-memory visibility | Source review, quality/lint, real operator/display/viewer/RAM/final-route parity and validation; independent Composite/viewer reruns passed |
-| G2 | Initialization cleanup, metadata lifetime, image reclamation, and vector quarantine repair accepted | Native parity/lifecycle/viewer/final paths and independent retirement reruns have zero validation errors; oracle readback recovery and viewer cancellation remain pending |
+| G2 | Initialization cleanup, metadata lifetime, image reclamation, vector quarantine, and oracle recovery accepted | Native parity/lifecycle/viewer/final paths and independent retirement reruns have zero validation errors; viewer cancellation remains pending |
 | G3–G10 | Pending | No implementation or qualification claim |
 
 G0 adds opt-in bounded numeric frame tracing and a native Full-resolution 1920 × 1080 solid/text
@@ -431,6 +431,21 @@ lint passed. The
 historical quarantine fuse remains latched after recovery; current retirement is reported by exact
 submission ownership. Oracle readback recovery and service cancellation/accounting remain separate
 G2 work. No cross-platform GPU qualification or complete G2 acceptance is claimed.
+
+G2D2 local oracle evidence (2026-10-08): full process/display and sparse display readbacks share
+two bounded reservations, retain the exact source image and actual staging allocation bytes through
+unknown completion, and recover only after the original owner's real native fence proof. Native
+fixtures cover same-source retry without a separate pump, normal owner-pump recovery after foreign
+final release, repeated timeout/retry, two concurrent owners, aggregate-capacity and actual-allocation
+budget refusal, stale proof/slot/thread identity, and closed-owner retention. Oracle, image-owner,
+process/output-colour final readback, resident display, and Composite parity gates passed locally
+with genuine core/synchronization validation loaded and no reported validation errors. A missing
+loader fails the required-device gate. Quality and affected-TU lint passed, including new private
+files. Supervisor source review and independent oracle/Composite reruns passed with the genuine
+validation layer loaded and no reported errors. Actual driver device-loss branches are handled
+consistently; this evidence does not claim
+that a device-loss event was induced. Service cancellation/accounting and remaining G2 transition
+work are still outstanding; cross-platform GPU and complete G2 remain unqualified.
 
 ### G3 — Make retention and presentation state truthful
 

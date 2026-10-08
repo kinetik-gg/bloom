@@ -1,8 +1,4 @@
-// The test-only sparse readback of the resident RGBA8 display image, split out of
-// gpu_resident_display_resources.cpp so the debug full-frame readback and the shared readback
-// quarantine stay cohesive and this bounded sparse copy has its own translation unit. It shares the
-// one process quarantine/fuse with the full readback (gpu_resident_display_readback_private.hpp);
-// it never creates a second one.
+// Test-only sparse display oracle; shares the bounded aggregate oracle admission.
 
 #include "gpu_resident_display_readback_private.hpp"
 
@@ -37,11 +33,6 @@ GpuDisplayImageSparseReadback
 readbackResidentDisplayImageSparse(const GpuDisplayImage& image,
                                    const std::span<const ImagePixelCoordinate> coordinates,
                                    const std::uint64_t byteBudget) noexcept {
-    using readback_detail::StagingBuffer;
-    if (readback_detail::displayFuse().load()) {
-        return displaySparseReadbackFailure(GpuDisplayImageReadbackCode::DeviceUnavailable,
-                                            "a prior display readback could not be retired");
-    }
     try {
         if (image.impl_ == nullptr || image.impl_->image == VK_NULL_HANDLE) {
             return displaySparseReadbackFailure(GpuDisplayImageReadbackCode::DeviceUnavailable,
@@ -53,6 +44,7 @@ readbackResidentDisplayImageSparse(const GpuDisplayImage& image,
                 GpuDisplayImageReadbackCode::WrongThread,
                 "sparse readback must run on the device owner thread");
         }
+        oracle_detail::drain(*impl.state);
         if (impl.deviceLost) {
             return displaySparseReadbackFailure(GpuDisplayImageReadbackCode::DeviceLost,
                                                 "the device was lost");
@@ -76,16 +68,16 @@ readbackResidentDisplayImageSparse(const GpuDisplayImage& image,
                                                     "a sparse coordinate is outside the image");
             }
         }
-        auto& slot = readback_detail::displayQuarantine();
-        if (!readback_detail::tryRetireDisplayQuarantine(slot)) {
+        oracle_detail::Reservation reservation(impl);
+        if (!reservation.valid()) {
             return displaySparseReadbackFailure(GpuDisplayImageReadbackCode::DeviceUnavailable,
-                                                "a prior display readback is still unretired");
+                                                "oracle readback admission is occupied or closed");
         }
         auto& state = *impl.state;
         const VkDevice device = static_cast<VkDevice>(*state.device);
         const auto* dispatcher = state.device.getDispatcher();
 
-        StagingBuffer staging;
+        oracle_detail::StagingBuffer staging;
         staging.state = &state;
         VkBufferCreateInfo bufferInfo{};
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -102,6 +94,12 @@ readbackResidentDisplayImageSparse(const GpuDisplayImage& image,
                                                 "the sparse staging buffer could not be created");
         }
         staging.armed = true;
+        reservation.charge(static_cast<std::uint64_t>(stagingInfo.size));
+        if (stagingInfo.size > byteBudget) {
+            return displaySparseReadbackFailure(
+                GpuDisplayImageReadbackCode::OverBudget,
+                "the actual oracle staging allocation exceeds the byte budget");
+        }
 
         vk::raii::CommandPool pool{nullptr};
         {
@@ -206,22 +204,22 @@ readbackResidentDisplayImageSparse(const GpuDisplayImage& image,
         submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submit.commandBufferCount = 1;
         submit.pCommandBuffers = &rawCommandBuffer;
-        if (dispatcher->vkQueueSubmit(static_cast<VkQueue>(*state.computeQueue), 1, &submit,
-                                      rawFence) != VK_SUCCESS) {
+        const VkResult submitted = dispatcher->vkQueueSubmit(
+            static_cast<VkQueue>(*state.computeQueue), 1, &submit, rawFence);
+        if (submitted == VK_ERROR_DEVICE_LOST) {
+            impl.deviceLost = true;
+            return displaySparseReadbackFailure(GpuDisplayImageReadbackCode::DeviceLost,
+                                                "the device was lost during sparse submit");
+        }
+        if (submitted != VK_SUCCESS) {
             return displaySparseReadbackFailure(GpuDisplayImageReadbackCode::ReadbackFailed,
                                                 "the sparse readback submission failed");
         }
-        const VkResult waited = dispatcher->vkWaitForFences(device, 1, &rawFence, VK_TRUE,
-                                                            kSparseReadbackDeadlineNanoseconds);
+        const VkResult waited =
+            oracle_detail::wait(state, rawFence, kSparseReadbackDeadlineNanoseconds);
         if (waited != VK_SUCCESS && waited != VK_ERROR_DEVICE_LOST) {
-            slot.state = impl.state;
-            slot.staging = std::move(staging);
-            slot.pool = std::move(pool);
-            slot.buffer = std::move(commandBuffer);
-            slot.fence = std::move(fence);
-            slot.occupied = true;
-            impl.submissionUnretired = true;
-            readback_detail::displayFuse().store(true);
+            reservation.retain(std::move(staging), std::move(pool), std::move(commandBuffer),
+                               std::move(fence));
             return displaySparseReadbackFailure(
                 GpuDisplayImageReadbackCode::ReadbackFailed,
                 "the sparse readback completion is unknown; retained");

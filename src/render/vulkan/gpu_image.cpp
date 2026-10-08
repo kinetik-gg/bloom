@@ -1,5 +1,6 @@
 #include "gpu_image_private.hpp"
 #include "gpu_image_reclamation_private.hpp"
+#include "gpu_oracle_readback_private.hpp"
 
 #include <array>
 #include <atomic>
@@ -33,92 +34,6 @@ constexpr std::uint64_t kReadbackDeadlineNanoseconds = 5ULL * 1000ULL * 1000ULL 
     return result;
 }
 
-struct StagingBuffer final {
-    StagingBuffer() = default;
-    StagingBuffer(const StagingBuffer&) = delete;
-    StagingBuffer& operator=(const StagingBuffer&) = delete;
-    StagingBuffer(StagingBuffer&& other) noexcept { *this = std::move(other); }
-    StagingBuffer& operator=(StagingBuffer&& other) noexcept {
-        if (this != &other) {
-            release();
-            state = other.state;
-            buffer = other.buffer;
-            allocation = other.allocation;
-            armed = other.armed;
-            other.state = nullptr;
-            other.buffer = VK_NULL_HANDLE;
-            other.allocation = VK_NULL_HANDLE;
-            other.armed = false;
-        }
-        return *this;
-    }
-    ~StagingBuffer() { release(); }
-
-    void release() noexcept {
-        if (armed && state != nullptr) {
-            vmaDestroyBuffer(state->allocator, buffer, allocation);
-        }
-        state = nullptr;
-        buffer = VK_NULL_HANDLE;
-        allocation = VK_NULL_HANDLE;
-        armed = false;
-    }
-
-    DeviceAllocatorState* state = nullptr;
-    VkBuffer buffer = VK_NULL_HANDLE;
-    VmaAllocation allocation = VK_NULL_HANDLE;
-    bool armed = false;
-};
-
-// One bounded quarantine slot for a readback whose submission could not be
-// proved retired. It retains the entire submitted resource set, the source image
-// (via GpuImageImpl::submissionUnretired), and the device generation. Allocated
-// once on first use and never destroyed, so a possibly in-flight submission is
-// never torn down at process exit. No allocation happens on the failure path.
-struct ReadbackQuarantine final {
-    std::shared_ptr<DeviceAllocatorState> state;
-    StagingBuffer staging;
-    vk::raii::CommandPool pool{nullptr};
-    vk::raii::CommandBuffer buffer{nullptr};
-    vk::raii::Fence fence{nullptr};
-    bool occupied = false;
-};
-
-ReadbackQuarantine& readbackQuarantine() {
-    static auto* const slot = new ReadbackQuarantine();
-    return *slot;
-}
-
-std::atomic<bool>& readbackFuse() {
-    static std::atomic<bool> fuse{false};
-    return fuse;
-}
-
-// Retires the quarantined readback only when its fence is known signalled (or
-// the device is lost). Returns true when the slot is free afterwards.
-bool tryRetireQuarantine(ReadbackQuarantine& slot) noexcept {
-    if (!slot.occupied) {
-        return true;
-    }
-    if (slot.state == nullptr) {
-        slot.occupied = false;
-        return true;
-    }
-    const VkFence rawFence = static_cast<VkFence>(*slot.fence);
-    const VkResult status = slot.state->device.getDispatcher()->vkGetFenceStatus(
-        static_cast<VkDevice>(*slot.state->device), rawFence);
-    if (status != VK_SUCCESS && status != VK_ERROR_DEVICE_LOST) {
-        return false;
-    }
-    slot.staging.release();
-    slot.fence = vk::raii::Fence{nullptr};
-    slot.buffer = vk::raii::CommandBuffer{nullptr};
-    slot.pool = vk::raii::CommandPool{nullptr};
-    slot.state.reset();
-    slot.occupied = false;
-    return true;
-}
-
 } // namespace
 
 GpuImage::GpuImage(std::unique_ptr<GpuImageImpl> impl) noexcept : impl_(std::move(impl)) {}
@@ -142,7 +57,7 @@ void GpuImage::releaseOwnedImpl() noexcept {
     // Never make Vulkan calls from a foreign thread, and never destroy an image
     // referenced by an unretired submission. Its pre-reserved owner slot retains the entire
     // impl and allocator generation, with its native allocation bytes still charged.
-    if (impl_->submissionUnretired || !impl_->onOwnerThread()) {
+    if (!impl_->onOwnerThread() || impl_->submissionUnretired.load(std::memory_order_acquire)) {
         image_detail::orphanImage(*impl_);
         static_cast<void>(impl_.release()); // NOLINT(bugprone-unused-return-value)
         return;
@@ -336,10 +251,6 @@ bool createResidentImage(vulkan_detail::DeviceAllocatorState& state, const std::
 
 GpuImageReadback readbackResidentImage(const GpuImage& image,
                                        const std::uint64_t byteBudget) noexcept {
-    if (readbackFuse().load()) {
-        return readbackFailure(GpuImageReadbackCode::DeviceUnavailable,
-                               "a prior readback could not be retired; the device is quarantined");
-    }
     try {
         if (image.impl_ == nullptr || image.impl_->image == VK_NULL_HANDLE) {
             return readbackFailure(GpuImageReadbackCode::DeviceUnavailable, "no resident image");
@@ -349,6 +260,7 @@ GpuImageReadback readbackResidentImage(const GpuImage& image,
             return readbackFailure(GpuImageReadbackCode::WrongThread,
                                    "readback must run on the device owner thread");
         }
+        oracle_detail::drain(*impl.state);
         if (impl.deviceLost) {
             return readbackFailure(GpuImageReadbackCode::DeviceLost, "the device was lost");
         }
@@ -363,18 +275,17 @@ GpuImageReadback readbackResidentImage(const GpuImage& image,
                                    "the readback exceeds the requested byte budget");
         }
 
-        ReadbackQuarantine& slot = readbackQuarantine();
-        if (!tryRetireQuarantine(slot)) {
-            return readbackFailure(
-                GpuImageReadbackCode::DeviceUnavailable,
-                "a prior readback submission is still unretired and was retained");
+        oracle_detail::Reservation reservation(impl);
+        if (!reservation.valid()) {
+            return readbackFailure(GpuImageReadbackCode::DeviceUnavailable,
+                                   "oracle readback admission is occupied or closed");
         }
 
         auto& state = *impl.state;
         const VkDevice device = static_cast<VkDevice>(*state.device);
         const auto* dispatcher = state.device.getDispatcher();
 
-        StagingBuffer staging;
+        oracle_detail::StagingBuffer staging;
         staging.state = &state;
         VkBufferCreateInfo bufferInfo{};
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -392,6 +303,11 @@ GpuImageReadback readbackResidentImage(const GpuImage& image,
                                    "the readback staging buffer could not be created");
         }
         staging.armed = true;
+        reservation.charge(static_cast<std::uint64_t>(stagingInfo.size));
+        if (stagingInfo.size > byteBudget) {
+            return readbackFailure(GpuImageReadbackCode::OverBudget,
+                                   "the actual oracle staging allocation exceeds the byte budget");
+        }
 
         vk::raii::CommandPool pool{nullptr};
         {
@@ -509,17 +425,10 @@ GpuImageReadback readbackResidentImage(const GpuImage& image,
 
         // From here the queue owns staging, command buffer, and fence. Retire only on
         // a known completion; on an unknown result retain the whole set and the image.
-        const VkResult waited = dispatcher->vkWaitForFences(device, 1, &rawFence, VK_TRUE,
-                                                            kReadbackDeadlineNanoseconds);
+        const VkResult waited = oracle_detail::wait(state, rawFence, kReadbackDeadlineNanoseconds);
         if (waited != VK_SUCCESS && waited != VK_ERROR_DEVICE_LOST) {
-            slot.state = impl.state;
-            slot.staging = std::move(staging);
-            slot.pool = std::move(pool);
-            slot.buffer = std::move(commandBuffer);
-            slot.fence = std::move(fence);
-            slot.occupied = true;
-            impl.submissionUnretired = true;
-            readbackFuse().store(true);
+            reservation.retain(std::move(staging), std::move(pool), std::move(commandBuffer),
+                               std::move(fence));
             return readbackFailure(
                 GpuImageReadbackCode::ReadbackFailed,
                 "the readback completion is unknown; the submission was retained");
