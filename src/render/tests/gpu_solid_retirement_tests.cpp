@@ -7,6 +7,7 @@
 // backend is built; a hardware-free build prints an explicit skip and --require-device fails
 // closed.
 
+#include "gpu_initialization_observation.hpp"
 #include "gpu_solid_fault.hpp"
 
 #include <bloom/core/color.hpp>
@@ -122,6 +123,75 @@ struct Options final {
 // Trigger the non-blocking owner-thread drain through the public create(), which drains orphaned
 // foreign-released residents before constructing the (lazy, native-free) new instance.
 void drainOwnerOrphans(GpuDevice& device) { (void)GpuSolid::create(device); }
+
+// Every point executes real production cleanup, then retries the same lazy owner successfully.
+void testInitializationCleanup(Expectations& expectations, GpuDevice& device) {
+    const auto parameters = makeParameters();
+    if (!parameters) {
+        expectations.expect(false, "initialization parameters build");
+        return;
+    }
+    const auto allocations = bloom::render::primitive_detail::initializationAllocationStats(device);
+    const auto baseline = solid_detail::solidInitializationStats();
+    const auto slots = solid_detail::solidResidentInUse();
+    const auto retired = solid_detail::solidResidentRetired();
+    for (std::uint8_t point = 1; point <= 10; ++point) {
+        auto created = GpuSolid::create(device);
+        expectations.expect(created.hasValue(), "lazy initialization fixture creates");
+        if (!created) {
+            return;
+        }
+        const auto before = solid_detail::solidInitializationStats();
+        solid_detail::setSolidInitializationFaultForTest(
+            static_cast<solid_detail::SolidInitializationFault>(point));
+        const auto failure = created.solid->begin(*parameters, 1ULL << 32ULL);
+        solid_detail::setSolidInitializationFaultForTest(
+            solid_detail::SolidInitializationFault::None);
+        expectations.expect(failure.code == GpuSolidDiagnosticCode::AllocationFailed,
+                            "injected boundary returns AllocationFailed");
+        expectations.expect(
+            bloom::render::primitive_detail::initializationAllocationStats(device) == allocations,
+            "failed native initialization returns live VMA count and bytes to baseline");
+        const auto after = solid_detail::solidInitializationStats();
+        expectations.expect(after.slotReturns == before.slotReturns + 1,
+                            "failure returns exactly one resident slot");
+        expectations.expect(after.faultHits == before.faultHits + 1,
+                            "exact production initialization boundary was reached");
+        expectations.expect(after.created - before.created == point - 1U &&
+                                after.destroyed - before.destroyed == point - 1U,
+                            "each preceding real native object was created and released once");
+        expectations.expect(after.created - after.destroyed ==
+                                baseline.created - baseline.destroyed,
+                            "native object ownership returns to baseline after failure");
+        expectations.expect(solid_detail::solidResidentInUse() == slots &&
+                                solid_detail::solidResidentOrphaned() == 0,
+                            "failed initialization returns its slot without quarantine");
+        expectations.expect(!created.solid->hasUnretiredSubmission() &&
+                                created.solid->image() == nullptr &&
+                                created.solid->lastJobAllocationBytes() == 0,
+                            "failed initialization submits nothing and owns no image bytes");
+        expectations.expect(runSolid(*created.solid, *parameters),
+                            "same owner cleanly retries and executes real native work");
+        expectations.expect(solid_detail::solidResidentInUse() == slots + 1,
+                            "successful retry owns exactly one slot");
+        created.solid.reset();
+        expectations.expect(
+            bloom::render::primitive_detail::initializationAllocationStats(device) == allocations,
+            "successful native retry releases live VMA count and bytes to baseline");
+        const auto released = solid_detail::solidInitializationStats();
+        expectations.expect(released.slotReturns == before.slotReturns + 2,
+                            "retry destruction returns exactly one further resident slot");
+        expectations.expect(released.created - released.destroyed ==
+                                baseline.created - baseline.destroyed,
+                            "successful retry native objects return to baseline on destruction");
+        expectations.expect(solid_detail::solidResidentInUse() == slots &&
+                                solid_detail::solidResidentRetired() == retired,
+                            "owner release returns the slot without invoking orphan retirement");
+        std::cout << "BOUNDARY: solid initialization " << static_cast<unsigned>(point)
+                  << " native-created=" << after.created - before.created
+                  << " native-destroyed=" << after.destroyed - before.destroyed << '\n';
+    }
+}
 
 // Many pre-created instances beyond capacity; foreign destruction preserves the bounded pool; the
 // owner drain retires every orphan and admission recovers.
@@ -436,6 +506,7 @@ int main(const int argc, char** argv) {
             return expectations.ok() ? 0 : 1;
         }
 
+        testInitializationCleanup(expectations, *device.device);
         testBoundedPool(expectations, *device.device);
         testUnprovenRetention(expectations, *device.device);
         testOwnerIsolation(expectations, options.loader_path);

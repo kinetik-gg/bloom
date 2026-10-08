@@ -58,6 +58,7 @@ void GpuImageUpload::Impl::releaseResidentSlot() noexcept {
         return;
     }
     uploadSlots().release(this, residentSlot);
+    upload_detail::recordUploadInitializationSlotReturn();
     residentSlot = kUploadNoResidentSlot;
 }
 

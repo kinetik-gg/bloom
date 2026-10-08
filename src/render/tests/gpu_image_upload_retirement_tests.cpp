@@ -8,6 +8,7 @@
 // closed.
 
 #include "gpu_image_upload_fault.hpp"
+#include "gpu_initialization_observation.hpp"
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/gpu_device.hpp>
@@ -157,6 +158,76 @@ makeParameters(const std::shared_ptr<const Rgba32fImage>& source) {
 // Trigger the non-blocking owner-thread drain through the public create(), which drains orphaned
 // foreign-released residents before constructing the (lazy, native-free) new instance.
 void drainOwnerOrphans(GpuDevice& device) { (void)GpuImageUpload::create(device); }
+
+// Every point executes real production cleanup, then retries the same lazy owner successfully.
+void testInitializationCleanup(Expectations& expectations, GpuDevice& device) {
+    const auto source = makeSource();
+    if (!source) {
+        expectations.expect(false, "initialization source builds");
+        return;
+    }
+    const auto parameters = makeParameters(source);
+    const auto allocations = bloom::render::primitive_detail::initializationAllocationStats(device);
+    const auto baseline = upload_detail::uploadInitializationStats();
+    const auto slots = upload_detail::uploadResidentInUse();
+    const auto retired = upload_detail::uploadResidentRetired();
+    for (std::uint8_t point = 1; point <= 4; ++point) {
+        auto created = GpuImageUpload::create(device);
+        expectations.expect(created.hasValue(), "lazy initialization fixture creates");
+        if (!created) {
+            return;
+        }
+        const auto before = upload_detail::uploadInitializationStats();
+        upload_detail::setUploadInitializationFaultForTest(
+            static_cast<upload_detail::UploadInitializationFault>(point));
+        const auto failure = created.upload->begin(parameters, 1ULL << 32ULL);
+        upload_detail::setUploadInitializationFaultForTest(
+            upload_detail::UploadInitializationFault::None);
+        expectations.expect(failure.code == GpuImageUploadDiagnosticCode::AllocationFailed,
+                            "injected boundary returns AllocationFailed");
+        expectations.expect(
+            bloom::render::primitive_detail::initializationAllocationStats(device) == allocations,
+            "failed native initialization returns live VMA count and bytes to baseline");
+        const auto after = upload_detail::uploadInitializationStats();
+        expectations.expect(after.slotReturns == before.slotReturns + 1,
+                            "failure returns exactly one resident slot");
+        expectations.expect(after.faultHits == before.faultHits + 1,
+                            "exact production initialization boundary was reached");
+        expectations.expect(after.created - before.created == point - 1U &&
+                                after.destroyed - before.destroyed == point - 1U,
+                            "each preceding real native object was created and released once");
+        expectations.expect(after.created - after.destroyed ==
+                                baseline.created - baseline.destroyed,
+                            "native object ownership returns to baseline after failure");
+        expectations.expect(upload_detail::uploadResidentInUse() == slots &&
+                                upload_detail::uploadResidentOrphaned() == 0,
+                            "failed initialization returns its slot without quarantine");
+        expectations.expect(!created.upload->hasUnretiredSubmission() &&
+                                created.upload->image() == nullptr &&
+                                created.upload->lastJobAllocationBytes() == 0,
+                            "failed initialization submits nothing and owns no image bytes");
+        expectations.expect(runUpload(*created.upload, parameters),
+                            "same owner cleanly retries and executes real native work");
+        expectations.expect(upload_detail::uploadResidentInUse() == slots + 1,
+                            "successful retry owns exactly one slot");
+        created.upload.reset();
+        expectations.expect(
+            bloom::render::primitive_detail::initializationAllocationStats(device) == allocations,
+            "successful native retry releases live VMA count and bytes to baseline");
+        const auto released = upload_detail::uploadInitializationStats();
+        expectations.expect(released.slotReturns == before.slotReturns + 2,
+                            "retry destruction returns exactly one further resident slot");
+        expectations.expect(released.created - released.destroyed ==
+                                baseline.created - baseline.destroyed,
+                            "successful retry native objects return to baseline on destruction");
+        expectations.expect(upload_detail::uploadResidentInUse() == slots &&
+                                upload_detail::uploadResidentRetired() == retired,
+                            "owner release returns the slot without invoking orphan retirement");
+        std::cout << "BOUNDARY: upload initialization " << static_cast<unsigned>(point)
+                  << " native-created=" << after.created - before.created
+                  << " native-destroyed=" << after.destroyed - before.destroyed << '\n';
+    }
+}
 
 void testBoundedPool(Expectations& expectations, GpuDevice& device) {
     const auto source = makeSource();
@@ -455,6 +526,7 @@ int main(const int argc, char** argv) {
             return expectations.ok() ? 0 : 1;
         }
 
+        testInitializationCleanup(expectations, *device.device);
         testBoundedPool(expectations, *device.device);
         testUnprovenRetention(expectations, *device.device);
         testOwnerIsolation(expectations, options.loader_path);

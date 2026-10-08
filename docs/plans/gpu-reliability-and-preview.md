@@ -15,7 +15,7 @@ remain separate decisions under G9.
 | --- | --- | --- |
 | G0 | Initial instrumentation slice accepted; remaining probes attach to their owning packages | Source review, quality checks, three focused suites, native acknowledgement correlation and original interaction fixture passed |
 | G1 | Accepted: native validity and mapped-memory visibility | Source review, quality/lint, real operator/display/viewer/RAM/final-route parity and validation; independent Composite/viewer reruns passed |
-| G2 | In progress: first slice covers initialization failure cleanup | Async metadata lifetime, owner reclamation, and cancellation recovery follow separately |
+| G2 | Initialization cleanup accepted; asynchronous metadata lifetime next | Fourteen native failure/retry boundaries, ownership/VMA baselines, parity, quality/lint and independent retirement reruns passed; reclamation and cancellation remain pending |
 | G3–G10 | Pending | No implementation or qualification claim |
 
 G0 adds opt-in bounded numeric frame tracing and a native Full-resolution 1920 × 1080 solid/text

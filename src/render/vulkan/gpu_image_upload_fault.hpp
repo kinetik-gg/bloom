@@ -20,6 +20,25 @@ enum class UploadRetirementFault : std::uint8_t {
     ForceFenceTimeout,
 };
 
+// Boundaries in the actual lazy native initialization path, including a fully built set.
+enum class UploadInitializationFault : std::uint8_t {
+    None,
+    BeforeCommandPool,
+    BeforeCommandBuffer,
+    BeforeFence,
+    Complete,
+};
+struct UploadInitializationStats final {
+    std::uint64_t created = 0;
+    std::uint64_t destroyed = 0;
+    std::uint64_t faultHits = 0;
+    std::uint64_t slotReturns = 0;
+};
+// Called only by the actual owner-slot release path.
+void recordUploadInitializationSlotReturn() noexcept;
+void setUploadInitializationFaultForTest(UploadInitializationFault fault) noexcept;
+[[nodiscard]] UploadInitializationStats uploadInitializationStats() noexcept;
+
 // Production-owned atomic read by the retirement path.
 [[nodiscard]] std::atomic<std::uint8_t>& uploadRetirementFault() noexcept;
 

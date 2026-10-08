@@ -120,6 +120,20 @@ owner-thread operations, explicit byte budgets checked against actual VMA alloca
 transient staging peak with overflow-safe arithmetic, cancellation, device-binding checks, and a
 bounded teardown that quarantines an unproved submission rather than destroying it in flight.
 
+Initialization failure cleanup (G2A). The shared Solid base pipeline and Upload command resources
+reset native children before their descriptor/command pools, matching reverse member declaration
+order. Composite, Affine, and Blend already follow that order. Their private native regression
+fixtures now fail before every Solid/Upload initialization API and after the complete native set
+exists, run the actual lazy `begin` cleanup, and retry the same owner successfully. The fixtures
+assert exact native-object creation/destruction and slot returns, no submitted work or published
+image on failure, and baseline live VMA allocation count/bytes after failure and retry destruction.
+The existing bounded pool, foreign-owner isolation, unproven-fence retention, and cancellation
+fixtures remain in place. Linux native core/synchronization validation and Solid, CoveredSolid,
+Upload, Composite, Affine, and Blend parity pass locally; this does not qualify Windows/macOS GPU
+execution. Native-object counts and live VMA allocations do not measure driver-reserved memory or
+reusable committed allocator blocks. Metadata staging lifetime, foreign-thread image-handle release,
+and broader submission retirement remain subsequent G2 work.
+
 Qualification. `bloom/runtime/gpu_neutral_display_qualification.hpp` runs the native device/pipeline
 on the owner thread, refuses any processor other than the exact default Bloom Neutral v1 handle
 (canonical identity byte comparison plus processor cache ID, OCIO version, and display/view

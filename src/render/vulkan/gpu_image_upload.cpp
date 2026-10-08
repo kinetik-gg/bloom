@@ -22,7 +22,32 @@ using GpuRendererAccess = bloom::render::GpuRendererAccess;
 
 constexpr std::uint64_t kDrainTimeoutNanoseconds = 2ULL * 1000ULL * 1000ULL * 1000ULL;
 
+std::atomic<std::uint8_t> initializationFault{0};
+std::atomic<std::uint64_t> initializationCreated{0};
+std::atomic<std::uint64_t> initializationDestroyed{0};
+std::atomic<std::uint64_t> initializationFaultHits{0};
+std::atomic<std::uint64_t> initializationSlotReturns{0};
+
+bool initializationFails(upload_detail::UploadInitializationFault boundary) noexcept {
+    if (initializationFault.load() != static_cast<std::uint8_t>(boundary)) {
+        return false;
+    }
+    initializationFaultHits.fetch_add(1);
+    return true;
+}
+
 } // namespace
+
+namespace upload_detail {
+void recordUploadInitializationSlotReturn() noexcept { initializationSlotReturns.fetch_add(1); }
+void setUploadInitializationFaultForTest(UploadInitializationFault fault) noexcept {
+    initializationFault.store(static_cast<std::uint8_t>(fault));
+}
+UploadInitializationStats uploadInitializationStats() noexcept {
+    return {initializationCreated.load(), initializationDestroyed.load(),
+            initializationFaultHits.load(), initializationSlotReturns.load()};
+}
+} // namespace upload_detail
 
 GpuImageUpload::Impl::~Impl() {
     // A slot-less Impl owns no native Vulkan resources (the command resources are created lazily
@@ -32,12 +57,23 @@ GpuImageUpload::Impl::~Impl() {
     assert(residentSlot == kUploadNoResidentSlot);
     releaseResident();
     staging.release();
+    resetResources();
 }
 
 void GpuImageUpload::Impl::resetResources() noexcept {
-    commandPool = vk::raii::CommandPool{nullptr};
-    commandBuffer = vk::raii::CommandBuffer{nullptr};
+    // Free children through their still-live pools, matching reverse member destruction.
+    if (*fence) {
+        initializationDestroyed.fetch_add(1);
+    }
     fence = vk::raii::Fence{nullptr};
+    if (*commandBuffer) {
+        initializationDestroyed.fetch_add(1);
+    }
+    commandBuffer = vk::raii::CommandBuffer{nullptr};
+    if (*commandPool) {
+        initializationDestroyed.fetch_add(1);
+    }
+    commandPool = vk::raii::CommandPool{nullptr};
     resourcesReady = false;
 }
 
@@ -125,6 +161,12 @@ bool GpuImageUpload::Impl::createResources() {
     commandPoolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
     commandPoolInfo.queueFamilyIndex = control->computeQueueFamily;
     VkCommandPool rawCommandPool = VK_NULL_HANDLE;
+    if (initializationFails(upload_detail::UploadInitializationFault::BeforeCommandPool)) {
+        createDiagnostic =
+            uploadDiagnostic(GpuImageUploadDiagnosticCode::AllocationFailed,
+                             "injected native initialization failure before CommandPool");
+        return false;
+    }
     if (dispatcher->vkCreateCommandPool(
             rawDevice, reinterpret_cast<const VkCommandPoolCreateInfo*>(&commandPoolInfo), nullptr,
             &rawCommandPool) != VK_SUCCESS) {
@@ -133,12 +175,19 @@ bool GpuImageUpload::Impl::createResources() {
         return false;
     }
     commandPool = vk::raii::CommandPool(control->device, rawCommandPool);
+    initializationCreated.fetch_add(1);
 
     vk::CommandBufferAllocateInfo commandBufferInfo{};
     commandBufferInfo.commandPool = *commandPool;
     commandBufferInfo.level = vk::CommandBufferLevel::ePrimary;
     commandBufferInfo.commandBufferCount = 1;
     VkCommandBuffer rawCommandBuffer = VK_NULL_HANDLE;
+    if (initializationFails(upload_detail::UploadInitializationFault::BeforeCommandBuffer)) {
+        createDiagnostic =
+            uploadDiagnostic(GpuImageUploadDiagnosticCode::AllocationFailed,
+                             "injected native initialization failure before CommandBuffer");
+        return false;
+    }
     if (dispatcher->vkAllocateCommandBuffers(
             rawDevice, reinterpret_cast<const VkCommandBufferAllocateInfo*>(&commandBufferInfo),
             &rawCommandBuffer) != VK_SUCCESS) {
@@ -147,9 +196,15 @@ bool GpuImageUpload::Impl::createResources() {
         return false;
     }
     commandBuffer = vk::raii::CommandBuffer(control->device, rawCommandBuffer, *commandPool);
+    initializationCreated.fetch_add(1);
 
     vk::FenceCreateInfo fenceInfo{};
     VkFence rawFence = VK_NULL_HANDLE;
+    if (initializationFails(upload_detail::UploadInitializationFault::BeforeFence)) {
+        createDiagnostic = uploadDiagnostic(GpuImageUploadDiagnosticCode::AllocationFailed,
+                                            "injected native initialization failure before Fence");
+        return false;
+    }
     if (dispatcher->vkCreateFence(rawDevice, reinterpret_cast<const VkFenceCreateInfo*>(&fenceInfo),
                                   nullptr, &rawFence) != VK_SUCCESS) {
         createDiagnostic = uploadDiagnostic(GpuImageUploadDiagnosticCode::AllocationFailed,
@@ -157,6 +212,13 @@ bool GpuImageUpload::Impl::createResources() {
         return false;
     }
     fence = vk::raii::Fence(control->device, rawFence);
+    initializationCreated.fetch_add(1);
+    if (initializationFails(upload_detail::UploadInitializationFault::Complete)) {
+        createDiagnostic =
+            uploadDiagnostic(GpuImageUploadDiagnosticCode::AllocationFailed,
+                             "injected native initialization failure after complete setup");
+        return false;
+    }
     return true;
 }
 

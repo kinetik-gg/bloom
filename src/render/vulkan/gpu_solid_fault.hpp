@@ -24,6 +24,31 @@ enum class SolidRetirementFault : std::uint8_t {
     ForceFenceTimeout,
 };
 
+// Boundaries in the actual lazy native initialization path, including a fully built set.
+enum class SolidInitializationFault : std::uint8_t {
+    None,
+    BeforeShaderModule,
+    BeforeDescriptorSetLayout,
+    BeforePipelineLayout,
+    BeforePipeline,
+    BeforeDescriptorPool,
+    BeforeDescriptorSet,
+    BeforeCommandPool,
+    BeforeCommandBuffer,
+    BeforeFence,
+    Complete,
+};
+struct SolidInitializationStats final {
+    std::uint64_t created = 0;
+    std::uint64_t destroyed = 0;
+    std::uint64_t faultHits = 0;
+    std::uint64_t slotReturns = 0;
+};
+// Called only by the actual owner-slot release path.
+void recordSolidInitializationSlotReturn() noexcept;
+void setSolidInitializationFaultForTest(SolidInitializationFault fault) noexcept;
+[[nodiscard]] SolidInitializationStats solidInitializationStats() noexcept;
+
 // Production-owned atomic read by the retirement path.
 [[nodiscard]] std::atomic<std::uint8_t>& solidRetirementFault() noexcept;
 

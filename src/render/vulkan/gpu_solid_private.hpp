@@ -23,6 +23,14 @@
 
 namespace bloom::render {
 
+// One private shader ABI shared by pipeline creation and dispatch recording.
+struct SolidPushConstants final {
+    float pixel[4];
+    std::uint32_t width;
+    std::uint32_t height;
+};
+static_assert(sizeof(SolidPushConstants) == 24);
+
 // Shared diagnostic constructor, defined in gpu_solid.cpp, so both the ordinary
 // and covered translation units build the same typed diagnostic values.
 [[nodiscard]] GpuSolidDiagnostic gpuSolidDiagnostic(GpuSolidDiagnosticCode code,

@@ -1,7 +1,5 @@
 #include "gpu_solid_private.hpp"
 
-#include "shaders/solid_spirv.inc"
-
 #ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
 #include "gpu_scene_executor_fault_injection.hpp"
 #endif
@@ -23,13 +21,6 @@ using GpuRendererAccess = bloom::render::GpuRendererAccess;
 
 constexpr std::uint32_t kWorkgroupSizeX = 256;
 constexpr std::uint64_t kDrainTimeoutNanoseconds = 2ULL * 1000ULL * 1000ULL * 1000ULL;
-
-struct SolidPushConstants final {
-    float pixel[4];
-    std::uint32_t width;
-    std::uint32_t height;
-};
-static_assert(sizeof(SolidPushConstants) == 24);
 
 } // namespace
 
@@ -135,159 +126,7 @@ GpuSolid::Impl::~Impl() {
     releaseResident();
     coveredPalette.release();
     coveredMask.release();
-}
-
-void GpuSolid::Impl::resetPipelineResources() noexcept {
-    shaderModule = vk::raii::ShaderModule{nullptr};
-    descriptorSetLayout = vk::raii::DescriptorSetLayout{nullptr};
-    pipelineLayout = vk::raii::PipelineLayout{nullptr};
-    pipeline = vk::raii::Pipeline{nullptr};
-    descriptorPool = vk::raii::DescriptorPool{nullptr};
-    descriptorSet = vk::raii::DescriptorSet{nullptr};
-    commandPool = vk::raii::CommandPool{nullptr};
-    commandBuffer = vk::raii::CommandBuffer{nullptr};
-    fence = vk::raii::Fence{nullptr};
-    pipelineReady = false;
-}
-
-bool GpuSolid::Impl::createPipeline() {
-    const VkDevice rawDevice = static_cast<VkDevice>(*control->device);
-    const auto* dispatcher = control->device.getDispatcher();
-
-    vk::ShaderModuleCreateInfo shaderInfo{};
-    shaderInfo.codeSize = vulkan_detail::kSolidSpirvByteCount;
-    shaderInfo.pCode = vulkan_detail::kSolidSpirvCode;
-    VkShaderModule rawShader = VK_NULL_HANDLE;
-    if (dispatcher->vkCreateShaderModule(
-            rawDevice, reinterpret_cast<const VkShaderModuleCreateInfo*>(&shaderInfo), nullptr,
-            &rawShader) != VK_SUCCESS) {
-        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::ShaderRejected,
-                                              "the embedded SolidV1 shader module was rejected");
-        return false;
-    }
-    shaderModule = vk::raii::ShaderModule(control->device, rawShader);
-
-    vk::DescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = vk::DescriptorType::eStorageImage;
-    binding.descriptorCount = 1;
-    binding.stageFlags = vk::ShaderStageFlagBits::eCompute;
-    vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &binding;
-    VkDescriptorSetLayout rawLayout = VK_NULL_HANDLE;
-    if (dispatcher->vkCreateDescriptorSetLayout(
-            rawDevice, reinterpret_cast<const VkDescriptorSetLayoutCreateInfo*>(&layoutInfo),
-            nullptr, &rawLayout) != VK_SUCCESS) {
-        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::ShaderRejected,
-                                              "the SolidV1 descriptor set layout was rejected");
-        return false;
-    }
-    descriptorSetLayout = vk::raii::DescriptorSetLayout(control->device, rawLayout);
-
-    vk::PushConstantRange pushRange{};
-    pushRange.stageFlags = vk::ShaderStageFlagBits::eCompute;
-    pushRange.offset = 0;
-    pushRange.size = static_cast<std::uint32_t>(sizeof(SolidPushConstants));
-    const vk::DescriptorSetLayout setLayout = *descriptorSetLayout;
-    vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
-    pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &setLayout;
-    pipelineLayoutInfo.pushConstantRangeCount = 1;
-    pipelineLayoutInfo.pPushConstantRanges = &pushRange;
-    VkPipelineLayout rawPipelineLayout = VK_NULL_HANDLE;
-    if (dispatcher->vkCreatePipelineLayout(
-            rawDevice, reinterpret_cast<const VkPipelineLayoutCreateInfo*>(&pipelineLayoutInfo),
-            nullptr, &rawPipelineLayout) != VK_SUCCESS) {
-        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::ShaderRejected,
-                                              "the SolidV1 pipeline layout was rejected");
-        return false;
-    }
-    pipelineLayout = vk::raii::PipelineLayout(control->device, rawPipelineLayout);
-
-    vk::ComputePipelineCreateInfo pipelineInfo{};
-    pipelineInfo.stage.stage = vk::ShaderStageFlagBits::eCompute;
-    pipelineInfo.stage.module = *shaderModule;
-    pipelineInfo.stage.pName = "main";
-    pipelineInfo.layout = *pipelineLayout;
-    VkPipeline rawPipeline = VK_NULL_HANDLE;
-    if (dispatcher->vkCreateComputePipelines(
-            rawDevice, VK_NULL_HANDLE, 1,
-            reinterpret_cast<const VkComputePipelineCreateInfo*>(&pipelineInfo), nullptr,
-            &rawPipeline) != VK_SUCCESS) {
-        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::ShaderRejected,
-                                              "the embedded SolidV1 compute pipeline was rejected");
-        return false;
-    }
-    pipeline = vk::raii::Pipeline(control->device, rawPipeline);
-
-    const vk::DescriptorPoolSize poolSize{vk::DescriptorType::eStorageImage, 1};
-    vk::DescriptorPoolCreateInfo poolInfo{};
-    poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
-    poolInfo.maxSets = 1;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
-    VkDescriptorPool rawPool = VK_NULL_HANDLE;
-    if (dispatcher->vkCreateDescriptorPool(
-            rawDevice, reinterpret_cast<const VkDescriptorPoolCreateInfo*>(&poolInfo), nullptr,
-            &rawPool) != VK_SUCCESS) {
-        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
-                                              "the SolidV1 descriptor pool could not be created");
-        return false;
-    }
-    descriptorPool = vk::raii::DescriptorPool(control->device, rawPool);
-
-    vk::DescriptorSetAllocateInfo allocateInfo{};
-    allocateInfo.descriptorPool = *descriptorPool;
-    allocateInfo.descriptorSetCount = 1;
-    allocateInfo.pSetLayouts = &setLayout;
-    VkDescriptorSet rawSet = VK_NULL_HANDLE;
-    if (dispatcher->vkAllocateDescriptorSets(
-            rawDevice, reinterpret_cast<const VkDescriptorSetAllocateInfo*>(&allocateInfo),
-            &rawSet) != VK_SUCCESS) {
-        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
-                                              "the SolidV1 descriptor set could not be allocated");
-        return false;
-    }
-    descriptorSet = vk::raii::DescriptorSet(control->device, rawSet, *descriptorPool);
-
-    vk::CommandPoolCreateInfo commandPoolInfo{};
-    commandPoolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
-    commandPoolInfo.queueFamilyIndex = control->computeQueueFamily;
-    VkCommandPool rawCommandPool = VK_NULL_HANDLE;
-    if (dispatcher->vkCreateCommandPool(
-            rawDevice, reinterpret_cast<const VkCommandPoolCreateInfo*>(&commandPoolInfo), nullptr,
-            &rawCommandPool) != VK_SUCCESS) {
-        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
-                                              "the SolidV1 command pool could not be created");
-        return false;
-    }
-    commandPool = vk::raii::CommandPool(control->device, rawCommandPool);
-
-    vk::CommandBufferAllocateInfo commandBufferInfo{};
-    commandBufferInfo.commandPool = *commandPool;
-    commandBufferInfo.level = vk::CommandBufferLevel::ePrimary;
-    commandBufferInfo.commandBufferCount = 1;
-    VkCommandBuffer rawCommandBuffer = VK_NULL_HANDLE;
-    if (dispatcher->vkAllocateCommandBuffers(
-            rawDevice, reinterpret_cast<const VkCommandBufferAllocateInfo*>(&commandBufferInfo),
-            &rawCommandBuffer) != VK_SUCCESS) {
-        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
-                                              "the SolidV1 command buffer could not be allocated");
-        return false;
-    }
-    commandBuffer = vk::raii::CommandBuffer(control->device, rawCommandBuffer, *commandPool);
-
-    vk::FenceCreateInfo fenceInfo{};
-    VkFence rawFence = VK_NULL_HANDLE;
-    if (dispatcher->vkCreateFence(rawDevice, reinterpret_cast<const VkFenceCreateInfo*>(&fenceInfo),
-                                  nullptr, &rawFence) != VK_SUCCESS) {
-        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
-                                              "the SolidV1 fence could not be created");
-        return false;
-    }
-    fence = vk::raii::Fence(control->device, rawFence);
-    return true;
+    resetPipelineResources();
 }
 
 GpuSolidCreateResult GpuSolid::create(GpuDevice& device, const GpuSolidBudgets& budgets) {

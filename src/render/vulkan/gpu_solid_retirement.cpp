@@ -58,6 +58,7 @@ void GpuSolid::Impl::releaseResidentSlot() noexcept {
         return;
     }
     solidSlots().release(this, residentSlot);
+    solid_detail::recordSolidInitializationSlotReturn();
     residentSlot = kSolidNoResidentSlot;
 }
 
