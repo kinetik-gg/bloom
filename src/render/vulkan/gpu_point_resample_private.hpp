@@ -225,6 +225,7 @@ struct GpuPointResample::Impl final {
     bool deviceLost = false;
     std::uint64_t lastJobBytes = 0;
     std::uint64_t slotToken = 0;
+    std::uint64_t quarantineToken = 0;
     std::chrono::steady_clock::time_point submittedAt{};
     std::atomic<bool> discardRequested{false};
     GpuPointResampleDiagnostic jobDiagnostic;

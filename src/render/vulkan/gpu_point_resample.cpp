@@ -161,7 +161,20 @@ bool GpuPointResample::isBoundTo(GpuDevice& device) const noexcept {
 }
 
 bool GpuPointResample::hasUnretiredSubmission() const noexcept {
-    return impl_ != nullptr && impl_->queueSubmitted;
+    if (impl_ == nullptr) {
+        return false;
+    }
+    if (impl_->queueSubmitted) {
+        return true;
+    }
+    if (impl_->quarantineToken == 0) {
+        return false;
+    }
+    std::lock_guard lock(point_resample_detail::reservationMutex());
+    const auto& slot = point_resample_detail::reservation();
+    return slot.state == point_resample_detail::ReservationState::Quarantined &&
+           slot.token == impl_->quarantineToken && slot.ownerThread == impl_->owner &&
+           slot.resources.deviceState == impl_->control;
 }
 
 std::uint64_t GpuPointResample::lastJobAllocationBytes() const noexcept {
@@ -278,6 +291,7 @@ GpuPointResampleDiagnostic GpuPointResample::begin(const GpuPointResampleRequest
     }
     std::uint64_t requestedCombined = 0;
     if (compositeAddOverflows(imageBytes, metadataBytes, requestedCombined) ||
+        compositeAddOverflows(requestedCombined, metadataBytes, requestedCombined) ||
         requestedCombined > byteBudget) {
         return makeDiagnostic(GpuPointResampleDiagnosticCode::OverBudget,
                               "the requested image and axis metadata exceed the byte budget");
@@ -348,6 +362,7 @@ GpuPointResampleDiagnostic GpuPointResample::begin(const GpuPointResampleRequest
         impl.slotToken = slot.token;
     }
 
+    impl.quarantineToken = 0;
     impl.clearJob();
     if (!impl.createPipelines()) {
         const auto diagnostic = impl.createDiagnostic;
@@ -376,6 +391,19 @@ GpuPointResamplePollResult GpuPointResample::poll() {
     if (!impl.onOwnerThread()) {
         return GpuPointResamplePollResult::WrongThread;
     }
+    if (impl.quarantineToken != 0) {
+        std::lock_guard lock(point_resample_detail::reservationMutex());
+        auto& slot = point_resample_detail::reservation();
+        if (slot.state == point_resample_detail::ReservationState::Quarantined &&
+            slot.token == impl.quarantineToken && slot.ownerThread == impl.owner &&
+            slot.resources.deviceState == impl.control) {
+            if (!point_resample_detail::retireQuarantinedLocked(slot)) {
+                return GpuPointResamplePollResult::Failure;
+            }
+        }
+        impl.quarantineToken = 0;
+        return GpuPointResamplePollResult::Failure;
+    }
     if (impl.jobState == GpuPointResampleJobState::Ready) {
         return GpuPointResamplePollResult::Ready;
     }
@@ -384,7 +412,15 @@ GpuPointResamplePollResult GpuPointResample::poll() {
     }
     const auto fault = static_cast<point_resample_detail::PointResampleFault>(
         point_resample_detail::pointResampleFault().load());
-    if (fault == point_resample_detail::PointResampleFault::ForceDeviceLost) {
+    const VkFence rawFence = static_cast<VkFence>(*impl.resources.fence);
+    const VkResult status = fault == point_resample_detail::PointResampleFault::ForceFenceTimeout
+                                ? VK_NOT_READY
+                                : impl.control->device.getDispatcher()->vkGetFenceStatus(
+                                      static_cast<VkDevice>(*impl.control->device), rawFence);
+    // An injected diagnostic cannot justify freeing real pending driver resources. First prove
+    // retirement using the genuine fence, then reject publication as device loss.
+    if (fault == point_resample_detail::PointResampleFault::ForceDeviceLost &&
+        status == VK_SUCCESS) {
         impl.deviceLost = true;
         impl.queueSubmitted = false;
         impl.freeJobResources();
@@ -392,11 +428,6 @@ GpuPointResamplePollResult GpuPointResample::poll() {
         impl.fail(GpuPointResampleDiagnosticCode::DeviceLost, "the device was lost while polling");
         return GpuPointResamplePollResult::Failure;
     }
-    const VkFence rawFence = static_cast<VkFence>(*impl.resources.fence);
-    const VkResult status = fault == point_resample_detail::PointResampleFault::ForceFenceTimeout
-                                ? VK_NOT_READY
-                                : impl.control->device.getDispatcher()->vkGetFenceStatus(
-                                      static_cast<VkDevice>(*impl.control->device), rawFence);
     if (status == VK_NOT_READY) {
         const bool deadlineExceeded =
             fault == point_resample_detail::PointResampleFault::ForceFenceTimeout ||

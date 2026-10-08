@@ -458,12 +458,24 @@ void testActualAllocationBudget(Expectations& expectations, GpuDevice& device) {
 
     // 4x4 RGBA32F requests 256 bytes; a 512-byte budget passes the requested check but the actual
     // VMA allocations (image + axis + status + staging) exceed it.
+    const auto control = bloom::render::GpuRendererAccess::state(device);
+    VmaTotalStatistics before{};
+    vmaCalculateStatistics(control->allocator, &before);
+    const auto stagingBefore = bloom::render::composite_detail::metadataStagingLiveBytes.load();
     const auto tight =
         composite.composite->beginTranslation({shared, window4, 0.0, 0.0, 1.0F}, 512);
     expectations.expect(tight.code == GpuCompositeDiagnosticCode::OverBudget,
                         "an actual-allocation over-budget request is refused");
     expectations.expect(composite.composite->state() == GpuCompositeJobState::Idle,
                         "an allocation-budget refusal starts no job");
+
+    VmaTotalStatistics after{};
+    vmaCalculateStatistics(control->allocator, &after);
+    expectations.expect(
+        after.total.statistics.allocationCount == before.total.statistics.allocationCount &&
+            after.total.statistics.allocationBytes == before.total.statistics.allocationBytes &&
+            bloom::render::composite_detail::metadataStagingLiveBytes.load() == stagingBefore,
+        "actual allocation-budget refusal immediately restores VMA/staging baseline");
 
     // The same request with a generous budget still succeeds.
     const auto ok =

@@ -15,7 +15,7 @@ remain separate decisions under G9.
 | --- | --- | --- |
 | G0 | Initial instrumentation slice accepted; remaining probes attach to their owning packages | Source review, quality checks, three focused suites, native acknowledgement correlation and original interaction fixture passed |
 | G1 | Accepted: native validity and mapped-memory visibility | Source review, quality/lint, real operator/display/viewer/RAM/final-route parity and validation; independent Composite/viewer reruns passed |
-| G2 | Initialization cleanup accepted; asynchronous metadata lifetime next | Fourteen native failure/retry boundaries, ownership/VMA baselines, parity, quality/lint and independent retirement reruns passed; reclamation and cancellation remain pending |
+| G2 | Initialization cleanup and asynchronous metadata lifetime accepted; owner reclamation next | Metadata copies share owning dispatch/fence, actual staging budgets and token-bound quarantine retirement; native parity/lifecycle/viewer/final paths and independent Composite/PointResample/retirement reruns have zero validation errors; owner reclamation and viewer cancellation remain pending |
 | G3–G10 | Pending | No implementation or qualification claim |
 
 G0 adds opt-in bounded numeric frame tracing and a native Full-resolution 1920 × 1080 solid/text
@@ -390,6 +390,17 @@ submit, cancellation, device loss, and foreign-thread final release. Assert no r
 is freed early, no invalid pool access, exactly one eventual reclaim/diagnosed quarantine, and
 retained bytes remain charged. Presentation retirement uses its existing WSI proof, not a compute
 fence substitute. **Exclude:** capacity increases and precision changes.
+
+G2B local evidence (2026-10-08): Translation/PointResample parity, mapped initialization/status
+instrumentation, partial-axis/status flush failures, actual-allocation budget refusal, cancellation,
+unproved orphan/quarantine retention, exact eventual staging reclaim, and drained loss diagnostics
+pass native tests. The original PointResample operation continues to report its exact quarantined
+submission until owner polling proves retirement, preserving runtime admission charge. Resident
+viewer and mixed media+CST+text final export also pass with zero core/synchronization validation
+errors, checked separately from exit status. Supervisor source review and independent Composite,
+PointResample fault/retirement, and Composite/Blend/Affine retirement reruns passed with the real
+validation layer loaded and zero validation errors. Observed native mappings were coherent; noncoherent
+hardware execution remains unqualified. No cross-platform GPU qualification is claimed.
 
 ### G3 — Make retention and presentation state truthful
 

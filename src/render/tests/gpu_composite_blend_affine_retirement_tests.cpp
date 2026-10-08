@@ -198,6 +198,8 @@ template <typename Op, typename CreateFn, typename SubmitFn, typename DrainFn, t
 void runRetention(Expectations& expectations, const std::string& name, std::size_t (*inUse)(),
                   std::size_t (*orphaned)(), std::uint64_t (*retired)(), CreateFn create,
                   SubmitFn submit, DrainFn drain, SetFaultFn setFault) {
+    const auto stagingBefore = composite_detail::metadataStagingLiveBytes.load();
+    const auto stagingReclaimsBefore = composite_detail::metadataStagingReclaims.load();
     const std::size_t inUseBefore = inUse();
     const std::size_t orphanedBefore = orphaned();
     const std::uint64_t retiredBefore = retired();
@@ -217,6 +219,11 @@ void runRetention(Expectations& expectations, const std::string& name, std::size
     expectations.expect(inUse() == inUseBefore + 1,
                         name + ": the pending instance still holds its slot");
 
+    const auto stagingRetained = composite_detail::metadataStagingLiveBytes.load();
+    if (name == "composite") {
+        expectations.expect(stagingRetained > stagingBefore,
+                            "translation orphan retains both staged axes");
+    }
     setFault(true);
     drain();
     expectations.expect(orphaned() == orphanedBefore + 1,
@@ -224,6 +231,8 @@ void runRetention(Expectations& expectations, const std::string& name, std::size
     expectations.expect(inUse() == inUseBefore + 1, name + ": an unproven fence retains its slot");
     expectations.expect(retired() == retiredBefore, name + ": nothing is retired while unproven");
 
+    expectations.expect(composite_detail::metadataStagingLiveBytes.load() == stagingRetained,
+                        name + ": unproved owner drain preserves staging byte charge");
     setFault(false);
     bool done = false;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
@@ -235,6 +244,13 @@ void runRetention(Expectations& expectations, const std::string& name, std::size
         }
     }
     expectations.expect(done, name + ": the proven fence retires the orphan");
+    expectations.expect(composite_detail::metadataStagingLiveBytes.load() == stagingBefore,
+                        name + ": proven owner retirement restores staging baseline");
+    if (name == "composite") {
+        expectations.expect(composite_detail::metadataStagingReclaims.load() ==
+                                stagingReclaimsBefore + 2,
+                            "translation owner retirement reclaims each axis exactly once");
+    }
     expectations.expect(inUse() == inUseBefore, name + ": the proven drain returns the slot");
     expectations.expect(retired() == retiredBefore + 1,
                         name + ": the proven orphan was retired exactly once");

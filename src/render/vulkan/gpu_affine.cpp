@@ -371,12 +371,12 @@ GpuAffineDiagnostic GpuAffine::Impl::beginPrepared(const std::shared_ptr<const G
     // map is host-visible and written directly: no transient staging buffer and no extra queue
     // submit, unlike the former O(width*height) sample array.
     const GpuAffineMapGpu packedMap = packAffineMap(affineMap);
-    if (!createCompositeBuffer(*control, sizeof(packedMap), true, &packedMap, this->map)) {
+    if (!createCompositeBuffer(control, sizeof(packedMap), true, &packedMap, this->map)) {
         return makeDiagnostic(GpuAffineDiagnosticCode::AllocationFailed,
                               "the affine map metadata buffer could not be allocated");
     }
     const std::uint32_t zeroFlag = 0;
-    if (!createCompositeBuffer(*control, sizeof(zeroFlag), true, &zeroFlag, status)) {
+    if (!createCompositeBuffer(control, sizeof(zeroFlag), true, &zeroFlag, status)) {
         return makeDiagnostic(GpuAffineDiagnosticCode::AllocationFailed,
                               "the affine status buffer could not be allocated");
     }

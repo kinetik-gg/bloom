@@ -13,6 +13,10 @@
 
 namespace bloom::render::composite_detail {
 
+// Actual VMA allocation bytes, shared by live jobs and their existing retirement/quarantine owner.
+inline std::atomic<std::uint64_t> metadataStagingLiveBytes{0};
+inline std::atomic<std::uint64_t> metadataStagingReclaims{0};
+
 enum class CompositeRetirementFault : std::uint8_t {
     None,
     // The owner drain treats an orphaned submission's fence as unproven without querying the real

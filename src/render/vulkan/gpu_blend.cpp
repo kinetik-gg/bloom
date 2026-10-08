@@ -358,7 +358,7 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
 
     impl.clearJob();
     const std::uint32_t zeroFlag = 0;
-    if (!createCompositeBuffer(*impl.control, sizeof(zeroFlag), true, &zeroFlag, impl.status)) {
+    if (!createCompositeBuffer(impl.control, sizeof(zeroFlag), true, &zeroFlag, impl.status)) {
         return makeDiagnostic(GpuBlendDiagnosticCode::AllocationFailed,
                               "the status buffer could not be allocated");
     }

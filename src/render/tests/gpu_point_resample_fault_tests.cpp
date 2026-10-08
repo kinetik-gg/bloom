@@ -12,6 +12,7 @@
 
 #include "gpu_composite_native_support.hpp"
 
+#include "gpu_composite_memory.hpp"
 #include "gpu_point_resample_fault.hpp"
 
 #include <bloom/render/gpu_point_resample.hpp>
@@ -172,6 +173,8 @@ void testFenceTimeoutQuarantine(Expectations& expectations, GpuDevice& device) {
         expectations.expect(false, "timeout: instance created");
         return;
     }
+    const auto stagingBefore = bloom::render::composite_detail::metadataStagingLiveBytes.load();
+    const auto reclaimsBefore = bloom::render::composite_detail::metadataStagingReclaims.load();
     setPointResampleFaultForTest(PointResampleFault::ForceFenceTimeout);
     expectations.expect(first.resampler->begin(*request, kBudget).code ==
                             GpuPointResampleDiagnosticCode::None,
@@ -185,6 +188,21 @@ void testFenceTimeoutQuarantine(Expectations& expectations, GpuDevice& device) {
     expectations.expect(pointResampleLiveResourceSetsForTest() == 1,
                         "timeout: exactly one native resource set is retained");
 
+    expectations.expect(first.resampler->hasUnretiredSubmission(),
+                        "timeout: operation reports its quarantined submission as unretired");
+    expectations.expect(first.resampler->poll() == GpuPointResamplePollResult::Failure &&
+                            first.resampler->hasUnretiredSubmission() &&
+                            !first.resampler->take().isValid(),
+                        "timeout: later poll keeps admission charged without publication");
+    const auto retainedStaging = bloom::render::composite_detail::metadataStagingLiveBytes.load();
+    expectations.expect(retainedStaging > stagingBefore &&
+                            first.resampler->lastJobAllocationBytes() >=
+                                retainedStaging - stagingBefore,
+                        "timeout: actual staging bytes remain charged in quarantine");
+    expectations.expect(!retirePointResampleQuarantineForOwnerForTest() &&
+                            bloom::render::composite_detail::metadataStagingLiveBytes.load() ==
+                                retainedStaging,
+                        "timeout: unproved retirement cannot free metadata staging");
     // New admission is refused while the quarantine is un-retirable.
     auto second = GpuPointResample::create(device);
     if (!second) {
@@ -199,12 +217,18 @@ void testFenceTimeoutQuarantine(Expectations& expectations, GpuDevice& device) {
     setPointResampleFaultForTest(PointResampleFault::None);
     bool retired = false;
     for (int attempt = 0; attempt < 400 && !retired; ++attempt) {
-        retired = retirePointResampleQuarantineForOwnerForTest();
+        static_cast<void>(first.resampler->poll());
+        retired = !first.resampler->hasUnretiredSubmission();
         if (!retired) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
     }
-    expectations.expect(retired, "timeout: the owner retires the quarantine after fence proof");
+    expectations.expect(retired && !first.resampler->take().isValid(),
+                        "timeout: original operation polls exact retirement without publication");
+    expectations.expect(
+        bloom::render::composite_detail::metadataStagingLiveBytes.load() == stagingBefore &&
+            bloom::render::composite_detail::metadataStagingReclaims.load() == reclaimsBefore + 1,
+        "timeout: proven completion reclaims staging exactly once");
     expectations.expect(!pointResampleQuarantineOccupiedForTest() &&
                             pointResampleLiveResourceSetsForTest() == 0,
                         "timeout: the quarantine is freed after retirement");

@@ -400,6 +400,17 @@ readbacks and full/sparse pixel-oracle readbacks record transfer-to-host depende
 exact copied destination bytes before fence retirement and invalidate. Shader identities, CPU
 semantics, single final-readback policy, and coverage requirements are unchanged.
 
+G2B metadata lifetime repair (2026-10-08; implementation qualification recorded in the reliability
+plan). Buffer preparation no longer submits or waits on a private queue operation. Translation's
+X/Y metadata and PointResample's axis initialization copies execute in the owning compute command
+buffer, with transfer-write to compute visibility after flushed staging writes. Staging shares the
+real allocator owner and moves with its destination through the existing job/quarantine lifetime.
+Both Translation axes remain alive concurrently until the same completion proof; actual VMA
+staging allocation sizes are summed in admission and live-byte accounting. Proven completion frees
+staging before a successful image remains cached. Timeout and cancellation never authorize early
+release; injected device-loss diagnostics first prove the real submission retired. Direct mapped
+Affine/status initialization retains the flush contract and rejects a missing mapping.
+
 Presentation enables swapchain maintenance only with the matching EXT/KHR surface-maintenance
 instance extension and its surface-capabilities2 prerequisite. Without them, existing present-wait
 or unsupported-presentation behavior remains available. The present render pass explicitly chains

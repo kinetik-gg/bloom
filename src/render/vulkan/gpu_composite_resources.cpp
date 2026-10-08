@@ -40,6 +40,9 @@ CompositeBuffer& CompositeBuffer::operator=(CompositeBuffer&& other) noexcept {
         state = std::move(other.state);
         buffer = other.buffer;
         allocation = other.allocation;
+        stagingBuffer = std::exchange(other.stagingBuffer, VK_NULL_HANDLE);
+        stagingAllocation = std::exchange(other.stagingAllocation, VK_NULL_HANDLE);
+        stagingBytes = std::exchange(other.stagingBytes, 0);
         bytes = other.bytes;
         hostVisible = other.hostVisible;
         armed = other.armed;
@@ -53,7 +56,40 @@ CompositeBuffer& CompositeBuffer::operator=(CompositeBuffer&& other) noexcept {
     return *this;
 }
 
+void CompositeBuffer::releaseStaging() noexcept {
+    if (stagingBuffer != VK_NULL_HANDLE && state != nullptr) {
+        vmaDestroyBuffer(state->allocator, stagingBuffer, stagingAllocation);
+        composite_detail::metadataStagingLiveBytes.fetch_sub(stagingBytes);
+        composite_detail::metadataStagingReclaims.fetch_add(1);
+    }
+    stagingBuffer = VK_NULL_HANDLE;
+    stagingAllocation = VK_NULL_HANDLE;
+    stagingBytes = 0;
+}
+
+void CompositeBuffer::recordInitialization(const VkCommandBuffer commandBuffer) const noexcept {
+    if (stagingBuffer == VK_NULL_HANDLE) {
+        return;
+    }
+    const auto* dispatcher = state->device.getDispatcher();
+    VkBufferCopy copy{};
+    copy.size = bytes;
+    dispatcher->vkCmdCopyBuffer(commandBuffer, stagingBuffer, buffer, 1, &copy);
+    VkBufferMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.buffer = buffer;
+    barrier.size = bytes;
+    dispatcher->vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
+                                     &barrier, 0, nullptr);
+}
+
 void CompositeBuffer::release() noexcept {
+    releaseStaging();
     if (armed && state != nullptr) {
         vmaDestroyBuffer(state->allocator, buffer, allocation);
     }
@@ -65,12 +101,13 @@ void CompositeBuffer::release() noexcept {
     armed = false;
 }
 
-bool createCompositeBuffer(DeviceAllocatorState& state, const std::uint64_t bytes,
-                           const bool hostVisible, const void* const initialData,
-                           CompositeBuffer& out) noexcept {
-    if (bytes == 0 || state.allocator == VK_NULL_HANDLE) {
+bool createCompositeBuffer(const std::shared_ptr<DeviceAllocatorState>& owner,
+                           const std::uint64_t bytes, const bool hostVisible,
+                           const void* const initialData, CompositeBuffer& out) noexcept {
+    if (owner == nullptr || bytes == 0 || owner->allocator == VK_NULL_HANDLE) {
         return false;
     }
+    DeviceAllocatorState& state = *owner;
     // Metadata and status buffers are tiny and bounded by the caller's budget; refuse anything that
     // could not be addressed in one binding.
     if (bytes > state.maxStorageBufferRange) {
@@ -94,7 +131,7 @@ bool createCompositeBuffer(DeviceAllocatorState& state, const std::uint64_t byte
     }
 
     CompositeBuffer created;
-    created.state = std::shared_ptr<DeviceAllocatorState>(&state, [](DeviceAllocatorState*) {});
+    created.state = owner;
     created.bytes = bytes;
     created.hostVisible = hostVisible;
     VmaAllocationInfo allocationInfo{};
@@ -104,9 +141,9 @@ bool createCompositeBuffer(DeviceAllocatorState& state, const std::uint64_t byte
     }
     created.armed = true;
 
-    const VkDevice device = static_cast<VkDevice>(*state.device);
-    const auto* dispatcher = state.device.getDispatcher();
-
+    if (hostVisible && initialData != nullptr && allocationInfo.pMappedData == nullptr) {
+        return false;
+    }
     bool directMapped = false;
     if (hostVisible && initialData != nullptr && allocationInfo.pMappedData != nullptr) {
         std::memcpy(allocationInfo.pMappedData, initialData, static_cast<std::size_t>(bytes));
@@ -117,7 +154,7 @@ bool createCompositeBuffer(DeviceAllocatorState& state, const std::uint64_t byte
         directMapped = true;
     }
     if (!directMapped && initialData != nullptr) {
-        // Transient staging buffer + one-time copy, all RAII, synchronously retired.
+        // Retained staging is recorded into the owning operation command buffer.
         VkBufferCreateInfo stagingInfo{};
         stagingInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         stagingInfo.size = bytes;
@@ -147,80 +184,10 @@ bool createCompositeBuffer(DeviceAllocatorState& state, const std::uint64_t byte
             return false;
         }
 
-        vk::raii::CommandPool pool{nullptr};
-        vk::raii::CommandBuffer commandBuffer{nullptr};
-        vk::raii::Fence fence{nullptr};
-        VkCommandPoolCreateInfo poolInfo{};
-        poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-        poolInfo.queueFamilyIndex = state.computeQueueFamily;
-        VkCommandPool rawPool = VK_NULL_HANDLE;
-        bool ok =
-            dispatcher->vkCreateCommandPool(device, &poolInfo, nullptr, &rawPool) == VK_SUCCESS;
-        if (ok) {
-            pool = vk::raii::CommandPool(state.device, rawPool);
-            VkCommandBufferAllocateInfo allocate{};
-            allocate.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            allocate.commandPool = rawPool;
-            allocate.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            allocate.commandBufferCount = 1;
-            VkCommandBuffer rawBuffer = VK_NULL_HANDLE;
-            ok = dispatcher->vkAllocateCommandBuffers(device, &allocate, &rawBuffer) == VK_SUCCESS;
-            if (ok) {
-                commandBuffer = vk::raii::CommandBuffer(state.device, rawBuffer, rawPool);
-                VkCommandBufferBeginInfo begin{};
-                begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-                begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-                ok = dispatcher->vkBeginCommandBuffer(rawBuffer, &begin) == VK_SUCCESS;
-                if (ok) {
-                    VkBufferCopy copy{};
-                    copy.size = bytes;
-                    dispatcher->vkCmdCopyBuffer(rawBuffer, stagingBuffer, created.buffer, 1, &copy);
-                    // The completed copy still needs a memory dependency for the later shader
-                    // consumer; a host fence wait only proves retirement.
-                    VkBufferMemoryBarrier toShader{};
-                    toShader.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-                    toShader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                    toShader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                    toShader.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    toShader.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    toShader.buffer = created.buffer;
-                    toShader.size = bytes;
-                    dispatcher->vkCmdPipelineBarrier(rawBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
-                                                     nullptr, 1, &toShader, 0, nullptr);
-                    ok = dispatcher->vkEndCommandBuffer(rawBuffer) == VK_SUCCESS;
-                }
-            }
-        }
-        if (ok) {
-            VkFenceCreateInfo fenceInfo{};
-            fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-            VkFence rawFence = VK_NULL_HANDLE;
-            ok = dispatcher->vkCreateFence(device, &fenceInfo, nullptr, &rawFence) == VK_SUCCESS;
-            if (ok) {
-                fence = vk::raii::Fence(state.device, rawFence);
-                VkSubmitInfo submit{};
-                submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-                submit.commandBufferCount = 1;
-                const VkCommandBuffer rawCommandBuffer =
-                    static_cast<VkCommandBuffer>(*commandBuffer);
-                submit.pCommandBuffers = &rawCommandBuffer;
-                const VkResult submitted = dispatcher->vkQueueSubmit(
-                    static_cast<VkQueue>(*state.computeQueue), 1, &submit, rawFence);
-                ok = submitted == VK_SUCCESS;
-                if (ok) {
-                    const VkResult waited = dispatcher->vkWaitForFences(device, 1, &rawFence,
-                                                                        VK_TRUE, 5'000'000'000ULL);
-                    ok = waited == VK_SUCCESS || waited == VK_ERROR_DEVICE_LOST;
-                }
-            }
-        }
-        vmaDestroyBuffer(state.allocator, stagingBuffer, stagingHandle);
-        if (!ok) {
-            created.release();
-            return false;
-        }
+        created.stagingBuffer = stagingBuffer;
+        created.stagingAllocation = stagingHandle;
+        created.stagingBytes = stagingMapped.size;
+        composite_detail::metadataStagingLiveBytes.fetch_add(created.stagingBytes);
     }
 
     out = std::move(created);
@@ -534,8 +501,18 @@ GpuCompositeDiagnostic GpuComposite::beginSourceOver(const GpuSourceOverParamete
     }
 
     impl.clearJob();
+    // Before submission every request-owned allocation is immediately reclaimable. Once the
+    // queue accepts the command, only the existing completion/retirement owner may release it.
+    struct PreparationCleanup final {
+        GpuComposite::Impl& impl;
+        ~PreparationCleanup() {
+            if (!impl.queueSubmitted) {
+                impl.clearJob();
+            }
+        }
+    } preparationCleanup{impl};
     const std::uint32_t zeroFlag = 0;
-    if (!createCompositeBuffer(*impl.control, sizeof(zeroFlag), true, &zeroFlag, impl.status)) {
+    if (!createCompositeBuffer(impl.control, sizeof(zeroFlag), true, &zeroFlag, impl.status)) {
         return compositeDiagnostic(GpuCompositeDiagnosticCode::AllocationFailed,
                                    "the status buffer could not be allocated");
     }

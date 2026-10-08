@@ -291,6 +291,13 @@ GpuCompositeDiagnostic GpuComposite::beginTranslation(const GpuTranslationParame
         return makeDiagnostic(GpuCompositeDiagnosticCode::OverBudget,
                               "the translation image or metadata exceeds the byte budget");
     }
+    std::uint64_t requestedPeak = 0;
+    if (compositeAddOverflows(imageBytes, metadataBytes, requestedPeak) ||
+        compositeAddOverflows(requestedPeak, axisBytes, requestedPeak) ||
+        requestedPeak > byteBudget) {
+        return makeDiagnostic(GpuCompositeDiagnosticCode::OverBudget,
+                              "the translation image, metadata and staging exceed the byte budget");
+    }
     if (impl.control->generation != impl.expectedGeneration) {
         impl.deviceLost = true;
         return makeDiagnostic(GpuCompositeDiagnosticCode::DeviceLost,
@@ -319,18 +326,28 @@ GpuCompositeDiagnostic GpuComposite::beginTranslation(const GpuTranslationParame
     }
 
     impl.clearJob();
+    // Before submission every request-owned allocation is immediately reclaimable. Once the
+    // queue accepts the command, only the existing completion/retirement owner may release it.
+    struct PreparationCleanup final {
+        GpuComposite::Impl& impl;
+        ~PreparationCleanup() {
+            if (!impl.queueSubmitted) {
+                impl.clearJob();
+            }
+        }
+    } preparationCleanup{impl};
     // Prepare host metadata first so any allocation failure is before any device work.
     const auto axisX = prepareTranslationAxis(outputWidth, sourceWidth, parameters.translationX);
     const auto axisY = prepareTranslationAxis(outputHeight, sourceHeight, parameters.translationY);
-    if (!createCompositeBuffer(*impl.control, axisX.size() * sizeof(CompositeAxisSampleGpu), false,
+    if (!createCompositeBuffer(impl.control, axisX.size() * sizeof(CompositeAxisSampleGpu), false,
                                axisX.data(), impl.axisX) ||
-        !createCompositeBuffer(*impl.control, axisY.size() * sizeof(CompositeAxisSampleGpu), false,
+        !createCompositeBuffer(impl.control, axisY.size() * sizeof(CompositeAxisSampleGpu), false,
                                axisY.data(), impl.axisY)) {
         return makeDiagnostic(GpuCompositeDiagnosticCode::AllocationFailed,
                               "the axis metadata buffers could not be allocated");
     }
     const std::uint32_t zeroFlag = 0;
-    if (!createCompositeBuffer(*impl.control, sizeof(zeroFlag), true, &zeroFlag, impl.status)) {
+    if (!createCompositeBuffer(impl.control, sizeof(zeroFlag), true, &zeroFlag, impl.status)) {
         return makeDiagnostic(GpuCompositeDiagnosticCode::AllocationFailed,
                               "the status buffer could not be allocated");
     }
@@ -363,8 +380,10 @@ GpuCompositeDiagnostic GpuComposite::beginTranslation(const GpuTranslationParame
         const std::uint64_t axisYActual = compositeBufferAllocationBytes(impl.axisY);
         const std::uint64_t statusActual = compositeBufferAllocationBytes(impl.status);
         std::uint64_t sum = 0;
-        std::uint64_t staging = axisXActual > axisYActual ? axisXActual : axisYActual;
-        if (compositeAddOverflows(outputActual, axisXActual, sum) ||
+        std::uint64_t staging = 0;
+        if (compositeAddOverflows(impl.axisX.stagingBytes, impl.axisY.stagingBytes, staging) ||
+            compositeAddOverflows(staging, impl.status.stagingBytes, staging) ||
+            compositeAddOverflows(outputActual, axisXActual, sum) ||
             compositeAddOverflows(sum, axisYActual, sum) ||
             compositeAddOverflows(sum, statusActual, sum) ||
             compositeAddOverflows(sum, staging, peakActual)) {
@@ -444,6 +463,9 @@ GpuCompositeDiagnostic GpuComposite::beginTranslation(const GpuTranslationParame
         return makeDiagnostic(GpuCompositeDiagnosticCode::DeviceUnavailable,
                               "the composite command buffer could not begin");
     }
+    impl.axisX.recordInitialization(rawCommandBuffer);
+    impl.axisY.recordInitialization(rawCommandBuffer);
+    impl.status.recordInitialization(rawCommandBuffer);
     // Both input and output must be GENERAL for storage-image access. The source is produced by an
     // earlier operation and already GENERAL; the output is fresh (UNDEFINED).
     VkImageMemoryBarrier outputBarrier{};
@@ -582,6 +604,9 @@ GpuCompositePollResult GpuComposite::poll() {
         return GpuCompositePollResult::Failure;
     }
     impl.queueSubmitted = false;
+    impl.axisX.releaseStaging();
+    impl.axisY.releaseStaging();
+    impl.status.releaseStaging();
     if (!pending) {
         return GpuCompositePollResult::Failure;
     }

@@ -43,22 +43,26 @@ struct CompositeBuffer final {
     CompositeBuffer& operator=(CompositeBuffer&& other) noexcept;
     ~CompositeBuffer();
     void release() noexcept;
+    void releaseStaging() noexcept;
+    void recordInitialization(VkCommandBuffer commandBuffer) const noexcept;
 
     std::shared_ptr<vulkan_detail::DeviceAllocatorState> state;
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
+    VkBuffer stagingBuffer = VK_NULL_HANDLE;
+    VmaAllocation stagingAllocation = VK_NULL_HANDLE;
+    std::uint64_t stagingBytes = 0;
     std::uint64_t bytes = 0;
     bool hostVisible = false;
     bool armed = false;
 };
 
-// Creates a device-local (or host-visible) buffer and, when `initialData` is non-null, uploads it
-// through a transient staging buffer synchronously on the owner thread. Returns false and leaves
-// `out` untouched on any failure; every transient resource is RAII. `hostVisible` buffers are used
-// for the status word so poll() can map it.
-[[nodiscard]] bool createCompositeBuffer(vulkan_detail::DeviceAllocatorState& state,
-                                         std::uint64_t bytes, bool hostVisible,
-                                         const void* initialData, CompositeBuffer& out) noexcept;
+// Prepares bounded initialization without submitting device work. The owning dispatch records
+// initialization and retains this buffer through proven completion. Failure leaves out untouched.
+[[nodiscard]] bool
+createCompositeBuffer(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>& owner,
+                      std::uint64_t bytes, bool hostVisible, const void* initialData,
+                      CompositeBuffer& out) noexcept;
 
 // Builds one compute pipeline from the given SPIR-V with `bindingCount` storage bindings (the first
 // N are storage images, the rest storage buffers) and a push-constant range of `pushBytes`.

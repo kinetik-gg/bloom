@@ -239,6 +239,7 @@ bool GpuPointResample::Impl::quarantine() noexcept {
     resources = point_resample_detail::ResourceSet{};
     // Ownership of the counted set moved into the quarantine; do not decrement here.
     resourcesLive = false;
+    quarantineToken = slotToken;
     slotToken = 0;
     queueSubmitted = false;
     return true;
@@ -364,8 +365,7 @@ bool GpuPointResample::Impl::launchJob(const std::shared_ptr<const GpuImage>& so
         return false;
     }
     // Device buffer first so any allocation failure precedes any driver work.
-    if (!createCompositeBuffer(*control, metadataBytes, false, axisIndices.data(),
-                               resources.axis)) {
+    if (!createCompositeBuffer(control, metadataBytes, false, axisIndices.data(), resources.axis)) {
         jobDiagnostic = pointResampleDiagnostic(
             GpuPointResampleDiagnosticCode::AllocationFailed,
             "the point-resample axis metadata buffer could not be allocated");
@@ -408,7 +408,7 @@ bool GpuPointResample::Impl::launchJob(const std::shared_ptr<const GpuImage>& so
     std::uint64_t retainedActual = 0;
     std::uint64_t peakActual = 0;
     if (compositeAddOverflows(outputActual, axisActual, retainedActual) ||
-        compositeAddOverflows(retainedActual, axisActual, peakActual)) {
+        compositeAddOverflows(retainedActual, resources.axis.stagingBytes, peakActual)) {
         jobDiagnostic = pointResampleDiagnostic(GpuPointResampleDiagnosticCode::OverBudget,
                                                 "the point-resample allocation sizes overflow the "
                                                 "byte arithmetic");
@@ -513,6 +513,7 @@ bool GpuPointResample::Impl::launchJob(const std::shared_ptr<const GpuImage>& so
                                     "the point-resample command buffer could not begin");
         return false;
     }
+    resources.axis.recordInitialization(rawCommandBuffer);
     VkImageMemoryBarrier outputBarrier{};
     outputBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     outputBarrier.srcAccessMask = 0;

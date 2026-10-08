@@ -1,6 +1,7 @@
 #ifndef BLOOM_RENDER_VULKAN_GPU_COMPOSITE_MEMORY_HPP
 #define BLOOM_RENDER_VULKAN_GPU_COMPOSITE_MEMORY_HPP
 
+#include "gpu_composite_fault.hpp"
 #include "gpu_device_private.hpp"
 
 #include <atomic>

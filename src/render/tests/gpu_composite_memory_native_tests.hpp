@@ -15,6 +15,7 @@ struct Observations final {
     std::size_t noncoherent = 0;
     bool validRanges = true;
     bool failFlush = false;
+    std::size_t failFlushAt = 0;
     bool failInvalidate = false;
     VkDeviceSize lastBytes = 0;
     VkMemoryPropertyFlags observedProperties = 0;
@@ -43,7 +44,7 @@ inline VkResult observe(const bool invalidate, VmaAllocator allocator, VmaAlloca
         return vmaInvalidateAllocation(allocator, allocation, offset, bytes);
     }
     ++observations.flushes;
-    if (observations.failFlush) {
+    if (observations.failFlush || observations.flushes == observations.failFlushAt) {
         return VK_ERROR_MEMORY_MAP_FAILED;
     }
     return vmaFlushAllocation(allocator, allocation, offset, bytes);
@@ -58,10 +59,15 @@ template <typename Operator, typename Begin>
 void testConsumer(Expectations& expectations, Operator& operation, Begin begin,
                   const std::string& name) {
     const auto flushBefore = observations.flushes;
+    const auto stagingBefore = composite_detail::metadataStagingLiveBytes.load();
     auto started = begin();
     expectations.expect(static_cast<int>(started.code) == 0, name + ": begins");
     if (static_cast<int>(started.code) != 0) {
         return;
+    }
+    if (name == "translation status") {
+        expectations.expect(composite_detail::metadataStagingLiveBytes.load() > stagingBefore,
+                            "translation retains both staged axes through owning dispatch");
     }
     using Poll = decltype(operation.poll());
     auto result = Poll::Pending;
@@ -69,6 +75,8 @@ void testConsumer(Expectations& expectations, Operator& operation, Begin begin,
         result = operation.poll();
     }
     expectations.expect(result == Poll::Ready, name + ": completes");
+    expectations.expect(composite_detail::metadataStagingLiveBytes.load() == stagingBefore,
+                        name + ": releases staging at proven completion before image take");
     expectations.expect(observations.flushes > flushBefore, name + ": initializes with flush");
     expectations.expect(observations.invalidates == 1 && observations.lastBytes == 4,
                         name + ": invalidates exactly the status word before publication");
@@ -77,6 +85,8 @@ void testConsumer(Expectations& expectations, Operator& operation, Begin begin,
     observations.failFlush = true;
     started = begin();
     observations.failFlush = false;
+    expectations.expect(composite_detail::metadataStagingLiveBytes.load() == stagingBefore,
+                        name + ": pre-submit failure immediately frees all staging");
     expectations.expect(static_cast<int>(started.code) != 0,
                         name + ": flush failure rejects initialization");
     expectations.expect(!operation.hasUnretiredSubmission() && !operation.takeImage().isValid(),
@@ -127,14 +137,26 @@ inline void run(Expectations& expectations, GpuDevice& device) {
         CompositeBuffer buffer;
         const auto before = observations.flushes;
         expectations.expect(
-            createCompositeBuffer(*control, sizeof(initial), direct, &initial, buffer),
+            createCompositeBuffer(control, sizeof(initial), direct, &initial, buffer),
             "mapped initialization succeeds");
         expectations.expect(observations.flushes == before + 1 && observations.lastBytes == 4,
                             "direct/staged initialization flushes the allocation-relative word");
+        expectations.expect(buffer.state == control && !buffer.state.owner_before(control) &&
+                                !control.owner_before(buffer.state),
+                            "metadata shares the genuine allocator owner");
+        expectations.expect(direct ? buffer.stagingBytes == 0 : buffer.stagingBytes >= 4,
+                            "only staged initialization retains actual allocation bytes");
+        const VkBuffer originalBuffer = buffer.buffer;
+        observations.failFlush = true;
+        expectations.expect(
+            !createCompositeBuffer(control, sizeof(initial), direct, &initial, buffer) &&
+                buffer.buffer == originalBuffer && buffer.armed,
+            "failed preparation leaves existing output ownership untouched");
+        observations.failFlush = false;
         buffer.release();
         observations.failFlush = true;
         expectations.expect(
-            !createCompositeBuffer(*control, sizeof(initial), direct, &initial, buffer),
+            !createCompositeBuffer(control, sizeof(initial), direct, &initial, buffer),
             "initialization flush fails closed");
         expectations.expect(!buffer.armed, "failed flush publishes no buffer");
         observations.failFlush = false;
@@ -165,6 +187,26 @@ inline void run(Expectations& expectations, GpuDevice& device) {
                         "memory visibility consumers initialize");
     if (!composite || !affine || !blend || !transform) {
         return;
+    }
+    // Fail after the first staged axis, then after both axes at the mapped status initialization.
+    for (const std::size_t boundary : {2U, 3U}) {
+        VmaTotalStatistics before{};
+        vmaCalculateStatistics(control->allocator, &before);
+        const auto stagingBefore = composite_detail::metadataStagingLiveBytes.load();
+        observations.failFlushAt = observations.flushes + boundary;
+        const auto refused =
+            composite.composite->beginTranslation({source, outputWindow, 0.25, 0.5, 1.0F}, kBudget);
+        observations.failFlushAt = 0;
+        VmaTotalStatistics after{};
+        vmaCalculateStatistics(control->allocator, &after);
+        // The first request lazily builds pipeline state, which has no VMA allocations.
+        expectations.expect(
+            refused.code == GpuCompositeDiagnosticCode::AllocationFailed &&
+                !composite.composite->hasUnretiredSubmission() &&
+                after.total.statistics.allocationCount == before.total.statistics.allocationCount &&
+                after.total.statistics.allocationBytes == before.total.statistics.allocationBytes &&
+                composite_detail::metadataStagingLiveBytes.load() == stagingBefore,
+            "partial-axis/status failure immediately restores VMA and staging baseline");
     }
     observations.invalidates = 0;
     testConsumer(
