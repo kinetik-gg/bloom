@@ -348,6 +348,23 @@ void CoordinatorState::drivePresent(Entry& entry) {
     // Aggregate/per-overlay byte budgets are enforced at admission (see
     // GpuPresentationClient::update), so `update` is already within budget here.
 
+    // Validate/pin the replacement before any swapchain mutation. A refused lease must leave
+    // the prior complete native image and active overlay charge intact, and must not acquire then
+    // clear an image merely to consume an invalid update.
+    auto pinned = registry->pin(update.lease);
+    if (!pinned) {
+        {
+            std::lock_guard lock(mailbox->mutex);
+            mailbox->chargedOverlayBytes -= entry.chargedPendingBytes;
+            entry.chargedPendingBytes = 0;
+        }
+        entry.rejectedSequence = update.sequence;
+        entry.message = "the resident lease was rejected: " + pinned.diagnostic.message;
+        entry.lastCode = render::GpuPresentationTargetCode::InvalidArgument;
+        publish(entry, entry.state, false, entry.lastCode, entry.message);
+        return;
+    }
+
     const auto acquireCode = entry.native->acquire();
     if (acquireCode == render::GpuPresentationTargetCode::NotReady) {
         // Keep the request and retry on the next pump; no busy loop.
@@ -383,19 +400,6 @@ void CoordinatorState::drivePresent(Entry& entry) {
         entry.activeOverlayBytes = 0;
     }
 
-    auto pinned = registry->pin(update.lease);
-    if (!pinned) {
-        // The lease is stale/foreign. Consume the acquired image legally and keep the target
-        // healthy; release the overlay charge for the dropped update.
-        const auto discard = entry.native->present(render::GpuClearColor{});
-        static_cast<void>(discard);
-        entry.nativeAcquired = false;
-        releaseOverlayCharge(entry);
-        entry.message = "the resident lease was rejected: " + pinned.diagnostic.message;
-        entry.lastCode = render::GpuPresentationTargetCode::InvalidArgument;
-        publish(entry, entry.state, false, entry.lastCode, entry.message);
-        return;
-    }
     // The alias owns the pin through its deleter, so the presenter's retained input keeps the
     // resident image (and its registry byte charge) alive even after this entry is gone.
     entry.activeAlias =

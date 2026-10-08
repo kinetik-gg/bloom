@@ -356,6 +356,40 @@ windows. A blank frame or project replacement retires the previous target before
 completion is queued onto the UI event loop before destroying the presenter. Resizing retains a
 pending presentation of the current frame until the new extent is ready, and an older acknowledgement
 cannot complete that pending presentation.
+
+Coherent outline publication (G3B1). The controller captures a complete immutable image/parameters/
+overlay-recording pair, with one active raster and one newest request. A changed required overlay
+never causes an outline-free replacement: the last complete pair remains visible, and a completed
+older coherent pair may advance the display while newer geometry is still being prepared. Its exact
+owner-applied identity remains stale until the newest pair applies. Project/composition, surface,
+selection/style, removal, and viewport extent domains prevent late completions from resurrecting
+removed handles or crossing a replacement. Reuse compares the actual recorded commands and logical/
+device extent, rather than trusting a hash or request generation; direct UI comparison is capped at
+64 KiB of commands, and larger recordings conservatively rasterize on the existing worker. Raster
+failure retains the last complete pair with a diagnostic, or uses the explicit CPU fallback when
+none exists. There is no scheduler-cadence change or UI wait.
+
+Publication admission is coalesced to one owner-outstanding update plus one newest complete update.
+The controller retains at most six distinct immutable frame handles across applied, two submission
+correlations, ready, active, and newest slots; the command-stream reuse key retains no frame, and
+the 32 trace correlations retain identity only. An exact consumed-owner `rejectedSequence` releases
+the admission without inventing an applied acknowledgement. Viewer-local accessibility separates prepared desired
+intent from applied content. Existing gesture mapping remains on the prepared frame; coupling passive
+hit mapping and bounds to applied metadata while preserving ongoing interactions remains G3B2.
+Native owner acknowledgement proves submitted presentation, not compositor-visible pixels; external
+bounded fixture captures are the separate visible oracle.
+
+The owner pins a replacement lease before acquiring a swapchain image. Rejection releases only
+that replacement's pending overlay charge and publishes its exact rejected sequence, retaining
+the previous native image and active overlay charge. Acquire/retry/retirement proof is unchanged.
+
+G3B remains incomplete. G3B2 must qualify last-good/refusal/CPU-cover surface identity and finish
+failed/non-neutral display-adjustment and global status-intent truth. The underlying clear/discard
+acquire-wait/layout-transition dependency also remains a G3B2 native validation gate; avoiding the
+refused-lease clear call does not qualify other clear, hard-failure, or unpresented-retire paths.
+G3B1 does not claim those gates or cross-platform native GPU qualification; the explicit CPU
+fallback remains supported on macOS and Windows.
+
 The RAM preview controller fills its range with a bounded two-deep pipeline
 so the next frame's CPU preparation overlaps the previous frame's display stage, with the
 pixels-identity duplicate guard, out-of-order collection, cancel-all, and no cross-frame coalescing

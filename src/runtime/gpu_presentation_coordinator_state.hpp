@@ -94,6 +94,7 @@ struct CoordinatorState {
         std::optional<detail::GpuPresentationPendingResize> pendingResize;
         bool retirePending = false;
         std::uint64_t appliedSequence = 0;
+        std::uint64_t rejectedSequence = 0;
         std::uint64_t presentCount = 0;
         bool nativeAcquired = false;
         // Actual overlay bytes currently applied and charged in the mailbox.
@@ -165,6 +166,7 @@ struct CoordinatorState {
             snapshot.id = entry.id;
             snapshot.state = state;
             snapshot.appliedSequence = entry.appliedSequence;
+            snapshot.rejectedSequence = entry.rejectedSequence;
             snapshot.presentCount = entry.presentCount;
             snapshot.surfaceSafeToDestroy = safeToDestroy;
             snapshot.targetCode = code;

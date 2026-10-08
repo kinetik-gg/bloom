@@ -134,8 +134,8 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
             request.overlay.valid = true;
         }
     }
-    // Stable signature of everything the overlay recording depends on. The controller reuses the
-    // retained overlay and its token while this is unchanged, so a steady view never re-rasterizes.
+    // Diagnostic signature of recorded dependencies. The controller's actual reuse oracle is
+    // bounded exact command equality; request generations alone never invalidate identical geometry.
     std::uint64_t signature = 1469598103934665603ULL;
     const auto mix = [&signature](const std::uint64_t value) {
         signature ^= value;
@@ -163,6 +163,7 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
     mix(static_cast<std::uint64_t>(request.containerRect.width() * 1000.0));
     mix(static_cast<std::uint64_t>(request.containerRect.height() * 1000.0));
     request.overlaySignature = signature;
+    request.overlayDomainRevision = gpuOverlayRevision_;
     return request;
 }
 
@@ -243,8 +244,8 @@ void ViewerEditor::updateGpuResidentPresentationBody() {
             gpuContainer_->hide();
         }
         gpuResident_->concealCpuCover();
-        gpuPresentedFrame_ = frame;
-        gpuPresentedTransform_ = transform_;
+        gpuRequestedFrame_ = frame;
+        gpuRequestedTransform_ = transform_;
         return;
     }
     if (!currentDisplayGeometry().has_value()) {
@@ -285,8 +286,9 @@ void ViewerEditor::updateGpuResidentPresentationBody() {
             gpuContainer_->show();
         }
     }
-    gpuPresentedFrame_ = frame;
-    gpuPresentedTransform_ = transform_;
+    gpuRequestedFrame_ = frame;
+    gpuRequestedTransform_ = transform_;
+    updatePreviewAccessibility();
 }
 
 void ViewerEditor::requestResidentCpuFallback() {
@@ -390,7 +392,7 @@ void ViewerEditor::pollGpuResident() {
     if (!residentFrameIsDisplayed() && !residentActive_) {
         return;
     }
-    if (gpuPresentedFrame_ != displayedFrame() || !(gpuPresentedTransform_ == transform_)) {
+    if (gpuRequestedFrame_ != displayedFrame() || !(gpuRequestedTransform_ == transform_)) {
         updateGpuResidentPresentation();
     }
 }

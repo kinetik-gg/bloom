@@ -15,6 +15,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -68,394 +69,7 @@ namespace {
 
 } // namespace
 
-struct ViewerGpuResidentController::Impl final {
-    std::shared_ptr<PreviewFrameTrace> trace;
-    PreviewTraceIdentity pendingTraceIdentity;
-    struct TraceSubmission final {
-        std::uint64_t sequence = 0;
-        PreviewTraceIdentity identity;
-    };
-    std::array<TraceSubmission, 32> traceSubmissions{};
-    std::size_t nextTraceSubmission = 0;
-    std::uint64_t tracePresenterId = 0, lastTracedAppliedSequence = 0;
-    Dependencies dependencies;
-    std::shared_ptr<ViewerGpuPort> port;
-    std::unique_ptr<ViewerGpuPresenter> presenter;
-    InputSink inputSink;
-    PresentAck presentAck;
-    CpuFallback cpuFallback;
-    CpuCoverSnapshot coverSnapshot;
-    // The cover is parented to this alien host so Qt's WA_NativeWindow sibling enforcement only
-    // reaches the cover, never the host's parent (the editor) or the editor's other children.
-    ViewerGpuCpuCoverHost* coverHost = nullptr;
-    ViewerGpuCpuCover* cover = nullptr;
-    // True only while a native transition (attach/resize/resume/refusal) needs the CPU cover.
-    bool coverRequired = true;
-    // True once the cover pixmap holds the current CPU paint. It is captured on the hidden->visible
-    // transition only, so a retained/refused transition that re-raises the cover does not
-    // re-rasterize the snapshot every poll tick.
-    bool coverCaptured = false;
-    std::function<void()> stateChanged;
-    ViewerGpuPresenter::State lastReportedState = ViewerGpuPresenter::State::Uninitialized;
-
-    // The last request/lease we intend to present. Cheap: an opaque lease plus
-    // plain params.
-    runtime::GpuResidentFrameLease pendingLease;
-    render::GpuPresentImageParams pendingParams;
-    std::uint32_t targetWidth = 0;
-    std::uint32_t targetHeight = 0;
-    std::uint64_t requestGeneration = 0;
-    std::uint64_t enqueuedSequence = 0;
-    bool presentAcked = false;
-    // A present waiting for the target to become Active; enqueued once when presents are admitted.
-    bool presentPending = false;
-    std::shared_ptr<const runtime::GpuPresentationOverlay> pendingOverlayToPresent;
-
-    // Bounded overlay pipeline: one active raster plus one newest pending; stale completions drop.
-    std::optional<runtime::TaskHandle<std::shared_ptr<const runtime::GpuPresentationOverlay>>>
-        activeOverlayTask;
-    std::uint64_t activeOverlayGeneration = 0;
-    std::uint64_t activeOverlayRequestGeneration = 0;
-    std::optional<OverlayRasterRequest> newestOverlay;
-    std::uint64_t newestOverlayRequestGeneration = 0;
-    std::uint64_t nextOverlayToken = 0;
-    std::uint64_t presentedOverlaySignature = 0;
-    std::shared_ptr<const runtime::GpuPresentationOverlay> presentedOverlay;
-
-    std::size_t presentAttempts = 0;
-    std::size_t acceptedPresents = 0;
-    std::size_t overlayRasters = 0;
-    bool lastResident = false;
-    std::string diagnostic;
-
-    [[nodiscard]] bool usable() const noexcept {
-        return dependencies.client != nullptr || port != nullptr;
-    }
-
-    void failCpu(const std::string& message) {
-        diagnostic = message;
-        if (cover != nullptr) {
-            coverRequired = true;
-            showCover();
-        }
-        if (cpuFallback) {
-            cpuFallback();
-        }
-    }
-
-    // Returns true only on the conceal->reveal transition that actually showed and restacked the
-    // cover. A cover that is already visible is left completely untouched.
-    [[nodiscard]] bool ensureCover(const QRect& rect) {
-        if (!coverSnapshot) {
-            return false;
-        }
-        if (coverHost == nullptr) {
-            coverHost = new ViewerGpuCpuCoverHost(dependencies.containerParent);
-        }
-        if (coverHost->geometry() != rect) {
-            coverHost->setGeometry(rect);
-        }
-        if (cover == nullptr) {
-            cover = new ViewerGpuCpuCover(coverHost);
-            cover->setObjectName(QStringLiteral("bloomViewerGpuCpuCover"));
-            coverCaptured = false;
-        }
-        const QRect local(QPoint(0, 0), rect.size());
-        if (cover->geometry() != local) {
-            cover->setGeometry(local);
-        }
-        // Snapshot once per conceal->reveal transition; a cover that is merely re-raised while it
-        // already holds the current paint is not re-rasterized (and a hidden ancestor cannot be
-        // mistaken for a transition, unlike a bare isVisible() test).
-        if (!coverCaptured) {
-            cover->setSnapshot(coverSnapshot());
-            coverCaptured = true;
-        }
-        if (!cover->isVisible()) {
-            if (!coverHost->isVisible()) {
-                coverHost->show();
-            }
-            cover->show();
-            cover->raise();
-            return true;
-        }
-        return false;
-    }
-
-    void showCover() {
-        if (cover == nullptr) {
-            return;
-        }
-        if (!coverCaptured) {
-            cover->setSnapshot(coverSnapshot());
-            coverCaptured = true;
-        }
-        if (!cover->isVisible()) {
-            if (coverHost != nullptr && !coverHost->isVisible()) {
-                coverHost->show();
-            }
-            cover->show();
-            cover->raise();
-        }
-    }
-
-    void hideCover() {
-        if (cover != nullptr) {
-            cover->hide();
-        }
-        if (coverHost != nullptr) {
-            coverHost->hide();
-        }
-        // The next reveal must capture fresh paint, whatever changed while it was concealed.
-        coverCaptured = false;
-    }
-
-    [[nodiscard]] bool ensurePresenter(const std::uint32_t width, const std::uint32_t height) {
-        if (presenter != nullptr) {
-            if (presenter->initialized()) {
-                return true;
-            }
-            return presenter->initialize();
-        }
-        if (!usable() || width == 0U || height == 0U) {
-            diagnostic = "no presentation client/port or positive target extent was supplied";
-            return false;
-        }
-        ViewerGpuPresenter::Config config;
-        config.vulkan_loader_path = dependencies.vulkanLoaderPath;
-        config.target_width = width;
-        config.target_height = height;
-        config.device_pixel_ratio =
-            dependencies.devicePixelRatio > 0.0 ? dependencies.devicePixelRatio : 1.0;
-        if (trace) {
-            tracePresenterId = trace->allocatePresenterId();
-            traceSubmissions = {};
-            lastTracedAppliedSequence = 0;
-        }
-        if (port != nullptr) {
-            presenter = std::make_unique<ViewerGpuPresenter>(port, config);
-        } else {
-            presenter = std::make_unique<ViewerGpuPresenter>(dependencies.client, config);
-        }
-        // Parent the container BEFORE the window is exposed and the surface
-        // attached.
-        presenter->setContainerParent(dependencies.containerParent);
-        presenter->setInputCallback([this](const ViewerGpuInputEvent& event) {
-            if (inputSink) {
-                inputSink(event);
-            }
-        });
-        if (!presenter->initialize()) {
-            diagnostic = presenter->diagnostic();
-            return false;
-        }
-        return true;
-    }
-
-    // Enqueues one present; the returned bool is mailbox admission only, the result arrives via
-    // poll().
-    [[nodiscard]] bool
-    enqueuePresent(std::shared_ptr<const runtime::GpuPresentationOverlay> overlay) {
-        if (presenter == nullptr || !presenter->acceptingPresent()) {
-            failCpu(presenter != nullptr ? presenter->diagnostic()
-                                         : "no presentation target is active");
-            if (presentAck) {
-                presentAck(false, diagnostic);
-            }
-            return false;
-        }
-        ++presentAttempts;
-        const bool admitted = presenter->present(pendingLease, pendingParams, std::move(overlay));
-        if (!admitted) {
-            if (trace)
-                trace->record(
-                    pendingTraceIdentity, PreviewTraceStage::PresentSubmitted,
-                    PreviewTraceOutcome::Rejected,
-                    static_cast<std::uint8_t>(runtime::PreviewDisplayProvider::GpuResident), 0, 0,
-                    0, 0, tracePresenterId);
-            failCpu(presenter->diagnostic());
-            if (presentAck) {
-                presentAck(false, diagnostic);
-            }
-            return false;
-        }
-        ++acceptedPresents;
-        enqueuedSequence = presenter->lastEnqueuedSequence();
-        if (trace) {
-            traceSubmissions[nextTraceSubmission] = {enqueuedSequence, pendingTraceIdentity};
-            nextTraceSubmission = (nextTraceSubmission + 1) % traceSubmissions.size();
-            trace->record(pendingTraceIdentity, PreviewTraceStage::PresentSubmitted,
-                          PreviewTraceOutcome::Accepted,
-                          static_cast<std::uint8_t>(runtime::PreviewDisplayProvider::GpuResident),
-                          0, enqueuedSequence, 0, 0, tracePresenterId);
-        }
-        presentAcked = false;
-        return true;
-    }
-
-    // Enqueues the pending present once the target admits presents (first attach
-    // / after resize).
-    void pumpPendingPresent() {
-        if (!presentPending || presenter == nullptr || !presenter->acceptingPresent()) {
-            return;
-        }
-        presentPending = false;
-        static_cast<void>(enqueuePresent(pendingOverlayToPresent));
-    }
-
-    void startOverlayRaster(OverlayRasterRequest request, const std::uint64_t forGeneration) {
-        if (dependencies.scheduler == nullptr) {
-            // No worker: present the frame without an overlay rather than stalling
-            // it.
-            newestOverlay.reset();
-            pendingOverlayToPresent = nullptr;
-            presentPending = true;
-            pumpPendingPresent();
-            return;
-        }
-        const std::uint64_t generation = ++activeOverlayGeneration;
-        activeOverlayRequestGeneration = forGeneration;
-        ++overlayRasters;
-        const OverlayRasterRequest sharedRequest = std::move(request);
-        auto submission =
-            dependencies.scheduler->submit<std::shared_ptr<const runtime::GpuPresentationOverlay>>(
-                runtime::TaskRequest(
-                    "viewer-gpu-overlay-raster",
-                    runtime::TaskOwner{.kind = runtime::TaskOwnerKind::PanelRequest,
-                                       .id = runtime::TaskOwnerId::fromRaw(
-                                           (std::uint64_t{1} << 63U) | 0x5A17ULL)}),
-                [sharedRequest](runtime::TaskContext& context)
-                    -> runtime::TaskResult<std::shared_ptr<const runtime::GpuPresentationOverlay>> {
-                    auto overlay = rasterizeResidentOverlay(
-                        sharedRequest, [&context] { return context.isCancellationRequested(); });
-                    if (overlay == nullptr) {
-                        return runtime::TaskResult<std::shared_ptr<
-                            const runtime::GpuPresentationOverlay>>::failed(runtime::TaskDiagnostic{
-                            .code = "bloom.ui.overlay-raster",
-                            .severity = runtime::DiagnosticSeverity::Error,
-                            .summary = "the viewer overlay could not be "
-                                       "rasterized",
-                            .detail = {},
-                            .suggestedAction = {}});
-                    }
-                    return runtime::TaskResult<std::shared_ptr<
-                        const runtime::GpuPresentationOverlay>>::succeeded(std::move(overlay));
-                });
-        static_cast<void>(generation);
-        if (!submission.accepted()) {
-            diagnostic = "the overlay raster task was not admitted; presenting "
-                         "without overlay";
-            pendingOverlayToPresent = nullptr;
-            presentPending = true;
-            pumpPendingPresent();
-            return;
-        }
-        activeOverlayTask = submission.handle;
-    }
-
-    // Starts the newest pending overlay raster if none is active.
-    void pumpOverlayStart() {
-        if (activeOverlayTask.has_value() || !newestOverlay.has_value()) {
-            return;
-        }
-        OverlayRasterRequest request = std::move(*newestOverlay);
-        newestOverlay.reset();
-        startOverlayRaster(std::move(request), newestOverlayRequestGeneration);
-    }
-
-    // Drains a completed overlay raster and enqueues the follow-up present when
-    // it is still current.
-    void pumpOverlayCompletion() {
-        if (!activeOverlayTask.has_value()) {
-            return;
-        }
-        auto result = activeOverlayTask->tryTakeResult();
-        if (!result.has_value()) {
-            return;
-        }
-        activeOverlayTask.reset();
-        const bool current = activeOverlayRequestGeneration == requestGeneration;
-        if (!current) {
-            // Stale raster for a frame/params we have already replaced: drop it,
-            // never present it onto the newer frame.
-            pumpOverlayStart();
-            return;
-        }
-        if (result->state() == runtime::TaskState::Succeeded && result->value().has_value() &&
-            *result->value() != nullptr) {
-            presentedOverlay = *result->value();
-            presentedOverlaySignature = newestOverlaySignatureForRequest;
-            pendingOverlayToPresent = presentedOverlay;
-            presentPending = true;
-            pumpPendingPresent();
-        } else {
-            // Keep the image visible (it was already presented without an overlay)
-            // and report the overlay failure honestly; never silently drop the
-            // required handles.
-            diagnostic = "the viewer overlay could not be rasterized; the frame is "
-                         "shown without "
-                         "its overlays";
-        }
-        pumpOverlayStart();
-    }
-
-    // The signature associated with the current request (set by present()).
-    std::uint64_t newestOverlaySignatureForRequest = 0;
-
-    void pumpPresentAck() {
-        // Trace the owner's actual applied sequence, even while a newer request is pending.
-        // Never stamp the current pending identity onto an older acknowledgement. If correlation
-        // has fallen out of this bounded map, identity remains explicitly unavailable (all zero).
-        if (trace && presenter && presenter->appliedSequence() != 0 &&
-            presenter->appliedSequence() != lastTracedAppliedSequence) {
-            const auto applied = presenter->appliedSequence();
-            PreviewTraceIdentity acknowledged;
-            for (const auto& submission : traceSubmissions) {
-                if (submission.sequence == applied) {
-                    acknowledged = submission.identity;
-                    break;
-                }
-            }
-            trace->record(acknowledged, PreviewTraceStage::PresentAcknowledged,
-                          PreviewTraceOutcome::Accepted,
-                          static_cast<std::uint8_t>(runtime::PreviewDisplayProvider::GpuResident),
-                          0, applied, applied, presenter->presentCount(), tracePresenterId);
-            lastTracedAppliedSequence = applied;
-        }
-        if (presentAcked || presenter == nullptr || enqueuedSequence == 0) {
-            return;
-        }
-        const auto state = presenter->state();
-        if (state == ViewerGpuPresenter::State::Retained ||
-            state == ViewerGpuPresenter::State::Unsupported ||
-            state == ViewerGpuPresenter::State::Uninitialized) {
-            presentAcked = true;
-            failCpu(presenter->diagnostic());
-            if (presentAck) {
-                presentAck(false, diagnostic);
-            }
-            return;
-        }
-        if (presentPending) {
-            // A newer present is authored but not yet enqueued (the target is still attaching or
-            // resizing). The previous present's sequence must not acknowledge the newer request, or
-            // the cover would hide over a stale frame.
-            return;
-        }
-        if (!presenter->acceptingPresent()) {
-            return; // still attaching/resizing; wait
-        }
-        if (presentSequenceAcknowledged(presenter->appliedSequence(), enqueuedSequence)) {
-            presentAcked = true;
-            diagnostic = presenter->diagnostic();
-            coverRequired = false;
-            hideCover();
-            if (presentAck) {
-                presentAck(true, diagnostic);
-            }
-        }
-    }
-};
+#include "viewer_gpu_resident_state.ipp"
 
 ViewerGpuResidentController::ViewerGpuResidentController() : impl_(std::make_unique<Impl>()) {}
 
@@ -513,7 +127,7 @@ void ViewerGpuResidentController::revealCpuCover(const QRect& containerRect) {
     static_cast<void>(impl_->ensureCover(containerRect));
 }
 
-bool ViewerGpuResidentController::cpuCoverVisibleForTest() const noexcept {
+bool ViewerGpuResidentController::cpuCoverVisible() const noexcept {
     return impl_->cover != nullptr && impl_->cover->isVisible();
 }
 
@@ -583,6 +197,8 @@ bool ViewerGpuResidentController::requestTargetResize(const std::uint32_t device
         impl_->diagnostic = impl_->presenter->diagnostic();
         return false;
     }
+    ++impl_->surfaceEpoch;
+    impl_->enqueuedSequence = 0; // resize discards old updates without acknowledging them
     impl_->targetWidth = deviceWidth;
     impl_->targetHeight = deviceHeight;
     impl_->presentAcked = false;
@@ -683,51 +299,41 @@ bool ViewerGpuResidentController::present(const runtime::PreparedPreviewFrame& f
     params.checkerTilePixels = request.checkerTilePixels;
     params.checkerOriginX = static_cast<float>(-request.containerRect.left());
     params.checkerOriginY = static_cast<float>(-request.containerRect.top());
-    impl_->pendingLease = geometry->lease;
-    if (impl_->trace)
-        impl_->pendingTraceIdentity = PreviewFrameTrace::identity(frame.desiredIdentity());
-    impl_->pendingParams = params;
-    ++impl_->requestGeneration;
-    impl_->newestOverlaySignatureForRequest = request.overlaySignature;
-
-    // The overlay recording is only re-rasterized when its signature changed;
-    // otherwise the retained overlay and its token are reused, so a steady view
-    // never floods the worker.
-    if (request.overlay.valid && request.overlaySignature != 0 &&
-        request.overlaySignature == impl_->presentedOverlaySignature &&
-        impl_->presentedOverlay != nullptr) {
-        impl_->newestOverlay.reset();
-        impl_->pendingOverlayToPresent = impl_->presentedOverlay;
-        impl_->presentPending = true;
-        impl_->pumpPendingPresent();
+    Impl::Publication publication;
+    publication.frame = std::make_shared<const runtime::PreparedPreviewFrame>(frame);
+    publication.projectId = frame.desiredIdentity().projectId;
+    publication.compositionId = frame.desiredIdentity().compositionId;
+    publication.params = params;
+    publication.source = request.overlay;
+    publication.destination = request.destination;
+    publication.domainRevision = request.overlayDomainRevision;
+    publication.surfaceEpoch = impl_->surfaceEpoch;
+    if (!request.overlay.valid)
+        ++impl_->removalEpoch;
+    publication.removalEpoch = impl_->removalEpoch;
+    publication.generation = ++impl_->requestGeneration;
+    if (impl_->pendingPublication && !Impl::compatible(*impl_->pendingPublication, publication))
+        impl_->presentPending = false;
+    impl_->desiredPublication = publication;
+    impl_->presentAcked = false;
+    // A changed required overlay is published atomically with the captured image/params; the
+    // previous complete pair remains visible while the existing bounded worker runs.
+    if (request.overlay.valid) {
+        if (impl_->rasterPublication && impl_->presentedOverlay &&
+            Impl::equivalent(*impl_->rasterPublication, publication)) {
+            impl_->newestPublication.reset();
+            impl_->stagePublication(std::move(publication), impl_->presentedOverlay);
+        } else {
+            impl_->newestPublication = std::move(publication);
+            impl_->pumpOverlayStart();
+        }
         return true;
     }
-
-    if (request.overlay.valid && request.overlay.token != 0 &&
-        impl_->dependencies.scheduler != nullptr) {
-        OverlayRasterRequest raster;
-        raster.picture = request.overlay.picture;
-        raster.logicalSize = request.overlay.logicalSize;
-        raster.width = width;
-        raster.height = height;
-        raster.token = ++impl_->nextOverlayToken;
-        raster.byteBudget = kResidentOverlayByteBudget;
-        impl_->newestOverlay = std::move(raster);
-        impl_->newestOverlayRequestGeneration = impl_->requestGeneration;
-        // Present the frame as soon as the target admits presents, without the
-        // stale overlay; the new overlay follows when the bounded raster completes.
-        // Never present an old overlay onto a new frame.
-        impl_->pendingOverlayToPresent = nullptr;
-        impl_->presentPending = true;
-        impl_->pumpOverlayStart();
-        impl_->pumpPendingPresent();
-        return true;
-    }
-
-    impl_->newestOverlay.reset();
-    impl_->pendingOverlayToPresent = nullptr;
-    impl_->presentPending = true;
-    impl_->pumpPendingPresent();
+    // Explicit removal is a complete publication, never an invitation to reuse old handles.
+    impl_->newestPublication.reset();
+    impl_->rasterPublication.reset();
+    impl_->presentedOverlay.reset();
+    impl_->stagePublication(std::move(publication), nullptr);
     return true;
 }
 
@@ -771,7 +377,15 @@ void ViewerGpuResidentController::resumeAfterMutation() {
         impl_->presenter.reset();
         impl_->pendingLease = runtime::GpuResidentFrameLease{};
         impl_->presentedOverlay.reset();
-        impl_->presentedOverlaySignature = 0;
+        ++impl_->surfaceEpoch;
+        impl_->activePublication.reset();
+        impl_->newestPublication.reset();
+        impl_->desiredPublication.reset();
+        impl_->rasterPublication.reset();
+        impl_->pendingPublication.reset();
+        impl_->appliedPublicationFrame.reset();
+        impl_->frameSubmissions = {};
+        impl_->lastObservedAppliedSequence = 0;
         impl_->enqueuedSequence = 0;
         impl_->presentAcked = false;
         // The next present's extent initializes the next presenter; a stale extent must not gate.
@@ -804,7 +418,7 @@ bool ViewerGpuResidentController::lastPresentWasResident() const noexcept {
 }
 
 bool ViewerGpuResidentController::presentationAcknowledged() const noexcept {
-    return impl_->presentAcked;
+    return impl_->presentAcked && publicationCurrent();
 }
 
 std::uint64_t ViewerGpuResidentController::presentedSequence() const noexcept {
@@ -821,6 +435,20 @@ std::uint64_t ViewerGpuResidentController::nativePresentCount() const noexcept {
 
 std::uint64_t ViewerGpuResidentController::nativeLastEnqueuedSequence() const noexcept {
     return impl_->presenter != nullptr ? impl_->presenter->lastEnqueuedSequence() : 0U;
+}
+
+std::shared_ptr<const runtime::PreparedPreviewFrame>
+ViewerGpuResidentController::appliedFrame() const noexcept {
+    return impl_->appliedPublicationFrame;
+}
+
+QRectF ViewerGpuResidentController::appliedDestination() const noexcept {
+    return impl_->appliedPublicationDestination;
+}
+
+bool ViewerGpuResidentController::publicationCurrent() const noexcept {
+    return impl_->appliedPublicationFrame &&
+           impl_->appliedPublicationGeneration == impl_->requestGeneration;
 }
 
 std::size_t ViewerGpuResidentController::overlayRasterCount() const noexcept {

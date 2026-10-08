@@ -167,6 +167,8 @@ struct GpuPresentationTargetSnapshot final {
     GpuPresentationTargetState state = GpuPresentationTargetState::Gone;
     // Last update sequence whose present was submitted.
     std::uint64_t appliedSequence = 0;
+    // Exact consumed update refused by the owner; never an applied/presented acknowledgement.
+    std::uint64_t rejectedSequence = 0;
     // Monotonic count of successful presents (for latest-only coalescing evidence).
     std::uint64_t presentCount = 0;
     // True only when the native target is proven gone (Retired, or Rejected before native creation)

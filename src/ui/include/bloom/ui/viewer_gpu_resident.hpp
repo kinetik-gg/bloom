@@ -89,11 +89,11 @@ struct ResidentPresentRequest final {
     render::GpuPresentColor checkerColorA{0.0F, 0.0F, 0.0F, 1.0F};
     render::GpuPresentColor checkerColorB{1.0F, 1.0F, 1.0F, 1.0F};
     float checkerTilePixels = 22.0F;
-    // Stable signature of everything the overlay recording depends on (frame
-    // identity, view transform, channel, background, overlay options, selection
-    // revision). When it matches the last presented overlay, the retained overlay
-    // is reused and no raster is scheduled.
+    // Optional caller signature for diagnostics. Reuse correctness uses the bounded exact
+    // immutable command stream plus logical/device extent and publication domain, never this hash.
     std::uint64_t overlaySignature = 0;
+    // Selection/style domain: a completion from another domain never resurrects removed handles.
+    std::uint64_t overlayDomainRevision = 0;
     ResidentOverlaySource overlay;
 };
 
@@ -111,9 +111,9 @@ class ViewerGpuResidentController final {
     };
 
     using InputSink = std::function<void(const ViewerGpuInputEvent&)>;
-    // Fired exactly once per present request, with the truthful result: true only
-    // after the owner published a genuine presentCount/appliedSequence advance
-    // for that request; false on a refusal/unsupported/stale-lease path.
+    // Reports an owner-applied complete publication (which may be explicitly stale relative to
+    // newer desired intent). appliedFrame()/publicationCurrent() identify that publication;
+    // mailbox admission never reports true. False on refusal/unsupported/stale-lease paths.
     using PresentAck = std::function<void(bool presented, const std::string& diagnostic)>;
     // Invoked when a resident frame cannot be presented, so the host can run its
     // explicit same-request CPU fallback. Never a GPU readback.
@@ -150,7 +150,8 @@ class ViewerGpuResidentController final {
     // is never hidden, reparented, or destroyed here. Safe when no snapshot callback is configured
     // (no-op) and when no cover exists yet.
     void revealCpuCover(const QRect& containerRect);
-    [[nodiscard]] bool cpuCoverVisibleForTest() const noexcept;
+    [[nodiscard]] bool cpuCoverVisible() const noexcept;
+    [[nodiscard]] bool cpuCoverVisibleForTest() const noexcept { return cpuCoverVisible(); }
     // Fired whenever the presenter's state changed since the previous poll
     // (attach ack, retire, refusal), so the host can re-evaluate whether to
     // present or fall back.
@@ -204,11 +205,18 @@ class ViewerGpuResidentController final {
     [[nodiscard]] bool presentationAcknowledged() const noexcept;
     [[nodiscard]] std::uint64_t presentedSequence() const noexcept;
     [[nodiscard]] std::size_t overlayRasterCount() const noexcept;
+    // Owner-applied coherent publication, distinct from the newest prepared/desired frame.
+    [[nodiscard]] std::shared_ptr<const runtime::PreparedPreviewFrame>
+    appliedFrame() const noexcept;
+    [[nodiscard]] bool publicationCurrent() const noexcept;
+    [[nodiscard]] QRectF appliedDestination() const noexcept;
     // Genuine owner-observed native present progress for the live presenter (read-only): the
     // applied sequence and applied present count the presentation owner published, and the last
     // sequence this controller enqueued. A mailbox admission never advances these; a caller that
-    // needs proof a specific request was genuinely presented waits until
-    // nativeAppliedSequence() >= nativeLastEnqueuedSequence(). Zero when no presenter exists.
+    // tracks an exact submitted sequence waits for nativeAppliedSequence() to reach that captured
+    // sequence. A newer desired outline may still await raster and have no submitted sequence;
+    // publicationCurrent() separately reports newest desired publication. Neither is compositor
+    // visible-pixel proof. Zero when no presenter exists.
     [[nodiscard]] std::uint64_t nativeAppliedSequence() const noexcept;
     [[nodiscard]] std::uint64_t nativePresentCount() const noexcept;
     [[nodiscard]] std::uint64_t nativeLastEnqueuedSequence() const noexcept;

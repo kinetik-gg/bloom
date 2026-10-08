@@ -46,7 +46,10 @@ rasterizeResidentOverlay(const OverlayRasterRequest& request,
     const auto cancelled = [&cancellationRequested] {
         return cancellationRequested && cancellationRequested();
     };
-    if (request.token == 0U || request.width == 0U || request.height == 0U) {
+    if (request.token == 0U || request.width == 0U || request.height == 0U ||
+        !std::isfinite(request.logicalSize.width()) ||
+        !std::isfinite(request.logicalSize.height()) || !(request.logicalSize.width() > 0.0) ||
+        !(request.logicalSize.height() > 0.0)) {
         return nullptr;
     }
     constexpr std::uint32_t kMaxExtent =

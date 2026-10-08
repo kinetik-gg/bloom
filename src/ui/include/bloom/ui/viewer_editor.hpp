@@ -60,6 +60,7 @@ class QWheelEvent;
 namespace bloom::ui {
 
 class CompositionPreviewController;
+struct CompositionPreviewState;
 class PlaybackController;
 class RamPreviewController;
 class ViewerTimecodeReadout;
@@ -542,6 +543,8 @@ class ViewerEditor final : public QWidget,
     std::optional<render::Rgba8> probeCacheDisplay_;
     QString probeFailure_;
     [[nodiscard]] PreparedPreviewFrameHandle displayedFrame() const;
+    [[nodiscard]] PreparedPreviewFrameHandle appliedDisplayFrame() const;
+    [[nodiscard]] CompositionPreviewState displayedPreviewState() const;
     runtime::ViewAdjust viewAdjust_{};
     kit::KValueField* exposureField_ = nullptr;
     kit::KValueField* gammaField_ = nullptr;
@@ -698,8 +701,8 @@ class ViewerEditor final : public QWidget,
     // failed (so a stale completion is dropped and an actual failure is not retried forever).
     std::optional<runtime::PreviewRequestIdentity> cpuFallbackIdentity_;
     std::optional<runtime::PreviewRequestIdentity> cpuFallbackFailedIdentity_;
-    PreparedPreviewFrameHandle gpuPresentedFrame_;
-    ViewTransform gpuPresentedTransform_{};
+    PreparedPreviewFrameHandle gpuRequestedFrame_;
+    ViewTransform gpuRequestedTransform_{};
     std::uint64_t gpuOverlayToken_ = 0;
     // True only while renderCpuCoverSnapshot() is painting the CPU content into the cover pixmap.
     bool coverSnapshotInProgress_ = false;

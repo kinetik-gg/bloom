@@ -1,13 +1,13 @@
 # GPU reliability, media preparation, and preview execution plan
 
-Status: working — paused at owner request after G2E; architecture choices remain gated by evidence
+Status: working — implementation resumed after G2E; architecture choices remain gated by evidence
 
-Updated: 2026-10-08
+Updated: 2026-10-09
 
 ## Execution checkpoint
 
-Execution is paused at the owner’s request after the G2E checkpoint. No next milestone is active.
-Resume with G3B outline publication and visible presentation, then G3A retention truth.
+The owner resumed execution after the G2E checkpoint. G3B outline publication and visible
+presentation is active; G3A retention truth follows after its acceptance.
 
 Implementation proceeds sequentially from `e1086c13`. Each slice requires source review, focused
 regressions, and the applicable native/product evidence before its successor is accepted. A passing
@@ -19,7 +19,22 @@ remain separate decisions under G9.
 | G0 | Initial instrumentation slice accepted; remaining probes attach to their owning packages | Source review, quality checks, three focused suites, native acknowledgement correlation and original interaction fixture passed |
 | G1 | Accepted: native validity and mapped-memory visibility | Source review, quality/lint, real operator/display/viewer/RAM/final-route parity and validation; independent Composite/viewer reruns passed |
 | G2 | Initialization cleanup, metadata lifetime, image reclamation, vector quarantine, oracle recovery, and G2E cancellation/teardown accepted as bounded slices | Native parity/lifecycle/viewer/final paths and independent retirement/transition reruns have zero validation errors; aggregate accounting remains G6 work |
-| G3–G10 | Pending | No implementation or qualification claim |
+| G3B1 | Coherent outline publication accepted as a bounded slice | Native state/interaction regressions, independent compositor samples, CPU regressions and changed-source static analysis pass; G3B2 remains pending |
+| G3A, G3B2, G4–G10 | Pending | No implementation or qualification claim |
+
+G3B1 checkpoint (2026-10-09), accepted after independent source review and focused reruns: coherent required-outline publication and exact
+owner-applied metadata are implemented as a bounded slice. Deterministic delayed raster, changing
+geometry progress, semantic reuse, removal, late lease expiry, and owner refusal/recovery checks
+pass; the original controller/interaction/project-swap, presentation, resident cache/service and
+focused CPU regressions pass with genuine core/synchronization validation on the native paths.
+Independent compositor captures retain a complete pair while replacement raster is delayed, then
+show the complete replacement and explicit outline removal. A real selected-solid native drag in
+a solid/text composition produced 73 sampled captures with no sampled outline loss (about 149 ms
+median and 455 ms maximum sample gap). These samples do not establish per-refresh continuity,
+playback performance, or text-specific dragging. G3B2 remains pending for refusal/CPU-cover intent,
+failed/non-neutral adjustment and global status truth, coupled applied hit mapping/bounds, and the
+underlying clear/discard acquire-wait/layout dependency. G3A/G4 cadence is unchanged. Further native
+GUI fixtures must use an isolated compositor; the user's desktop is no longer a test surface.
 
 G0 adds opt-in bounded numeric frame tracing and a native Full-resolution 1920 × 1080 solid/text
 fixture using four cold and four warm frame requests. The initial measured medians were 48.14 ms
@@ -478,7 +493,8 @@ These local native gates load real core/synchronization validation and report no
 This is correctness evidence in a shared environment, not sustained performance, cross-platform GPU
 qualification, or qualification of the separately reported outline flicker. Historical family fuses
 remain distinct from current submission ownership. The live service limit is 512 retirement pumps;
-scheduler-charge transfer and aggregate native quarantine admission remain G6 work. Root independently reran Neutral and General transitions and the intentional assertion-exit
+scheduler-charge transfer and aggregate native quarantine admission remain G6 work. Root
+independently reran Neutral and General transitions and the intentional assertion-exit
 fixture with real validation and zero errors. The additional root OCIO invocation used a mistaken
 executable name and did not run; the agent’s corrected native OCIO parity/retirement run passed.
 G2E is accepted as a bounded cancellation/teardown slice; complete G2 and the broader experience

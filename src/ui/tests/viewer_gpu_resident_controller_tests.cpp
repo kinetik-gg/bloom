@@ -83,6 +83,20 @@ void testOverlayRasterRejectsBadExtents(Expectations& expectations) {
     expectations.expect(ui::rasterizeResidentOverlay(zero, [] { return false; }) == nullptr,
                         "a zero extent is rejected before allocation");
 
+    ui::OverlayRasterRequest invalidLogical;
+    invalidLogical.picture = picture;
+    invalidLogical.logicalSize = QSizeF(0.0, 4.0);
+    invalidLogical.width = 4;
+    invalidLogical.height = 4;
+    invalidLogical.token = 1;
+    expectations.expect(
+        ui::rasterizeResidentOverlay(invalidLogical, [] { return false; }) == nullptr,
+        "invalid logical geometry never silently publishes a blank required overlay");
+    invalidLogical.logicalSize = QSizeF(std::numeric_limits<double>::infinity(), 4.0);
+    expectations.expect(ui::rasterizeResidentOverlay(invalidLogical, [] { return false; }) ==
+                            nullptr,
+                        "non-finite logical geometry is rejected before raster allocation");
+
     ui::OverlayRasterRequest overBudget;
     overBudget.picture = picture;
     overBudget.logicalSize = QSizeF(4.0, 4.0);

@@ -7,11 +7,18 @@ using namespace std::chrono_literals;
 using namespace bloom;
 using namespace bloom::ui::verticalproof;
 
+void holdEditorOutlinePhase() {
+    QEventLoop loop;
+    QTimer::singleShot(2500, &loop, &QEventLoop::quit);
+    loop.exec();
+}
+
 struct HarnessOptions final {
     std::filesystem::path loader;
     bool requireDevice = false;
     bool valid = true;
     bool baseline = false;
+    bool outlineProof = false;
     bool failAfterPresent = false;
     bool transitions = false;
     bool general = false;
@@ -35,6 +42,8 @@ struct HarnessOptions final {
             options.general = true;
         } else if (argument == "--transitions") {
             options.transitions = true;
+        } else if (argument == "--outline-proof") {
+            options.outlineProof = true;
         } else if (argument == "--baseline") {
             options.baseline = true;
         } else if (argument == "--trace" && index + 1 < argc) {

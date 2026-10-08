@@ -58,6 +58,7 @@ struct TestOptions final {
     std::filesystem::path loader_path;
     bool require_device = false;
     bool visible_proof = false;
+    bool outline_proof = false;
     bool valid = true;
 };
 
@@ -73,6 +74,8 @@ struct TestOptions final {
             options.loader_path = argv[++index];
         } else if (argument == "--require-device") {
             options.require_device = true;
+        } else if (argument == "--outline-proof") {
+            options.outline_proof = true;
         } else if (argument == "--visible-proof") {
             options.visible_proof = true;
         } else {
@@ -117,7 +120,7 @@ template <typename Predicate>
     return predicate();
 }
 
-enum class Cmd { None, ProduceLease, SetGate, Barrier };
+enum class Cmd { None, ProduceLease, SetGate, Barrier, ExpireLeases };
 
 struct Shared final {
     std::mutex mutex;
@@ -240,6 +243,8 @@ void ownerMain(Shared& shared, const TestOptions& options, Expectations& expecta
         }
         if (command == Cmd::SetGate) {
             gated = gateValue;
+        } else if (command == Cmd::ExpireLeases) {
+            registry->invalidateAll();
         } else if (command == Cmd::ProduceLease) {
             auto image = produceDisplay(*solid, *display, expectations);
             runtime::GpuResidentFrameLease leaseValue;
@@ -268,14 +273,16 @@ void ownerMain(Shared& shared, const TestOptions& options, Expectations& expecta
 }
 
 [[nodiscard]] std::shared_ptr<const runtime::PreparedPreviewFrame>
-makeResidentFrame(const runtime::GpuResidentFrameLease& lease, const std::uint64_t generation = 1) {
+makeResidentFrame(const runtime::GpuResidentFrameLease& lease, const std::uint64_t generation = 1,
+                  const std::uint64_t revision = 1, const std::int64_t time = 0) {
     runtime::PreviewRequestIdentity identity;
     identity.projectId = document::ProjectId::fromRaw(1);
     identity.compositionId = document::CompositionId::fromRaw(1);
-    identity.sourceRevision = document::Revision::fromRaw(1);
+    identity.sourceRevision = document::Revision::fromRaw(revision);
     identity.requestGeneration = generation;
-    const runtime::ProcessFrameIdentity process =
-        runtime::GpuResidentDisplayProductRequest{}.processIdentity;
+    auto process = runtime::GpuResidentDisplayProductRequest{}.processIdentity;
+    identity.time = core::RationalTime::fromInteger(time);
+    process.time = identity.time;
     auto built = runtime::detail::buildResidentPreviewFrame(identity, process, lease, nullptr, {});
     if (!built.has_value()) {
         return nullptr;
@@ -292,6 +299,8 @@ makeResidentFrame(const runtime::GpuResidentFrameLease& lease, const std::uint64
     request.background = render::GpuPresentBackground::Solid;
     return request;
 }
+
+#include "viewer_resident_outline_proof.ipp"
 
 } // namespace
 
@@ -393,6 +402,17 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    if (options.outline_proof) {
+        host.setWindowTitle(QStringLiteral("bloom-resident-outline-proof"));
+        runOutlineProof(
+            *controller, *frame, scheduler, expectations, [&] { runCommand(Cmd::ExpireLeases); },
+            [&](bool value) { runCommand(Cmd::SetGate, value); },
+            [&] {
+                runCommand(Cmd::ProduceLease);
+                return shared.lease;
+            });
+    }
+
     if (options.visible_proof) {
         // A deliberately delayed first present: the owner pump is gated so the
         // present is admitted but never applied. The native CPU cover (a
@@ -468,162 +488,169 @@ int main(int argc, char** argv) {
         return expectations.failures() == 0 ? 0 : 1;
     }
 
-    // 1. First present: the mailbox admission is NOT the acknowledgement.
-    // presentationAcknowledged()
-    //    must become true only after the owner publishes
-    //    presentCount/appliedSequence.
-    expectations.expect(controller->present(*frame, makeRequest(320.0, 240.0)),
-                        "the first present is admitted");
-    // Before the owner acknowledges, the native CPU cover must be visible above
-    // the native child (the parent backing store alone would be occluded).
-    expectations.expect(controller->cpuCoverForTest() != nullptr &&
-                            controller->cpuCoverForTest()->isVisible(),
-                        "the native CPU cover is visible during the pending first present");
-    if (const auto* coverLabel = qobject_cast<const QLabel*>(controller->cpuCoverForTest())) {
-        const QPixmap handoff = coverLabel->pixmap(Qt::ReturnByValue);
-        expectations.expect(!handoff.isNull(), "the native CPU cover holds the handoff snapshot");
-        // QLabel::pixmap() MAY return a normalized copy: Qt can scale the stored DPR2 pixmap to its
-        // logical device-independent extent and reset the ratio to 1.0 (Qt-dependent). The portable
-        // contract this asserts is therefore the logical display extent the cover is asked to fill
-        // plus scaledContents; the genuine full-physical four-quadrant handoff is proven by the
-        // native before-ack capture, not by this normalizing getter.
-        const auto deviceIndependent = handoff.deviceIndependentSize();
-        expectations.expect(deviceIndependent.width() == 160.0 &&
-                                deviceIndependent.height() == 120.0,
-                            "the cover handoff displays the full logical snapshot extent");
-        expectations.expect(coverLabel->hasScaledContents(),
-                            "the native CPU cover lets QLabel scale the full device pixmap");
-    } else {
-        expectations.expect(false, "the native CPU cover is a kit QLabel");
-    }
-    expectations.expect(
-        controller->cpuCoverForTest() != nullptr &&
-            controller->cpuCoverForTest()->size() == QSize(320, 240),
-        "the native CPU cover fills the requested 320x240 present extent before ack");
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller->poll();
-                                return controller->presentationAcknowledged();
-                            },
-                            20'000),
-                        "the owner genuinely acknowledged the first present");
-    expectations.expect(!controller->cpuCoverForTest()->isVisible(),
-                        "the native CPU cover is hidden after the genuine present ack");
-    expectations.expect(!controller->cpuCoverVisibleForTest(),
-                        "the cover visibility query agrees after the genuine ack");
-    // concealCpuCover() must expose the host paint without destroying the surface.
-    controller->concealCpuCover();
-    expectations.expect(!controller->cpuCoverVisibleForTest(),
-                        "concealCpuCover keeps the cover hidden");
-    const int capturesAfterFirstAck = coverCaptures.load();
-    // G0: let native A apply without polling the resident controller, then enqueue B before A's
-    // acknowledgement is observed. The trace must correlate A's applied sequence to A's identity,
-    // even though B is now the newest pending request. Gating the real owner makes this ordering
-    // deterministic; no fabricated GPU or presentation snapshot is used.
-    auto trace = std::make_shared<ui::PreviewFrameTrace>(64);
-    controller->setFrameTrace(trace);
-    const auto frameA = makeResidentFrame(lease, 101);
-    const auto frameB = makeResidentFrame(lease, 102);
-    expectations.expect(frameA && frameB, "G0 correlation frames share one real native lease");
-    if (frameA && frameB) {
-        expectations.expect(controller->present(*frameA, makeRequest(320.0, 240.0)),
-                            "G0 frame A enqueued");
-        const auto sequenceA = controller->nativeLastEnqueuedSequence();
-        expectations.expect(
-            waitUntil([&] { return controller->nativeAppliedSequence() >= sequenceA; }, 20'000),
-            "G0 frame A applies without resident-controller polling");
-        runCommand(Cmd::SetGate, true);
-        expectations.expect(controller->present(*frameB, makeRequest(320.0, 240.0)),
-                            "G0 frame B enqueued");
-        const auto sequenceB = controller->nativeLastEnqueuedSequence();
-        controller->poll();
-        const auto ackA = trace->lastNativeAcknowledgement();
-        expectations.expect(sequenceB > sequenceA && ackA && ackA->sequence == sequenceA &&
-                                ackA->identity.generation == 101 &&
-                                !controller->presentationAcknowledged(),
-                            "G0 older A acknowledgement is not stamped with pending B identity");
-        runCommand(Cmd::SetGate, false);
-        expectations.expect(waitUntil(
-                                [&] {
-                                    controller->poll();
-                                    return controller->presentationAcknowledged();
-                                },
-                                20'000),
-                            "G0 frame B later receives its own acknowledgement");
-        const auto ackB = trace->lastNativeAcknowledgement();
-        expectations.expect(ackB && ackB->sequence == sequenceB && ackB->identity.generation == 102,
-                            "G0 newer B acknowledgement preserves B's submitted identity");
-    }
-    // Ordinary native presents (a new frame / overlay / pan / zoom) must NOT
-    // recreate the cover or re-snapshot the UI; the last acknowledged swapchain
-    // image is kept until the new present.
-    for (int index = 0; index < 3; ++index) {
+    if (!options.outline_proof) {
+        // 1. First present: the mailbox admission is NOT the acknowledgement.
+        // presentationAcknowledged()
+        //    must become true only after the owner publishes
+        //    presentCount/appliedSequence.
         expectations.expect(controller->present(*frame, makeRequest(320.0, 240.0)),
-                            "an ordinary native present is admitted");
+                            "the first present is admitted");
+        // Before the owner acknowledges, the native CPU cover must be visible above
+        // the native child (the parent backing store alone would be occluded).
+        expectations.expect(controller->cpuCoverForTest() != nullptr &&
+                                controller->cpuCoverForTest()->isVisible(),
+                            "the native CPU cover is visible during the pending first present");
+        if (const auto* coverLabel = qobject_cast<const QLabel*>(controller->cpuCoverForTest())) {
+            const QPixmap handoff = coverLabel->pixmap(Qt::ReturnByValue);
+            expectations.expect(!handoff.isNull(),
+                                "the native CPU cover holds the handoff snapshot");
+            // QLabel::pixmap() MAY return a normalized copy: Qt can scale the stored DPR2 pixmap to
+            // its logical device-independent extent and reset the ratio to 1.0 (Qt-dependent). The
+            // portable contract this asserts is therefore the logical display extent the cover is
+            // asked to fill plus scaledContents; the genuine full-physical four-quadrant handoff is
+            // proven by the native before-ack capture, not by this normalizing getter.
+            const auto deviceIndependent = handoff.deviceIndependentSize();
+            expectations.expect(deviceIndependent.width() == 160.0 &&
+                                    deviceIndependent.height() == 120.0,
+                                "the cover handoff displays the full logical snapshot extent");
+            expectations.expect(coverLabel->hasScaledContents(),
+                                "the native CPU cover lets QLabel scale the full device pixmap");
+        } else {
+            expectations.expect(false, "the native CPU cover is a kit QLabel");
+        }
+        expectations.expect(
+            controller->cpuCoverForTest() != nullptr &&
+                controller->cpuCoverForTest()->size() == QSize(320, 240),
+            "the native CPU cover fills the requested 320x240 present extent before ack");
         expectations.expect(waitUntil(
                                 [&] {
                                     controller->poll();
                                     return controller->presentationAcknowledged();
                                 },
                                 20'000),
-                            "an ordinary native present is acknowledged");
+                            "the owner genuinely acknowledged the first present");
+        expectations.expect(!controller->cpuCoverForTest()->isVisible(),
+                            "the native CPU cover is hidden after the genuine present ack");
+        expectations.expect(!controller->cpuCoverVisibleForTest(),
+                            "the cover visibility query agrees after the genuine ack");
+        // concealCpuCover() must expose the host paint without destroying the surface.
+        controller->concealCpuCover();
+        expectations.expect(!controller->cpuCoverVisibleForTest(),
+                            "concealCpuCover keeps the cover hidden");
+        const int capturesAfterFirstAck = coverCaptures.load();
+        // G0: let native A apply without polling the resident controller, then enqueue B before A's
+        // acknowledgement is observed. The trace must correlate A's applied sequence to A's
+        // identity, even though B is now the newest pending request. Gating the real owner makes
+        // this ordering deterministic; no fabricated GPU or presentation snapshot is used.
+        auto trace = std::make_shared<ui::PreviewFrameTrace>(64);
+        controller->setFrameTrace(trace);
+        const auto frameA = makeResidentFrame(lease, 101);
+        const auto frameB = makeResidentFrame(lease, 102);
+        expectations.expect(frameA && frameB, "G0 correlation frames share one real native lease");
+        if (frameA && frameB) {
+            expectations.expect(controller->present(*frameA, makeRequest(320.0, 240.0)),
+                                "G0 frame A enqueued");
+            const auto sequenceA = controller->nativeLastEnqueuedSequence();
+            expectations.expect(
+                waitUntil([&] { return controller->nativeAppliedSequence() >= sequenceA; }, 20'000),
+                "G0 frame A applies without resident-controller polling");
+            runCommand(Cmd::SetGate, true);
+            expectations.expect(controller->present(*frameB, makeRequest(320.0, 240.0)),
+                                "G0 frame B enqueued");
+            const auto sequenceB = controller->nativeLastEnqueuedSequence();
+            controller->poll();
+            const auto ackA = trace->lastNativeAcknowledgement();
+            expectations.expect(
+                sequenceB > sequenceA && ackA && ackA->sequence == sequenceA &&
+                    ackA->identity.generation == 101 && !controller->presentationAcknowledged(),
+                "G0 older A acknowledgement is not stamped with pending B identity");
+            runCommand(Cmd::SetGate, false);
+            expectations.expect(waitUntil(
+                                    [&] {
+                                        controller->poll();
+                                        return controller->presentationAcknowledged();
+                                    },
+                                    20'000),
+                                "G0 frame B later receives its own acknowledgement");
+            const auto ackB = trace->lastNativeAcknowledgement();
+            expectations.expect(ackB && ackB->sequence == sequenceB &&
+                                    ackB->identity.generation == 102,
+                                "G0 newer B acknowledgement preserves B's submitted identity");
+        }
+        // Ordinary native presents (a new frame / overlay / pan / zoom) must NOT
+        // recreate the cover or re-snapshot the UI; the last acknowledged swapchain
+        // image is kept until the new present.
+        for (int index = 0; index < 3; ++index) {
+            expectations.expect(controller->present(*frame, makeRequest(320.0, 240.0)),
+                                "an ordinary native present is admitted");
+            expectations.expect(waitUntil(
+                                    [&] {
+                                        controller->poll();
+                                        return controller->presentationAcknowledged();
+                                    },
+                                    20'000),
+                                "an ordinary native present is acknowledged");
+        }
+        expectations.expect(coverCaptures.load() == capturesAfterFirstAck,
+                            "no cover capture happens across ordinary native presents");
+        expectations.expect(ackSeen && ackPresented, "the present ack reported a real present");
+        expectations.expect(controller->presentedSequence() >= 1U,
+                            "a real present sequence advanced");
+        expectations.expect(controller->container() != nullptr, "the native container exists");
+        expectations.expect(controller->container()->parent() == &host,
+                            "the container was parented before first attach (no live reparent)");
+
+        // 2. Swapchain resize gate: resize retires the old extent and present resumes
+        // on the new one.
+        expectations.expect(controller->requestTargetResize(640U, 480U),
+                            "the resize gate is admitted");
+        expectations.expect(waitUntil(
+                                [&] {
+                                    controller->poll();
+                                    return controller->presenterState() ==
+                                           ui::ViewerGpuPresenter::State::Active;
+                                },
+                                20'000),
+                            "the target becomes Active again after the resize");
+        expectations.expect(controller->present(*frame, makeRequest(640.0, 480.0)),
+                            "present resumes at the new extent");
+        expectations.expect(waitUntil(
+                                [&] {
+                                    controller->poll();
+                                    return controller->presentationAcknowledged();
+                                },
+                                20'000),
+                            "the post-resize present is acknowledged");
+
+        // 3. Retire-before-mutation gate and resume on the surviving tree.
+        bool mutationSafe = false;
+        const auto outcome =
+            controller->prepareForMutation(7, [&](const std::uint64_t generation,
+                                                  const ui::EditorNativeSurface::PrepareResult& r) {
+                expectations.expect(generation == 7, "the mutation generation is echoed");
+                mutationSafe = r.safeToMutate;
+            });
+        expectations.expect(outcome == ui::EditorNativeSurface::PrepareOutcome::RetirePending ||
+                                outcome == ui::EditorNativeSurface::PrepareOutcome::NoLiveTarget,
+                            "the mutation gate is admitted");
+        expectations.expect(waitUntil(
+                                [&] {
+                                    controller->poll();
+                                    return mutationSafe;
+                                },
+                                20'000),
+                            "the surface genuinely retired before mutation");
+        controller->resumeAfterMutation();
+        expectations.expect(controller->present(*frame, makeRequest(320.0, 240.0)),
+                            "a surviving editor re-presents after resume");
+        expectations.expect(waitUntil(
+                                [&] {
+                                    controller->poll();
+                                    return controller->presentationAcknowledged();
+                                },
+                                20'000),
+                            "the resumed present is acknowledged");
     }
-    expectations.expect(coverCaptures.load() == capturesAfterFirstAck,
-                        "no cover capture happens across ordinary native presents");
-    expectations.expect(ackSeen && ackPresented, "the present ack reported a real present");
-    expectations.expect(controller->presentedSequence() >= 1U, "a real present sequence advanced");
-    expectations.expect(controller->container() != nullptr, "the native container exists");
-    expectations.expect(controller->container()->parent() == &host,
-                        "the container was parented before first attach (no live reparent)");
-
-    // 2. Swapchain resize gate: resize retires the old extent and present resumes
-    // on the new one.
-    expectations.expect(controller->requestTargetResize(640U, 480U), "the resize gate is admitted");
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller->poll();
-                                return controller->presenterState() ==
-                                       ui::ViewerGpuPresenter::State::Active;
-                            },
-                            20'000),
-                        "the target becomes Active again after the resize");
-    expectations.expect(controller->present(*frame, makeRequest(640.0, 480.0)),
-                        "present resumes at the new extent");
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller->poll();
-                                return controller->presentationAcknowledged();
-                            },
-                            20'000),
-                        "the post-resize present is acknowledged");
-
-    // 3. Retire-before-mutation gate and resume on the surviving tree.
-    bool mutationSafe = false;
-    const auto outcome = controller->prepareForMutation(
-        7, [&](const std::uint64_t generation, const ui::EditorNativeSurface::PrepareResult& r) {
-            expectations.expect(generation == 7, "the mutation generation is echoed");
-            mutationSafe = r.safeToMutate;
-        });
-    expectations.expect(outcome == ui::EditorNativeSurface::PrepareOutcome::RetirePending ||
-                            outcome == ui::EditorNativeSurface::PrepareOutcome::NoLiveTarget,
-                        "the mutation gate is admitted");
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller->poll();
-                                return mutationSafe;
-                            },
-                            20'000),
-                        "the surface genuinely retired before mutation");
-    controller->resumeAfterMutation();
-    expectations.expect(controller->present(*frame, makeRequest(320.0, 240.0)),
-                        "a surviving editor re-presents after resume");
-    expectations.expect(waitUntil(
-                            [&] {
-                                controller->poll();
-                                return controller->presentationAcknowledged();
-                            },
-                            20'000),
-                        "the resumed present is acknowledged");
 
     // 4. Settle the live target before destroying the controller
     // (retire-before-mutation contract).

@@ -94,7 +94,7 @@ void ViewerEditor::resumeNativeSurfaceAfterMutation() {
     }
     gpuResident_->resumeAfterMutation();
     residentActive_ = false;
-    gpuPresentedFrame_.reset();
+    gpuRequestedFrame_.reset();
     cpuFallbackFrame_.reset();
     cpuFallbackIdentity_.reset();
     cpuFallbackFailedIdentity_.reset();
@@ -201,7 +201,7 @@ void ViewerEditor::onResidentNativeRetireResult(const std::uint64_t generation,
         gpuResident_->resumeAfterMutation();
     }
     residentActive_ = false;
-    gpuPresentedFrame_.reset();
+    gpuRequestedFrame_.reset();
     resolveGpuHostMutationWaiters(true, diagnostic);
     if (self.isNull()) {
         return;

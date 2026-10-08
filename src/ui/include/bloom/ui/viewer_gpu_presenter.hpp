@@ -198,6 +198,7 @@ class ViewerGpuPresenter final : public QObject {
     // observed when it enqueued, or appliedSequence() reaches its enqueued sequence.
     [[nodiscard]] std::uint64_t lastEnqueuedSequence() const noexcept;
     [[nodiscard]] std::uint64_t appliedSequence() const noexcept;
+    [[nodiscard]] std::uint64_t rejectedSequence() const noexcept;
     [[nodiscard]] std::uint64_t presentCount() const noexcept;
 
     // Must be called before initialize(). The presenter parents its container to `parent` at

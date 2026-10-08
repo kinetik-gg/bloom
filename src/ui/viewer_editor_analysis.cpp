@@ -2,6 +2,7 @@
 
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <bloom/ui/viewer_gpu_resident.hpp>
 
 #include <QSettings>
 #include <QTimer>
@@ -50,6 +51,38 @@ PreparedPreviewFrameHandle ViewerEditor::displayedFrame() const {
     auto desired = base->desiredIdentity();
     desired.viewAdjust = viewAdjust_;
     return adjustedFrame_ && adjustedFrame_->desiredIdentity() == desired ? adjustedFrame_ : base;
+}
+
+PreparedPreviewFrameHandle ViewerEditor::appliedDisplayFrame() const {
+    if (residentActive_ && gpuResident_ && !gpuResident_->cpuCoverVisible()) {
+        auto applied = gpuResident_->appliedFrame();
+        const auto& live = session_.snapshot();
+        if (applied && applied->desiredIdentity().projectId == live.project().id() &&
+            applied->desiredIdentity().compositionId == session_.compositionId())
+            return applied;
+        return nullptr;
+    }
+    return displayedFrame();
+}
+
+CompositionPreviewState ViewerEditor::displayedPreviewState() const {
+    auto state = previewController_.state();
+    if (state.desiredIdentity)
+        state.desiredIdentity->viewAdjust = viewAdjust_;
+    state.frame = appliedDisplayFrame();
+    const bool current = state.frame && state.desiredIdentity &&
+                         state.frame->desiredIdentity() == *state.desiredIdentity &&
+                         (!residentActive_ || !gpuResident_ || gpuResident_->publicationCurrent());
+    state.freshness = !state.frame ? FrameFreshness::None
+                      : current    ? FrameFreshness::Current
+                                   : FrameFreshness::Stale;
+    if (state.frame && !current && state.activity != PreviewActivity::Failed && residentActive_ &&
+        gpuResident_ && !gpuResident_->cpuCoverVisible()) {
+        state.message = adjustTask_
+                            ? tr("Preparing viewer adjustment; previous display intent retained")
+                            : tr("Previous complete display is retained (out of date)");
+    }
+    return state;
 }
 
 void ViewerEditor::refreshViewAdjustment() {
@@ -112,6 +145,8 @@ void ViewerEditor::consumeViewAdjustment() {
                 : QString::fromStdString(result->diagnostics().front().summary));
     }
     refreshViewAdjustment();
+    updatePreviewAccessibility();
+    updateGpuResidentPresentation();
     if (probePosition_)
         refreshProbe(*probePosition_);
     update();

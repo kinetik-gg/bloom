@@ -26,12 +26,14 @@
 #include <QApplication>
 #include <QColor>
 #include <QCoreApplication>
+#include <QEventLoop>
 #include <QImage>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPointF>
 #include <QSettings>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 #include <QWindow>
@@ -50,6 +52,8 @@
 
 #include "viewer_resident_interaction_support.hpp"
 #include "viewer_resident_transition_support.hpp"
+
+#include "viewer_resident_editor_outline_proof.ipp"
 
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const HarnessOptions options = parseHarnessOptions(argc, argv);
@@ -115,7 +119,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
                   "the first Solid layer is created through the session command surface");
 
-    if (options.baseline || options.transitions || options.shutdownInFlight) {
+    if (options.baseline || options.outlineProof || options.transitions ||
+        options.shutdownInFlight) {
         const auto solidSelection = session.selection();
         checks.expect(
             session.addTextLayer(QStringLiteral("Baseline text"), QStringLiteral("Bloom G0"), 120.0,
@@ -132,15 +137,18 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             session.selectLayer(*layer);
     }
 
-    TaskScheduler scheduler((options.baseline || options.transitions || options.shutdownInFlight)
+    TaskScheduler scheduler((options.baseline || options.outlineProof || options.transitions ||
+                             options.shutdownInFlight)
                                 ? TaskSchedulerConfig::defaults()
                                 : schedulerConfig());
     const runtime::CpuReferenceDisplayPreparer displayPreparer;
     auto gpuOptions = serviceOptions(options.loader);
-    const auto frameCache = (options.baseline || options.transitions || options.shutdownInFlight)
+    const auto frameCache = (options.baseline || options.outlineProof || options.transitions ||
+                             options.shutdownInFlight)
                                 ? std::make_shared<ui::PreviewFrameCache>()
                                 : nullptr;
-    if (options.baseline || options.transitions || options.shutdownInFlight) {
+    if (options.baseline || options.outlineProof || options.transitions ||
+        options.shutdownInFlight) {
         // Same default budget alignment as the desktop root, with no saved preference overrides.
         gpuOptions = GpuPreviewDisplayServiceOptions{};
         gpuOptions.enabled = true;
@@ -187,7 +195,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const auto transitionGate =
         (options.transitions || options.shutdownInFlight) ? installTransitionGate(core) : nullptr;
     ui::TaskUiBridge bridge(scheduler, nullptr,
-                            (options.baseline || options.transitions || options.shutdownInFlight)
+                            (options.baseline || options.outlineProof || options.transitions ||
+                             options.shutdownInFlight)
                                 ? ui::TaskUiBridge::defaultPollingInterval
                                 : 1ms);
     auto pipeline = ui::makeCompositionPreviewPipeline(fixture.compiler, fixture.evaluator,
@@ -202,7 +211,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         QSettings().setValue(QStringLiteral("viewer/resolution"), QStringLiteral("Full"));
         settings.resolutionPolicy = runtime::PreviewResolutionPolicy::Full;
     }
-    auto trace = (options.baseline || options.transitions || options.shutdownInFlight)
+    auto trace = (options.baseline || options.outlineProof || options.transitions ||
+                  options.shutdownInFlight)
                      ? std::make_shared<ui::PreviewFrameTrace>()
                      : nullptr;
     if (trace)
@@ -235,6 +245,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     auto host = std::make_unique<QWidget>();
     host->setWindowTitle(QString::fromStdString(
         "BloomResidentInteraction-" + std::to_string(QCoreApplication::applicationPid())));
+    if (options.outlineProof)
+        host->setWindowTitle(QStringLiteral("bloom-editor-outline-proof"));
     host->resize(960, 640);
     auto* layout = new QVBoxLayout(host.get());
     layout->setContentsMargins(0, 0, 0, 0);
@@ -443,6 +455,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                                            centre, session, controller, transitionGate, trace))
             return 1;
 
+        if (options.outlineProof)
+            settleEditorOutlineAndHold(checks, *viewer, controller, trace);
+        OutlineCancellationEvents outlineEvents;
+        if (options.outlineProof)
+            outlineEvents.observe(*viewer, *host, *nativeWindow);
         // Native drag: press, move, release. Exactly one undoable commit.
         const auto revisionBeforeDrag = session.snapshot().revision();
         const QPointF release = centre + QPointF(60.0, -40.0);
@@ -451,8 +468,15 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                         Qt::LeftButton);
         checks.expect(session.transformInteractionActive(),
                       "the native drag press begins the interaction");
-        sendNativeMouse(*nativeWindow, *container, QEvent::MouseMove, release, Qt::NoButton,
-                        Qt::LeftButton);
+        if (options.outlineProof) {
+            moveNativeOutlineSteps(checks, *viewer, controller, session, trace, *nativeWindow,
+                                   *container, centre, delta);
+        } else {
+            sendNativeMouse(*nativeWindow, *container, QEvent::MouseMove, release, Qt::NoButton,
+                            Qt::LeftButton);
+        }
+        if (options.outlineProof && !session.transformInteractionActive())
+            reportOutlineFailure(*viewer, controller, trace, *nativeWindow, outlineEvents);
         checks.expect(session.transformInteractionActive(),
                       "the native drag move survives the mid-gesture mapping revalidation");
         sendNativeMouse(*nativeWindow, *container, QEvent::MouseButtonRelease, release,
@@ -481,7 +505,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         checks.expect(viewer->residentPresentationActiveForTest(),
                       "the viewer still presents the genuine resident arm after the gesture");
 
-        if (!options.baseline && !options.transitions && !options.shutdownInFlight) {
+        if (!options.baseline && !options.outlineProof && !options.transitions &&
+            !options.shutdownInFlight) {
             // A second, DISTINCT resident lease: change the Solid colour so the requested content
             // genuinely changes. LIMIT, stated plainly: this is a live authoring edit producing a
             // new revision and a new resident lease -- it is NOT a sequence-playback proof (no time
@@ -547,8 +572,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                 checks.expect(second->desiredIdentity() != beforeIdentity,
                               "the second frame's request identity actually changed");
             }
-            // Online CPU oracle: the two requested contents differ, so a frozen re-presentation of
-            // the first is impossible.
+            // The CPU oracle proves that the two requested contents differ. It does not prove
+            // which native pixels the compositor displayed; that requires a separate visible
+            // capture.
             {
                 const auto firstOracle =
                     snapshotCpuReference(fixture, beforeSnapshot, beforeIdentity);
@@ -658,24 +684,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     std::filesystem::remove_all(mediaDirectory, ignored);
     std::filesystem::remove_all(settingsRoot, ignored);
 
-    if (trace && !options.trace.empty()) {
-        verifyAndExportTrace(checks, trace, options.trace);
-        std::cout << (options.baseline ? "BASELINE" : "TRANSITIONS")
-                  << " output_format=1920x1080 par=4/3 requested_host=960x640 native_viewport="
-                  << nativeViewportSize.width() << 'x' << nativeViewportSize.height()
-                  << " device_pixel_ratio=1 bridge_poll_ms=" << bridge.pollingInterval().count()
-                  << " foreground_poll_ms=4 scheduler=defaults resolution_policy="
-                  << static_cast<unsigned>(controller.settings().resolutionPolicy) << " validation="
-                  << (qEnvironmentVariable("VK_INSTANCE_LAYERS").contains("validation") ? 1 : 0)
-                  << " request_byte_limit=" << settings.pixelStorageByteLimit
-                  << " cache_byte_budget=" << frameCache->byteBudget()
-                  << " native_dispatches=" << service.status().counters.nativeDispatches
-                  << " gpu_cache_hits=" << service.status().counters.gpuCacheHits
-                  << " gpu_cache_misses=" << service.status().counters.gpuCacheMisses
-                  << " cpu_fallbacks=" << service.status().counters.cpuFallbacks
-                  << " full_frame_readbacks=" << service.status().counters.fullFrameReadbacks
-                  << '\n';
-    }
+#include "viewer_resident_interaction_trace_report.ipp"
 
     if (runResult != 0 || checks.failures() != 0) {
         std::cerr << "resident interaction proof: " << checks.failures()

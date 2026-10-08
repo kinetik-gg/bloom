@@ -334,6 +334,11 @@ struct ViewerGpuPresenter::Impl final {
     void applySnapshot(const runtime::GpuPresentationTargetSnapshot& snapshot) {
         if (snapshot.id == target) {
             appliedSequenceValue = snapshot.appliedSequence;
+            rejectedSequenceValue = snapshot.rejectedSequence;
+            if (snapshot.rejectedSequence != 0 && snapshot.rejectedSequence == lastEnqueued)
+                diagnostic = snapshot.message;
+            else if (snapshot.appliedSequence != 0 && snapshot.appliedSequence == lastEnqueued)
+                diagnostic = snapshot.message;
             presentCountValue = snapshot.presentCount;
         }
         switch (snapshot.state) {
@@ -607,6 +612,7 @@ struct ViewerGpuPresenter::Impl final {
     // Owner-observed present progress (from the published snapshot). A mailbox admission is not a
     // native present; presentCountValue only advances when the owner actually presents.
     std::uint64_t appliedSequenceValue = 0;
+    std::uint64_t rejectedSequenceValue = 0;
     std::uint64_t presentCountValue = 0;
     std::uint64_t lastEnqueued = 0;
     QWidget* containerParent = nullptr;
@@ -691,6 +697,10 @@ std::uint64_t ViewerGpuPresenter::lastEnqueuedSequence() const noexcept {
 
 std::uint64_t ViewerGpuPresenter::appliedSequence() const noexcept {
     return impl_->appliedSequenceValue;
+}
+
+std::uint64_t ViewerGpuPresenter::rejectedSequence() const noexcept {
+    return impl_->rejectedSequenceValue;
 }
 
 std::uint64_t ViewerGpuPresenter::presentCount() const noexcept { return impl_->presentCountValue; }

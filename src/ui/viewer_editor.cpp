@@ -1778,8 +1778,9 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     gpuResident_ = std::make_unique<ViewerGpuResidentController>();
     gpuResident_->setFrameTrace(previewController_.frameTrace());
     gpuResident_->setPresentAck([this](const bool presented, const std::string&) {
-        // True only after the owner genuinely published a present for this request.
+        // True only for an owner-applied coherent pair; its exact frame may remain stale.
         residentActive_ = presented;
+        updatePreviewAccessibility();
         update();
     });
     gpuResident_->setCpuFallback([this] { requestResidentCpuFallback(); });
@@ -2442,7 +2443,7 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
 }
 
 void ViewerEditor::updatePreviewAccessibility() {
-    const auto& preview = previewController_.state();
+    const auto preview = displayedPreviewState();
     QString frameDescription;
     switch (preview.freshness) {
     case FrameFreshness::None:
@@ -2455,9 +2456,9 @@ void ViewerEditor::updatePreviewAccessibility() {
         frameDescription = tr("Previous composition pixels are displayed and marked out of date");
         break;
     }
-    // Single source of wording with the window status bar's own chip (previewColorState()) -- the
-    // accessible description and the visible chip can never drift apart, even though they are in
-    // two different widgets now.
+    // Viewer-local wording follows the owner-applied complete publication. The global status
+    // bar still describes preparation state; synchronizing that broader display-intent surface
+    // belongs to the subsequent truthful refusal/adjustment gate.
     const QString colorStateDescription = previewColorState(preview).text;
     setAccessibleDescription(
         tr("%1. %2. %3").arg(preview.message, frameDescription, colorStateDescription));
