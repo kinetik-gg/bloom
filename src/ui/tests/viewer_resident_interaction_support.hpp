@@ -198,8 +198,13 @@ struct OverlayProbe final {
     return waitUntil(
         [&] {
             const auto frame = controller.state().frame;
+            const auto actual = viewer.actualDisplayDescriptor();
             return isResidentFrame(frame) && viewer.residentPresentationActiveForTest() &&
-                   frame->desiredIdentity().sourceRevision == revision &&
+                   frame->desiredIdentity().sourceRevision == revision && actual &&
+                   actual->native && actual->frame &&
+                   actual->frame->desiredIdentity() == frame->desiredIdentity() &&
+                   viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current &&
+                   !viewer.gpuCpuCoverVisibleForTest() &&
                    controller.state().activity == ui::PreviewActivity::Ready;
         },
         timeout);

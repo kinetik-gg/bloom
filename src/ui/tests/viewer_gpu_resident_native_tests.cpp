@@ -27,13 +27,14 @@
 #include <QApplication>
 #include <QColor>
 #include <QEventLoop>
-#include <QLabel>
 #include <QPainter>
 #include <QPixmap>
+#include <QPointer>
 #include <QRect>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QWindow>
 
 #include <atomic>
 #include <chrono>
@@ -274,9 +275,10 @@ void ownerMain(Shared& shared, const TestOptions& options, Expectations& expecta
 
 [[nodiscard]] std::shared_ptr<const runtime::PreparedPreviewFrame>
 makeResidentFrame(const runtime::GpuResidentFrameLease& lease, const std::uint64_t generation = 1,
-                  const std::uint64_t revision = 1, const std::int64_t time = 0) {
+                  const std::uint64_t revision = 1, const std::int64_t time = 0,
+                  const std::uint64_t project = 1) {
     runtime::PreviewRequestIdentity identity;
-    identity.projectId = document::ProjectId::fromRaw(1);
+    identity.projectId = document::ProjectId::fromRaw(project);
     identity.compositionId = document::CompositionId::fromRaw(1);
     identity.sourceRevision = document::Revision::fromRaw(revision);
     identity.requestGeneration = generation;
@@ -452,6 +454,18 @@ int main(int argc, char** argv) {
                                 controller->cpuCoverForTest()->size() == QSize(320, 240),
                             "the native CPU cover fills the requested 320x240 present extent "
                             "before ack");
+        const QWindow* coverWindow = controller->cpuCoverPersistentWindowForTest();
+        QPointer<QWindow> initialCover = controller->cpuCoverWindowForTest();
+        expectations.expect(
+            coverWindow && coverWindow->parent() &&
+                coverWindow->parent()->surfaceType() == QSurface::VulkanSurface &&
+                coverWindow->position() == QPoint{} &&
+                coverWindow->size() == coverWindow->parent()->size() &&
+                coverWindow->devicePixelRatio() == coverWindow->parent()->devicePixelRatio(),
+            "the raster cover is a full-extent DPR-matched child of the untouched Vulkan parent");
+        expectations.expect(initialCover && initialCover != coverWindow &&
+                                initialCover->parent() == host.windowHandle(),
+                            "only first attach adds a temporary top-level child sharing the cover");
         std::cout << "PHASE_COVER\n" << std::flush;
         pumpQt(2500);
         runCommand(Cmd::SetGate, false);
@@ -463,6 +477,11 @@ int main(int argc, char** argv) {
                                 20'000),
                             "the delayed first present is genuinely acknowledged "
                             "after the gate opens");
+        expectations.expect(
+            !initialCover && controller->cpuCoverPersistentWindowForTest() == coverWindow &&
+                coverWindow && coverWindow->isVisible() && !controller->cpuCoverVisibleForTest(),
+            "genuine first application retires only the temporary cover and keeps "
+            "the persistent child mapped for transparent concealment");
         std::cout << "PHASE_GPU\n" << std::flush;
         pumpQt(2500);
         // Retire the live target before destroying the presenter (host order).
@@ -500,24 +519,18 @@ int main(int argc, char** argv) {
         expectations.expect(controller->cpuCoverForTest() != nullptr &&
                                 controller->cpuCoverForTest()->isVisible(),
                             "the native CPU cover is visible during the pending first present");
-        if (const auto* coverLabel = qobject_cast<const QLabel*>(controller->cpuCoverForTest())) {
-            const QPixmap handoff = coverLabel->pixmap(Qt::ReturnByValue);
-            expectations.expect(!handoff.isNull(),
-                                "the native CPU cover holds the handoff snapshot");
-            // QLabel::pixmap() MAY return a normalized copy: Qt can scale the stored DPR2 pixmap to
-            // its logical device-independent extent and reset the ratio to 1.0 (Qt-dependent). The
-            // portable contract this asserts is therefore the logical display extent the cover is
-            // asked to fill plus scaledContents; the genuine full-physical four-quadrant handoff is
-            // proven by the native before-ack capture, not by this normalizing getter.
-            const auto deviceIndependent = handoff.deviceIndependentSize();
-            expectations.expect(deviceIndependent.width() == 160.0 &&
-                                    deviceIndependent.height() == 120.0,
-                                "the cover handoff displays the full logical snapshot extent");
-            expectations.expect(coverLabel->hasScaledContents(),
-                                "the native CPU cover lets QLabel scale the full device pixmap");
-        } else {
-            expectations.expect(false, "the native CPU cover is a kit QLabel");
-        }
+        const QPixmap handoff = controller->cpuCoverSnapshotForTest();
+        expectations.expect(!handoff.isNull() && handoff.size() == QSize(320, 240) &&
+                                handoff.devicePixelRatio() == 2.0 &&
+                                handoff.deviceIndependentSize() == QSizeF(160, 120),
+                            "the raster cover retains the exact full DPR2 handoff snapshot");
+        const QWindow* coverWindow = controller->cpuCoverWindowForTest();
+        expectations.expect(
+            coverWindow && coverWindow->surfaceType() == QSurface::RasterSurface &&
+                coverWindow->size() == QSize(320, 240) &&
+                coverWindow->flags().testFlag(Qt::WindowTransparentForInput) &&
+                coverWindow->flags().testFlag(Qt::WindowDoesNotAcceptFocus),
+            "the independent raster cover fills the native extent without input or focus");
         expectations.expect(
             controller->cpuCoverForTest() != nullptr &&
                 controller->cpuCoverForTest()->size() == QSize(320, 240),

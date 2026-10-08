@@ -8,6 +8,7 @@
 
 #include <bloom/ui/viewer_editor.hpp>
 
+#include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/commands/command_stack.hpp>
@@ -25,7 +26,9 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/window_status_bar.hpp>
 
 #include <bloom/render/display_buffer.hpp>
 #include <bloom/render/gpu_present_image.hpp>
@@ -45,7 +48,11 @@
 #include <QImage>
 #include <QPainter>
 #include <QPixmap>
+#include <QPointer>
+#include <QSettings>
+#include <QWindow>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -649,11 +656,9 @@ void testViewerEditorBlankCoverIsOpaqueCurrentCpuPaint(Expectations& expectation
 
 // Structural regression for the native CPU cover. Qt's QWidget::setAttribute(WA_NativeWindow)
 // calls parentWidget()->enforceNativeChildren(), which marks every child of that parent native.
-// The cover must therefore never be parented directly to the editor: a dedicated alien host (whose
-// only child is the cover) fences that promotion, and the cover sets WA_DontCreateNativeAncestors
-// before enabling WA_NativeWindow so the host and the editor chain stay alien. A repeated reveal
-// with an unchanged rect must also be stable: same cover object, no extra native children, and the
-// cover remains the host's topmost child.
+// The cover must therefore never enable WA_NativeWindow directly under the editor. Its alien host
+// and wrapper own an independently backed raster QWindow child of the native parent. Repeated
+// reveals and resizes must keep that window, focus and the editor's alien sibling structure stable.
 void testNativeCoverPromotionIsFencedAndStable(Expectations& expectations) {
     QWidget root;
     root.setObjectName(QStringLiteral("coverFenceRoot"));
@@ -664,9 +669,17 @@ void testNativeCoverPromotionIsFencedAndStable(Expectations& expectations) {
     editor.setObjectName(QStringLiteral("coverFenceEditor"));
     QWidget siblingA(&editor);
     QWidget siblingB(&editor);
+    siblingA.setFocusPolicy(Qt::StrongFocus);
     root.resize(240, 180);
     root.show();
     QApplication::processEvents();
+    root.activateWindow();
+    siblingA.setFocus();
+    QApplication::processEvents();
+    QWidget* originalFocus = QApplication::focusWidget();
+    QWidget* originalLocalFocus = root.focusWidget();
+    expectations.expect(originalLocalFocus == &siblingA,
+                        "the cover fixture establishes editor focus before revealing the cover");
 
     expectations.expect(!editor.testAttribute(Qt::WA_NativeWindow) && editor.internalWinId() == 0,
                         "the editor starts alien before any cover exists");
@@ -693,7 +706,13 @@ void testNativeCoverPromotionIsFencedAndStable(Expectations& expectations) {
     if (cover == nullptr) {
         return;
     }
-    expectations.expect(cover->internalWinId() != 0, "the cover itself is native");
+    QWindow* coverWindow = controller.cpuCoverWindowForTest();
+    expectations.expect(coverWindow && coverWindow->surfaceType() == QSurface::RasterSurface &&
+                            coverWindow->flags().testFlag(Qt::WindowTransparentForInput) &&
+                            coverWindow->flags().testFlag(Qt::WindowDoesNotAcceptFocus),
+                        "the cover owns an output-only independent raster window");
+    expectations.expect(!cover->testAttribute(Qt::WA_NativeWindow) && cover->internalWinId() == 0,
+                        "the raster cover's widget wrapper stays alien");
     expectations.expect(!editor.testAttribute(Qt::WA_NativeWindow) && editor.internalWinId() == 0,
                         "constructing the cover does not promote the editor native");
     expectations.expect(!siblingA.testAttribute(Qt::WA_NativeWindow) &&
@@ -710,6 +729,11 @@ void testNativeCoverPromotionIsFencedAndStable(Expectations& expectations) {
                             coverHost->internalWinId() == 0,
                         "the fence host itself stays alien");
     const auto childrenBefore = coverHost->findChildren<QWidget*>(Qt::FindDirectChildrenOnly);
+    const auto descendantsBefore = editor.findChildren<QObject*>().size();
+    const auto windowsBefore = QGuiApplication::allWindows().size();
+    expectations.expect(waitUntil([&] { return controller.cpuCoverPaintCountForTest() > 0; }),
+                        "the cover completes an initial paint before the unchanged-update check");
+    const auto paintsBefore = controller.cpuCoverPaintCountForTest();
     expectations.expect(childrenBefore.size() == 1,
                         "the fence host contains only the native cover as a widget child");
 
@@ -722,12 +746,71 @@ void testNativeCoverPromotionIsFencedAndStable(Expectations& expectations) {
                         "a repeated reveal does not add native children to the host");
     expectations.expect(!childrenAfter.isEmpty() && childrenAfter.last() == cover,
                         "the cover stays the host's topmost child after a repeated reveal");
+    for (int tick = 0; tick < 20; ++tick) {
+        controller.revealCpuCover(coverRect);
+        controller.poll();
+        QApplication::processEvents();
+    }
+    expectations.expect(controller.cpuCoverPaintCountForTest() == paintsBefore &&
+                            QGuiApplication::allWindows().size() == windowsBefore,
+                        "unchanged reveal and poll ticks neither repaint nor grow native windows");
+
+    controller.revealCpuCover(QRect(12, 14, 64, 48));
+    QApplication::processEvents();
+    expectations.expect(coverWindow && coverWindow->geometry() == QRect(12, 14, 64, 48),
+                        "a same-size fallback origin move updates native top-level coordinates");
+
+    controller.revealCpuCover(QRect(8, 10, 80, 60));
+    QApplication::processEvents();
+    expectations.expect(controller.cpuCoverWindowForTest() == coverWindow &&
+                            editor.findChildren<QObject*>().size() == descendantsBefore &&
+                            coverWindow && coverWindow->size() == QSize(80, 60),
+                        "resizing reuses the same raster window without growing child ownership");
+    // Qt's offscreen platform unconditionally focuses every shown non-ToolTip QWindow, ignoring
+    // WindowDoesNotAcceptFocus (qoffscreenwindow.cpp::setVisible). Keep focus-chain preservation
+    // asserted on the real private Wayland platform; offscreen still checks the exact flags.
+    if (QApplication::platformName() != QStringLiteral("offscreen")) {
+        expectations.expect(
+            root.focusWidget() == originalLocalFocus,
+            "revealing and resizing the output-only cover preserves the editor focus chain");
+        if (originalFocus) {
+            expectations.expect(QApplication::focusWidget() == originalFocus,
+                                "the output-only cover preserves an established application focus");
+        }
+        expectations.expect(QGuiApplication::focusWindow() != coverWindow,
+                            "the raster cover never becomes the private compositor's focus window");
+    }
+    expectations.expect(!siblingA.testAttribute(Qt::WA_NativeWindow) &&
+                            !siblingB.testAttribute(Qt::WA_NativeWindow),
+                        "revealing and resizing the output-only cover preserves alien siblings");
 
     controller.concealCpuCover();
     QApplication::processEvents();
     expectations.expect(!controller.cpuCoverVisibleForTest(),
                         "concealing hides the CPU cover (and its fence host)");
+
+    QPointer<QWindow> queuedCoverWindow;
+    {
+        auto owner = std::make_unique<QWidget>();
+        owner->resize(80, 60);
+        owner->show();
+        ui::ViewerGpuResidentController queuedController;
+        ui::ViewerGpuResidentController::Dependencies queuedDependencies;
+        queuedDependencies.containerParent = owner.get();
+        queuedController.setDependencies(std::move(queuedDependencies));
+        queuedController.setCpuCoverSnapshot([] { return QPixmap{}; });
+        queuedController.revealCpuCover(QRect(0, 0, 80, 60));
+        queuedCoverWindow = queuedController.cpuCoverWindowForTest();
+        // Delete the owner before delivering the QWindow's coalesced update/expose requests.
+        owner.reset();
+        QApplication::processEvents();
+        expectations.expect(
+            queuedCoverWindow.isNull(),
+            "owner teardown deletes the raster cover despite pending update requests");
+    }
 }
+
+#include "viewer_display_truth_tests.ipp"
 
 } // namespace
 
@@ -740,6 +823,8 @@ int main(int argc, char** argv) {
     testCompositionFrameChromePaintsWithoutADevice(expectations);
     testViewerEditorBlankCoverIsOpaqueCurrentCpuPaint(expectations);
     testNativeCoverPromotionIsFencedAndStable(expectations);
+    testViewerActualAdjustmentFailureAndCover(expectations);
+    testViewerSharedFailureWithoutCandidate(expectations);
     if (expectations.failures() == 0) {
         std::cout << "PASS: actual ViewerEditor resident integration (CPU/inert gate)\n";
         return 0;

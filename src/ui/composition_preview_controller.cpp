@@ -156,11 +156,14 @@ const CompositionPreviewState& CompositionPreviewController::state() const noexc
 }
 
 std::vector<runtime::EvaluatedOperationBounds>
-CompositionPreviewController::currentLayerBounds() const {
+CompositionPreviewController::currentLayerBounds(PreparedPreviewFrameHandle source) const {
     std::vector<runtime::EvaluatedOperationBounds> result;
-    if (!state_.frame || state_.frame->desiredIdentity().compositionId != session_.compositionId())
+    if (!source)
+        source = state_.frame;
+    if (!source || source->desiredIdentity().compositionId != session_.compositionId() ||
+        source->desiredIdentity().projectId != session_.snapshot().project().id())
         return result;
-    const auto& frame = *state_.frame;
+    const auto& frame = *source;
     const auto identity = frame.desiredIdentity();
     const auto time = identity.time;
     const auto allBounds = frame.evaluatedBounds();
@@ -177,15 +180,18 @@ CompositionPreviewController::currentLayerBounds() const {
 }
 
 std::vector<runtime::EvaluatedOperationBounds>
-CompositionPreviewController::selectedLayerBounds() const {
+CompositionPreviewController::selectedLayerBounds(PreparedPreviewFrameHandle source) const {
     std::vector<runtime::EvaluatedOperationBounds> result;
-    if (!state_.frame || state_.frame->desiredIdentity().compositionId != session_.compositionId())
+    if (!source)
+        source = state_.frame;
+    if (!source || source->desiredIdentity().compositionId != session_.compositionId() ||
+        source->desiredIdentity().projectId != session_.snapshot().project().id())
         return result;
     const auto& selection = session_.selection();
     const auto* primary = std::get_if<document::LayerId>(&selection.primary);
     const auto layer = primary ? std::optional(*primary) : selection.contextualLayer;
     const auto& nodes = session_.selectedNodes();
-    const auto& frame = *state_.frame;
+    const auto& frame = *source;
     const auto identity = frame.desiredIdentity();
     const auto time = identity.time;
     const auto operations = frame.processIdentity().plan->operations();

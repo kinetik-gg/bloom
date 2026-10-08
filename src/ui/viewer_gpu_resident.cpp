@@ -111,24 +111,40 @@ void ViewerGpuResidentController::setCpuCoverSnapshot(CpuCoverSnapshot snapshot)
 }
 
 QWidget* ViewerGpuResidentController::cpuCoverForTest() const noexcept { return impl_->cover; }
+QWindow* ViewerGpuResidentController::cpuCoverWindowForTest() const noexcept {
+    return impl_->cover ? impl_->cover->nativeWindow() : nullptr;
+}
+QWindow* ViewerGpuResidentController::cpuCoverPersistentWindowForTest() const noexcept {
+    return impl_->cover ? impl_->cover->persistentWindow() : nullptr;
+}
+QPixmap ViewerGpuResidentController::cpuCoverSnapshotForTest() const {
+    return impl_->cover ? impl_->cover->snapshot() : QPixmap{};
+}
+std::size_t ViewerGpuResidentController::cpuCoverPaintCountForTest() const noexcept {
+    return impl_->cover ? impl_->cover->paintCount() : 0;
+}
 
 void ViewerGpuResidentController::concealCpuCover() {
     impl_->coverRequired = false;
     impl_->hideCover();
 }
 
-void ViewerGpuResidentController::revealCpuCover(const QRect& containerRect) {
+void ViewerGpuResidentController::revealCpuCover(const QRect& containerRect,
+                                                 const bool refreshSnapshot) {
     // Keep the cover required while the transition is in flight, then raise it. ensureCover()
     // captures the CPU paint once per conceal->reveal transition, so a retained/refused transition
     // that re-raises the cover on every poll tick never re-rasterizes it (and never churns platform
     // buffers); a fresh capture happens only after a conceal, so a blank/no-frame state stays blank
     // rather than flashing the previous native frame.
     impl_->coverRequired = true;
+    if (refreshSnapshot)
+        impl_->coverCaptured = false;
     static_cast<void>(impl_->ensureCover(containerRect));
 }
 
 bool ViewerGpuResidentController::cpuCoverVisible() const noexcept {
-    return impl_->cover != nullptr && impl_->cover->isVisible();
+    return impl_->cover != nullptr && impl_->cover->isVisible() && impl_->cover->nativeWindow() &&
+           impl_->cover->nativeWindow()->isVisible();
 }
 
 void ViewerGpuResidentController::setStateChanged(std::function<void()> callback) {
@@ -203,12 +219,31 @@ bool ViewerGpuResidentController::requestTargetResize(const std::uint32_t device
     impl_->targetHeight = deviceHeight;
     impl_->presentAcked = false;
     impl_->coverRequired = true;
+    impl_->showCover();
     return true;
 }
 
 bool ViewerGpuResidentController::present(const runtime::PreparedPreviewFrame& frame,
                                           const ResidentPresentRequest& request) {
     impl_->lastResident = false;
+    const std::uint32_t width =
+        deviceExtent(request.containerRect.width(), request.devicePixelRatio);
+    const std::uint32_t height =
+        deviceExtent(request.containerRect.height(), request.devicePixelRatio);
+    if (!request.overlay.valid &&
+        (!impl_->requestedSafetyDomain || impl_->requestedSafetyDomain->overlayRequired))
+        ++impl_->removalEpoch;
+    impl_->requestedSafetyDomain =
+        Impl::RequestedSafetyDomain{frame.desiredIdentity().projectId,
+                                    frame.desiredIdentity().compositionId,
+                                    request.overlayDomainRevision,
+                                    impl_->surfaceEpoch,
+                                    impl_->removalEpoch,
+                                    width,
+                                    height,
+                                    request.containerRect,
+                                    request.devicePixelRatio,
+                                    request.overlay.valid};
     const auto geometry = residentFrameGeometry(frame);
     if (!geometry.has_value()) {
         impl_->diagnostic = "the displayed frame is not a live resident frame";
@@ -220,10 +255,6 @@ bool ViewerGpuResidentController::present(const runtime::PreparedPreviewFrame& f
         impl_->failCpu("no presentation client/port is configured");
         return false;
     }
-    const std::uint32_t width =
-        deviceExtent(request.containerRect.width(), request.devicePixelRatio);
-    const std::uint32_t height =
-        deviceExtent(request.containerRect.height(), request.devicePixelRatio);
     if (width == 0U || height == 0U) {
         impl_->failCpu("the native container has a zero target extent");
         return false;
@@ -233,7 +264,7 @@ bool ViewerGpuResidentController::present(const runtime::PreparedPreviewFrame& f
         return false;
     }
     // Parent to the injected host and give final geometry BEFORE first attach; never reparent a
-    // live surface. The native CPU cover is raised above it until a genuine present ack.
+    // live surface. Establish the persistent raster child and temporary initial cover before ack.
     const bool coverRevealed =
         impl_->coverRequired && impl_->ensureCover(request.containerRect.toRect());
     if (QWidget* container = impl_->presenter->container(); container != nullptr) {
@@ -246,11 +277,9 @@ bool ViewerGpuResidentController::present(const runtime::PreparedPreviewFrame& f
         if (containerRevealed) {
             container->show();
         }
-        // Restack the cover only on a genuine reveal transition (the cover was just shown, or the
-        // container was just mapped above it). QWidget::raise() is stack-order dependent: when the
-        // widget is already topmost it early-returns, but when it has to reorder it marks the whole
-        // widget dirty. A stable, already-visible, topmost cover needs no restack, so no restack is
-        // issued per present.
+        // Maintain the alien wrapper order only on genuine reveal. Its persistent native child
+        // covers the GPU parent independently of QWidget/container stacking. QWidget::raise can
+        // dirty the parent when its widget order changes, so never issue it per present.
         if (impl_->cover != nullptr && (coverRevealed || containerRevealed)) {
             impl_->cover->raise();
         }
@@ -272,6 +301,11 @@ bool ViewerGpuResidentController::present(const runtime::PreparedPreviewFrame& f
             return false;
         }
         static_cast<void>(impl_->ensureCover(request.containerRect.toRect()));
+        if (!impl_->requestedSafetyDomain) {
+            impl_->failCpu("the native request domain was cleared during cover capture");
+            return false;
+        }
+        impl_->requestedSafetyDomain->surfaceEpoch = impl_->surfaceEpoch;
     }
 
     // Destination is the PAR-folded display rect in native-container device pixels; source is the
@@ -305,11 +339,12 @@ bool ViewerGpuResidentController::present(const runtime::PreparedPreviewFrame& f
     publication.compositionId = frame.desiredIdentity().compositionId;
     publication.params = params;
     publication.source = request.overlay;
+    publication.geometry = geometry;
+    publication.containerRect = request.containerRect;
+    publication.devicePixelRatio = request.devicePixelRatio;
     publication.destination = request.destination;
     publication.domainRevision = request.overlayDomainRevision;
     publication.surfaceEpoch = impl_->surfaceEpoch;
-    if (!request.overlay.valid)
-        ++impl_->removalEpoch;
     publication.removalEpoch = impl_->removalEpoch;
     publication.generation = ++impl_->requestGeneration;
     if (impl_->pendingPublication && !Impl::compatible(*impl_->pendingPublication, publication))
@@ -384,6 +419,8 @@ void ViewerGpuResidentController::resumeAfterMutation() {
         impl_->rasterPublication.reset();
         impl_->pendingPublication.reset();
         impl_->appliedPublicationFrame.reset();
+        impl_->appliedDisplay.reset();
+        impl_->requestedSafetyDomain.reset();
         impl_->frameSubmissions = {};
         impl_->lastObservedAppliedSequence = 0;
         impl_->enqueuedSequence = 0;
@@ -442,12 +479,36 @@ ViewerGpuResidentController::appliedFrame() const noexcept {
     return impl_->appliedPublicationFrame;
 }
 
+const std::optional<ResidentAppliedDisplay>&
+ViewerGpuResidentController::appliedDisplay() const noexcept {
+    return impl_->appliedDisplay;
+}
+
+bool ViewerGpuResidentController::canRetainAppliedDisplay() const noexcept {
+    return impl_->canRetainAppliedDisplay();
+}
+
+void ViewerGpuResidentController::clearPublicationDomain() {
+    ++impl_->removalEpoch;
+    impl_->desiredPublication.reset();
+    impl_->requestedSafetyDomain.reset();
+    impl_->newestPublication.reset();
+    impl_->pendingPublication.reset();
+    impl_->presentPending = false;
+    impl_->presentAcked = false;
+    impl_->coverRequired = true;
+    impl_->coverCaptured = false;
+    if (impl_->activeOverlayTask)
+        impl_->activeOverlayTask->cancel();
+}
+
 QRectF ViewerGpuResidentController::appliedDestination() const noexcept {
     return impl_->appliedPublicationDestination;
 }
 
 bool ViewerGpuResidentController::publicationCurrent() const noexcept {
-    return impl_->appliedPublicationFrame &&
+    return impl_->desiredPublication && !impl_->coverRequired &&
+           impl_->appliedMatchesRequestedSafetyDomain() && impl_->appliedPublicationFrame &&
            impl_->appliedPublicationGeneration == impl_->requestGeneration;
 }
 

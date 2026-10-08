@@ -19,6 +19,7 @@
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/gpu_viewer_bootstrap.hpp>
 #include <bloom/ui/kit/tokens.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/preview_frame_trace.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_editor.hpp>
@@ -32,12 +33,14 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPointF>
+#include <QPointer>
 #include <QSettings>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 #include <QWindow>
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -99,6 +102,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     auto newProject = document::makeNewProject("Resident Interaction");
     document::Document document(std::move(newProject.project));
     commands::CommandStack commands(document);
+    document::Document replacementA(
+        document::Project(document::ProjectId::fromRaw(77), "First blank replacement"));
+    commands::CommandStack replacementCommandsA(replacementA);
+    document::Document replacementB(
+        document::Project(document::ProjectId::fromRaw(78), "Second blank replacement"));
+    commands::CommandStack replacementCommandsB(replacementB);
     ui::CompositionSession session(document, commands, document::CompositionId{});
     {
         commands::Transaction transaction("Create Composition", session.snapshot().revision());
@@ -199,8 +208,30 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                              options.shutdownInFlight)
                                 ? ui::TaskUiBridge::defaultPollingInterval
                                 : 1ms);
-    auto pipeline = ui::makeCompositionPreviewPipeline(fixture.compiler, fixture.evaluator,
-                                                       displayPreparer, fixture.provider);
+    const auto cpuPipeline = ui::makeCompositionPreviewPipeline(fixture.compiler, fixture.evaluator,
+                                                                displayPreparer, fixture.provider);
+    std::atomic<bool> blockAdjustment{false}, refuseAdjustment{true};
+    std::atomic<int> adjustmentCalls{0};
+    ui::PreviewPreparationFunction pipeline =
+        [&](const document::Snapshot& snapshot, const runtime::PreviewRequestIdentity& identity,
+            std::size_t budget, const std::vector<runtime::SnapshotParameterOverride>& overrides,
+            runtime::TaskContext& context) {
+            if (options.outlineProof && !identity.viewAdjust.neutral()) {
+                ++adjustmentCalls;
+                while (blockAdjustment && !context.isCancellationRequested())
+                    std::this_thread::sleep_for(1ms);
+                if (context.isCancellationRequested())
+                    return runtime::TaskResult<ui::PreviewPreparationResultHandle>::cancelled();
+                if (refuseAdjustment)
+                    return runtime::TaskResult<ui::PreviewPreparationResultHandle>::failed(
+                        {.code = "bloom.test.native-adjustment-refused",
+                         .severity = runtime::DiagnosticSeverity::Error,
+                         .summary = "Requested native-viewer adjustment was refused",
+                         .detail = {},
+                         .suggestedAction = {}});
+            }
+            return cpuPipeline(snapshot, identity, budget, overrides, context);
+        };
     ui::CompositionPreviewSettings settings;
     if (!options.baseline)
         settings.pixelStorageByteLimit = kBudget;
@@ -380,6 +411,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         session.clearSelection();
         checks.expect(session.selectedNodes().empty(),
                       "nothing is selected before the viewer click");
+        checks.expect(waitUntil([&] { return viewer->mappingForTest().has_value(); }, 20s),
+                      "passive picking waits for the cleared selection outline domain to apply");
 
         QWidget* container = nullptr;
         const bool containerReady = waitUntil(
@@ -496,6 +529,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         checks.expect(
             waitForResidentRevision(controller, *viewer, session.snapshot().revision(), 30s),
             "the resident frame catches up to the undone revision");
+        if (options.outlineProof)
+            exerciseNativeTextOutline(checks, *viewer, controller, session, trace, *nativeWindow,
+                                      *container, *host);
+        if (options.outlineProof)
+            exerciseNativeAdjustmentIntent(checks, *viewer, controller, *host, blockAdjustment,
+                                           refuseAdjustment, adjustmentCalls);
 
         const auto countersAfterGesture = service.status().counters;
         checks.expect(countersAfterGesture.fullFrameReadbacks == 0U,
@@ -504,6 +543,105 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                       "the whole gesture forced no CPU fallback");
         checks.expect(viewer->residentPresentationActiveForTest(),
                       "the viewer still presents the genuine resident arm after the gesture");
+        if (options.outlineProof) {
+            QPointer<QWindow> refusalCover;
+            for (auto* window : QGuiApplication::allWindows()) {
+                if (window->objectName() == "bloomViewerGpuCpuCoverWindow" && window->parent() &&
+                    window->parent()->surfaceType() == QSurface::VulkanSurface)
+                    refusalCover = window;
+            }
+            const auto appliedBeforeRefusal = viewer->gpuNativeAppliedSequenceForTest();
+            scheduler.beginShutdown();
+            session.clearSelection();
+            const bool overlayRefused = waitUntil(
+                [&] {
+                    const auto shown = viewer->displayedPreviewState();
+                    return shown.activity == ui::PreviewActivity::Failed &&
+                           shown.message.contains("overlay raster task was not admitted") &&
+                           viewer->gpuCpuCoverVisibleForTest();
+                },
+                20s);
+            if (!overlayRefused) {
+                const auto shown = viewer->displayedPreviewState();
+                auto* cover = viewer->findChild<QWidget*>("bloomViewerGpuCpuCover");
+                std::cout << "REFUSAL_STATE activity=" << static_cast<int>(shown.activity)
+                          << " message=" << shown.message.toStdString()
+                          << " cover=" << viewer->gpuCpuCoverVisibleForTest()
+                          << " widget=" << (cover && cover->isVisible())
+                          << " hidden=" << (cover && cover->isHidden()) << '\n';
+                for (auto* window : QGuiApplication::allWindows()) {
+                    if (window->objectName() != "bloomViewerGpuCpuCoverWindow")
+                        continue;
+                    std::cout << "REFUSAL_WINDOW visible=" << window->isVisible()
+                              << " exposed=" << window->isExposed()
+                              << " parent=" << (window->parent() != nullptr) << " parentVisible="
+                              << (window->parent() && window->parent()->isVisible())
+                              << " parentType="
+                              << (window->parent()
+                                      ? static_cast<int>(window->parent()->surfaceType())
+                                      : -1)
+                              << " rect=" << window->x() << ',' << window->y() << ','
+                              << window->width() << ',' << window->height() << '\n';
+                }
+                std::cout << std::flush;
+            }
+            checks.expect(
+                overlayRefused,
+                "async overlay admission refusal publishes its concrete failure and safe cover");
+            checks.expect(refusalCover && refusalCover->isVisible() &&
+                              viewer->gpuNativeAppliedSequenceForTest() == appliedBeforeRefusal,
+                          "the fresh target's persistent cover reappears on async refusal without "
+                          "another GPU application");
+            std::cout << "PHASE_INTENT_OVERLAY_REFUSED\n" << std::flush;
+            holdEditorOutlinePhase();
+            checks.expect(
+                viewer->displayedPreviewState().message.contains(
+                    "overlay raster task was not admitted"),
+                "unchanged refused overlay is not retried or replaced by generic pending text");
+
+            // No event-loop turn between these two rebinds: the first starts real native
+            // retirement and the second changes domain while its queued completion is still held.
+            // Inspect the INSTALLED pixmap; a test-triggered recapture would conceal the defect.
+            const auto retainedCover = viewer->installedCpuCoverSnapshotForTest();
+            const auto retainedDescriptor = viewer->cpuCoverDescriptorForTest();
+            checks.expect(!retainedCover.isNull() && retainedDescriptor &&
+                              retainedDescriptor->frame && retainedDescriptor->mapping,
+                          "the refused overlay holds a concrete prior CPU cover before rebind");
+            QPoint sample;
+            if (retainedDescriptor && retainedDescriptor->mapping) {
+                const auto rect = retainedDescriptor->mapping->displayRect;
+                sample = ((rect.topLeft() + QPointF(rect.width() * 0.75, rect.height() * 0.75) -
+                           retainedDescriptor->captureRect.topLeft()) *
+                          retainedDescriptor->devicePixelRatio)
+                             .toPoint();
+            }
+            session.rebind(replacementA, replacementCommandsA, {});
+            const auto firstCover = viewer->installedCpuCoverSnapshotForTest();
+            const auto retirement = viewer->internalNativeRetireGenerationForTest();
+            checks.expect(
+                viewer->internalNativeRetirePendingForTest() &&
+                    viewer->gpuCpuCoverVisibleForTest() && !firstCover.isNull() &&
+                    viewer->cpuCoverDescriptorForTest() &&
+                    !viewer->cpuCoverDescriptorForTest()->frame &&
+                    firstCover.toImage().rect().contains(sample) &&
+                    retainedCover.toImage().rect().contains(sample) &&
+                    firstCover.toImage().pixel(sample) != retainedCover.toImage().pixel(sample),
+                "a held cover rebind installs actual blank pixels before real retirement");
+            session.rebind(replacementB, replacementCommandsB, {});
+            const auto secondCover = viewer->installedCpuCoverSnapshotForTest();
+            checks.expect(viewer->internalNativeRetirePendingForTest() &&
+                              viewer->internalNativeRetireGenerationForTest() == retirement &&
+                              viewer->gpuCpuCoverVisibleForTest() && !secondCover.isNull() &&
+                              secondCover.cacheKey() != firstCover.cacheKey() &&
+                              viewer->cpuCoverDescriptorForTest() &&
+                              !viewer->cpuCoverDescriptorForTest()->frame &&
+                              secondCover.toImage().rect().contains(sample) &&
+                              firstCover.toImage().rect().contains(sample) &&
+                              secondCover.toImage().pixel(sample) ==
+                                  firstCover.toImage().pixel(sample),
+                          "a second retiring domain refreshes the installed blank cover without "
+                          "re-retirement");
+        }
 
         if (!options.baseline && !options.outlineProof && !options.transitions &&
             !options.shutdownInFlight) {

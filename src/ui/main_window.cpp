@@ -27,6 +27,7 @@
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/timeline_editor.hpp>
+#include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
@@ -50,6 +51,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <string_view>
@@ -900,6 +902,8 @@ void MainWindow::createCentralStack() {
     column->addWidget(centralStack_, 1);
     column->addWidget(statusStrip_);
     setCentralWidget(central);
+    qApp->installEventFilter(this);
+    scheduleDisplayedViewerUpdate();
 }
 
 QWidget* MainWindow::createReadOnlyPlaceholderPage() {
@@ -1012,6 +1016,7 @@ void MainWindow::createWorkspaceActions() {
 }
 
 void MainWindow::updateWorkspaceActions() {
+    scheduleDisplayedViewerUpdate();
     const bool hasMultipleAreas = workspaceHost_->areaCount() > 1;
     const bool canChangeStructure = !workspaceHost_->isAreaMaximized();
     splitLeftRightAction_->setEnabled(canChangeStructure);
@@ -1024,6 +1029,60 @@ void MainWindow::updateWorkspaceActions() {
     // Kept in lockstep with the Window menu's own action: same underlying state, two menu homes.
     viewMaximizePanelAction_->setEnabled(hasMultipleAreas);
     viewMaximizePanelAction_->setChecked(workspaceHost_->isAreaMaximized());
+}
+
+void MainWindow::scheduleDisplayedViewerUpdate() {
+    if (displayedViewerUpdateQueued_)
+        return;
+    displayedViewerUpdateQueued_ = true;
+    QMetaObject::invokeMethod(
+        this,
+        [this] {
+            displayedViewerUpdateQueued_ = false;
+            updateDisplayedViewer();
+        },
+        Qt::QueuedConnection);
+}
+
+void MainWindow::updateDisplayedViewer() {
+    if (!statusStrip_ || !workspaceHost_)
+        return;
+    auto viewers = workspaceHost_->findChildren<ViewerEditor*>();
+    viewers.erase(std::remove_if(viewers.begin(), viewers.end(),
+                                 [](const auto* viewer) { return !viewer->isVisible(); }),
+                  viewers.end());
+    const auto areaId = [](const ViewerEditor* viewer) {
+        for (auto* ancestor = viewer->parentWidget(); ancestor; ancestor = ancestor->parentWidget())
+            if (const auto* area = qobject_cast<EditorArea*>(ancestor))
+                return area->areaId();
+        return QString{};
+    };
+    std::sort(viewers.begin(), viewers.end(),
+              [&](const auto* a, const auto* b) { return areaId(a) < areaId(b); });
+    ViewerEditor* selected = nullptr;
+    if (auto* active = workspaceHost_->activeArea()) {
+        auto* viewer = active->findChild<ViewerEditor*>();
+        if (viewer && viewers.contains(viewer)) {
+            selected = viewer;
+            lastActiveViewer_ = viewer;
+        }
+    }
+    if (!selected && lastActiveViewer_ && viewers.contains(lastActiveViewer_.data()))
+        selected = lastActiveViewer_;
+    if (!selected && !viewers.empty())
+        selected = viewers.front();
+    statusStrip_->setDisplayedViewer(selected);
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (workspaceHost_ &&
+        (event->type() == QEvent::Show || event->type() == QEvent::Hide ||
+         event->type() == QEvent::ChildAdded || event->type() == QEvent::ChildRemoved)) {
+        const auto* widget = qobject_cast<QWidget*>(watched);
+        if (widget && (widget == workspaceHost_ || workspaceHost_->isAncestorOf(widget)))
+            scheduleDisplayedViewerUpdate();
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
 
 } // namespace bloom::ui

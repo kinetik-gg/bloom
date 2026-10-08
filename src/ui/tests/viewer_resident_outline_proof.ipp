@@ -411,4 +411,150 @@ void runOutlineProof(ui::ViewerGpuResidentController& controller,
                             },
                             20'000),
                         "refused admission never wedges later coherent publication");
+
+    // Safe refusal retains the exact owner-applied descriptor even after all its admission leases
+    // expire. Unsafe early refusals must compare the latest requested safety domain, not the last
+    // admitted publication. The private compositor captures these three stable surfaces.
+    const auto known = controller.appliedDisplay();
+    expectations.expect(known && known->geometry && known->containerRect == removed.containerRect,
+                        "correlated applied geometry is immutable and captured with its container");
+    std::cout << "PHASE_TRUTH_BASE\n" << std::flush;
+    pumpQt(2500);
+    auto rejected = makeResidentFrame(produceLease(), 702);
+    gateOwner(true);
+    expectations.expect(rejected && controller.present(*rejected, removed),
+                        "same-domain refusal candidate is admitted before genuine lease expiry");
+    expireLeases();
+    gateOwner(false);
+    expectations.expect(waitUntil(
+                            [&] {
+                                controller.poll();
+                                return controller.diagnostic().find(
+                                           "resident lease was rejected") != std::string::npos;
+                            },
+                            20'000),
+                        "same-domain owner refusal is reported concretely");
+    expectations.expect(
+        known && controller.appliedDisplay() &&
+            controller.appliedDisplay()->frame == known->frame &&
+            controller.appliedDisplay()->geometry && known->geometry &&
+            controller.appliedDisplay()->geometry->displayWindow ==
+                known->geometry->displayWindow &&
+            controller.appliedDisplay()->geometry->pixelAspect == known->geometry->pixelAspect &&
+            controller.appliedDisplay()->geometry->lease.id() == known->geometry->lease.id() &&
+            controller.canRetainAppliedDisplay() && !controller.cpuCoverVisibleForTest() &&
+            !controller.publicationCurrent(),
+        "safe refusal retains readable actual geometry and native pixels without claiming "
+        "recovery");
+    std::cout << "PHASE_TRUTH_RETAINED\n" << std::flush;
+    pumpQt(2500);
+    QPointer<QWindow> persistentCover = controller.cpuCoverPersistentWindowForTest();
+    const auto paintsBeforeCover = controller.cpuCoverPaintCountForTest();
+    const auto appliedBeforeCover = controller.nativeAppliedSequence();
+    const auto windowsBeforeCover = QGuiApplication::allWindows().size();
+    auto unsafe = removed;
+    unsafe.overlayDomainRevision = 77;
+    expectations.expect(
+        rejected && !controller.present(*rejected, unsafe) &&
+            !controller.canRetainAppliedDisplay() && controller.cpuCoverVisibleForTest(),
+        "early expired admission with changed selection domain covers old-domain pixels");
+    expectations.expect(waitUntil(
+                            [&] {
+                                controller.poll();
+                                return controller.cpuCoverPaintCountForTest() > paintsBeforeCover;
+                            },
+                            5000) &&
+                            persistentCover && persistentCover->isVisible() &&
+                            controller.cpuCoverPersistentWindowForTest() == persistentCover &&
+                            controller.nativeAppliedSequence() == appliedBeforeCover,
+                        "the persistent child repaints an opaque cover after transparent idle "
+                        "without another successful GPU parent present");
+    std::cout << "PHASE_TRUTH_COVER\n" << std::flush;
+    pumpQt(2500);
+    const auto coverPaints = controller.cpuCoverPaintCountForTest();
+    for (int repeat = 0; repeat < 20; ++repeat) {
+        controller.revealCpuCover(unsafe.containerRect.toRect());
+        controller.poll();
+        QApplication::processEvents();
+    }
+    expectations.expect(controller.cpuCoverPaintCountForTest() == coverPaints &&
+                            QGuiApplication::allWindows().size() == windowsBeforeCover,
+                        "unchanged refusal reveal and poll do not paint or allocate new windows");
+    const auto recover = [&](const ui::ResidentPresentRequest& request,
+                             const std::uint64_t generation) {
+        const auto next = makeResidentFrame(produceLease(), generation);
+        expectations.expect(next && controller.present(*next, request),
+                            "a real recovery candidate is admitted");
+        expectations.expect(waitUntil(
+                                [&] {
+                                    controller.poll();
+                                    return controller.presentationAcknowledged();
+                                },
+                                20'000),
+                            "recovery applies its own complete descriptor");
+        return next;
+    };
+    auto live = recover(removed, 703);
+    expireLeases();
+    auto moved = removed;
+    moved.containerRect.translate(10.0, 0.0);
+    expectations.expect(live && !controller.present(*live, moved) &&
+                            !controller.canRetainAppliedDisplay() &&
+                            controller.cpuCoverVisibleForTest(),
+                        "equal-device-extent logical relocation is unsafe on early refusal");
+    live = recover(removed, 704);
+    expireLeases();
+    auto ratio = removed;
+    ratio.containerRect.setSize(QSizeF(160.0, 120.0));
+    ratio.devicePixelRatio = 2.0;
+    expectations.expect(live && !controller.present(*live, ratio) &&
+                            !controller.canRetainAppliedDisplay() &&
+                            controller.cpuCoverVisibleForTest(),
+                        "equal-device-extent DPR change cannot relabel old painted geometry");
+    live = recover(removed, 705);
+    const auto foreign = makeResidentFrame(produceLease(), 706, 1, 0, 2);
+    expireLeases();
+    expectations.expect(
+        foreign && !controller.present(*foreign, removed) &&
+            !controller.canRetainAppliedDisplay() && controller.cpuCoverVisibleForTest(),
+        "same composition id in a foreign project refuses native last-good retention");
+    live = recover(removed, 707);
+    const auto delayed = makeResidentFrame(produceLease(), 708);
+    expectations.expect(delayed && controller.present(*delayed, removed),
+                        "late-ack resize candidate is admitted");
+    const auto delayedSequence = controller.nativeLastEnqueuedSequence();
+    expectations.expect(
+        waitUntil([&] { return controller.nativeAppliedSequence() >= delayedSequence; }, 20'000),
+        "real owner applies the candidate before controller observes its acknowledgement");
+    gateOwner(true);
+    expectations.expect(
+        controller.requestTargetResize(640, 480) && controller.cpuCoverVisibleForTest() &&
+            !controller.publicationCurrent() && !controller.presentationAcknowledged(),
+        "direct resize immediately covers and invalidates displayed currentness");
+    controller.poll();
+    expectations.expect(
+        controller.appliedDisplay() &&
+            controller.appliedDisplay()->frame->desiredIdentity().requestGeneration == 708 &&
+            controller.cpuCoverVisibleForTest() && !controller.publicationCurrent(),
+        "late actual old-extent acknowledgement cannot unlock a resized cover");
+    gateOwner(false);
+    expectations.expect(waitUntil(
+                            [&] {
+                                controller.poll();
+                                return controller.presenterState() ==
+                                       ui::ViewerGpuPresenter::State::Active;
+                            },
+                            20'000),
+                        "the real resized native target becomes active");
+    expectations.expect(
+        controller.cpuCoverVisibleForTest() && !controller.publicationCurrent(),
+        "resize without a replacement candidate never claims old pixels are current");
+    auto resized = makeRequest(640.0, 480.0);
+    live = recover(resized, 709);
+    controller.clearPublicationDomain();
+    expectations.expect(
+        !controller.publicationCurrent() && !controller.presentationAcknowledged() &&
+            !controller.canRetainAppliedDisplay(),
+        "domain clear resets public readiness without inventing an acknowledgement");
+    recover(resized, 710);
 }

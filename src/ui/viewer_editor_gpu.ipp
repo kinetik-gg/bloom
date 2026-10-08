@@ -36,19 +36,23 @@ void ViewerEditor::setGpuPresentationDependencies(
 }
 
 bool ViewerEditor::residentFrameIsDisplayed() const {
-    const auto frame = displayedFrame();
+    const auto frame = preparedDisplayFrame();
     return frame != nullptr &&
            frame->provenance().provider == runtime::PreviewDisplayProvider::GpuResident;
 }
 
 PreparedPreviewFrameHandle ViewerEditor::paintableCpuFrame() {
-    auto current = displayedFrame();
+    auto current = preparedDisplayFrame();
+    if (!current)
+        return frameInCurrentDomain(lastCpuFrame_) ? lastCpuFrame_ : nullptr;
     if (current != nullptr &&
         current->provenance().provider == runtime::PreviewDisplayProvider::GpuResident) {
         if (residentActive_) {
             return nullptr;
         }
-        return cpuFallbackFrame_ != nullptr ? cpuFallbackFrame_ : lastCpuFrame_;
+        return frameInCurrentDomain(cpuFallbackFrame_) ? cpuFallbackFrame_
+               : frameInCurrentDomain(lastCpuFrame_)   ? lastCpuFrame_
+                                                       : nullptr;
     }
     lastCpuFrame_ = current;
     cpuFallbackFrame_.reset();
@@ -60,7 +64,14 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
     ResidentPresentRequest request;
     request.containerRect = contentRect();
     request.devicePixelRatio = devicePixelRatioF() > 0.0 ? devicePixelRatioF() : 1.0;
-    const auto geometry = currentDisplayGeometry();
+    const auto frame = preparedDisplayFrame();
+    const auto format =
+        frame ? std::optional{frame->processIdentity().plan->format()} : std::nullopt;
+    const auto extent = format ? render::ImageExtent::create(format->width(), format->height())
+                               : render::ImageExtent::create(0, 0);
+    const std::optional<DisplayGeometry> geometry =
+        format && extent ? std::optional{DisplayGeometry{*extent.value(), format->pixelAspect()}}
+                         : std::nullopt;
     if (geometry.has_value()) {
         request.destination = viewTransformedDisplayRect(canvasRect(), geometry->extent,
                                                          geometry->pixelAspect, transform_);
@@ -94,9 +105,7 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
 
     // Record the immutable overlays on the UI thread as a QPicture in container-local coordinates.
     // The worker only replays this picture; it reads no widget and no session state.
-    const auto frame = displayedFrame();
     const auto resident = frame != nullptr ? residentFrameGeometry(*frame) : std::nullopt;
-    const auto* composition = session_.composition();
     if (frame != nullptr && resident.has_value() && geometry.has_value()) {
         const QRectF displayRect = request.destination;
         QPicture picture;
@@ -108,10 +117,9 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
             // The composition frame is part of the CPU paint (paintViewerContent); the native
             // overlay must draw it too or a resident composition has no visible bounds at all.
             paintViewerCompositionFrame(painter, displayRect);
-            const ViewerMapping mapping{displayRect, composition->format(),
-                                        frame->desiredIdentity().resolution, resident->pixelAspect,
-                                        *descriptor.value()};
-            const auto bounds = previewController_.selectedLayerBounds();
+            const ViewerMapping mapping{displayRect, *format, frame->desiredIdentity().resolution,
+                                        resident->pixelAspect, *descriptor.value()};
+            const auto bounds = previewController_.selectedLayerBounds(frame);
             paintViewerOverlays(painter, canvasRect(), mapping,
                                 effectiveZoom(displayRect, *geometry), overlayOptions_,
                                 textEdit_ ? std::span<const runtime::EvaluatedOperationBounds>{}
@@ -135,7 +143,8 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
         }
     }
     // Diagnostic signature of recorded dependencies. The controller's actual reuse oracle is
-    // bounded exact command equality; request generations alone never invalidate identical geometry.
+    // bounded exact command equality; request generations alone never invalidate identical
+    // geometry.
     std::uint64_t signature = 1469598103934665603ULL;
     const auto mix = [&signature](const std::uint64_t value) {
         signature ^= value;
@@ -169,6 +178,17 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
 
 QPixmap ViewerEditor::renderCpuCoverSnapshot() {
     const QRect content = contentRect().toRect();
+    // Every returned pixmap, including an unavailable/empty capture, has its own metadata.
+    cpuCoverDisplay_ = ViewerDisplayDescriptor{.frame = nullptr,
+                                               .mapping = std::nullopt,
+                                               .captureRect = contentRect(),
+                                               .devicePixelRatio = devicePixelRatioF(),
+                                               .channel = channel_,
+                                               .background = background_,
+                                               .overlayRevision = gpuOverlayRevision_,
+                                               .native = false,
+                                               .cover = true};
+    scheduleDisplayedStateRefresh();
     if (content.isEmpty()) {
         return {};
     }
@@ -177,7 +197,7 @@ QPixmap ViewerEditor::renderCpuCoverSnapshot() {
     std::uint32_t deviceWidth = 0;
     std::uint32_t deviceHeight = 0;
     if (!checkedOverlayDeviceExtent(content.width(), content.height(), devicePixelRatioF(),
-                                    kResidentOverlayByteBudget, deviceWidth, deviceHeight)) {
+                                    cpuCoverByteBudget_, deviceWidth, deviceHeight)) {
         return {};
     }
     const double ratio = devicePixelRatioF() > 0.0 ? devicePixelRatioF() : 1.0;
@@ -193,13 +213,29 @@ QPixmap ViewerEditor::renderCpuCoverSnapshot() {
     // may be transparent where no layer covers).
     drawCanvasBackground(painter, content, background_);
     coverSnapshotInProgress_ = true;
+    coverCaptureDisplay_ = ViewerDisplayDescriptor{.frame = nullptr,
+                                                   .mapping = std::nullopt,
+                                                   .captureRect = contentRect(),
+                                                   .devicePixelRatio = devicePixelRatioF(),
+                                                   .channel = channel_,
+                                                   .background = background_,
+                                                   .overlayRevision = gpuOverlayRevision_,
+                                                   .native = false,
+                                                   .cover = true};
     paintViewerContent(painter);
     coverSnapshotInProgress_ = false;
     painter.end();
+    // Install metadata from this exact completed capture together with the returned pixmap.
+    cpuCoverDisplay_ = std::move(coverCaptureDisplay_);
+    coverCaptureDisplay_.reset();
+    scheduleDisplayedStateRefresh();
     return snapshot;
 }
 
 QPixmap ViewerEditor::renderCpuCoverSnapshotForTest() { return renderCpuCoverSnapshot(); }
+QPixmap ViewerEditor::installedCpuCoverSnapshotForTest() const {
+    return gpuResident_ ? gpuResident_->cpuCoverSnapshotForTest() : QPixmap{};
+}
 
 ResidentPresentRequest ViewerEditor::buildResidentPresentRequestForTest() {
     return buildResidentPresentRequest();
@@ -221,10 +257,54 @@ void ViewerEditor::updateGpuResidentPresentationBody() {
     if (gpuResident_ == nullptr) {
         return;
     }
-    const auto frame = displayedFrame();
+    const GpuPublicationDomain domain{session_.snapshot().project().id(),
+                                      session_.composition() ? session_.compositionId()
+                                                             : document::CompositionId{}};
+    if (!gpuPublicationDomain_ || *gpuPublicationDomain_ != domain) {
+        // A selection clear and an earlier retirement cannot consume a later project/composition
+        // clear. Refresh the cover for EVERY distinct domain before the retirement early return;
+        // changing only its safe raster contents never unmaps or re-retires the live GPU target.
+        gpuPublicationDomain_ = domain;
+        gpuDomainCleared_ = true;
+        gpuResident_->clearPublicationDomain();
+        residentActive_ = false;
+        nativeFailure_.clear();
+        if (!frameInCurrentDomain(adjustedFrame_))
+            adjustedFrame_.reset();
+        if (!frameInCurrentDomain(lastCpuFrame_))
+            lastCpuFrame_.reset();
+        if (!frameInCurrentDomain(gpuRequestedFrame_))
+            gpuRequestedFrame_.reset();
+        cpuPaintedDisplay_.reset();
+        cpuCoverDisplay_.reset();
+        coverCaptureDisplay_.reset();
+        cpuFallbackFrame_.reset();
+        cpuFallbackFailedIdentity_.reset();
+        if (cpuFallbackTask_) {
+            cpuFallbackTask_->cancel();
+        }
+        if (gpuResident_->hasLiveTarget()) {
+            gpuResident_->revealCpuCover(contentRect().toRect(), true);
+            requestResidentNativeRetire();
+            return;
+        }
+    }
     if (gpuNativeRetirePending_) {
         // A retire-before-unmap is in flight for a live target. Until it genuinely succeeds the
         // container must stay mapped and the cover must stay raised; never hide, never present.
+        return;
+    }
+    const auto frame = preparedDisplayFrame();
+    if (!frame && session_.composition()) {
+        // A desired adjustment may have no new complete candidate. Keep the actual last-good
+        // native pair; this is not the composition-less/domain-clear retirement signal.
+        const auto& applied = gpuResident_->appliedDisplay();
+        if (applied && applied->domainRevision != gpuOverlayRevision_ && !gpuDomainCleared_) {
+            gpuDomainCleared_ = true;
+            gpuResident_->clearPublicationDomain();
+            gpuResident_->revealCpuCover(contentRect().toRect());
+        }
+        updatePreviewAccessibility();
         return;
     }
     if (frame == nullptr ||
@@ -257,14 +337,18 @@ void ViewerEditor::updateGpuResidentPresentationBody() {
         return;
     }
     const bool intended = gpuResident_->present(*frame, request);
+    gpuDomainCleared_ = false;
     if (!intended) {
+        nativeFailure_ = QString::fromStdString(gpuResident_->diagnostic());
         // Refusal / unsupported / stale lease: keep or restore the CPU paint. Never claim a blank
         // activation. Do NOT hide the container here: the target is still live, and unmapping the
         // window-container child can silently replace/destroy the surface. Raise the current CPU
         // cover so no stale native frame is exposed while the target stays mapped and safe to
         // retire later.
-        residentActive_ = false;
-        gpuResident_->revealCpuCover(contentRect().toRect());
+        residentActive_ = gpuResident_->canRetainAppliedDisplay();
+        if (!residentActive_)
+            gpuResident_->revealCpuCover(contentRect().toRect());
+        updatePreviewAccessibility();
         return;
     }
     if (QWidget* container = gpuResident_->container(); container != nullptr) {
@@ -292,7 +376,7 @@ void ViewerEditor::updateGpuResidentPresentationBody() {
 }
 
 void ViewerEditor::requestResidentCpuFallback() {
-    const auto frame = displayedFrame();
+    const auto frame = preparedDisplayFrame();
     if (frame == nullptr ||
         frame->provenance().provider != runtime::PreviewDisplayProvider::GpuResident) {
         return;
@@ -310,7 +394,10 @@ void ViewerEditor::requestResidentCpuFallback() {
         // genuine resident present failure (failCpu), so no live native attach still needs the
         // cover.
         if (gpuResident_ != nullptr) {
-            gpuResident_->concealCpuCover();
+            if (gpuResident_->hasLiveTarget())
+                gpuResident_->revealCpuCover(contentRect().toRect(), true);
+            else
+                gpuResident_->concealCpuCover();
         }
         update();
         return;
@@ -342,7 +429,7 @@ void ViewerEditor::pollResidentCpuFallback() {
     cpuFallbackTask_.reset();
     cpuFallbackIdentity_.reset();
 
-    const auto currentFrame = displayedFrame();
+    const auto currentFrame = preparedDisplayFrame();
     const bool stillResident =
         currentFrame != nullptr &&
         currentFrame->provenance().provider == runtime::PreviewDisplayProvider::GpuResident;
@@ -362,7 +449,10 @@ void ViewerEditor::pollResidentCpuFallback() {
                 // A real CPU fallback frame is now painted directly; the native cover must not
                 // keep occluding it.
                 if (gpuResident_ != nullptr) {
-                    gpuResident_->concealCpuCover();
+                    if (gpuResident_->hasLiveTarget())
+                        gpuResident_->revealCpuCover(contentRect().toRect(), true);
+                    else
+                        gpuResident_->concealCpuCover();
                 }
                 update();
                 return;
@@ -392,7 +482,7 @@ void ViewerEditor::pollGpuResident() {
     if (!residentFrameIsDisplayed() && !residentActive_) {
         return;
     }
-    if (gpuRequestedFrame_ != displayedFrame() || !(gpuRequestedTransform_ == transform_)) {
+    if (gpuRequestedFrame_ != preparedDisplayFrame() || !(gpuRequestedTransform_ == transform_)) {
         updateGpuResidentPresentation();
     }
 }

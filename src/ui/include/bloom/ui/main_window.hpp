@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QPointer>
 
 #include <cstdint>
 
@@ -34,6 +35,7 @@ class RamPreviewController;
 class PlaybackController;
 class WindowStatusBar;
 class WorkspaceHost;
+class ViewerEditor;
 enum class WorkspaceLayoutRestoreResult;
 
 // Historical custom-chrome setting (task U2, issue #118). Superseded by task C1 ("let OS handle
@@ -113,6 +115,7 @@ class MainWindow final : public QMainWindow {
 
   protected:
     void closeEvent(QCloseEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
     void createChrome();
@@ -132,6 +135,10 @@ class MainWindow final : public QMainWindow {
     void resetCompositingLayout(bool persist = false);
     void updateEditActions();
     void updateWorkspaceActions();
+    void updateDisplayedViewer();
+    void scheduleDisplayedViewerUpdate();
+    QPointer<ViewerEditor> lastActiveViewer_;
+    bool displayedViewerUpdateQueued_ = false;
     void updateFileActions();
     void updateExportAction();
     void updateWindowTitle();

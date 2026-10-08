@@ -15,8 +15,8 @@ struct ViewerGpuResidentController::Impl final {
     PresentAck presentAck;
     CpuFallback cpuFallback;
     CpuCoverSnapshot coverSnapshot;
-    // The cover is parented to this alien host so Qt's WA_NativeWindow sibling enforcement only
-    // reaches the cover, never the host's parent (the editor) or the editor's other children.
+    // Alien host/wrapper owns only the independent raster cover windows. No native QWidget cover
+    // participates in Qt's sibling promotion or decorated-parent backing-store crop.
     ViewerGpuCpuCoverHost* coverHost = nullptr;
     ViewerGpuCpuCover* cover = nullptr;
     // True only while a native transition (attach/resize/resume/refusal) needs the CPU cover.
@@ -45,6 +45,9 @@ struct ViewerGpuResidentController::Impl final {
         std::shared_ptr<const runtime::PreparedPreviewFrame> frame;
         render::GpuPresentImageParams params;
         ResidentOverlaySource source;
+        std::optional<ResidentFrameGeometry> geometry;
+        QRectF containerRect;
+        double devicePixelRatio = 1.0;
         QRectF destination;
         document::ProjectId projectId;
         document::CompositionId compositionId;
@@ -53,6 +56,17 @@ struct ViewerGpuResidentController::Impl final {
     std::optional<Publication> desiredPublication, activePublication, newestPublication;
     std::optional<Publication> rasterPublication, pendingPublication;
     std::shared_ptr<const runtime::PreparedPreviewFrame> appliedPublicationFrame;
+    std::optional<ResidentAppliedDisplay> appliedDisplay;
+    struct RequestedSafetyDomain final {
+        document::ProjectId projectId;
+        document::CompositionId compositionId;
+        std::uint64_t domainRevision = 0, surfaceEpoch = 0, removalEpoch = 0;
+        std::uint32_t width = 0, height = 0;
+        QRectF containerRect;
+        double devicePixelRatio = 1.0;
+        bool overlayRequired = false;
+    };
+    std::optional<RequestedSafetyDomain> requestedSafetyDomain;
     QRectF appliedPublicationDestination;
     std::uint64_t appliedPublicationGeneration = 0, surfaceEpoch = 1, removalEpoch = 0;
     struct FrameSubmission final {
@@ -61,6 +75,10 @@ struct ViewerGpuResidentController::Impl final {
         QRectF destination;
         std::uint64_t domainRevision = 0, surfaceEpoch = 0, removalEpoch = 0;
         std::uint32_t width = 0, height = 0;
+        std::optional<ResidentFrameGeometry> geometry;
+        render::GpuPresentImageParams params;
+        QRectF containerRect;
+        double devicePixelRatio = 1.0;
     };
     std::array<FrameSubmission, 2> frameSubmissions{};
     std::size_t nextFrameSubmission = 0;
@@ -115,9 +133,31 @@ struct ViewerGpuResidentController::Impl final {
         return dependencies.client != nullptr || port != nullptr;
     }
 
+    [[nodiscard]] bool appliedMatchesRequestedSafetyDomain() const noexcept {
+        return appliedDisplay && requestedSafetyDomain &&
+               appliedDisplay->frame->desiredIdentity().projectId ==
+                   requestedSafetyDomain->projectId &&
+               appliedDisplay->frame->desiredIdentity().compositionId ==
+                   requestedSafetyDomain->compositionId &&
+               appliedDisplay->domainRevision == requestedSafetyDomain->domainRevision &&
+               appliedDisplay->surfaceEpoch == requestedSafetyDomain->surfaceEpoch &&
+               appliedDisplay->surfaceEpoch == surfaceEpoch &&
+               appliedDisplay->removalEpoch == requestedSafetyDomain->removalEpoch &&
+               appliedDisplay->removalEpoch == removalEpoch &&
+               appliedDisplay->params.targetWidth == requestedSafetyDomain->width &&
+               appliedDisplay->params.targetHeight == requestedSafetyDomain->height &&
+               appliedDisplay->containerRect == requestedSafetyDomain->containerRect &&
+               appliedDisplay->devicePixelRatio == requestedSafetyDomain->devicePixelRatio;
+    }
+
+    [[nodiscard]] bool canRetainAppliedDisplay() const noexcept {
+        return presenter && presenter->state() == ViewerGpuPresenter::State::Active &&
+               !coverRequired && appliedMatchesRequestedSafetyDomain();
+    }
+
     void failCpu(const std::string& message) {
         diagnostic = message;
-        if (cover != nullptr) {
+        if (cover != nullptr && !canRetainAppliedDisplay()) {
             coverRequired = true;
             showCover();
         }
@@ -137,12 +177,15 @@ struct ViewerGpuResidentController::Impl final {
         }
         if (coverHost->geometry() != rect) {
             coverHost->setGeometry(rect);
+            coverCaptured = false;
         }
         if (cover == nullptr) {
             cover = new ViewerGpuCpuCover(coverHost);
             cover->setObjectName(QStringLiteral("bloomViewerGpuCpuCover"));
             coverCaptured = false;
         }
+        if (cover->bindNativeParent(presenter ? presenter->window() : nullptr))
+            coverCaptured = false;
         const QRect local(QPoint(0, 0), rect.size());
         if (cover->geometry() != local) {
             cover->setGeometry(local);
@@ -204,6 +247,11 @@ struct ViewerGpuResidentController::Impl final {
             diagnostic = "no presentation client/port or positive target extent was supplied";
             return false;
         }
+        // CPU concealment may have cleared this after genuine retirement destroyed the old GPU
+        // window and its raster child. A fresh target must establish its own cover before first
+        // application, regardless of that former target's state.
+        coverRequired = true;
+        coverCaptured = false;
         ViewerGpuPresenter::Config config;
         config.vulkan_loader_path = dependencies.vulkanLoaderPath;
         config.target_width = width;
@@ -273,7 +321,11 @@ struct ViewerGpuResidentController::Impl final {
                                                      pendingPublication->surfaceEpoch,
                                                      pendingPublication->removalEpoch,
                                                      pendingPublication->params.targetWidth,
-                                                     pendingPublication->params.targetHeight};
+                                                     pendingPublication->params.targetHeight,
+                                                     pendingPublication->geometry,
+                                                     pendingPublication->params,
+                                                     pendingPublication->containerRect,
+                                                     pendingPublication->devicePixelRatio};
             nextFrameSubmission = (nextFrameSubmission + 1) % frameSubmissions.size();
         }
         if (trace) {
@@ -303,8 +355,7 @@ struct ViewerGpuResidentController::Impl final {
     void startOverlayRaster(Publication publication) {
         if (dependencies.scheduler == nullptr) {
             diagnostic = "the required viewer overlay has no raster worker";
-            if (!appliedPublicationFrame)
-                failCpu(diagnostic);
+            failCpu(diagnostic);
             return;
         }
         OverlayRasterRequest request;
@@ -337,10 +388,8 @@ struct ViewerGpuResidentController::Impl final {
                         const runtime::GpuPresentationOverlay>>::succeeded(std::move(overlay));
                 });
         if (!submission.accepted()) {
-            diagnostic =
-                "the overlay raster task was not admitted; retaining the previous complete frame";
-            if (!appliedPublicationFrame)
-                failCpu(diagnostic);
+            diagnostic = "the overlay raster task was not admitted";
+            failCpu(diagnostic);
             return;
         }
         activePublication = std::move(publication);
@@ -356,7 +405,7 @@ struct ViewerGpuResidentController::Impl final {
     }
 
     void pumpOverlayCompletion() {
-        if (!activeOverlayTask)
+        if (!activeOverlayTask || !activePublication)
             return;
         auto result = activeOverlayTask->tryTakeResult();
         if (!result)
@@ -380,10 +429,8 @@ struct ViewerGpuResidentController::Impl final {
                 }
                 stagePublication(std::move(completed), presentedOverlay);
             } else {
-                diagnostic =
-                    "the viewer overlay failed; retaining the previous complete frame (stale)";
-                if (!appliedPublicationFrame)
-                    failCpu(diagnostic);
+                diagnostic = "the viewer overlay failed to rasterize";
+                failCpu(diagnostic);
             }
         }
         pumpOverlayStart();
@@ -422,6 +469,7 @@ struct ViewerGpuResidentController::Impl final {
             lastObservedAppliedSequence = presenter->appliedSequence();
             // Unknown correlation is explicitly unavailable, never the previous known frame.
             appliedPublicationFrame.reset();
+            appliedDisplay.reset();
             appliedPublicationGeneration = 0;
             appliedPublicationDestination = {};
             for (auto& submission : frameSubmissions) {
@@ -429,6 +477,12 @@ struct ViewerGpuResidentController::Impl final {
                     appliedPublicationFrame = submission.frame;
                     appliedPublicationGeneration = submission.generation;
                     appliedPublicationDestination = submission.destination;
+                    appliedDisplay =
+                        ResidentAppliedDisplay{submission.frame,           submission.geometry,
+                                               submission.destination,     submission.params,
+                                               submission.domainRevision,  submission.surfaceEpoch,
+                                               submission.removalEpoch,    submission.containerRect,
+                                               submission.devicePixelRatio};
                     const bool sameDomain =
                         desiredPublication &&
                         submission.frame->desiredIdentity().projectId ==
@@ -441,7 +495,7 @@ struct ViewerGpuResidentController::Impl final {
                         submission.width == desiredPublication->params.targetWidth &&
                         submission.height == desiredPublication->params.targetHeight;
                     submission = {};
-                    if (sameDomain) {
+                    if (sameDomain && appliedMatchesRequestedSafetyDomain()) {
                         diagnostic =
                             appliedPublicationGeneration == requestGeneration
                                 ? presenter->diagnostic()
@@ -454,6 +508,9 @@ struct ViewerGpuResidentController::Impl final {
                     break;
                 }
             }
+            if (!appliedDisplay)
+                failCpu(
+                    "the native publication identity is unavailable; awaiting a complete display");
         }
         // Trace the owner's actual applied sequence, even while a newer request is pending.
         // Never stamp the current pending identity onto an older acknowledgement. If correlation

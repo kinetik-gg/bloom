@@ -4,6 +4,7 @@
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/viewer_editor_probe.hpp>
 
+#include <QPointer>
 #include <QString>
 
 #include <bloom/ui/kit/surfaces.hpp>
@@ -22,6 +23,7 @@ namespace bloom::ui {
 
 class CompositionPreviewController;
 class CompositionSession;
+class ViewerEditor;
 struct CompositionPreviewState;
 
 // The application's one persistent reporting surface (task VIEW-1). Anything the artist needs to
@@ -40,9 +42,7 @@ struct CompositionPreviewState;
 // this chip is always on screen, which is what moving it from the viewer footer to the window
 // status bar guarantees regardless of which panels an artist has open.
 //
-// PreviewActivity::Failed overrides to Error and shows the controller's own fail-closed diagnostic
-// ("Any state other than Ready is fail-closed for qualified processing"): every Failed case this
-// codebase produces reaches that state with an already-unqualified retained frame, or none at all.
+// A failed replacement reports an error separately while preserving a retained frame's provenance.
 struct PreviewColorState final {
     QString text;
     kit::Color colorToken = kit::Color::Warn;
@@ -97,6 +97,8 @@ class WindowStatusBar final : public kit::KSurface {
     // progress. Passing an empty string clears it.
     void setPersistentMessage(const QString& message);
     void setExportActive(bool active);
+    // MainWindow owns selection among visible viewers. Cache/preview preparation remains shared.
+    void setDisplayedViewer(ViewerEditor* viewer);
 
   signals:
     void cancelExportRequested();
@@ -120,6 +122,7 @@ class WindowStatusBar final : public kit::KSurface {
     [[nodiscard]] QString mediaDiskCacheTextForTest() const;
     [[nodiscard]] QString messageTextForTest() const;
     [[nodiscard]] QString versionTextForTest() const;
+    [[nodiscard]] ViewerEditor* displayedViewerForTest() const noexcept;
 
   protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -140,6 +143,10 @@ class WindowStatusBar final : public kit::KSurface {
     runtime::MemoryBudgetLedger& memoryLedger_;
     CompositionSession& session_;
     CompositionPreviewController* previewController_ = nullptr;
+    QPointer<ViewerEditor> displayedViewer_;
+    QMetaObject::Connection displayedViewerConnection_;
+    QMetaObject::Connection displayedViewerProbeConnection_;
+    QMetaObject::Connection displayedViewerDestroyedConnection_;
     runtime::OperationCache* operationCache_ = nullptr;
     media::cache::MediaDiskCache* mediaDiskCache_ = nullptr;
     QWidget* colorChip_ = nullptr;

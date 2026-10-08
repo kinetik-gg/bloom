@@ -1,29 +1,30 @@
 #pragma once
 
-// Private native CPU cover for ViewerGpuResidentController. A plain QWidget
-// sibling lives in the parent's backing store and is always occluded by an
-// exposed native child, so this cover is forced native and raised above the
-// container. It shows the last valid CPU image until a genuine owner present
-// acknowledgement. It never takes focus or mouse/key/IME events, so input still
-// reaches the container and is forwarded through the existing handlers.
-//
-// The pixels are displayed through the existing kit pixel-display control:
-// KLabel subclasses QLabel and shows a QPixmap with no private painting, so the
-// cover composes a kit control instead of hand-painting a canvas. It owns no
-// geometry or color of its own -- zero margins, centred alignment and
-// setScaledContents(true) -- so QLabel's own device-aware pixmap display scales
-// the snapshot to the cover rect while honouring the pixmap's devicePixelRatio,
-// which keeps the bounded CPU snapshot semantics identical to a direct drawPixmap.
+// Private output-only CPU cover. Its raster QWindow owns a QBackingStore rather than sharing the
+// decorated parent's QWidget backing store: Qt Wayland's native-widget child flush crops that raw
+// parent buffer without its decoration margins. An independent content buffer avoids displaced
+// pixels, copied chrome and incomplete cover extents using public portable Qt APIs.
 
+#include <QBackingStore>
+#include <QEvent>
+#include <QExposeEvent>
+#include <QPainter>
 #include <QPixmap>
+#include <QPointer>
+#include <QResizeEvent>
+#include <QShowEvent>
 #include <QString>
+#include <QSurfaceFormat>
 #include <QWidget>
+#include <QWindow>
 
-#include <bloom/ui/kit/controls.hpp>
+#include <cstddef>
+
+#include <bloom/ui/kit/tokens.hpp>
 
 namespace bloom::ui {
 
-// Alien host whose only widget child is the native CPU cover.
+// Alien host whose only widget child is the CPU-cover wrapper.
 //
 // Qt's QWidget::setAttribute(WA_NativeWindow) calls parentWidget()->
 // d_func()->enforceNativeChildren(), which marks EVERY child of that parent
@@ -34,10 +35,10 @@ namespace bloom::ui {
 // SHM backing store, and the first flush of each newly promoted child is a fresh
 // "wayland-shm" memfd, that promotion multiplied the resident footprint.
 //
-// This host has exactly one child (the cover), so the forced-native promotion is
-// fenced to the cover. The host itself stays an alien widget: the cover sets
-// WA_DontCreateNativeAncestors before it enables WA_NativeWindow, so the eager
-// QWidgetPrivate::createWinId() ancestor walk cannot promote the host.
+// The former native-QWidget cover used this host to fence that promotion. The current alien
+// wrapper instead owns an independent raster QWindow, parented to the GPU QWindow while a target
+// exists. It covers its native parent instead of depending on undefined overlapping container
+// stacking. Neither wrapper nor host enables WA_NativeWindow; editor siblings stay alien.
 class ViewerGpuCpuCoverHost final : public QWidget {
   public:
     explicit ViewerGpuCpuCoverHost(QWidget* parent) : QWidget(parent) {
@@ -49,36 +50,209 @@ class ViewerGpuCpuCoverHost final : public QWidget {
     }
 };
 
-class ViewerGpuCpuCover final : public kit::KLabel {
+class ViewerGpuCpuCoverWindow final : public QWindow {
   public:
-    explicit ViewerGpuCpuCover(QWidget* parent) : kit::KLabel(QString{}, parent) {
-        // Order matters. QWidget::setAttribute(WA_NativeWindow) is eager when the widget is already
-        // created: it calls QWidgetPrivate::createWinId(), which walks up and sets WA_NativeWindow
-        // on the parent unless WA_DontCreateNativeAncestors is already set. Setting the ancestor
-        // guard second would therefore already have promoted the parent chain.
-        setAttribute(Qt::WA_DontCreateNativeAncestors, true);
-        // Force only this widget native so it can stack above the QWindowContainer. The alien host
-        // (above) fences Qt's sibling promotion to this cover.
-        setAttribute(Qt::WA_NativeWindow, true);
-        setAttribute(Qt::WA_TransparentForMouseEvents, true);
-        setAttribute(Qt::WA_NoSystemBackground, true);
-        setFocusPolicy(Qt::NoFocus);
-        setScaledContents(true);
-        setAlignment(Qt::AlignCenter);
-        setContentsMargins(0, 0, 0, 0);
-        // KLabel fixes its height to the kit Control size; a full-frame cover must instead take the
-        // whole presented container rect. Clear the inherited fixed height and let the controller's
-        // setGeometry drive both axes; the pixmap/DPR display path is unchanged.
-        setMinimumHeight(0);
-        setMaximumHeight(QWIDGETSIZE_MAX);
-        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    explicit ViewerGpuCpuCoverWindow(QWindow* parent) : QWindow(parent), backingStore_(this) {
+        setObjectName(QStringLiteral("bloomViewerGpuCpuCoverWindow"));
+        setSurfaceType(QSurface::RasterSurface);
+        QSurfaceFormat format;
+        format.setAlphaBufferSize(8);
+        setFormat(format);
+        setFlags(Qt::SubWindow | Qt::FramelessWindowHint | Qt::WindowTransparentForInput |
+                 Qt::WindowDoesNotAcceptFocus);
     }
+    ~ViewerGpuCpuCoverWindow() override { destroy(); }
 
     void setSnapshot(const QPixmap& snapshot) {
-        // QLabel's device-aware display scales to its own rect while honouring the
-        // pixmap's devicePixelRatio, exactly as the previous drawPixmap(rect(), snapshot) did.
-        setPixmap(snapshot);
+        if (snapshot_.cacheKey() == snapshot.cacheKey())
+            return;
+        snapshot_ = snapshot; // implicitly shared; no new capture or pixel processing
+        requestUpdate();
     }
+    void setCovered(bool covered) {
+        if (covered_ == covered)
+            return;
+        covered_ = covered;
+        requestUpdate();
+    }
+    [[nodiscard]] QPixmap snapshot() const { return snapshot_; }
+    [[nodiscard]] std::size_t paintCount() const noexcept { return paintCount_; }
+
+  protected:
+    bool event(QEvent* event) override {
+        if (event->type() == QEvent::UpdateRequest) {
+            paintNow();
+            return true;
+        }
+        if (event->type() == QEvent::DevicePixelRatioChange)
+            requestUpdate();
+        return QWindow::event(event);
+    }
+    void exposeEvent(QExposeEvent*) override {
+        if (isExposed() && !wasExposed_)
+            forcePaint_ = true;
+        wasExposed_ = isExposed();
+        requestUpdate();
+    }
+    void resizeEvent(QResizeEvent*) override { requestUpdate(); }
+
+  private:
+    void paintNow() {
+        if (!isExposed() || size().isEmpty())
+            return;
+        if (!forcePaint_ && paintedSize_ == size() && paintedRatio_ == devicePixelRatio() &&
+            paintedCovered_ == covered_ &&
+            (!covered_ || paintedSnapshotKey_ == snapshot_.cacheKey()))
+            return;
+        const QRect rect(QPoint{}, size());
+        backingStore_.resize(size());
+        backingStore_.beginPaint(rect);
+        QPainter painter(backingStore_.paintDevice());
+        if (!painter.isActive()) {
+            backingStore_.endPaint();
+            return;
+        }
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.fillRect(rect, covered_ ? kit::color(kit::Color::Canvas) : QColor(Qt::transparent));
+        if (covered_ && !snapshot_.isNull()) {
+            painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+            painter.drawPixmap(rect, snapshot_);
+        }
+        painter.end();
+        backingStore_.endPaint();
+        backingStore_.flush(rect);
+        ++paintCount_;
+        paintedSize_ = size();
+        paintedRatio_ = devicePixelRatio();
+        paintedCovered_ = covered_;
+        paintedSnapshotKey_ = snapshot_.cacheKey();
+        forcePaint_ = false;
+    }
+    QBackingStore backingStore_;
+    QPixmap snapshot_;
+    std::size_t paintCount_ = 0;
+    bool covered_ = true;
+    bool wasExposed_ = false;
+    bool forcePaint_ = true;
+    QSize paintedSize_;
+    double paintedRatio_ = 0;
+    bool paintedCovered_ = false;
+    qint64 paintedSnapshotKey_ = 0;
+};
+
+class ViewerGpuCpuCover final : public QWidget {
+  public:
+    explicit ViewerGpuCpuCover(QWidget* parent) : QWidget(parent) {
+        setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        setFocusPolicy(Qt::NoFocus);
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    }
+    ~ViewerGpuCpuCover() override {
+        delete initialCover_.data();
+        delete window_.data();
+    }
+
+    // Only the raster child is replaced. Its GPU parent remains owned/mapped by the presenter;
+    // QPointer also clears if a genuinely retired parent deletes its children before this wrapper.
+    [[nodiscard]] bool bindNativeParent(QWindow* gpuParent) {
+        if (window_ && gpuParent_ == gpuParent) {
+            syncNativeGeometry();
+            return false;
+        }
+        if (gpuParent_)
+            gpuParent_->removeEventFilter(this);
+        delete initialCover_.data();
+        delete window_.data();
+        gpuParent_ = gpuParent;
+        static_cast<void>(this->window()->winId());
+        QWindow* topLevel = this->window()->windowHandle();
+        window_ = new ViewerGpuCpuCoverWindow(gpuParent ? gpuParent : topLevel);
+        // A Vulkan parent without its first buffer cannot display a subsurface. This temporary
+        // top-level child covers first attach; both windows share the same snapshot. The GPU child
+        // is already established when that first parent commit arrives, then stays mapped for the
+        // target's lifetime so later refusal needs only its own desynchronized raster commit.
+        if (gpuParent)
+            initialCover_ = new ViewerGpuCpuCoverWindow(topLevel);
+        if (gpuParent_)
+            gpuParent_->installEventFilter(this);
+        syncNativeGeometry();
+        window_->setSnapshot(snapshot_);
+        if (initialCover_)
+            initialCover_->setSnapshot(snapshot_);
+        if (isVisible()) {
+            window_->show();
+            if (initialCover_)
+                initialCover_->show();
+        }
+        return true;
+    }
+    void setSnapshot(const QPixmap& snapshot) {
+        snapshot_ = snapshot;
+        if (window_)
+            window_->setSnapshot(snapshot);
+        if (initialCover_)
+            initialCover_->setSnapshot(snapshot);
+    }
+    [[nodiscard]] QPixmap snapshot() const { return snapshot_; }
+    [[nodiscard]] QWindow* nativeWindow() const noexcept {
+        return initialCover_ ? initialCover_.data() : window_.data();
+    }
+    [[nodiscard]] QWindow* persistentWindow() const noexcept { return window_; }
+    [[nodiscard]] std::size_t paintCount() const noexcept {
+        return window_ ? window_->paintCount() : 0;
+    }
+
+  protected:
+    void showEvent(QShowEvent*) override {
+        syncNativeGeometry();
+        if (window_) {
+            window_->setCovered(true);
+            window_->show();
+        }
+        if (initialCover_)
+            initialCover_->show();
+    }
+    void hideEvent(QHideEvent*) override {
+        if (gpuParent_) {
+            // Hide only the temporary attach surface. Conceal the persistent child by transparent
+            // pixels: destroying/recreating its role requires another parent commit, which a
+            // refused/idle GPU target may never produce.
+            delete initialCover_.data();
+            if (window_)
+                window_->setCovered(false);
+        } else {
+            if (window_)
+                window_->hide();
+            if (initialCover_)
+                initialCover_->hide();
+        }
+    }
+    void resizeEvent(QResizeEvent*) override { syncNativeGeometry(); }
+    void moveEvent(QMoveEvent*) override { syncNativeGeometry(); }
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (watched == gpuParent_ && event->type() == QEvent::Resize)
+            syncNativeGeometry();
+        return QWidget::eventFilter(watched, event);
+    }
+
+  private:
+    void syncNativeGeometry() {
+        if (!window_)
+            return;
+        const QRect target = gpuParent_ ? QRect(QPoint{}, gpuParent_->size())
+                                        : QRect(mapTo(this->window(), QPoint{}), size());
+        if (window_->geometry() != target)
+            window_->setGeometry(target);
+        if (initialCover_) {
+            const QRect initialTarget(mapTo(this->window(), QPoint{}), size());
+            if (initialCover_->geometry() != initialTarget)
+                initialCover_->setGeometry(initialTarget);
+        }
+    }
+    QPointer<ViewerGpuCpuCoverWindow> window_;
+    QPointer<ViewerGpuCpuCoverWindow> initialCover_;
+    QPointer<QWindow> gpuParent_;
+    QPixmap snapshot_;
 };
 
 } // namespace bloom::ui

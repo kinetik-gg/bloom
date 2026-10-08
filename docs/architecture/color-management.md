@@ -483,7 +483,19 @@ window status bar is the one surface that is always present. The chip's qualifie
 reading is driven by the CURRENTLY DISPLAYED frame's own qualification bit, never by the activity
 of a request in flight, so a retained qualified frame keeps reading as qualified while a later,
 unrelated request is running -- the state is never silently relabelled. The same wording backs the
-Viewer's accessible description, from one definition, so the two cannot drift apart.
+Viewer's accessible description, from one definition, so the two cannot drift apart. MainWindow
+selects the active visible Viewer, then the last-active visible Viewer, then the first visible
+Viewer by stable panel identity. With no visible Viewer the chip is muted `No visible viewer`,
+and displayed qualification and probe claims are cleared. Shared RAM/cache statistics remain
+preparation metrics. A missing composition is a separate neutral state.
+
+Per-viewer desired EV/gamma and channel/background may differ from the actual complete display.
+The selected-viewer status names the shown intent and marks retained pixels stale; full captured
+intent lives in its tooltip and accessible description. A failed adjustment preserves the
+last-good frame's own provenance and shows its concrete diagnostic directly in the status strip.
+A shared processing/configuration failure cannot be replaced with generic adjustment-pending text.
+Prepared readiness or mailbox admission alone never qualifies a displayed frame. A blank or failed
+cover capture has no displayed frame, even if a complete candidate exists.
 
 Any state other than `Ready` is fail-closed for qualified processing:
 

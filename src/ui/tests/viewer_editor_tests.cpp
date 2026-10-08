@@ -344,10 +344,12 @@ void testViewerRendersQualifiedFrameAndReportsColorState(Expectations& expectati
     const QImage beforeReadiness = viewer.grab().toImage();
     expectations.expect(!beforeReadiness.isNull(),
                         "the viewer renders offscreen before the qualified processor is ready");
-    expectations.expect(
-        viewer.accessibleDescription().contains(QStringLiteral("Reference (unqualified)")),
-        "the status surface reports the reference (unqualified) color state before "
-        "readiness");
+    expectations.expect(waitUntil([&] {
+                            return viewer.accessibleDescription().contains(
+                                QStringLiteral("Reference (unqualified)"));
+                        }),
+                        "the status surface reports the reference (unqualified) color state before "
+                        "readiness");
     expectations.expect(
         ui::previewColorState(controller.state()).text == QStringLiteral("Reference (unqualified)"),
         "the window status bar's own color chip text agrees with the accessible description");
@@ -382,7 +384,10 @@ void testViewerRendersQualifiedFrameAndReportsColorState(Expectations& expectati
     expectations.expect(!afterReadiness.isNull(),
                         "the viewer renders the qualified frame's buffer offscreen (smoke)");
     expectations.expect(
-        viewer.accessibleDescription().contains(QStringLiteral("Qualified · Bloom Neutral")),
+        waitUntil([&] {
+            return viewer.accessibleDescription().contains(
+                QStringLiteral("Qualified · Bloom Neutral"));
+        }),
         "the status surface reports the qualified color state once the frame is qualified");
     expectations.expect(
         ui::previewColorState(controller.state()).text ==
@@ -1849,6 +1854,13 @@ void testViewerAdjustments(Expectations& expectations) {
         ui::EditorArea second(registry, "viewer-test", secondId);
         auto* one = first.findChild<ui::ViewerEditor*>();
         auto* two = second.findChild<ui::ViewerEditor*>();
+        first.resize(400, 300);
+        second.resize(400, 300);
+        first.show();
+        second.show();
+        expectations.expect(
+            waitUntil([&] { return one->displayedFrameForTest() && two->displayedFrameForTest(); }),
+            "both viewers paint their independent initial display before adjustments");
         auto* exposure = first.findChild<ui::kit::KValueField*>("viewerExposure");
         auto* gamma = first.findChild<ui::kit::KValueField*>("viewerGamma");
         exposure->stepBy(10);
@@ -1867,12 +1879,16 @@ void testViewerAdjustments(Expectations& expectations) {
                             "display adjustments never edit document or export truth");
         exposure->stepBy(-10);
         gamma->stepBy(-20);
-        expectations.expect(one->displayedFrameForTest()->desiredIdentity().viewAdjust.neutral(),
-                            "neutral controls immediately restore the original display buffer");
+        expectations.expect(waitUntil([&] {
+                                const auto frame = one->displayedFrameForTest();
+                                return frame && frame->desiredIdentity().viewAdjust.neutral();
+                            }),
+                            "neutral controls publish the original buffer through CPU paint");
         exposure->stepBy(10);
         expectations.expect(waitUntil([&] {
-                                return one->displayedFrameForTest()->desiredIdentity().viewAdjust ==
-                                       runtime::ViewAdjust{1, 1};
+                                const auto frame = one->displayedFrameForTest();
+                                return frame && frame->desiredIdentity().viewAdjust ==
+                                                    runtime::ViewAdjust{1, 1};
                             }),
                             "returning to an earlier adjustment still prepares a frame");
     }

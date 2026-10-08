@@ -9,6 +9,7 @@
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/viewer_editor_probe.hpp>
 #include <bloom/ui/viewer_gpu_resident.hpp>
+#include <bloom/ui/viewer_gpu_resident_overlay.hpp>
 #include <bloom/ui/viewer_overlays.hpp>
 
 #include <QCursor>
@@ -202,6 +203,18 @@ void paintViewerEmptyInvitation(QPainter& painter, const QRectF& canvasRect,
 // unaffected by this amendment.
 struct ViewerTextEdit;
 
+struct ViewerDisplayDescriptor final {
+    PreparedPreviewFrameHandle frame;
+    std::optional<ViewerMapping> mapping;
+    QRectF captureRect;
+    double devicePixelRatio = 1.0;
+    ViewerChannel channel = ViewerChannel::Rgba;
+    ViewerBackground background = ViewerBackground::Solid;
+    std::uint64_t overlayRevision = 0;
+    bool native = false;
+    bool cover = false;
+};
+
 class ViewerEditor final : public QWidget,
                            public EditorChromeProvider,
                            public EditorNativeSurface,
@@ -225,6 +238,8 @@ class ViewerEditor final : public QWidget,
     // focus re-enters that subscription, which reads sibling widgets deleteChildren() may already
     // have destroyed.
     ~ViewerEditor() override;
+    [[nodiscard]] CompositionPreviewState displayedPreviewState() const;
+    [[nodiscard]] std::optional<ViewerDisplayDescriptor> actualDisplayDescriptor() const;
 
     // them immediately after the panel switcher in the shared editor header.
 
@@ -246,6 +261,11 @@ class ViewerEditor final : public QWidget,
     [[nodiscard]] ViewTransform viewTransformForTest() const noexcept;
     [[nodiscard]] QRectF canvasRectForTest() const { return canvasRect(); }
     [[nodiscard]] QRectF contentRectForTest() const { return contentRect(); }
+    [[nodiscard]] std::optional<ViewerMapping> mappingForTest() const { return currentMapping(); }
+    [[nodiscard]] const std::optional<ViewerDisplayDescriptor>& cpuCoverDescriptorForTest() const {
+        return cpuCoverDisplay_;
+    }
+    void setCpuCoverByteBudgetForTest(std::size_t bytes) { cpuCoverByteBudget_ = bytes; }
     // The invitation the empty canvas paints ("Create a composition to begin" with no active
     // composition, "Create a layer to begin" for an active composition that has no layers, empty
     // once there is content).
@@ -287,6 +307,13 @@ class ViewerEditor final : public QWidget,
     // genuine present is acknowledged (it would occlude the resident image and intercept input),
     // and the container must be the viewer's live native child. No behavior change.
     [[nodiscard]] bool gpuCpuCoverVisibleForTest() const noexcept;
+    [[nodiscard]] QPixmap installedCpuCoverSnapshotForTest() const;
+    [[nodiscard]] bool internalNativeRetirePendingForTest() const noexcept {
+        return gpuNativeRetirePending_;
+    }
+    [[nodiscard]] std::uint64_t internalNativeRetireGenerationForTest() const noexcept {
+        return gpuNativeRetireGeneration_;
+    }
     [[nodiscard]] QWidget* gpuNativeContainerForTest() const noexcept { return gpuContainer_; }
     [[nodiscard]] std::string gpuPresentationDiagnosticForTest() const;
     void pollGpuResidentForTest();
@@ -318,6 +345,7 @@ class ViewerEditor final : public QWidget,
     void forwardGpuInputForTest(const ViewerGpuInputEvent& event) { forwardGpuInput(event); }
 
   signals:
+    void displayedStateChanged();
     void probeChanged(ProbeReadout readout);
 
   protected:
@@ -371,6 +399,8 @@ class ViewerEditor final : public QWidget,
     // describe no longer belongs to this widget's own geometry.
     [[nodiscard]] QRectF statusBarRect() const;
     void updatePreviewAccessibility();
+    void scheduleDisplayedStateRefresh();
+    bool displayedStateRefreshQueued_ = false;
     // Recomputes the mapping context (fitted display rectangle, composition format, proxy
     // resolution, pixel aspect, display descriptor) from the currently displayed preview frame and
     // this widget's current geometry. Returns std::nullopt when there is no current-composition
@@ -487,6 +517,10 @@ class ViewerEditor final : public QWidget,
     CompositionPreviewController& previewController_;
     bool dragActive_ = false;
     std::optional<ViewerMapping> activeMapping_;
+    std::optional<runtime::PreviewRequestIdentity> activeGestureIdentity_;
+    QRectF activeGestureViewport_;
+    ViewTransform activeGestureTransform_;
+    std::uint64_t activeGestureSelectionRevision_ = 0;
 
     // Zoom/pan (decision 2).
     ViewTransform transform_;
@@ -543,8 +577,9 @@ class ViewerEditor final : public QWidget,
     std::optional<render::Rgba8> probeCacheDisplay_;
     QString probeFailure_;
     [[nodiscard]] PreparedPreviewFrameHandle displayedFrame() const;
+    [[nodiscard]] PreparedPreviewFrameHandle preparedDisplayFrame() const;
+    [[nodiscard]] bool frameInCurrentDomain(const PreparedPreviewFrameHandle& frame) const;
     [[nodiscard]] PreparedPreviewFrameHandle appliedDisplayFrame() const;
-    [[nodiscard]] CompositionPreviewState displayedPreviewState() const;
     runtime::ViewAdjust viewAdjust_{};
     kit::KValueField* exposureField_ = nullptr;
     kit::KValueField* gammaField_ = nullptr;
@@ -552,6 +587,10 @@ class ViewerEditor final : public QWidget,
     std::optional<runtime::TaskHandle<runtime::PreviewPreparationResultHandle>> adjustTask_;
     std::optional<runtime::PreviewRequestIdentity> adjustIdentity_;
     PreparedPreviewFrameHandle adjustedFrame_;
+    QString adjustmentFailure_;
+    QString nativeFailure_;
+    std::optional<ViewerDisplayDescriptor> cpuPaintedDisplay_, cpuCoverDisplay_,
+        coverCaptureDisplay_;
     std::optional<CreationGesture> roiGesture_;
     std::optional<QRectF> roiRect_;
     QToolButton* roiButton_ = nullptr;
@@ -690,6 +729,14 @@ class ViewerEditor final : public QWidget,
     std::uint64_t gpuHostMutationGeneration_ = 0;
     // Defensive re-entrancy guard; the repaint/OOM report depth was never established.
     bool gpuPresentationUpdating_ = false;
+    struct GpuPublicationDomain final {
+        document::ProjectId projectId;
+        document::CompositionId compositionId;
+        friend bool operator==(const GpuPublicationDomain&, const GpuPublicationDomain&) = default;
+    };
+    std::optional<GpuPublicationDomain> gpuPublicationDomain_;
+    bool gpuDomainCleared_ = false;
+    std::size_t cpuCoverByteBudget_ = kResidentOverlayByteBudget;
     QTimer* gpuResidentTimer_ = nullptr;
     bool residentActive_ = false;
     PreparedPreviewFrameHandle lastCpuFrame_;

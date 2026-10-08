@@ -342,8 +342,10 @@ were sent but the client did not process them. A controlled 1 ms acquire restore
 The final typed policy passes repeated clear/image reuse, resize, acquired-unpresented retirement,
 and eight simultaneous three-target reuse rounds with core and synchronization validation on the
 isolated Vulkan and GL compositors. These are lifecycle/progress checks, not viewer performance or visible-intent
-qualification. Qt before/after present hooks remain a separate integration gap: fixture-only hooks
-did not resolve the observed stall, and the Wayland before hook can wait for frame synchronization.
+qualification. Qt before/after present hooks remain a separate integration gap assigned to G4D,
+after completion notification work: fixture-only hooks did not resolve the observed stall, and the
+Wayland before hook can wait for frame synchronization. That integration needs a bounded UI-thread
+design and its own qualification.
 
 `bloom::ui::ViewerGpuPresenter` adopts the coordinator
 client's borrowed instance through `QVulkanInstance`, creates one `QWindow`/container on the UI
@@ -373,10 +375,24 @@ status poll, then hands every current and future `ViewerEditor` a typed `ViewerG
 resident arm through `ViewerGpuResidentController`, which owns the same-request CPU fallback, the
 native CPU cover, and off-thread overlay rasterization, and forwards native window input back through
 the real event handlers. The embedded window's logical geometry belongs to its Qt window container;
-device-pixel extents are passed separately to the presentation service. The native CPU cover lives
-under a dedicated non-native widget parent, with native ancestor creation disabled before the cover
-becomes native, so Qt's sibling promotion cannot convert the surrounding editor panels into native
-windows. A blank frame or project replacement retires the previous target before unmounting it;
+device-pixel extents are passed separately to the presentation service. The CPU cover is an
+output-only raster `QWindow` with its own public `QBackingStore`, owned through an alien wrapper and
+host. Its persistent alpha-capable child is established under the presenter's GPU window before
+first presentation and stays mapped until genuine target retirement. Concealment paints transparent
+pixels; a required cover paints opaque Canvas even when its snapshot is unavailable. This preserves
+the Wayland subsurface role: creating a new role while an idle/refused GPU parent never commits again
+cannot make the cover visible. Before first GPU application, one temporary top-level child shares
+the same snapshot, then is destroyed on genuine application. Steady state has one raster backing
+store. Every genuinely new presenter establishes its first-attach cover again, including neutral
+recovery after CPU adjustment retirement; previous CPU concealment cannot suppress the new child.
+Initial attach has at most two raster backing
+stores. Qt Wayland bounds each platform pool to five buffers, so this
+is a retained-pixel inventory, not an aggregate-budget claim. Snapshot/resize/expose updates coalesce
+through Qt, and unchanged content/geometry/cover state skips painting. This avoids Qt Wayland's
+decorated-parent native-widget backing-store crop and undefined overlapping container stacking,
+while keeping editor siblings alien. It uses no private Qt APIs, decoration-offset compensation,
+native-decoration bypass or extra parent/GPU commits. A blank frame or project replacement
+retires the previous target before unmounting it;
 completion is queued onto the UI event loop before destroying the presenter. Resizing retains a
 pending presentation of the current frame until the new extent is ready, and an older acknowledgement
 cannot complete that pending presentation.
@@ -390,29 +406,74 @@ selection/style, removal, and viewport extent domains prevent late completions f
 removed handles or crossing a replacement. Reuse compares the actual recorded commands and logical/
 device extent, rather than trusting a hash or request generation; direct UI comparison is capped at
 64 KiB of commands, and larger recordings conservatively rasterize on the existing worker. Raster
-failure retains the last complete pair with a diagnostic, or uses the explicit CPU fallback when
-none exists. There is no scheduler-cadence change or UI wait.
+failure retains the last complete pair only when its requested safety domain still matches, with a
+concrete diagnostic; otherwise it raises the CPU cover/fallback. There is no scheduler-cadence
+change or UI wait.
 
 Publication admission is coalesced to one owner-outstanding update plus one newest complete update.
 The controller retains at most six distinct immutable frame handles across applied, two submission
 correlations, ready, active, and newest slots; the command-stream reuse key retains no frame, and
 the 32 trace correlations retain identity only. An exact consumed-owner `rejectedSequence` releases
-the admission without inventing an applied acknowledgement. Viewer-local accessibility separates prepared desired
-intent from applied content. Existing gesture mapping remains on the prepared frame; coupling passive
-hit mapping and bounds to applied metadata while preserving ongoing interactions remains G3B2.
+the admission without inventing an applied acknowledgement.
 Native owner acknowledgement proves submitted presentation, not compositor-visible pixels; external
 bounded fixture captures are the separate visible oracle.
+
+Actual displayed intent (G3B2B). Desired viewer controls, a complete prepared candidate, mailbox
+admission, an exact owner-applied native descriptor, and a painted CPU/cover descriptor are separate
+states. Missing or failed adjusted preparation retains a same-project/composition last-good image
+visibly stale; it does not retire the native target or substitute neutral pixels as the requested
+adjustment. Identical failed adjustments are not retried on polling. Cancellation completion may
+schedule only the newest still-live desired identity. Shared Failed/Unsupported configuration
+diagnostics remain authoritative. A ready candidate without actual publication has no displayed
+frame and reports presentation pending.
+
+The correlated native descriptor captures frame, geometry, destination, channel/background,
+selection/removal and surface domains, logical container rectangle, and DPR before enqueue. Its
+metadata remains readable when the lease stops admitting work; it never grants reuse permission.
+Refusal retains native pixels only in the same project/composition, selection/removal, live surface,
+logical/device extent and DPR domain. An unsafe refusal, resize or domain clear requires an opaque
+CPU cover or explicit unavailable display. Late old-domain acknowledgements cannot uncover it or
+restore currentness. CPU cover metadata describes the exact completed capture, including blank or
+budget-refused capture; it never inherits the newest candidate's identity. Project/composition
+cleanup is keyed to each distinct domain and precedes the retirement early return. A second domain
+change refreshes or blanks the installed cover while preserving the mapped target and the single
+pending retirement. Failure notifications carry concrete diagnostics without synthesizing present
+acknowledgements.
+An explicit document rebind invalidates all viewer-local retained frames, probe/cache ownership and
+publication domains even when numeric project/composition/revision IDs collide. Cancelled adjustment,
+fallback and probe handles are detached; an old completion cannot publish into the new owner.
+
+Passive hit mapping and evaluated bounds use the same actual frame and captured destination. They
+reject foreign project/composition/time and pending selection domains before retained-layer remapping.
+An ongoing gesture freezes its actual mapping and validates real time/domain/format/viewport/
+transform/selection/lifecycle changes, rather than cancelling on preparation lag or lease admission
+expiry. GPU Auto resolution stays stable while a per-viewer adjustment is pending. The pixel probe
+is unavailable for another displayed intent or channel; it cannot sample the newest prepared frame
+and label it as painted pixels.
+
+The applied descriptor aliases the existing applied frame; immutable geometry adds no distinct
+frame. Each viewer adds two bounded CPU descriptor slots (paint and cover), which may retain older
+frames than its current preparation/fallback slots. The temporary capture descriptor aliases the
+capture source and is reset after installation. These metadata slots add no pixel copies or GPU
+readbacks; the existing bounded cover pixmap remains the only cover capture. The independent raster
+surface replaces the former child crop/copy from the parent's shared QWidget backing store and still
+paints into its own platform backing-store buffers. Qt Wayland 6.11.2 bounds each pool to five
+buffers: at most ten during temporary first attach, and five in steady state. This is retained
+platform pixel storage for the G6 inventory, not an aggregate-budget repair or a claim of one
+platform buffer. Foreign CPU handles are cleared on replacement, and native
+descriptors/correlations are cleared after real retirement when the presenter resumes.
 
 The owner pins a replacement lease before acquiring a swapchain image. Rejection releases only
 that replacement's pending overlay charge and publishes its exact rejected sequence, retaining
 the previous native image and active overlay charge. Acquire/retry/retirement proof is unchanged.
 
-G3B remains incomplete. G3B2 must qualify last-good/refusal/CPU-cover surface identity and finish
-failed/non-neutral display-adjustment and global status-intent truth. G3B2A repairs the underlying
+G3B remains incomplete until its independent visible-intent and presentation-integration gates are
+qualified. G3B2B covers actual display identity, last-good/refusal policy, failed/non-neutral
+adjustment, passive/frozen gesture mapping, and selected-viewer status. G3B2A repairs the underlying
 clear/discard dependency and bounded WSI progress; that bounded slice is accepted after independent
 source review and native reruns, CPU checks, a Vulkan-disabled render build and source-quality checks.
-This does not qualify the broader visible-refusal/CPU-cover policy.
-G3B1 does not claim those gates or cross-platform native GPU qualification; the explicit CPU
+Metadata/identity and lifecycle checks do not alone qualify compositor-visible pixels or every
+refresh during interaction. This does not claim cross-platform native GPU qualification; the explicit CPU
 fallback remains supported on macOS and Windows.
 
 The RAM preview controller fills its range with a bounded two-deep pipeline

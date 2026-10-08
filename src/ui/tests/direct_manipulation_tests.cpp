@@ -504,6 +504,10 @@ void testAdmissionRejectedOverrideSurfacesErrorWithoutKillingInteraction(
 
 void sendMouse(QWidget& widget, const QEvent::Type type, const QPointF& local,
                const Qt::MouseButton button, const Qt::MouseButtons buttons) {
+    // Passive hit testing follows actual CPU publication. Hidden offscreen fixtures must paint
+    // the frame/transform before beginning a gesture; no paint is forced during the held gesture.
+    if (type == QEvent::MouseButtonPress)
+        static_cast<void>(widget.grab());
     QMouseEvent mouseEvent(type, local, local, button, buttons, Qt::NoModifier);
     QCoreApplication::sendEvent(&widget, &mouseEvent);
 }
@@ -846,6 +850,7 @@ void testPickingAtZoomAndPan(Expectations& expectations) {
     expectations.expect(selector && selector->currentText() == QStringLiteral("Top"),
                         "object dropdown follows canvas selection");
     fixture.session.selectLayer(fixture.session.timelineMerge()->entries().back().layerId);
+    (void)fixture.viewer.grab();
     QMouseEvent shiftPress(QEvent::MouseButtonPress, QPointF(210, 155), QPointF(210, 155),
                            Qt::LeftButton, Qt::LeftButton, Qt::ShiftModifier);
     QCoreApplication::sendEvent(&fixture.viewer, &shiftPress);
@@ -929,6 +934,38 @@ void testDragOnEmptyOrUnselectedDoesNothing(Expectations& expectations) {
     fixture.bridge.beginShutdown();
     expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
                         "the unselected-drag fixture reaches asynchronous scheduler quiescence");
+}
+
+void testSelectionCallbackInvalidatesPress(Expectations& expectations) {
+    using namespace bloom;
+    GestureFixture fixture(makeTestProject("Viewer Reentrant Selection Test"));
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
+        "the reentrant-selection fixture has a real pickable solid");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the pickable solid is prepared before the press");
+    fixture.session.clearSelection();
+    const auto revisionBeforePress = fixture.session.snapshot().revision();
+    bool callbackRan = false;
+    QObject::connect(
+        &fixture.session, &ui::CompositionSession::selectionChanged, &fixture.viewer, [&] {
+            callbackRan = true;
+            static_cast<void>(fixture.session.setCurrentTime(core::RationalTime::fromInteger(1)));
+        });
+    sendPress(fixture.viewer, QPointF(200.0, 150.0));
+    expectations.expect(callbackRan &&
+                            fixture.session.currentTime() == core::RationalTime::fromInteger(1),
+                        "selection synchronously changes the press's time domain");
+    expectations.expect(!fixture.session.transformInteractionActive(),
+                        "an invalidated displayed time cannot start a frozen gesture");
+    sendMove(fixture.viewer, QPointF(240.0, 150.0));
+    sendRelease(fixture.viewer, QPointF(240.0, 150.0));
+    expectations.expect(fixture.session.snapshot().revision() == revisionBeforePress,
+                        "the invalidated press and release create no document command");
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+                        "the reentrant-selection fixture reaches scheduler quiescence");
 }
 
 void testMidDragResizeCancelsWithNoCommitAndNoOverrideLeft(Expectations& expectations) {
@@ -1170,6 +1207,7 @@ int main(int argc, char** argv) {
     testPickingAtZoomAndPan(expectations);
     testKeyboardNudgeAndDelete(expectations);
     testDragOnEmptyOrUnselectedDoesNothing(expectations);
+    testSelectionCallbackInvalidatesPress(expectations);
     testMidDragResizeCancelsWithNoCommitAndNoOverrideLeft(expectations);
     testEscapeCancelsMidDrag(expectations);
     testGestureAfterLayoutEditUsesLiveRevision(expectations);

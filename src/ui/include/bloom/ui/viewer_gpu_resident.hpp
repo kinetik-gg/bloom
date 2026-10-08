@@ -48,6 +48,7 @@
 #include <string>
 
 class QWidget;
+class QWindow;
 
 namespace bloom::ui {
 
@@ -97,6 +98,19 @@ struct ResidentPresentRequest final {
     ResidentOverlaySource overlay;
 };
 
+// Exact metadata captured before enqueue and published only by its correlated owner
+// acknowledgement. Geometry remains readable after lease invalidation; it grants no permission to
+// submit that lease.
+struct ResidentAppliedDisplay final {
+    std::shared_ptr<const runtime::PreparedPreviewFrame> frame;
+    std::optional<ResidentFrameGeometry> geometry;
+    QRectF destination;
+    render::GpuPresentImageParams params;
+    std::uint64_t domainRevision = 0, surfaceEpoch = 0, removalEpoch = 0;
+    QRectF containerRect;
+    double devicePixelRatio = 1.0;
+};
+
 class ViewerGpuResidentController final {
   public:
     struct Dependencies final {
@@ -141,6 +155,10 @@ class ViewerGpuResidentController final {
     // first attach or a resize. Input-transparent; retired with the host tree.
     void setCpuCoverSnapshot(CpuCoverSnapshot snapshot);
     [[nodiscard]] QWidget* cpuCoverForTest() const noexcept;
+    [[nodiscard]] QWindow* cpuCoverWindowForTest() const noexcept;
+    [[nodiscard]] QWindow* cpuCoverPersistentWindowForTest() const noexcept;
+    [[nodiscard]] std::size_t cpuCoverPaintCountForTest() const noexcept;
+    [[nodiscard]] QPixmap cpuCoverSnapshotForTest() const;
     // Hides the native CPU cover so the host's own CPU paint (or no frame) is
     // exposed. Safe when no cover exists; never destroys or reparents a surface.
     void concealCpuCover();
@@ -149,7 +167,7 @@ class ViewerGpuResidentController final {
     // the opaque cover hides the last native child and no stale frame can flash, and the container
     // is never hidden, reparented, or destroyed here. Safe when no snapshot callback is configured
     // (no-op) and when no cover exists yet.
-    void revealCpuCover(const QRect& containerRect);
+    void revealCpuCover(const QRect& containerRect, bool refreshSnapshot = false);
     [[nodiscard]] bool cpuCoverVisible() const noexcept;
     [[nodiscard]] bool cpuCoverVisibleForTest() const noexcept { return cpuCoverVisible(); }
     // Fired whenever the presenter's state changed since the previous poll
@@ -208,6 +226,11 @@ class ViewerGpuResidentController final {
     // Owner-applied coherent publication, distinct from the newest prepared/desired frame.
     [[nodiscard]] std::shared_ptr<const runtime::PreparedPreviewFrame>
     appliedFrame() const noexcept;
+    [[nodiscard]] const std::optional<ResidentAppliedDisplay>& appliedDisplay() const noexcept;
+    // Whether a known native publication can safely remain exposed in the current requested domain.
+    [[nodiscard]] bool canRetainAppliedDisplay() const noexcept;
+    // Explicit domain clear, unlike the absence of a newly prepared adjustment candidate.
+    void clearPublicationDomain();
     [[nodiscard]] bool publicationCurrent() const noexcept;
     [[nodiscard]] QRectF appliedDestination() const noexcept;
     // Genuine owner-observed native present progress for the live presenter (read-only): the

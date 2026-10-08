@@ -5,6 +5,7 @@
 #include <bloom/ui/viewer_gpu_resident.hpp>
 
 #include <QSettings>
+#include <QStringList>
 #include <QTimer>
 
 namespace bloom::ui {
@@ -44,44 +45,136 @@ void ViewerEditor::loadViewAdjust() {
     refreshViewAdjustment();
 }
 
-PreparedPreviewFrameHandle ViewerEditor::displayedFrame() const {
+bool ViewerEditor::frameInCurrentDomain(const PreparedPreviewFrameHandle& frame) const {
+    return frame && session_.composition() &&
+           frame->desiredIdentity().projectId == session_.snapshot().project().id() &&
+           frame->desiredIdentity().compositionId == session_.compositionId();
+}
+
+PreparedPreviewFrameHandle ViewerEditor::preparedDisplayFrame() const {
     auto base = previewController_.state().frame;
-    if (!base || viewAdjust_.neutral())
+    if (!frameInCurrentDomain(base))
+        return nullptr;
+    if (viewAdjust_.neutral())
         return base;
     auto desired = base->desiredIdentity();
     desired.viewAdjust = viewAdjust_;
-    return adjustedFrame_ && adjustedFrame_->desiredIdentity() == desired ? adjustedFrame_ : base;
+    return adjustedFrame_ && adjustedFrame_->desiredIdentity() == desired ? adjustedFrame_
+                                                                          : nullptr;
 }
 
-PreparedPreviewFrameHandle ViewerEditor::appliedDisplayFrame() const {
-    if (residentActive_ && gpuResident_ && !gpuResident_->cpuCoverVisible()) {
-        auto applied = gpuResident_->appliedFrame();
-        const auto& live = session_.snapshot();
-        if (applied && applied->desiredIdentity().projectId == live.project().id() &&
-            applied->desiredIdentity().compositionId == session_.compositionId())
-            return applied;
-        return nullptr;
+std::optional<ViewerDisplayDescriptor> ViewerEditor::actualDisplayDescriptor() const {
+    if (gpuResident_ && gpuResident_->cpuCoverVisible()) {
+        if (cpuCoverDisplay_ &&
+            (!cpuCoverDisplay_->frame || frameInCurrentDomain(cpuCoverDisplay_->frame)))
+            return cpuCoverDisplay_;
+        return std::nullopt;
     }
-    return displayedFrame();
+    if (gpuResident_ && gpuResident_->hasLiveTarget() && gpuResident_->appliedDisplay()) {
+        const auto& applied = *gpuResident_->appliedDisplay();
+        if (!frameInCurrentDomain(applied.frame) || !applied.geometry)
+            return std::nullopt;
+        const auto descriptor = render::ReferenceDisplayBufferDescriptor::create(
+            applied.geometry->displayWindow, applied.geometry->pixelAspect);
+        if (!descriptor)
+            return std::nullopt;
+        ViewerDisplayDescriptor result;
+        result.frame = applied.frame;
+        result.mapping =
+            ViewerMapping{applied.destination, applied.frame->processIdentity().plan->format(),
+                          applied.frame->desiredIdentity().resolution,
+                          applied.geometry->pixelAspect, *descriptor.value()};
+        result.captureRect = applied.containerRect;
+        result.devicePixelRatio = applied.devicePixelRatio;
+        result.channel = static_cast<ViewerChannel>(applied.params.channel);
+        result.background = static_cast<ViewerBackground>(applied.params.background);
+        result.overlayRevision = applied.domainRevision;
+        result.native = true;
+        return result;
+    }
+    if (cpuPaintedDisplay_ && frameInCurrentDomain(cpuPaintedDisplay_->frame))
+        return cpuPaintedDisplay_;
+    return std::nullopt;
 }
+
+PreparedPreviewFrameHandle ViewerEditor::displayedFrame() const {
+    const auto actual = actualDisplayDescriptor();
+    return actual ? actual->frame : nullptr;
+}
+
+PreparedPreviewFrameHandle ViewerEditor::appliedDisplayFrame() const { return displayedFrame(); }
 
 CompositionPreviewState ViewerEditor::displayedPreviewState() const {
     auto state = previewController_.state();
+    state.viewerDisplayState = true;
     if (state.desiredIdentity)
         state.desiredIdentity->viewAdjust = viewAdjust_;
-    state.frame = appliedDisplayFrame();
+    const auto actual = actualDisplayDescriptor();
+    state.frame = actual ? actual->frame : nullptr;
+    QRectF desiredDestination;
+    if (state.frame) {
+        const auto format = state.frame->processIdentity().plan->format();
+        const auto extent = render::ImageExtent::create(format.width(), format.height());
+        if (extent)
+            desiredDestination = viewTransformedDisplayRect(canvasRect(), *extent.value(),
+                                                            format.pixelAspect(), transform_);
+    }
     const bool current = state.frame && state.desiredIdentity &&
-                         state.frame->desiredIdentity() == *state.desiredIdentity &&
-                         (!residentActive_ || !gpuResident_ || gpuResident_->publicationCurrent());
+                         state.frame->desiredIdentity() == *state.desiredIdentity && actual &&
+                         actual->channel == channel_ && actual->background == background_ &&
+                         actual->overlayRevision == gpuOverlayRevision_ &&
+                         actual->captureRect == contentRect() && actual->mapping &&
+                         actual->devicePixelRatio == devicePixelRatioF() &&
+                         actual->mapping->displayRect == desiredDestination &&
+                         (!actual->native || gpuResident_->publicationCurrent());
+    state.ownerAppliedDisplay = actual && actual->native;
     state.freshness = !state.frame ? FrameFreshness::None
                       : current    ? FrameFreshness::Current
                                    : FrameFreshness::Stale;
-    if (state.frame && !current && state.activity != PreviewActivity::Failed && residentActive_ &&
-        gpuResident_ && !gpuResident_->cpuCoverVisible()) {
-        state.message = adjustTask_
-                            ? tr("Preparing viewer adjustment; previous display intent retained")
-                            : tr("Previous complete display is retained (out of date)");
+    const bool sharedFailure =
+        state.activity == PreviewActivity::Failed || state.activity == PreviewActivity::Unsupported;
+    if (!session_.composition() || sharedFailure) {
+        // Shared pipeline/configuration diagnostics remain authoritative, including when a
+        // local adjustment has no candidate. Display freshness is still projected separately.
+    } else if (!adjustmentFailure_.isEmpty() || !nativeFailure_.isEmpty()) {
+        state.activity = PreviewActivity::Failed;
+        state.message = !adjustmentFailure_.isEmpty() ? adjustmentFailure_ : nativeFailure_;
+    } else if (!viewAdjust_.neutral() && !preparedDisplayFrame() &&
+               (adjustTask_ || frameInCurrentDomain(previewController_.state().frame))) {
+        state.activity = PreviewActivity::Rendering;
+        state.message = tr("Preparing viewer adjustment; previous display intent retained");
+    } else if (!state.frame && state.activity == PreviewActivity::Ready) {
+        state.activity = PreviewActivity::Rendering;
+        state.message = tr("Prepared frame awaiting viewer presentation");
+    } else if (state.frame && !current) {
+        state.message = tr("Previous complete display is retained (out of date)");
     }
+    if (state.frame && actual) {
+        const auto shown = state.frame->desiredIdentity().viewAdjust;
+        const QStringList channels{tr("RGBA"),  tr("RGB"),  tr("Red"),
+                                   tr("Green"), tr("Blue"), tr("Alpha")};
+        const QStringList backgrounds{tr("Solid"), tr("Checkerboard"), tr("Black"), tr("White")};
+        state.viewerStatusText =
+            state.activity == PreviewActivity::Failed ||
+                    state.activity == PreviewActivity::Unsupported
+                ? state.message
+                : tr("Shown EV %1%2 · %3%4 · %5")
+                      .arg(shown.exposure, 0, 'g', 5)
+                      .arg(shown.gamma == 1.0 ? QString{}
+                                              : tr(", gamma %1").arg(shown.gamma, 0, 'g', 5))
+                      .arg(channels.value(static_cast<int>(actual->channel)))
+                      .arg(actual->cover ? tr(" · CPU cover") : QString{})
+                      .arg(current ? tr("Current") : tr("Previous display"));
+        state.message = tr("Shown EV %1, gamma %2 · %3 · %4%5 · %6")
+                            .arg(shown.exposure, 0, 'g', 5)
+                            .arg(shown.gamma, 0, 'g', 5)
+                            .arg(channels.value(static_cast<int>(actual->channel)))
+                            .arg(backgrounds.value(static_cast<int>(actual->background)))
+                            .arg(actual->cover ? tr(" · CPU cover") : QString{})
+                            .arg(state.message);
+    }
+    if (state.viewerStatusText.isEmpty())
+        state.viewerStatusText = state.message;
     return state;
 }
 
@@ -89,11 +182,13 @@ void ViewerEditor::refreshViewAdjustment() {
     if (probePosition_)
         refreshProbe(*probePosition_);
     const auto base = previewController_.state().frame;
-    if (previewController_.isShuttingDown() || !base || viewAdjust_.neutral()) {
+    if (previewController_.isShuttingDown() || !frameInCurrentDomain(base) ||
+        viewAdjust_.neutral()) {
         if (adjustTask_)
             adjustTask_->cancel();
         adjustedFrame_.reset();
         adjustIdentity_.reset();
+        adjustmentFailure_.clear();
         update();
         return;
     }
@@ -109,9 +204,14 @@ void ViewerEditor::refreshViewAdjustment() {
     if (adjustIdentity_ == desired)
         return;
     adjustIdentity_ = desired;
+    adjustmentFailure_.clear();
     const auto submission = previewController_.submitViewerAnalysis(desired);
     if (!submission.accepted()) {
-        exposureField_->setToolTip(tr("Viewer adjustment could not start"));
+        adjustmentFailure_ = submission.diagnostic && !submission.diagnostic->summary.empty()
+                                 ? QString::fromStdString(submission.diagnostic->summary)
+                                 : tr("Viewer adjustment could not start for the requested frame");
+        exposureField_->setToolTip(adjustmentFailure_);
+        updatePreviewAccessibility();
         return;
     }
     adjustTask_ = submission.handle;
@@ -136,13 +236,14 @@ void ViewerEditor::consumeViewAdjustment() {
         desired.viewAdjust = viewAdjust_;
         if ((*value)->frame()->desiredIdentity() == desired) {
             adjustedFrame_ = (*value)->frame();
+            adjustmentFailure_.clear();
             exposureField_->setToolTip(tr("Exposure in EV stops; viewer display only"));
         }
-    } else if (result->state() == runtime::TaskState::Failed) {
-        exposureField_->setToolTip(
-            result->diagnostics().empty()
-                ? tr("Viewer adjustment failed")
-                : QString::fromStdString(result->diagnostics().front().summary));
+    } else if (result->state() != runtime::TaskState::Cancelled) {
+        adjustmentFailure_ = result->diagnostics().empty()
+                                 ? tr("Viewer adjustment returned no supported display frame")
+                                 : QString::fromStdString(result->diagnostics().front().summary);
+        exposureField_->setToolTip(adjustmentFailure_);
     }
     refreshViewAdjustment();
     updatePreviewAccessibility();

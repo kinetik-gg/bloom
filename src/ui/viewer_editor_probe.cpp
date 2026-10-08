@@ -74,11 +74,22 @@ void ViewerEditor::leaveEvent(QEvent* event) {
 void ViewerEditor::refreshProbe(QPointF position) {
     probePosition_ = position;
     const auto mapping = currentMapping();
-    const auto base = previewController_.state().frame;
-    const auto shown = displayedFrame();
-    if (!mapping || !base || !shown || !mapping->displayRect.contains(position) ||
+    const auto actual = actualDisplayDescriptor();
+    const auto shown = actual ? actual->frame : nullptr;
+    const auto state = displayedPreviewState();
+    const auto& base = shown;
+    // The probe must not label another prepared request/adjustment/channel as painted values.
+    // Until the exact displayed intent is current, the sample is explicitly unavailable.
+    if (!mapping || !base || !shown || !actual || !mapping->displayRect.contains(position) ||
         !contentRect().contains(position) || previewController_.isShuttingDown()) {
         clearProbe();
+        if (contentRect().contains(position) && !previewController_.isShuttingDown())
+            probePosition_ = position;
+        return;
+    }
+    if (actual->channel != ViewerChannel::Rgba || state.freshness != FrameFreshness::Current) {
+        clearProbe();
+        probePosition_ = position; // keep the cursor location so real publication can refresh it
         return;
     }
     const auto coordinate = mapping->toComposition(position);
@@ -88,8 +99,8 @@ void ViewerEditor::refreshProbe(QPointF position) {
     std::optional<render::ImageWindow> window;
     if (const auto buffer = shown->displayBufferView(); buffer.has_value()) {
         window = buffer->displayWindow;
-    } else if (const auto resident = residentFrameGeometry(*shown); resident.has_value()) {
-        window = resident->displayWindow;
+    } else if (actual->mapping) {
+        window = actual->mapping->displayDescriptor.displayWindow();
     }
     if (!window.has_value()) {
         clearProbe();
@@ -142,7 +153,6 @@ void ViewerEditor::refreshProbe(QPointF position) {
         auto desired = base->desiredIdentity();
         const auto roi = render::ImageWindow::create(x, y, 1, 1);
         desired.roi = *roi.value();
-        desired.viewAdjust = {};
         readout.pending = true;
         if (probeTask_) {
             if (probeIdentity_ != desired)

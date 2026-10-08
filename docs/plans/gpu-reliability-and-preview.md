@@ -6,8 +6,8 @@ Updated: 2026-10-09
 
 ## Execution checkpoint
 
-The owner resumed execution after the G2E checkpoint. G3B outline publication and visible
-presentation is active; G3A retention truth follows after its acceptance.
+The owner resumed execution after the G2E checkpoint. G3B outline publication and displayed-intent
+slices are accepted within the limits below; G3A retention truth is next.
 
 Implementation proceeds sequentially from `e1086c13`. Each slice requires source review, focused
 regressions, and the applicable native/product evidence before its successor is accepted. A passing
@@ -19,9 +19,10 @@ remain separate decisions under G9.
 | G0 | Initial instrumentation slice accepted; remaining probes attach to their owning packages | Source review, quality checks, three focused suites, native acknowledgement correlation and original interaction fixture passed |
 | G1 | Accepted: native validity and mapped-memory visibility | Source review, quality/lint, real operator/display/viewer/RAM/final-route parity and validation; independent Composite/viewer reruns passed |
 | G2 | Initialization cleanup, metadata lifetime, image reclamation, vector quarantine, oracle recovery, and G2E cancellation/teardown accepted as bounded slices | Native parity/lifecycle/viewer/final paths and independent retirement/transition reruns have zero validation errors; aggregate accounting remains G6 work |
-| G3B1 | Coherent outline publication accepted as a bounded slice | Native state/interaction regressions, independent compositor samples, CPU regressions and changed-source static analysis pass; G3B2 remains pending |
+| G3B1 | Coherent outline publication accepted as a bounded slice | Native state/interaction regressions, independent compositor samples, CPU regressions and changed-source static analysis pass; G3B2A/B checkpoints follow |
 | G3B2A | Clear/discard synchronization and bounded owner WSI progress accepted as a bounded slice | Independent source review and isolated GL native checks, isolated Vulkan lifecycle/progress, CPU admission/fairness tests, Vulkan-disabled render build and changed-source static analysis pass |
-| G3A, G3B2B, G4–G10 | Pending | No implementation or qualification claim |
+| G3B2B | Actual displayed intent, safe CPU cover and coupled hit mapping accepted as a bounded slice | Independent private compositor pixels, strict native interaction/project replacement, focused regressions, source quality and 58 affected translation units of static analysis pass |
+| G3A, G4–G10 | Pending | No implementation or qualification claim |
 
 G3B1 checkpoint (2026-10-09), accepted after independent source review and focused reruns: coherent required-outline publication and exact
 owner-applied metadata are implemented as a bounded slice. Deterministic delayed raster, changing
@@ -32,8 +33,9 @@ Independent compositor captures retain a complete pair while replacement raster 
 show the complete replacement and explicit outline removal. A real selected-solid native drag in
 a solid/text composition produced 73 sampled captures with no sampled outline loss (about 149 ms
 median and 455 ms maximum sample gap). These samples do not establish per-refresh continuity,
-playback performance, or text-specific dragging. G3B2 remains pending for refusal/CPU-cover intent,
-failed/non-neutral adjustment and global status truth, and coupled applied hit mapping/bounds.
+playback performance, or text-specific dragging. G3B2 refusal/CPU-cover intent, failed/non-neutral
+adjustment, global status truth and coupled applied hit mapping/bounds were still pending at that
+checkpoint; G3B2B below qualifies them.
 The clear/discard acquire-wait/layout dependency is addressed by the G3B2A checkpoint below.
 G3A/G4 cadence is unchanged. Further native
 GUI fixtures must use an isolated compositor; the user's desktop is no longer a test surface.
@@ -48,9 +50,40 @@ clear/image reuse, actual resize and acquired-unpresented retirement pass twice;
 three-target reuse rounds pass with genuine core and synchronization validation. Independent raw-target
 and coordinator reruns also pass on the isolated GL renderer. CPU contract checks
 cover the one-shot budget, fair rotation and admission gates. Affected native and portable-stub static
-analysis, source quality/format checks, and the Vulkan-disabled render build pass. G3B2B visible intent, adjusted-display
-failure, coupled hit mapping and Qt present-hook integration remain separate work. No further native
-fixture uses the desktop; current checks use the private isolated compositor.
+analysis, source quality/format checks, and the Vulkan-disabled render build pass. The G3B2B
+checkpoint below handles visible intent, adjusted-display failure and coupled hit mapping; Qt
+present-hook integration remains G4D work. No further native fixture uses the desktop; current
+checks use the private isolated compositor.
+
+G3B2B checkpoint (2026-10-09), accepted after independent review and private native/pixel checks:
+desired controls, prepared candidates and actual native/CPU/cover displays now have separate
+identity and currentness. Native metadata is correlated with the real owner acknowledgement;
+painted CPU and cover metadata describes the exact captured source, geometry and intent. Status
+and probes follow the active visible Viewer, with last-active/stable-visible fallback and explicit
+no-viewer clearing. Passive picking uses the actual frame and destination; an active gesture keeps
+its frozen mapping, while genuine domain/time/geometry/lifecycle changes cancel it. A synchronous
+selection callback that invalidates a press cannot start a gesture or create a command.
+
+Failed or held adjustment retains the prior complete display visibly stale. Failure reports a
+concrete diagnostic without an unchanged retry loop. Unsafe refusal, domain replacement, resize and blank capture
+require a safe CPU cover or explicit unavailable display. Explicit document rebind rejects old
+local frames/tasks even when numeric IDs collide. The public raster cover owns its backing store:
+a mapped alpha child conceals by transparency and reveals opaque captured pixels; a temporary
+first-attach surface lasts only until genuine owner application. Fresh native targets re-establish
+the cover after CPU retirement. No extra GPU parent commit, UI evaluation/readback, coverage exception,
+precision change or scheduler-cadence change was added.
+
+The final genuine native interaction proof passes all 17 stable capture phases with core and
+synchronization validation clean. Independent pixel masks prove four exact text-outline moves and
+undo, unchanged neutral pixels during held/failed EV, and matching adjusted-CPU/unsafe-cover image
+geometry. Controller samples retain the exact outline until replacement/removal and the complete
+320 × 240 refusal cover. Held first-attach samples fill four 160 × 120 quadrants from a DPR2
+pixmap. Strict native project replacement, six focused portable suites, source quality and all
+58 affected translation units of static analysis pass. Tests use private/offscreen surfaces only.
+These samples do not qualify every refresh, sustained playback, desktop responsiveness, physical
+monitor DPR2, or global keyboard focus. Linux native execution is locally verified; macOS/Windows
+retain the explicit CPU fallback. G3A cache truth, G4 completion/cadence and public present hooks,
+G6 aggregate memory accounting and G7 processing remain pending.
 
 G0 adds opt-in bounded numeric frame tracing and a native Full-resolution 1920 × 1080 solid/text
 fixture using four cold and four warm frame requests. The initial measured medians were 48.14 ms

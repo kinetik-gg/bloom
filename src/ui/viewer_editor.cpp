@@ -1769,6 +1769,43 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     });
     connect(&previewController_, &CompositionPreviewController::stateChanged, this,
             &ViewerEditor::refreshViewAdjustment);
+    connect(&session_, &CompositionSession::documentRebound, this, [this] {
+        // Different document owners may have colliding numeric project/composition/revision IDs.
+        // Detach cancelled per-view work and every local retained display before re-evaluation;
+        // no late completion can become a candidate for the newly bound document.
+        if (adjustTask_)
+            adjustTask_->cancel();
+        adjustTask_.reset();
+        analysisTimer_->stop();
+        adjustIdentity_.reset();
+        adjustedFrame_.reset();
+        adjustmentFailure_.clear();
+        if (cpuFallbackTask_)
+            cpuFallbackTask_->cancel();
+        cpuFallbackTask_.reset();
+        cpuFallbackIdentity_.reset();
+        cpuFallbackFailedIdentity_.reset();
+        cpuFallbackFrame_.reset();
+        lastCpuFrame_.reset();
+        gpuRequestedFrame_.reset();
+        cpuPaintedDisplay_.reset();
+        cpuCoverDisplay_.reset();
+        coverCaptureDisplay_.reset();
+        clearProbe();
+        probeTask_.reset();
+        probeIdentity_.reset();
+        probeTaskFrame_.reset();
+        probeCacheFrame_.reset();
+        probeCacheReference_.reset();
+        probeCacheDisplayLinear_.reset();
+        probeCacheDisplay_.reset();
+        probeFailure_.clear();
+        ++gpuOverlayRevision_;
+        gpuPublicationDomain_.reset();
+        updateGpuResidentPresentation();
+        updatePreviewAccessibility();
+        update();
+    });
     updatePreviewResolution();
     updatePreviewAccessibility();
     updateOverlayActions();
@@ -1777,13 +1814,24 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     // client. It never creates a device/thread here; the adapter owns the only native objects.
     gpuResident_ = std::make_unique<ViewerGpuResidentController>();
     gpuResident_->setFrameTrace(previewController_.frameTrace());
-    gpuResident_->setPresentAck([this](const bool presented, const std::string&) {
+    gpuResident_->setPresentAck([this](const bool presented, const std::string& diagnostic) {
         // True only for an owner-applied coherent pair; its exact frame may remain stale.
-        residentActive_ = presented;
+        residentActive_ = presented || gpuResident_->canRetainAppliedDisplay();
+        if (!presented)
+            nativeFailure_ = QString::fromStdString(diagnostic);
+        else if (gpuResident_->publicationCurrent())
+            nativeFailure_.clear();
         updatePreviewAccessibility();
         update();
     });
-    gpuResident_->setCpuFallback([this] { requestResidentCpuFallback(); });
+    gpuResident_->setCpuFallback([this] {
+        // This bounded failure notification also covers asynchronous overlay/admission failures,
+        // which have no present sequence and therefore must not manufacture a failed owner ack.
+        nativeFailure_ = QString::fromStdString(gpuResident_->diagnostic());
+        residentActive_ = gpuResident_->canRetainAppliedDisplay();
+        updatePreviewAccessibility();
+        requestResidentCpuFallback();
+    });
     gpuResident_->setCpuCoverSnapshot([this]() -> QPixmap { return renderCpuCoverSnapshot(); });
     gpuResident_->setInputSink(
         [this](const ViewerGpuInputEvent& event) { forwardGpuInput(event); });
@@ -2230,7 +2278,10 @@ void ViewerEditor::updatePreviewResolution() {
     // A resident frame is presented at its native resolution. Auto stays stable Full so a zoom/pan
     // only updates the present parameters (destination/source) and never forces a re-evaluation or
     // an implicit proxy resolution change. Half/Quarter remain explicit choices made elsewhere.
-    if (residentFrameIsDisplayed()) {
+    const auto base = previewController_.state().frame;
+    if (residentFrameIsDisplayed() ||
+        (frameInCurrentDomain(base) &&
+         base->provenance().provider == runtime::PreviewDisplayProvider::GpuResident)) {
         return;
     }
     const auto geometry = currentDisplayGeometry();
@@ -2345,17 +2396,30 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
     // the still-mapped native container.
     PreparedPreviewFrameHandle cpuFrame;
     if (coverSnapshotInProgress_) {
-        const auto current = displayedFrame();
+        const auto current = preparedDisplayFrame();
         if (current != nullptr &&
             current->provenance().provider == runtime::PreviewDisplayProvider::GpuResident) {
-            cpuFrame = cpuFallbackFrame_ != nullptr ? cpuFallbackFrame_ : lastCpuFrame_;
+            cpuFrame = frameInCurrentDomain(cpuFallbackFrame_) ? cpuFallbackFrame_
+                       : frameInCurrentDomain(lastCpuFrame_)   ? lastCpuFrame_
+                                                               : nullptr;
         } else {
-            cpuFrame = current;
+            cpuFrame = current                               ? current
+                       : frameInCurrentDomain(lastCpuFrame_) ? lastCpuFrame_
+                                                             : nullptr;
         }
     } else {
         cpuFrame = paintableCpuFrame();
     }
     const QRectF frame = canvasRect();
+    ViewerDisplayDescriptor painted{.frame = nullptr,
+                                    .mapping = std::nullopt,
+                                    .captureRect = contentRect(),
+                                    .devicePixelRatio = devicePixelRatioF(),
+                                    .channel = channel_,
+                                    .background = background_,
+                                    .overlayRevision = gpuOverlayRevision_,
+                                    .native = false,
+                                    .cover = coverSnapshotInProgress_};
     if (cpuFrame != nullptr) {
         // displayBufferView() normalizes both display-product alternatives (reference and
         // qualified) to the same packed-RGBA8 shape -- the viewer draws pixels identically either
@@ -2390,7 +2454,13 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                     }
                     const QImage& shownImage =
                         channel_ == ViewerChannel::Rgba ? image : channelView_;
-                    const auto geometry = currentDisplayGeometry();
+                    const auto format = cpuFrame->processIdentity().plan->format();
+                    const auto fullExtent =
+                        render::ImageExtent::create(format.width(), format.height());
+                    const std::optional<DisplayGeometry> geometry =
+                        fullExtent ? std::optional{DisplayGeometry{*fullExtent.value(),
+                                                                   format.pixelAspect()}}
+                                   : std::nullopt;
                     const QRectF displayRect =
                         geometry.has_value()
                             ? viewTransformedDisplayRect(frame, geometry->extent,
@@ -2409,14 +2479,15 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
                     paintViewerCompositionFrame(painter, displayRect);
                     if (geometry.has_value()) {
-                        const auto bounds = previewController_.selectedLayerBounds();
+                        const auto bounds = previewController_.selectedLayerBounds(cpuFrame);
                         const auto descriptor = render::ReferenceDisplayBufferDescriptor::create(
                             bufferView->displayWindow, bufferView->pixelAspect);
                         if (descriptor && session_.composition()) {
                             const ViewerMapping mapping{
-                                displayRect, session_.composition()->format(),
-                                cpuFrame->desiredIdentity().resolution, bufferView->pixelAspect,
-                                *descriptor.value()};
+                                displayRect, format, cpuFrame->desiredIdentity().resolution,
+                                bufferView->pixelAspect, *descriptor.value()};
+                            painted.frame = cpuFrame;
+                            painted.mapping = mapping;
                             painter.save();
                             painter.setClipRect(contentRect());
                             paintViewerOverlays(
@@ -2438,8 +2509,34 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
     paintPathTools(painter);
     paintTextEditing(painter);
 
+    if (coverSnapshotInProgress_)
+        coverCaptureDisplay_ = std::move(painted);
+    else {
+        const bool changed = !cpuPaintedDisplay_ || cpuPaintedDisplay_->frame != painted.frame ||
+                             cpuPaintedDisplay_->mapping != painted.mapping ||
+                             cpuPaintedDisplay_->channel != painted.channel ||
+                             cpuPaintedDisplay_->background != painted.background ||
+                             cpuPaintedDisplay_->overlayRevision != painted.overlayRevision;
+        cpuPaintedDisplay_ = std::move(painted);
+        if (changed)
+            scheduleDisplayedStateRefresh();
+    }
+
     // Readiness and diagnostics remain in the status bar. Selection geometry is derived from
     // the delivered process frame and painted in screen space above the composition.
+}
+
+void ViewerEditor::scheduleDisplayedStateRefresh() {
+    if (displayedStateRefreshQueued_)
+        return;
+    displayedStateRefreshQueued_ = true;
+    QMetaObject::invokeMethod(
+        this,
+        [this] {
+            displayedStateRefreshQueued_ = false;
+            updatePreviewAccessibility();
+        },
+        Qt::QueuedConnection);
 }
 
 void ViewerEditor::updatePreviewAccessibility() {
@@ -2456,12 +2553,14 @@ void ViewerEditor::updatePreviewAccessibility() {
         frameDescription = tr("Previous composition pixels are displayed and marked out of date");
         break;
     }
-    // Viewer-local wording follows the owner-applied complete publication. The global status
-    // bar still describes preparation state; synchronizing that broader display-intent surface
-    // belongs to the subsequent truthful refusal/adjustment gate.
+    // The local accessible description and the selected viewer's window status share exact actual
+    // display metadata. Shared controller/cache activity remains preparation truth.
     const QString colorStateDescription = previewColorState(preview).text;
     setAccessibleDescription(
         tr("%1. %2. %3").arg(preview.message, frameDescription, colorStateDescription));
+    emit displayedStateChanged();
+    if (probePosition_)
+        refreshProbe(*probePosition_);
 }
 
 std::optional<render::ReferenceDisplayBufferDescriptor>
@@ -2490,93 +2589,35 @@ viewerDisplayDescriptorForFrame(std::optional<runtime::PreviewDisplayBufferView>
 }
 
 std::optional<ViewerMapping> ViewerEditor::currentMapping() const {
-    const auto& preview = previewController_.state();
-    const PreparedPreviewFrameHandle& frameHandle = preview.frame;
-    if (frameHandle == nullptr) {
+    const auto actual = actualDisplayDescriptor();
+    if (!actual || !actual->frame || !actual->mapping)
         return std::nullopt;
-    }
-    // A stale frame from another composition, another project, or an older evaluation is never a
-    // mapping source (docs/architecture/animation-and-time.md, "Direct Manipulation And Preview
-    // Overrides"). A committed frame honestly carries the retained evaluation snapshot's revision,
-    // which a verified layout-only edit may have left behind the live revision; an interactive
-    // frame carries the live revision. Both name THIS live document, so requiring the project id to
-    // agree -- not just the numeric revision -- is what keeps an old project's frame from ever
-    // mapping, even when its revision number collides.
-    const auto& desired = frameHandle->desiredIdentity();
+    const auto& identity = actual->frame->desiredIdentity();
     const auto& live = session_.snapshot();
-    // TEMPORAL-2B: the genuine snapshot is resolved for the frame's OWN time, so a frame retained
-    // at an older revision inside an unaffected segment still maps; an interactive frame carries
-    // live.
-    const auto& evaluation = session_.evaluationSnapshotForTime(desired.time);
-    if (desired.compositionId != session_.compositionId() ||
-        desired.projectId != live.project().id() ||
-        desired.projectId != evaluation.project().id() ||
-        (desired.sourceRevision != live.revision() &&
-         desired.sourceRevision != evaluation.revision()) ||
-        desired.time != session_.currentTime()) {
+    // Reject the foreign/time domain BEFORE any retained-layer remapping.
+    if (!frameInCurrentDomain(actual->frame) || identity.time != session_.currentTime())
         return std::nullopt;
-    }
-    const auto* composition = session_.composition();
-    if (composition == nullptr) {
+    const auto& evaluation = session_.evaluationSnapshotForTime(identity.time);
+    if (identity.projectId != evaluation.project().id() ||
+        (identity.sourceRevision != live.revision() &&
+         identity.sourceRevision != evaluation.revision()) ||
+        actual->mapping->compositionFormat != session_.composition()->format() ||
+        actual->overlayRevision != gpuOverlayRevision_ || actual->captureRect != contentRect() ||
+        actual->devicePixelRatio != devicePixelRatioF())
         return std::nullopt;
-    }
-    // The gesture-mapping geometry is alternative-agnostic (design decision 2): a qualified frame's
-    // window/pixel-aspect maps a drag gesture exactly the way a reference frame's does, and the
-    // GPU-resident arm (which has no host pixels at all) maps from its lease metadata the same way.
-    // The frozen ViewerMapping::displayDescriptor stays a
-    // render::ReferenceDisplayBufferDescriptor purely as a geometry/change-detection value here
-    // (extent, pixel aspect, packed layout) -- never as a claim that the underlying pixels are the
-    // unqualified reference product; a qualified frame's isOcioQualified() bit lives on
-    // PreviewDisplayBufferView above, not on this reused geometry type, and nothing reads this
-    // descriptor's own (always-false) isOcioQualified() to decide provenance.
-    //
-    // A resident frame's displayBufferView() is nullopt by construction; resolving the descriptor
-    // through the lease's immutable geometry (never a readback) is what lets direct manipulation
-    // work on the GPU presentation route instead of refusing every gesture forever.
-    const auto descriptorResult = viewerDisplayDescriptorForFrame(
-        frameHandle->displayBufferView(), residentFrameGeometry(*frameHandle));
-    if (!descriptorResult) {
-        return std::nullopt;
-    }
-    const auto descriptor = descriptorResult.value();
-    // THE SEAM (task U3, decision 2): the frozen mapping rectangle used to be ALWAYS
-    // fitDisplayRect() -- the fit-to-window rectangle, regardless of any zoom/pan. It is now
-    // viewTransformedDisplayRect(), which composes the SAME fit rectangle when transform_ is in
-    // Fit mode, or the actively zoomed/panned rectangle otherwise -- so a drag begun at zoom 200%
-    // and a pan offset maps screen deltas against the geometry the user actually SEES, and lands
-    // exactly under the cursor. Freeze semantics are unchanged: this is still computed once here,
-    // handed to CompositionSession::beginTransformInteraction(), and frozen there for the gesture's
-    // duration; ViewerMapping's own equality (already comparing displayRect) is what
-    // makes mappingStillValid() correctly invalidate a gesture if transform_ changes mid-drag, with
-    // zero additional invalidation code needed (mousePressEvent()/wheelEvent() additionally refuse
-    // to start a NEW zoom/pan while dragActive_, so this only matters as a defensive backstop).
-    const auto geometry = currentDisplayGeometry();
-    if (!geometry.has_value()) {
-        return std::nullopt;
-    }
-    const QRectF displayRect = viewTransformedDisplayRect(canvasRect(), geometry->extent,
-                                                          geometry->pixelAspect, transform_);
-    if (displayRect.isEmpty()) {
-        return std::nullopt;
-    }
-    return ViewerMapping{
-        .displayRect = displayRect,
-        .compositionFormat = composition->format(),
-        .resolution = frameHandle->desiredIdentity().resolution,
-        .pixelAspect = descriptor.pixelAspect(),
-        .displayDescriptor = descriptor,
-    };
+    return actual->mapping;
 }
 
 ViewerHit ViewerEditor::hitAt(const ViewerMapping& mapping, const QPointF point) const {
     std::vector<runtime::EvaluatedOperationBounds> ordered;
-    const auto& frame = previewController_.state().frame;
-    if (!frame)
+    const auto actual = actualDisplayDescriptor();
+    const auto frame = actual ? actual->frame : nullptr;
+    if (!frameInCurrentDomain(frame) || frame->desiredIdentity().time != session_.currentTime())
         return {};
     // SPLIT-2: read geometry translated to the CURRENT live graph, then order by the live Merge
     // entries. The raw frame bounds carry the retained snapshot's layer IDs, which after an
     // equivalent split name the head.
-    const auto bounds = previewController_.currentLayerBounds();
+    const auto bounds = previewController_.currentLayerBounds(frame);
     if (const auto* stack = session_.timelineMerge()) {
         for (const auto& entry : stack->entries()) {
             const auto found = std::ranges::find(bounds, entry.layerId,
@@ -2585,21 +2626,34 @@ ViewerHit ViewerEditor::hitAt(const ViewerMapping& mapping, const QPointF point)
                 ordered.push_back(*found);
         }
     }
-    const auto selected = previewController_.selectedLayerBounds();
+    const auto selected = previewController_.selectedLayerBounds(frame);
     return hitTestViewer(mapping, point, ordered, selected, pointTextLayers(session_, selected));
 }
 
 bool ViewerEditor::mappingStillValid() const {
-    if (!activeMapping_.has_value()) {
+    if (!activeMapping_ || !activeGestureIdentity_ || !session_.composition() ||
+        !session_.transformInteractionActive())
         return false;
-    }
-    const auto mapping = currentMapping();
-    return mapping.has_value() && *mapping == *activeMapping_;
+    const auto& identity = *activeGestureIdentity_;
+    if (identity.projectId != session_.snapshot().project().id() ||
+        identity.compositionId != session_.compositionId() ||
+        identity.time != session_.currentTime() ||
+        activeMapping_->compositionFormat != session_.composition()->format() ||
+        activeGestureViewport_ != contentRect() || activeGestureTransform_ != transform_ ||
+        activeGestureSelectionRevision_ != gpuOverlayRevision_ || gpuNativeRetirePending_ ||
+        gpuHostMutationPending_)
+        return false;
+    // An ongoing gesture uses its frozen mapping. Prepared/applied lag and a lease becoming
+    // inadmissible cannot invalidate immutable geometry. A genuinely applied format/proxy change
+    // can.
+    const auto actual = actualDisplayDescriptor();
+    return actual && actual->mapping && *actual->mapping == *activeMapping_;
 }
 
 void ViewerEditor::endDrag(const bool commit) {
     dragActive_ = false;
     activeMapping_.reset();
+    activeGestureIdentity_.reset();
     if (commit) {
         (void)session_.commitTransformInteraction();
     } else {
@@ -2711,14 +2765,35 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
         QWidget::mousePressEvent(event);
         return;
     }
+    const auto hitDisplay = actualDisplayDescriptor();
+    if (!hitDisplay || !hitDisplay->frame)
+        return;
+    const auto& pressedIdentity = hitDisplay->frame->desiredIdentity();
+    const auto pressedViewport = contentRect();
+    const auto pressedTransform = transform_;
     const auto hit = hitAt(*mapping, event->position());
     if (hit.region == ViewerHitRegion::Empty) {
         session_.clearSelection();
         event->accept();
         return;
     }
+    QPointer<ViewerEditor> self(this);
     session_.selectLayer(hit.layerId, event->modifiers().testFlag(Qt::ShiftModifier));
-    const auto selected = previewController_.selectedLayerBounds();
+    if (!self)
+        return;
+    const auto actual = actualDisplayDescriptor();
+    // Selection emits synchronous callbacks. Start only if the same painted identity/mapping and
+    // live geometry still own this press; never substitute shared preparation when display
+    // vanished.
+    if (!actual || !actual->frame || !actual->mapping || !frameInCurrentDomain(actual->frame) ||
+        actual->frame->desiredIdentity() != pressedIdentity ||
+        pressedIdentity.time != session_.currentTime() || *actual->mapping != *mapping ||
+        mapping->compositionFormat != session_.composition()->format() ||
+        actual->captureRect != pressedViewport || contentRect() != pressedViewport ||
+        actual->devicePixelRatio != devicePixelRatioF() || transform_ != pressedTransform ||
+        gpuNativeRetirePending_ || gpuHostMutationPending_)
+        return;
+    const auto selected = previewController_.selectedLayerBounds(actual->frame);
     const auto bounds =
         std::ranges::find(selected, hit.layerId, &runtime::EvaluatedOperationBounds::layerId);
     if (bounds == selected.end())
@@ -2745,6 +2820,10 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
     }
     dragActive_ = true;
     activeMapping_ = mapping;
+    activeGestureIdentity_ = actual->frame->desiredIdentity();
+    activeGestureViewport_ = contentRect();
+    activeGestureTransform_ = transform_;
+    activeGestureSelectionRevision_ = gpuOverlayRevision_;
     setFocus(Qt::MouseFocusReason);
     previewController_.beginInteractiveScrub();
     event->accept();

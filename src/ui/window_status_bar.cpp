@@ -10,6 +10,7 @@
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
+#include <bloom/ui/viewer_editor.hpp>
 
 #include <QCoreApplication>
 #include <QFontMetrics>
@@ -68,7 +69,8 @@ QLabel* makeCell(const QString& objectName, const kit::TypeRole role, const kit:
 } // namespace
 
 PreviewColorState previewColorState(const CompositionPreviewState& preview) {
-    if (preview.activity == PreviewActivity::Failed) {
+    if (preview.activity == PreviewActivity::Failed &&
+        (!preview.viewerDisplayState || !preview.frame)) {
         return {preview.message.isEmpty() ? WindowStatusBar::tr("Color state unavailable")
                                           : preview.message,
                 kit::Color::Error};
@@ -80,12 +82,13 @@ PreviewColorState previewColorState(const CompositionPreviewState& preview) {
         // The resident arm keeps no CPU display buffer by construction (its pixels never crossed
         // the host boundary), so `bufferView` can never classify it and the reference fallback
         // below would falsely report the CPU "Reference (unqualified)" state. Read the immutable
-        // provenance instead: the route is GPU, and it is only shown while the owner-bound lease is
-        // still display-valid. An invalidated lease is reported unavailable -- never labelled GPU
-        // and never claimed as a CPU reference.
+        // provenance instead. A valid admission lease or an exact known owner-applied descriptor
+        // identifies GPU pixels. Lease invalidation alone does not erase that applied metadata;
+        // uncorrelated/blank displays remain unavailable and can never become CPU reference.
         if (provider == runtime::PreviewDisplayProvider::GpuResident) {
             const auto& resident = preview.frame->residentFrame();
-            if (resident != nullptr && resident->isDisplayValid()) {
+            if (preview.ownerAppliedDisplay ||
+                (resident != nullptr && resident->isDisplayValid())) {
                 return {WindowStatusBar::tr("GPU resident"), kit::Color::Ok};
             }
             return {WindowStatusBar::tr("Color state unavailable"), kit::Color::Warn};
@@ -101,10 +104,19 @@ PreviewColorState previewColorState(const CompositionPreviewState& preview) {
     if (bufferView.has_value() && bufferView->isOcioQualified) {
         return {WindowStatusBar::tr("Qualified · Bloom Neutral"), kit::Color::Ok};
     }
-    return {WindowStatusBar::tr("Reference (unqualified)"), kit::Color::Warn};
+    return {preview.frame ? WindowStatusBar::tr("Reference (unqualified)")
+                          : WindowStatusBar::tr("No displayed frame"),
+            kit::Color::Warn};
 }
 
 QString previewActivityText(const CompositionPreviewState& preview) {
+    if (preview.viewerDisplayState && !preview.viewerStatusText.isEmpty())
+        return preview.viewerStatusText;
+    if (preview.viewerDisplayState && !preview.message.isEmpty())
+        return preview.message;
+    if (!preview.message.isEmpty() && (preview.activity == PreviewActivity::Failed ||
+                                       preview.freshness != FrameFreshness::Current))
+        return preview.message;
     const bool stale = preview.freshness == FrameFreshness::Stale;
     switch (preview.activity) {
     case PreviewActivity::Rendering:
@@ -297,8 +309,6 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     }
 
     if (previewController_ != nullptr) {
-        connect(previewController_, &CompositionPreviewController::probeChanged, this,
-                &WindowStatusBar::refreshProbeCell);
         connect(previewController_, &CompositionPreviewController::stateChanged, this,
                 &WindowStatusBar::refreshPreviewCells);
         connect(previewController_, &CompositionPreviewController::droppedFrameCountChanged, this,
@@ -369,6 +379,8 @@ void WindowStatusBar::refreshMemoryToolTip() {
 QString WindowStatusBar::cacheToolTipForTest() const { return cache_->toolTip(); }
 
 void WindowStatusBar::refreshPreviewCells() {
+    if (!displayedViewer_)
+        refreshProbeCell({});
     if (previewController_ == nullptr) {
         static_cast<StatusColorChip*>(colorChip_)
             ->setState({tr("Color state unavailable"), kit::Color::Warn});
@@ -391,13 +403,21 @@ void WindowStatusBar::refreshPreviewCells() {
                                                    : operationCacheText(*operationCache_));
         return;
     }
-    const auto& preview = previewController_->state();
-    static_cast<StatusColorChip*>(colorChip_)->setState(previewColorState(preview));
+    const auto preview =
+        displayedViewer_ ? displayedViewer_->displayedPreviewState() : CompositionPreviewState{};
+    static_cast<StatusColorChip*>(colorChip_)
+        ->setState(displayedViewer_
+                       ? previewColorState(preview)
+                       : PreviewColorState{tr("No visible viewer"), kit::Color::Muted});
 
-    previewState_->setText(previewActivityText(preview));
+    previewState_->setText(displayedViewer_ ? previewActivityText(preview) : QString{});
     QPalette statePalette = previewState_->palette();
-    statePalette.setColor(QPalette::WindowText, kit::color(kit::Color::Muted));
+    statePalette.setColor(QPalette::WindowText,
+                          kit::color(preview.activity == PreviewActivity::Failed
+                                         ? kit::Color::Error
+                                         : kit::Color::Muted));
     previewState_->setPalette(statePalette);
+    previewState_->setToolTip(displayedViewer_ ? preview.message : QString{});
 
     const QString dropped = droppedFrameText(*previewController_);
     droppedFrames_->setText(dropped);
@@ -413,6 +433,28 @@ void WindowStatusBar::refreshPreviewCells() {
     cache_->setText(previewText.isEmpty()     ? operationText
                     : operationText.isEmpty() ? previewText
                                               : previewText + tr(" · ") + operationText);
+}
+
+void WindowStatusBar::setDisplayedViewer(ViewerEditor* viewer) {
+    if (displayedViewer_ != viewer) {
+        QObject::disconnect(displayedViewerConnection_);
+        QObject::disconnect(displayedViewerProbeConnection_);
+        QObject::disconnect(displayedViewerDestroyedConnection_);
+        displayedViewer_ = viewer;
+        refreshProbeCell({});
+        if (viewer) {
+            displayedViewerConnection_ = connect(viewer, &ViewerEditor::displayedStateChanged, this,
+                                                 &WindowStatusBar::refreshPreviewCells);
+            displayedViewerProbeConnection_ = connect(viewer, &ViewerEditor::probeChanged, this,
+                                                      &WindowStatusBar::refreshProbeCell);
+            displayedViewerDestroyedConnection_ =
+                connect(viewer, &QObject::destroyed, this, [this] {
+                    refreshProbeCell({});
+                    refreshPreviewCells();
+                });
+        }
+    }
+    refreshPreviewCells();
 }
 
 // CACHE-2: independent of refreshPreviewCells() above -- the disk cache is unrelated to the
@@ -470,6 +512,8 @@ void WindowStatusBar::setExportActive(bool active) { exportCancel_->setVisible(a
 QString WindowStatusBar::messageTextForTest() const { return message_->text(); }
 
 QString WindowStatusBar::versionTextForTest() const { return version_->text(); }
+
+ViewerEditor* WindowStatusBar::displayedViewerForTest() const noexcept { return displayedViewer_; }
 
 void WindowStatusBar::refreshProbeCell(const ProbeReadout& readout) {
     probeReadout_ = readout;

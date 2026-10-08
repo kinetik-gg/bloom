@@ -18,6 +18,7 @@
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/split_handle.hpp>
 #include <bloom/ui/licenses_window.hpp>
 #include <bloom/ui/main_window.hpp>
@@ -783,6 +784,64 @@ void testPurgePreviewCacheActionHasRealEffect(Expectations& expectations) {
                         "purge preview: the status bar reports the completed purge");
 }
 
+void testDisplayedViewerStatusPolicy(Expectations& expectations) {
+    bloom::ui::test::WindowFixture fixture;
+    auto* workspace = fixture.window->workspaceHost();
+    auto* status = fixture.window->statusStrip();
+    workspace->resetToSingleArea("bloom.viewer");
+    QTest::qWait(20);
+    auto* firstArea = workspace->activeArea();
+    auto* first = firstArea->findChild<ViewerEditor*>();
+    expectations.expect(first && status->displayedViewerForTest() == first,
+                        "active visible viewer owns global display status");
+    auto* secondArea = workspace->splitArea(*firstArea, Qt::Horizontal, "bloom.viewer");
+    QTest::qWait(20);
+    auto* second = secondArea ? secondArea->findChild<ViewerEditor*>() : nullptr;
+    expectations.expect(second != nullptr, "a second real viewer is created");
+    if (!second)
+        return;
+    auto* channel = secondArea->findChild<kit::KDropdown*>("viewerChannelDropdown");
+    expectations.expect(channel != nullptr,
+                        "the second area's hosted footer has its channel control");
+    if (!channel)
+        return;
+    channel->setCurrentIndex(static_cast<int>(ViewerChannel::Red));
+    workspace->setActiveArea(secondArea);
+    QTest::qWait(20);
+    expectations.expect(status->displayedViewerForTest() == second &&
+                            status->previewStateTextForTest().contains("Red"),
+                        "active second viewer reports its own painted channel intent");
+    auto* nodesArea = workspace->splitArea(*secondArea, Qt::Vertical, "bloom.nodes");
+    workspace->setActiveArea(nodesArea);
+    QTest::qWait(20);
+    expectations.expect(status->displayedViewerForTest() == second,
+                        "a non-viewer active panel retains the last-active visible viewer");
+    ProbeReadout readout;
+    readout.valid = true;
+    readout.display = {11, 22, 33, 255};
+    Q_EMIT second->probeChanged(readout);
+    auto* probe = status->findChild<QLabel*>("windowStatusBarProbe");
+    expectations.expect(probe && !probe->text().isEmpty(),
+                        "selected viewer supplies the probe cell");
+    workspace->toggleMaximizeActiveArea();
+    QTest::qWait(20);
+    expectations.expect(!status->displayedViewerForTest() &&
+                            status->colorChipTextForTest() == "No visible viewer" &&
+                            status->previewStateTextForTest().isEmpty() && probe->text().isEmpty(),
+                        "no visible viewer clears displayed qualification, activity and probe");
+    workspace->toggleMaximizeActiveArea();
+    QTest::qWait(20);
+    expectations.expect(status->displayedViewerForTest() == second,
+                        "restoring visibility restores the last-active viewer");
+    Q_EMIT second->probeChanged(readout);
+    expectations.expect(secondArea->setEditorId("bloom.nodes"),
+                        "selected viewer replacement succeeds");
+    QTest::qWait(20);
+    expectations.expect(
+        status->displayedViewerForTest() == first && probe->text().isEmpty(),
+        "destroyed selected viewer clears its probe and falls back to first visible viewer");
+}
+
 // A transient notice clears itself; a persistent one does not. The five-second life is asserted by
 // driving the timer rather than by waiting on the wall clock.
 void testWindowStatusBarMessagesClearThemselves(Expectations& expectations) {
@@ -925,6 +984,13 @@ int main(int argc, char** argv) {
     testWindowStatusBarIsAKitStripWithEveryCell(expectations);
     testWindowStatusBarTrimsCachesUnderMemoryPressure(expectations);
     testWindowStatusBarMessagesClearThemselves(expectations);
+    try {
+        testDisplayedViewerStatusPolicy(expectations);
+    } catch (const std::exception& error) {
+        expectations.expect(false, std::string("displayed viewer fixture: ") + error.what());
+    } catch (...) {
+        expectations.expect(false, "displayed viewer fixture: unexpected exception");
+    }
     testRejectedCommandsBecomeStatusBarNotices(expectations);
     testPurgeMenuActionsExistAndAreInTheEditMenu(expectations);
     testPurgePreviewCacheActionHasRealEffect(expectations);

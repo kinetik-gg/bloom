@@ -61,6 +61,16 @@ fixed moves content. The overlay follows zoom/pan and shows the actual delivered
 preview. Cached display frames retain evaluated geometry without their Float32 process images, so
 playback also shows the overlay without re-rendering. Empty content or another composition has no overlay. Selecting node cards can show multiple layer boundaries. Existing drag bindings are unchanged.
 
+Passive picking uses the actual published image, destination and evaluated bounds together. A
+pending selection outline or a different project/composition/time has no passive hit geometry.
+Once a gesture begins, its mapping stays frozen through preparation/presentation lag and admission
+lease expiry. Actual time, composition format, viewport/transform, selection, domain or lifecycle
+changes cancel it; Escape, mouse-ungrab and window deactivation keep their cancellation behavior.
+Pending or failed viewer EV/gamma changes may keep the prior complete image visibly stale. The
+window status follows the active visible Viewer, then the last-active visible Viewer, then a stable
+first visible Viewer. Hiding or replacing that Viewer switches or clears its probe readout. With no
+visible Viewer, the window makes no displayed qualification claim.
+
 | Binding | Action |
 | --- | --- |
 | Composition selector | Switches the shared session to the chosen document composition and clears selection/time-local state as usual |
