@@ -614,10 +614,8 @@ GpuResidentDisplayPollResult GpuResidentDisplay::poll() {
     if (status == VK_ERROR_DEVICE_LOST) {
         impl.deviceLost = true;
         impl.queueSubmitted = false;
-        if (pending) {
-            impl.fail(GpuResidentDisplayDiagnosticCode::DeviceLost,
-                      "the device was lost while polling");
-        }
+        impl.fail(GpuResidentDisplayDiagnosticCode::DeviceLost,
+                  "the device was lost while polling");
         return GpuResidentDisplayPollResult::Failure;
     }
     if (status != VK_SUCCESS) {
@@ -694,12 +692,5 @@ void GpuResidentDisplay::cancel() noexcept {
     }
 }
 bool GpuResidentDisplay::teardownDrainIncomplete() noexcept { return g_teardownIncomplete.load(); }
-
-// Folded additive accessor (declared in the public header). It reports the native Impl's
-// queueSubmitted flag, the authoritative retirement test: logical job state is not proof because an
-// unknown fence result sets Failure without clearing the submission. No field or layout change.
-bool GpuResidentDisplay::hasUnretiredSubmission() const noexcept {
-    return impl_ != nullptr && impl_->queueSubmitted;
-}
 
 } // namespace bloom::render

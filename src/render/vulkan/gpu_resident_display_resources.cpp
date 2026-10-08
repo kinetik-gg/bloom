@@ -471,4 +471,18 @@ GpuDisplayImageReadback readbackResidentDisplayImage(const GpuDisplayImage& imag
     }
 }
 
+// Current native loss truth survives cancellation and failed-job retirement.
+bool GpuResidentDisplay::deviceLost() const noexcept {
+    return impl_ != nullptr &&
+           (impl_->deviceLost ||
+            impl_->jobDiagnostic.code == GpuResidentDisplayDiagnosticCode::DeviceLost);
+}
+
+// Folded additive accessor (declared in the public header). It reports the native Impl's
+// queueSubmitted flag, the authoritative retirement test: logical job state is not proof because an
+// unknown fence result sets Failure without clearing the submission. No field or layout change.
+bool GpuResidentDisplay::hasUnretiredSubmission() const noexcept {
+    return impl_ != nullptr && impl_->queueSubmitted;
+}
+
 } // namespace bloom::render

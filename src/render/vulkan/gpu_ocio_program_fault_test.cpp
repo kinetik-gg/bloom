@@ -9,6 +9,10 @@ void setUploadFenceOverrideForTest(const UploadFenceOverride override) noexcept 
     ocioFaultCancelAfterSubmit().store(override == UploadFenceOverride::CancelAfterSubmit);
 }
 
+void setJobFenceUnknownForTest(const bool unknown) noexcept {
+    ocioFaultJobFenceUnknown().store(unknown, std::memory_order_release);
+}
+
 bool uploadQuarantineOccupiedForTest() noexcept { return uploadQuarantineOccupied(); }
 void retireUploadQuarantineForTest() noexcept { retireUploadQuarantine(); }
 

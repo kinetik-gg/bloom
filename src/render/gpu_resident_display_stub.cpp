@@ -75,6 +75,8 @@ const GpuResidentDisplayDiagnostic& GpuResidentDisplay::diagnostic() const noexc
     return unavailable;
 }
 bool GpuResidentDisplay::isBoundTo(GpuDevice&) const noexcept { return false; }
+// Match the native owning-by-value public API even though this unavailable arm retains nothing.
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
 GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const GpuImage>,
                                                        std::uint64_t) {
     return diagnostic();
@@ -89,6 +91,8 @@ GpuDisplayImageReadback GpuResidentDisplay::readback() noexcept {
 }
 void GpuResidentDisplay::cancel() noexcept {}
 bool GpuResidentDisplay::teardownDrainIncomplete() noexcept { return false; }
+bool GpuResidentDisplay::deviceLost() const noexcept { return false; }
+
 bool GpuResidentDisplay::hasUnretiredSubmission() const noexcept { return false; }
 
 } // namespace bloom::render

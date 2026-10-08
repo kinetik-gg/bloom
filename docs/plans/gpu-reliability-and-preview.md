@@ -1,10 +1,13 @@
 # GPU reliability, media preparation, and preview execution plan
 
-Status: working — implementation authorized; architecture choices remain gated by evidence
+Status: working — paused at owner request after G2E; architecture choices remain gated by evidence
 
 Updated: 2026-10-08
 
 ## Execution checkpoint
+
+Execution is paused at the owner’s request after the G2E checkpoint. No next milestone is active.
+Resume with G3B outline publication and visible presentation, then G3A retention truth.
 
 Implementation proceeds sequentially from `e1086c13`. Each slice requires source review, focused
 regressions, and the applicable native/product evidence before its successor is accepted. A passing
@@ -15,7 +18,7 @@ remain separate decisions under G9.
 | --- | --- | --- |
 | G0 | Initial instrumentation slice accepted; remaining probes attach to their owning packages | Source review, quality checks, three focused suites, native acknowledgement correlation and original interaction fixture passed |
 | G1 | Accepted: native validity and mapped-memory visibility | Source review, quality/lint, real operator/display/viewer/RAM/final-route parity and validation; independent Composite/viewer reruns passed |
-| G2 | Initialization cleanup, metadata lifetime, image reclamation, vector quarantine, and oracle recovery accepted | Native parity/lifecycle/viewer/final paths and independent retirement reruns have zero validation errors; viewer cancellation remains pending |
+| G2 | Initialization cleanup, metadata lifetime, image reclamation, vector quarantine, oracle recovery, and G2E cancellation/teardown accepted as bounded slices | Native parity/lifecycle/viewer/final paths and independent retirement/transition reruns have zero validation errors; aggregate accounting remains G6 work |
 | G3–G10 | Pending | No implementation or qualification claim |
 
 G0 adds opt-in bounded numeric frame tracing and a native Full-resolution 1920 × 1080 solid/text
@@ -38,6 +41,12 @@ coherent: noncoherent execution and other platforms remain unqualified. See the 
 A separate resolution-transition attempt exposed cancellation recovery and failed-teardown
 behavior for G2/G4; fixed-resolution success does not qualify that transition. G1 does not establish
 flicker-free playback or repair the remaining scheduling, retention, and memory-ownership findings.
+
+The user subsequently clarified the open G1 build's remaining manipulation symptom: dragging is
+responsive, but object outlines and outer bounds blink in and out, resembling refresh lag. This is
+a failed overlay experience check after the native validity repair; it does not establish slow
+dragging or flickering image pixels. Prioritize G3B overlay publication and visible presentation
+after G2E, then G3A retention truth. The causal mechanism remains to be instrumented.
 
 The audit observations below describe the baseline; subsequent fixes and measured results belong
 in this checkpoint and the owning architecture documents.
@@ -447,6 +456,34 @@ consistently; this evidence does not claim
 that a device-loss event was induced. Service cancellation/accounting and remaining G2 transition
 work are still outstanding; cross-platform GPU and complete G2 remain unqualified.
 
+G2E local cancellation/teardown evidence (2026-10-08): actual EditorArea-owned Full, Half,
+Quarter and Auto controls supersede real submitted solid/text work through default controller and
+TaskUiBridge intervals. Neutral and General OCIO arms recover identity-matched native
+acknowledgements and the policy's resolved dimensions without CPU fallback or full-frame readback.
+The native gesture fixture changes resolution after press/move, continues native pointer input,
+and uses Escape to restore document truth without a command. Submitted display failure retains its
+active stage and valid completion until owner retirement, including concurrent supersession; a
+typed unexpected scene poll failure remains diagnosed when cancellation races it. The General
+native/runtime regression injects unknown completion after real submit, preserves original failure
+and native program ownership through cancellation, retires only after real fence proof, and then
+passes healthy retry against the unchanged CPU pixel oracle. The observation seams do not claim
+an actual driver error or induced device loss.
+
+Every ordinary assertion exit now shares bounded WSI retirement and controller/bridge/service
+shutdown. An intentional failure after real native presentation exits normally with code 1, and a
+dedicated controller-shutdown mode begins with genuinely submitted work. Production EditorArea
+replacement also passes while scene work is submitted. The final fatal unproved-WSI path retains
+the entire owning fixture until process termination; normal assertion failure does not take it.
+These local native gates load real core/synchronization validation and report no validation errors.
+This is correctness evidence in a shared environment, not sustained performance, cross-platform GPU
+qualification, or qualification of the separately reported outline flicker. Historical family fuses
+remain distinct from current submission ownership. The live service limit is 512 retirement pumps;
+scheduler-charge transfer and aggregate native quarantine admission remain G6 work. Root independently reran Neutral and General transitions and the intentional assertion-exit
+fixture with real validation and zero errors. The additional root OCIO invocation used a mistaken
+executable name and did not run; the agent’s corrected native OCIO parity/retirement run passed.
+G2E is accepted as a bounded cancellation/teardown slice; complete G2 and the broader experience
+gates are not claimed by this evidence alone.
+
 ### G3 — Make retention and presentation state truthful
 
 **Slice A owns:** `PreviewFrameCache`, `RamPreviewController`, RAM state/UI/tests.
@@ -520,6 +557,13 @@ allocator charges, committed blocks, pinned bytes, queued/active scratch, and re
 bytes. Charge shared allocations once; expose retention reasons. Move pressure sampling/application
 out of status-bar ownership into the application runtime; the UI observes it. Handle discrete and unified heaps
 explicitly. Measure process/driver residuals rather than pretending counters equal RSS/VRAM use.
+
+Include the remaining native display/OCIO/presentation quarantine owners in that inventory.
+Their historical failure counters/fuses do not reserve space for already-created objects; the
+presentation target's full quarantine array can also leave later retained objects untracked.
+These source-confirmed gaps require ownership records and reservation transfer, not a larger counter
+limit. Preserve the presentation engine's separate WSI retirement proof. The accepted G2 primitive,
+image, and oracle slices do not establish aggregate accounting for these other owners.
 
 **Slice B owns:** an explicit application-owned reservation/budget coordinator passed to the
 existing owners. Preview and export share the device allowance even before they share a device.

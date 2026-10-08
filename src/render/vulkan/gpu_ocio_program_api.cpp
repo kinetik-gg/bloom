@@ -1,9 +1,17 @@
 #include "gpu_ocio_program_private.hpp"
+#include "ocio_gpu_program_fault.hpp"
 
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
+
+namespace bloom::render::ocio_program_detail {
+std::atomic<bool>& ocioFaultJobFenceUnknown() noexcept {
+    static std::atomic<bool> unknown{false};
+    return unknown;
+}
+} // namespace bloom::render::ocio_program_detail
 
 namespace bloom::render {
 namespace {
@@ -157,15 +165,21 @@ GpuOcioProgramPollResult GpuOcioProgram::poll() {
         impl.fail(GpuOcioProgramDiagnosticCode::WrongThread, "poll must run on the owner thread");
         return GpuOcioProgramPollResult::Failure;
     }
-    if (impl.jobState != GpuOcioProgramJobState::Pending) {
+    const bool pending = impl.jobState == GpuOcioProgramJobState::Pending;
+    if (!pending && !impl.queueSubmitted) {
         return impl.jobState == GpuOcioProgramJobState::Ready ? GpuOcioProgramPollResult::Ready
                                                               : GpuOcioProgramPollResult::Failure;
     }
     const VkFence rawFence = static_cast<VkFence>(*impl.fence);
-    const VkResult status = impl.control->device.getDispatcher()->vkGetFenceStatus(
+    const VkResult observed = impl.control->device.getDispatcher()->vkGetFenceStatus(
         static_cast<VkDevice>(*impl.control->device), rawFence);
+    const VkResult status =
+        observed != VK_ERROR_DEVICE_LOST &&
+                ocio_program_detail::ocioFaultJobFenceUnknown().load(std::memory_order_acquire)
+            ? VK_ERROR_UNKNOWN
+            : observed;
     if (status == VK_NOT_READY) {
-        return GpuOcioProgramPollResult::Pending;
+        return pending ? GpuOcioProgramPollResult::Pending : GpuOcioProgramPollResult::Failure;
     }
     if (status == VK_ERROR_DEVICE_LOST) {
         impl.deviceLost = true;
@@ -174,10 +188,14 @@ GpuOcioProgramPollResult GpuOcioProgram::poll() {
         return GpuOcioProgramPollResult::Failure;
     }
     if (status != VK_SUCCESS) {
-        impl.fail(GpuOcioProgramDiagnosticCode::NativeTimeout, "the fence query failed");
+        if (pending)
+            impl.fail(GpuOcioProgramDiagnosticCode::NativeTimeout, "the fence query failed");
         return GpuOcioProgramPollResult::Failure;
     }
     impl.queueSubmitted = false;
+    // A failed job polls only for retirement; successful proof never resurrects its pixels.
+    if (!pending)
+        return GpuOcioProgramPollResult::Failure;
     if (impl.discardRequested.load()) {
         impl.fail(GpuOcioProgramDiagnosticCode::Cancelled, "the job was cancelled");
         return GpuOcioProgramPollResult::Failure;

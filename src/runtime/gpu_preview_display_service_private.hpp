@@ -276,6 +276,7 @@ struct PreviewDisplayServiceCore final {
     std::function<GpuSceneExecutorPollResult(GpuSceneExecutor&)> residentExecutorPollOverride;
     std::function<render::GpuResidentDisplayPollResult(render::GpuResidentDisplay&)>
         residentDisplayPollOverride;
+    std::function<GpuOcioExecutorPollResult(GpuOcioDisplayArm&)> residentGeneralDisplayPollOverride;
     std::function<bool(const GpuSceneExecutor&)> residentExecutorUnretiredOverride;
     std::function<bool(const render::GpuResidentDisplay&)> residentDisplayUnretiredOverride;
 

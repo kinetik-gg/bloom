@@ -370,6 +370,34 @@ void testDisplay(Expectations& expectations, GpuDevice& device, GpuOcioProgramPr
     if (input == nullptr) {
         return;
     }
+    using namespace bloom::render::ocio_program_detail;
+    setJobFenceUnknownForTest(true);
+    const auto failedAccepted = executor.executor->begin(prepared.command, input, {}, kBudget);
+    expectations.expect(failedAccepted.code == GpuOcioExecutorDiagnosticCode::None,
+                        "unknown-fence fixture genuinely submits a display job");
+    const auto failurePoll = executor.executor->poll();
+    const auto failureDiagnostic = executor.executor->diagnostic();
+    const auto retained = executor.executor->counters().cacheBytes;
+    expectations.expect(failurePoll == GpuOcioExecutorPollResult::Failure &&
+                            executor.executor->hasUnretiredSubmission() && retained > 0,
+                        "unknown completion retains submitted resources and native program bytes");
+    executor.executor->cancel();
+    expectations.expect(executor.executor->poll() == GpuOcioExecutorPollResult::Failure &&
+                            executor.executor->hasUnretiredSubmission() &&
+                            executor.executor->diagnostic() == failureDiagnostic &&
+                            !executor.executor->takeDisplayOutput().has_value(),
+                        "cancelled failed job retains original error and publishes no pixels");
+    setJobFenceUnknownForTest(false);
+    for (int attempt = 0; attempt < 200 && executor.executor->hasUnretiredSubmission(); ++attempt) {
+        static_cast<void>(executor.executor->poll());
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    expectations.expect(
+        !executor.executor->hasUnretiredSubmission() &&
+            executor.executor->diagnostic() == failureDiagnostic &&
+            !executor.executor->takeDisplayOutput().has_value(),
+        "real owner fence retires failure without promoting it to successful output");
+    // The ordinary accepted dispatch and unchanged CPU parity below now prove healthy retry.
     const auto accepted = executor.executor->begin(prepared.command, input, {}, kBudget);
     expectations.expect(accepted.code == GpuOcioExecutorDiagnosticCode::None,
                         "begin accepts the display command");
@@ -596,6 +624,10 @@ int main(int argc, char** argv) {
     }
 
     GpuDeviceCreationOptions options;
+    for (int index = 1; index + 1 < argc; ++index) {
+        if (std::string_view(argv[index]) == "--loader")
+            options.loader_path = argv[++index];
+    }
     auto device = GpuDevice::create(options);
     if (!device) {
         if (requireDevice) {

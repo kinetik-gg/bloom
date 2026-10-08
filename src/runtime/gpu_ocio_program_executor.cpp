@@ -340,6 +340,17 @@ GpuOcioExecutorPollResult GpuOcioProgramExecutor::poll() {
         impl.fail(GpuOcioExecutorDiagnosticCode::WrongThread, "poll must run on the owner thread");
         return GpuOcioExecutorPollResult::WrongThread;
     }
+    if (impl.jobState == GpuOcioExecutorJobState::Failure && impl.active != nullptr &&
+        impl.active->hasUnretiredSubmission()) {
+        // Preserve failed-job input/output/program ownership and original diagnostics. Advance
+        // only the exact owner fence; no successful pixels can be published from this branch.
+        static_cast<void>(impl.active->poll());
+        if (impl.active->diagnostic().code == render::GpuOcioProgramDiagnosticCode::DeviceLost) {
+            impl.deviceLost = true;
+            impl.fail(GpuOcioExecutorDiagnosticCode::DeviceLost, impl.active->diagnostic().message);
+        }
+        return GpuOcioExecutorPollResult::Failure;
+    }
     if (impl.jobState != GpuOcioExecutorJobState::Pending) {
         return impl.jobState == GpuOcioExecutorJobState::Ready ? GpuOcioExecutorPollResult::Ready
                                                                : GpuOcioExecutorPollResult::Failure;
@@ -360,8 +371,11 @@ GpuOcioExecutorPollResult GpuOcioProgramExecutor::poll() {
         return GpuOcioExecutorPollResult::Ready;
     }
     const auto nativeDiagnostic = impl.active->diagnostic();
-    const auto code = impl.deadlineExpired ? GpuOcioExecutorDiagnosticCode::NativeTimeout
-                                           : mapProgramCode(nativeDiagnostic.code);
+    const auto nativeCode = mapProgramCode(nativeDiagnostic.code);
+    const auto code =
+        nativeCode == GpuOcioExecutorDiagnosticCode::DeviceLost
+            ? nativeCode
+            : (impl.deadlineExpired ? GpuOcioExecutorDiagnosticCode::NativeTimeout : nativeCode);
     if (code == GpuOcioExecutorDiagnosticCode::DeviceLost) {
         impl.deviceLost = true;
     }

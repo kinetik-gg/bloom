@@ -1593,12 +1593,15 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     # --loader/--require-device under QT_QPA_PLATFORM=wayland.
     add_executable(bloom_ui_viewer_resident_interaction_native_test
         viewer_resident_interaction_native_tests.cpp
+        viewer_resident_interaction_support.hpp
+        viewer_resident_transition_support.hpp
         gpu_service_chain_fixture.hpp
         gpu_vertical_proof_support.hpp)
     target_include_directories(bloom_ui_viewer_resident_interaction_native_test
-        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/render" "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
     target_link_libraries(bloom_ui_viewer_resident_interaction_native_test
-        PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
+        PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR bloom_render_ocio_test_faults)
+    bloom_package_gpu_shader_tools(bloom_ui_viewer_resident_interaction_native_test)
     bloom_enable_warnings(bloom_ui_viewer_resident_interaction_native_test)
     bloom_enable_strict_floating_point(bloom_ui_viewer_resident_interaction_native_test)
     bloom_add_test(
@@ -1611,6 +1614,32 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     )
     set_tests_properties(bloom.ui.viewer_resident_interaction_native
         PROPERTIES SKIP_RETURN_CODE 77)
+
+    # These native modes use real EditorArea controls and real submitted-work barriers. Device-free
+    # CTest skips explicitly; native required-device supervision executes them with validation.
+    foreach(resident_transition_arm IN ITEMS neutral general)
+        set(resident_transition_args --transitions)
+        if(resident_transition_arm STREQUAL "general")
+            list(APPEND resident_transition_args --general)
+        endif()
+        bloom_add_test(
+            NAME bloom.ui.viewer_resident_transitions_${resident_transition_arm}
+            COMMAND bloom_ui_viewer_resident_interaction_native_test
+                    ${bloom_ui_gpu_viewer_service_chain_loader_args} ${resident_transition_args}
+            LABELS ui gpu viewer resident interaction native
+            TIMEOUT 150
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        set_tests_properties(bloom.ui.viewer_resident_transitions_${resident_transition_arm}
+            PROPERTIES SKIP_RETURN_CODE 77)
+    endforeach()
+    bloom_add_test(
+        NAME bloom.ui.viewer_resident_shutdown_inflight
+        COMMAND bloom_ui_viewer_resident_interaction_native_test
+                ${bloom_ui_gpu_viewer_service_chain_loader_args} --shutdown-in-flight
+        LABELS ui gpu viewer resident native
+        TIMEOUT 150
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    set_tests_properties(bloom.ui.viewer_resident_shutdown_inflight PROPERTIES SKIP_RETURN_CODE 77)
 
     # Bounded native acceptance for the resident viewer surface across a DOCUMENT REPLACEMENT
     # (File > Open / New) while a live native target exists: genuine applied present for the swapped

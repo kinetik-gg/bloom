@@ -206,6 +206,8 @@ class GpuResidentDisplay final {
     // pipeline on the owner thread (its destructor performs a bounded drain/quarantine). Additive
     // accessor: no field or layout change.
     [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
+    // Current native device-loss truth, independent of cancellation or logical job state.
+    [[nodiscard]] bool deviceLost() const noexcept;
 
   private:
     struct Impl;

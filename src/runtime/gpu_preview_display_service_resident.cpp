@@ -496,7 +496,10 @@ residentGeneralDisplayPoll(const std::shared_ptr<PreviewDisplayServiceCore>& cor
     if (core->residentGeneralDisplay == nullptr) {
         return render::GpuResidentDisplayPollResult::Failure;
     }
-    switch (core->residentGeneralDisplay->poll()) {
+    const auto poll = core->residentGeneralDisplayPollOverride
+                          ? core->residentGeneralDisplayPollOverride(*core->residentGeneralDisplay)
+                          : core->residentGeneralDisplay->poll();
+    switch (poll) {
     case GpuOcioExecutorPollResult::Pending:
         return render::GpuResidentDisplayPollResult::Pending;
     case GpuOcioExecutorPollResult::Ready:
@@ -634,6 +637,9 @@ void residentCancelNative(const std::shared_ptr<PreviewDisplayServiceCore>& core
     if (core->residentDisplay != nullptr) {
         core->residentDisplay->cancel();
     }
+    if (core->residentGeneralDisplay != nullptr) {
+        core->residentGeneralDisplay->cancel();
+    }
 }
 
 bool residentOwnerDrainRequired(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
@@ -641,7 +647,9 @@ bool residentOwnerDrainRequired(const std::shared_ptr<PreviewDisplayServiceCore>
 }
 
 bool residentDeviceLost(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
-    return core->residentExecutor != nullptr && core->residentExecutor->deviceLost();
+    return (core->residentExecutor != nullptr && core->residentExecutor->deviceLost()) ||
+           (core->residentDisplay != nullptr && core->residentDisplay->deviceLost()) ||
+           (core->residentGeneralDisplay != nullptr && core->residentGeneralDisplay->deviceLost());
 }
 
 void noteResidentExecutorCounters(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {

@@ -14,6 +14,7 @@ enum class UploadFenceOverride : std::uint8_t { None, NotReady, CancelAfterSubmi
 
 [[nodiscard]] std::atomic<bool>& ocioFaultNotReady() noexcept;
 [[nodiscard]] std::atomic<bool>& ocioFaultCancelAfterSubmit() noexcept;
+[[nodiscard]] std::atomic<bool>& ocioFaultJobFenceUnknown() noexcept;
 
 // Production quarantine helpers the test wrappers forward to.
 [[nodiscard]] bool uploadQuarantineOccupied() noexcept;
@@ -21,6 +22,8 @@ void retireUploadQuarantine() noexcept;
 
 // Defined only in the test-only library.
 void setUploadFenceOverrideForTest(UploadFenceOverride override) noexcept;
+// After real submit, observe unknown completion until cleared; never fabricates retirement/loss.
+void setJobFenceUnknownForTest(bool unknown) noexcept;
 [[nodiscard]] bool uploadQuarantineOccupiedForTest() noexcept;
 void retireUploadQuarantineForTest() noexcept;
 

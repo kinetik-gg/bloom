@@ -823,6 +823,36 @@ partway through an output with mixed hidden semantics.
 - Preview fallback or reduced precision: expose it in viewer status. Strict final output does not
   degrade silently.
 
+### Resident request cancellation and failure retirement (G2E)
+
+Independently requested cancellation or supersession discards publication, while the admitted stage,
+its completion and native pins remain owned until exact submitted-work retirement. Expected
+executor/display cancellation does not increment the resident backend-failure counter or replace
+its error detail. A concurrent unexpected poll result or native failure still counts and reports
+both the actual poll result and the underlying diagnostic. Actual native device loss takes
+precedence over cancellation or an expired deadline. Scene, Neutral display and General OCIO
+display loss participate in the same terminal-route decision; cancellation reaches all three arms.
+
+A display's logical Failure is not fence proof. The resident service checks its exact outstanding
+submission before clearing the active stage or consuming completion. The General OCIO native
+program and runtime wrapper continue owner-thread fence polling after logical failure solely to
+retire that submission. A successful later fence preserves the original failure and publishes no
+pixels; actual driver loss preserves explicit loss truth. Healthy reuse is admitted only after the
+outstanding submission clears. Repeated retirement polls do not count another job failure.
+
+Current owner-drain truth is per executor and exact submission. PathCoverage's static historical
+teardown fuse remains latched for audit and is not the service's current outstanding-work test.
+The unchanged resident terminal policy permits 512 owner pumps before pipeline destruction invokes
+its native bounded drain/quarantine. Exact native family ownership can remain retained afterward,
+but consuming the scheduler completion does not transfer its request charge into an aggregate
+quarantine reservation. That accounting gap and native store admission are G6 work; this slice
+claims neither an aggregate retained-byte broker nor hard native reservation ceilings from
+historical teardown counters.
+
+EditorArea replacement and workspace mutation continue requiring the existing WSI safe-to-mutate
+proof. An unsafe result leaves the outgoing owners and mapped native surface intact. Compute fence
+retirement is never substituted for that presentation proof.
+
 ### Oracle readback retirement (G2D2)
 
 The full process/display and sparse display pixel oracles share exactly two process-wide native

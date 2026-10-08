@@ -22,52 +22,13 @@
 #include <utility>
 #include <vector>
 
+#include "gpu_preview_display_service_resident_job_diagnostics.hpp"
+
 namespace bloom::runtime {
 namespace detail {
 namespace {
 
 using StagePhase = PreviewDisplayStageRecord::Phase;
-
-[[nodiscard]] TaskDiagnostic residentJobDiagnostic(std::string code, std::string summary,
-                                                   std::string detail = {}) {
-    return {.code = std::move(code),
-            .severity = DiagnosticSeverity::Error,
-            .summary = std::move(summary),
-            .detail = std::move(detail),
-            .suggestedAction = "Review the GPU preview display service resident diagnostics."};
-}
-
-// Publish the concrete refusal reason for a resident-stage failure. Without this the service
-// reports an empty residentDetail and the actual GpuSceneExecutor/native diagnostic is lost.
-void publishResidentJobDetail(const std::shared_ptr<PreviewDisplayServiceCore>& core,
-                              std::string detail) {
-    std::lock_guard lock(core->stateMutex);
-    core->publishedResidentDetail = std::move(detail);
-}
-
-// The executor's own diagnostic (code + message) plus the actual peak live bytes it charged
-// against the per-request allowance: the required-vs-admitted evidence a refusal lacks otherwise.
-[[nodiscard]] std::string executorFailureDetail(const GpuSceneExecutor& executor,
-                                                const std::uint64_t admittedBytes,
-                                                std::string_view prefix) {
-    const auto& diagnostic = executor.diagnostic();
-    const auto counters = executor.counters();
-    std::string detail(prefix);
-    if (!diagnostic.message.empty()) {
-        detail += ": ";
-        detail += diagnostic.message;
-    }
-    detail += " [code=";
-    detail += std::to_string(static_cast<unsigned>(diagnostic.code));
-    detail += ", admittedBytes=";
-    detail += std::to_string(admittedBytes);
-    detail += ", peakLiveBytes=";
-    detail += std::to_string(counters.peakLiveImageBytes);
-    detail += ", liveBytes=";
-    detail += std::to_string(counters.currentLiveImageBytes);
-    detail += ']';
-    return detail;
-}
 
 [[nodiscard]] std::uint64_t
 residentStageAdmittedBytes(const std::shared_ptr<PreviewDisplayServiceCore>& core,
@@ -145,13 +106,15 @@ void finishResidentImmediately(const std::shared_ptr<PreviewDisplayServiceCore>&
 // native pipelines; the completion is released only once retirement is proven or the pipelines are
 // destroyed.
 void beginResidentRetirement(const std::shared_ptr<PreviewDisplayServiceCore>& core,
-                             const std::shared_ptr<PreviewDisplayStageRecord>& stage) {
+                             const std::shared_ptr<PreviewDisplayStageRecord>& stage,
+                             const bool nativeFailure = true) {
     if (stage->residentPhase == ResidentNativePhase::Retiring) {
         return;
     }
     if (residentDeviceLost(core)) {
+        publishResidentLossDetail(core, *stage);
         core->residentRouteTerminal = true;
-    } else {
+    } else if (nativeFailure) {
         core->counterResidentFailures.fetch_add(1, std::memory_order_relaxed);
     }
     residentCancelNative(core);
@@ -484,7 +447,7 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
         if (poll == GpuSceneExecutorPollResult::Pending) {
             if (cancelled ||
                 nativeNow(core) - stage->nativeStartedAt >= core->options.nativeDispatchDeadline) {
-                beginResidentRetirement(core, stage);
+                beginResidentRetirement(core, stage, !cancelled);
             }
             return;
         }
@@ -494,17 +457,22 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             return;
         }
         if (poll != GpuSceneExecutorPollResult::Ready) {
-            if (core->residentExecutor != nullptr) {
+            const bool expectedCancellation = cancelled &&
+                                              poll == GpuSceneExecutorPollResult::Failure &&
+                                              core->residentExecutor != nullptr &&
+                                              core->residentExecutor->diagnostic().code ==
+                                                  GpuSceneExecutorDiagnosticCode::Cancelled;
+            if (core->residentExecutor != nullptr && !expectedCancellation) {
                 publishResidentJobDetail(
                     core, executorFailureDetail(*core->residentExecutor,
                                                 residentStageAdmittedBytes(core, *stage),
-                                                "resident scene executor failed"));
+                                                "resident scene executor failed", poll));
             }
-            beginResidentRetirement(core, stage);
+            beginResidentRetirement(core, stage, !expectedCancellation);
             return;
         }
         if (stage->cancellationRequested || stage->nativeDiscard) {
-            beginResidentRetirement(core, stage);
+            beginResidentRetirement(core, stage, false);
             return;
         }
         std::string reason;
@@ -532,8 +500,19 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
         if (poll == render::GpuResidentDisplayPollResult::Pending) {
             if (cancelled ||
                 nativeNow(core) - stage->nativeStartedAt >= core->options.nativeDispatchDeadline) {
-                beginResidentRetirement(core, stage);
+                beginResidentRetirement(core, stage, !cancelled);
             }
+            return;
+        }
+        const bool expectedCancellation = cancelled &&
+                                          poll == render::GpuResidentDisplayPollResult::Failure &&
+                                          residentDisplayCancelled(*core, *stage);
+        const bool nativeFailure =
+            poll != render::GpuResidentDisplayPollResult::Ready && !expectedCancellation;
+        if (nativeFailure)
+            publishResidentJobDetail(core, residentDisplayFailureDetail(*core, *stage, poll));
+        if (residentDeviceLost(core) || residentDisplayHasUnretiredSubmission(core)) {
+            beginResidentRetirement(core, stage, nativeFailure);
             return;
         }
         // The display submission is retired (or never submitted); no unretired pin remains.
@@ -541,7 +520,9 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
         core->residentNativeActive.reset();
         stage->residentPhase = ResidentNativePhase::Done;
         if (cancelled) {
-            core->counterResidentFailures.fetch_add(1, std::memory_order_relaxed);
+            if (nativeFailure) {
+                core->counterResidentFailures.fetch_add(1, std::memory_order_relaxed);
+            }
             completeCancelled(stage);
             return;
         }
@@ -588,6 +569,7 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             static_cast<void>(residentDisplayPoll(core));
         }
         if (residentDeviceLost(core)) {
+            publishResidentLossDetail(core, *stage);
             teardownTerminalResidentRoute(core);
             finishResidentRetirement(core, stage);
             return;
