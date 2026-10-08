@@ -365,7 +365,12 @@ void CoordinatorState::drivePresent(Entry& entry) {
         return;
     }
 
-    const auto acquireCode = entry.native->acquire();
+    auto acquireCode = entry.native->acquire();
+    if (acquireCode == render::GpuPresentationTargetCode::NotReady &&
+        admitProgressProbe(entry.id)) {
+        // The one-shot pump budget is consumed before the call; no mailbox lock spans it.
+        acquireCode = entry.native->acquire(render::GpuPresentationAcquireMode::BoundedProgress);
+    }
     if (acquireCode == render::GpuPresentationTargetCode::NotReady) {
         // Keep the request and retry on the next pump; no busy loop.
         entry.pendingUpdate = std::move(update);
@@ -612,6 +617,7 @@ void CoordinatorState::pumpOnce() {
         static_cast<void>(entry);
         ids.push_back(id);
     }
+    prepareProgressProbePump(ids);
     for (const GpuPresentationTargetId id : ids) {
         const auto it = entries.find(id);
         if (it == entries.end()) {

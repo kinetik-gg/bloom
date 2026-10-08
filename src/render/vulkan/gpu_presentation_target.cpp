@@ -335,7 +335,7 @@ GpuPresentationTarget::create(GpuDevice& device,
             {}};
 }
 
-GpuPresentationTargetCode GpuPresentationTarget::acquire() {
+GpuPresentationTargetCode GpuPresentationTarget::acquire(const GpuPresentationAcquireMode mode) {
     if (impl_ == nullptr) {
         return GpuPresentationTargetCode::PresentationUnavailable;
     }
@@ -351,7 +351,7 @@ GpuPresentationTargetCode GpuPresentationTarget::acquire() {
     }
     std::string message;
     const GpuPresentationTargetCode code =
-        presentation_detail::acquireImage(*impl_->resources, impl_->control->device, message);
+        presentation_detail::acquireImage(*impl_->resources, impl_->control->device, mode, message);
     if (code == GpuPresentationTargetCode::DeviceLost) {
         impl_->deviceLost = true;
     }

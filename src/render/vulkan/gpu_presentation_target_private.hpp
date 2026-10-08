@@ -119,10 +119,13 @@ submitAndPresentAcquired(SwapchainResources& resources, vk::raii::Device const& 
                          std::string& message);
 
 // Driver operations. Each is owner-thread-only and returns the target code plus a message. None
-// waits idle: acquire uses a zero timeout, present is asynchronous, and retirement polling uses
+// waits idle: acquire defaults to zero timeout with an explicit fixed 1 ms progress option,
+// present is asynchronous, and retirement polling uses
 // vkGetFenceStatus or a zero-timeout vkWaitForPresentKHR.
-[[nodiscard]] GpuPresentationTargetCode
-acquireImage(SwapchainResources& resources, vk::raii::Device const& device, std::string& message);
+[[nodiscard]] GpuPresentationTargetCode acquireImage(SwapchainResources& resources,
+                                                     vk::raii::Device const& device,
+                                                     GpuPresentationAcquireMode mode,
+                                                     std::string& message);
 [[nodiscard]] GpuPresentationTargetCode presentImage(SwapchainResources& resources,
                                                      vk::raii::Device const& device,
                                                      vk::raii::Queue const& presentQueue,

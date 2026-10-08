@@ -321,7 +321,31 @@ constructed on the existing service owner thread, does no work until its `pump()
 UI-created surface as integer handle bits, reuses the target acquire/present/retire path and the
 strong-lease-pin contract, publishes `Retired` only after presentation-engine proof, and bounds
 retained records with `maxRetainedTargets`, an explicit `forget()` terminal acknowledgement, and a
-fixed process quarantine reservation store. `bloom::ui::ViewerGpuPresenter` adopts the coordinator
+fixed process quarantine reservation store.
+
+The clear/discard layout transition starts at `TRANSFER`, matching the acquire semaphore wait
+stage; discarding contents with `UNDEFINED` does not remove the acquire execution dependency.
+Present-fence and present-id scalar backing storage stays alive through `vkQueuePresentKHR`.
+Target acquire defaults to zero-timeout `Poll`; the explicit owner-only `BoundedProgress` mode
+requests a fixed 1 ms maximum driver wait. `VK_NOT_READY` and `VK_TIMEOUT` remain temporary
+`NotReady` results, without an acquired index or acknowledgement. After an ordinary poll returns
+`NotReady`, the coordinator admits at most one such probe across the entire owner pump, rotating
+traversal after the consumed target. All targets still receive retirement driving. Locked admission
+rejects newly closed, resizing, retiring, or shutdown targets; no mailbox lock spans the driver call.
+An already admitted finite call may finish after a concurrent close request. This bounds aggregate
+requested driver wait to 1 ms per pump, independent of target count, rather than promising a hard
+wall-clock deadline or adding UI waits.
+
+Isolated native evidence on 2026-10-09 reproduced the clear acquire/layout synchronization hazard.
+Zero-timeout and a controlled 1 ns acquire stalled after initial buffers; server release messages
+were sent but the client did not process them. A controlled 1 ms acquire restored progress.
+The final typed policy passes repeated clear/image reuse, resize, acquired-unpresented retirement,
+and eight simultaneous three-target reuse rounds with core and synchronization validation on the
+isolated Vulkan and GL compositors. These are lifecycle/progress checks, not viewer performance or visible-intent
+qualification. Qt before/after present hooks remain a separate integration gap: fixture-only hooks
+did not resolve the observed stall, and the Wayland before hook can wait for frame synchronization.
+
+`bloom::ui::ViewerGpuPresenter` adopts the coordinator
 client's borrowed instance through `QVulkanInstance`, creates one `QWindow`/container on the UI
 thread, forwards actual Qt input, and presents only through the opaque lease/params/overlay port; it
 creates no device, pipeline, queue, service, or thread and performs no native work on the UI thread.
@@ -384,9 +408,10 @@ that replacement's pending overlay charge and publishes its exact rejected seque
 the previous native image and active overlay charge. Acquire/retry/retirement proof is unchanged.
 
 G3B remains incomplete. G3B2 must qualify last-good/refusal/CPU-cover surface identity and finish
-failed/non-neutral display-adjustment and global status-intent truth. The underlying clear/discard
-acquire-wait/layout-transition dependency also remains a G3B2 native validation gate; avoiding the
-refused-lease clear call does not qualify other clear, hard-failure, or unpresented-retire paths.
+failed/non-neutral display-adjustment and global status-intent truth. G3B2A repairs the underlying
+clear/discard dependency and bounded WSI progress; that bounded slice is accepted after independent
+source review and native reruns, CPU checks, a Vulkan-disabled render build and source-quality checks.
+This does not qualify the broader visible-refusal/CPU-cover policy.
 G3B1 does not claim those gates or cross-platform native GPU qualification; the explicit CPU
 fallback remains supported on macOS and Windows.
 

@@ -395,6 +395,55 @@ void testThousandsForgetCycles(Expectations& expectations) {
                         "admission count stayed bounded across thousands of cycles");
 }
 
+void testBoundedProgressProbe(Expectations& expectations) {
+    CoordinatorState state(nullptr, nullptr, GpuPresentationCoordinatorOptions{});
+    state.mailbox = std::make_shared<GpuPresentationMailbox>();
+    const std::vector<GpuPresentationTargetId> ordered{1U, 3U, 7U};
+    for (const auto id : ordered)
+        state.mailbox->slots.try_emplace(id);
+    for (std::size_t pump = 0; pump < 12U; ++pump) {
+        auto ids = ordered;
+        state.prepareProgressProbePump(ids);
+        const auto expected = ordered[pump % ordered.size()];
+        expectations.expect(ids.front() == expected, "probe traversal rotates fairly and wraps");
+        expectations.expect(state.admitProgressProbe(ids.front()), "one target admits a probe");
+        for (const auto id : ids)
+            expectations.expect(!state.admitProgressProbe(id), "no second probe in the same pump");
+    }
+    // Cursor remains meaningful when its previous target was removed.
+    state.lastProgressProbeTarget = 3U;
+    std::vector<GpuPresentationTargetId> remaining{1U, 7U};
+    state.prepareProgressProbePump(remaining);
+    expectations.expect(remaining == std::vector<GpuPresentationTargetId>{7U, 1U},
+                        "a removed cursor rotates to the next surviving target");
+    auto& slot = state.mailbox->slots.at(7U);
+    slot.admissionClosed = true;
+    expectations.expect(!state.admitProgressProbe(7U), "closed admission rejects a fresh probe");
+    slot.admissionClosed = false;
+    slot.retirePending = true;
+    expectations.expect(!state.admitProgressProbe(7U), "pending retirement rejects a fresh probe");
+    slot.retirePending = false;
+    slot.resize.emplace();
+    expectations.expect(!state.admitProgressProbe(7U), "pending resize rejects a fresh probe");
+    slot.resize.reset();
+    state.mailbox->accepting = false;
+    expectations.expect(!state.admitProgressProbe(7U),
+                        "close after pump preparation rejects probe");
+    state.mailbox->accepting = true;
+    state.mailbox->ownerGone = true;
+    expectations.expect(!state.admitProgressProbe(7U), "gone owner rejects a fresh probe");
+    state.mailbox->ownerGone = false;
+    expectations.expect(state.admitProgressProbe(1U), "rejected candidates do not consume permit");
+    state.shuttingDown = true;
+    auto ids = ordered;
+    state.prepareProgressProbePump(ids);
+    expectations.expect(ids.size() == ordered.size(), "shutdown still traverses every target");
+    expectations.expect(!state.admitProgressProbe(7U), "shutdown never resets a usable permit");
+    ids.clear();
+    state.prepareProgressProbePump(ids);
+    expectations.expect(ids.empty(), "empty traversal is safe");
+}
+
 void testResetRefusesRealCommittedGeneration(Expectations& expectations) {
     using namespace bloom::runtime::presentation_coordinator_detail;
 
@@ -425,6 +474,7 @@ int run() {
     testPortFuseAndRetainedBound(expectations);
     testOwnerForgetDrain(expectations);
     testThousandsForgetCycles(expectations);
+    testBoundedProgressProbe(expectations);
     testResetRefusesRealCommittedGeneration(expectations);
     if (expectations.failures() == 0) {
         std::cout << "PASS: presentation coordinator ownership/bounds/forget gates\n";

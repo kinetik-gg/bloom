@@ -14,6 +14,7 @@
 #include <bloom/runtime/gpu_presentation_coordinator.hpp>
 #include <bloom/runtime/gpu_resident_frame_lease.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -127,6 +128,30 @@ struct CoordinatorState {
     bool valid = false;
     bool shuttingDown = false;
     std::size_t shutdownPumps = 0;
+    bool progressProbeAvailable = false;
+    GpuPresentationTargetId lastProgressProbeTarget = kInvalidPresentationTarget;
+
+    void prepareProgressProbePump(std::vector<GpuPresentationTargetId>& ids) {
+        progressProbeAvailable = !shuttingDown;
+        const auto next = std::upper_bound(ids.begin(), ids.end(), lastProgressProbeTarget);
+        std::rotate(ids.begin(), next, ids.end());
+    }
+    // Called only after ordinary acquire returned NotReady with a pinned replacement.
+    // Admission linearizes under the mailbox lock; later close requests may coexist with this
+    // already-admitted finite call, but can never authorize another fresh probe.
+    [[nodiscard]] bool admitProgressProbe(const GpuPresentationTargetId id) {
+        if (!progressProbeAvailable || shuttingDown || !mailbox)
+            return false;
+        std::lock_guard lock(mailbox->mutex);
+        const auto slot = mailbox->slots.find(id);
+        if (!mailbox->accepting || mailbox->ownerGone || slot == mailbox->slots.end() ||
+            slot->second.admissionClosed || slot->second.retirePending ||
+            slot->second.resize.has_value())
+            return false;
+        progressProbeAvailable = false;
+        lastProgressProbeTarget = id;
+        return true;
+    }
     // Owner-thread dirty flag. The mailbox shutdown summary is recomputed and republished only when
     // an owner state change can alter it, so an idle pump performs no mailbox lock, no status
     // traversal, and no string churn. `lastShutdownStatus` is the value published by the last dirty

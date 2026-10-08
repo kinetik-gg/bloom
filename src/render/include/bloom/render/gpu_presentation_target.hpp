@@ -46,9 +46,12 @@ enum class GpuPresentationRetirement : std::uint8_t {
     PresentWait,
 };
 
+// Owner-thread acquire policy. No arbitrary or infinite wait is accepted.
+enum class GpuPresentationAcquireMode : std::uint8_t { Poll, BoundedProgress };
+
 enum class GpuPresentationTargetCode : std::uint8_t {
     Ok,
-    // No swapchain image was ready for this zero-timeout acquire; poll again later.
+    // No swapchain image is available after polling or a bounded progress probe; retry later.
     NotReady,
     OutOfDate,
     Suboptimal,
@@ -112,10 +115,13 @@ class GpuPresentationTarget final {
     [[nodiscard]] static GpuPresentationTargetResult
     create(GpuDevice& device, const GpuPresentationTargetDescription& description);
 
-    // Zero-timeout acquire. NotReady/OutOfDate/Suboptimal/DeviceLost are returned as codes; a
+    // Poll uses zero timeout; explicit BoundedProgress requests at most 1 ms of driver wait.
+    // This requested wait bound is not a hard wall-clock bound on driver/API overhead.
+    // Owner-thread only. NotReady/OutOfDate/Suboptimal/DeviceLost are returned as codes; a
     // Suboptimal result still carries an acquired image so the caller can present and then
     // recreate.
-    [[nodiscard]] GpuPresentationTargetCode acquire();
+    [[nodiscard]] GpuPresentationTargetCode
+    acquire(GpuPresentationAcquireMode mode = GpuPresentationAcquireMode::Poll);
 
     // Clears the acquired image to `color` on the owner thread and presents it. Bounded to one
     // outstanding present; a second call while one is outstanding returns NothingAcquired.

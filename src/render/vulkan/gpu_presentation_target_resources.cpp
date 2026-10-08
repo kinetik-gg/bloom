@@ -320,7 +320,8 @@ std::uint32_t computeImageCount(const VkSurfaceCapabilitiesKHR& capabilities) no
 }
 
 GpuPresentationTargetCode acquireImage(SwapchainResources& resources,
-                                       vk::raii::Device const& device, std::string& message) {
+                                       vk::raii::Device const& device,
+                                       GpuPresentationAcquireMode mode, std::string& message) {
     if (resources.presentOutstanding || resources.renderInFlight) {
         message = "a frame is already in flight";
         return GpuPresentationTargetCode::NotReady;
@@ -330,9 +331,14 @@ GpuPresentationTargetCode acquireImage(SwapchainResources& resources,
         message = "the driver exposes no vkAcquireNextImageKHR";
         return GpuPresentationTargetCode::DriverUnavailable;
     }
+    // A finite owner-side probe lets WSI dispatch release events without an unbounded wait.
+    constexpr std::uint64_t kProgressWaitNanoseconds = 1'000'000;
+    const std::uint64_t timeout =
+        mode == GpuPresentationAcquireMode::BoundedProgress ? kProgressWaitNanoseconds : 0;
     std::uint32_t index = 0;
-    const VkResult result = dispatcher->vkAcquireNextImageKHR(
-        *device, *resources.swapchain, 0, *resources.acquireSemaphore, VK_NULL_HANDLE, &index);
+    const VkResult result =
+        dispatcher->vkAcquireNextImageKHR(*device, *resources.swapchain, timeout,
+                                          *resources.acquireSemaphore, VK_NULL_HANDLE, &index);
     if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
         if (index >= resources.images.size()) {
             message = "the acquired image index is out of range";
@@ -342,7 +348,9 @@ GpuPresentationTargetCode acquireImage(SwapchainResources& resources,
         return result == VK_SUBOPTIMAL_KHR ? GpuPresentationTargetCode::Suboptimal
                                            : GpuPresentationTargetCode::Ok;
     }
-    if (result == VK_NOT_READY) {
+    if (result == VK_NOT_READY || result == VK_TIMEOUT) {
+        message = "no swapchain image is available yet (VkResult " +
+                  std::to_string(static_cast<int>(result)) + ")";
         return GpuPresentationTargetCode::NotReady;
     }
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
@@ -351,7 +359,8 @@ GpuPresentationTargetCode acquireImage(SwapchainResources& resources,
     if (result == VK_ERROR_DEVICE_LOST) {
         return GpuPresentationTargetCode::DeviceLost;
     }
-    message = "vkAcquireNextImageKHR returned an unexpected result";
+    message = "vkAcquireNextImageKHR returned unexpected VkResult " +
+              std::to_string(static_cast<int>(result));
     return GpuPresentationTargetCode::DriverUnavailable;
 }
 
@@ -389,7 +398,10 @@ GpuPresentationTargetCode presentImage(SwapchainResources& resources,
     toTransfer.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     toTransfer.srcAccessMask = 0;
     toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    dispatcher->vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+    // The acquire semaphore waits at TRANSFER in submitAndPresentAcquired below. The
+    // transition must depend on that same stage so it cannot overwrite an image still read
+    // by presentation; UNDEFINED discards contents, not the acquire execution dependency.
+    dispatcher->vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                      VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
                                      &toTransfer);
     VkClearColorValue clear{};
@@ -462,6 +474,9 @@ GpuPresentationTargetCode submitAndPresentAcquired(SwapchainResources& resources
     present.pSwapchains = &swapchain;
     present.pImageIndices = &index;
 
+    // pNext payload pointers must retain backing storage through vkQueuePresentKHR below.
+    VkFence presentFence = VK_NULL_HANDLE;
+    std::uint64_t presentId = 0;
     VkSwapchainPresentFenceInfoEXT fenceInfo{};
     VkPresentIdKHR presentIdInfo{};
     if (resources.retirement == GpuPresentationRetirement::PresentFence) {
@@ -469,14 +484,14 @@ GpuPresentationTargetCode submitAndPresentAcquired(SwapchainResources& resources
             message = "the present fence for the acquired image is missing";
             return GpuPresentationTargetCode::NoRetirementMechanism;
         }
-        VkFence presentFence = *resources.presentFences[index];
+        presentFence = *resources.presentFences[index];
         dispatcher->vkResetFences(*device, 1, &presentFence);
         fenceInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT;
         fenceInfo.swapchainCount = 1;
         fenceInfo.pFences = &presentFence;
         present.pNext = &fenceInfo;
     } else if (resources.retirement == GpuPresentationRetirement::PresentWait) {
-        const std::uint64_t presentId = resources.nextPresentId++;
+        presentId = resources.nextPresentId++;
         resources.presentIds[index] = presentId;
         presentIdInfo.sType = VK_STRUCTURE_TYPE_PRESENT_ID_KHR;
         presentIdInfo.swapchainCount = 1;

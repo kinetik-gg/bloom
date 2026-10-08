@@ -63,6 +63,7 @@ struct TestOptions final {
     std::filesystem::path loader_path;
     bool require_device = false;
     bool quarantine_fixture = false;
+    bool bounded_acquire = false;
     bool valid = true;
 };
 
@@ -79,6 +80,8 @@ struct TestOptions final {
             options.loader_path = argv[++index];
         } else if (argument == "--require-device") {
             options.require_device = true;
+        } else if (argument == "--bounded-acquire") {
+            options.bounded_acquire = true;
         } else if (argument == "--quarantine-fixture") {
             options.quarantine_fixture = true;
         } else {
@@ -278,17 +281,19 @@ int main(int argc, char** argv) {
     window->resize(320, 240);
     window->show();
 
+    // A VkSurface may exist before the initial xdg_surface configure has been processed.
+    // Raw owner-side Vulkan presentation must wait for Qt's exposed/configured window.
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     if (!waitUntil(
             [&surface, window] {
                 surface = QVulkanInstance::surfaceForWindow(window);
-                return surface != VK_NULL_HANDLE;
+                return surface != VK_NULL_HANDLE && window->isExposed();
             },
             10'000)) {
         window->hide();
         delete window;
         instance.destroy();
-        std::cerr << "FAIL: the QWindow did not produce a Wayland VkSurfaceKHR\n";
+        std::cerr << "FAIL: the QWindow did not expose a configured Wayland VkSurfaceKHR\n";
         return 1;
     }
 
@@ -337,9 +342,13 @@ int main(int argc, char** argv) {
     }
     bloom::render::GpuPresentationTarget& target = *targetResult.target;
 
+    const auto acquireMode = options.bounded_acquire
+                                 ? bloom::render::GpuPresentationAcquireMode::BoundedProgress
+                                 : bloom::render::GpuPresentationAcquireMode::Poll;
     const auto presentFrame = [&]() -> bool {
         for (int attempt = 0; attempt < 400; ++attempt) {
-            const auto acquire = target.acquire();
+            static_cast<void>(target.pollRetirement());
+            const auto acquire = target.acquire(acquireMode);
             if (acquire == bloom::render::GpuPresentationTargetCode::Ok ||
                 acquire == bloom::render::GpuPresentationTargetCode::Suboptimal) {
                 const auto present = target.present(
@@ -396,7 +405,7 @@ int main(int argc, char** argv) {
         const auto params = residentParams(width, height);
         for (int attempt = 0; attempt < 400; ++attempt) {
             static_cast<void>(target.pollRetirement());
-            const auto acquire = target.acquire();
+            const auto acquire = target.acquire(acquireMode);
             if (acquire == bloom::render::GpuPresentationTargetCode::Ok ||
                 acquire == bloom::render::GpuPresentationTargetCode::Suboptimal) {
                 const auto present =
@@ -425,6 +434,24 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Recycle the real swapchain between transfer clears and sampled resident presents. This
+    // repeatedly exercises acquire -> layout transition -> clear and the different image-present
+    // wait stage; core/synchronization validation is the native dependency oracle.
+    for (int cycle = 0; cycle < 8; ++cycle) {
+        drain();
+        if (!presentFrame()) {
+            std::cerr << "FAIL: repeated acquire/clear failed at cycle " << cycle << " ("
+                      << target.lastMessage() << "); retaining the native surface\n";
+            std::_Exit(1);
+        }
+        drain();
+        if (!presentResident(description.width, description.height)) {
+            std::cerr << "FAIL: repeated resident present failed at cycle " << cycle << " ("
+                      << target.lastMessage() << "); retaining the native surface\n";
+            std::_Exit(1);
+        }
+    }
+
     // A foreign-thread acquire fails closed without touching the driver.
     {
         std::atomic<int> foreign{0};
@@ -444,6 +471,17 @@ int main(int argc, char** argv) {
     // for the previous present to be proven retired; the second runs with no present in between, so
     // the presenter's cached views/framebuffers must have been dropped with the first generation.
     const auto recreateTo = [&](const std::uint32_t width, const std::uint32_t height) {
+        window->resize(static_cast<int>(width), static_cast<int>(height));
+        // Process Qt/Wayland resize events before rebuilding the native swapchain; the target
+        // extent must match the actual exposed fixture window rather than a synthetic size.
+        pump(8);
+        if (!waitUntil(
+                [&] {
+                    return window->isExposed() && window->width() == static_cast<int>(width) &&
+                           window->height() == static_cast<int>(height);
+                },
+                10'000))
+            return false;
         bloom::render::GpuPresentationTargetDescription resized = description;
         resized.width = width;
         resized.height = height;
@@ -494,7 +532,7 @@ int main(int argc, char** argv) {
     auto acquired = bloom::render::GpuPresentationTargetCode::NotReady;
     for (int attempt = 0; attempt < 2000; ++attempt) {
         static_cast<void>(target.pollRetirement());
-        acquired = target.acquire();
+        acquired = target.acquire(acquireMode);
         if (acquired != bloom::render::GpuPresentationTargetCode::NotReady) {
             break;
         }

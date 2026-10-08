@@ -20,7 +20,8 @@ remain separate decisions under G9.
 | G1 | Accepted: native validity and mapped-memory visibility | Source review, quality/lint, real operator/display/viewer/RAM/final-route parity and validation; independent Composite/viewer reruns passed |
 | G2 | Initialization cleanup, metadata lifetime, image reclamation, vector quarantine, oracle recovery, and G2E cancellation/teardown accepted as bounded slices | Native parity/lifecycle/viewer/final paths and independent retirement/transition reruns have zero validation errors; aggregate accounting remains G6 work |
 | G3B1 | Coherent outline publication accepted as a bounded slice | Native state/interaction regressions, independent compositor samples, CPU regressions and changed-source static analysis pass; G3B2 remains pending |
-| G3A, G3B2, G4–G10 | Pending | No implementation or qualification claim |
+| G3B2A | Clear/discard synchronization and bounded owner WSI progress accepted as a bounded slice | Independent source review and isolated GL native checks, isolated Vulkan lifecycle/progress, CPU admission/fairness tests, Vulkan-disabled render build and changed-source static analysis pass |
+| G3A, G3B2B, G4–G10 | Pending | No implementation or qualification claim |
 
 G3B1 checkpoint (2026-10-09), accepted after independent source review and focused reruns: coherent required-outline publication and exact
 owner-applied metadata are implemented as a bounded slice. Deterministic delayed raster, changing
@@ -32,9 +33,24 @@ show the complete replacement and explicit outline removal. A real selected-soli
 a solid/text composition produced 73 sampled captures with no sampled outline loss (about 149 ms
 median and 455 ms maximum sample gap). These samples do not establish per-refresh continuity,
 playback performance, or text-specific dragging. G3B2 remains pending for refusal/CPU-cover intent,
-failed/non-neutral adjustment and global status truth, coupled applied hit mapping/bounds, and the
-underlying clear/discard acquire-wait/layout dependency. G3A/G4 cadence is unchanged. Further native
+failed/non-neutral adjustment and global status truth, and coupled applied hit mapping/bounds.
+The clear/discard acquire-wait/layout dependency is addressed by the G3B2A checkpoint below.
+G3A/G4 cadence is unchanged. Further native
 GUI fixtures must use an isolated compositor; the user's desktop is no longer a test surface.
+
+G3B2A checkpoint (2026-10-09), accepted after independent source review and native reruns: the clear/discard initial transition now shares the
+acquire wait's transfer stage, and present-extension scalar storage lives through the API call.
+Measured zero-timeout and 1 ns acquisition stalled while 1 ms enabled client release-event progress.
+The final explicit owner-only probe requests at most 1 ms once per pump, rotates eligible targets,
+and admits no fresh probe after close/resize/retirement/shutdown. Temporary results remain pending;
+there is no fake acknowledgement, UI wait, or hard wall-clock promise. Isolated native raw-target
+clear/image reuse, actual resize and acquired-unpresented retirement pass twice; eight simultaneous
+three-target reuse rounds pass with genuine core and synchronization validation. Independent raw-target
+and coordinator reruns also pass on the isolated GL renderer. CPU contract checks
+cover the one-shot budget, fair rotation and admission gates. Affected native and portable-stub static
+analysis, source quality/format checks, and the Vulkan-disabled render build pass. G3B2B visible intent, adjusted-display
+failure, coupled hit mapping and Qt present-hook integration remain separate work. No further native
+fixture uses the desktop; current checks use the private isolated compositor.
 
 G0 adds opt-in bounded numeric frame tracing and a native Full-resolution 1920 × 1080 solid/text
 fixture using four cold and four warm frame requests. The initial measured medians were 48.14 ms

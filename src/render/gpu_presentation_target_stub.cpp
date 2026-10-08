@@ -27,7 +27,7 @@ GpuPresentationTargetResult GpuPresentationTarget::create(GpuDevice&,
             "Bloom was built without Vulkan dependencies; the CPU path remains active"};
 }
 
-GpuPresentationTargetCode GpuPresentationTarget::acquire() {
+GpuPresentationTargetCode GpuPresentationTarget::acquire(GpuPresentationAcquireMode) {
     return GpuPresentationTargetCode::PresentationUnavailable;
 }
 

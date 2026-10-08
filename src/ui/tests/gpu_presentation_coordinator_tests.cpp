@@ -330,7 +330,7 @@ int main(int argc, char** argv) {
         if (!waitUntil(
                 [&ui] {
                     ui.surface = QVulkanInstance::surfaceForWindow(ui.window);
-                    return ui.surface != VK_NULL_HANDLE;
+                    return ui.surface != VK_NULL_HANDLE && ui.window->isExposed();
                 },
                 10'000)) {
             return std::optional<UiSurface>{};
@@ -524,6 +524,22 @@ int main(int argc, char** argv) {
     expectations.expect(targetC.code == GpuPresentationPortCode::Accepted, "target C attaches");
     expectations.expect(waitState(targetC.target, GpuPresentationTargetState::Active, 10'000),
                         "target C becomes Active");
+    // Exercise real WSI progress with three simultaneously eligible targets across reuse cycles.
+    for (std::uint64_t sequence = 100U; sequence < 108U; ++sequence) {
+        runCommand(Cmd::SetGate, true);
+        expectations.expect(
+            client->update(targetA.target, sequence, makeUpdate(lease, nullptr, 400U, 300U))
+                .accepted(),
+            "A admits the repeated three-target update");
+        for (const auto id : {targetB.target, targetC.target})
+            expectations.expect(
+                client->update(id, sequence, makeUpdate(lease, nullptr, 320U, 240U)).accepted(),
+                "B/C admit the repeated three-target update");
+        runCommand(Cmd::SetGate, false);
+        for (const auto id : {targetA.target, targetB.target, targetC.target})
+            expectations.expect(waitApplied(id, sequence, 10'000),
+                                "every target makes real progress through repeated WSI reuse");
+    }
     auto surfaceD = createSurface(320U, 240U);
     expectations.expect(surfaceD.has_value(), "the cap-probe surface was created");
     if (surfaceD) {
@@ -547,7 +563,7 @@ int main(int argc, char** argv) {
     const std::array<GpuPresentationTargetId, 3> targets{targetA.target, targetB.target,
                                                          targetC.target};
     for (const auto id : targets) {
-        expectations.expect(client->retire(id, 100U).code == GpuPresentationPortCode::Accepted,
+        expectations.expect(client->retire(id, 150U).code == GpuPresentationPortCode::Accepted,
                             "retire is admitted");
     }
     for (const auto id : targets) {
