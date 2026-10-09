@@ -196,6 +196,12 @@ class PreviewDisplayOnlyFrame final {
     [[nodiscard]] std::optional<PreviewDisplayBufferView> displayBufferView() const noexcept;
     // What retaining this frame costs: packed display pixels plus evaluated geometry.
     [[nodiscard]] std::size_t displayByteCost() const noexcept;
+    [[nodiscard]] render::PackedRgba8Ownership packedHostOwnership() const noexcept {
+        return buffer_.pixelOwnership();
+    }
+    [[nodiscard]] bool promotePackedHostOwnership() const noexcept {
+        return buffer_.promotePixelOwnership();
+    }
 
   private:
     // Only the validating GPU product finalizer may construct this private storage directly; there

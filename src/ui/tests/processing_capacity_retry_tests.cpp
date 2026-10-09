@@ -1,5 +1,6 @@
 #include "ram_preview_pipeline_test_support.hpp"
 
+#include <bloom/render/packed_rgba8_storage.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/ui/composition_preview_cpu_stage.hpp>
 
@@ -213,12 +214,174 @@ void run(Expectations& checks) {
     std::cout << "retry proof: submissions=" << submissions.load()
               << " actualPreparations=" << heavy.load() << " heldGuiPulses=" << pulses << "\n";
 }
+
+// This is a CPU/control fixture for the real controller and neutral admission state. Genuine
+// rooted GPU pixels/publication are independently exercised by the packed native service test.
+void packedProvisionalRetry(Expectations& checks) {
+    auto project = makeTestProject("Packed ownership retry", timeAt(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, project.initialCompositionId);
+    checks.expect(session.addSolidLayer("Solid", {0.25, 0.5, 0.75, 1}), "retry solid authored");
+    PipelineFixture fixture;
+    auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(1);
+    auto sample = capacity(1);
+    policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+    checks.expect(
+        policy->reportDevice(101, {.source = render::GpuAllocationBudgetSource::MemoryBudget,
+                                   .device_local_bytes = gib,
+                                   .available_bytes = 0}),
+        "packed host retry has irrelevant native zero");
+    runtime::TaskScheduler scheduler(twoWorkerConfig());
+    ui::TaskUiBridge bridge(scheduler);
+    const auto pipeline = ui::makeCompositionPreviewPipeline(
+        fixture.compiler, fixture.evaluator, fixture.displayPreparer,
+        fixture.qualifiedProcessorProvider, fixture.planCache);
+    auto external = std::make_shared<render::PackedRgba8Storage>();
+    const auto prepareExternal = [&] {
+        auto phase = runtime::reserveHostEvaluationPhase(
+            *policy, 192, 128ULL * 1024, runtime::GpuProcessingPhaseOutput::PackedPreview);
+        if (!phase.lease)
+            return false;
+        auto storage = render::PackedRgba8Storage::create(32, phase.lease, 128);
+        if (!storage.hasValue() || !storage.value()->promote())
+            return false;
+        *external = std::move(*storage.value());
+        return true;
+    };
+    std::atomic_bool faultNext{false}, releaseBeforeDelivery{false}, arithmeticValid{true};
+    std::atomic_size_t submissions{0}, actualPreparations{0}, failuresAfterAllocation{0};
+    ui::PreviewPreparationFunction preparation =
+        [&, pipeline](const document::Snapshot& snapshot,
+                      const runtime::PreviewRequestIdentity& identity, const std::size_t bytes,
+                      const std::vector<runtime::SnapshotParameterOverride>& overrides,
+                      runtime::TaskContext& context) {
+            using Result = runtime::TaskResult<runtime::PreviewPreparationResultHandle>;
+            ++submissions;
+            auto phase = runtime::reserveHostEvaluationPhase(
+                *policy, 192, bytes, runtime::GpuProcessingPhaseOutput::PackedPreview);
+            if (!phase.lease) {
+                arithmeticValid = false;
+                return Result::failed({{.code = "fixture.phase-admission",
+                                        .severity = runtime::DiagnosticSeverity::Error,
+                                        .summary = "Expected host phase was not admitted.",
+                                        .detail = {},
+                                        .suggestedAction = {}}});
+            }
+            if (!faultNext.exchange(false)) {
+                ++actualPreparations;
+                return pipeline(snapshot, identity, bytes, overrides, context);
+            }
+            const auto before = policy->snapshot().reservations;
+            auto allocated = render::PackedRgba8Storage::create(32, phase.lease, 128);
+            if (!allocated.hasValue()) {
+                arithmeticValid = false;
+                return Result::failed(
+                    {{.code = "fixture.packed-allocation",
+                      .severity = runtime::DiagnosticSeverity::Error,
+                      .summary = "Expected provisional storage was not allocated.",
+                      .detail = {},
+                      .suggestedAction = {}}});
+            }
+            // This real count refusal occurs AFTER the actual bounded allocator request.
+            const auto refused =
+                policy->reserve({.pixels = 1, .sourceFree = true, .native = false});
+            const auto revision = phase.lease->revisionAfterOwnRelease();
+            arithmeticValid =
+                arithmeticValid &&
+                refused.status == render::GpuProcessingPhaseAdmission::BudgetRefused &&
+                refused.domain == render::GpuProcessingPhaseDomain::RequestCount &&
+                policy->snapshot().reservations.ownedPackedHostBytes ==
+                    before.ownedPackedHostBytes + allocated.value()->byteCost();
+            phase.lease.reset();
+            arithmeticValid =
+                arithmeticValid && policy->snapshot().reservations.admittedPhases == 1;
+            allocated.value()->reset(); // Fold back, then exactly one origin-phase release.
+            const auto after = policy->snapshot().reservations;
+            arithmeticValid = arithmeticValid && after.admissionRevision == revision &&
+                              after.admittedPhases == 0 && after.hostReservedBytes == 0 &&
+                              after.ownedPackedHostBytes == before.ownedPackedHostBytes;
+            if (releaseBeforeDelivery.exchange(false))
+                external->reset();
+            ++failuresAfterAllocation;
+            return Result::failed(
+                {{.code = "bloom.preview.gpu-scene.budget-refused",
+                  .severity = runtime::DiagnosticSeverity::Error,
+                  .summary = "Real count refusal after provisional allocation.",
+                  .detail = "Controller control witness; no GPU pixel claim.",
+                  .suggestedAction = "Wait for an independent capacity release.",
+                  .admissionRetry = runtime::TaskAdmissionRetry{revision, false}}});
+        };
+    ui::CompositionPreviewSettings settings;
+    settings.resolutionPolicy = runtime::PreviewResolutionPolicy::Full;
+    ui::CompositionPreviewController controller(session, scheduler, bridge, preparation, settings,
+                                                {}, nullptr, {}, {}, policy);
+    const auto ready = [&] {
+        return controller.state().activity == ui::PreviewActivity::Ready &&
+               controller.state().freshness == ui::FrameFreshness::Current &&
+               controller.state().frame;
+    };
+    checks.expect(waitUntil(ready) && actualPreparations == 1, "real CPU last-good frame reached");
+    if (checks.failures())
+        return;
+    const auto oldFrame = controller.state().frame;
+    checks.expect(prepareExternal(), "published external host owner prepared without phase count");
+    faultNext = true;
+    controller.requestRefresh();
+    checks.expect(
+        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Failed; }) &&
+            failuresAfterAllocation == 1 && arithmeticValid && controller.state().frame == oldFrame,
+        "typed refusal after allocated storage preserves last good frame and exact R+1");
+    const auto failedSubmissions = submissions.load();
+    QElapsedTimer held;
+    held.start();
+    int pulses = 0;
+    checks.expect(waitUntil([&] {
+                      controller.notifyProcessingCapacityChanged();
+                      ++pulses;
+                      return held.elapsed() >= 150;
+                  }) &&
+                      submissions == failedSubmissions && actualPreparations == 1,
+                  "own provisional cleanup cannot spin controller across held GUI pulses");
+    external->reset();
+    controller.notifyProcessingCapacityChanged();
+    checks.expect(waitUntil(ready) && submissions == failedSubmissions + 1 &&
+                      actualPreparations == 2,
+                  "external host last release wakes CPU recovery once despite device zero");
+    checks.expect(prepareExternal(), "second independent published host owner prepared");
+    faultNext = true;
+    releaseBeforeDelivery = true;
+    controller.requestRefresh();
+    // Deliberately hold UI delivery. The worker's external release precedes terminal drain.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while ((failuresAfterAllocation != 2 || !scheduler.isQuiescent()) &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    checks.expect(failuresAfterAllocation == 2 && scheduler.isQuiescent() && arithmeticValid,
+                  "real failed task and interleaved release complete before UI delivery");
+    checks.expect(waitUntil(ready) && submissions == failedSubmissions + 3 &&
+                      actualPreparations == 3,
+                  "external release before refusal delivery remains visible for one newest retry");
+    const auto final = policy->snapshot().reservations;
+    checks.expect(final.admittedPhases == 0 && final.hostReservedBytes == 0 &&
+                      final.ownedPackedHostBytes == 0 && final.totalHostClaimBytes == 0,
+                  "controller proof leaves no phase or packed allocation claims");
+    controller.beginShutdown();
+    bridge.beginShutdown();
+    checks.expect(waitUntil([&] { return scheduler.isQuiescent(); }), "packed retry tasks quiesce");
+    std::cout << "packed provisional controller: submissions=" << submissions
+              << " failuresAfterAllocation=" << failuresAfterAllocation
+              << " actualCpuPreparations=" << actualPreparations << " heldPulses=" << pulses
+              << '\n';
+}
 } // namespace
 int main(int argc, char** argv) {
     try {
         QApplication application(argc, argv);
         Expectations checks;
         run(checks);
+        if (!checks.failures())
+            packedProvisionalRetry(checks);
         return checks.failures() == 0 ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

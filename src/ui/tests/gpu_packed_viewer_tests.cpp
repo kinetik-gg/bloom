@@ -8,6 +8,7 @@
 #include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/runtime/gpu_prepared_packed_preview_product.hpp>
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
@@ -165,6 +166,7 @@ void observe(const char* name, ui::ViewerEditor& viewer, QSplitter& splitter, QW
 
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     bool cache100 = false, half = false, partial = false, playing = false, animatedDrag = false;
+    bool hostOwnership = false;
     std::vector<char*> forwarded{argv[0]};
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument = argv[index];
@@ -179,6 +181,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             playing = true;
         else if (argument == "--animated-drag")
             animatedDrag = true;
+        else if (argument == "--host-ownership")
+            hostOwnership = true;
         else
             forwarded.push_back(argv[index]);
     }
@@ -241,13 +245,52 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     auto resolver =
         host::makePackagedGpuOcioResolver(QCoreApplication::applicationFilePath().toStdString());
     checks.expect(resolver != nullptr, "actual packaged application OCIO resolver is available");
+    auto processingPolicy =
+        hostOwnership ? std::make_shared<runtime::GpuProcessingPhasePolicy>(4) : nullptr;
+    runtime::GpuScenePreparationPhase processingPhase;
+    if (processingPolicy) {
+        processingPhase = {.policy = processingPolicy,
+                           .envelope = {.metadataBytes = 1024ULL * 1024,
+                                        .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                                        .requestedExecutorBytes = kBudget,
+                                        .deviceWorkingBytes = 832ULL * 1024 * 1024}};
+    }
     auto gpuStage = ui::makeSessionRefreshingGpuSceneStage(
         fixture.compiler, fixture.evaluator, fixture.provider,
         std::make_shared<runtime::GpuSceneCoverageCache>(),
-        std::make_shared<runtime::GpuPreparedUploadCache>(), nullptr, resolver);
+        std::make_shared<runtime::GpuPreparedUploadCache>(), nullptr, resolver, processingPhase);
+    if (processingPolicy) {
+        struct SampleRoot {
+            std::mutex mutex;
+            std::unique_ptr<runtime::MemoryBudgetLedger> ledger;
+        };
+        auto sampleRoot = std::make_shared<SampleRoot>();
+        gpuStage = [base = std::move(gpuStage), processingPolicy, sampleRoot](
+                       const document::Snapshot& snapshot,
+                       const runtime::PreviewRequestIdentity& identity, const std::size_t bytes,
+                       const std::vector<runtime::SnapshotParameterOverride>& overrides,
+                       runtime::TaskContext& context) {
+            // Real sampling happens only on this production CPU-stage worker, before admission.
+            auto sample = runtime::memoryBudgetSample(context.cancellation());
+            {
+                std::lock_guard lock(sampleRoot->mutex);
+                if (!sampleRoot->ledger) {
+                    sampleRoot->ledger = std::make_unique<runtime::MemoryBudgetLedger>(
+                        sample.physicalBytes, sample.machine.availableBytes.value_or(0));
+                    sampleRoot->ledger->beginProcessSampling();
+                }
+                const auto at = runtime::GpuProcessingPhasePolicy::Clock::now();
+                const auto state = sampleRoot->ledger->applySample(std::move(sample), at);
+                processingPolicy->applyHostSample(state, sampleRoot->ledger->physicalByteBudget(),
+                                                  at);
+            }
+            return base(snapshot, identity, bytes, overrides, context);
+        };
+    }
     auto serviceSettings = serviceOptions(options.loader_path);
     serviceSettings.product = runtime::GpuPreviewDisplayProductMode::GpuPreparedPacked;
     serviceSettings.presentation = runtime::GpuPreviewDisplayServicePresentationMode::Disabled;
+    serviceSettings.processingPhasePolicy = processingPolicy;
     runtime::GpuPreviewDisplayService service(scheduler, gpuStage, fixture.productionCpuStage(),
                                               fixture.productionCpuFallback(displayPreparer),
                                               serviceSettings);
@@ -287,8 +330,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     ui::CompositionPreviewSettings settings;
     settings.pixelStorageByteLimit = kBudget;
     settings.resolutionPolicy = runtime::PreviewResolutionPolicy::Full;
-    ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline, settings,
-                                                nullptr, nullptr, submitter);
+    auto frameCache =
+        hostOwnership ? std::make_shared<ui::PreviewFrameCache>(64ULL * 1024 * 1024) : nullptr;
+    auto controllerOwner = std::make_unique<ui::CompositionPreviewController>(
+        session, scheduler, bridge, pipeline, settings, frameCache, nullptr, submitter,
+        std::shared_ptr<ui::PreviewFrameTrace>{}, processingPolicy);
+    auto& controller = *controllerOwner;
     ui::EditorRegistry registry;
     checks.expect(ui::registerFoundationEditors(registry, session, controller),
                   "actual production editor registry registers");
@@ -349,6 +396,107 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             !viewer->residentPresentationActiveForTest(),
         "painted provenance is explicit and never native/ownerApplied");
     exactPackedCacheAdmission(checks, viewer->displayedFrameForTest());
+    if (hostOwnership) {
+        auto external = viewer->displayedFrameForTest();
+        const auto view = external ? external->displayBufferView() : std::nullopt;
+        const auto proof = external ? external->provenance().gpuPreparedPacked : nullptr;
+        if (!external || !view || !proof) {
+            checks.expect(false, "rooted Viewer proof requires actual packed pixels/provenance");
+            return 1;
+        }
+        const auto* const originalPixels = view->pixels.data();
+        const auto publishedBytes = proof->transfer.hostStorageBytes;
+        checks.expect(
+            external && view &&
+                external->displayOnlyFrame()->packedHostOwnership() ==
+                    render::PackedRgba8Ownership::RootedPublished &&
+                waitUntil(
+                    [&] {
+                        const auto root = processingPolicy->snapshot().reservations;
+                        return root.admittedPhases == 0 && root.hostReservedBytes == 0 &&
+                               root.ownedPackedHostAllocations == 1 &&
+                               root.ownedPackedHostBytes ==
+                                   external->provenance()
+                                       .gpuPreparedPacked->transfer.hostStorageBytes;
+                    },
+                    2s),
+            "actual production QWidget frame owns one independent rooted packed allocation");
+        checks.expect(
+            session.setCurrentTime(core::RationalTime::fromInteger(1)) && current() &&
+                waitUntil(
+                    [&] { return processingPolicy->snapshot().reservations.admittedPhases == 0; },
+                    2s) &&
+                processingPolicy->snapshot().reservations.ownedPackedHostAllocations == 2,
+            "second exact Viewer time cold-prepares a second actual owned allocation");
+        const auto beforeWarm = service.status().counters;
+        checks.expect(
+            session.setCurrentTime(core::RationalTime::fromInteger(0)) && current() &&
+                service.status().counters.nativeDispatches == beforeWarm.nativeDispatches &&
+                service.status().counters.residentGraphJobs == beforeWarm.residentGraphJobs &&
+                service.status().counters.packedTransfers == beforeWarm.packedTransfers &&
+                service.status().counters.fullFrameReadbacks == beforeWarm.fullFrameReadbacks &&
+                processingPolicy->snapshot().reservations.ownedPackedHostAllocations == 2,
+            "ordinary warm cached Viewer return shares owned backing with no GPU work or new "
+            "allocation");
+        controller.purgePreviewCache();
+        viewer->update();
+        checks.expect(
+            waitUntil(
+                [&] {
+                    const auto painted = viewer->actualDisplayDescriptor();
+                    return painted && painted->frame &&
+                           painted->frame->displayOnlyFrame() == external->displayOnlyFrame() &&
+                           painted->mapping && !painted->native && !painted->cover;
+                },
+                3s) &&
+                frameCache->size() == 0 && frameCache->residentBytes() == 0 &&
+                processingPolicy->snapshot().reservations.ownedPackedHostBytes == publishedBytes &&
+                processingPolicy->snapshot().reservations.ownedPackedHostAllocations == 1,
+            "real cache purge leaves Viewer-painted/external aliases charged and readable");
+        {
+            const auto paintedFrame = viewer->displayedFrameForTest();
+            const auto paintedView =
+                paintedFrame ? paintedFrame->displayBufferView() : std::nullopt;
+            checks.expect(paintedView && paintedView->pixels.data() == originalPixels,
+                          "purged current Viewer still reads the exact original packed allocation");
+        }
+        controller.beginShutdown();
+        delete area; // Destroy the actual Viewer and its displayed frame/presentation aliases.
+        controllerOwner.reset();
+        const auto externalView = external->displayBufferView();
+        checks.expect(
+            processingPolicy->snapshot().reservations.ownedPackedHostAllocations == 1 &&
+                externalView && externalView->pixels.data() == originalPixels,
+            "external frame alone preserves backing after actual Viewer/controller destruction");
+        const auto revision = processingPolicy->snapshot().reservations.admissionRevision;
+        external.reset();
+        checks.expect(
+            waitUntil(
+                [&] {
+                    const auto root = processingPolicy->snapshot().reservations;
+                    return root.ownedPackedHostAllocations == 0 && root.ownedPackedHostBytes == 0 &&
+                           root.totalHostClaimBytes == 0 && root.admissionRevision == revision + 1;
+                },
+                2s),
+            "last external alias releases one owned allocation and advances admission once");
+        bridge.beginShutdown();
+        service.beginShutdown();
+        checks.expect(waitUntil(
+                          [&] {
+                              return scheduler.isQuiescent() &&
+                                     service.status().state ==
+                                         runtime::GpuPreviewDisplayServiceState::Stopped;
+                          },
+                          30s),
+                      "rooted QWidget proof retires asynchronously");
+        std::cout << "PACKED_HOST_VIEWER bytes=" << publishedBytes
+                  << " coldTransfers=" << beforeWarm.packedTransfers
+                  << " cacheAfterPurge=" << frameCache->residentBytes() << " finalOwned="
+                  << processingPolicy->snapshot().reservations.ownedPackedHostBytes << '\n'
+                  << (checks.failures() ? "FAIL" : "PASS")
+                  << ": rooted packed Viewer/cache purge ownership\n";
+        return checks.failures() ? 1 : 0;
+    }
     if (playing || animatedDrag) {
         if (animatedDrag)
             exercisePackedAnimation(checks, fixture, scheduler, *viewer, splitter, host, session,

@@ -1,8 +1,124 @@
 #pragma once
 #include "gpu_preview_display_service_packed_support.hpp"
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
 namespace {
 #if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
+void payloadAllocationFailureProof(
+    Expectations& checks, GpuPreviewDisplayServiceOptions options,
+    const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan,
+    const std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle>& processor,
+    const bloom::document::Snapshot& snapshot) {
+    TaskScheduler scheduler(schedulerConfig());
+    auto policy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>();
+    auto sample = bloom::runtime::memoryBudgetSample();
+    bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
+                                              sample.machine.availableBytes.value_or(0));
+    ledger.beginProcessSampling();
+    const auto at = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
+    const auto state = ledger.applySample(std::move(sample), at);
+    policy->applyHostSample(state, ledger.physicalByteBudget(), at);
+    options.processingPhasePolicy = policy;
+    auto builder = std::make_shared<CpuGpuSceneBuilder>(
+        nullptr, bloom::runtime::GpuSceneMediaContext{}, bloom::runtime::GpuSceneOcioContext{},
+        bloom::runtime::GpuScenePreparationPhase{
+            .policy = policy,
+            .envelope = {.metadataBytes = 1024ULL * 1024,
+                         .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                         .requestedExecutorBytes = kBudget,
+                         .deviceWorkingBytes = 832ULL * 1024 * 1024}});
+    GpuPreviewDisplayService service(
+        scheduler, packedStageFunction(plan, builder, {}, processor),
+        generalCpuStageFunction(plan, processor, std::make_shared<CpuCompositionEvaluator>()),
+        generalFallback(processor), options);
+    checks.expect(
+        waitUntil(
+            [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; },
+            30s) &&
+            service.status().state == GpuPreviewDisplayServiceState::Ready,
+        "payload allocation fault uses genuine native service");
+    auto core = bloom::runtime::detail::GpuPreviewDisplayServiceTestAccess::coreOf(service);
+    auto faultArmed = std::make_shared<std::atomic_uint>(1);
+    core->testBeforePackedPayloadAllocation = [faultArmed] {
+        packed_payload_fault::failuresRemaining = faultArmed->exchange(0);
+    };
+    const auto previousFailures = packed_payload_fault::actualFailures.load();
+    const bloom::runtime::TaskOwner owner{.kind = bloom::runtime::TaskOwnerKind::Composition,
+                                          .id = bloom::runtime::TaskOwnerId::fromRaw(7)};
+    auto identity = makeIdentity(*plan, 1000, {}, {}, {});
+    auto submission = service.submit(TaskRequest("actual packed payload allocation fault", owner),
+                                     snapshot, identity, kBudget, {});
+    checks.expect(submission.accepted(), "payload fault task admitted");
+    if (!submission.accepted())
+        return;
+    const auto failed = awaitResult(submission.handle, 10s);
+    checks.expect(
+        failed && failed->state() == TaskState::Failed &&
+            packed_payload_fault::actualFailures == previousFailures + 1 &&
+            std::any_of(failed->diagnostics().begin(), failed->diagnostics().end(),
+                        [](const auto& diagnostic) {
+                            return diagnostic.code ==
+                                       "bloom.runtime.gpu-packed-product-construction-failed" &&
+                                   !diagnostic.admissionRetry;
+                        }),
+        "actual final make_shared allocation fault terminates without capacity retry");
+    checks.expect(
+        waitUntil(
+            [&] {
+                const auto root = policy->snapshot().reservations;
+                return root.admittedPhases == 0 && root.unprovenPhases == 0 &&
+                       root.hostReservedBytes == 0 && root.deviceReservedBytes == 0 &&
+                       root.ownedPackedHostBytes == 0 && root.ownedPackedHostAllocations == 0 &&
+                       root.totalHostClaimBytes == 0;
+            },
+            2s) &&
+            service.status().counters.packedTransfers == 1 &&
+            service.status().counters.cpuFallbacks == 0,
+        "fence-proven product fault unwinds every provisional/phase claim with no CPU loop");
+    faultArmed->store(2);
+    identity.requestGeneration = 1001;
+    auto doubleFault =
+        service.submit(TaskRequest("packed payload plus diagnostic allocation fault", owner),
+                       snapshot, identity, kBudget, {});
+    const auto doubleFailed =
+        doubleFault.accepted() ? awaitResult(doubleFault.handle, 10s) : std::nullopt;
+    checks.expect(
+        doubleFailed && doubleFailed->state() == TaskState::Failed &&
+            doubleFailed->diagnostics().empty() &&
+            packed_payload_fault::actualFailures == previousFailures + 3 &&
+            waitUntil(
+                [&] {
+                    const auto root = policy->snapshot().reservations;
+                    return root.admittedPhases == 0 && root.unprovenPhases == 0 &&
+                           root.hostReservedBytes == 0 && root.deviceReservedBytes == 0 &&
+                           root.ownedPackedHostBytes == 0 && root.totalHostClaimBytes == 0;
+                },
+                2s),
+        "payload plus diagnostic allocation faults terminate through empty nonallocating failure");
+    identity.requestGeneration = 1002;
+    auto recovery = service.submit(TaskRequest("native after payload allocation fault", owner),
+                                   snapshot, identity, kBudget, {});
+    auto recovered = recovery.accepted() ? packedResult(awaitResult(recovery.handle)) : nullptr;
+    checks.expect(
+        recovered &&
+            recovered->provenance().provider ==
+                bloom::runtime::PreviewDisplayProvider::GpuPreparedPacked &&
+            recovered->displayOnlyFrame()->packedHostOwnership() ==
+                bloom::render::PackedRgba8Ownership::RootedPublished &&
+            service.status().counters.packedTransfers == 3 &&
+            service.status().counters.cpuFallbacks == 0,
+        "following real native request recovers after allocation-failed terminal product");
+    if (recovered)
+        compareCpu(checks, *recovered, plan, *processor);
+    recovered.reset();
+    checks.expect(
+        waitUntil([&] { return policy->snapshot().reservations.totalHostClaimBytes == 0; }, 2s),
+        "recovered product's last alias also releases owned payload");
+    service.beginShutdown();
+    std::cout << "PAYLOAD_ALLOCATION_FAULT actualFailures=" << packed_payload_fault::actualFailures
+              << " nativeTransfers=" << service.status().counters.packedTransfers << '\n';
+}
+
 void unsupportedPackedProof(
     Expectations& checks, GpuPreviewDisplayServiceOptions options,
     const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan,
@@ -11,6 +127,16 @@ void unsupportedPackedProof(
     const bloom::document::Snapshot& snapshot) {
     TaskScheduler scheduler(schedulerConfig());
     options.enabled = false;
+    // This CPU fallback is a production processing attempt, so it needs the same explicit,
+    // actually sampled host root even though no native executor will initialize.
+    options.processingPhasePolicy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>();
+    auto sample = bloom::runtime::memoryBudgetSample();
+    bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
+                                              sample.machine.availableBytes.value_or(0));
+    ledger.beginProcessSampling();
+    const auto at = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
+    const auto state = ledger.applySample(std::move(sample), at);
+    options.processingPhasePolicy->applyHostSample(state, ledger.physicalByteBudget(), at);
     GpuPreviewDisplayService service(
         scheduler,
         packedStageFunction(plan, std::make_shared<CpuGpuSceneBuilder>(), programs, processor),
@@ -21,7 +147,13 @@ void unsupportedPackedProof(
     auto submission = service.submit(TaskRequest("explicit unavailable GPU", owner), snapshot,
                                      makeIdentity(*plan, 800, {}, {}, {}), kBudget, {});
     checks.expect(submission.accepted(), "disabled GPU has explicit supported CPU fallback");
-    auto frame = packedResult(awaitResult(submission.handle));
+    const auto result = awaitResult(submission.handle);
+    auto frame = packedResult(result);
+    if (!frame && result) {
+        for (const auto& diagnostic : result->diagnostics())
+            std::cerr << diagnostic.code << ": " << diagnostic.summary << " / " << diagnostic.detail
+                      << '\n';
+    }
     checks.expect(
         frame && frame->provenance().provider == bloom::runtime::PreviewDisplayProvider::CpuOcio &&
             frame->processIdentity().provider == bloom::runtime::EvaluationProvider::CpuReference &&
@@ -38,11 +170,31 @@ void heldTransferProof(
     const std::shared_ptr<const GpuDisplayProgramService>& programs,
     const bloom::document::Snapshot& snapshot, const bool shutdownProof) {
     auto scheduler = std::make_unique<TaskScheduler>(schedulerConfig());
+    auto configured = options;
+    auto builder = std::make_shared<CpuGpuSceneBuilder>();
+    if (!shutdownProof) {
+        configured.processingPhasePolicy =
+            std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(4);
+        auto sample = bloom::runtime::memoryBudgetSample();
+        bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
+                                                  sample.machine.availableBytes.value_or(0));
+        ledger.beginProcessSampling();
+        const auto at = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
+        const auto state = ledger.applySample(std::move(sample), at);
+        configured.processingPhasePolicy->applyHostSample(state, ledger.physicalByteBudget(), at);
+        builder = std::make_shared<CpuGpuSceneBuilder>(
+            nullptr, bloom::runtime::GpuSceneMediaContext{}, bloom::runtime::GpuSceneOcioContext{},
+            bloom::runtime::GpuScenePreparationPhase{
+                .policy = configured.processingPhasePolicy,
+                .envelope = {.metadataBytes = 1024ULL * 1024,
+                             .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                             .requestedExecutorBytes = kBudget,
+                             .deviceWorkingBytes = 832ULL * 1024 * 1024}});
+    }
     auto service = std::make_unique<GpuPreviewDisplayService>(
-        *scheduler,
-        packedStageFunction(plan, std::make_shared<CpuGpuSceneBuilder>(), programs, processor),
+        *scheduler, packedStageFunction(plan, builder, programs, processor),
         generalCpuStageFunction(plan, processor, std::make_shared<CpuCompositionEvaluator>()),
-        generalFallback(processor), options);
+        generalFallback(processor), configured);
     checks.expect(
         waitUntil(
             [&] { return service->status().state != GpuPreviewDisplayServiceState::Initializing; },
@@ -106,6 +258,12 @@ void heldTransferProof(
         initial.sourceBytes > 0 && initial.stagingBytes > 0 && initial.hostBytes > 0 &&
             initial.reservedBytes >= initial.sourceBytes + initial.stagingBytes + initial.hostBytes,
         "admitted reservation covers every actual source/staging/preallocated host allocation");
+    if (!shutdownProof) {
+        const auto root = configured.processingPhasePolicy->snapshot().reservations;
+        checks.expect(root.ownedPackedHostAllocations == 1 &&
+                          root.ownedPackedHostBytes == initial.hostBytes && root.admittedPhases > 0,
+                      "held native copy retains an actual provisional rooted packed allocation");
+    }
     if (shutdownProof) {
         using namespace bloom::render::display_transfer_detail;
         // Make the destructor's nonblocking fence observation explicitly unproved too. This
@@ -171,6 +329,21 @@ void heldTransferProof(
                   "newest coherent GPU product publishes only after old copy retires");
     if (replacement)
         compareCpu(checks, *replacement, plan, *processor);
+    checks.expect(
+        replacement &&
+            replacement->displayOnlyFrame()->packedHostOwnership() ==
+                bloom::render::PackedRgba8Ownership::RootedPublished &&
+            waitUntil(
+                [&] {
+                    const auto root = configured.processingPhasePolicy->snapshot().reservations;
+                    return root.admittedPhases == 0 && root.hostReservedBytes == 0 &&
+                           root.ownedPackedHostAllocations == 1 &&
+                           root.ownedPackedHostBytes ==
+                               replacement->provenance()
+                                   .gpuPreparedPacked->transfer.hostStorageBytes;
+                },
+                2s),
+        "cancelled provisional copy folds back while only newest published storage remains");
 
     checks.expect(service->status().counters.cpuFallbacks == 0,
                   "fitting queued newest stays on genuine GPU scene and final transfer route");
@@ -194,11 +367,31 @@ void heldTransferProof(
                       retained.stagingBytes > 0 && retained.hostBytes > 0 &&
                       retained.reservedBytes > 0,
                   "forced scheduler detach cannot erase still-owned transfer allocation charge");
+    checks.expect(
+        forced &&
+            std::all_of(forced->diagnostics().begin(), forced->diagnostics().end(),
+                        [](const auto& diagnostic) { return !diagnostic.admissionRetry; }) &&
+            configured.processingPhasePolicy->snapshot().reservations.ownedPackedHostAllocations ==
+                2,
+        "forced terminal carries no capacity retry and retains unpublished host backing");
     hold->store(false);
     checks.expect(waitUntil([&] { return retention->snapshot().reservedBytes == 0; }, 10s),
                   "live exact owner still retires detached transfer and releases charge");
     std::cout << "DETACH retained=" << retained.reservedBytes
               << " later=" << retention->snapshot().reservedBytes << '\n';
+    checks.expect(
+        waitUntil(
+            [&] {
+                const auto root = configured.processingPhasePolicy->snapshot().reservations;
+                return root.admittedPhases == 0 && root.hostReservedBytes == 0 &&
+                       root.ownedPackedHostAllocations == 1;
+            },
+            2s),
+        "forced terminal retirement releases its provisional host allocation exactly once");
+    replacement.reset();
+    checks.expect(configured.processingPhasePolicy->snapshot().reservations.ownedPackedHostBytes ==
+                      0,
+                  "last successful frame alias releases the remaining published host allocation");
     service->beginShutdown();
 }
 #endif

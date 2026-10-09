@@ -36,7 +36,8 @@ GpuProcessingPhaseLease::~GpuProcessingPhaseLease() {
     }
     const std::lock_guard lock(state_->mutex);
     auto& counters = state_->counters;
-    counters.hostReservedBytes -= hostBytes_;
+    counters.hostReservedBytes -= remainingHostBytes_;
+    counters.totalHostClaimBytes -= remainingHostBytes_;
     counters.deviceReservedBytes -= deviceBytes_;
     --counters.admittedPhases;
     incrementSaturating(counters.admissionRevision);
@@ -56,6 +57,105 @@ void GpuProcessingPhaseLease::markUnproven() noexcept {
         unproven_ = true;
         ++state_->counters.unprovenPhases;
     }
+}
+
+PackedHostStorageToken::PackedHostStorageToken(
+    std::shared_ptr<PackedHostStorageAuthority> authority, const std::uint64_t bytes) noexcept
+    : authority_(std::move(authority)), bytes_(bytes) {}
+PackedHostStorageToken::PackedHostStorageToken(PackedHostStorageToken&& other) noexcept
+    : authority_(std::move(other.authority_)), bytes_(std::exchange(other.bytes_, 0)) {}
+PackedHostStorageToken& PackedHostStorageToken::operator=(PackedHostStorageToken&& other) noexcept {
+    if (this != &other) {
+        reset();
+        authority_ = std::move(other.authority_);
+        bytes_ = std::exchange(other.bytes_, 0);
+    }
+    return *this;
+}
+PackedHostStorageToken::~PackedHostStorageToken() { reset(); }
+void PackedHostStorageToken::reset() noexcept {
+    if (authority_) {
+        authority_->release(bytes_);
+        authority_.reset();
+        bytes_ = 0;
+    }
+}
+PackedHostStorageAuthority::PackedHostStorageAuthority(
+    const std::shared_ptr<GpuProcessingPhaseLease>& phase, const std::uint64_t limit) noexcept
+    : state_(phase->state_), origin_(phase), limit_(limit) {}
+std::shared_ptr<PackedHostStorageAuthority>
+PackedHostStorageAuthority::create(const std::shared_ptr<GpuProcessingPhaseLease>& phase,
+                                   const std::uint64_t limit) {
+    if (!phase) {
+        return {};
+    }
+    return std::shared_ptr<PackedHostStorageAuthority>(
+        new PackedHostStorageAuthority(phase, limit));
+}
+std::optional<PackedHostStorageToken>
+PackedHostStorageAuthority::reserve(const std::uint64_t bytes) noexcept {
+    if (bytes == 0) {
+        return {};
+    }
+    auto self = weak_from_this().lock();
+    auto origin = origin_.lock();
+    if (!self || !origin) {
+        return {};
+    }
+    const std::lock_guard lock(state_->mutex);
+    if (published_ || bytes_ > limit_ || bytes > limit_ - bytes_ ||
+        bytes > origin->remainingHostBytes_) {
+        return {};
+    }
+    // Both counters change under one lock; the total never changes during an ownership handoff.
+    origin->remainingHostBytes_ -= bytes;
+    state_->counters.hostReservedBytes -= bytes;
+    state_->counters.ownedPackedHostBytes += bytes;
+    ++state_->counters.ownedPackedHostAllocations;
+    bytes_ += bytes;
+    retainedOrigin_ = std::move(origin);
+    return PackedHostStorageToken(std::move(self), bytes);
+}
+void PackedHostStorageAuthority::release(const std::uint64_t bytes) noexcept {
+    std::shared_ptr<GpuProcessingPhaseLease> releasedOrigin;
+    {
+        const std::lock_guard lock(state_->mutex);
+        bytes_ -= bytes;
+        state_->counters.ownedPackedHostBytes -= bytes;
+        --state_->counters.ownedPackedHostAllocations;
+        if (published_) {
+            state_->counters.totalHostClaimBytes -= bytes;
+            incrementSaturating(state_->counters.admissionRevision);
+        } else {
+            retainedOrigin_->remainingHostBytes_ += bytes;
+            state_->counters.hostReservedBytes += bytes;
+            if (bytes_ == 0) {
+                releasedOrigin = std::move(retainedOrigin_);
+            }
+        }
+    }
+    // The final phase alias can run its destructor, which takes the same mutex.
+    releasedOrigin.reset();
+}
+bool PackedHostStorageAuthority::promote() noexcept {
+    std::shared_ptr<GpuProcessingPhaseLease> releasedOrigin;
+    {
+        const std::lock_guard lock(state_->mutex);
+        if (published_) {
+            return true;
+        }
+        if (retainedOrigin_ && retainedOrigin_->unproven_) {
+            return false;
+        }
+        published_ = true;
+        releasedOrigin = std::move(retainedOrigin_);
+    }
+    releasedOrigin.reset();
+    return true;
+}
+PackedHostStorageSnapshot PackedHostStorageAuthority::snapshot() const noexcept {
+    const std::lock_guard lock(state_->mutex);
+    return {.bytes = bytes_, .published = published_};
 }
 
 GpuProcessingPhaseBudget::GpuProcessingPhaseBudget(const std::size_t requestCapacity)
@@ -151,7 +251,7 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
         return {.status = GpuProcessingPhaseAdmission::SerialExhausted, .domain = {}, .lease = {}};
     }
     const std::uint64_t hostRemaining =
-        remaining(*counters.hostCapacityBytes, counters.hostReservedBytes);
+        remaining(*counters.hostCapacityBytes, counters.totalHostClaimBytes);
     if (request.fixedHostBytes > hostRemaining) {
         return refused(GpuProcessingPhaseDomain::Host);
     }
@@ -187,6 +287,7 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
     }
     // Division/subtraction bounds above prove these additions cannot overflow capacity.
     lease->hostBytes_ = request.fixedHostBytes + 3 * sourceBytes;
+    lease->remainingHostBytes_ = lease->hostBytes_;
     lease->deviceBytes_ = request.native ? request.deviceWorkingBytes + executorBytes : 0;
     lease->sourceBytes_ = sourceBytes;
     lease->executorBytes_ = executorBytes;
@@ -195,6 +296,7 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
     state_->nextId =
         state_->nextId == std::numeric_limits<std::uint64_t>::max() ? 0 : state_->nextId + 1;
     counters.hostReservedBytes += lease->hostBytes_;
+    counters.totalHostClaimBytes += lease->hostBytes_;
     counters.deviceReservedBytes += lease->deviceBytes_;
     ++counters.admittedPhases;
     counters.peakHostReservedBytes =

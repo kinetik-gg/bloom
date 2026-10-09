@@ -125,6 +125,11 @@ provide research or rationale, but they are not binding until adopted here.
   Allocation-owned physical accounting, width two and sustained/platform qualification remain open;
   see the [owning GPU contract](architecture/gpu-backend.md#conservative-processing-phase-reservations-first-g6b-slice).
 
+- Rooted packed-host RGBA8 payload ownership and conservation are accepted within
+  [a separate bounded slice](architecture/gpu-backend.md#rooted-packed-host-payload-ownership-bounded-ownership-slice).
+  Production allocation runs off UI; published last-owner freeing can still run on UI and must
+  move off-thread next, before native allocation accounting. No whole-process accounting is implied.
+
 The detailed implementation status and next merge gates live in [`roadmap.md`](roadmap.md).
 
 See [Export](user-guide/exporting-video.md) for composition export presets, audio,

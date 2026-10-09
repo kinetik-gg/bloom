@@ -654,21 +654,71 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
         }
         if (poll == render::GpuDisplayTransferState::Ready) {
             stage->processingPhaseRetired = true;
-            std::string reason;
-            auto frame = residentPackedTransferFinish(core, *stage, reason);
-            if (frame) {
-                auto prepared = PreviewPreparationResult::prepared(
-                    std::make_shared<const PreparedPreviewFrame>(std::move(*frame)));
-                if (prepared && stage->completion.isValid()) {
-                    releaseProcessingPhase(core, stage, true);
-                    static_cast<void>(std::move(stage->completion)
-                                          .succeed(std::make_shared<const PreviewPreparationResult>(
-                                              std::move(*prepared))));
-                    stage->phase = StagePhase::Done;
-                    return;
+            try {
+                std::string reason;
+                auto frame = residentPackedTransferFinish(core, *stage, reason);
+                if (frame) {
+                    auto prepared = PreviewPreparationResult::prepared(
+                        std::make_shared<const PreparedPreviewFrame>(std::move(*frame)));
+                    if (prepared && stage->completion.isValid()) {
+                        // All pixel/proof/identity/frame/result allocations succeed before
+                        // promoting the provisional storage. No capacity-fallback branch follows
+                        // this terminal handoff; cancellation or forced terminal delivery merely
+                        // discards aliases.
+                        if (core->testBeforePackedPayloadAllocation)
+                            core->testBeforePackedPayloadAllocation();
+                        auto payload =
+                            std::make_shared<const PreviewPreparationResult>(std::move(*prepared));
+                        if (stage->completion.cancellationRequested() || core->stopping.load()) {
+                            payload.reset();
+                            prepared.reset();
+                            frame.reset();
+                            releaseProcessingPhase(core, stage, true);
+                            completeCancelled(stage);
+                            return;
+                        }
+                        const auto& display = payload->frame()->displayOnlyFrame();
+                        if (display &&
+                            display->packedHostOwnership() !=
+                                render::PackedRgba8Ownership::LegacyUnowned &&
+                            !display->promotePackedHostOwnership()) {
+                            publishResidentJobDetail(core,
+                                                     "GPU packed host ownership promotion refused");
+                        } else {
+                            releaseProcessingPhase(core, stage, true);
+                            static_cast<void>(
+                                std::move(stage->completion).succeed(std::move(payload)));
+                            stage->phase = StagePhase::Done;
+                            return;
+                        }
+                    }
                 }
+                publishResidentJobDetail(core, "GPU packed product refused: " + reason);
+            } catch (...) {
+                // The copy fence is proved retired. All provisional frame/result/storage aliases
+                // above unwind before releasing the prepared phase; nothing remains Running
+                // after this stage has left the native active/ready queues. Allocation and other
+                // product-construction failures are terminal, never capacity-retry signals.
+                releaseProcessingPhase(core, stage, true);
+                std::vector<TaskDiagnostic> diagnostics;
+                try {
+                    diagnostics.push_back(residentJobDiagnostic(
+                        "bloom.runtime.gpu-packed-product-construction-failed",
+                        "The completed GPU packed product could not be constructed."));
+                } catch (...) {
+                    // Diagnostics are best effort. Empty-vector failure uses the already owned
+                    // completion and performs no diagnostic allocation, unlike completeFailed.
+                    diagnostics.clear();
+                }
+                if (stage->completion.isValid()) {
+                    static_cast<void>(
+                        std::move(stage->completion)
+                            .complete(TaskResult<PreviewPreparationResultHandle>::failed(
+                                std::move(diagnostics))));
+                }
+                stage->phase = StagePhase::Done;
+                return;
             }
-            publishResidentJobDetail(core, "GPU packed product refused: " + reason);
         }
         finishResidentImmediately(core, stage, true);
         return;

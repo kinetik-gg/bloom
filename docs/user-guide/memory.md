@@ -22,6 +22,15 @@ transfers, live display pins and retirement can hold additional memory. Process/
 headroom now constrains reusable cache retention; complete aggregate reservation accounting remains
 under development. These limits do not guarantee total process memory or prevent every OOM.
 
+Cache-held bytes can fall after eviction or purge while the viewer or another consumer still holds
+the same storage. A bounded rooted packed-host ownership slice tracks those pixel payloads across
+their consumers; it does not change the cache's held/budget reading or measure total application memory.
+Its accounting covers explicitly rooted allocator-requested pixel bytes, excluding metadata,
+allocator overhead, legacy storage and native GPU allocations.
+Backing storage currently frees on the last consumer's thread, which can be the interface thread;
+moving that release off-thread remains required. The ownership checks do not qualify release
+latency or guarantee that large releases cannot interrupt interaction.
+
 ## How much memory Bloom gives itself
 
 Bloom samples memory on a worker every five seconds as other applications use or release memory.

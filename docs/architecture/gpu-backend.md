@@ -1086,6 +1086,63 @@ residuals still need allocation-owned accounting. This slice establishes no aggr
 width-two execution, sustained throughput, or native macOS/Windows qualification. The
 [GPU reliability plan](../plans/gpu-reliability-and-preview.md) owns the remaining gates.
 
+### Rooted packed-host payload ownership (bounded ownership slice)
+
+This narrow G6B slice tracks allocator-requested RGBA8 pixel payloads for explicitly rooted
+packed preview storage. It does not replace the accepted phase-reservation contract above.
+`PackedRgba8Storage` distinguishes its legacy `std::vector` arm from a bounded allocator arm;
+`PackedRgba8Ownership` reports `LegacyUnowned`, `RootedProvisional` or `RootedPublished`.
+`PreparedReferenceDisplayBuffer::pixelOwnership()` exposes that distinction. Legacy storage remains
+unowned by this accounting even when its cache retention cost is known.
+
+The rooted allocator admits each actual allocator request before allocating the payload. During
+construction, the allocation keeps its originating phase alive and moves covered bytes from the
+phase estimate into the owned-payload count under the same budget lock. Failed or discarded
+provisional storage folds that debit back atomically, without manufacturing a capacity-release
+revision or a preview retry. The complete product's terminal-success handoff promotes its payload's
+lifetime ownership independently of the origin phase, before sink or mailbox acceptance. Later
+cancellation, forced terminal delivery or abandonment can still discard that promoted storage.
+Aliases, mailbox delivery, cache retention and later external pins retain the same allocation
+charge until actual backing storage is destroyed;
+dropping one alias is not release proof. The locked ownership handoff leaves the total claim and
+admission revision unchanged. Dropping the retained origin outside that lock may release the last
+phase alias; that releases its remaining bytes/count and advances the revision normally.
+
+`hostReservedBytes` continues to mean the remaining phase estimate. `ownedPackedHostBytes` and
+`ownedPackedHostAllocations` describe only explicitly rooted allocator-requested pixel payloads.
+`totalHostClaimBytes` combines that remaining estimate with owned payload bytes for admission,
+without counting the covered bytes twice. These counters exclude allocation headers, debug proxies,
+malloc bookkeeping, geometry/proof/envelope metadata, legacy vectors and native/driver allocations.
+They are neither RSS nor committed allocator blocks, VRAM or UMA accounting. Cache-held product cost
+remains a separate retention measure and may include metadata.
+
+Independent review accepts ownership, conservation and off-UI production allocation within this
+scope. Neutral core tests and sanitizers, final native Neutral/general Full/Half/ROI parity,
+200 warm aliases, allocation/diagnostic double-fault terminal cleanup and cancellation retirement
+pass. Actual Viewer cached return adds no GPU work, transfer or allocation; purge and external pins
+preserve one charge until the last backing owner releases it. Native service-owner teardown does
+not prove policy-root destruction because that fixture retains root aliases; neutral core tests
+cover root destruction separately. Controller no-spin/recovery evidence is CPU/control evidence
+using existing notification/sample pulses, with five-second sampling as the late-release backstop.
+It does not establish a new immediate final-alias release wake.
+
+The 51 affected strict translation units close through 47 initial passes and four corrected owning
+reruns, plus a final RAM fixture rerun already in that map. Owning tests initially pass 15/16;
+the repaired tiny RAM fixture asserts CPU OCIO/CpuReference and zero native dispatch. Linux
+no-Vulkan tests initially pass 11/13; the two Qt-theme startup failures pass isolated reruns.
+Application and repository quality pass. These corrected batches are distinct evidence, recorded
+in the reliability plan. Existing required final-render coverage is unchanged; no final-render
+host-payload route, unrooted legacy route, native allocation accounting, whole-process guarantee,
+width-two execution or sustained/platform qualification is adopted here.
+
+Published backing storage still frees synchronously on the thread dropping its final owner, which
+can be the Qt UI thread. The actual Viewer witness releases its final external alias there; it
+proves ordering and charge conservation, not off-UI freeing or bounded large-free latency. Legacy
+immutable vectors had the same release behavior. Moving published host retirement off the UI
+thread remains a required next repair before native allocation ownership work; this bounded
+acceptance does not waive the UI-thread engineering rule. The next slice must keep charges until
+actual worker-side freeing, bound queued retirement and preserve safe shutdown behavior.
+
 ### Resident request cancellation and failure retirement (G2E)
 
 Independently requested cancellation or supersession discards publication, while the admitted stage,

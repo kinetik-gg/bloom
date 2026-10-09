@@ -617,3 +617,12 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     bloom_enable_warnings(bloom_render_gpu_scene_executor_fault)
     bloom_enable_strict_floating_point(bloom_render_gpu_scene_executor_fault)
 endif()
+add_executable(bloom_render_packed_host_storage_test packed_host_storage_tests.cpp)
+target_link_libraries(bloom_render_packed_host_storage_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_packed_host_storage_test)
+bloom_enable_strict_floating_point(bloom_render_packed_host_storage_test)
+bloom_add_test(
+    NAME bloom.render.packed_host_storage
+    COMMAND bloom_render_packed_host_storage_test
+    LABELS unit render memory
+)

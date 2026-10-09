@@ -1,5 +1,29 @@
+#include <atomic>
+#include <cstdlib>
+#include <new>
+
+namespace packed_payload_fault {
+thread_local unsigned failuresRemaining = 0;
+std::atomic_size_t actualFailures{0};
+} // namespace packed_payload_fault
+void* operator new(const std::size_t bytes) {
+    if (packed_payload_fault::failuresRemaining != 0) {
+        --packed_payload_fault::failuresRemaining;
+        ++packed_payload_fault::actualFailures;
+        throw std::bad_alloc{};
+    }
+    void* const block = std::malloc(bytes == 0 ? 1 : bytes);
+    if (!block)
+        throw std::bad_alloc{};
+    return block;
+}
+void operator delete(void* const block) noexcept { std::free(block); }
+void operator delete(void* const block, std::size_t) noexcept { ::operator delete(block); }
+
 #include "gpu_preview_display_service_packed_retirement.hpp"
 #include "gpu_preview_display_service_packed_support.hpp"
+#include <bloom/document/new_project.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
 namespace {
 #if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
@@ -24,9 +48,17 @@ requestPacked(Expectations& checks, GpuPreviewDisplayService& service,
             std::cerr << submission.diagnostic->summary << '\n';
         return {};
     }
-    auto frame = packedResult(awaitResult(submission.handle));
+    const auto result = awaitResult(submission.handle);
+    auto frame = packedResult(result);
     if (!frame) {
         std::cerr << "packed request refused: " << service.status().residentDetail << '\n';
+        if (result) {
+            for (const auto& diagnostic : result->diagnostics())
+                std::cerr << diagnostic.code << ": " << diagnostic.summary << " / "
+                          << diagnostic.detail << '\n';
+        } else {
+            std::cerr << "packed request timed out before terminal delivery\n";
+        }
         checks.expect(false, "GPU packed frame returned");
         return {};
     }
@@ -49,7 +81,29 @@ bool matrix(Expectations& checks, const TestOptions& options,
             const std::shared_ptr<const GpuDisplayProgramService>& programs,
             const bloom::document::Snapshot& snapshot) {
     TaskScheduler scheduler(schedulerConfig());
-    auto builder = std::make_shared<CpuGpuSceneBuilder>();
+    auto policy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>();
+    auto sample = bloom::runtime::memoryBudgetSample();
+    bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
+                                              sample.machine.availableBytes.value_or(0));
+    ledger.beginProcessSampling();
+    const auto deliveredAt = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
+    const auto sampled = ledger.applySample(std::move(sample), deliveredAt);
+    policy->applyHostSample(sampled, ledger.physicalByteBudget(), deliveredAt);
+    const auto refresh = [&] {
+        auto refreshedSample = bloom::runtime::memoryBudgetSample();
+        const auto at = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
+        const auto state = ledger.applySample(std::move(refreshedSample), at);
+        policy->applyHostSample(state, ledger.physicalByteBudget(), at);
+    };
+    const bloom::runtime::GpuScenePreparationPhase phase{
+        .policy = policy,
+        .envelope = {.metadataBytes = 1024ULL * 1024,
+                     .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                     .requestedExecutorBytes = kBudget,
+                     .deviceWorkingBytes = 832ULL * 1024 * 1024}};
+    auto builder =
+        std::make_shared<CpuGpuSceneBuilder>(nullptr, bloom::runtime::GpuSceneMediaContext{},
+                                             bloom::runtime::GpuSceneOcioContext{}, phase);
     auto fallbackEvaluator = std::make_shared<CpuCompositionEvaluator>();
     auto preparationCount = std::make_shared<std::atomic<std::uint64_t>>(0);
     auto baseStage = packedStageFunction(plan, builder, programs, processor);
@@ -62,9 +116,12 @@ bool matrix(Expectations& checks, const TestOptions& options,
             ++*preparationCount;
             return baseStage(snap, identity, bytes, overrides, context);
         };
-    GpuPreviewDisplayService service(scheduler, counted,
-                                     generalCpuStageFunction(plan, processor, fallbackEvaluator),
-                                     generalFallback(processor), packedOptions(options));
+    auto configured = packedOptions(options);
+    configured.processingPhasePolicy = policy;
+    auto serviceOwner = std::make_unique<GpuPreviewDisplayService>(
+        scheduler, counted, generalCpuStageFunction(plan, processor, fallbackEvaluator),
+        generalFallback(processor), configured);
+    auto& service = *serviceOwner;
     checks.expect(
         waitUntil(
             [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; },
@@ -82,10 +139,24 @@ bool matrix(Expectations& checks, const TestOptions& options,
                           bloom::render::GpuPresentationAvailability::NotRequested,
                   "offscreen product requires no native target or presentation bootstrap");
     auto identity = makeIdentity(*plan, 1, {}, {}, {});
+    refresh();
     const auto full = requestPacked(checks, service, snapshot, identity);
     if (!full)
         return true;
     compareCpu(checks, *full, plan, *processor);
+    checks.expect(
+        waitUntil([&] { return policy->snapshot().reservations.admittedPhases == 0; }, 2s),
+        "native terminal stage aliases release the original phase");
+    const auto ownedFull = policy->snapshot().reservations;
+    checks.expect(
+        full->displayOnlyFrame()->packedHostOwnership() ==
+                bloom::render::PackedRgba8Ownership::RootedPublished &&
+            ownedFull.hostReservedBytes == 0 && ownedFull.admittedPhases == 0 &&
+            ownedFull.ownedPackedHostAllocations == 1 &&
+            ownedFull.ownedPackedHostBytes ==
+                full->provenance().gpuPreparedPacked->transfer.hostStorageBytes &&
+            ownedFull.totalHostClaimBytes == ownedFull.ownedPackedHostBytes,
+        "actual rooted native transfer publishes one independently charged host allocation");
     const auto proof = full->provenance().gpuPreparedPacked;
     checks.expect(proof && proof->serviceGeneration != 0 && proof->deviceGeneration != 0 &&
                       proof->transfer.submissions == 1 &&
@@ -105,13 +176,16 @@ bool matrix(Expectations& checks, const TestOptions& options,
                           warm->provenance().gpuPreparedPacked == proof,
                       "retained packed product reuse shares immutable bytes and sealed evidence");
     }
-    checks.expect(service.status().counters == beforeWarm &&
-                      preparationCount->load() == beforePreparation,
-                  "retained packed reuse adds no scene preparation/dispatch or repeated transfer");
+    checks.expect(
+        service.status().counters == beforeWarm && preparationCount->load() == beforePreparation &&
+            policy->snapshot().reservations.ownedPackedHostAllocations == 1 &&
+            policy->snapshot().reservations.ownedPackedHostBytes == ownedFull.ownedPackedHostBytes,
+        "retained packed reuse adds no scene preparation/dispatch or repeated transfer");
     const auto halfExtent = bloom::render::ImageExtent::create(960, 540);
     identity.requestGeneration = 202;
     identity.resolution = bloom::runtime::ProxyResolution{*halfExtent.value()};
     identity.resolutionPolicy = PreviewResolutionPolicy::Half;
+    refresh();
     const auto half = requestPacked(checks, service, snapshot, identity);
     if (half) {
         compareCpu(checks, *half, plan, *processor);
@@ -126,6 +200,7 @@ bool matrix(Expectations& checks, const TestOptions& options,
     const auto roiHeight = programs ? 97U : 400U;
     const auto roiWindow = bloom::render::ImageWindow::create(37, 29, roiWidth, roiHeight);
     identity.roi = *roiWindow.value();
+    refresh();
     const auto roi = requestPacked(checks, service, snapshot, identity);
     if (roi) {
         compareCpu(checks, *roi, plan, *processor);
@@ -141,11 +216,16 @@ bool matrix(Expectations& checks, const TestOptions& options,
                           copiedView->displayWindow == view.displayWindow &&
                           std::ranges::equal(copiedView->pixels, view.pixels),
                       "retention copy preserves ROI extent, mapping and GPU provenance");
+        checks.expect(
+            copied &&
+                copied->packedHostOwnership() == bloom::render::PackedRgba8Ownership::LegacyUnowned,
+            "legacy unrooted retention copy is explicitly unowned, never zero-allocation proof");
     }
     if (programs) {
         identity.requestGeneration = 204;
         identity.roi.reset();
         identity.viewAdjust = {.exposure = 1.0, .gamma = 0.8};
+        refresh();
         const auto adjusted = requestPacked(checks, service, snapshot, identity);
         if (adjusted) {
             compareCpu(checks, *adjusted, plan, *processor);
@@ -167,7 +247,20 @@ bool matrix(Expectations& checks, const TestOptions& options,
             counters.fullFrameReadbacks == counters.packedTransfers &&
             counters.packedReservedBytes == 0 && counters.packedRetainedHostBytes == 0,
         "production GPU scene and one final transfer per cold product, no CPU scene fallback");
+    auto externalPin = full->displayOnlyFrame();
+    const auto retainedBytes = policy->snapshot().reservations.ownedPackedHostBytes;
     service.beginShutdown();
+    serviceOwner.reset();
+    const auto externalView = externalPin->displayBufferView();
+    checks.expect(
+        waitUntil([&] { return policy->snapshot().deviceReports == 0; }, 2s) &&
+            policy->snapshot().reservations.admittedPhases == 0 &&
+            policy->snapshot().reservations.hostReservedBytes == 0 &&
+            policy->snapshot().reservations.ownedPackedHostBytes == retainedBytes &&
+            externalPin->packedHostOwnership() ==
+                bloom::render::PackedRgba8Ownership::RootedPublished &&
+            externalView && externalView->pixels.data() == fullView.pixels.data(),
+        "real native owner teardown retires its report while external host pixels stay charged");
     return true;
 }
 
@@ -213,7 +306,14 @@ int run(int argc, char** argv) {
     auto programs = std::make_shared<const GpuDisplayProgramService>(
         std::make_shared<GpuOcioContextResolver>(std::move(ocioRequest)));
     const auto plan = makePlan(1920, 1080);
-    bloom::document::Document document(bloom::document::Project(kProjectId, "packed-proof"));
+    bloom::document::Project project(kProjectId, "packed-proof");
+    const auto seed = bloom::document::makeNewProject("Fixture", "Main",
+                                                      RationalTime::fromInteger(4), plan->format());
+    if (!project.addComposition(bloom::document::Composition(
+            plan->compositionId(), "Main", RationalTime::fromInteger(4),
+            seed.project.findComposition(seed.initialCompositionId)->graph(), plan->format())))
+        return 1;
+    bloom::document::Document document(std::move(project));
     Expectations checks;
     if (!shutdownProof) {
         if (!matrix(checks, options, plan, processor, {}, document.snapshot()) ||
@@ -221,6 +321,8 @@ int run(int argc, char** argv) {
             return options.requireDevice ? 1 : kSkipExit;
         unsupportedPackedProof(checks, packedOptions(options), plan, processor, programs,
                                document.snapshot());
+        payloadAllocationFailureProof(checks, packedOptions(options), plan, processor,
+                                      document.snapshot());
     }
     heldTransferProof(checks, packedOptions(options), plan, processor, programs,
                       document.snapshot(), shutdownProof);

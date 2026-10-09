@@ -66,9 +66,9 @@ packedView(const bloom::runtime::PreparedPreviewFrame& frame) {
                 program = std::make_shared<const GpuDisplayProgram>(std::move(prepared.program));
             }
         }
-        auto stage = std::make_shared<const PreviewGpuSceneStage>(identity, built.scene, processor,
-                                                                  std::move(program), limit,
-                                                                  std::vector<TaskDiagnostic>{});
+        auto stage = std::make_shared<const PreviewGpuSceneStage>(
+            identity, built.scene, processor, std::move(program), limit,
+            std::vector<TaskDiagnostic>{}, std::move(built.phaseLease));
         return R::succeeded(
             std::make_shared<const PreviewGpuSceneStageOutcome>(PreviewGpuSceneStageOutcome{
                 PreviewGpuSceneStageStatus::Prepared, std::move(stage), {}}));

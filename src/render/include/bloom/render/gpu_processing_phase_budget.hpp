@@ -42,6 +42,11 @@ struct GpuProcessingPhaseSnapshot final {
     bool hostReady = false;
     bool deviceReady = false;
     std::uint64_t hostReservedBytes = 0;
+    // Only allocator-requested payload bytes for explicitly rooted packed RGBA8 storage.
+    // Legacy vectors, allocator overhead and native allocations are not included.
+    std::uint64_t ownedPackedHostBytes = 0;
+    std::uint64_t totalHostClaimBytes = 0;
+    std::size_t ownedPackedHostAllocations = 0;
     std::uint64_t deviceReservedBytes = 0;
     std::uint64_t peakHostReservedBytes = 0;
     std::uint64_t peakDeviceReservedBytes = 0;
@@ -72,16 +77,70 @@ class GpuProcessingPhaseLease final {
 
   private:
     friend class GpuProcessingPhaseBudget;
+    friend class PackedHostStorageAuthority;
     explicit GpuProcessingPhaseLease(
         std::shared_ptr<detail::GpuProcessingPhaseBudgetState>) noexcept;
     std::shared_ptr<detail::GpuProcessingPhaseBudgetState> state_;
     std::uint64_t id_ = 0;
     std::uint64_t admissionRevision_ = 0;
     std::uint64_t hostBytes_ = 0;
+    // Separate from immutable granted limits; accesses are guarded by state_->mutex.
+    std::uint64_t remainingHostBytes_ = 0;
     std::uint64_t deviceBytes_ = 0;
     std::uint64_t sourceBytes_ = 0;
     std::uint64_t executorBytes_ = 0;
     bool unproven_ = false;
+};
+
+class PackedHostStorageAuthority;
+// One actual packed-vector allocation. Its allocator destroys the backing block before this
+// token returns provisional bytes to the originating phase or releases published bytes.
+class PackedHostStorageToken final {
+  public:
+    PackedHostStorageToken() = default;
+    PackedHostStorageToken(const PackedHostStorageToken&) = delete;
+    PackedHostStorageToken& operator=(const PackedHostStorageToken&) = delete;
+    PackedHostStorageToken(PackedHostStorageToken&&) noexcept;
+    PackedHostStorageToken& operator=(PackedHostStorageToken&&) noexcept;
+    ~PackedHostStorageToken();
+    [[nodiscard]] std::uint64_t bytes() const noexcept { return bytes_; }
+
+  private:
+    friend class PackedHostStorageAuthority;
+    PackedHostStorageToken(std::shared_ptr<PackedHostStorageAuthority>, std::uint64_t) noexcept;
+    void reset() noexcept;
+    std::shared_ptr<PackedHostStorageAuthority> authority_;
+    std::uint64_t bytes_ = 0;
+};
+
+struct PackedHostStorageSnapshot final {
+    std::uint64_t bytes = 0;
+    bool published = false;
+};
+
+// A bounded allocator authority under the existing phase root, never a second allowance. Empty
+// allocators hold only a weak origin; actual provisional allocations keep it alive until every
+// debit is folded back or the complete successful product is promoted once.
+class PackedHostStorageAuthority final
+    : public std::enable_shared_from_this<PackedHostStorageAuthority> {
+  public:
+    [[nodiscard]] static std::shared_ptr<PackedHostStorageAuthority>
+    create(const std::shared_ptr<GpuProcessingPhaseLease>&, std::uint64_t simultaneousByteLimit);
+    [[nodiscard]] std::optional<PackedHostStorageToken> reserve(std::uint64_t bytes) noexcept;
+    [[nodiscard]] bool promote() noexcept;
+    [[nodiscard]] PackedHostStorageSnapshot snapshot() const noexcept;
+
+  private:
+    friend class PackedHostStorageToken;
+    PackedHostStorageAuthority(const std::shared_ptr<GpuProcessingPhaseLease>&,
+                               std::uint64_t) noexcept;
+    void release(std::uint64_t bytes) noexcept;
+    std::shared_ptr<detail::GpuProcessingPhaseBudgetState> state_;
+    std::weak_ptr<GpuProcessingPhaseLease> origin_;
+    std::shared_ptr<GpuProcessingPhaseLease> retainedOrigin_;
+    std::uint64_t limit_ = 0;
+    std::uint64_t bytes_ = 0;
+    bool published_ = false;
 };
 
 struct GpuProcessingPhaseGrant final {

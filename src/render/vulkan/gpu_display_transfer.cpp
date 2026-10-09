@@ -4,10 +4,12 @@
 #include "gpu_display_transfer_fault.hpp"
 #include "gpu_resident_display_private.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -203,7 +205,7 @@ struct GpuDisplayTransfer::Impl final {
     vk::raii::CommandBuffer buffer{nullptr};
     vk::raii::Fence fence{nullptr};
     std::uint64_t bytes = 0;
-    std::vector<Rgba8> pixels;
+    PackedRgba8Storage pixels;
     GpuDisplayTransferAccounting accounting;
     std::optional<ImageWindow> dataWindow, displayWindow;
     core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
@@ -221,12 +223,12 @@ struct GpuDisplayTransfer::Impl final {
     std::chrono::steady_clock::time_point submittedAt{};
 
     ~Impl() {
-        std::vector<Rgba8>{}.swap(pixels);
+        pixels.reset();
         if (retentionState)
             retentionState->releaseHost();
     }
     void discardHost() noexcept {
-        std::vector<Rgba8>{}.swap(pixels);
+        pixels.reset();
         if (retentionState)
             retentionState->releaseHost();
     }
@@ -373,7 +375,8 @@ bool GpuDisplayTransfer::isOwnerThread() const noexcept {
 
 bool GpuDisplayTransfer::begin(GpuDevice& expectedDevice,
                                std::shared_ptr<const GpuDisplayImage> image,
-                               const std::uint64_t byteBudget) noexcept {
+                               const std::uint64_t byteBudget,
+                               const std::shared_ptr<GpuProcessingPhaseLease>& hostPhase) noexcept {
     try {
         if (impl_ == nullptr || impl_->state != GpuDisplayTransferState::Idle) {
             return false;
@@ -508,8 +511,26 @@ bool GpuDisplayTransfer::begin(GpuDevice& expectedDevice,
             return false;
         }
 
-        impl_->pixels.resize(static_cast<std::size_t>(bytes / sizeof(Rgba8)));
-        const std::uint64_t hostBytes = impl_->pixels.capacity() * sizeof(Rgba8);
+        if (hostPhase) {
+            auto storage = PackedRgba8Storage::create(
+                static_cast<std::size_t>(bytes / sizeof(Rgba8)), hostPhase,
+                static_cast<std::size_t>(std::min<std::uint64_t>(
+                    byteBudget - actualStagingBytes, std::numeric_limits<std::size_t>::max())));
+            if (!storage) {
+                impl_->fail(storage.error()->code == ImageErrorCode::PixelStorageBudgetExceeded
+                                ? GpuDisplayTransferCode::OverBudget
+                                : GpuDisplayTransferCode::TransferFailed,
+                            "rooted packed host allocation refused before transfer submission");
+                return false;
+            }
+            impl_->pixels = std::move(*storage.value());
+        } else {
+            // Low-level compatibility callers remain explicitly unowned. Production packed
+            // preview passes the admitted phase; no legacy vector is labelled uniquely charged.
+            impl_->pixels = PackedRgba8Storage::legacy(
+                std::vector<Rgba8>(static_cast<std::size_t>(bytes / sizeof(Rgba8))));
+        }
+        const std::uint64_t hostBytes = impl_->pixels.byteCost();
         impl_->accounting = {0,
                              bytes,
                              actualStagingBytes,
@@ -765,7 +786,8 @@ GpuDisplayTransferState GpuDisplayTransfer::poll() noexcept {
             return impl.state;
         }
         try {
-            std::memcpy(impl.pixels.data(), info.pMappedData, static_cast<std::size_t>(impl.bytes));
+            std::memcpy(impl.pixels.mutablePixels().data(), info.pMappedData,
+                        static_cast<std::size_t>(impl.bytes));
         } catch (const std::bad_alloc&) {
             impl.releaseRetired();
             impl.setFailure(GpuDisplayTransferCode::TransferFailed,
@@ -792,6 +814,8 @@ std::optional<GpuDisplayTransferResult> GpuDisplayTransfer::take() noexcept {
     GpuDisplayTransferResult result(*impl_->dataWindow, *impl_->displayWindow, impl_->pixelAspect,
                                     impl_->generation, std::move(impl_->pixels), impl_->accounting,
                                     impl_->deviceBinding);
+    // This gauge describes transfer ownership. The moved allocation's independent neutral token
+    // stays charged in the same phase root through product adoption and immutable publication.
     impl_->retentionState->releaseHost();
     impl_->state = GpuDisplayTransferState::Idle;
     impl_->diagnostic = {};

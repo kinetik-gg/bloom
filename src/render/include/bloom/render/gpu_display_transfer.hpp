@@ -5,6 +5,7 @@
 // unproved native submissions retain their source, staging and device in one bounded quarantine.
 
 #include <bloom/render/gpu_resident_display.hpp>
+#include <bloom/render/packed_rgba8_storage.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -76,17 +77,20 @@ class GpuDisplayTransferResult final {
     [[nodiscard]] core::PixelAspectRatio pixelAspect() const noexcept { return pixelAspect_; }
     [[nodiscard]] std::uint32_t deviceGeneration() const noexcept { return generation_; }
     [[nodiscard]] bool isBoundTo(GpuDevice& device) const noexcept;
-    [[nodiscard]] std::span<const Rgba8> pixels() const noexcept { return pixels_; }
+    [[nodiscard]] std::span<const Rgba8> pixels() const noexcept { return pixels_.pixels(); }
+    [[nodiscard]] PackedRgba8Ownership pixelOwnership() const noexcept {
+        return pixels_.ownership();
+    }
     [[nodiscard]] const GpuDisplayTransferAccounting& accounting() const noexcept {
         return accounting_;
     }
-    [[nodiscard]] std::vector<Rgba8> takePixels() && noexcept { return std::move(pixels_); }
+    [[nodiscard]] PackedRgba8Storage takePixels() && noexcept { return std::move(pixels_); }
 
   private:
     friend class GpuDisplayTransfer;
     GpuDisplayTransferResult(ImageWindow dataWindow, ImageWindow displayWindow,
                              core::PixelAspectRatio pixelAspect, std::uint32_t generation,
-                             std::vector<Rgba8> pixels, GpuDisplayTransferAccounting accounting,
+                             PackedRgba8Storage pixels, GpuDisplayTransferAccounting accounting,
                              std::weak_ptr<const void> deviceBinding) noexcept
         : dataWindow_(dataWindow), displayWindow_(displayWindow), pixelAspect_(pixelAspect),
           generation_(generation), pixels_(std::move(pixels)), accounting_(accounting),
@@ -95,7 +99,7 @@ class GpuDisplayTransferResult final {
     ImageWindow dataWindow_, displayWindow_;
     core::PixelAspectRatio pixelAspect_;
     std::uint32_t generation_ = 0;
-    std::vector<Rgba8> pixels_;
+    PackedRgba8Storage pixels_;
     GpuDisplayTransferAccounting accounting_;
     // Weak control-block identity only: host results never retain an allocator/device allocation.
     std::weak_ptr<const void> deviceBinding_;
@@ -111,8 +115,9 @@ class GpuDisplayTransfer final {
     // Source must be complete and bound to this owner/device. byteBudget admits actual rounded
     // staging plus concurrent eventual host capacity; source native bytes remain separately
     // charged.
-    [[nodiscard]] bool begin(GpuDevice& device, std::shared_ptr<const GpuDisplayImage> image,
-                             std::uint64_t byteBudget) noexcept;
+    [[nodiscard]] bool
+    begin(GpuDevice& device, std::shared_ptr<const GpuDisplayImage> image, std::uint64_t byteBudget,
+          const std::shared_ptr<GpuProcessingPhaseLease>& hostPhase = {}) noexcept;
     [[nodiscard]] GpuDisplayTransferState poll() noexcept;
     // Exactly once in Ready; returns to Idle. No host result is published on cancellation/failure.
     [[nodiscard]] std::optional<GpuDisplayTransferResult> take() noexcept;

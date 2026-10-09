@@ -39,10 +39,64 @@ and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 | G6A reusable process headroom | Accepted as a bounded retention/sampling slice | Paired visible Linux v2 limits, zero credit, requested/effective separation, pressure/recovery cycles, off-UI lifetime tests, private finite helper and Linux CPU-only gate pass; mailbox accepted separately, aggregate reservations remain pending |
 | G6A terminal result ownership | Accepted as a bounded lifetime slice | Handle-owned mailboxes, weak writers, unlocked payload disposal, expired-consumer outcomes and forced/late mock GPU tests pass; history/accounting/notification sites unchanged |
 | G6B first phase reservations | Accepted as a bounded admission/lifetime slice | Shared explicit roots, conservative host/device/count envelopes, native retirement/quarantine, observed-constraint release and bounded readiness/release retries; required native routes, affected strict, application and Linux CPU-only closure pass; no unique physical accounting or width two |
+| G6B rooted packed-host payloads | Accepted only for ownership, conservation and off-UI production allocation | Allocator-requested RGBA8 payload, provisional foldback, terminal-success handoff, fault/cancellation, Viewer/cache pins and scoped closure pass; published last-owner free can still run on UI and must move off-thread next |
 | G4C prerequisite | Accepted only as the bounded cold-progress prerequisite | One active/newest intent, useful older Stale publication and guarded pause/shutdown pass source review and short real playing pixels; remaining G4 scheduling is pending |
 | G7A / G9 bounded display work | Packed immutable borrowing, off-UI CPU channel derivation and finished-display host choice accepted | Explicit provenance and measured bytes; remaining CPU storage/process/channel work and broader cache policy remain pending |
 | G8 optional two-frame throughput | Investigation complete; implementation and benchmark pending | Source confirms per-service frame serialization; no multi-frame speedup or GPU-utilization result is established |
 | Remaining G4–G10 | Pending | Remaining scheduling, native public hooks, media reuse, aggregate memory, batching and sustained/platform qualification are not completed |
+
+Rooted packed-host follow-on (2026-10-10), accepted for bounded ownership/conservation and off-UI
+production allocation: the neutral storage/ledger
+core distinguishes legacy unowned vectors from explicitly rooted allocator-requested RGBA8 payloads.
+Provisional allocations keep their origin phase alive; failure/disposal folds covered bytes back
+atomically without a release revision. The complete product's terminal-success handoff, before
+sink/mailbox acceptance, preserves a single payload charge across aliases independently of the
+phase; later cancellation, forced delivery or abandonment can still discard it. The locked handoff
+changes neither total host claim nor revision; dropping the last retained origin outside the lock can then release remaining
+phase bytes/count and advance the revision normally. The exact counter/provenance contract is in the
+[owning GPU document](../architecture/gpu-backend.md#rooted-packed-host-payload-ownership-bounded-ownership-slice).
+
+Nine-file core review, focused tests, strict checks and sanitizers pass. The historical private
+Neutral/general Full/Half/ROI witness passes in 5.857 s with 200 warm aliases sharing one charge
+and native service-owner teardown. It still aliases the policy root; neutral core tests separately
+cover root destruction. Actual final-payload allocation failure exposed a stranded Running request.
+The final 6.852 s native witness proves repaired single/double allocation-fault terminal cleanup,
+late cancellation and forced-terminal conservation, with real core/synchronization validation.
+Earlier failed exceptions and fixture prerequisites remain preserved rather than relabelled passes.
+
+The actual production-stage Viewer warm-cache witness passes in 1.316 s: two cold transfers produce
+two 8,294,400-byte payloads; ordinary cached return adds no GPU work, transfer or allocation. Purge
+reduces owned allocations from two to one while cache-held cost becomes zero; Viewer/controller
+destruction leaves the external frame readable, and its last alias releases the remaining charge.
+The 0.38 s controller witness separately qualifies CPU/control RequestCount refusal, own-release
+no-spin and external-release retry using existing pulses. It is not GPU pixel proof or an immediate
+natural last-alias wake; five-second production sampling remains the late-release backstop.
+
+Strict checks initially pass 47/51; four corrected owning reruns close the map, followed by the final
+RAM fixture rerun of a TU already counted. Owning tests initially pass 15/16; the corrected RAM suite
+passes in 1.45 s, preserving its 16x12/barrier/cache assertions with explicit CPU OCIO/CpuReference,
+null GPU proof and zero native dispatch. The intermediate incorrect GPU-provenance assertion remains
+failed evidence. Native device and legacy transfer component tests pass; the legacy unknown-work
+helper passes in 2.371 s while retaining its unproved claims, not releasing them. These component
+checks are not rooted final-render allocation proof. Application/quality checks pass, including
+1,443 format checks. The affected Linux no-Vulkan build and all thirteen tests close through an
+initial 11/13 plus exactly two Qt-theme-isolated reruns passing in 0.36 s; actual stub identity,
+no Vulkan linkage and zero missing dependencies are verified. Native branches remain explicitly
+Unavailable there, never GPU passes. Exact split-run logs and frozen source hashes remain in the
+private owning report; the accepted first phase slice below is unchanged.
+
+Published host backing still frees synchronously on its last-owner thread, potentially the UI
+thread; the Viewer fixture's final external release occurs on Qt. Ownership ordering and
+conservation are proved, off-UI freeing and large-free latency are not. This pre-existing legacy
+behavior remains a required next repair, not an engineering-rule waiver. Before native allocation
+ownership, implement bounded off-UI published host retirement: transfer backing and its charge
+together, retain the charge through queued/active freeing, bound queue bytes/count, and handle
+submission refusal and shutdown without freeing a large published payload on UI. Deterministic
+blocked-worker/final-alias/overflow/shutdown tests must precede actual Viewer lifecycle proof.
+This is the next bounded design gate, not an implementation or completed performance claim.
+
+Allocation headers, debug proxies, malloc/driver overhead, metadata, legacy host storage,
+native/UMA backing and final RGBA32F/final-render host payloads remain outside this slice's charge.
 
 First G6B phase-reservation checkpoint (2026-10-09), accepted within bounded scope:
 independent reviews cover coordinator/policy/builder quotas, resident and final phase lifetimes,

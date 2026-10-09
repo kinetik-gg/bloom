@@ -2,6 +2,7 @@
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/image_types.hpp>
+#include <bloom/render/packed_rgba8_storage.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -84,6 +85,10 @@ class PreparedReferenceDisplayBuffer final {
     [[nodiscard]] static ImageResult<PreparedReferenceDisplayBuffer>
     create(ReferenceDisplayBufferDescriptor descriptor, std::span<const Rgba8> pixels,
            std::size_t pixelStorageByteLimit) noexcept;
+    [[nodiscard]] static ImageResult<PreparedReferenceDisplayBuffer>
+    create(ReferenceDisplayBufferDescriptor, std::span<const Rgba8>,
+           const std::shared_ptr<GpuProcessingPhaseLease>&,
+           std::size_t pixelStorageByteLimit) noexcept;
 
     // Adopts caller-owned packed storage after the same descriptor, pixel-count, and byte-budget
     // checks as create(), moving the payload only once those checks pass. On failure the caller's
@@ -91,11 +96,19 @@ class PreparedReferenceDisplayBuffer final {
     [[nodiscard]] static ImageResult<PreparedReferenceDisplayBuffer>
     adopt(ReferenceDisplayBufferDescriptor descriptor, std::vector<Rgba8>&& pixels,
           std::size_t pixelStorageByteLimit) noexcept;
+    // Owned storage moves as one pair; every rejected adoption preserves the caller's owner.
+    [[nodiscard]] static ImageResult<PreparedReferenceDisplayBuffer>
+    adopt(ReferenceDisplayBufferDescriptor, PackedRgba8Storage&&,
+          std::size_t pixelStorageByteLimit) noexcept;
+    [[nodiscard]] PackedRgba8Ownership pixelOwnership() const noexcept {
+        return pixels_.ownership();
+    }
+    [[nodiscard]] bool promotePixelOwnership() const noexcept { return pixels_.promote(); }
 
     [[nodiscard]] bool isValid() const noexcept;
     [[nodiscard]] const ReferenceDisplayBufferDescriptor* descriptor() const& noexcept;
     [[nodiscard]] const ReferenceDisplayBufferDescriptor* descriptor() const&& = delete;
-    [[nodiscard]] std::span<const Rgba8> pixels() const& noexcept { return pixels_; }
+    [[nodiscard]] std::span<const Rgba8> pixels() const& noexcept { return pixels_.pixels(); }
     [[nodiscard]] std::span<const Rgba8> pixels() const&& = delete;
     // Allocation capacity, including any spare storage, rather than the visible pixel length.
     [[nodiscard]] std::size_t pixelStorageByteCost() const noexcept {
@@ -108,11 +121,11 @@ class PreparedReferenceDisplayBuffer final {
     friend class ReferenceDisplayBufferBuilder;
 
     PreparedReferenceDisplayBuffer(ReferenceDisplayBufferDescriptor descriptor,
-                                   std::vector<Rgba8> pixels) noexcept;
+                                   PackedRgba8Storage pixels) noexcept;
     void reset() noexcept;
 
     std::optional<ReferenceDisplayBufferDescriptor> descriptor_;
-    std::vector<Rgba8> pixels_;
+    PackedRgba8Storage pixels_;
 };
 
 // Mutation is confined to worker-side construction. Freeze consumes the builder and publishes the
@@ -127,11 +140,14 @@ class ReferenceDisplayBufferBuilder final {
 
     [[nodiscard]] static ImageResult<ReferenceDisplayBufferBuilder>
     create(ReferenceDisplayBufferDescriptor descriptor, std::size_t pixelStorageByteLimit) noexcept;
+    [[nodiscard]] static ImageResult<ReferenceDisplayBufferBuilder>
+    create(ReferenceDisplayBufferDescriptor, const std::shared_ptr<GpuProcessingPhaseLease>&,
+           std::size_t pixelStorageByteLimit) noexcept;
 
     [[nodiscard]] bool isValid() const noexcept;
     [[nodiscard]] const ReferenceDisplayBufferDescriptor* descriptor() const& noexcept;
     [[nodiscard]] const ReferenceDisplayBufferDescriptor* descriptor() const&& = delete;
-    [[nodiscard]] std::span<const Rgba8> pixels() const& noexcept { return pixels_; }
+    [[nodiscard]] std::span<const Rgba8> pixels() const& noexcept { return pixels_.pixels(); }
     [[nodiscard]] std::span<const Rgba8> pixels() const&& = delete;
     [[nodiscard]] ImageResult<ReferenceDisplayBufferView> view() const& noexcept;
     [[nodiscard]] ImageResult<ReferenceDisplayBufferView> view() const&& = delete;
@@ -141,11 +157,11 @@ class ReferenceDisplayBufferBuilder final {
 
   private:
     ReferenceDisplayBufferBuilder(ReferenceDisplayBufferDescriptor descriptor,
-                                  std::vector<Rgba8> pixels) noexcept;
+                                  PackedRgba8Storage pixels) noexcept;
     void reset() noexcept;
 
     std::optional<ReferenceDisplayBufferDescriptor> descriptor_;
-    std::vector<Rgba8> pixels_;
+    PackedRgba8Storage pixels_;
 };
 
 } // namespace bloom::render
