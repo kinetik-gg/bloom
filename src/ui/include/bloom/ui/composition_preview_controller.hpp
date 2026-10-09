@@ -6,6 +6,7 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
+#include <bloom/ui/viewer_channel_display.hpp>
 #include <bloom/ui/viewer_editor_probe.hpp>
 
 #include <QElapsedTimer>
@@ -205,6 +206,11 @@ class CompositionPreviewController final : public QObject {
     void setRegionOfInterest(std::optional<QRectF> region);
     [[nodiscard]] runtime::TaskSubmission<PreviewPreparationResultHandle>
     submitViewerAnalysis(const runtime::PreviewRequestIdentity& identity);
+    [[nodiscard]] runtime::TaskSubmission<PreviewPreparationResultHandle>
+    submitViewerDisplay(const runtime::PreviewRequestIdentity& identity);
+    [[nodiscard]] runtime::TaskSubmission<ViewerChannelDisplayHandle>
+    submitViewerChannelDisplay(PreparedPreviewFrameHandle frame, ViewerChannel channel,
+                               std::size_t retainedDisplayBytes);
     [[nodiscard]] std::optional<render::ImageWindow> regionOfInterest() const;
     // Display pixels per composition pixel, including device pixel ratio. Unknown geometry uses 1.
     void setDisplayedCompositionScale(double scale);
@@ -240,6 +246,8 @@ class CompositionPreviewController final : public QObject {
   signals:
     void probeChanged(ProbeReadout readout);
     void stateChanged();
+    // Explicit controller-to-Viewer delivery seam; currently driven by the shared task bridge.
+    void viewerResultsAvailable();
     void resolutionChanged();
     // Synchronous cancellation seam for speculative work, before foreground admission.
     void foregroundWorkRequested();
@@ -257,6 +265,8 @@ class CompositionPreviewController final : public QObject {
     void previewCachePurged();
 
   private:
+    runtime::TaskSubmission<PreviewPreparationResultHandle>
+    submitViewerPreparation(const runtime::PreviewRequestIdentity& identity, bool displayRoute);
     std::shared_ptr<PreviewFrameTrace> trace_;
     struct ActiveRequest final {
         runtime::TaskHandle<PreviewPreparationResultHandle> handle;

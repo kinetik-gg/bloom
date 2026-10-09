@@ -5,6 +5,17 @@ its **RAM preview**. The status bar reports each as "held / budget". Decoded vid
 thumbnail images, queued disk-cache writes and the export frame queue also share the memory
 allowance.
 
+Ordinary GPU preview prepares the scene and display on the GPU, then transfers the final display
+image once for widget painting. Its status says **GPU-prepared / CPU-painted**. RAM preview retains
+that immutable host display storage, including metadata, without a second native copy of every
+finished frame. A tight Full 1920×1080 display has 8,294,400 pixel bytes; Half has 2,073,600 before
+metadata. The GPU native route remains separately supported. Channel display changes use a bounded
+CPU worker and disclose CPU presentation; they do not change the scene's GPU provenance.
+
+Cache counters describe held products, not total process or driver memory. Active work, temporary
+transfers, live display pins and retirement can hold additional memory. Process/container-limit
+headroom and complete aggregate accounting remain under development.
+
 ## How much memory Bloom gives itself
 
 Bloom adjusts its cache cap every five seconds as other applications use or release memory.

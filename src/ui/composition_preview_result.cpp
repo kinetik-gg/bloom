@@ -60,32 +60,52 @@ void CompositionPreviewController::consumeReadyResult() {
         !completed.carriedInteractionOverride) {
         recordPreparationDuration(completed.desiredIdentity, deliveredAt - completed.submittedAt);
     }
-    if (completed.playbackDeadline.has_value() &&
+    const auto ownKey =
+        completed.playbackDeadline ? cacheKeyForTime(completed.desiredIdentity.time) : std::nullopt;
+    const auto deliveryGeneration = generation_;
+    const bool validPlayback =
+        playbackActive_ && !shuttingDown_ && !cachePurgeGate_ &&
+        (!pending_ || pending_->kind == PreviewRequestKind::Playback) &&
+        completed.playbackDeadline && !completed.carriedInteractionOverride &&
+        result->state() == runtime::TaskState::Succeeded && result->diagnostics().empty() &&
+        prepared && *prepared &&
+        (*prepared)->status() == runtime::PreviewPreparationStatus::Prepared &&
+        (*prepared)->frame() &&
+        (*prepared)->frame()->desiredIdentity() == completed.desiredIdentity &&
+        (*prepared)->frame()->isDisplayValid() && ownKey &&
+        *ownKey == PreviewFrameCacheKey::forIdentity(completed.desiredIdentity);
+    if (completed.playbackDeadline &&
         (deliveredAt > *completed.playbackDeadline || !isCurrent(completed))) {
         if (trace_)
             trace_->record(completed.desiredIdentity, PreviewTraceStage::Delivered,
                            PreviewTraceOutcome::Late, 255, completed.handle.id().value());
         if (completed.playbackOutstanding) {
             noteDroppedFrame();
+            completed.playbackOutstanding = false;
         }
-        // Late frames can still serve a later loop, but must never replace the current picture.
-        const auto key = cacheKeyForTime(completed.desiredIdentity.time);
-        if (key.has_value() &&
-            *key == PreviewFrameCacheKey::forIdentity(completed.desiredIdentity) &&
-            prepared.has_value() && *prepared != nullptr && (*prepared)->frame() != nullptr &&
-            (*prepared)->frame()->desiredIdentity() == completed.desiredIdentity &&
-            result->diagnostics().empty()) {
-            frameCache_->insert((*prepared)->frame());
-        }
-        if (isCurrent(completed)) {
-            auto skipped = state_;
-            skipped.activity = PreviewActivity::Cancelled;
-            skipped.taskId.reset();
-            skipped.message = tr("Playback skipped this frame; showing the previous frame");
-            publish(std::move(skipped));
-        }
-        if (!pending_.has_value()) {
+    }
+    if (generation_ != deliveryGeneration || shuttingDown_ || cachePurgeGate_)
+        return;
+    if (validPlayback && prepared && !isCurrent(completed)) {
+        // This immutable product keeps its own exact time/revision. Never restamp it as a newer
+        // pending time; late but valid pixels can warm the loop and describe useful stale output.
+        frameCache_->insert((*prepared)->frame());
+        if (generation_ != deliveryGeneration || shuttingDown_ || cachePurgeGate_)
             return;
+        if (playbackActive_ && !isCurrent(completed) && state_.desiredIdentity &&
+            (!state_.frame || state_.frame->desiredIdentity().requestGeneration <
+                                  completed.desiredIdentity.requestGeneration)) {
+            auto domain = completed.desiredIdentity;
+            domain.time = state_.desiredIdentity->time;
+            domain.sourceRevision = state_.desiredIdentity->sourceRevision;
+            domain.requestGeneration = state_.desiredIdentity->requestGeneration;
+            if (domain == *state_.desiredIdentity) {
+                const auto newest = *state_.desiredIdentity;
+                publishRendering(newest, std::nullopt, (*prepared)->frame());
+                // A synchronous state observer may rebind, purge or close the recovery domain.
+                if (generation_ != deliveryGeneration || shuttingDown_ || cachePurgeGate_)
+                    return;
+            }
         }
     }
     if (pending_.has_value()) {

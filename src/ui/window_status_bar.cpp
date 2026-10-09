@@ -100,6 +100,9 @@ PreviewColorState previewColorState(const CompositionPreviewState& preview) {
         if (provider == runtime::PreviewDisplayProvider::GpuNeutral) {
             return {WindowStatusBar::tr("GPU display"), kit::Color::Ok};
         }
+        if (provider == runtime::PreviewDisplayProvider::GpuPreparedPacked) {
+            return {WindowStatusBar::tr("GPU-prepared / CPU-painted"), kit::Color::Ok};
+        }
     }
     if (bufferView.has_value() && bufferView->isOcioQualified) {
         return {WindowStatusBar::tr("Qualified · Bloom Neutral"), kit::Color::Ok};

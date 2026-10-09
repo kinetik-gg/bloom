@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-10-08
+Updated: 2026-10-09
 
 ## Purpose
 
@@ -282,7 +282,8 @@ mode runs the genuine GPU scene and selected Neutral or general OCIO display pro
 copies only the final RGBA8 data window into host storage. It works without a WSI target. This is
 separate from the older CPU-stage/`GpuNeutral` display route above. The process identity remains
 `EvaluationProvider::GpuResident`; the display provider explicitly records transferred host pixels.
-The native route remains the default, and normal Viewer adoption is not yet qualified.
+Ordinary application preview now selects this packed product for QWidget painting, with explicit
+GPU-prepared/CPU-painted status. The native service route remains available and required.
 
 The owner submits and polls the real fence without a GUI wait; host materialization also stays off
 the UI thread. Admission validates exact device control-block identity, allocator generation,
@@ -954,12 +955,29 @@ and geometry-admission experiments were rejected, not installed.
 
 The [bounded ADR revisit](../decisions/0006-gpu-backend.md) therefore authorizes a final GPU RGBA8
 transfer followed by ordinary QWidget painting with explicit GPU-prepared/CPU-painted provenance.
-The asynchronous service foundation above is accepted; Viewer wiring and adoption remain pending
-external resize/move/top-level pixels, coherent outlines, actual host-only cache charges and warm
-100-frame replay. This costs staging, host storage and one final transfer for a cold product; it
-must not retain full-range native and packed duplicates. The native route and final GPU routes
-remain required. Linux measurements do not establish equivalent macOS/Windows GPU execution or
-sustained performance; the public widget path and explicit CPU fallback are the supported direction.
+Stage 2 now adopts this route for ordinary application preview. Painting borrows immutable packed
+storage and maps the true ROI data window inside the full display window, painting background outside.
+An older coherent image, bounds and channel remain explicitly Stale until replacement; collapsed or
+offscreen content advertises no displayed pixels. The cache retains only the sealed host product,
+not a native image, lease or Float32 process frame. Cold preparation costs staging, host storage
+and one final transfer; fitting warm reuse adds none of those preparation steps.
+
+The channel presentation scan runs in a cancellable bounded CPU worker, with explicit CPU channel
+provenance. One completed derivative, one active task and one newest intent bound publication;
+admission includes held source/derivative/active allocations and retained legacy process capacity.
+Rebind and cancellation reject late old-owner results. This is a responsiveness repair, not required
+GPU channel execution or an aggregate memory broker. Exposure/gamma/OCIO remain genuine GPU work.
+
+Private Linux external pixels qualify held panel/top-level shrink, same-size ancestor movement,
+ROI, eight handles and collapse without new image spill. Animated cold playback displays a coherent
+older frame as Stale while the newest intent remains pending, then pause converges to Current.
+Controlled Full/Half 100-frame EXRs retain 829,620,400/207,540,400 host bytes respectively under a
+1 GiB host cache, with zero native retained products. Two hundred Current readiness observations
+(199 changed-time seeks) add zero scene evaluation, dispatch, transfer or cache growth; they do not
+prove 200 forced paints. The native route and final GPU routes remain required. Linux samples do
+not establish equivalent macOS/Windows GPU execution or sustained performance; explicit CPU fallback
+remains supported. Aggregate/process-limit accounting, remaining channel processing and broader
+cache policy qualification stay separate work.
 
 `QRhiWidget` is useful for a comparison spike because it embeds accelerated rendering naturally in
 Qt Widgets and supports Vulkan, Metal, and Direct3D. It is not the core GPU backend. Accessing the

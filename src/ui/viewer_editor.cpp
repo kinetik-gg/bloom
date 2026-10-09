@@ -280,52 +280,6 @@ QToolButton* makeTransportButton(const kit::IconId iconId, const QString& toolTi
     return button;
 }
 
-// The viewer-only channel remap (task VIEW-1). `source` is always the packed RGBA8 display buffer
-// paintEvent() borrows, so the byte order below is exactly R, G, B, A. Rgba returns the borrow
-// untouched -- no copy at all, which is the case that matters for playback; every other channel
-// deep-copies once and is cached by the caller against the frame it was built from.
-//
-// This is presentation, not evaluation: nothing here reaches an exported frame, the RAM preview
-// cache, or the display buffer the colour pipeline produced. It is applied AFTER display-referred
-// conversion, on the bytes that are about to be blitted.
-QImage remapChannels(const QImage& source, const ViewerChannel channel) {
-    if (channel == ViewerChannel::Rgba) {
-        return source;
-    }
-    QImage result = source.copy(); // detaches from the borrowed, immutable frame bytes
-    for (int y = 0; y < result.height(); ++y) {
-        uchar* row = result.scanLine(y);
-        for (int x = 0; x < result.width(); ++x) {
-            uchar* pixel = row + static_cast<std::ptrdiff_t>(x) * 4;
-            uchar grey = 0;
-            switch (channel) {
-            case ViewerChannel::Rgba:
-                continue;
-            case ViewerChannel::Rgb:
-                pixel[3] = 255;
-                continue;
-            case ViewerChannel::Red:
-                grey = pixel[0];
-                break;
-            case ViewerChannel::Green:
-                grey = pixel[1];
-                break;
-            case ViewerChannel::Blue:
-                grey = pixel[2];
-                break;
-            case ViewerChannel::Alpha:
-                grey = pixel[3];
-                break;
-            }
-            pixel[0] = grey;
-            pixel[1] = grey;
-            pixel[2] = grey;
-            pixel[3] = 255;
-        }
-    }
-    return result;
-}
-
 constexpr int kFixedZoomItemCount = 1 + static_cast<int>(kZoomPresets.size());
 
 // What the Resolution control is ACTUALLY delivering. The dropdown says which policy is chosen;
@@ -1769,7 +1723,10 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     });
     connect(&previewController_, &CompositionPreviewController::stateChanged, this,
             &ViewerEditor::refreshViewAdjustment);
+    connect(&previewController_, &CompositionPreviewController::viewerResultsAvailable, this,
+            &ViewerEditor::consumeChannelDisplay);
     connect(&session_, &CompositionSession::documentRebound, this, [this] {
+        resetChannelDisplay();
         // Different document owners may have colliding numeric project/composition/revision IDs.
         // Detach cancelled per-view work and every local retained display before re-evaluation;
         // no late completion can become a candidate for the newly bound document.
@@ -1842,6 +1799,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
 }
 
 ViewerEditor::~ViewerEditor() {
+    resetChannelDisplay();
     if (gpuResidentTimer_ != nullptr) {
         gpuResidentTimer_->stop();
     }
@@ -2079,10 +2037,7 @@ void ViewerEditor::setChannel(const ViewerChannel channel) {
         return;
     }
     channel_ = channel;
-    // Drop the cached remap eagerly rather than on the next paint: a channel the artist has moved
-    // away from should not keep a whole frame resident.
-    channelView_ = QImage();
-    channelViewFrame_.reset();
+    // Keep at most one complete older channel while the newest worker derivation is pending.
     if (channelDropdown_ != nullptr &&
         channelDropdown_->currentIndex() != static_cast<int>(channel)) {
         const QSignalBlocker blocker(channelDropdown_);
@@ -2419,12 +2374,14 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
     } else {
         cpuFrame = paintableCpuFrame();
     }
+    const auto packedDisplay = choosePackedPaintDisplay(cpuFrame);
+    cpuFrame = packedDisplay.frame;
     const QRectF frame = canvasRect();
     ViewerDisplayDescriptor painted{.frame = nullptr,
                                     .mapping = std::nullopt,
                                     .captureRect = contentRect(),
                                     .devicePixelRatio = devicePixelRatioF(),
-                                    .channel = channel_,
+                                    .channel = packedDisplay.channel,
                                     .background = background_,
                                     .overlayRevision = gpuOverlayRevision_,
                                     .native = false,
@@ -2436,13 +2393,14 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
         // change how pixels are drawn.
         const auto bufferView = cpuFrame->displayBufferView();
         if (bufferView.has_value()) {
-            const auto extent = bufferView->displayWindow.extent();
+            const auto dataWindow = bufferView->dataWindow.value_or(bufferView->displayWindow);
+            const auto extent = dataWindow.extent();
             const auto& layout = bufferView->layout;
             if (extent.width() <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
                 extent.height() <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
                 layout.rowStrideBytes <=
                     static_cast<std::size_t>(std::numeric_limits<qsizetype>::max())) {
-                const auto pixels = bufferView->pixels;
+                const auto pixels = packedDisplay.pixels;
                 // cpuFrame owns the immutable bytes for this entire paint. The const-data
                 // QImage constructor borrows them, so presentation does not copy or convert a
                 // full frame on the UI thread.
@@ -2451,18 +2409,6 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                     static_cast<int>(extent.height()),
                     static_cast<qsizetype>(layout.rowStrideBytes), QImage::Format_RGBA8888);
                 if (!image.isNull()) {
-                    // The viewer-only channel view (task VIEW-1). RGBA keeps the borrow above
-                    // untouched; any other channel is remapped ONCE per (frame, channel) and held
-                    // in channelView_, so a repaint -- or a playback tick that re-presents the same
-                    // frame -- never re-walks the buffer. Nothing downstream of this paint sees it.
-                    if (channel_ != ViewerChannel::Rgba &&
-                        (channelViewFrame_ != cpuFrame || channelViewChannel_ != channel_)) {
-                        channelView_ = remapChannels(image, channel_);
-                        channelViewFrame_ = cpuFrame;
-                        channelViewChannel_ = channel_;
-                    }
-                    const QImage& shownImage =
-                        channel_ == ViewerChannel::Rgba ? image : channelView_;
                     const auto format = cpuFrame->processIdentity().plan->format();
                     const auto fullExtent =
                         render::ImageExtent::create(format.width(), format.height());
@@ -2476,7 +2422,19 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                                                          geometry->pixelAspect, transform_)
                             : QRectF{};
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-                    painter.drawImage(displayRect, shownImage, QRectF(shownImage.rect()));
+                    const auto& fullWindow = bufferView->displayWindow;
+                    const QRectF dataRect{
+                        displayRect.left() +
+                            static_cast<double>(dataWindow.originX() - fullWindow.originX()) /
+                                fullWindow.extent().width() * displayRect.width(),
+                        displayRect.top() +
+                            static_cast<double>(dataWindow.originY() - fullWindow.originY()) /
+                                fullWindow.extent().height() * displayRect.height(),
+                        static_cast<double>(extent.width()) / fullWindow.extent().width() *
+                            displayRect.width(),
+                        static_cast<double>(extent.height()) / fullWindow.extent().height() *
+                            displayRect.height()};
+                    painter.drawImage(dataRect, image, QRectF(image.rect()));
                     if (!coverSnapshotInProgress_ && !displayRect.isEmpty()) {
                         if (const auto& trace = previewController_.frameTrace(); trace) {
                             // QPainter submission, not compositor scanout. Use the actual painted

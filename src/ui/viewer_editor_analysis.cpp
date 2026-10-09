@@ -99,7 +99,8 @@ std::optional<ViewerDisplayDescriptor> ViewerEditor::actualDisplayDescriptor() c
         result.native = true;
         return result;
     }
-    if (cpuPaintedDisplay_ && frameInCurrentDomain(cpuPaintedDisplay_->frame))
+    if (cpuPaintedDisplay_ && frameInCurrentDomain(cpuPaintedDisplay_->frame) &&
+        visibleRegion().intersects(contentRect().toAlignedRect()))
         return cpuPaintedDisplay_;
     return std::nullopt;
 }
@@ -143,9 +144,17 @@ CompositionPreviewState ViewerEditor::displayedPreviewState() const {
     if (!session_.composition() || sharedFailure) {
         // Shared pipeline/configuration diagnostics remain authoritative, including when a
         // local adjustment has no candidate. Display freshness is still projected separately.
-    } else if (!adjustmentFailure_.isEmpty() || !nativeFailure_.isEmpty()) {
+    } else if (!adjustmentFailure_.isEmpty() || !nativeFailure_.isEmpty() ||
+               !channelFailure_.isEmpty()) {
         state.activity = PreviewActivity::Failed;
-        state.message = !adjustmentFailure_.isEmpty() ? adjustmentFailure_ : nativeFailure_;
+        state.message = !adjustmentFailure_.isEmpty() ? adjustmentFailure_
+                        : !nativeFailure_.isEmpty()   ? nativeFailure_
+                                                      : channelFailure_;
+    } else if (channelTask_ && actual &&
+               (actual->channel != channel_ ||
+                !sameViewerPackedSource(actual->frame, channelWantedFrame_))) {
+        state.activity = PreviewActivity::Rendering;
+        state.message = tr("Preparing Viewer channel; previous complete display retained");
     } else if (!viewAdjust_.neutral() && !preparedDisplayFrame() &&
                (adjustTask_ || frameInCurrentDomain(previewController_.state().frame))) {
         state.activity = PreviewActivity::Rendering;
@@ -179,6 +188,10 @@ CompositionPreviewState ViewerEditor::displayedPreviewState() const {
                             .arg(backgrounds.value(static_cast<int>(actual->background)))
                             .arg(actual->cover ? tr(" · CPU cover") : QString{})
                             .arg(state.message);
+        if (!actual->native && actual->channel != ViewerChannel::Rgba) {
+            state.viewerStatusText += tr(" · CPU channel presentation");
+            state.message += tr(" · CPU channel presentation");
+        }
     }
     if (state.viewerStatusText.isEmpty())
         state.viewerStatusText = state.message;
@@ -212,7 +225,10 @@ void ViewerEditor::refreshViewAdjustment() {
         return;
     adjustIdentity_ = desired;
     adjustmentFailure_.clear();
-    const auto submission = previewController_.submitViewerAnalysis(desired);
+    const auto submission =
+        base->provenance().provider == runtime::PreviewDisplayProvider::GpuPreparedPacked
+            ? previewController_.submitViewerDisplay(desired)
+            : previewController_.submitViewerAnalysis(desired);
     if (!submission.accepted()) {
         adjustmentFailure_ = submission.diagnostic && !submission.diagnostic->summary.empty()
                                  ? QString::fromStdString(submission.diagnostic->summary)

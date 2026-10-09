@@ -1,4 +1,5 @@
 #include <bloom/ui/composition_preview_controller.hpp>
+#include <bloom/ui/composition_session.hpp>
 
 #include <algorithm>
 #include <limits>
@@ -25,8 +26,16 @@ void CompositionPreviewController::setPlaybackActive(const bool playing) {
         active_->playbackOutstanding = false;
         noteDroppedFrame();
     }
-    if (!playing) {
-        handleCurrentTimeChanged();
+    if (!playing && !shuttingDown_ && !cachePurgeGate_) {
+        // The playback ask may have this same time but be cancelled or deadline-bound. Desired
+        // identity alone cannot deduplicate the stopped request: it must have a live Current
+        // product. Keep cancelled work as the admission gate while queuing one Visible intent.
+        const bool current = state_.freshness == FrameFreshness::Current && state_.frame &&
+                             state_.frame->desiredIdentity().time == session_.currentTime() &&
+                             state_.frame->isDisplayValid() &&
+                             liveSessionMatches(state_.frame->desiredIdentity());
+        if (!current)
+            requestPreview(false, PreviewRequestKind::Visible);
     }
 }
 

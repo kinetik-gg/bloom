@@ -214,16 +214,13 @@ int main(int argc, char* argv[]) {
                                                            "/" BLOOM_BUNDLED_VULKAN_LOADER_NAME))
                                   .toStdString());
 #endif
-    // Presentation is requested only for the genuine Wayland session with a packaged loader. Every
-    // other platform/session keeps the compute-only or CPU-only path; no blank activation is
-    // claimed and the service still publishes an explicit Unavailable capability if the device
-    // cannot enable a present-capable queue.
-    if (bloom::ui::shouldRequestWaylandPresentation(
-            bundledNativeLoader,
-            QGuiApplication::platformName().contains(QStringLiteral("wayland")))) {
-        gpuPreviewDisplayOptions.presentation =
-            bloom::runtime::GpuPreviewDisplayServicePresentationMode::Wayland;
-    }
+    // Ordinary widget composition provides panel/window clipping. Scene/display preparation
+    // remains genuinely GPU; one asynchronous final transfer supplies immutable painted pixels.
+    // The independently qualified NativeResident route remains available to its required fixtures.
+    gpuPreviewDisplayOptions.product =
+        bloom::runtime::GpuPreviewDisplayProductMode::GpuPreparedPacked;
+    gpuPreviewDisplayOptions.presentation =
+        bloom::runtime::GpuPreviewDisplayServicePresentationMode::Disabled;
     // Align the resident lease registry with the artist's UI frame-cache budget so the registry can
     // publish every lease the cache can reference, with bounded in-flight/visible headroom and a
     // hard VRAM ceiling. No live lease/pin is ever invalidated; pressure takes the CPU fallback.

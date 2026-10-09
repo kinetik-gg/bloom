@@ -7,6 +7,7 @@
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/preferences_aware.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
+#include <bloom/ui/viewer_channel_display.hpp>
 #include <bloom/ui/viewer_editor_probe.hpp>
 #include <bloom/ui/viewer_gpu_resident.hpp>
 #include <bloom/ui/viewer_gpu_resident_overlay.hpp>
@@ -76,14 +77,6 @@ class ViewerTimecodeReadout;
 //            rather than the background behind it.
 //   Red / Green / Blue -- that one channel as grey.
 //   Alpha -- the alpha channel as luminance.
-enum class ViewerChannel : std::uint8_t {
-    Rgba,
-    Rgb,
-    Red,
-    Green,
-    Blue,
-    Alpha,
-};
 
 // What the Viewer paints behind (and around) the composition (task VIEW-1). Persisted under
 // "viewer/background"; Checkerboard is the default so alpha behind the composition is always
@@ -432,6 +425,15 @@ class ViewerEditor final : public QWidget,
     // click-to-edit commit.
     void seekToFrame(std::uint64_t frameIndex);
     void setChannel(ViewerChannel channel);
+    struct PackedPaintDisplay {
+        PreparedPreviewFrameHandle frame;
+        std::span<const render::Rgba8> pixels;
+        ViewerChannel channel = ViewerChannel::Rgba;
+    };
+    PackedPaintDisplay choosePackedPaintDisplay(PreparedPreviewFrameHandle frame);
+    void startChannelDisplay();
+    void consumeChannelDisplay();
+    void resetChannelDisplay();
     void setBackground(ViewerBackground background);
     void buildHeader();
     void rebuildCompositionSelector();
@@ -669,14 +671,16 @@ class ViewerEditor final : public QWidget,
     QMetaObject::Connection focusConnection_;
     ViewerChannel channel_ = ViewerChannel::Rgba;
     ViewerBackground background_ = ViewerBackground::Checkerboard;
-    // The channel remap's one cached result. Keyed on the FRAME HANDLE (held by value, so the
-    // bytes it was built from cannot be freed and a later frame cannot reuse the address) plus the
-    // channel, so a repaint at an unchanged channel and frame costs nothing and playback does not
-    // re-walk the buffer every tick. Empty whenever channel_ is Rgba, which is also the only case
-    // paintEvent() keeps its original zero-copy borrow for.
-    PreparedPreviewFrameHandle channelViewFrame_;
-    ViewerChannel channelViewChannel_ = ViewerChannel::Rgba;
-    QImage channelView_;
+    // One immutable completed channel product, one active worker and one newest intent. RGBA
+    // borrows the original bytes; painting never scans/converts a full buffer.
+    ViewerChannelDisplayHandle channelView_;
+    std::optional<runtime::TaskHandle<ViewerChannelDisplayHandle>> channelTask_;
+    PreparedPreviewFrameHandle channelTaskFrame_, channelWantedFrame_;
+    ViewerChannel channelTaskChannel_ = ViewerChannel::Rgba;
+    ViewerChannel channelWantedChannel_ = ViewerChannel::Rgba;
+    std::uint64_t channelEpoch_ = 0, channelTaskEpoch_ = 0;
+    bool channelTaskCancelled_ = false;
+    QString channelFailure_;
     // FORMAL AMENDMENT 1, as of task VIEW-1: non-null for this ViewerEditor's whole life. Until
 
     // widget's own bottom strip; after it, the caller owns it and this stays the surviving

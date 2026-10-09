@@ -27,10 +27,14 @@ struct ViewerGpuPresenter::Impl final {
     ReadyCallback readyCallback;
 };
 
+// Keep the native ownership-taking API; this unsupported implementation discards its inputs.
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
 ViewerGpuPresenter::ViewerGpuPresenter(std::shared_ptr<runtime::GpuPresentationClient>, Config,
                                        QObject* parent)
     : QObject(parent), impl_(std::make_unique<Impl>()) {}
 
+// Keep the native ownership-taking API; this unsupported implementation discards its inputs.
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
 ViewerGpuPresenter::ViewerGpuPresenter(std::shared_ptr<ViewerGpuPort>, Config, QObject* parent)
     : QObject(parent), impl_(std::make_unique<Impl>()) {}
 
@@ -74,6 +78,7 @@ std::uint64_t ViewerGpuPresenter::surfaceBits() const noexcept { return 0; }
 std::uint64_t ViewerGpuPresenter::lastEnqueuedSequence() const noexcept { return 0; }
 
 std::uint64_t ViewerGpuPresenter::appliedSequence() const noexcept { return 0; }
+std::uint64_t ViewerGpuPresenter::rejectedSequence() const noexcept { return 0; }
 
 std::uint64_t ViewerGpuPresenter::presentCount() const noexcept { return 0; }
 
@@ -83,16 +88,22 @@ void ViewerGpuPresenter::setReadyCallback(ReadyCallback callback) {
     impl_->readyCallback = std::move(callback);
 }
 
+// The native implementation retains this callback; unsupported input has no receiver here.
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
 void ViewerGpuPresenter::setInputCallback(InputCallback) {}
 
 bool ViewerGpuPresenter::present(const runtime::GpuResidentFrameLease&,
                                  const render::GpuPresentImageParams&,
+                                 // Native API owns the overlay; unsupported here.
+                                 // NOLINTNEXTLINE(performance-unnecessary-value-param)
                                  std::shared_ptr<const runtime::GpuPresentationOverlay>) {
     return false;
 }
 
 bool ViewerGpuPresenter::requestResize(std::uint32_t, std::uint32_t) { return false; }
 
+// Keep the native asynchronous ownership-taking API even though this fallback completes inline.
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
 bool ViewerGpuPresenter::prepareForMutation(MutationCallback completion) {
     if (completion) {
         completion(

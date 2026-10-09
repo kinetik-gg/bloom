@@ -1226,7 +1226,11 @@ void testChannelDropdownRemapsOnlyThePresentedImage(Expectations& expectations) 
     channel->setCurrentIndex(2); // "R"
     expectations.expect(fixture.viewer.channelForTest() == ui::ViewerChannel::Red,
                         "choosing R puts the viewer in the red-channel view");
-    QCoreApplication::processEvents();
+    expectations.expect(waitUntil([&] {
+                            return fixture.viewer.displayedPreviewState().freshness ==
+                                   ui::FrameFreshness::Current;
+                        }),
+                        "the asynchronous channel derivation becomes current");
     const QImage red = fixture.viewer.grab().toImage();
     expectations.expect(red != rgba, "a single-channel view really changes the presented pixels");
 
@@ -1242,6 +1246,146 @@ void testChannelDropdownRemapsOnlyThePresentedImage(Expectations& expectations) 
     expectations.expect(fixture.viewer.grab().toImage() == rgba,
                         "returning to RGBA restores exactly the original presentation");
     reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+}
+
+// A CPU worker barrier holds the real production channel task before execution. It does not
+// fabricate a completed channel image or bypass its normal result delivery/admission path.
+class ChannelWorkerHold final {
+  public:
+    explicit ChannelWorkerHold(bloom::runtime::TaskScheduler& scheduler) {
+        submission_ = scheduler.submit<void>(
+            bloom::runtime::TaskRequest("Hold channel worker",
+                                        {.kind = bloom::runtime::TaskOwnerKind::PanelRequest,
+                                         .id = bloom::runtime::TaskOwnerId::fromRaw(999)}),
+            [this](bloom::runtime::TaskContext& context) {
+                entered = true;
+                while (!released && !context.isCancellationRequested())
+                    std::this_thread::sleep_for(1ms);
+                return bloom::runtime::TaskResult<void>::succeeded();
+            });
+    }
+    ~ChannelWorkerHold() {
+        released = true;
+        if (submission_.accepted())
+            while (!submission_.handle.tryTakeResult())
+                std::this_thread::sleep_for(1ms);
+    }
+    std::atomic<bool> entered{false};
+    std::atomic<bool> released{false};
+
+  private:
+    bloom::runtime::TaskSubmission<void> submission_;
+};
+
+void testChannelPendingRefusalAndSupersession(Expectations& checks) {
+    using namespace bloom;
+    // These owners outlive the Viewer/controller even after rebind.
+    std::unique_ptr<document::Document> replacement;
+    std::unique_ptr<commands::CommandStack> replacementCommands;
+    ViewerFixture fixture(makeTestProject("Channel publication"));
+    checks.expect(fixture.session.addSolidLayer("Marker", {0.125, 0.25, 0.5, 1.0}),
+                  "the channel publication fixture has distinct RGB pixels");
+    fixture.viewer.show();
+    checks.expect(waitUntil([&] { return isReady(fixture.controller); }), "base prepares");
+    const auto nextTime = core::RationalTime::fromInteger(1);
+    checks.expect(fixture.session.setCurrentTime(nextTime), "a second exact time is requested");
+    checks.expect(waitUntil([&] {
+                      return isReady(fixture.controller) &&
+                             fixture.controller.state().frame->desiredIdentity().time == nextTime;
+                  }),
+                  "the second source is cached");
+    checks.expect(fixture.session.setCurrentTime(core::RationalTime::fromInteger(0)),
+                  "return to the original source");
+    auto* channel = fixture.viewer.findChild<ui::kit::KDropdown*>("viewerChannelDropdown");
+    if (!channel)
+        return;
+    channel->setCurrentIndex(2);
+    checks.expect(waitUntil([&] {
+                      const auto state = fixture.viewer.displayedPreviewState();
+                      return state.freshness == ui::FrameFreshness::Current &&
+                             state.viewerStatusText.contains("Red") &&
+                             state.viewerStatusText.contains("CPU channel presentation");
+                  }),
+                  "the completed Red presentation is explicitly CPU-derived");
+    ui::WindowStatusBar status(fixture.session, &fixture.controller);
+    status.setDisplayedViewer(&fixture.viewer);
+    const auto original = fixture.viewer.displayedFrameForTest();
+    {
+        ChannelWorkerHold hold(fixture.scheduler);
+        checks.expect(waitUntil([&] { return hold.entered.load(); }), "CPU worker is held");
+        checks.expect(fixture.session.setCurrentTime(nextTime), "cached next source is selected");
+        checks.expect(waitUntil([&] {
+                          const auto state = fixture.viewer.displayedPreviewState();
+                          return state.activity == ui::PreviewActivity::Rendering &&
+                                 state.freshness == ui::FrameFreshness::Stale;
+                      }),
+                      "same-channel/new-source task reports Pending before completion");
+        checks.expect(fixture.viewer.displayedFrameForTest() == original &&
+                          status.previewStateTextForTest().contains("Previous display"),
+                      "held derivative preserves the actual old frame and refreshes status");
+        hold.released = true;
+        checks.expect(waitUntil([&] {
+                          const auto state = fixture.viewer.displayedPreviewState();
+                          return state.freshness == ui::FrameFreshness::Current && state.frame &&
+                                 state.frame->desiredIdentity().time == nextTime;
+                      }),
+                      "new Red pixels publish after real worker completion");
+    }
+    {
+        ChannelWorkerHold hold(fixture.scheduler);
+        checks.expect(waitUntil([&] { return hold.entered.load(); }),
+                      "worker held for channel edits");
+        channel->setCurrentIndex(4);
+        checks.expect(waitUntil([&] {
+                          return fixture.viewer.displayedPreviewState().activity ==
+                                 ui::PreviewActivity::Rendering;
+                      }),
+                      "Blue requests a held replacement while showing Red");
+        channel->setCurrentIndex(2);
+        QCoreApplication::processEvents();
+        checks.expect(fixture.viewer.displayedPreviewState().freshness ==
+                          ui::FrameFreshness::Current,
+                      "Red to Blue to Red reuses the coherent Red derivative");
+        channel->setCurrentIndex(4);
+        QCoreApplication::processEvents();
+        replacement = std::make_unique<document::Document>(fixture.session.snapshot().project());
+        replacementCommands = std::make_unique<commands::CommandStack>(*replacement);
+        ui::CompositionSession changed(*replacement, *replacementCommands,
+                                       fixture.session.compositionId());
+        if (const auto* layer =
+                std::get_if<document::LayerId>(&fixture.session.selection().primary)) {
+            changed.selectLayer(*layer);
+            checks.expect(changed.setSelectedSolidColor({0.0, 0.0, 1.0, 1.0}),
+                          "same-ID replacement owns distinguishable blue pixels");
+        }
+        fixture.session.rebind(*replacement, *replacementCommands, fixture.session.compositionId());
+        hold.released = true;
+        checks.expect(waitUntil([&] {
+                          const auto state = fixture.viewer.displayedPreviewState();
+                          return state.freshness == ui::FrameFreshness::Current &&
+                                 state.viewerStatusText.contains("Blue");
+                      }),
+                      "rebind rejects old work and publishes only the new domain/channel");
+        const auto rebound = fixture.viewer.displayedFrameForTest()->displayBufferView();
+        checks.expect(rebound && std::ranges::any_of(rebound->pixels,
+                                                     [](const auto pixel) {
+                                                         return pixel.blue == 255 && pixel.red == 0;
+                                                     }),
+                      "the painted channel source belongs to distinct replacement content");
+    }
+    fixture.scheduler.beginShutdown();
+    channel->setCurrentIndex(2);
+    checks.expect(waitUntil([&] {
+                      return fixture.viewer.displayedPreviewState().activity ==
+                                 ui::PreviewActivity::Failed &&
+                             status.previewStateTextForTest().contains("could not be admitted");
+                  }),
+                  "local channel refusal refreshes status without a completion signal");
+    checks.expect(fixture.viewer.displayedPreviewState().freshness == ui::FrameFreshness::Stale &&
+                      fixture.viewer.displayedPreviewState().viewerStatusText.contains(
+                          "CPU channel presentation"),
+                  "refusal retains the old actual CPU channel as Stale");
+    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, checks);
 }
 
 // The background dropdown chooses what the canvas surround is, defaults to Checkerboard, and
@@ -2016,6 +2160,7 @@ int main(int argc, char** argv) {
     testPlayPauseButtonIconSwapsWithState(expectations);
     testLoopToggleDrivesThePlaybackControllerAndPersists(expectations);
     testChannelDropdownRemapsOnlyThePresentedImage(expectations);
+    testChannelPendingRefusalAndSupersession(expectations);
     testBackgroundDropdownChoosesTheSurroundAndPersists(expectations);
     testTimeReadoutEditsFramesAndSwitchesFormat(expectations);
     testViewerHeaderSelectorsMenusAndOverflow(expectations);

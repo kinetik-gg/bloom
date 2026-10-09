@@ -7,15 +7,17 @@ Updated: 2026-10-09
 ## Execution checkpoint
 
 The owner resumed execution after the G2E checkpoint. G3B outline publication and displayed-intent
-slices and G3A retention truth are accepted within the limits below. The immediate next G3B follow-up
-is Viewer resize recovery and clipping. The narrow resize acknowledgement/visible-status repair is
-accepted below; the pixel containment defect remains unresolved and G3 as a whole is incomplete.
+slices and G3A retention truth are accepted within the limits below. The packed QWidget Stage 2
+containment/adoption slice and its bounded cold-progress prerequisite are now accepted. This closes
+the measured panel/top-level spill gate for that route; broader G3/G4–G10 qualification remains
+incomplete. The next narrow G6A work addresses process-limit headroom and unconsumed result mailboxes.
 
 Implementation proceeds sequentially from `e1086c13`. Each slice requires source review, focused
 regressions, and the applicable native/product evidence before its successor is accepted. A passing
 unit test does not complete an experience gate. A bounded final GPU-packed transfer into QWidget
-is now authorized for the G3B layout repair, with its service reviewed before Viewer integration.
-The broader host tier and residency policy remain separate decisions under G9.
+is now adopted for the G3B layout repair, after service and Viewer integration review. This adopts
+the bounded finished-display host choice under the existing ADR; broader cache tier/promotion policy
+and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 
 | Package | State | Evidence |
 | --- | --- | --- |
@@ -26,10 +28,12 @@ The broader host tier and residency policy remain separate decisions under G9.
 | G3B2A | Clear/discard synchronization and bounded owner WSI progress accepted as a bounded slice | Independent source review and isolated GL native checks, isolated Vulkan lifecycle/progress, CPU admission/fairness tests, Vulkan-disabled render build and changed-source static analysis pass |
 | G3B2B | Actual displayed intent, safe CPU cover and coupled hit mapping accepted as a bounded slice | Independent private compositor pixels, strict native interaction/project replacement, focused regressions, source quality and 58 affected translation units of static analysis pass |
 | G3A | Accepted as a bounded retention/capacity slice | Independent source/artifact review, typed/live coverage regressions, measured 100-frame Full/Half native parity/warm replay, UI goldens, quality and 57 affected translation units of static analysis pass |
-| G3B resize lifecycle/status | Accepted as a narrow slice; containment remains unresolved | Independent resize completion sequence, exposed previous pixels described as Stale, native/focused/UI checks and 20 affected translation units of static analysis pass |
+| G3B resize lifecycle/status | Accepted as a narrow slice; containment was unresolved at that checkpoint | Independent resize completion sequence, exposed previous pixels described as Stale, native/focused/UI checks and 20 affected translation units of static analysis pass |
 | G3B packed service foundation | Accepted as a bounded core slice | Genuine offscreen GPU final transfers, exact provenance/retirement, Vulkan-disabled core build, quality and 45 affected translation units pass |
-| G3B resize containment | Pending; immediate next slice | External pixels reject native viewport and geometry-admission approaches; staged asynchronous final GPU-packed QWidget output must qualify actual layout transitions |
-| G4–G10 | Pending | No implementation or qualification claim |
+| G3B packed Viewer Stage 2 | Accepted as a bounded containment/adoption slice | Independent external pixels, real animation/drag/undo, exact host-only Full/Half 100-frame reuse, portable regressions, final builds/quality/static analysis pass |
+| G4C prerequisite | Accepted only as the bounded cold-progress prerequisite | One active/newest intent, useful older Stale publication and guarded pause/shutdown pass source review and short real playing pixels; remaining G4 scheduling is pending |
+| G7A / G9 bounded display work | Packed immutable borrowing, off-UI CPU channel derivation and finished-display host choice accepted | Explicit provenance and measured bytes; remaining CPU storage/process/channel work and broader cache policy remain pending |
+| Remaining G4–G10 | Pending | Completion delivery, rational clock, native public hooks, media reuse, aggregate memory, batching and sustained/platform qualification are not completed |
 
 G3B1 checkpoint (2026-10-09), accepted after independent source review and focused reruns: coherent required-outline publication and exact
 owner-applied metadata are implemented as a bounded slice. Deterministic delayed raster, changing
@@ -226,13 +230,74 @@ restamps without new preparation/dispatch/transfer, Vulkan-disabled runtime buil
 quality and 45 affected translation units of static analysis pass. Initial fixture failures remain
 preserved and do not qualify behavior.
 
-This accepts the service foundation only. NativeResident remains the default; actual Viewer
-GPU-prepared/CPU-painted adoption, external panel/top-level clipping, off-UI channel derivatives,
-host-only cache retention, ROI placement and warm 100-frame widget replay remain Stage 2 gates.
+At this Stage 1 checkpoint only the service foundation was accepted. NativeResident remained the
+default; Viewer adoption, clipping, off-UI channel derivatives, host-only retention, ROI and warm
+100-frame widget reuse were still Stage 2 gates. The accepted Stage 2 checkpoint below supersedes
+that default and closes those bounded gates.
 The [existing ADR](../decisions/0006-gpu-backend.md) records the bounded presentation revisit.
 Core aliases are not playback evidence; Linux controlled pixels are not sustained or cross-platform
 qualification. G3 remains incomplete. G4–G10 and G6 service-aware headroom/unconsumed-mailbox
 ownership follow-ups remain unchanged.
+
+## Accepted packed Viewer Stage 2 — 2026-10-09
+
+Ordinary application preview now prepares the actual GPU scene and selected Neutral/general display,
+asynchronously transfers only final RGBA8, and paints borrowed immutable storage through QWidget.
+Status explicitly says GPU-prepared/CPU-painted; native-owner display claims remain false. Native
+preview and all required final GPU routes remain intact, with no precision change, CPU scene
+substitution, pixel exemption or coverage opt-out. The existing ADR0006 owns this bounded host
+presentation choice; no separate promotion architecture is required.
+
+Private external pixels qualify held panel shrink, same-size ancestor movement, decorated top-level
+shrink, ROI placement, collapse and all eight handles. Neighbor panels remain byte-identical through
+seven animation phases; the unchanged cursor pixels are excluded from image-spill claims. Collapsed
+content has no displayed provider. One Full host product charges 8,296,204 B (8,294,400 pixel bytes
+plus 1,804 metadata bytes); one-byte-below cache admission refuses without losing the prior product.
+Channel remapping now runs in a bounded cancellable CPU worker with explicit CPU presentation
+provenance. One completed derivative, one active task and one newest intent bound retention;
+rebind/cancellation refuse late old-owner results. Exposure/gamma/custom OCIO stay GPU display work.
+This satisfies the packed part of G7A, not GPU channel execution or a G6 aggregate broker.
+
+Controlled local 100-distinct-member 1080 EXRs retain all 100 Half (960×540) products at
+207,540,400 B and Full (1920×1080) at 829,620,400 B under the unchanged 1 GiB host preview cache.
+Per-frame CPU oracles pass, with no native retained products/bytes. Each fitting replay records
+200 exact-time Current observations: 199 changed-time seeks plus the unchanged reversal endpoint.
+They add zero scene evaluations, dispatches, final transfers or cache growth; they do not establish
+200 forced repaints or zero Qt presentation work. Historical RAM preparations are 99 because the
+foreground supplied frame zero. At a 64 MiB Full limit, the exact eight retained indices `{1..8}`
+charge 66,369,632 B with span `[0.04 s,0.36 s)`, PartialBudget and no autoplay.
+
+The initial animated cold run advanced transport while keeping displayed time zero; that failed
+experience proof remains preserved. The authorized narrow G4C prerequisite keeps one active
+same-domain producer and one newest pending intent. Lateness is counted once without canceling
+useful work. A clean exact-identity older product is cached at its own time and may display Stale
+while desired identity stays newest. Generation checks forbid overwriting a newer cache/display
+winner or reviving data after purge/same-ID rebind. Pause queues a stopped Visible replacement only
+when needed; shutdown closes admission before recovery. Domain/edit/cancellation and terminal-drain
+barriers remain. No clock/deadline/ticker increase, prewarm or fallback workaround was introduced.
+
+The corrected real animation shows actual time 0.916667 while transport is playing/requesting 1.0,
+then stopped Current at 2.83333. Independent seven-phase pixels and seven byte-exact CPU oracles
+qualify changed solid/text imagery, coherent handles, a real text drag committing one revision and
+exact undo restoring the entire content. Text moves +24,+14 live and +48,+28 at commit. Strict native
+core/synchronization validation and required-device checks report no fallback/errors. These are
+short useful-progress samples, not sustained cadence/latency qualification.
+
+Focused controller/cache/Viewer/playback/product suites pass, including loop-generation, newer-cache
+winner, late failure, observer purge, held pause and shutdown admission regressions. A prior busy-tick
+assertion was updated only to the approved newest-intent policy. Final changed-source static
+analysis and repository quality pass; the normal Bloom build and Vulkan-disabled Bloom/Viewer/
+controller build plus two offscreen UI suites pass. The portable presenter retains the identical
+owning native API, with diagnostic-specific line-local annotations for inert unsupported arguments.
+Failed launcher/build/experience evidence is preserved, not counted as a pass.
+
+All native fixtures used private/offscreen surfaces. Original checkout, running old app, unsaved
+session, preferences and recovery remain untouched. Local uniform EXRs establish dimensions,
+capacity, identity and warm reuse, not heavy EXR/SMB throughput. G4A completion notifications/refill,
+G4B rational transport, remaining G4C scheduling and G4D public native Qt hooks remain required.
+Next narrow G6A process-limit/headroom and unconsumed mailbox ownership, CPU-fallback G7A storage,
+G5 source reuse, G6B aggregate budgets, G8 batching, remaining evidence-driven G9 and G10 sustained/
+platform qualification remain open. G3 and the broader program are not declared complete.
 
 ## Decision to make
 

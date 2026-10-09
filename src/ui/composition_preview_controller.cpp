@@ -122,6 +122,8 @@ CompositionPreviewController::CompositionPreviewController(
     });
     connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this,
             &CompositionPreviewController::consumeReadyResult);
+    connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this,
+            &CompositionPreviewController::viewerResultsAvailable);
     interactiveCadenceTimer_.setSingleShot(true);
     interactiveCadenceTimer_.setTimerType(Qt::PreciseTimer);
     connect(&interactiveCadenceTimer_, &QTimer::timeout, this,
@@ -696,10 +698,10 @@ void CompositionPreviewController::beginShutdown() {
         return;
     }
 
+    shuttingDown_ = true;
     if (playbackController_ != nullptr) {
         playbackController_->pause();
     }
-    shuttingDown_ = true;
     emit foregroundWorkRequested();
     disconnect(&session_, nullptr, this, nullptr);
     interactiveCadenceTimer_.stop();
@@ -747,13 +749,8 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
                                                   const bool allowCachedFrame) {
     Q_ASSERT(QThread::currentThread() == thread());
 
-    if (cachePurgeGate_) {
+    if (shuttingDown_ || cachePurgeGate_) {
         return;
-    }
-    if (active_.has_value() && active_->playbackOutstanding) {
-        active_->playbackOutstanding = false;
-        active_->handle.cancel();
-        noteDroppedFrame();
     }
     // Overrides ride ONLY Interactive requests from an active gesture (docs/architecture/
     // animation-and-time.md), and are read fresh here -- never cached across requests. They are
@@ -868,6 +865,8 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
                 // A request that was waiting to be submitted and never will be: the frame it asked
                 // for was never delivered, which is exactly what droppedFrameCount() counts.
                 noteDroppedFrame();
+                if (generation_ != generation || shuttingDown_ || cachePurgeGate_)
+                    return;
                 pending_.reset();
             }
             // An in-flight task is for an older ask. Cancelling it leaves the admission gate closed
@@ -881,21 +880,27 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         }
     }
 
-    // Playback admission. A frame already in flight is never queued behind: drop this tick and keep
-    // the previous picture. When the controller is IDLE, a Playback tick must still submit even
-    // when the measured preparation estimate says it cannot fit the tick. `preparationEstimate_` is
-    // only refreshed by a successful completion, so refusing to submit while idle starves the
-    // transport permanently: the estimate can never change, no frame is ever cached, and playback
-    // never progresses or recovers. One-active/one-newest is preserved because a non-idle tick
-    // still drops.
-    if (kind == PreviewRequestKind::Playback && (active_.has_value() || pending_.has_value())) {
-        noteDroppedFrame();
-        publishTerminal(PreviewActivity::Cancelled,
-                        tr("Playback skipped this frame; showing the previous frame"));
-        return;
+    // Cold playback may take longer than a tick. Keep one compatible producer and one newest
+    // intent; a missed presentation deadline is accounting, not permission to cancel useful work.
+    bool carryPlayback = false;
+    if (kind == PreviewRequestKind::Playback && playbackActive_ && active_ &&
+        active_->playbackDeadline && !active_->carriedInteractionOverride) {
+        const auto accepted = cacheKeyForTime(active_->desiredIdentity.time);
+        carryPlayback =
+            accepted && *accepted == PreviewFrameCacheKey::forIdentity(active_->desiredIdentity);
     }
+    if (active_ && active_->playbackOutstanding) {
+        active_->playbackOutstanding = false;
+        if (!carryPlayback)
+            active_->handle.cancel();
+        noteDroppedFrame();
+    }
+    if (generation_ != generation || shuttingDown_ || cachePurgeGate_)
+        return;
 
     emit foregroundWorkRequested();
+    if (generation_ != generation || shuttingDown_ || cachePurgeGate_)
+        return;
     PendingRequest pendingRequest{.snapshot = snapshot,
                                   .desiredIdentity = desiredIdentity,
                                   .pixelStorageByteLimit = settings_.pixelStorageByteLimit,
@@ -905,9 +910,10 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
     if (active_.has_value()) {
         // Finish one live frame while coalescing newer pointer/text input. Cancelling every
         // active frame starves presentation for as long as the artist keeps moving.
-        if (!active_->carriedInteractionOverride || interactionOverride.empty() ||
-            !liveSessionMatches(active_->desiredIdentity) ||
-            active_->desiredIdentity.time != desiredIdentity.time)
+        if (!carryPlayback &&
+            (!active_->carriedInteractionOverride || interactionOverride.empty() ||
+             !liveSessionMatches(active_->desiredIdentity) ||
+             active_->desiredIdentity.time != desiredIdentity.time))
             active_->handle.cancel();
         // The cancelled handle remains the admission gate until its terminal result is observed.
         // Cadence is irrelevant beneath this gate: it delays SUBMISSION, and this request cannot
@@ -915,6 +921,8 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         if (pending_.has_value()) {
             noteDroppedFrame();
         }
+        if (generation_ != generation || shuttingDown_ || cachePurgeGate_)
+            return;
         pending_.emplace(std::move(pendingRequest));
         publishRendering(desiredIdentity, std::nullopt, std::move(retainedFrame));
         taskUiBridge_.wake();
@@ -927,6 +935,8 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         if (pending_.has_value()) {
             noteDroppedFrame();
         }
+        if (generation_ != generation || shuttingDown_ || cachePurgeGate_)
+            return;
         pending_.emplace(std::move(pendingRequest));
         publishRendering(desiredIdentity, std::nullopt, std::move(retainedFrame));
         flushCadence();
@@ -940,6 +950,8 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
     if (pending_.has_value()) {
         noteDroppedFrame();
     }
+    if (generation_ != generation || shuttingDown_ || cachePurgeGate_)
+        return;
     pending_.reset();
     submitPreview(std::move(pendingRequest), std::move(retainedFrame));
 }

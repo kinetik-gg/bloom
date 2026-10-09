@@ -111,6 +111,10 @@ std::size_t PreviewFrameCache::frameByteCost(const runtime::PreparedPreviewFrame
         const auto& resident = frame.residentFrame();
         return resident != nullptr ? resident->retainedByteCost() : 0;
     }
+    if (frame.provenance().provider == runtime::PreviewDisplayProvider::GpuPreparedPacked) {
+        const auto& packed = frame.displayOnlyFrame();
+        return packed ? packed->displayByteCost() : 0;
+    }
     // What RETAINING a CPU frame costs, which is not what holding it costs right now: insertion
     // keeps packed display pixels and evaluated geometry while dropping the Float32 process image.
     const auto view = frame.displayBufferView();

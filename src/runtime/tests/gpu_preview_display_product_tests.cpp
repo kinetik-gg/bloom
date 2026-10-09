@@ -181,6 +181,7 @@ void testAdoptMovesPayloadAndPreservesPointer(Expectations& expectations) {
     expectations.expect(result.value()->pixels().data() == originalData,
                         "adoption moves the payload rather than copying it");
     expectations.expect(result.value()->pixels().size() == 16 &&
+                            result.value()->pixelStorageByteCost() == 16 * sizeof(Rgba8) &&
                             result.value()->descriptor() != nullptr,
                         "the adopted buffer keeps the payload size and descriptor");
 }

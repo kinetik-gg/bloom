@@ -392,12 +392,12 @@ destructively.
 Current time is an evaluation-request input, not a persistent preview setting. Every change
 immediately advances the desired request generation. Scrub and direct manipulation use
 `Interactive` priority; discrete typed time entry, key selection, and document refresh use
-`Visible`. Playback serves cached frames immediately, admits predicted fast misses at `Visible`,
-and skips other misses as described under **Playback never blocks**. The first Interactive request
-submits immediately. Subsequent pointer storms use an injectable 16 ms trailing cadence and retain
-at most one active request handle plus one newest pending request per preview owner. A superseded
+`Visible`. Playback serves cached frames immediately and admits bounded same-domain cold work at
+`Visible`, retaining one active producer and one newest pending intent as described under
+**Playback never blocks**. The first Interactive request submits immediately. Subsequent pointer storms use an injectable 16 ms trailing cadence and retain
+at most one active request handle plus one newest pending request per preview owner. For scrub and incompatible intents, a superseded
 active request is cancelled but remains active until terminal; only then may the pending request be
-submitted. Live parameter overrides at the same revision and time finish the active frame so
+submitted. Compatible Playback follows the useful-work rule below. Live parameter overrides at the same revision and time finish the active frame so
 continuous input can still display progress. Scrub end bypasses the trailing delay but does not
 violate that active-request gate. Scheduler coalescing and stale-result rejection remain
 lower-level backstops.
@@ -517,8 +517,13 @@ retains an owner-bound lease charged by actual native allocation and metadata. A
 host buffer has 8,294,400 pixel bytes before metadata; native alignment may charge more.
 The new `GpuPreparedPacked` service product retains only sealed GPU-prepared host pixels and proof,
 with no native image or process frame. ROI pixel extent is its data window, distinct from the full
-display mapping. Restamps share immutable bytes/proof. Normal Viewer/cache use of this new arm
-remains pending Stage 2; core restamp evidence does not qualify warm range playback.
+display mapping. Ordinary application Viewer/cache use is adopted: painting and restamps borrow
+immutable bytes/proof. Actual charge includes vector capacity, proof/envelope, bounds and identity
+metadata. Controlled 100-frame Full/Half ranges retain 829,620,400/207,540,400 B under a 1 GiB host
+cache with no retained native products. Warm exact-time readiness observations add no evaluation,
+GPU dispatch, final transfer or cache growth; they do not prove a repaint at every seek or sustained
+clock performance. Channel derivatives run off the UI thread in a bounded cancellable CPU worker
+and are labelled CPU presentation; exposure/gamma/OCIO still use genuine GPU display preparation.
 
 Consumers of scene-linear pixels check `PreparedPreviewFrame::hasProcessFrame()`. The pixel probe
 reads an available bounded process frame or schedules exact one-pixel ROI evaluation for a
@@ -746,17 +751,31 @@ Each due tick advances the exact session time and asks for its frame:
   delivery estimate does not gate an idle admission: it is only refreshed by a successful
   completion, so refusing to submit on an unknown or slow estimate would starve a cold, uncached
   range forever. Delivery timing includes queue, preparation, and UI polling.
-- A busy miss (a foreground request is active or pending) is skipped immediately. The previous
-  picture remains visibly stale, the frame is counted dropped, and speculative filling continues. A
-  prediction is not a deadline guarantee: an admitted frame arriving after its deadline or
-  superseded by another tick cannot replace the displayed picture. A valid late result may still
-  enter the cache for a later loop.
+- Same-domain playback keeps one active producer and one newest pending intent. A busy miss
+  replaces only that pending intent; newer ticks do not cancel useful active work. Admission remains
+  blocked until the active handle reaches terminal state. Missed deadlines count lateness once,
+  independently of whether preparation later succeeds.
+- A clean, valid exact-identity older completion may enter the cache at its own rational time and
+  display coherently as Stale while desired time/generation remains newest. It cannot overwrite a
+  newer displayed or cached generation, including after a loop. Identity and generation guards are
+  rechecked around cache/accounting callbacks, preventing purge or same-ID rebind from reviving an
+  old result. Failed/unsupported late work cannot claim pixels and contributes at most one drop.
+- Incompatible domain, edits, scrub, rebind, purge, pause and shutdown retain cancellation and
+  terminal-drain barriers. Pause queues one normal Visible replacement unless a live Current frame
+  already matches; shutdown closes admission before pause recovery can enqueue work.
 
 The transport retains its two exact clocks. If the next frame is cached, it advances exactly one
 frame per due tick, preserving frame-accurate RAM Preview even after a host stall. Otherwise it jumps
 to the frame demanded by total elapsed time. Both loop without accumulated floating-point time.
 Neither clock waits for cache completion. Explicit RAM Preview is the mode that waits before starting
 playback.
+
+This bounded cold-progress repair is locally qualified by a short real solid/text animation:
+actual time 0.916667 is displayed Stale while transport requests 1.0 and remains playing; pause
+converges at 2.83333. Seven CPU pixel oracles, coherent handles, real text drag/commit and exact undo
+pass. It changes no clock/deadline/ticker interval and adds no prewarm or CPU scene substitution.
+Completion notifications/refill, rational transport refinement, required native Qt present hooks and
+remaining scheduling/stress qualification remain G4 work; sustained rate and drift remain G10.
 
 ### Audio Clock Master
 

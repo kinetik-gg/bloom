@@ -89,6 +89,9 @@ class Rgba32fImage final {
     [[nodiscard]] const Rgba32fImageDescriptor* descriptor() const&& = delete;
     [[nodiscard]] std::span<const Rgba32f> pixels() const& noexcept { return pixels_; }
     [[nodiscard]] std::span<const Rgba32f> pixels() const&& = delete;
+    [[nodiscard]] std::size_t pixelStorageByteCost() const noexcept {
+        return pixels_.capacity() * sizeof(Rgba32f);
+    }
     [[nodiscard]] ImageResult<Rgba32fImageView> view() const& noexcept;
     [[nodiscard]] ImageResult<Rgba32fImageView> view() const&& = delete;
     [[nodiscard]] ImageResult<Rgba32f> read(std::int64_t x, std::int64_t y) const noexcept;

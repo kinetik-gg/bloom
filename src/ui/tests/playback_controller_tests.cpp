@@ -610,7 +610,7 @@ void testOverflowingDurationCompositionPlaybackIsNoOp(Expectations& expectations
     finishFixture(fixture, expectations);
 }
 
-// Hold initial work on the worker: playback must skip immediately without queuing behind it.
+// Hold initial work on the worker: playback keeps one newest intent behind its retirement gate.
 struct WorkerGate final {
     void enterAndWait() {
         std::unique_lock lock(mutex_);
@@ -648,7 +648,7 @@ snapshotForGeneration(const bloom::runtime::TaskScheduler& scheduler,
     return std::nullopt;
 }
 
-void testIntegrationPlaybackSkipsWhileForegroundGateIsBusy(Expectations& expectations) {
+void testIntegrationPlaybackCoalescesWhileForegroundGateIsBusy(Expectations& expectations) {
     using namespace bloom;
     auto newProject = makeTestProject("Playback Interactive Gate", time(4));
     const auto compositionId = newProject.initialCompositionId;
@@ -691,14 +691,23 @@ void testIntegrationPlaybackSkipsWhileForegroundGateIsBusy(Expectations& expecta
                                     : 0;
     expectations.expect(tickGeneration != 0, "the tick's own request identity is observable");
     expectations.expect(scheduler.snapshots().size() == 1,
-                        "the tick skips the busy foreground gate without adding pending work");
+                        "the tick keeps the busy foreground admission gate closed");
 
     firstRequest.release();
-    expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
-                        "the initial request terminates without a playback request behind it");
+    expectations.expect(
+        waitUntil([&] {
+            return controller.state().freshness == ui::FrameFreshness::Current &&
+                   controller.state().frame &&
+                   controller.state().frame->desiredIdentity().requestGeneration == tickGeneration;
+        }),
+        "the one newest playback intent is delivered after cancelled foreground work drains");
     const auto tickSnapshot = snapshotForGeneration(scheduler, tickGeneration);
-    expectations.expect(!tickSnapshot.has_value() && controller.droppedFrameCount() == 1,
-                        "the skipped tick is counted once and is never submitted later");
+    expectations.expect(tickSnapshot.has_value() && invocationCount.load() == 2 &&
+                            scheduler.isQuiescent(),
+                        "only the original producer and one newest playback request are admitted");
+    expectations.expect(
+        controller.droppedFrameCount() >= 1 && controller.droppedFrameCount() <= 2,
+        "the superseded foreground frame is dropped once; late playback may add one");
 
     playback.pause();
     controller.beginShutdown();
@@ -1207,7 +1216,7 @@ int main(int argc, char** argv) try {
     testScrubDuringPlaybackPauses(expectations);
     testStopsOnCompositionSwitch(expectations);
     testOverflowingDurationCompositionPlaybackIsNoOp(expectations);
-    testIntegrationPlaybackSkipsWhileForegroundGateIsBusy(expectations);
+    testIntegrationPlaybackCoalescesWhileForegroundGateIsBusy(expectations);
     testPlaybackToggleButtonAndSpaceShortcut(expectations);
     testStepForwardFromZeroLandsOnFrameOne(expectations);
     testStepBackwardAtZeroClampsWithNoSignalChurn(expectations);

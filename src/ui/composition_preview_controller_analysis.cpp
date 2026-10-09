@@ -7,6 +7,40 @@ namespace bloom::ui {
 runtime::TaskSubmission<PreviewPreparationResultHandle>
 CompositionPreviewController::submitViewerAnalysis(
     const runtime::PreviewRequestIdentity& identity) {
+    return submitViewerPreparation(identity, false);
+}
+
+runtime::TaskSubmission<PreviewPreparationResultHandle>
+CompositionPreviewController::submitViewerDisplay(const runtime::PreviewRequestIdentity& identity) {
+    return submitViewerPreparation(identity, true);
+}
+
+runtime::TaskSubmission<ViewerChannelDisplayHandle>
+CompositionPreviewController::submitViewerChannelDisplay(PreparedPreviewFrameHandle frame,
+                                                         const ViewerChannel channel,
+                                                         const std::size_t retainedDisplayBytes) {
+    if (shuttingDown_ || !frame || !liveSessionMatches(frame->desiredIdentity()) ||
+        retainedDisplayBytes >= settings_.pixelStorageByteLimit)
+        return {};
+    runtime::TaskRequest request(
+        "Prepare Viewer channel",
+        {.kind = runtime::TaskOwnerKind::PanelRequest,
+         .id = runtime::TaskOwnerId::fromRaw(frame->desiredIdentity().compositionId.value())},
+        runtime::TaskPriority::Visible);
+    const auto budget = settings_.pixelStorageByteLimit - retainedDisplayBytes;
+    auto submission = scheduler_.submit<ViewerChannelDisplayHandle>(
+        std::move(request),
+        [frame = std::move(frame), channel, budget](runtime::TaskContext& context) {
+            return prepareViewerChannelDisplay(frame, channel, budget, context);
+        });
+    if (submission.accepted())
+        taskUiBridge_.wake();
+    return submission;
+}
+
+runtime::TaskSubmission<PreviewPreparationResultHandle>
+CompositionPreviewController::submitViewerPreparation(
+    const runtime::PreviewRequestIdentity& identity, const bool displayRoute) {
     if (shuttingDown_ || !liveSessionMatches(identity))
         return {};
 
@@ -48,6 +82,12 @@ CompositionPreviewController::submitViewerAnalysis(
     request.sourceVersion = {.documentRevision = identity.sourceRevision.value(),
                              .requestGeneration = identity.requestGeneration};
     const auto budget = settings_.pixelStorageByteLimit;
+    if (displayRoute && submitter_) {
+        auto submission = submitter_(std::move(request), snapshot, identity, budget, overrides);
+        if (submission.accepted())
+            taskUiBridge_.wake();
+        return submission;
+    }
     auto submission = scheduler_.submit<PreviewPreparationResultHandle>(
         std::move(request), [snapshot, identity, overrides, budget,
                              preparation = preparation_](runtime::TaskContext& context) {

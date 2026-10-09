@@ -20,6 +20,7 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
@@ -1171,6 +1172,7 @@ bloom::document::NodeId firstGraphNode(const bloom::ui::CompositionSession& sess
 #include "composition_preview_controller_02_snapshot.ipp"
 #include "composition_preview_controller_03_split.ipp"
 #include "composition_preview_controller_04_retention.ipp"
+#include "composition_preview_controller_pause.ipp"
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1183,6 +1185,11 @@ int main(int argc, char** argv) {
     }
     Expectations expectations;
     try {
+        testPauseReplacesCancelledSameTime(expectations);
+        testShutdownCannotRecoverStalePlayback(expectations);
+        testColdPlaybackCarriesUsefulFrames(expectations);
+        testLatePlaybackCountsFailureOnce(expectations);
+        testLatePlaybackPurgeObserverRejectsOldDelivery(expectations);
         testResolutionPolicyAndRequestThresholds(expectations);
         testProxyPipelineUsesRoundedExtent(expectations);
         testRevisionAndPanelSuppression(expectations);

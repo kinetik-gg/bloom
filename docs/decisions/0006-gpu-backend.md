@@ -92,12 +92,20 @@ Native preview and all final-render routes remain required and independently qua
 
 The accepted Stage 1 service foundation submits and polls on the GPU owner, materializes off the
 UI thread, preserves exact identity and measured allocation accounting, and quarantines unproved
-native retirement. Viewer integration, host-only retained cache use, clipping and warm playback
-remain Stage 2 gates. The native route remains the current default until that integration qualifies.
-Public QWidget painting makes this direction feasible across Linux, macOS and Windows; current
-native evidence is Linux-only, not proof of equivalent GPU capability or performance on all three.
-Unavailable GPU preparation retains explicit CPU-fallback provenance. This bounded revisit does
-not change this ADR's working status or its cross-platform acceptance requirement.
+native retirement. The bounded Stage 2 integration is now adopted for ordinary application preview:
+GPU-prepared packed output is CPU-painted through QWidget, with host-only retained display products.
+Private Linux pixels qualify held panel/top-level shrink, ancestor movement, ROI, coherent outlines,
+real animated text manipulation and short useful cold progress. Fitting Full/Half 100-frame ranges
+reuse immutable storage without further scene evaluation, dispatch or final transfer; readiness
+observations do not certify a paint at every seek or sustained playback cadence.
+
+Channel remapping runs in a bounded cancellable CPU worker and is disclosed as CPU presentation;
+exposure, gamma and OCIO remain GPU display processing. This is not a GPU coverage exception.
+Native preview and final GPU routes remain required. Public QWidget painting supports the same
+presentation direction across Linux, macOS and Windows; current native evidence is Linux-only,
+not proof of equivalent GPU capability or performance on all three. Unavailable GPU preparation
+retains explicit CPU-fallback provenance. This bounded revisit does not change this ADR's working
+status or its cross-platform acceptance requirement.
 
 ## References
 

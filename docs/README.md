@@ -2,7 +2,7 @@
 
 Status: canonical
 
-Updated: 2026-09-20
+Updated: 2026-10-09
 
 This directory is Bloom's current source of truth. Historical notes outside this repository may
 provide research or rationale, but they are not binding until adopted here.
@@ -85,6 +85,14 @@ provide research or rationale, but they are not binding until adopted here.
   explicit supported fallback; GPU execution is locally exercised on Linux only, and macOS and
   Windows have an explicit supported CPU fallback. Vulkan/MoltenVK remains a working GPU direction
   until its cross-platform parity and lifecycle spike passes.
+- Ordinary Viewer preview now uses genuine GPU scene/display preparation followed by an asynchronous
+  final RGBA8 transfer and QWidget painting, explicitly labelled GPU-prepared/CPU-painted. Bounded
+  private Linux checks qualify clipping, ROI, coherent outlines, host-only Full/Half 100-frame reuse,
+  real animated text manipulation and short useful cold progress. Channel remapping is a bounded
+  CPU worker with explicit provenance. Native preview/final GPU coverage remains required. These
+  checks do not establish sustained playback or cross-platform GPU qualification; broader completion,
+  clock, media, aggregate memory and batching work remains in the
+  [GPU reliability plan](plans/gpu-reliability-and-preview.md).
 
 The detailed implementation status and next merge gates live in [`roadmap.md`](roadmap.md).
 

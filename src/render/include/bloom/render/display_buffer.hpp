@@ -97,6 +97,10 @@ class PreparedReferenceDisplayBuffer final {
     [[nodiscard]] const ReferenceDisplayBufferDescriptor* descriptor() const&& = delete;
     [[nodiscard]] std::span<const Rgba8> pixels() const& noexcept { return pixels_; }
     [[nodiscard]] std::span<const Rgba8> pixels() const&& = delete;
+    // Allocation capacity, including any spare storage, rather than the visible pixel length.
+    [[nodiscard]] std::size_t pixelStorageByteCost() const noexcept {
+        return pixels_.capacity() * sizeof(Rgba8);
+    }
     [[nodiscard]] ImageResult<ReferenceDisplayBufferView> view() const& noexcept;
     [[nodiscard]] ImageResult<ReferenceDisplayBufferView> view() const&& = delete;
 

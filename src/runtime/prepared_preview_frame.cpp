@@ -153,9 +153,9 @@ std::size_t PreviewDisplayOnlyFrame::displayByteCost() const noexcept {
     if (provenance_.provider == PreviewDisplayProvider::GpuPreparedPacked) {
         const auto metadata =
             gpuPreparedPackedMetadataByteCost(desiredIdentity_, bounds_.capacity());
-        if (buffer_.pixels().size_bytes() > std::numeric_limits<std::size_t>::max() - metadata)
+        if (buffer_.pixelStorageByteCost() > std::numeric_limits<std::size_t>::max() - metadata)
             return std::numeric_limits<std::size_t>::max();
-        return buffer_.pixels().size_bytes() + metadata;
+        return buffer_.pixelStorageByteCost() + metadata;
     }
     return buffer_.pixels().size_bytes() + std::span(bounds_).size_bytes();
 }

@@ -420,6 +420,8 @@ target_sources(
         viewer_overlays.cpp
         viewer_overlays_text.cpp
         viewer_editor.cpp
+        viewer_channel_display.cpp
+        viewer_editor_channel.cpp
         viewer_editor_analysis.cpp
         viewer_editor_probe.cpp
         composition_preview_controller_analysis.cpp
@@ -491,6 +493,7 @@ target_sources(
             include/bloom/ui/composition_commands.hpp
             include/bloom/ui/viewer_overlays.hpp
             include/bloom/ui/viewer_editor.hpp
+            include/bloom/ui/viewer_channel_display.hpp
             include/bloom/ui/viewer_editor_probe.hpp
             include/bloom/ui/viewer_gpu_presenter.hpp
             include/bloom/ui/viewer_gpu_resident.hpp

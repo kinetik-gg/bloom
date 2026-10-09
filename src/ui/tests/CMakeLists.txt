@@ -1505,6 +1505,15 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )
 
+    add_executable(bloom_ui_gpu_packed_viewer_test gpu_packed_viewer_tests.cpp)
+    target_include_directories(bloom_ui_gpu_packed_viewer_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    target_link_libraries(bloom_ui_gpu_packed_viewer_test
+        PRIVATE bloom_ui bloom_host bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
+    bloom_package_gpu_shader_tools(bloom_ui_gpu_packed_viewer_test)
+    bloom_enable_warnings(bloom_ui_gpu_packed_viewer_test)
+    bloom_enable_strict_floating_point(bloom_ui_gpu_packed_viewer_test)
+
     add_executable(bloom_ui_gpu_viewer_service_chain_test
         gpu_viewer_service_chain_tests.cpp
         gpu_service_chain_fixture.hpp
@@ -1521,6 +1530,31 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     else()
         set(bloom_ui_gpu_viewer_service_chain_loader_args)
     endif()
+    foreach(packed_case IN ITEMS paused playing animated half100 full100 partial)
+        if(packed_case STREQUAL "playing")
+            set(packed_args --playing)
+        elseif(packed_case STREQUAL "animated")
+            set(packed_args --animated-drag)
+        elseif(packed_case STREQUAL "half100")
+            set(packed_args --cache100-half)
+        elseif(packed_case STREQUAL "full100")
+            set(packed_args --cache100-full)
+        elseif(packed_case STREQUAL "partial")
+            set(packed_args --cache100-full --partial)
+        else()
+            set(packed_args)
+        endif()
+        bloom_add_test(
+            NAME bloom.ui.gpu_packed_viewer_${packed_case}
+            COMMAND bloom_ui_gpu_packed_viewer_test
+                    ${bloom_ui_gpu_viewer_service_chain_loader_args} ${packed_args}
+            LABELS ui gpu viewer packed native
+            TIMEOUT 150
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        set_tests_properties(bloom.ui.gpu_packed_viewer_${packed_case}
+            PROPERTIES SKIP_RETURN_CODE 77)
+    endforeach()
+
     bloom_add_test(
         NAME bloom.ui.gpu_viewer_service_chain
         COMMAND bloom_ui_gpu_viewer_service_chain_test
