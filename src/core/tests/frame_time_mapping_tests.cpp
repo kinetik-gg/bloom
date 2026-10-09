@@ -1,10 +1,12 @@
 #include <bloom/core/frame_time_mapping.hpp>
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <string_view>
+#include <utility>
 
 namespace {
 
@@ -223,6 +225,72 @@ void testFrameOffsetForElapsedNanosecondsFloorsExactly() {
             "an unrepresentable frame offset is refused rather than silently wrapped");
 }
 
+void testRationalPlaybackGridAndDueBoundaries() {
+    constexpr std::array rates{std::pair{24U, 1U},       std::pair{25U, 1U},
+                               std::pair{30U, 1U},       std::pair{60U, 1U},
+                               std::pair{24000U, 1001U}, std::pair{30000U, 1001U},
+                               std::pair{60000U, 1001U}};
+    constexpr auto ns = std::uint64_t{1'000'000'000};
+    for (const auto& [p, q] : rates) {
+        const auto grid = mapping(time(1), p, q);
+        const auto periodNumerator = ns * q;
+        const auto periodCeiling = (periodNumerator + p - 1) / p;
+        require(grid.frameOffsetForTime(time(0)) == 0 &&
+                    grid.nanosecondsUntilNextFrame(time(0)) == periodCeiling,
+                "zero starts a positive exact rational frame period");
+        for (const auto index : {1ULL, 10ULL, 600ULL}) {
+            const auto exact = time(static_cast<std::int64_t>(index * q), p);
+            require(grid.frameOffsetForTime(exact) == index &&
+                        grid.nanosecondsUntilNextFrame(exact) == periodCeiling,
+                    "exact audio frame boundaries floor without clamping after range/loops");
+            const auto boundaryNumerator = index * periodNumerator;
+            const auto boundaryCeiling = (boundaryNumerator + p - 1) / p;
+            const auto before = boundaryCeiling - 1;
+            require(grid.frameOffsetForElapsedNanoseconds(before) == index - 1 &&
+                        grid.frameOffsetForTime(time(static_cast<std::int64_t>(before), ns)) ==
+                            index - 1,
+                    "the final whole nanosecond before a fractional boundary stays on prior frame");
+            require(grid.nanosecondsUntilNextFrame(time(static_cast<std::int64_t>(before), ns)) ==
+                        (boundaryNumerator - before * p + p - 1) / p,
+                    "remaining deadline is exact ceil of rational boundary distance");
+            require(grid.frameOffsetForTime(time(static_cast<std::int64_t>(boundaryCeiling), ns)) ==
+                        index,
+                    "first representable nanosecond at/after boundary advances frame");
+        }
+        require(!grid.frameOffsetForTime(time(-1)).has_value() &&
+                    !grid.nanosecondsUntilNextFrame(time(-1)).has_value(),
+                "negative clock input is refused without unsigned wrap");
+    }
+    constexpr auto maxInt = std::numeric_limits<std::int64_t>::max();
+    constexpr auto maxRate = std::numeric_limits<std::uint32_t>::max();
+    const auto wide = mapping(time(1), maxRate, maxRate - 1);
+    require(wide.frameOffsetForTime(time(1, maxInt)) == 0 &&
+                wide.nanosecondsUntilNextFrame(time(1, maxInt)) == ns,
+            "95-bit remaining fraction scaled into 125 bits keeps exact positive deadline");
+    const auto fast = mapping(time(1), maxRate, 1);
+    require(!fast.frameOffsetForTime(time(maxInt)).has_value() &&
+                !fast.nanosecondsUntilNextFrame(time(maxInt)).has_value(),
+            "unrepresentable audio index refuses both target and boundary without wrap");
+    const auto normal = mapping(time(1), 25, 1);
+    require(normal.nanosecondsUntilNextFrame(time(0), time(2)) == 20'000'000 &&
+                normal.nanosecondsUntilNextFrame(time(0), time(1, 2)) == 80'000'000 &&
+                normal.nanosecondsUntilNextFrame(time(0), time(1, 1'000'000)) ==
+                    40'000'000'000'000ULL,
+            "existing fast and slow audio rate ratios convert media deadline to wall time");
+    require(mapping(time(1), 30, 1).nanosecondsUntilNextFrame(time(0), time(1, 2)) == 66'666'667 &&
+                mapping(time(1), 60, 1).nanosecondsUntilNextFrame(time(0), time(1, 2)) ==
+                    33'333'334,
+            "fractional wall periods round once after exact speed scaling");
+    require(!normal.nanosecondsUntilNextFrame(time(0), time(0)) &&
+                !normal.nanosecondsUntilNextFrame(time(0), time(-1)),
+            "invalid speed cannot produce a silent forced-one deadline");
+    const auto sparse = mapping(time(1), 1, maxRate);
+    require(sparse.nanosecondsUntilNextFrame(time(0)) == ns * maxRate,
+            "long rational periods remain checked and finite");
+    require(!sparse.nanosecondsUntilNextFrame(time(0), time(1, maxInt)),
+            "unrepresentable scaled wall budget is explicitly refused");
+}
+
 } // namespace
 
 int main() {
@@ -234,5 +302,6 @@ int main() {
     testExactTimeRepresentationBoundary();
     testStructuredFailures();
     testFrameOffsetForElapsedNanosecondsFloorsExactly();
+    testRationalPlaybackGridAndDueBoundaries();
     return 0;
 }

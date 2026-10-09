@@ -39,6 +39,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -48,12 +49,26 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <source_location>
 #include <string>
 #include <thread>
 #include <utility>
+
+namespace bloom::ui {
+struct CompositionPreviewDeadlineTestAccess final {
+    static std::optional<std::chrono::steady_clock::time_point>
+    active(const CompositionPreviewController& controller) {
+        return controller.active_ ? controller.active_->playbackDeadline : std::nullopt;
+    }
+    static std::optional<std::chrono::steady_clock::time_point>
+    pending(const CompositionPreviewController& controller) {
+        return controller.pending_ ? controller.pending_->playbackDeadline : std::nullopt;
+    }
+};
+} // namespace bloom::ui
 
 namespace {
 
@@ -115,8 +130,9 @@ bloom::runtime::TaskSchedulerConfig testSchedulerConfig() {
 // with no fractional-nanosecond ambiguity -- the frame-math tests below need that exactness, not
 // an inexact rate like frame_time_mapping_tests.cpp's own fractional-rate coverage already handles
 // at the bloom::core level.
-bloom::document::CompositionFormat testFormat() {
-    const auto rate = bloom::document::FrameRate::create(25, 1);
+bloom::document::CompositionFormat testFormat(const std::uint32_t p = 25,
+                                              const std::uint32_t q = 1) {
+    const auto rate = bloom::document::FrameRate::create(p, q);
     if (!rate.has_value()) {
         std::abort();
     }
@@ -202,10 +218,11 @@ struct SessionFixture final {
     PipelineFixture pipeline;
     bloom::ui::CompositionPreviewController controller;
 
-    explicit SessionFixture(bloom::document::NewProject newProject)
+    explicit SessionFixture(bloom::document::NewProject newProject,
+                            const std::chrono::milliseconds monitorInterval = 1ms)
         : document(std::move(newProject.project)), commands(document),
           session(document, commands, newProject.initialCompositionId),
-          scheduler(testSchedulerConfig()), bridge(scheduler, nullptr, 1ms),
+          scheduler(testSchedulerConfig()), bridge(scheduler, nullptr, monitorInterval),
           controller(session, scheduler, bridge, pipeline.pipeline) {}
 };
 
@@ -231,8 +248,7 @@ void testWorkAreaLoop(Expectations& expectations) {
                         "work area accepted");
     ManualClock clock;
     ui::PlaybackController playback(
-        fixture.session, fixture.controller, [&clock] { return clock.now; }, 16ms,
-        [](std::uint64_t) { return false; });
+        fixture.session, fixture.controller, [&clock] { return clock.now; }, 16ms);
     playback.play();
     expectations.expect(fixture.session.currentTime() == time(1),
                         "out-of-range playback starts at work-area start");
@@ -291,54 +307,413 @@ void testPlayAdvancesExactFrameTimesAndDropsFrames(Expectations& expectations) {
 
 // Controller test 2: loop wrap at duration is exact -- no drift after several wraps, verified by
 // exact RationalTime equality (never an approximate/epsilon comparison).
-// Task PERF1, item 4: the frame-accurate clock. A cached next frame costs a lookup, so the
-// transport has nothing to drop and must not skip -- it advances exactly one frame, even when
-// several frame durations have already elapsed. An uncached next frame keeps the original
-// drop-not-slow jump, and the two clocks have to be able to alternate within one run.
-void testCachedFramesAdvanceOneFrameWithoutCatchUpSkipping(Expectations& expectations) {
+// Real cached products affect preparation only; late/repeated ticks retain the same real-time grid.
+void testCachedFramesUseElapsedClock(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Cached Playback Clock", time(4)));
+    for (const auto index : {5, 6, 12, 0}) {
+        (void)fixture.session.setCurrentTime(time(index, 25));
+        expectations.expect(waitUntil([&] {
+                                return fixture.controller.state().freshness ==
+                                       ui::FrameFreshness::Current;
+                            }),
+                            "seed genuine cached exact-time product");
+    }
     ManualClock clock;
-    bool framesAreCached = true;
     ui::PlaybackController playback(
-        fixture.session, fixture.controller, [&clock] { return clock.now; }, 16ms,
-        [&framesAreCached](std::uint64_t) { return framesAreCached; });
-
+        fixture.session, fixture.controller, [&clock] { return clock.now; }, 16ms);
     playback.play();
-    clock.advance(200'000'000ns); // exactly five 25 fps frames
+    clock.advance(200'000'000ns);
     playback.tick();
-    expectations.expect(fixture.session.currentTime() == time(1, 25),
-                        "a cached next frame advances exactly one frame, however far behind the "
-                        "transport is");
+    expectations.expect(fixture.session.currentTime() == time(5, 25) &&
+                            fixture.controller.state().freshness == ui::FrameFreshness::Current &&
+                            !fixture.controller.state().taskId &&
+                            fixture.controller.droppedFrameCount() == 4,
+                        "late warm tick jumps directly to frame five without evaluation");
     playback.tick();
-    expectations.expect(fixture.session.currentTime() == time(2, 25),
-                        "the frames the transport owes are played rather than skipped");
-    playback.tick();
-    playback.tick();
-    playback.tick();
-    expectations.expect(fixture.session.currentTime() == time(5, 25),
-                        "paying the debt off stops exactly where elapsed time asks, never past it");
-    playback.tick();
-    expectations.expect(fixture.session.currentTime() == time(5, 25),
-                        "a caught-up cached transport waits for the next frame to come due");
+    expectations.expect(fixture.session.currentTime() == time(5, 25) &&
+                            fixture.controller.droppedFrameCount() == 4,
+                        "repeated tick at unchanged elapsed time never pays cached frame debt");
     clock.advance(40'000'000ns);
     playback.tick();
     expectations.expect(fixture.session.currentTime() == time(6, 25),
-                        "the due moment is still total elapsed time since play(), so presentations "
-                        "track the ideal frame grid");
-
-    // The same run, with the cache no longer answering: the original elapsed-time policy comes back
-    // and the next tick skips straight to the frame the wall clock demands.
-    framesAreCached = false;
+                        "next cached boundary is exact");
     clock.advance(200'000'000ns);
     playback.tick();
-    expectations.expect(fixture.session.currentTime() == time(11, 25),
-                        "an uncached next frame keeps the drop-frames-never-slow jump");
-
+    expectations.expect(fixture.session.currentTime() == time(11, 25) &&
+                            fixture.controller.droppedFrameCount() == 8,
+                        "late cold tick uses the same elapsed target and skipped-frame accounting");
+    clock.advance(40'000'000ns);
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(12, 25) &&
+                            fixture.controller.state().freshness == ui::FrameFreshness::Current,
+                        "warm transition never selects a different clock");
     playback.pause();
-    expectations.expect(fixture.controller.droppedFrameCount() == 0 ||
-                            !fixture.controller.isCountingDroppedFrames(),
-                        "the frame-accurate clock never asks the preview path to drop anything");
+    finishFixture(fixture, expectations);
+}
+
+void testTransportRationalRateBoundaries(Expectations& expectations) {
+    using namespace bloom;
+    constexpr std::array rates{std::pair{24U, 1U},       std::pair{25U, 1U},
+                               std::pair{30U, 1U},       std::pair{60U, 1U},
+                               std::pair{24000U, 1001U}, std::pair{30000U, 1001U},
+                               std::pair{60000U, 1001U}};
+    constexpr auto ns = std::uint64_t{1'000'000'000};
+    for (const auto& [p, q] : rates) {
+        SessionFixture fixture(
+            document::makeNewProject("Rational transport", "Main", time(4), testFormat(p, q)));
+        ManualClock clock;
+        const auto origin = clock.now;
+        ui::PlaybackController playback(fixture.session, fixture.controller,
+                                        [&clock] { return clock.now; });
+        playback.play();
+        clock.advance(200ms);
+        playback.tick();
+        const auto frame = 200'000'000ULL * p / (ns * q);
+        const auto expected = time(static_cast<std::int64_t>(frame * q), p);
+        expectations.expect(fixture.session.currentTime() == expected,
+                            "late cold tick lands on exact elapsed target at every required rate");
+        playback.tick();
+        expectations.expect(fixture.session.currentTime() == expected,
+                            "identical clock reading never advances frame at any rate");
+        const auto boundary = ((frame + 1) * ns * q + p - 1) / p;
+        clock.now = origin + std::chrono::nanoseconds{boundary - 1};
+        playback.tick();
+        expectations.expect(fixture.session.currentTime() == expected,
+                            "fractional due boundary does not fire one nanosecond early");
+        clock.now = origin + std::chrono::nanoseconds{boundary};
+        playback.tick();
+        expectations.expect(fixture.session.currentTime() ==
+                                time(static_cast<std::int64_t>((frame + 1) * q), p),
+                            "first whole nanosecond after due boundary lands exactly");
+        playback.pause();
+        finishFixture(fixture, expectations);
+    }
+}
+
+void testAudioMasterFloorLoopAndDisableReanchor(Expectations& expectations) {
+    using namespace bloom;
+    namespace audio = media::audio::playback;
+    SessionFixture fixture(makeTestProject("Audio master", time(2)));
+    ManualClock clock;
+    ui::PlaybackController playback(fixture.session, fixture.controller,
+                                    [&clock] { return clock.now; });
+    auto owned = std::make_unique<audio::AudioEngine>(std::make_unique<audio::NullBackend>(),
+                                                      audio::AudioEngine::Config{1000, 2, 4096});
+    auto* engine = owned.get();
+    playback.setAudioEngine(std::move(owned));
+    runtime::AudioMixDescription mix;
+    mix.clips.push_back(
+        {document::NodeId::fromRaw(1), document::AssetId::fromRaw(1), time(0), time(10)});
+    playback.setAudioMix(std::move(mix), {audio::AudioClip{nullptr, time(0)}});
+    playback.play();
+    clock.advance(20s);
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(0),
+                        "written audio frames, not advanced wall time, are the master");
+    expectations.expect(!engine->renderForTesting(999), "silent NullBackend advances audio clock");
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(24, 25),
+                        "audio just before frame boundary floors instead of nearest rounding");
+    expectations.expect(!engine->renderForTesting(1), "audio reaches exact boundary");
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(1),
+                        "audio exact boundary is frame25");
+    expectations.expect(!engine->renderForTesting(2200), "audio continues beyond composition end");
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(30, 25),
+                        "unclamped audio frame offset keeps exact loop progress beyond duration");
+    playback.setLooping(false);
+    expectations.expect(!engine->renderForTesting(1000), "audio nonloop end advances");
+    playback.tick();
+    expectations.expect(playback.state() == ui::PlaybackState::Stopped &&
+                            fixture.session.currentTime() == time(49, 25),
+                        "nonloop audio stops exactly on work-area last frame");
+    playback.setLooping(true);
+    playback.play();
+    expectations.expect(!engine->renderForTesting(80), "audio resumes from last-frame origin");
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(1, 25),
+                        "resumed audio loops exactly");
+    clock.advance(5s);
+    playback.tick();
+    playback.setAudioEnabled(false);
+    clock.advance(39ms);
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(1, 25),
+                        "audio disable anchors wall clock to current frame without old-clock jump");
+    clock.advance(1ms);
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(2, 25),
+                        "first full period after disabling audio advances exactly one frame");
+    playback.pause();
+    finishFixture(fixture, expectations);
+}
+
+void testSharedSubframeOriginAndNonOneAudioRates(Expectations& expectations) {
+    using namespace bloom;
+    namespace audio = media::audio::playback;
+    for (const auto origin : {time(1, 100), time(1, 50), time(3, 100)}) {
+        for (const bool useAudio : {false, true}) {
+            SessionFixture fixture(makeTestProject("Subframe origin", time(4)));
+            (void)fixture.session.setCurrentTime(origin);
+            ManualClock clock;
+            ui::PlaybackController playback(fixture.session, fixture.controller,
+                                            [&clock] { return clock.now; });
+            audio::AudioEngine* engine = nullptr;
+            if (useAudio) {
+                auto owned =
+                    std::make_unique<audio::AudioEngine>(std::make_unique<audio::NullBackend>(),
+                                                         audio::AudioEngine::Config{1000, 2, 4096});
+                engine = owned.get();
+                playback.setAudioEngine(std::move(owned));
+                runtime::AudioMixDescription mix;
+                mix.clips.push_back({document::NodeId::fromRaw(1), document::AssetId::fromRaw(1),
+                                     time(0), time(10)});
+                playback.setAudioMix(std::move(mix), {audio::AudioClip{nullptr, time(0)}});
+            }
+            playback.play();
+            expectations.expect(fixture.session.currentTime() == origin,
+                                "play preserves immediate exact subframe session time");
+            clock.advance(39ms);
+            if (engine)
+                expectations.expect(!engine->renderForTesting(39), "silent audio39ms");
+            playback.tick();
+            expectations.expect(fixture.session.currentTime() == origin,
+                                "shared nearest-grid origin advances only after full period");
+            clock.advance(1ms);
+            if (engine)
+                expectations.expect(!engine->renderForTesting(1), "silent audio boundary");
+            playback.tick();
+            const auto nearest = origin < time(1, 50) ? 0 : 1;
+            expectations.expect(
+                fixture.session.currentTime() == time(nearest + 1, 25),
+                "wall/audio subframe and greater halfway tie agree at first boundary");
+            playback.pause();
+            (void)fixture.session.setCurrentTime(origin);
+            playback.play();
+            clock.advance(40ms);
+            if (engine)
+                expectations.expect(!engine->renderForTesting(40), "silent audio resume");
+            playback.tick();
+            expectations.expect(fixture.session.currentTime() == time(nearest + 1, 25),
+                                "pause/seek/resume restores the same shared origin convention");
+            playback.pause();
+            finishFixture(fixture, expectations);
+        }
+    }
+    for (const auto speed : {2.0, 0.5}) {
+        SessionFixture fixture(makeTestProject("Non-one audio", time(4)));
+        expectations.expect(waitUntil([&] {
+                                return fixture.controller.state().freshness ==
+                                       ui::FrameFreshness::Current;
+                            }),
+                            "non-one fixture opening is ready");
+        ManualClock clock;
+        ui::PlaybackController playback(fixture.session, fixture.controller,
+                                        [&clock] { return clock.now; });
+        auto owned = std::make_unique<audio::AudioEngine>(
+            std::make_unique<audio::NullBackend>(), audio::AudioEngine::Config{1000, 2, 4096});
+        auto* engine = owned.get();
+        expectations.expect(engine->setRate(speed), "existing non-one audio speed is supported");
+        playback.setAudioEngine(std::move(owned));
+        runtime::AudioMixDescription mix;
+        mix.clips.push_back(
+            {document::NodeId::fromRaw(1), document::AssetId::fromRaw(1), time(0), time(10)});
+        playback.setAudioMix(std::move(mix), {audio::AudioClip{nullptr, time(0)}});
+        playback.play();
+        const auto wallFrames = speed == 2.0 ? std::size_t{20} : std::size_t{80};
+        const auto budget = speed == 2.0 ? 20ms : 80ms;
+        expectations.expect(!engine->renderForTesting(wallFrames - 1),
+                            "non-one audio before boundary");
+        playback.tick();
+        expectations.expect(fixture.session.currentTime() == time(0),
+                            "non-one audio does not run early");
+        expectations.expect(!engine->renderForTesting(1), "non-one audio exact boundary");
+        const auto before = std::chrono::steady_clock::now();
+        playback.tick();
+        const auto after = std::chrono::steady_clock::now();
+        const auto deadline = ui::CompositionPreviewDeadlineTestAccess::active(fixture.controller);
+        expectations.expect(
+            fixture.session.currentTime() == time(1, 25) && deadline &&
+                *deadline >= before + budget && *deadline <= after + budget,
+            "supported audio rate scales target and accounting deadline to wall time");
+        commands::Transaction edit("Audio live rate", fixture.session.snapshot().revision());
+        edit.emplace<commands::SetCompositionFormat>(fixture.session.compositionId(),
+                                                     testFormat(60));
+        const auto editBefore = std::chrono::steady_clock::now();
+        expectations.expect(fixture.session.executeTransaction(std::move(edit)).changed(),
+                            "audio live frame-rate edit accepted");
+        const auto editAfter = std::chrono::steady_clock::now();
+        auto reanchoredDeadline =
+            ui::CompositionPreviewDeadlineTestAccess::pending(fixture.controller);
+        if (!reanchoredDeadline)
+            reanchoredDeadline =
+                ui::CompositionPreviewDeadlineTestAccess::active(fixture.controller);
+        const auto reanchoredBudget = speed == 2.0 ? std::chrono::nanoseconds{8'333'334}
+                                                   : std::chrono::nanoseconds{33'333'334};
+        expectations.expect(fixture.session.currentTime() == time(2, 60) && reanchoredDeadline &&
+                                *reanchoredDeadline >= editBefore + reanchoredBudget &&
+                                *reanchoredDeadline <= editAfter + reanchoredBudget,
+                            "live rate reanchor preserves non-one audio wall deadline");
+        playback.pause();
+        finishFixture(fixture, expectations);
+    }
+}
+
+void testRateChangesEmptyGridAndInvalidClock(Expectations& expectations) {
+    using namespace bloom;
+    for (const auto newRate : {24U, 60U}) {
+        SessionFixture fixture(makeTestProject("Live rate", time(4)));
+        ManualClock clock;
+        ui::PlaybackController playback(fixture.session, fixture.controller,
+                                        [&clock] { return clock.now; });
+        playback.play();
+        clock.advance(400ms);
+        playback.tick();
+        commands::Transaction edit("Frame rate", fixture.session.snapshot().revision());
+        edit.emplace<commands::SetCompositionFormat>(fixture.session.compositionId(),
+                                                     testFormat(newRate));
+        expectations.expect(fixture.session.executeTransaction(std::move(edit)).changed(),
+                            "live frame-rate command accepted");
+        const auto anchor = newRate == 24 ? 10 : 24;
+        expectations.expect(playback.state() == ui::PlaybackState::Playing &&
+                                fixture.session.currentTime() == time(anchor, newRate),
+                            "live rate reanchors the current nearest grid rather than old offset");
+        clock.advance(std::chrono::nanoseconds{(1'000'000'000ULL + newRate - 1) / newRate});
+        playback.tick();
+        expectations.expect(fixture.session.currentTime() == time(anchor + 1, newRate),
+                            "new-rate rational period advances without freeze or clock debt");
+        playback.pause();
+        finishFixture(fixture, expectations);
+    }
+    for (const auto bounds : {std::pair{35, 36}, std::pair{10, 20}}) {
+        SessionFixture fixture(
+            document::makeNewProject("Grid disappears", "Main", time(4), testFormat(1000)));
+        commands::Transaction area("Narrow work area", fixture.session.snapshot().revision());
+        area.emplace<commands::SetWorkArea>(fixture.session.compositionId(),
+                                            time(bounds.first, 1000), time(bounds.second, 1000));
+        expectations.expect(fixture.session.executeTransaction(std::move(area)).changed(),
+                            "valid1000fps area");
+        ManualClock clock;
+        ui::PlaybackController playback(fixture.session, fixture.controller,
+                                        [&clock] { return clock.now; });
+        playback.play();
+        commands::Transaction rate("Remove grid", fixture.session.snapshot().revision());
+        rate.emplace<commands::SetCompositionFormat>(fixture.session.compositionId(),
+                                                     testFormat(25));
+        expectations.expect(fixture.session.executeTransaction(std::move(rate)).changed(),
+                            "valid format leaves empty grid");
+        expectations.expect(
+            playback.state() == ui::PlaybackState::Stopped,
+            "range with no valid new-rate frame pauses instead of reanchoring forever");
+        playback.play();
+        expectations.expect(playback.state() == ui::PlaybackState::Stopped,
+                            "a new play also refuses the empty valid-grid range");
+        finishFixture(fixture, expectations);
+    }
+    {
+        SessionFixture fixture(
+            document::makeNewProject("Off-grid valid range", "Main", time(4), testFormat(1000)));
+        commands::Transaction area("Work area", fixture.session.snapshot().revision());
+        area.emplace<commands::SetWorkArea>(fixture.session.compositionId(), time(10, 1000),
+                                            time(90, 1000));
+        expectations.expect(fixture.session.executeTransaction(std::move(area)).changed(),
+                            "valid authored range is accepted");
+        ManualClock clock;
+        ui::PlaybackController playback(fixture.session, fixture.controller,
+                                        [&clock] { return clock.now; });
+        playback.play();
+        commands::Transaction rate("Off-grid endpoints", fixture.session.snapshot().revision());
+        rate.emplace<commands::SetCompositionFormat>(fixture.session.compositionId(),
+                                                     testFormat(25));
+        expectations.expect(fixture.session.executeTransaction(std::move(rate)).changed(),
+                            "supported rate edit makes endpoints off-grid");
+        expectations.expect(fixture.session.currentTime() == time(1, 25),
+                            "reanchor chooses first valid frame instead of preceding frame zero");
+        clock.advance(40ms);
+        playback.tick();
+        expectations.expect(fixture.session.currentTime() == time(2, 25),
+                            "nonempty off-grid range advances to its last valid frame");
+        clock.advance(40ms);
+        playback.tick();
+        expectations.expect(fixture.session.currentTime() == time(1, 25),
+                            "off-grid loop excludes both preceding frame and exclusive end");
+        playback.pause();
+        (void)fixture.session.setCurrentTime(time(11, 1000));
+        playback.play();
+        expectations.expect(fixture.session.currentTime() == time(11, 1000),
+                            "inside authored interval preserves immediate stored subframe time");
+        clock.advance(40ms);
+        playback.tick();
+        expectations.expect(
+            fixture.session.currentTime() == time(2, 25),
+            "play origin clamps to valid grid even when alignment exceeds half-frame");
+        playback.pause();
+        finishFixture(fixture, expectations);
+    }
+    {
+        SessionFixture fixture(makeTestProject("Extreme clock", time(4)));
+        ManualClock clock;
+        clock.now = std::chrono::steady_clock::time_point::min();
+        ui::PlaybackController playback(fixture.session, fixture.controller,
+                                        [&clock] { return clock.now; });
+        playback.play();
+        clock.now = std::chrono::steady_clock::time_point::max();
+        playback.tick();
+        expectations.expect(fixture.session.currentTime() == time(0),
+                            "extreme difference is refused before signed subtraction");
+        clock.now = std::chrono::steady_clock::time_point::min() + 40ms;
+        playback.tick();
+        expectations.expect(fixture.session.currentTime() == time(1, 25),
+                            "valid clock recovery retains fixed origin");
+        playback.pause();
+        bool refused = false;
+        try {
+            ui::PlaybackController invalid(fixture.session, fixture.controller,
+                                           ui::PlaybackController::ClockFunction{});
+        } catch (const std::invalid_argument&) {
+            refused = true;
+        }
+        expectations.expect(refused, "empty injected clock rejected during construction");
+        finishFixture(fixture, expectations);
+    }
+}
+
+void testLiveWorkAreaEditsReanchorSafely(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Range edit clock", time(4)));
+    ManualClock clock;
+    ui::PlaybackController playback(fixture.session, fixture.controller,
+                                    [&clock] { return clock.now; });
+    playback.play();
+    clock.advance(1200ms);
+    playback.tick();
+    const auto setArea = [&](const core::RationalTime start, const core::RationalTime end) {
+        commands::Transaction edit("Work area", fixture.session.snapshot().revision());
+        edit.emplace<commands::SetWorkArea>(fixture.session.compositionId(), start, end);
+        expectations.expect(fixture.session.executeTransaction(std::move(edit)).changed(),
+                            "live work-area edit is accepted");
+    };
+    setArea(time(2), time(3));
+    expectations.expect(playback.state() == ui::PlaybackState::Playing &&
+                            fixture.session.currentTime() == time(2),
+                        "shift beyond old origin reanchors without unsigned offset underflow");
+    clock.advance(40ms);
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(51, 25), "shifted range progresses");
+    setArea(time(1), time(3));
+    clock.advance(40ms);
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(52, 25),
+                        "range expansion preserves current origin without accumulated clock debt");
+    playback.setLooping(false);
+    setArea(time(1), time(53, 25));
+    clock.advance(200ms);
+    playback.tick();
+    expectations.expect(playback.state() == ui::PlaybackState::Stopped &&
+                            fixture.session.currentTime() == time(52, 25),
+                        "trimmed nonloop range stops on exclusive-end predecessor");
     finishFixture(fixture, expectations);
 }
 
@@ -636,6 +1011,72 @@ struct WorkerGate final {
     bool entered_ = false;
     bool released_ = false;
 };
+
+void testPendingDeadlineRetainsIntentAndCountsLateOnce(Expectations& expectations) {
+    using namespace bloom;
+    auto project = makeTestProject("Captured deadline", time(4));
+    const auto compositionId = project.initialCompositionId;
+    document::Document document(std::move(project.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler); // Production100ms progress; completion drives delivery.
+    PipelineFixture pipeline;
+    WorkerGate first, second;
+    auto prepare = [&](const document::Snapshot& snapshot,
+                       const runtime::PreviewRequestIdentity& identity, const std::size_t limit,
+                       const std::vector<runtime::SnapshotParameterOverride>& override,
+                       runtime::TaskContext& context) {
+        if (identity.time == time(1, 25))
+            first.enterAndWait();
+        if (identity.time == time(2, 25))
+            second.enterAndWait();
+        return pipeline.pipeline(snapshot, identity, limit, override, context);
+    };
+    ui::CompositionPreviewController controller(session, scheduler, bridge, prepare);
+    expectations.expect(
+        waitUntil([&] { return controller.state().freshness == ui::FrameFreshness::Current; }),
+        "deadline fixture opening frame is ready");
+    ManualClock clock;
+    ui::PlaybackController playback(session, controller, [&clock] { return clock.now; });
+    playback.play();
+    clock.advance(40ms);
+    const auto before = std::chrono::steady_clock::now();
+    playback.tick();
+    const auto after = std::chrono::steady_clock::now();
+    const auto active = ui::CompositionPreviewDeadlineTestAccess::active(controller);
+    expectations.expect(active && *active >= before + 40ms && *active <= after + 40ms,
+                        "25fps intent has40ms rational budget independent of16ms wake cap");
+    expectations.expect(waitUntil([&] { return first.entered(); }), "first producer held");
+    clock.advance(40ms);
+    playback.tick();
+    const auto captured = ui::CompositionPreviewDeadlineTestAccess::pending(controller);
+    expectations.expect(captured.has_value(), "newest pending intent captures absolute deadline");
+    expectations.expect(captured &&
+                            waitUntil([&] { return std::chrono::steady_clock::now() > *captured; }),
+                        "held producer lasts beyond actual rational frame deadline without sleeps");
+    first.release();
+    expectations.expect(waitUntil([&] { return second.entered(); }),
+                        "completion admits newest pending producer once");
+    expectations.expect(ui::CompositionPreviewDeadlineTestAccess::active(controller) == captured,
+                        "pending deadline survives queue retirement without rebasing at submit");
+    second.release();
+    expectations.expect(waitUntil([&] {
+                            return controller.state().freshness == ui::FrameFreshness::Current &&
+                                   controller.state().frame->desiredIdentity().time == time(2, 25);
+                        }),
+                        "late clean current product remains useful while deadline is accounting");
+    expectations.expect(controller.droppedFrameCount() == 2,
+                        "superseded first ask and late second delivery each count exactly once");
+    bridge.wake();
+    QCoreApplication::processEvents();
+    expectations.expect(controller.droppedFrameCount() == 2, "extra drain cannot count late twice");
+    playback.pause();
+    controller.beginShutdown();
+    bridge.beginShutdown();
+    expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
+                        "deadline fixture drains");
+}
 
 std::optional<bloom::runtime::TaskSnapshot>
 snapshotForGeneration(const bloom::runtime::TaskScheduler& scheduler,
@@ -1201,15 +1642,150 @@ void testTimeReadoutFormatsFrameExactTimeAndResetsOnCompositionSwitch(Expectatio
     finishFixture(fixture, expectations);
 }
 
+// Opt-in bounded clock evidence. Five competing 4x3 CPU-reference sessions use production
+// transport timers and the normal 100ms Jobs interval. This measures desired time, not painting.
+void testRealClockProof(Expectations& expectations) {
+    using namespace bloom;
+    constexpr auto rates = std::array{std::pair{24U, 1U}, std::pair{25U, 1U}, std::pair{30U, 1U},
+                                      std::pair{60U, 1U}, std::pair{30000U, 1001U}};
+    struct Sample final {
+        std::optional<std::chrono::steady_clock::time_point> origin;
+        std::chrono::steady_clock::time_point read{};
+        std::chrono::nanoseconds maximumGap{};
+        std::uint64_t reads = 0;
+        std::uint64_t changes = 0;
+        std::uint64_t mismatches = 0;
+    };
+    std::array<Sample, rates.size()> samples;
+    std::array<std::unique_ptr<SessionFixture>, rates.size()> fixtures;
+    std::array<std::unique_ptr<ui::PlaybackController>, rates.size()> transports;
+    QEventLoop loop;
+    for (std::size_t index = 0; index < rates.size(); ++index) {
+        const auto [p, q] = rates[index];
+        fixtures[index] = std::make_unique<SessionFixture>(
+            document::makeNewProject("Real clock", "Main", time(120), testFormat(p, q)), 100ms);
+        auto& fixture = *fixtures[index];
+        expectations.expect(waitUntil([&] {
+                                return fixture.controller.state().freshness ==
+                                       ui::FrameFreshness::Current;
+                            }),
+                            "clock proof opening product is ready");
+        transports[index] = std::make_unique<ui::PlaybackController>(
+            fixture.session, fixture.controller, [&, index] {
+                auto& sample = samples[index];
+                const auto now = std::chrono::steady_clock::now();
+                if (!sample.origin)
+                    sample.origin = now;
+                else
+                    sample.maximumGap = std::max(
+                        sample.maximumGap,
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(now - sample.read));
+                sample.read = now;
+                ++sample.reads;
+                return now;
+            });
+        const auto mappingResult = core::FrameTimeMapping::create(time(120), p, q);
+        const auto mapping = *mappingResult.value();
+        QObject::connect(&fixture.session, &ui::CompositionSession::currentTimeChanged, &loop,
+                         [&, index, mapping, p, q] {
+                             auto& sample = samples[index];
+                             const auto origin = sample.origin;
+                             if (!origin) {
+                                 ++sample.mismatches;
+                                 return;
+                             }
+                             const auto elapsed =
+                                 std::chrono::duration_cast<std::chrono::nanoseconds>(sample.read -
+                                                                                      *origin);
+                             // This 60s bounded reference fits uint64, independently of the
+                             // production portable wide-integer implementation.
+                             const auto expected = static_cast<std::uint64_t>(elapsed.count()) * p /
+                                                   (std::uint64_t{1'000'000'000} * q);
+                             const auto actual =
+                                 mapping.nearestFrameIndex(fixtures[index]->session.currentTime());
+                             ++sample.changes;
+                             if (actual != expected)
+                                 ++sample.mismatches;
+                         });
+    }
+    for (auto& transport : transports)
+        transport->play();
+    bool timedOut = false;
+    QTimer finish;
+    finish.setSingleShot(true);
+    finish.setTimerType(Qt::PreciseTimer);
+    QObject::connect(&finish, &QTimer::timeout, &loop, [&] {
+        for (auto& transport : transports) {
+            transport->tick();
+            transport->pause();
+        }
+        loop.quit();
+    });
+    QTimer watchdog;
+    watchdog.setSingleShot(true);
+    QObject::connect(&watchdog, &QTimer::timeout, &loop, [&] {
+        timedOut = true;
+        loop.quit();
+    });
+    finish.start(60'000);
+    watchdog.start(65'000);
+    loop.exec();
+    expectations.expect(!timedOut, "bounded real clock proof completes before watchdog");
+    for (std::size_t index = 0; index < rates.size(); ++index) {
+        const auto& sample = samples[index];
+        const auto origin = sample.origin;
+        if (!origin) {
+            expectations.expect(false, "real-clock playback captured an origin");
+            transports[index]->pause();
+            finishFixture(*fixtures[index], expectations);
+            continue;
+        }
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(sample.read - *origin);
+        expectations.expect(
+            elapsed >= 60s && sample.changes > 0 && sample.mismatches == 0,
+            "all genuine real-clock desired frame changes follow exact elapsed grid");
+        const auto expectedFinal = static_cast<std::uint64_t>(elapsed.count()) *
+                                   rates[index].first /
+                                   (std::uint64_t{1'000'000'000} * rates[index].second);
+        expectations.expect(
+            fixtures[index]->session.currentTime() ==
+                time(static_cast<std::int64_t>(expectedFinal * rates[index].second),
+                     rates[index].first),
+            "final desired time equals exact elapsed frame even after a late freeze");
+        const auto& state = fixtures[index]->controller.state();
+        std::cout << "REAL_CLOCK rate=" << rates[index].first << '/' << rates[index].second
+                  << " elapsedNs=" << elapsed.count() << " reads=" << sample.reads
+                  << " desiredChanges=" << sample.changes << " mismatches=" << sample.mismatches
+                  << " maxWakeGapNs=" << sample.maximumGap.count()
+                  << " desiredSeconds=" << fixtures[index]->session.currentTime().toSeconds()
+                  << " preparedSeconds="
+                  << (state.frame ? state.frame->desiredIdentity().time.toSeconds() : -1.0)
+                  << " paintedEvidence=none provider=CPU-reference\n";
+        transports[index]->pause();
+        finishFixture(*fixtures[index], expectations);
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) try {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     Expectations expectations;
+    if (argc == 2 && std::string_view(argv[1]) == "--real-clock-proof") {
+        testRealClockProof(expectations);
+        return expectations.failures() == 0 ? 0 : 1;
+    }
     testWorkAreaLoop(expectations);
     testPlayAdvancesExactFrameTimesAndDropsFrames(expectations);
-    testCachedFramesAdvanceOneFrameWithoutCatchUpSkipping(expectations);
+    testCachedFramesUseElapsedClock(expectations);
+    testTransportRationalRateBoundaries(expectations);
+    testAudioMasterFloorLoopAndDisableReanchor(expectations);
+    testSharedSubframeOriginAndNonOneAudioRates(expectations);
+    testRateChangesEmptyGridAndInvalidClock(expectations);
+    testLiveWorkAreaEditsReanchorSafely(expectations);
+    testPendingDeadlineRetainsIntentAndCountsLateOnce(expectations);
     testSlowPlaybackStillSubmitsWhenIdle(expectations);
     testLoopWrapExactAfterManyWraps(expectations);
     testPauseFreezesAndResumeUsesCurrentSessionTime(expectations);

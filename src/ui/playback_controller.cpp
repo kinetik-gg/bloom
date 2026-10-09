@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace bloom::ui {
@@ -34,17 +36,64 @@ mappingForComposition(const document::Composition& composition) noexcept {
     return *result.value();
 }
 
+// An authored endpoint can become off-grid after a rate change. The first admitted frame must
+// lie at or after that endpoint, even when nearest rounding would choose the preceding frame.
+[[nodiscard]] std::optional<std::uint64_t>
+firstFrameAtOrAfter(const core::FrameTimeMapping& mapping,
+                    const core::RationalTime start) noexcept {
+    const auto floor = mapping.frameOffsetForTime(start);
+    if (!floor)
+        return std::nullopt;
+    const auto floorTime = mapping.timeForFrame(*floor);
+    if (!floorTime)
+        return std::nullopt;
+    if (*floorTime.value() >= start)
+        return floor;
+    if (*floor == std::numeric_limits<std::uint64_t>::max())
+        return std::nullopt;
+    return *floor + 1;
+}
+
+// Refuse invalid injected extremes BEFORE signed subtraction or duration conversion.
+[[nodiscard]] std::optional<std::uint64_t>
+elapsedNanoseconds(const std::chrono::steady_clock::time_point now,
+                   const std::chrono::steady_clock::time_point start) noexcept {
+    using Clock = std::chrono::steady_clock;
+    using Rep = Clock::duration::rep;
+    if (now < start)
+        return std::nullopt;
+    const auto current = now.time_since_epoch().count();
+    const auto origin = start.time_since_epoch().count();
+    if constexpr (std::is_signed_v<Rep>) {
+        if (origin < 0 && current > std::numeric_limits<Rep>::max() + origin)
+            return std::nullopt;
+    }
+    const Clock::duration elapsed{current - origin};
+    if constexpr (!std::ratio_less_v<Clock::period, std::nano>) {
+        if (elapsed > std::chrono::duration_cast<Clock::duration>(std::chrono::nanoseconds::max()))
+            return std::nullopt;
+    }
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count());
+}
+
 } // namespace
 
 PlaybackController::PlaybackController(CompositionSession& session,
                                        CompositionPreviewController& previewController,
                                        ClockFunction clock,
                                        const std::chrono::milliseconds tickInterval,
-                                       FrameCachedPredicate frameCached, QObject* parent)
+                                       QObject* parent)
     : QObject(parent), session_(session), previewController_(previewController),
-      clock_(std::move(clock)), frameCached_(std::move(frameCached)) {
+      clock_(std::move(clock)) {
+    if (!clock_)
+        throw std::invalid_argument("Playback clock must be callable");
+    if (tickInterval <= std::chrono::milliseconds::zero())
+        throw std::invalid_argument("Playback wake interval must be positive");
+    wakeCap_ = std::min(tickInterval, std::chrono::milliseconds{16});
+    timer_.setSingleShot(true);
     timer_.setTimerType(Qt::PreciseTimer);
-    timer_.setInterval(static_cast<int>(tickInterval.count()));
+    timer_.setInterval(static_cast<int>(wakeCap_.count()));
     connect(&timer_, &QTimer::timeout, this, &PlaybackController::tick);
     connect(&previewController_, &CompositionPreviewController::interactiveScrubStarted, this,
             &PlaybackController::pause);
@@ -65,6 +114,10 @@ PlaybackController::PlaybackController(CompositionSession& session,
     // time entry, undo/redo) reaching the session while playing.
     connect(&session_, &CompositionSession::currentTimeChanged, this,
             &PlaybackController::handleCurrentTimeChanged);
+    connect(&session_, &CompositionSession::workAreaChanged, this,
+            &PlaybackController::handleWorkAreaChanged);
+    connect(&session_, &CompositionSession::snapshotChanged, this,
+            &PlaybackController::handleSnapshotChanged);
 }
 
 PlaybackController::~PlaybackController() { pause(); }
@@ -94,8 +147,22 @@ void PlaybackController::setAudioEnabled(const bool enabled) {
     }
     audioEnabled_ = enabled;
     if (!audioEnabled_ && audioEngine_) {
+        const bool wasMaster = audioClockActive_;
         audioEngine_->stop();
         audioClockActive_ = false;
+        if (wasMaster && state_ == PlaybackState::Playing) {
+            const auto* composition = session_.composition();
+            const auto mapping = composition ? mappingForComposition(*composition) : std::nullopt;
+            if (!mapping) {
+                pause();
+                return;
+            }
+            startClock_ = clock_();
+            startFrameIndex_ = mapping->nearestFrameIndex(session_.currentTime());
+            appliedOffset_ = 0;
+            lastAppliedFrameIndex_ = startFrameIndex_;
+            scheduleTick(wakeCap_);
+        }
     }
 }
 
@@ -141,13 +208,19 @@ void PlaybackController::play() {
     // start (design decision 2) -- read fresh here every time, not cached from a prior play().
     startClock_ = clock_();
     const auto range = session_.workArea();
-    const auto first = mapping->nearestFrameIndex(range.start);
+    const auto firstIndex = firstFrameAtOrAfter(*mapping, range.start);
+    if (!firstIndex)
+        return;
+    const auto first = *firstIndex;
     const auto endMapping =
         core::FrameTimeMapping::create(range.end, composition->format().frameRate().numerator(),
                                        composition->format().frameRate().denominator());
     if (!endMapping)
         return;
-    startFrameIndex_ = mapping->nearestFrameIndex(session_.currentTime());
+    const auto last = endMapping.value()->maximumFrameIndex();
+    if (last < first || last - first == std::numeric_limits<std::uint64_t>::max())
+        return;
+    startFrameIndex_ = std::clamp(mapping->nearestFrameIndex(session_.currentTime()), first, last);
     if (session_.currentTime() < range.start || session_.currentTime() >= range.end) {
         startFrameIndex_ = first;
         if (const auto time = mapping->timeForFrame(first); time)
@@ -155,10 +228,18 @@ void PlaybackController::play() {
     }
     appliedOffset_ = 0;
     lastAppliedFrameIndex_ = startFrameIndex_;
+    runRateNumerator_ = mapping->rateNumerator();
+    runRateDenominator_ = mapping->rateDenominator();
+    runRangeStart_ = range.start;
+    runRangeEnd_ = range.end;
 
     audioClockActive_ = false;
     if (audioEnabled_ && audioEngine_ && audioMix_.has_value() && !audioMix_->clips.empty()) {
-        const auto status = audioEngine_->play(session_.currentTime());
+        const auto anchor = mapping->timeForFrame(startFrameIndex_);
+        if (!anchor)
+            return;
+        // Match the established nearest-grid wall origin while preserving immediate session time.
+        const auto status = audioEngine_->play(*anchor.value());
         audioClockActive_ = !status.has_value();
         if (status.has_value()) {
             qWarning("Audio playback could not start (error %d, observed %llu)",
@@ -214,67 +295,80 @@ void PlaybackController::tick() {
         return;
     }
 
+    if (mapping->rateNumerator() != runRateNumerator_ ||
+        mapping->rateDenominator() != runRateDenominator_) {
+        handleWorkAreaChanged();
+        return;
+    }
+    // Every early refusal still rearms a bounded positive wake; no timer spin or missed restart.
+    scheduleTick(wakeCap_);
     std::optional<std::uint64_t> frameOffset;
+    std::optional<std::uint64_t> untilNextFrame;
     if (audioClockActive_ && audioEngine_) {
-        const auto audioFrame = mapping->nearestFrameIndex(audioEngine_->positionNow());
-        if (audioFrame < startFrameIndex_) {
+        const auto position = audioEngine_->positionNow();
+        const auto audioFrame = mapping->frameOffsetForTime(position);
+        if (!audioFrame || *audioFrame < startFrameIndex_) {
             return;
         }
-        frameOffset = audioFrame - startFrameIndex_;
+        frameOffset = *audioFrame - startFrameIndex_;
+        untilNextFrame =
+            mapping->nanosecondsUntilNextFrame(position, audioEngine_->playbackRateRatio());
     } else {
         const auto now = clock_();
-        if (now < startClock_) {
-            // A non-monotonic injected clock (only reachable from a test double) -- no-op rather
-            // than treat a negative duration as unsigned wraparound.
+        const auto elapsed = elapsedNanoseconds(now, startClock_);
+        if (!elapsed)
             return;
-        }
-        const auto elapsed = now - startClock_;
-        const auto elapsedNanoseconds = static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count());
+        const auto elapsedCount = *elapsed;
 
         // Real-time, drop-frames-never-slow policy: the target frame is derived from TOTAL elapsed
         // time since play()'s fixed start every tick (never `lastFrame + 1`, never an accumulated
         // running clock), so a slow tick jumps straight to the frame elapsed time now demands
         // instead of catching up frame-by-frame.
-        frameOffset = mapping->frameOffsetForElapsedNanoseconds(elapsedNanoseconds);
+        frameOffset = mapping->frameOffsetForElapsedNanoseconds(elapsedCount);
+        const auto elapsedTime =
+            core::RationalTime::create(static_cast<std::int64_t>(elapsedCount), 1'000'000'000);
+        if (elapsedTime)
+            untilNextFrame = mapping->nanosecondsUntilNextFrame(*elapsedTime);
     }
-    if (!frameOffset.has_value()) {
+    if (!frameOffset || !untilNextFrame ||
+        *untilNextFrame > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
         // Checked-arithmetic overflow guard (unreachable for any realistic elapsed duration and
         // frame rate) -- no-op rather than wrap.
         return;
     }
 
     const auto range = session_.workArea();
-    const auto first = mapping->nearestFrameIndex(range.start);
+    const auto firstIndex = firstFrameAtOrAfter(*mapping, range.start);
+    if (!firstIndex) {
+        pause();
+        return;
+    }
+    const auto first = *firstIndex;
     const auto rate = composition->format().frameRate();
     const auto endMapping =
         core::FrameTimeMapping::create(range.end, rate.numerator(), rate.denominator());
     if (!endMapping)
         return;
-    const auto frameCount = endMapping.value()->maximumFrameIndex() - first + 1;
+    const auto last = endMapping.value()->maximumFrameIndex();
+    if (last < first || last - first == std::numeric_limits<std::uint64_t>::max() ||
+        startFrameIndex_ < first || startFrameIndex_ > last) {
+        handleWorkAreaChanged();
+        return;
+    }
+    const auto frameCount = last - first + 1;
+    const auto frameBudget = std::chrono::nanoseconds{static_cast<std::int64_t>(*untilNextFrame)};
+    scheduleTick(frameBudget);
     if (*frameOffset <= appliedOffset_) {
         // The frame this run is already showing is still the one elapsed time asks for.
         return;
     }
-    // The frame-accurate clock (task PERF1, item 4): when the NEXT frame is already cached there is
-    // nothing to drop, so the target advances by exactly one frame however far behind the transport
-    // is -- no elapsed-time catch-up skipping. The due moment above is still total elapsed time
-    // since play()'s fixed start, so presentations track the ideal frame grid rather than
-    // accumulating a per-tick error. An uncached next frame keeps the original policy and jumps to
-    // whatever elapsed time demands.
-    const auto steppedOffset = appliedOffset_ + 1;
-    auto nextOffset = *frameOffset;
-    if (!audioClockActive_ &&
-        steppedOffset <= std::numeric_limits<std::uint64_t>::max() - startFrameIndex_ &&
-        isFrameCached(*mapping, first + (startFrameIndex_ - first + steppedOffset) % frameCount)) {
-        nextOffset = steppedOffset;
-    }
+    const auto nextOffset = *frameOffset;
     if (nextOffset > std::numeric_limits<std::uint64_t>::max() - startFrameIndex_) {
         // Same checked-overflow discipline applied to the addition below.
         return;
     }
     // Looping (design decision 2): wraps within [0, duration) via exact modulo of the frame count.
-    // The offset is exact in both clocks -- elapsed-derived or one frame on -- so repeated wraps
+    // The offset is exact in either master clock, so repeated wraps
     // never drift.
     //
     // Task VIEW-1 made that wrap conditional rather than unconditional. With looping off, the run
@@ -297,7 +391,7 @@ void PlaybackController::tick() {
     applyingOwnTimeChange_ = true;
     (void)session_.setCurrentTime(*targetTime.value());
     applyingOwnTimeChange_ = false;
-    previewController_.presentPlaybackFrame(std::chrono::milliseconds{timer_.interval()});
+    previewController_.presentPlaybackFrame(frameBudget);
     if (pastEnd) {
         // After the frame is applied and presented, so the artist is left looking at the last
         // frame of the range rather than at whatever the run showed one tick earlier.
@@ -305,17 +399,91 @@ void PlaybackController::tick() {
     }
 }
 
-bool PlaybackController::isFrameCached(const core::FrameTimeMapping& mapping,
-                                       const std::uint64_t frameIndex) const {
-    if (frameCached_) {
-        return frameCached_(frameIndex);
+void PlaybackController::scheduleTick(const std::chrono::nanoseconds untilNextFrame) {
+    if (state_ != PlaybackState::Playing)
+        return;
+    const auto positive = std::max(untilNextFrame, std::chrono::nanoseconds{1});
+    const auto milliseconds = std::chrono::ceil<std::chrono::milliseconds>(positive);
+    timer_.start(static_cast<int>(std::min(milliseconds, wakeCap_).count()));
+}
+
+void PlaybackController::handleWorkAreaChanged() {
+    if (state_ != PlaybackState::Playing)
+        return;
+    const auto* composition = session_.composition();
+    const auto mapping = composition ? mappingForComposition(*composition) : std::nullopt;
+    if (!mapping) {
+        pause();
+        return;
     }
-    const auto time = mapping.timeForFrame(frameIndex);
-    if (!time.hasValue()) {
-        return false;
+    const auto area = session_.workArea();
+    const auto firstIndex = firstFrameAtOrAfter(*mapping, area.start);
+    if (!firstIndex) {
+        pause();
+        return;
     }
-    const auto key = previewController_.cacheKeyForTime(*time.value());
-    return key.has_value() && previewController_.frameCache().contains(*key);
+    const auto first = *firstIndex;
+    const auto end = core::FrameTimeMapping::create(area.end, mapping->rateNumerator(),
+                                                    mapping->rateDenominator());
+    if (!end || end.value()->maximumFrameIndex() < first ||
+        end.value()->maximumFrameIndex() - first == std::numeric_limits<std::uint64_t>::max()) {
+        pause();
+        return;
+    }
+    const auto index =
+        std::clamp(mapping->nearestFrameIndex(session_.currentTime() < area.start ||
+                                                      session_.currentTime() >= area.end
+                                                  ? area.start
+                                                  : session_.currentTime()),
+                   first, end.value()->maximumFrameIndex());
+    const auto anchor = mapping->timeForFrame(index);
+    if (!anchor) {
+        pause();
+        return;
+    }
+    if (runRateNumerator_ == mapping->rateNumerator() &&
+        runRateDenominator_ == mapping->rateDenominator() && runRangeStart_ == area.start &&
+        runRangeEnd_ == area.end)
+        return;
+    runRateNumerator_ = mapping->rateNumerator();
+    runRateDenominator_ = mapping->rateDenominator();
+    runRangeStart_ = area.start;
+    runRangeEnd_ = area.end;
+    startClock_ = clock_();
+    startFrameIndex_ = index;
+    appliedOffset_ = 0;
+    lastAppliedFrameIndex_ = index;
+    const bool moved = session_.currentTime() != *anchor.value();
+    applyingOwnTimeChange_ = true;
+    (void)session_.setCurrentTime(*anchor.value());
+    applyingOwnTimeChange_ = false;
+    if (audioClockActive_ && audioEngine_) {
+        if (const auto status = audioEngine_->seek(*anchor.value()); status) {
+            qWarning("Audio range seek failed (error %d)", static_cast<int>(status->code));
+            audioEngine_->stop();
+            audioClockActive_ = false;
+        }
+    }
+    const auto period =
+        audioClockActive_ && audioEngine_
+            ? mapping->nanosecondsUntilNextFrame(*anchor.value(), audioEngine_->playbackRateRatio())
+            : mapping->nanosecondsUntilNextFrame(core::RationalTime{});
+    if (!period || *period > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+        pause();
+        return;
+    }
+    const auto budget = std::chrono::nanoseconds{static_cast<std::int64_t>(*period)};
+    scheduleTick(budget);
+    if (moved)
+        previewController_.presentPlaybackFrame(budget);
+}
+
+void PlaybackController::handleSnapshotChanged() {
+    const auto* composition = session_.composition();
+    if (state_ == PlaybackState::Playing && composition &&
+        (composition->format().frameRate().numerator() != runRateNumerator_ ||
+         composition->format().frameRate().denominator() != runRateDenominator_))
+        handleWorkAreaChanged();
 }
 
 void PlaybackController::handleCompositionChanged() {

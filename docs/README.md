@@ -96,8 +96,14 @@ provide research or rationale, but they are not binding until adopted here.
 - Shared preview completion now uses callback-free neutral runtime subscriptions and one coalesced
   queued UI drain. RAM/background refill and typed Viewer/asset/bootstrap/export/purge consumers
   receive completed results independently of Jobs progress snapshots. Bounded private tests qualify
-  burst coalescing, held-worker UI activity and GPU Half100 refill; clocks, native acknowledgements,
+  burst coalescing, held-worker UI activity and GPU Half100 refill; native acknowledgements,
   separate text-layout/ProjectHost I/O polling and sustained/platform gates remain separate.
+- Playback now derives cache-independent targets from elapsed rational wall/audio time, using checked
+  valid-grid origins, live reanchoring and absolute intent-time deadlines. Five competing 60-second
+  CPU-reference sessions show zero exact desired-grid mismatches; private GPU animation pixels
+  separately qualify short visible progress. This is clock/image correctness, not painted FPS or
+  real-audio/sustained/platform qualification. Process-aware cache headroom and terminal mailbox
+  ownership are the next bounded reliability slices.
 
 The detailed implementation status and next merge gates live in [`roadmap.md`](roadmap.md).
 

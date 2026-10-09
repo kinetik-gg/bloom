@@ -31,10 +31,13 @@ enum class PlaybackState : std::uint8_t {
     Playing,
 };
 
-// Exact elapsed-time transport with a frame-by-frame cached path. Cache misses never wait:
-// the preview controller admits Visible work only when its delivery estimate fits the next tick.
-// A cached next frame advances once per tick, preserving the explicit RAM Preview's exact mode.
-// Uncached catch-up skips indices and includes those skips in the run's dropped-frame count.
+// Real-time transport uses total elapsed time or the existing audio master clock. Cache
+// membership affects preparation only; it never selects a slower clock or accumulates tick debt.
+// A run anchors both clocks to the nearest valid grid frame (halfway ties greater). Ordinary
+// nearest rounding aligns audio by at most half a frame; clamping to the valid grid in the work
+// area can require larger alignment, including at off-grid authored endpoints after rate edits.
+// play() leaves the immediate stored session time unchanged unless the existing outside-range
+// clamp is needed.
 class PlaybackController final : public QObject {
     Q_OBJECT
 
@@ -43,17 +46,11 @@ class PlaybackController final : public QObject {
     // std::chrono::steady_clock::now(); tests substitute a manually-advanced fake with no
     // dependency on real elapsed wall time.
     using ClockFunction = std::function<std::chrono::steady_clock::time_point()>;
-    // Whether the frame at this composition frame index is already in the RAM preview cache, which
-    // is what decides which of the two clocks above a tick uses. Empty means "ask the preview
-    // controller's own cache", which is what production wants and what this controller does by
-    // default; a test injects one to pin either clock without rendering a frame.
-    using FrameCachedPredicate = std::function<bool(std::uint64_t frameIndex)>;
-
     explicit PlaybackController(
         CompositionSession& session, CompositionPreviewController& previewController,
         ClockFunction clock = &std::chrono::steady_clock::now,
         std::chrono::milliseconds tickInterval = std::chrono::milliseconds{16},
-        FrameCachedPredicate frameCached = {}, QObject* parent = nullptr);
+        QObject* parent = nullptr);
 
     ~PlaybackController() override;
     [[nodiscard]] PlaybackState state() const noexcept;
@@ -102,20 +99,21 @@ class PlaybackController final : public QObject {
   private:
     void handleCompositionChanged();
     void handleCurrentTimeChanged();
-    [[nodiscard]] bool isFrameCached(const core::FrameTimeMapping& mapping,
-                                     std::uint64_t frameIndex) const;
+    void handleWorkAreaChanged();
+    void handleSnapshotChanged();
+    void scheduleTick(std::chrono::nanoseconds untilNextFrame);
 
     CompositionSession& session_;
     CompositionPreviewController& previewController_;
     ClockFunction clock_;
-    FrameCachedPredicate frameCached_;
+    std::chrono::milliseconds wakeCap_{16};
     QTimer timer_;
     PlaybackState state_ = PlaybackState::Stopped;
     std::chrono::steady_clock::time_point startClock_{};
     std::uint64_t startFrameIndex_ = 0;
-    // How many frames this run has advanced past startFrameIndex_. The uncached clock sets it to
-    // whatever total elapsed time demands (so it can jump); the cached clock raises it by exactly
-    // one.
+    std::uint32_t runRateNumerator_ = 0, runRateDenominator_ = 0;
+    core::RationalTime runRangeStart_{}, runRangeEnd_{};
+    // Elapsed/audio-derived offset from the fixed run origin, never accumulated timer ticks.
     std::uint64_t appliedOffset_ = 0;
     std::optional<std::uint64_t> lastAppliedFrameIndex_;
     // Guards handleCurrentTimeChanged()'s scrub-during-playback detection: set around

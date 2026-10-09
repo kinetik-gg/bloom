@@ -33,7 +33,7 @@ void dataCallback(ma_device* device, void* output, const void*, const ma_uint32 
 
 class MiniaudioBackend::Impl final {
   public:
-    ma_device device{};
+    ma_device device{.type = ma_device_type_playback};
     CallbackState callbackState{};
     bool initialized = false;
 };

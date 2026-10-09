@@ -769,11 +769,27 @@ Each due tick advances the exact session time and asks for its frame:
   terminal-drain barriers. Pause queues one normal Visible replacement unless a live Current frame
   already matches; shutdown closes admission before pause recovery can enqueue work.
 
-The transport retains its two exact clocks. If the next frame is cached, it advances exactly one
-frame per due tick, preserving frame-accurate RAM Preview even after a host stall. Otherwise it jumps
-to the frame demanded by total elapsed time. Both loop without accumulated floating-point time.
-Neither clock waits for cache completion. Explicit RAM Preview is the mode that waits before starting
-playback.
+Ordinary playback targets total elapsed steady time or authoritative audio position independently
+of cache membership. A delayed 200 ms tick at 25 fps requests frame five for both warm and cold
+ranges; repeating the same clock sample does not advance time. Cache hits affect delivery, not the
+transport clock. Explicit RAM Preview still waits for complete retention before starting playback;
+it does not introduce a slower one-frame-per-callback transport mode.
+
+Wall and audio origins select the nearest valid work-area frame-grid sample, with exact halfway
+ties choosing the greater index. Play preserves the immediate stored session time when it is inside
+the authored work area. Ordinary nearest rounding is within half a frame; clamping to the first or
+last valid grid sample may move farther, including inside an authored off-grid interval. Existing
+outside-range behavior clamps session time to the first valid sample. First grid index is checked
+at-or-after start; the last is strictly before the exclusive end. A range containing no grid sample
+pauses playback and refuses a new play. Live frame-rate/range changes reanchor the current valid
+grid and clocks; disabling audio reanchors the wall clock at current time. Checked arithmetic
+refuses invalid/overflowing targets rather than publishing a time outside the valid grid.
+
+The precise single-shot timer requests positive ceil-millisecond wakes capped at 16 ms. Actual OS
+wake lateness is allowed; each tick derives its target from elapsed time without accumulating tick
+debt. A frame's absolute accounting deadline is captured when its playback intent is created and
+copied unchanged from pending to active, so delayed admission cannot renew its budget. Existing
+bounded active/newest, own-time Stale publication and cancellation/retirement barriers remain.
 
 This bounded cold-progress repair is locally qualified by a short real solid/text animation:
 actual time 0.916667 is displayed Stale while transport requests 1.0 and remains playing; pause
@@ -781,8 +797,9 @@ converges at 2.83333. Seven CPU pixel oracles, coherent handles, real text drag/
 pass. It changes no clock/deadline/ticker interval and adds no prewarm or CPU scene substitution.
 Shared preview completion notifications/refill are now implemented by the bounded G4A subscription
 and UI drain described in [Task System](task-system.md#completion-driven-result-delivery-g4a).
-Rational transport refinement, required native Qt present hooks and remaining scheduling/stress
-qualification remain G4 work; sustained rate and drift remain G10.
+Cache-independent rational transport and intent-time deadlines are now implemented as bounded G4B.
+Required native Qt present hooks and remaining scheduling/stress qualification remain G4 work;
+sustained render rate and drift remain G10.
 
 ### Audio Clock Master
 
@@ -795,8 +812,22 @@ revision change clears the old clips before a new mix is accepted.
 
 If there is no resolved audio clip, audio playback is disabled, or the backend cannot start, the
 transport falls back to its existing wall-clock frame schedule. That fallback is explicit and keeps
-RAM Preview's frame-cache behavior unchanged. Mix publication is revision-guarded, so a completed
-worker plan cannot load clips for a newer document revision.
+RAM Preview's prefill and cache behavior unchanged. Mix publication is revision-guarded, so a
+completed worker plan cannot load clips for a newer document revision.
+
+The existing supported audio playback-rate ratio scales the exact remaining media-frame fraction
+before one ceiling to wall nanoseconds for deadlines and wakes. Invalid speeds or unrepresentable
+products/divisors/budgets refuse explicitly. This adds no speed mode or audio backend; existing
+non-1× audio position remains nanosecond-quantized. NullBackend tests qualify silent clock authority,
+2×/0.5× budgets of 20/80 ms at 25 fps and live 60 fps reanchor budgets of 8,333,334/33,333,334 ns;
+they do not qualify a physical audio device or audible output.
+
+A bounded real-clock gate runs five competing tiny CPU-reference sessions for 60 seconds at
+24/25/30/60/30000÷1001 fps with zero exact desired-grid mismatches. Maximum observed wake gap is
+17.809458 ms despite the requested 16 ms cap. Prepared products are measured separately and no
+Viewer paints in that gate. Separate private seven-phase GPU pixels qualify short animated visible
+progress, real text drag/commit and exact undo. These proofs establish clock/grid and image
+correctness, not painted FPS, sustained GPU throughput or input-to-display latency.
 
 ### Dropped-Frame Counter
 

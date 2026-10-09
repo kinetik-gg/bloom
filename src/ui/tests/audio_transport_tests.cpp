@@ -100,8 +100,7 @@ int run(int argc, char** argv) {
 
     // Same wiring as apps/bloom/main.cpp.
     ui::PlaybackController playback(
-        fixture.session, *fixture.preview, [] { return std::chrono::steady_clock::now(); }, 16ms,
-        [](std::uint64_t) { return false; });
+        fixture.session, *fixture.preview, [] { return std::chrono::steady_clock::now(); }, 16ms);
     ui::AudioPlaybackSession audioPlaybackSession(fixture.session, fixture.compiler,
                                                   std::make_shared<ui::CompiledPlanCache>(),
                                                   fixture.evaluator);

@@ -10,8 +10,9 @@ The owner resumed execution after the G2E checkpoint. G3B outline publication an
 slices and G3A retention truth are accepted within the limits below. The packed QWidget Stage 2
 containment/adoption slice and its bounded cold-progress prerequisite are now accepted. This closes
 the measured panel/top-level spill gate for that route; broader G3/G4–G10 qualification remains
-incomplete. Bounded G4A completion-driven delivery/refill is accepted; G4B rational transport is
-next. G6A process-limit headroom and unconsumed result mailboxes remain required follow-ups.
+incomplete. Bounded G4A completion delivery/refill and G4B rational transport/deadlines are accepted.
+After the immutable user-build checkpoint, G6A proceeds as two sequential slices: process-aware
+headroom/off-UI sampling, then terminal mailbox ownership. Broader aggregate accounting remains G6B.
 
 Implementation proceeds sequentially from `e1086c13`. Each slice requires source review, focused
 regressions, and the applicable native/product evidence before its successor is accepted. A passing
@@ -33,9 +34,10 @@ and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 | G3B packed service foundation | Accepted as a bounded core slice | Genuine offscreen GPU final transfers, exact provenance/retirement, Vulkan-disabled core build, quality and 45 affected translation units pass |
 | G3B packed Viewer Stage 2 | Accepted as a bounded containment/adoption slice | Independent external pixels, real animation/drag/undo, exact host-only Full/Half 100-frame reuse, portable regressions, final builds/quality/static analysis pass |
 | G4A shared-preview completion | Accepted as a bounded delivery/refill slice | Neutral terminal subscriptions, coalesced UI drain, typed consumers, private Half100 refill/animation, portable tests, final build/quality and 115 affected translation units pass |
+| G4B rational transport | Accepted as a bounded clock/deadline slice | Exact cache-independent elapsed/audio targets, valid-grid reanchor, intent deadlines, five-rate real-clock gate, private animation pixels, Linux CPU fallback and 62 affected translation units pass |
 | G4C prerequisite | Accepted only as the bounded cold-progress prerequisite | One active/newest intent, useful older Stale publication and guarded pause/shutdown pass source review and short real playing pixels; remaining G4 scheduling is pending |
 | G7A / G9 bounded display work | Packed immutable borrowing, off-UI CPU channel derivation and finished-display host choice accepted | Explicit provenance and measured bytes; remaining CPU storage/process/channel work and broader cache policy remain pending |
-| Remaining G4–G10 | Pending | Rational clock, remaining scheduling, native public hooks, media reuse, aggregate memory, batching and sustained/platform qualification are not completed |
+| Remaining G4–G10 | Pending | Remaining scheduling, native public hooks, media reuse, aggregate memory, batching and sustained/platform qualification are not completed |
 
 G3B1 checkpoint (2026-10-09), accepted after independent source review and focused reruns: coherent required-outline publication and exact
 owner-applied metadata are implemented as a bounded slice. Deterministic delayed raster, changing
@@ -349,10 +351,65 @@ newer-cache winner behavior. A device-free bootstrap test still encoded pre-G3A 
 requires 4096 lease/3584 cache metadata slots while preserving byte/overflow/device-clamp checks.
 These are repaired prior coverage gaps, not production-policy changes. Failed logs are retained.
 
-This accepts shared-preview completion delivery/refill only. Rational clocks, remaining cold policy,
-required native Qt acknowledgement hooks, process headroom/mailbox ownership, remaining CPU-storage
+This G4A checkpoint accepted shared-preview completion delivery/refill only; G4B clocks were still
+pending and are accepted below. Remaining cold policy, required native Qt acknowledgement hooks,
+process headroom/mailbox ownership, remaining CPU-storage
 accounting and broader export/sustained/platform qualification remain open. Stable Stage 2 user
 build and original app/session/preferences/recovery are untouched.
+
+## Accepted bounded G4B rational transport — 2026-10-09
+
+Elapsed steady time or existing AudioEngine position now drives transport independently of cache
+membership. A warm or cold delayed 200 ms tick at 25 fps targets frame five; same-clock repeats do
+not advance. Shared nearest valid-grid origins use greater-index halfway ties. Immediate in-range
+session time remains preserved at play. Nearest alignment is ordinarily within half a frame, but
+valid work-area endpoint clamping may move farther even within authored off-grid intervals.
+Checked first-at-or-after start and strict exclusive end handle rate-edited work areas; no-grid
+ranges pause/refuse play. Actual rate/range changes and audio disable reanchor current time/clocks.
+
+Single-shot timer requests are positive ceil-millisecond wakes capped at 16 ms; elapsed targeting
+absorbs actual OS lateness without tick debt. Absolute frame accounting deadlines originate at
+intent creation and survive pending-to-active admission unchanged. Existing wide rational math
+scales the exact audio media-time remainder by the supported speed ratio before one wall-nanosecond
+ceiling. Invalid/overflowing arithmetic refuses explicitly. No audio backend or speed mode is added;
+non-1× AudioEngine position retains its existing nanosecond quantization. RAM Preview prefill and
+accepted active/newest, own-time Stale, cache-generation and shutdown policy remain unchanged.
+
+Deterministic tests cover seven integer/fractional rates, boundaries/overflow, warm/cold late ticks,
+subframe/tie/resume, looping/nonloop, rate 25→24/60, audio disable, empty off-grid intervals after
+rate edits and valid `[0.01,0.09)`→25 fps samples 0.04/0.08. Held-producer tests preserve the original
+absolute deadline and count lateness once. Silent NullBackend authority at 2×/0.5× produces 20/80 ms
+wall budgets at 25 fps and 8,333,334/33,333,334 ns after 60 fps reanchor. This is not real-device or
+audible-output evidence.
+
+Five competing 4×3 CPU-reference sessions run for 60 seconds at 24/25/30/60/30000÷1001 fps with
+zero exact desired-grid mismatches. Maximum actual wake gap is 17.809458 ms despite requested wakes
+≤16 ms. Desired changes are 1440/1500/1800/3600/1798; independent integer-floor comparisons use
+genuine steady-clock reads. Prepared products remain separately reported; no Viewer exists in this
+gate and no painted-throughput claim follows. The test-only final exact-time/origin hardening was
+checked against logged end targets without repeating unchanged runtime behavior.
+
+Private required-device/core+sync GPU animation passes seven external phases and seven exact CPU
+oracles. Actual displayed time 0.916667 remains coherent Stale while playing/requesting 1.0, then
+pause settles Current 2.79167. Independent pixels show 9,872 playing and 22,565 stopped changes,
+eight coherent handles, exact text movement +24,+14 then +48,+28, and full-content byte-identical
+undo. Both adjacent panels have zero foreign pixels; exterior output remains unchanged. Short held
+captures qualify image correctness, not sustained GPU FPS or input-to-display latency.
+
+Final Bloom/repository quality, five focused suites and 62 unique affected translation units of
+strict analysis pass. A checked harness optional and a playback-only vendor wrapper placeholder
+initializer were narrowly repaired after review; vendor initialization overwrites the latter and
+no vendor code/suppression changed. Linux CPU-only/no-Vulkan Bloom/five targets build and five tests
+pass. Public C++20/Qt and portable arithmetic do not establish executed macOS/Windows qualification.
+Failed intermediate logs are retained. Stable prior bundle and original app/session are untouched.
+
+Next G6A separates process-aware automatic cache headroom/off-UI sampling from terminal mailbox
+ownership. Requested user settings remain intact while effective clamps are reported; finite hard
+process ceilings override floors/cooldowns. Platform provenance/fallback stays explicit. Live handles
+must retain take-once results while terminal history releases unnecessary payload ownership after
+safe cleanup. These slices do not implement the full G6B aggregate reservation broker or guarantee
+unmeasured RSS behavior. Remaining G4C/G4D/G5/G6B/G7/G8/G9/G10 and cross-platform/sustained gates
+remain open; the overall program is incomplete.
 
 ## Decision to make
 

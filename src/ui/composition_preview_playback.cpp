@@ -40,12 +40,16 @@ void CompositionPreviewController::setPlaybackActive(const bool playing) {
 }
 
 void CompositionPreviewController::presentPlaybackFrame(
-    const std::chrono::nanoseconds untilNextTick) {
+    const std::chrono::nanoseconds untilNextFrame) {
     if (shuttingDown_) {
         return;
     }
-    playbackBudget_ = std::max(untilNextTick, std::chrono::nanoseconds::zero());
-    requestPreview(false, PreviewRequestKind::Playback);
+    const auto now = std::chrono::steady_clock::now();
+    const auto budget = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        std::max(untilNextFrame, std::chrono::nanoseconds::zero()));
+    const auto maximum = std::chrono::steady_clock::time_point::max();
+    const auto deadline = now > maximum - budget ? maximum : now + budget;
+    requestPreview(false, PreviewRequestKind::Playback, true, deadline);
 }
 
 void CompositionPreviewController::recordPreparationDuration(

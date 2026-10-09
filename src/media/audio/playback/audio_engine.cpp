@@ -322,6 +322,12 @@ AudioStatus AudioEngine::renderForTesting(const std::size_t frames) {
     return std::nullopt;
 }
 
+RationalTime AudioEngine::playbackRateRatio() const noexcept {
+    std::scoped_lock lock(controlMutex_);
+    return RationalTime::create(playbackRateNumerator_, playbackRateDenominator_)
+        .value_or(RationalTime{});
+}
+
 RationalTime AudioEngine::positionNow() const noexcept {
     std::scoped_lock lock(controlMutex_);
     const auto frames = framesWritten_.load(std::memory_order_acquire);

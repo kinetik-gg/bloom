@@ -737,9 +737,9 @@ void CompositionPreviewController::setCachePurgeGate(const bool gated) {
     }
 }
 
-void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
-                                                  const PreviewRequestKind kind,
-                                                  const bool allowCachedFrame) {
+void CompositionPreviewController::requestPreview(
+    const bool clearLastGoodFrame, const PreviewRequestKind kind, const bool allowCachedFrame,
+    const std::optional<std::chrono::steady_clock::time_point> playbackDeadline) {
     Q_ASSERT(QThread::currentThread() == thread());
 
     if (shuttingDown_ || cachePurgeGate_) {
@@ -898,6 +898,7 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
                                   .desiredIdentity = desiredIdentity,
                                   .pixelStorageByteLimit = settings_.pixelStorageByteLimit,
                                   .kind = kind,
+                                  .playbackDeadline = playbackDeadline,
                                   .interactionOverride = interactionOverride};
 
     if (active_.has_value()) {
@@ -1024,9 +1025,7 @@ void CompositionPreviewController::submitPreview(PendingRequest pendingRequest,
                       .desiredIdentity = desiredIdentity,
                       .carriedInteractionOverride = !interactionOverride.empty(),
                       .submittedAt = submittedAt,
-                      .playbackDeadline = pendingRequest.kind == PreviewRequestKind::Playback
-                                              ? std::optional{submittedAt + playbackBudget_}
-                                              : std::nullopt,
+                      .playbackDeadline = pendingRequest.playbackDeadline,
                       .playbackOutstanding = pendingRequest.kind == PreviewRequestKind::Playback});
     if (pendingRequest.kind == PreviewRequestKind::Interactive)
         interactiveSubmissionClock_.restart();

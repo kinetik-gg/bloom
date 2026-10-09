@@ -181,7 +181,7 @@ class CompositionPreviewController final : public QObject {
     void endDroppedFrameCounting();
     void noteDroppedFrames(std::uint64_t count);
     void setPlaybackActive(bool playing);
-    void presentPlaybackFrame(std::chrono::nanoseconds untilNextTick);
+    void presentPlaybackFrame(std::chrono::nanoseconds untilNextFrame);
     // Includes admission/queue and UI delivery latency. Only matching live identities contribute.
     void recordPreparationDuration(const runtime::PreviewRequestIdentity& identity,
                                    std::chrono::nanoseconds duration);
@@ -265,6 +265,8 @@ class CompositionPreviewController final : public QObject {
     void previewCachePurged();
 
   private:
+    // Narrow read-only deadline proof; no test callback or alternate production clock.
+    friend struct CompositionPreviewDeadlineTestAccess;
     runtime::TaskSubmission<PreviewPreparationResultHandle>
     submitViewerPreparation(const runtime::PreviewRequestIdentity& identity, bool displayRoute);
     std::shared_ptr<PreviewFrameTrace> trace_;
@@ -284,6 +286,8 @@ class CompositionPreviewController final : public QObject {
         runtime::PreviewRequestIdentity desiredIdentity;
         std::size_t pixelStorageByteLimit;
         PreviewRequestKind kind = PreviewRequestKind::Visible;
+        // Captured with this intent; waiting behind an admitted producer never rebases lateness.
+        std::optional<std::chrono::steady_clock::time_point> playbackDeadline;
         // Sourced fresh from the session at requestPreview() build time; never cached across
         // requests (docs/architecture/animation-and-time.md).
         std::vector<runtime::SnapshotParameterOverride> interactionOverride;
@@ -294,7 +298,8 @@ class CompositionPreviewController final : public QObject {
     // display transform becoming available, or failing, is the live example -- so answering it from
     // the cache would be answering a question nobody asked.
     void requestPreview(bool clearLastGoodFrame, PreviewRequestKind kind,
-                        bool allowCachedFrame = true);
+                        bool allowCachedFrame = true,
+                        std::optional<std::chrono::steady_clock::time_point> playbackDeadline = {});
     void submitPreview(PendingRequest request, PreparedPreviewFrameHandle retainedFrame);
     void publishRendering(runtime::PreviewRequestIdentity desiredIdentity,
                           std::optional<runtime::TaskId> taskId,
@@ -355,7 +360,6 @@ class CompositionPreviewController final : public QObject {
     std::optional<QRectF> regionOfInterest_;
     std::unique_ptr<PlaybackController> playbackController_;
     bool playbackActive_ = false;
-    std::chrono::nanoseconds playbackBudget_{};
     std::optional<std::chrono::nanoseconds> preparationEstimate_;
 };
 

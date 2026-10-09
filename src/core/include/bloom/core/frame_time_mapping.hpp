@@ -64,6 +64,21 @@ class FrameTimeMapping final {
     [[nodiscard]] std::optional<std::uint64_t>
     frameOffsetForElapsedNanoseconds(std::uint64_t elapsedNanoseconds) const noexcept;
 
+    // Playback/audio absolute position, floored and deliberately not clamped to duration.
+    // Negative positions or an unrepresentable uint64 frame index return nullopt.
+    [[nodiscard]] std::optional<std::uint64_t> frameOffsetForTime(RationalTime time) const noexcept;
+
+    // Exact time remaining to the next rational frame boundary, rounded UP once to nanoseconds.
+    // A boundary itself starts a fresh frame period; the result is always positive. This is
+    // independent of the composition range and cache, so looping cannot freeze an audio clock.
+    // Negative positions or an unrepresentable frame index return nullopt.
+    [[nodiscard]] std::optional<std::uint64_t>
+    nanosecondsUntilNextFrame(RationalTime time) const noexcept;
+    // Scales the exact remaining media fraction by an existing positive playback-rate ratio,
+    // rounding UP once to wall nanoseconds; nullopt also covers checked product/budget overflow.
+    [[nodiscard]] std::optional<std::uint64_t>
+    nanosecondsUntilNextFrame(RationalTime time, RationalTime playbackRate) const noexcept;
+
   private:
     friend class FrameTimeMappingCreateResult;
 

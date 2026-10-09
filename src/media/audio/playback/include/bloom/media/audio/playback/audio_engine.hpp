@@ -124,6 +124,8 @@ class AudioEngine final {
     AudioStatus renderForTesting(std::size_t frames);
 
     [[nodiscard]] core::RationalTime positionNow() const noexcept;
+    // Existing configured playback speed, independent of sample rate. No new rate policy.
+    [[nodiscard]] core::RationalTime playbackRateRatio() const noexcept;
     [[nodiscard]] bool isPlaying() const noexcept {
         return playing_.load(std::memory_order_acquire);
     }
