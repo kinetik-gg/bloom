@@ -37,6 +37,7 @@ and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 | G4B rational transport | Accepted as a bounded clock/deadline slice | Exact cache-independent elapsed/audio targets, valid-grid reanchor, intent deadlines, five-rate real-clock gate, private animation pixels, Linux CPU fallback and 62 affected translation units pass |
 | G4C prerequisite | Accepted only as the bounded cold-progress prerequisite | One active/newest intent, useful older Stale publication and guarded pause/shutdown pass source review and short real playing pixels; remaining G4 scheduling is pending |
 | G7A / G9 bounded display work | Packed immutable borrowing, off-UI CPU channel derivation and finished-display host choice accepted | Explicit provenance and measured bytes; remaining CPU storage/process/channel work and broader cache policy remain pending |
+| G8 optional two-frame throughput | Investigation complete; implementation and benchmark pending | Source confirms per-service frame serialization; no multi-frame speedup or GPU-utilization result is established |
 | Remaining G4–G10 | Pending | Remaining scheduling, native public hooks, media reuse, aggregate memory, batching and sustained/platform qualification are not completed |
 
 G3B1 checkpoint (2026-10-09), accepted after independent source review and focused reruns: coherent required-outline publication and exact
@@ -990,6 +991,108 @@ count follows bounded batches rather than operation count for the representative
 unchanged output remains zero scene dispatch. CPU/GPU image and color parity, cancellation,
 retirement, cache identity, and every required render route pass. Demonstrate end-to-end gain and
 peak-memory change, not just dispatch timing. **Exclude:** broad kernel fusion or a backend rewrite.
+
+#### Optional bounded two-frame throughput experiment
+
+Status: source investigation complete (2026-10-09); implementation and measurement pending. This
+experiment addresses completed-frame throughput even when current rendering speed is acceptable.
+It does not complete G8 or establish that a single frame underutilizes the GPU.
+
+The current restriction is structural within each execution service:
+
+- Scheduler admission already permits 64 live GPU continuations by default
+  (`src/runtime/include/bloom/runtime/task_types.hpp:175`; dispatch gate in
+  `src/runtime/task_gpu_executor.cpp:301`). RAM fill already admits two requests
+  (`src/ui/include/bloom/ui/ram_preview_pipeline.hpp:32`). Increasing these bounds does not create
+  another executing frame context.
+- Preview owns one scene executor/display context and one active resident stage
+  (`src/runtime/gpu_preview_display_service_private.hpp:144`, `:268`). Its native pump starts a
+  frame only when that slot is free and retains it through the final packed transfer
+  (`src/runtime/gpu_preview_display_service_resident_jobs.cpp:398`, `:567`). Each scene executor
+  rejects an overlapping `begin()` and advances one operation at a time
+  (`src/runtime/gpu_scene_executor.cpp:163`, `:309`, `:346`).
+- Final export has a separate device owner, one executor/output-color context and a bounded
+  preparation FIFO; its owner runs one request through completion before taking the next
+  (`src/runtime/gpu_process_frame.cpp:85`, `:93`, `:403`, `:438`). The application can therefore
+  have preview and export work active together; it is not globally limited to one scheduler job.
+- Packed transfer and combined final output-color readback each have one process-global
+  reservation (`src/render/vulkan/gpu_display_transfer.cpp:83`, `:116`;
+  `src/render/vulkan/gpu_output_color_readback_private.hpp:79`, `:94`). Packed copies use the same
+  compute queue as ordinary operations, with `ALL_COMMANDS` transfer barriers
+  (`src/render/vulkan/gpu_display_transfer.cpp:592`, `:608`, `:637`;
+  `src/render/vulkan/gpu_solid.cpp:333`). Multiple outstanding submissions may reduce host-driven
+  queue gaps; simultaneous hardware compute/copy execution is not established or promised.
+
+The first candidate uses at most two frame contexts interleaved on one device owner thread, sharing
+the device, immutable prepared artifacts and owner-bound immutable image cache. Keep distinct
+mutable operation/context state: descriptors, command buffers/pools, fences, staging/output pins,
+scene cursor/live-byte ledger, cancellation, deadlines and completion identity. Existing operation
+wrappers combine pipeline and submission state (`src/render/vulkan/gpu_solid_private.hpp:166`;
+`src/runtime/gpu_scene_executor_private.hpp:409`), so copying whole contexts conservatively duplicates
+pipelines until G8 separates immutable pipeline reuse from submission resources. Cache access remains
+on the exact owner/device; it has no cross-thread locking, and pinned replacement/eviction rules
+must remain valid (`src/runtime/gpu_scene_cache.cpp:61`, `:107`, `:176`). Coalesce identical in-flight
+source work or account duplicate allocations explicitly. Do not share native images across today's
+separate preview/export devices.
+
+Keep the existing serialized final-transfer/readback lanes and their retirement reservations.
+Completed siblings wait with charged output pins; expected lane contention must not trigger CPU
+fallback. Before enabling a default width of two, implement the relevant G6B aggregate reservations
+for preparation, decoded/upload storage, active contexts/scratch, waiting outputs, caches and
+retiring/quarantined allocations. G6A process headroom alone does not establish that accounting.
+Shared physical allocations are charged once across aliases; allocator rounding, host adoption
+copies and driver residuals remain visible. Low headroom reduces width to one or refuses admission
+before allocation. Keep existing native resident capacity and retirement proofs intact.
+
+Prefer the representative within-frame G8 batch first, then benchmark width one against two again:
+batching may remove the very host gaps that an earlier concurrency probe hides. A private,
+conservatively capped two-context probe may precede full G8 to establish the opportunity, with
+default width unchanged. G5 verified source tickets/coalesced raw reuse are prerequisites for media
+throughput claims; CPU decompression remains separate from required GPU working-space conversion.
+Preview/export device consolidation and extra queues remain later measured decisions.
+
+Independent RAM cold-fill and range/video/headless frames are the useful initial routes. Still
+export alone has no second frame, and warm packed-cache replay already adds zero scene work.
+Widening the evaluator alone does not pipeline current range/video orchestration
+(`src/host/frame_range_runner.cpp:50`; `src/host/sequence_export_runner.cpp:376`, `:413`): add a bounded
+two-entry preparation/completion window while preserving exact frame identities, approvals and
+ordered codec/file publication. RAM results may complete out of order only at valid per-time keys.
+
+Preserve one active latest-intent interactive producer plus newest pending intent. Stop new
+background admission when interactive work arrives, prioritize its next safe dispatch/batch
+boundary, and preserve fairness for explicit exports. Already submitted work is not preempted by
+priority. Incompatible edit/rebind/purge/pause/shutdown cancels publication and retains physical
+ownership until retirement; same-domain playback keeps its currently accepted useful producer.
+Device loss terminalizes every context on that generation and retains or explicitly quarantines
+all reservations; native presentation still requires its separate WSI retirement proof.
+
+**Benchmark gate:** compare identical width-one and width-two workloads/builds, worker counts,
+cache/total caps and declared device/driver in three paired runs, separating startup/warmup, cold
+source, source-warm/output-cold and output-warm conditions. Record actual completed frames/s and
+wall duration, GPU busy time/queue gaps, native submissions, source reads/hashes/decodes/uploads,
+transfer/adoption/encode waits, actual host/device allocation peaks and RSS/driver residuals. Add
+fill/export competing with scrub/drag, p95 feedback/present acknowledgement and cancellation/physical
+retirement latency. Test CPU/GPU parity at every frame, ordered output, low-cap backpressure,
+supersession, stalled fences, device loss, foreign release, purge and bounded settled memory.
+Require zero relevant Vulkan core/synchronization errors, no unexpected fallback or extra full-frame
+roundtrips, unchanged warm zero-work reuse and every required production render route. No device is
+explicit NotRun/Skipped; `--require-device` fails. No GPU coverage exception is introduced.
+
+Proposed benchmark go/no-go criteria are repeatable **at least 15% completed-frame throughput
+improvement**, **no more than 10% p95 interactive/cancellation regression**, and compliance with the
+existing absolute interaction gates and assigned aggregate memory limits. These are proposed
+experiment criteria, not achieved results or a user-approved performance SLA. If width two yields
+small/noisy gains, exposes decode/codec saturation or costs excessive memory/latency, retain width
+one and address the measured limiting stage. Consider width four only after width two passes and
+measured queue gaps and memory headroom justify another comparison.
+
+Existing packed Full/Half 100-frame evidence in the accepted Stage 2 checkpoint above proves
+retention, per-frame CPU parity and zero scene work on warm replay. Its whole-fixture runtimes
+(21.117 s Full; 17.936 s Half) include startup, oracles and replay, so they are not isolated fill
+throughput or GPU occupancy measurements. G4B's five 60-second tiny CPU clock sessions and short
+GPU visible proof also do not measure sustained GPU throughput. Current preview traces lack GPU
+timestamps and source/upload substage timings (`src/ui/preview_frame_trace.cpp:188`). Source proves
+serialization; the benchmark must establish the actual bottleneck and benefit.
 
 ### G9 — Decide what RAM preview retains and where
 
