@@ -979,6 +979,40 @@ not establish equivalent macOS/Windows GPU execution or sustained performance; e
 remains supported. Aggregate/process-limit accounting, remaining channel processing and broader
 cache policy qualification stay separate work.
 
+### Controlled mounted-footage A (bounded Full/Half evidence)
+
+The 2026-10-10 private Linux check uses 100 strongly hashed contiguous EXR members, numbered
+1001–1100, through the production compiler, GPU packed preparation, RAM controller/cache and Viewer.
+The 1920x804 RGB HALF source is centered over authored opaque black in a 1920x1080 composition at
+an explicit controlled 24 fps; the separately recorded source rate is 24000/1001. Full output is
+1920x1080 with 138 black rows above and below; Half is 960x540 with 69. Every retained frame matches
+an independent expected-member still-image CPU plan, including geometry, black margins and
+nonuniform source pixels. EXR Auto assumes `lin_rec709_scene` because chromaticities are absent;
+parity qualifies that application interpretation, not independent source-color intent.
+
+Both runs retain 100 genuine GPU-prepared products: an initial foreground frame plus 99 RAM refill
+products. Full owns 829,440,000 payload bytes plus 6,400 exact retirement-header bytes; Half owns
+207,360,000 plus 6,400. Separate cache retention costs are 829,653,200 and 207,573,200 bytes and
+overlap the owned payload, so these measures must not be added. Two hundred warm forward/reverse
+Current observations add no preparation, graph work, dispatch, transfer or owned allocation.
+Final phase and owned claims return to zero before actual retirement exit and collection; relevant
+core/synchronization validation is clean. Fill intervals are 21.610 s Full and 21.533 s Half;
+complete helper runs are 68.949 s and 65.022 s. These are bounded preparation/parity/reuse checks,
+with largest-child peak RSS 1,945,460/1,203,524 KiB and separately reported cgroup peaks 2G/1.3G.
+RSS, cgroup usage and rooted payload claims are distinct, not physical GPU-memory totals. These
+checks do not establish painted FPS, sustained playback or SMB/server-cold throughput. Source read/decode bytes remain
+unmeasured, and digest/header verification warms file caches.
+
+Earlier attempts remain failed evidence: a missing timing utility prevented launch; malformed
+external file URIs yielded CPU output with 40/100 retained frames rather than a GPU capacity result; incoherent
+stage-only fixture sampling produced AwaitingCapacity despite ample bytes. Correct file URIs and
+the existing production off-UI sampler repair the fixture, without changing production policy.
+The successful Half run precedes only a fixture declaration-order correction for exceptional
+fallback teardown; final Full and the clean one-TU strict check use that corrected order.
+Repository quality passes with 1,459 format checks. Only two test files and owning evidence docs
+change; production binaries are unchanged. Larger native-resolution footage, native allocation
+ownership, media reuse, width two and sustained/platform qualification remain pending.
+
 `QRhiWidget` is useful for a comparison spike because it embeds accelerated rendering naturally in
 Qt Widgets and supports Vulkan, Metal, and Direct3D. It is not the core GPU backend. Accessing the
 underlying QRhi requires `Qt::GuiPrivate`; Qt labels the QRhi family semi-public and provides no

@@ -1,6 +1,7 @@
 // Production offscreen GPU preparation -> one packed transfer -> ordinary EditorArea/Viewer.
 // All observation windows run only under the caller's private compositor.
 #include "gpu_service_chain_fixture.hpp"
+#include "image_source.hpp"
 #include "packed_host_retirement_private.hpp"
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 
@@ -20,6 +21,7 @@
 #include <bloom/ui/gpu_viewer_bootstrap.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <bloom/ui/memory_budget_controller.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -27,12 +29,18 @@
 #include <bloom/ui/window_status_bar.hpp>
 
 #include <QApplication>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMouseEvent>
 #include <QPointer>
 #include <QSettings>
 #include <QSplitter>
 #include <QTemporaryDir>
+#include <QUrl>
 #include <QVBoxLayout>
+#include <future>
 
 #include <algorithm>
 #include <atomic>
@@ -164,17 +172,23 @@ void observe(const char* name, ui::ViewerEditor& viewer, QSplitter& splitter, QW
 } // namespace
 
 #include "gpu_packed_animation_proof.ipp"
-#include "gpu_packed_cache100_proof.ipp"
 #include "gpu_packed_host_retirement_proof.ipp"
+// Cache qualification reuses the explicit retirement teardown guard above.
+#include "gpu_packed_cache100_proof.ipp"
 #include "gpu_packed_playing_proof.ipp"
 
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     bool cache100 = false, half = false, partial = false, playing = false, animatedDrag = false;
     bool hostOwnership = false, hostRetirement = false;
+    std::string sequenceManifest;
     std::vector<char*> forwarded{argv[0]};
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument = argv[index];
-        if (argument == "--cache100-half") {
+        if (argument == "--sequence-manifest") {
+            if (++index >= argc)
+                return 2;
+            sequenceManifest = argv[index];
+        } else if (argument == "--cache100-half") {
             cache100 = true;
             half = true;
         } else if (argument == "--cache100-full")
@@ -193,7 +207,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             forwarded.push_back(argv[index]);
     }
     const auto options = parseOptions(static_cast<int>(forwarded.size()), forwarded.data());
-    if (!options.valid)
+    if (!options.valid || (!sequenceManifest.empty() && !cache100))
         return 2;
     QApplication application(argc, argv);
     QTemporaryDir temporary;
@@ -207,7 +221,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         return options.require_device ? 1 : 77;
     }
     if (cache100)
-        return runPackedCache100(options, temporary, half, partial);
+        return runPackedCache100(options, temporary, half, partial, sequenceManifest);
     Expectations checks;
     Fixture fixture(temporary.path().toStdString());
     auto format = document::CompositionFormat::create(1920, 1080);

@@ -41,6 +41,7 @@ and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 | G6B first phase reservations | Accepted as a bounded admission/lifetime slice | Shared explicit roots, conservative host/device/count envelopes, native retirement/quarantine, observed-constraint release and bounded readiness/release retries; required native routes, affected strict, application and Linux CPU-only closure pass; no unique physical accounting or width two |
 | G6B rooted packed-host payloads | Accepted only for ownership, conservation and off-UI production allocation | Historical `6acad4d4` allocator-requested RGBA8 payload/fault/pin scope; its UI last-owner free required the follow-on below |
 | G6B off-UI published-host retirement | Affected retirement qualification gates pass | Payload plus admitted intrusive header, allocation-free final-alias enqueue, charged worker free and explicit actual-exit collection; headless/Linux CPU-only gates and all 103 affected strict TUs pass |
+| Controlled mounted-footage A | Accepted only for bounded Full/Half preparation, pixels, ownership and warm reuse | 100 strongly verified members in a controlled 24 fps 1080 composition, independent still-member CPU parity, 200 zero-work warm observations, exact payload/header charges and final release; one affected strict TU and repository quality pass |
 | G4C prerequisite | Accepted only as the bounded cold-progress prerequisite | One active/newest intent, useful older Stale publication and guarded pause/shutdown pass source review and short real playing pixels; remaining G4 scheduling is pending |
 | G7A / G9 bounded display work | Packed immutable borrowing, off-UI CPU channel derivation and finished-display host choice accepted | Explicit provenance and measured bytes; remaining CPU storage/process/channel work and broader cache policy remain pending |
 | G8 optional two-frame throughput | Investigation complete; implementation and benchmark pending | Source confirms per-service frame serialization; no multi-frame speedup or GPU-utilization result is established |
@@ -139,8 +140,30 @@ corrected matching-interpreter build. The full 103-TU changed-header strict swee
 diagnostics or repair reruns.
 These final results remain distinct from earlier incremental maps and corrected owning batches. Legacy/other host buffers,
 FloatFinal, native/driver/UMA and whole-process accounting, width two and sustained/platform performance
-remain open. Controlled mounted-footage qualification follows this closure before deeper native
-allocation ownership; it is not established by uniform local cache fixtures.
+remain open. Controlled mounted-footage A follows this closure as the separate bounded checkpoint
+below; uniform local cache fixtures did not establish it.
+
+Mounted-footage A checkpoint (2026-10-10): 100 contiguous strongly hashed EXRs, source 1920x804,
+are centered over opaque black in an explicitly controlled 24 fps 1920x1080 composition. Full
+1920x1080 and Half 960x540 retain 100 genuine GPU products each, including the initial foreground
+frame plus 99 RAM refills. Independent expected-member still-image CPU parity covers every output,
+its black margins and nonuniform source content. Full owns 829,440,000 payload bytes plus 6,400
+retirement-header bytes; Half owns 207,360,000 plus 6,400. Cache costs 829,653,200/207,573,200 overlap
+those payloads and remain separate measures. Two hundred warm observations add zero preparation,
+graph work, dispatch, transfer or owned allocation; final claims reach zero before actual exit and
+collection, with relevant native validation clean. The [owning GPU evidence](../architecture/gpu-backend.md#controlled-mounted-footage-a-bounded-fullhalf-evidence)
+records Full/Half fill intervals 21.610/21.533 s and complete helpers 68.949/65.022 s.
+
+Missing timing-tool launch, malformed external URIs yielding CPU output with 40/100 retained frames, and incoherent
+stage-only sampling AwaitingCapacity remain distinct failed setups, followed by corrected fixture
+URI/production-sampler runs. Half precedes only the exceptional-fallback declaration-order fix;
+final Full and one clean owning strict TU use the final two-file source. Repository quality passes
+1,459 format checks. This is test/evidence-only: production code, binaries and the running verified
+app remain unchanged. EXR Auto assumes `lin_rec709_scene` from absent chromaticities, not proven
+source-color intent. Digest/probe preparation warms file caches; source read/decode bytes, SMB-cold
+throughput, painted FPS and sustained/platform performance remain unqualified. Next is a separate
+23-member 4608x3164 native-resolution B Full/Half check with distinct measured allowances, then
+the bounded native-image allocation-ownership slice. Neither is accepted by this A checkpoint.
 
 First G6B phase-reservation checkpoint (2026-10-09), accepted within bounded scope:
 independent reviews cover coordinator/policy/builder quotas, resident and final phase lifetimes,
