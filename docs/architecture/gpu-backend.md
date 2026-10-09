@@ -1037,6 +1037,55 @@ partway through an output with mixed hidden semantics.
 - Preview fallback or reduced precision: expose it in viewer status. Strict final output does not
   degrade silently.
 
+### Conservative processing-phase reservations (first G6B slice)
+
+The first G6B slice introduces a neutral coordinator explicitly injected by application, export
+and scripting composition roots. Owners sharing an allowance must receive the same coordinator;
+independent roots do not implicitly aggregate their budgets. Missing roots refuse before heavy
+work. Host preparation, native execution and final transfer hold checked host/device byte envelopes
+and request-count leases before entering each phase. Shared allowance never grants access to
+another native owner, device generation or cache. Mutable frame-context width remains one.
+
+These are conservative phase ceilings, not unique allocation charges. Preparation accounts for
+bounded source/coverage quotas and nested borrowing; final output accounts for process, encoded
+output and readback costs. Budget refusal is typed and cannot trigger an unadmitted CPU path.
+Disabled or unavailable GPU providers still require host admission before CPU evaluation. Existing
+GPU coverage, parity and strict final-output behavior remain required under the same policy.
+
+Final-evaluator producer budgets distinguish defaults from explicit overrides. An explicit
+`executorBudgets` value is honored verbatim. A rooted default uses `requestByteBudget` as its
+producer image upper ceiling, rather than capturing the startup reusable-cache split; each request
+is still constrained by its admitted executor allowance, live pins and native resource limits.
+Unrooted legacy defaults remain unchanged. This does not enlarge an admitted phase or guarantee
+that a composition fits.
+
+Native work keeps its lease until exact retirement, including cancellation, publication failure
+and retained/quarantined submission ownership. A logical terminal result or timeout is not fence
+proof. A final executor's terminal `Failure`/`OverBudget` may release its phase only when no device
+loss, unretired executor submission, owner drain or output-colour submission remains. The device's
+independent unproven-submission latch still prevents release; an unknown failure supplies no such
+proof. Capacity updates preserve held leases/counts; measured zero refuses new admission. Bounded
+readiness and external-capacity-release retries retain one active/newest intent, avoid retrying on
+own disposal, cancel safely on shutdown, and preserve warm exact-cache reuse when no new phase is
+needed. They do not create a polling loop or silently move GPU work to CPU.
+
+The sampled host policy may release a previously observed constraint only using fresh complete
+paired data in the same verified visible view and explicit removal for every remembered finite
+domain. It does not prove hidden limits absent; the exact proof and reusable-retention recovery
+remain owned by [evaluation primitives](evaluation-primitives.md).
+
+Independent source/lifetime reviews and integrated validation accept this bounded first slice.
+Required native coverage passes 56/56 with no missing fixtures and six production route proofs.
+The final native retry witness, full 6000x4000 output parity, explicit-cap refusal/retirement and
+sticky unknown-retirement checks pass. Affected strict checks close 195 translation units through
+193 initial passes and two repaired fixture reruns; application quality and Linux CPU-only builds
+and tests also pass. The reliability plan distinguishes initial failures from corrected evidence.
+Published
+products, cache aliases, external pins, later presentation, UMA backing, opaque metadata and driver
+residuals still need allocation-owned accounting. This slice establishes no aggregate OOM guarantee,
+width-two execution, sustained throughput, or native macOS/Windows qualification. The
+[GPU reliability plan](../plans/gpu-reliability-and-preview.md) owns the remaining gates.
+
 ### Resident request cancellation and failure retirement (G2E)
 
 Independently requested cancellation or supersession discards publication, while the admitted stage,
@@ -1058,10 +1107,10 @@ Current owner-drain truth is per executor and exact submission. PathCoverage's s
 teardown fuse remains latched for audit and is not the service's current outstanding-work test.
 The unchanged resident terminal policy permits 512 owner pumps before pipeline destruction invokes
 its native bounded drain/quarantine. Exact native family ownership can remain retained afterward,
-but consuming the scheduler completion does not transfer its request charge into an aggregate
-quarantine reservation. That accounting gap and native store admission are G6 work; this slice
-claims neither an aggregate retained-byte broker nor hard native reservation ceilings from
-historical teardown counters.
+but the G2E checkpoint alone did not transfer its request charge into an aggregate quarantine
+reservation. The first G6B phase slice above extends reservation lifetime without claiming unique
+allocation-owned retained-byte accounting. Native stores and residual lifetime inventory remain G6
+work; historical teardown counters do not establish hard physical reservation ceilings.
 
 EditorArea replacement and workspace mutation continue requiring the existing WSI safe-to-mutate
 proof. An unsafe result leaves the outgoing owners and mapped native surface intact. Compute fence

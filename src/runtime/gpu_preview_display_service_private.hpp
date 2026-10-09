@@ -62,6 +62,9 @@ inline constexpr std::size_t kMaxAcceptedServiceRoots = 512;
 // `completion` which the service thread consumes while the scheduler owns the caller's own parent
 // handle independently.
 struct PreviewDisplayStageRecord final {
+    // Legacy packed route: the paired phase precedes all heavy stage/mailbox owners so its last
+    // local release follows their destruction. An unproven native control keeps its own alias.
+    std::shared_ptr<render::GpuProcessingPhaseLease> cpuNativePhase;
     GpuTaskCompletion<PreviewPreparationResultHandle> completion;
     TaskHandle<PreviewCpuStageOutcomeHandle> stageChild;
     TaskHandle<PreviewPreparationResultHandle> fallbackChild;
@@ -101,11 +104,18 @@ struct PreviewDisplayStageRecord final {
     bool cancellationRequested = false;
     bool nativeDiscard = false;
     bool nativeDispatched = false;
+    // The phase slot is armed before executor planning, and native-capable work starts at poll.
+    bool processingPhaseArmed = false;
+    bool processingPhaseTouched = false;
+    bool processingPhaseFailed = false;
+    // Native retirement is independent of whether the completed product can be published.
+    bool processingPhaseRetired = false;
     std::chrono::steady_clock::time_point nativeStartedAt{};
 
     enum class Phase : std::uint8_t {
         AwaitingStage,
         AwaitingNative,
+        AwaitingCpuFallbackDispatch,
         AwaitingFallback,
         Done,
     };
@@ -274,6 +284,9 @@ struct PreviewDisplayServiceCore final {
     // Narrow fault seam: injectable clock/poll for the bounded native-dispatch deadline.
     // Empty uses the real steady clock and the pipeline's own poll().
     std::function<std::chrono::steady_clock::time_point()> nativeClockOverride;
+    // One-shot test-only exception phases:1 before begin,2 after submission,3 after Ready.
+    // Atomic publication lets the private fixture arm an idle owner without racing callbacks.
+    std::atomic_int testNativeExceptionPhase{0};
     std::function<render::GpuNeutralDisplayPollResult(render::GpuNeutralDisplay&)>
         nativePollOverride;
     std::function<render::GpuDisplayTransferState(render::GpuDisplayTransfer&)>

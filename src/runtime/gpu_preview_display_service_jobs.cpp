@@ -1,3 +1,4 @@
+#include "gpu_preview_display_service_cpu_phase.hpp"
 #include "gpu_preview_display_service_private.hpp"
 
 #include <bloom/runtime/gpu_preview_display_product.hpp>
@@ -6,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <variant>
@@ -161,6 +163,17 @@ void handleStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>& co
     core->nativeReady.push_back(stage);
 }
 
+// The host envelope remains with the CPU stage through same-stage display fallback. Only the
+// allocator's alias is released after proven native retirement; unknown ownership stays sticky.
+void releaseCpuNativePhase(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                           const std::shared_ptr<PreviewDisplayStageRecord>& stage,
+                           const bool proven) noexcept {
+    if (stage->processingPhaseArmed && stage->cpuNativePhase && core->device) {
+        core->device->retireProcessingPhase(stage->cpuNativePhase->id(), proven);
+        stage->processingPhaseArmed = false;
+    }
+}
+
 void retirePipeline(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                     GpuPreviewDisplayServiceDiagnosticCode code, std::string message,
                     std::shared_ptr<const GpuNeutralDisplayQualificationReport> report) {
@@ -191,6 +204,7 @@ void timeoutNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core
                           const std::shared_ptr<PreviewDisplayStageRecord>& stage) {
     core->nativeInFlight = false;
     core->nativeActive.reset();
+    releaseCpuNativePhase(core, stage, false);
     retirePipeline(core, GpuPreviewDisplayServiceDiagnosticCode::NativeTimeout,
                    "The native GPU display dispatch exceeded its bounded deadline.",
                    core->qualification);
@@ -250,6 +264,19 @@ void runGpuStartupImpl(const std::shared_ptr<PreviewDisplayServiceCore>& core, T
         return;
     }
     core->device = std::move(created.device);
+    if (core->options.processingPhasePolicy &&
+        !core->options.processingPhasePolicy->reportDevice(
+            core->device->ownershipEpoch(), core->device->availableAllocationBudget())) {
+        core->publishState(GpuPreviewDisplayServiceState::Unavailable, false,
+                           {GpuPreviewDisplayServiceDiagnosticCode::AdmissionUnavailable,
+                            "The shared processing device-report capacity is exhausted."},
+                           nullptr);
+        static_cast<void>(std::move(completion)
+                              .fail(previewDiagnostic(
+                                  "preview.processing-phase.budget-refused",
+                                  "The shared processing device-report capacity is exhausted.")));
+        return;
+    }
 
     // Resolve the real device allocation budget on this owner thread and clamp the configured
     // resident route to one shared pool BEFORE the lease registry and scene cache are created, so
@@ -393,6 +420,28 @@ void startGpuPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>& core
         return;
     }
 
+    const auto nativeWorking = std::min<std::uint64_t>(core->options.nativeBudgets.maxOwnedBytes,
+                                                       submission.gpuByteAllowance);
+    auto phase = reservePreviewCpuPhase(core->options.processingPhasePolicy, submission.snapshot,
+                                        submission.identity, submission.pixelStorageByteLimit,
+                                        nativeWorking);
+    if (stage->completion.cancellationRequested()) {
+        completeCancelled(stage);
+        return;
+    }
+    if (phase.status != render::GpuProcessingPhaseAdmission::Accepted || !phase.lease) {
+        completeFailed(stage, {previewCpuPhaseDiagnostic(phase, true)});
+        return;
+    }
+    if (!core->device || core->device->processingPhaseOccupied()) {
+        completeFailed(stage,
+                       {previewCpuPhaseDiagnostic(
+                           render::GpuProcessingPhaseAdmission::BudgetRefused,
+                           TaskAdmissionRetry{phase.lease->revisionAfterOwnRelease(), true})});
+        return;
+    }
+    stage->cpuNativePhase = std::move(phase.lease);
+
     TaskRequest childRequest("GPU preview CPU stage", submission.owner, submission.priority,
                              TaskExecutor::Cpu);
     childRequest.groupId = submission.groupId;
@@ -403,14 +452,16 @@ void startGpuPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>& core
         auto child = core->scheduler->submit<PreviewCpuStageOutcomeHandle>(
             std::move(childRequest),
             [core, snapshot = std::move(submission.snapshot),
-             identity = std::move(submission.identity), limit = submission.pixelStorageByteLimit,
+             identity = std::move(submission.identity), phase = stage->cpuNativePhase,
              overrides = std::move(submission.overrides)](
                 TaskContext& context) -> TaskResult<PreviewCpuStageOutcomeHandle> {
                 using Result = TaskResult<PreviewCpuStageOutcomeHandle>;
                 if (context.isCancellationRequested()) {
                     return Result::cancelled();
                 }
-                auto result = core->stageFunction(snapshot, identity, limit, overrides, context);
+                auto result = core->stageFunction(
+                    snapshot, identity, static_cast<std::size_t>(phase->sourceByteLimit()),
+                    overrides, context);
                 core->notify();
                 return result;
             });
@@ -517,6 +568,10 @@ void processPreviewStages(const std::shared_ptr<PreviewDisplayServiceCore>& core
                 }
             }
 
+            if (stage->phase == StagePhase::AwaitingCpuFallbackDispatch) {
+                dispatchResidentCpuFallbackChild(core, stage);
+            }
+
             if (stage->phase == StagePhase::AwaitingStage && stage->stageChild.isValid()) {
                 if (auto result = stage->stageChild.tryTakeResult()) {
                     handleStageChildResult(core, stage, *result);
@@ -552,39 +607,143 @@ void processPreviewStages(const std::shared_ptr<PreviewDisplayServiceCore>& core
 // -----------------------------------------------------------------------------------------------
 
 void processNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
-    if (!core->nativeReady.empty() && (core->display == nullptr || !core->gpuAvailable)) {
-        while (!core->nativeReady.empty()) {
-            auto stage = core->nativeReady.front();
-            core->nativeReady.pop_front();
+    std::shared_ptr<PreviewDisplayStageRecord> stage;
+    try {
+        if (!core->nativeReady.empty() && (core->display == nullptr || !core->gpuAvailable)) {
+            while (!core->nativeReady.empty()) {
+                stage = core->nativeReady.front();
+                core->nativeReady.pop_front();
+                dispatchDisplayFallbackChild(core, stage);
+            }
+        }
+
+        if (core->display == nullptr) {
+            return;
+        }
+
+        if (!core->nativeInFlight) {
+            stage = pickReadyStage(core);
+            if (stage == nullptr) {
+                return;
+            }
+            if (stage->cancellationRequested || core->stopping.load(std::memory_order_acquire)) {
+                completeCancelled(stage);
+                return;
+            }
+            const auto& pixels = stage->stage->processFrame()->processImage().pixels();
+            const std::uint64_t allowance = stage->gpuByteAllowance != 0
+                                                ? stage->gpuByteAllowance
+                                                : core->previewByteAllowance();
+            if (!stage->cpuNativePhase || !core->device ||
+                !core->device->retainProcessingPhase(stage->cpuNativePhase)) {
+                completeFailed(
+                    stage,
+                    {previewCpuPhaseDiagnostic(
+                        render::GpuProcessingPhaseAdmission::BudgetRefused,
+                        stage->cpuNativePhase
+                            ? std::optional<TaskAdmissionRetry>{{stage->cpuNativePhase
+                                                                     ->revisionAfterOwnRelease(),
+                                                                 true}}
+                            : std::nullopt)});
+                return;
+            }
+            stage->processingPhaseArmed = true;
+            stage->processingPhaseTouched = true;
+            int fault = 1;
+            if (core->testNativeExceptionPhase.compare_exchange_strong(fault, 0))
+                throw std::runtime_error("injected pre-begin exception");
+            const auto diagnostic = core->display->begin(pixels, allowance);
+            if (diagnostic.code == render::GpuNeutralDisplayDiagnosticCode::None) {
+                stage->nativeDispatched = true;
+                stage->nativeStartedAt = nativeNow(core);
+                stage->phase = StagePhase::AwaitingNative;
+                core->nativeActive = stage;
+                core->nativeInFlight = true;
+                return;
+            }
+            // These explicit Neutral begin outcomes all precede buffer/command/queue work.
+            const bool noNativeWork =
+                diagnostic.code == render::GpuNeutralDisplayDiagnosticCode::InvalidArgument ||
+                diagnostic.code == render::GpuNeutralDisplayDiagnosticCode::Unsupported ||
+                diagnostic.code == render::GpuNeutralDisplayDiagnosticCode::OverBudget;
+            releaseCpuNativePhase(core, stage, noNativeWork);
+            const bool deviceFailure =
+                diagnostic.code == render::GpuNeutralDisplayDiagnosticCode::DeviceLost ||
+                diagnostic.code == render::GpuNeutralDisplayDiagnosticCode::DeviceUnavailable;
+            if (deviceFailure) {
+                disableGpuAfterNativeFailure(core, diagnostic.message);
+            }
             dispatchDisplayFallbackChild(core, stage);
+            return;
         }
-    }
 
-    if (core->display == nullptr) {
-        return;
-    }
-
-    if (!core->nativeInFlight) {
-        auto stage = pickReadyStage(core);
+        stage = core->nativeActive;
         if (stage == nullptr) {
+            core->nativeInFlight = false;
             return;
         }
-        if (stage->cancellationRequested || core->stopping.load(std::memory_order_acquire)) {
-            completeCancelled(stage);
+        int fault = 2;
+        if (core->testNativeExceptionPhase.compare_exchange_strong(fault, 0))
+            throw std::runtime_error("injected post-submit exception");
+        const auto poll = pollNative(core);
+        if (poll == render::GpuNeutralDisplayPollResult::Pending) {
+            if (nativeNow(core) - stage->nativeStartedAt >= core->options.nativeDispatchDeadline) {
+                timeoutNativeDisplay(core, stage);
+            }
             return;
         }
-        const auto& pixels = stage->stage->processFrame()->processImage().pixels();
-        const std::uint64_t allowance =
-            stage->gpuByteAllowance != 0 ? stage->gpuByteAllowance : core->previewByteAllowance();
-        const auto diagnostic = core->display->begin(pixels, allowance);
-        if (diagnostic.code == render::GpuNeutralDisplayDiagnosticCode::None) {
-            stage->nativeDispatched = true;
-            stage->nativeStartedAt = nativeNow(core);
-            stage->phase = StagePhase::AwaitingNative;
-            core->nativeActive = stage;
-            core->nativeInFlight = true;
+
+        core->nativeInFlight = false;
+        core->nativeActive.reset();
+
+        if (poll == render::GpuNeutralDisplayPollResult::Ready) {
+            releaseCpuNativePhase(core, stage, true);
+            auto readback = core->display->readback();
+            if (!readback.hasValue()) {
+                const bool deviceFailure =
+                    readback.diagnostic.code ==
+                        render::GpuNeutralDisplayDiagnosticCode::DeviceLost ||
+                    readback.diagnostic.code ==
+                        render::GpuNeutralDisplayDiagnosticCode::DeviceUnavailable;
+                if (deviceFailure) {
+                    disableGpuAfterNativeFailure(core, readback.diagnostic.message);
+                }
+                dispatchDisplayFallbackChild(core, stage);
+                return;
+            }
+            if (stage->cancellationRequested || stage->nativeDiscard) {
+                completeCancelled(stage);
+                return;
+            }
+            if (stage->stage == nullptr || stage->report == nullptr) {
+                dispatchDisplayFallbackChild(core, stage);
+                return;
+            }
+            fault = 3;
+            if (core->testNativeExceptionPhase.compare_exchange_strong(fault, 0))
+                throw std::runtime_error("injected post-Ready publication exception");
+            auto frame =
+                makeGpuNeutralDisplayPreview(*stage->stage, stage->report, std::move(readback));
+            if (!frame.has_value()) {
+                dispatchDisplayFallbackChild(core, stage);
+                return;
+            }
+            auto prepared = PreviewPreparationResult::prepared(
+                std::make_shared<const PreparedPreviewFrame>(std::move(*frame)));
+            if (!prepared.has_value()) {
+                dispatchDisplayFallbackChild(core, stage);
+                return;
+            }
+            auto handle = std::make_shared<const PreviewPreparationResult>(std::move(*prepared));
+            if (stage->completion.isValid()) {
+                static_cast<void>(std::move(stage->completion).succeed(std::move(handle)));
+            }
+            stage->phase = StagePhase::Done;
             return;
         }
+
+        releaseCpuNativePhase(core, stage, !core->display->hasUnretiredSubmission());
+        const auto diagnostic = core->display->diagnostic();
         const bool deviceFailure =
             diagnostic.code == render::GpuNeutralDisplayDiagnosticCode::DeviceLost ||
             diagnostic.code == render::GpuNeutralDisplayDiagnosticCode::DeviceUnavailable;
@@ -592,74 +751,28 @@ void processNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core
             disableGpuAfterNativeFailure(core, diagnostic.message);
         }
         dispatchDisplayFallbackChild(core, stage);
-        return;
-    }
-
-    auto stage = core->nativeActive;
-    if (stage == nullptr) {
+    } catch (...) {
+        if (!stage)
+            return;
+        // Ownership cleanup cannot depend on allocating an exception diagnostic. The local stage
+        // survives begin/readback/adoption unwinding even before/after the active slot is set.
+        const bool proven = !stage->processingPhaseArmed ||
+                            (core->display && !core->display->hasUnretiredSubmission());
+        releaseCpuNativePhase(core, stage, proven);
         core->nativeInFlight = false;
-        return;
-    }
-    const auto poll = pollNative(core);
-    if (poll == render::GpuNeutralDisplayPollResult::Pending) {
-        if (nativeNow(core) - stage->nativeStartedAt >= core->options.nativeDispatchDeadline) {
-            timeoutNativeDisplay(core, stage);
-        }
-        return;
-    }
-
-    core->nativeInFlight = false;
-    core->nativeActive.reset();
-
-    if (poll == render::GpuNeutralDisplayPollResult::Ready) {
-        auto readback = core->display->readback();
-        if (!readback.hasValue()) {
-            const bool deviceFailure =
-                readback.diagnostic.code == render::GpuNeutralDisplayDiagnosticCode::DeviceLost ||
-                readback.diagnostic.code ==
-                    render::GpuNeutralDisplayDiagnosticCode::DeviceUnavailable;
-            if (deviceFailure) {
-                disableGpuAfterNativeFailure(core, readback.diagnostic.message);
-            }
-            dispatchDisplayFallbackChild(core, stage);
-            return;
-        }
-        if (stage->cancellationRequested || stage->nativeDiscard) {
-            completeCancelled(stage);
-            return;
-        }
-        if (stage->stage == nullptr || stage->report == nullptr) {
-            dispatchDisplayFallbackChild(core, stage);
-            return;
-        }
-        auto frame =
-            makeGpuNeutralDisplayPreview(*stage->stage, stage->report, std::move(readback));
-        if (!frame.has_value()) {
-            dispatchDisplayFallbackChild(core, stage);
-            return;
-        }
-        auto prepared = PreviewPreparationResult::prepared(
-            std::make_shared<const PreparedPreviewFrame>(std::move(*frame)));
-        if (!prepared.has_value()) {
-            dispatchDisplayFallbackChild(core, stage);
-            return;
-        }
-        auto handle = std::make_shared<const PreviewPreparationResult>(std::move(*prepared));
-        if (stage->completion.isValid()) {
-            static_cast<void>(std::move(stage->completion).succeed(std::move(handle)));
-        }
+        if (core->nativeActive == stage)
+            core->nativeActive.reset();
+        if (!proven)
+            core->display.reset(); // Sticky allocator alias precedes drain/quarantine destruction.
         stage->phase = StagePhase::Done;
-        return;
+        try {
+            completeFailed(stage,
+                           {previewDiagnostic("bloom.runtime.gpu-preview-native-threw",
+                                              "Native preview processing raised an exception.")});
+        } catch (...) {
+            completeCancelled(stage); // Allocation-free terminal fallback, never an orphan.
+        }
     }
-
-    const auto diagnostic = core->display->diagnostic();
-    const bool deviceFailure =
-        diagnostic.code == render::GpuNeutralDisplayDiagnosticCode::DeviceLost ||
-        diagnostic.code == render::GpuNeutralDisplayDiagnosticCode::DeviceUnavailable;
-    if (deviceFailure) {
-        disableGpuAfterNativeFailure(core, diagnostic.message);
-    }
-    dispatchDisplayFallbackChild(core, stage);
 }
 
 void disableGpuAfterNativeFailure(const std::shared_ptr<PreviewDisplayServiceCore>& core,

@@ -3,6 +3,7 @@
 // device/pipeline/qualification path for the bounded native-dispatch-deadline scenario and the
 // paired benchmark. It fabricates no eligibility report.
 
+#include "gpu_preview_display_service_phase_support.hpp"
 #include "gpu_preview_display_service_private.hpp"
 
 #include <bloom/color/ocio_builtin_registry.hpp>
@@ -82,11 +83,6 @@ constexpr auto kBlendP = document::ParameterId::fromRaw(46);
     c.diagnosticsPerTask = 16;
     c.groupRegistryCapacity = 16;
     return c;
-}
-
-[[nodiscard]] document::Snapshot makeSnapshot() {
-    document::Document doc(document::Project(kProjectId, "gpu-preview-display-lifecycle"));
-    return doc.snapshot();
 }
 
 [[nodiscard]] document::CompositionFormat format(const std::uint32_t w, const std::uint32_t h) {
@@ -243,6 +239,7 @@ benchmarkStage(std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> p
     options.enabled = true;
     options.loaderPath = loader;
     options.previewByteAllowance = kBudget;
+    options.processingPhasePolicy = previewTestPolicy();
     return options;
 }
 
@@ -349,6 +346,10 @@ NativeDeadlineScenarioResult runNativeDeadlineScenario(const std::filesystem::pa
     core->effectivePreviewByteAllowance.store(kBudget, std::memory_order_relaxed);
     core->gpuAvailable = true;
     core->qualification = report;
+    core->device = std::move(device.device);
+    core->options.processingPhasePolicy = previewTestPolicy();
+    static_cast<void>(core->options.processingPhasePolicy->reportDevice(
+        core->device->ownershipEpoch(), core->device->availableAllocationBudget()));
     core->display = std::move(pipeline.display);
     core->fallback = [](const PreviewCpuStage&,
                         TaskContext&) -> TaskResult<PreviewPreparationResultHandle> {
@@ -360,6 +361,14 @@ NativeDeadlineScenarioResult runNativeDeadlineScenario(const std::filesystem::pa
     auto stage = std::make_shared<PreviewDisplayStageRecord>();
     stage->stage = std::make_shared<const PreviewCpuStage>(makeIdentity(*plan, 1), frame, processor,
                                                            kBudget, std::vector<TaskDiagnostic>{});
+    auto grant = core->options.processingPhasePolicy->reserve(
+        {.output = GpuProcessingPhaseOutput::FloatFinal,
+         .pixels = static_cast<std::uint64_t>(size->first) * size->second,
+         .requestedSourceBytes = kBudget,
+         .minimumSourceBytes = static_cast<std::uint64_t>(size->first) * size->second * 16,
+         .deviceWorkingBytes = kBudget,
+         .native = true});
+    stage->cpuNativePhase = std::move(grant.lease);
     stage->pixelStorageByteLimit = kBudget;
     // Mirror startGpuPreviewStage(): the accepted request carries both the host pixel-storage
     // ceiling and the device-stage admission allowance resolved from capacity.
@@ -402,14 +411,15 @@ runGpuPreviewDisplayBenchmark(const std::filesystem::path& loader) {
     }
     auto small = makePlan(640, 360);
     auto large = makePlan(1920, 1080);
-    const auto snapshot = makeSnapshot();
+    const auto snapshot = previewTestSnapshot(*large);
     auto evaluator = std::make_shared<CpuCompositionEvaluator>();
     auto cacheHits = std::make_shared<std::atomic<std::size_t>>(0);
     const auto stage = benchmarkStage(processor, small, large, evaluator, cacheHits);
     const auto fallback = qualifiedFallback(processor);
 
     TaskScheduler scheduler(harnessConfig(4));
-    GpuPreviewDisplayService gpuService(scheduler, stage, fallback, gpuOptions(loader));
+    auto sharedOptions = gpuOptions(loader);
+    GpuPreviewDisplayService gpuService(scheduler, stage, fallback, sharedOptions);
     const bool terminal = [&] {
         const auto deadline = std::chrono::steady_clock::now() + 30s;
         while (std::chrono::steady_clock::now() < deadline) {
@@ -425,6 +435,7 @@ runGpuPreviewDisplayBenchmark(const std::filesystem::path& loader) {
     }
     GpuPreviewDisplayServiceOptions cpuOptions;
     cpuOptions.enabled = false;
+    cpuOptions.processingPhasePolicy = sharedOptions.processingPhasePolicy;
     GpuPreviewDisplayService cpuService(scheduler, stage, fallback, cpuOptions);
 
     const auto sample = [&](GpuPreviewDisplayService& service,

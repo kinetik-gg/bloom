@@ -100,6 +100,31 @@ const GpuCapabilityReport& GpuDevice::capabilityReport() const noexcept {
     return kEmptyCapabilityReport;
 }
 
+bool GpuDevice::retainProcessingPhase(std::shared_ptr<GpuProcessingPhaseLease> lease) noexcept {
+    if (!isOwnerThread() || !lease || !impl_->control || impl_->control->processingPhase) {
+        return false;
+    }
+    impl_->control->processingPhase = std::move(lease);
+    return true;
+}
+void GpuDevice::retireProcessingPhase(const std::uint64_t leaseId,
+                                      const bool retirementProven) noexcept {
+    if (!isOwnerThread() || !impl_->control || !impl_->control->processingPhase ||
+        impl_->control->processingPhase->id() != leaseId) {
+        return;
+    }
+    auto& control = *impl_->control;
+    if (!retirementProven || control.processingPhaseUnproven) {
+        control.processingPhaseUnproven = true;
+        control.processingPhase->markUnproven();
+        return;
+    }
+    control.processingPhase.reset();
+}
+bool GpuDevice::processingPhaseOccupied() const noexcept {
+    return !isOwnerThread() || !impl_->control || impl_->control->processingPhase != nullptr;
+}
+
 GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept {
     GpuAllocationBudget result;
     if (impl_ == nullptr || impl_->state != GpuDeviceState::Ready || impl_->control == nullptr) {
@@ -359,6 +384,9 @@ void DynamicLibrary::close() noexcept {
 
 DeviceAllocatorState::~DeviceAllocatorState() {
     assert(owner == std::this_thread::get_id());
+    if (processingPhase) {
+        processingPhase->markUnproven();
+    }
     if (allocator != VK_NULL_HANDLE) {
         vmaDestroyAllocator(allocator);
         allocator = VK_NULL_HANDLE;

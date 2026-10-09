@@ -1,4 +1,6 @@
+#include <QPointer>
 #include <QThread>
+#include <algorithm>
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -219,7 +221,18 @@ void CompositionPreviewController::consumeReadyResult() {
         }
         next.freshness = freshnessFor(next.frame, next.desiredIdentity);
     }
+    if (processingPolicy_ && result->state() == runtime::TaskState::Failed) {
+        for (const auto& diagnostic : next.diagnostics) {
+            if (diagnostic.admissionRetry) {
+                deferredAdmission_ = diagnostic.admissionRetry;
+                break;
+            }
+        }
+    }
+    const QPointer<CompositionPreviewController> guard(this);
     publish(std::move(next));
+    if (guard)
+        guard->notifyProcessingCapacityChanged();
 }
 
 } // namespace bloom::ui

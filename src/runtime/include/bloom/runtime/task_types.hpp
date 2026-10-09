@@ -71,12 +71,20 @@ enum class DiagnosticSeverity {
     Error,
 };
 
+// Optional admission-only retry watermark. It is never a task/result pixel identity.
+struct TaskAdmissionRetry final {
+    std::uint64_t revision = 0;
+    bool requiresDeviceCapacity = false;
+    friend bool operator==(const TaskAdmissionRetry&, const TaskAdmissionRetry&) = default;
+};
+
 struct TaskDiagnostic {
     std::string code;
     DiagnosticSeverity severity = DiagnosticSeverity::Error;
     std::string summary;
     std::string detail;
     std::string suggestedAction;
+    std::optional<TaskAdmissionRetry> admissionRetry = {};
 
     friend bool operator==(const TaskDiagnostic&, const TaskDiagnostic&) = default;
 };

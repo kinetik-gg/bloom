@@ -3,6 +3,7 @@
 
 #include <QCoreApplication>
 #include <QTimer>
+#include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/scripting/events.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/project_host.hpp>
@@ -55,6 +56,8 @@ struct ScriptPanelRuntime::State {
     host::PublicationCoordinator* publication;
     platform::StagedArtifactCoordinator* artifacts;
     std::shared_ptr<py::EmbeddedPython> python;
+    std::shared_ptr<host::GpuExportProvider> gpuExportProvider;
+    bool ownsGpuExportProvider = false;
     std::filesystem::path executable;
 
     Result enqueue(std::uint64_t expected, Action action) {
@@ -78,10 +81,13 @@ struct ScriptPanelRuntime::State {
     }
 };
 
-ScriptPanelRuntime::ScriptPanelRuntime(CompositionSession& session, ProjectHost& host)
+ScriptPanelRuntime::ScriptPanelRuntime(CompositionSession& session, ProjectHost& host,
+                                       std::shared_ptr<host::GpuExportProvider> provider)
     : session_(session), host_(host), state_(std::make_shared<State>()) {
     state_->publication = &host_.publicationCoordinator();
     state_->artifacts = &host_.artifactCoordinator();
+    state_->ownsGpuExportProvider = provider == nullptr;
+    state_->gpuExportProvider = provider ? std::move(provider) : host::GpuExportProvider::create();
     state_->executable = QCoreApplication::applicationFilePath().toStdString();
     replaceSession();
     connect(&session_, &CompositionSession::snapshotChanged, this, &ScriptPanelRuntime::refresh);
@@ -216,6 +222,15 @@ void ScriptPanelRuntime::poll() {
 }
 
 void ScriptPanelRuntime::work(const std::shared_ptr<State>& state) {
+    struct OwnedRootRetirement final {
+        std::shared_ptr<State> state;
+        ~OwnedRootRetirement() {
+            if (state->ownsGpuExportProvider) {
+                static_cast<void>(
+                    state->gpuExportProvider->shutdownAndWait(std::chrono::seconds(10)));
+            }
+        }
+    } retirement{state};
     try {
         auto python = std::make_shared<py::EmbeddedPython>(state->executable);
         {
@@ -289,7 +304,8 @@ void ScriptPanelRuntime::work(const std::shared_ptr<State>& state) {
                         },
                         [state, valid] {
                             return !valid() || state->cancellation != state->activeCancellation;
-                        });
+                        },
+                        state->gpuExportProvider);
                     boundGeneration = generation;
                 }
                 result = python->execute(work.source, true);

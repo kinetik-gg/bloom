@@ -1,4 +1,5 @@
 #include <bloom/render/gpu_device.hpp>
+#include <bloom/render/gpu_processing_phase_budget.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -222,6 +223,58 @@ void testRealDeviceIfAvailable(ExpectationContext& expectations, const TestOptio
     }
 
     testWrongThreadFailsClosed(expectations, device);
+
+    // One generation slot protects any native owner that keeps the allocator control alive. The
+    // tiny host buffer is a real allocator pin; no artificial GPU dispatch or quarantine is used.
+    bloom::render::GpuProcessingPhaseBudget phases;
+    phases.setHostCapacity(4096, true);
+    phases.setDeviceCapacity(4096, true);
+    const bloom::render::GpuProcessingPhaseRequest phaseRequest{.fixedHostBytes = 64,
+                                                                .deviceWorkingBytes = 16,
+                                                                .requestedExecutorBytes = 64,
+                                                                .sourceFree = true};
+    auto first = phases.reserve(phaseRequest);
+    auto second = phases.reserve(phaseRequest);
+    if (!first.lease || !second.lease) {
+        expectations.expect(false, "two small processing leases are granted");
+        return;
+    }
+    bool foreignRetain = true;
+    std::thread foreignArm([&] { foreignRetain = device.retainProcessingPhase(first.lease); });
+    foreignArm.join();
+    expectations.expect(!foreignRetain && !device.processingPhaseOccupied(),
+                        "foreign phase arming cannot occupy an owner slot");
+    expectations.expect(device.retainProcessingPhase(first.lease),
+                        "the owner arms the exact first lease");
+    device.retireProcessingPhase(second.lease->id(), true);
+    expectations.expect(device.processingPhaseOccupied(), "wrong ID cannot retire the slot");
+    expectations.expect(!device.retainProcessingPhase(second.lease),
+                        "a second phase cannot overwrite an occupied generation");
+    std::thread foreignRetire([&] { device.retireProcessingPhase(first.lease->id(), true); });
+    foreignRetire.join();
+    expectations.expect(device.processingPhaseOccupied(), "foreign retirement fails closed");
+    device.retireProcessingPhase(first.lease->id(), true);
+    expectations.expect(!device.processingPhaseOccupied(), "proven retirement makes slot reusable");
+    first.lease.reset();
+    expectations.expect(device.retainProcessingPhase(second.lease), "a new lease reuses the slot");
+    device.retireProcessingPhase(second.lease->id(), false);
+    device.retireProcessingPhase(second.lease->id(), true);
+    expectations.expect(device.processingPhaseOccupied() && phases.snapshot().unprovenPhases == 1,
+                        "unproven ownership is sticky despite a later claimed proof");
+    auto nativePin = device.allocateHostBuffer(64);
+    if (!nativePin) {
+        expectations.expect(false, "the native lifetime pin allocates");
+        return;
+    }
+    second.lease.reset();
+    result.device.reset();
+    expectations.expect(phases.snapshot().admittedPhases == 1,
+                        "last native control pin retains the phase after device wrapper teardown");
+    nativePin.allocation = GpuBufferAllocation{};
+    expectations.expect(phases.snapshot().admittedPhases == 0 &&
+                            phases.snapshot().hostReservedBytes == 0 &&
+                            phases.snapshot().deviceReservedBytes == 0,
+                        "actual final allocator-owner teardown releases both phase reservations");
 }
 
 // The optional presentation request must never weaken the compute path. With a compute-only loader

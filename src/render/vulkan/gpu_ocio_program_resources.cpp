@@ -2,6 +2,8 @@
 
 #include "ocio_gpu_program_fault.hpp"
 
+#include <bloom/render/gpu_processing_phase_budget.hpp>
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -205,6 +207,13 @@ void quarantineUpload(ImageOwner& image, Staging& staging, vk::raii::CommandPool
                       vk::raii::CommandBuffer& command, vk::raii::Fence& fence,
                       std::shared_ptr<vulkan_detail::DeviceAllocatorState> state,
                       const bool latchFuse) noexcept {
+    // A cancelled upload can outlive the failed program factory without an executor wrapper.
+    // Latch this exact generation before handing it to the independent quarantine; global
+    // historical teardown fuses are neither needed nor sufficient for this ownership proof.
+    if (state->processingPhase) {
+        state->processingPhaseUnproven = true;
+        state->processingPhase->markUnproven();
+    }
     quarantineStorage()->state = std::move(state);
     quarantineStorage()->image = image.image;
     quarantineStorage()->imageAllocation = image.allocation;

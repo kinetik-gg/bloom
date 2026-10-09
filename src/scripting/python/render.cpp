@@ -63,7 +63,8 @@ nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t
                                       runtime::TaskId::fromRaw(cancellationTask));
                                   return task && task->cancellationRequested;
                               }};
-        result = Render::run(*session_, scheduler_, compiler, std::move(request));
+        result = Render::run(*session_, scheduler_, compiler, std::move(request), {},
+                             gpuExportProvider_);
         if (result.succeeded) {
             if (range) {
                 for (auto index = first; index <= last; ++index) {

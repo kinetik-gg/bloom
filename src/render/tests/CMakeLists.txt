@@ -1,5 +1,11 @@
 include(BloomTesting)
 
+add_executable(bloom_render_gpu_processing_phase_budget_test gpu_processing_phase_budget_tests.cpp)
+target_link_libraries(bloom_render_gpu_processing_phase_budget_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_gpu_processing_phase_budget_test)
+bloom_add_test(NAME bloom.render.gpu_processing_phase_budget
+    COMMAND bloom_render_gpu_processing_phase_budget_test LABELS unit gpu memory)
+
 add_executable(bloom_render_image_test render_image_test.cpp)
 target_link_libraries(bloom_render_image_test PRIVATE bloom_render)
 bloom_enable_warnings(bloom_render_image_test)

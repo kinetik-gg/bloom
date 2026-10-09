@@ -1526,6 +1526,17 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )
 
+    add_executable(bloom_ui_gpu_processing_phase_native_test gpu_processing_phase_native_tests.cpp)
+    target_include_directories(bloom_ui_gpu_processing_phase_native_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    target_link_libraries(bloom_ui_gpu_processing_phase_native_test
+        PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
+    bloom_enable_warnings(bloom_ui_gpu_processing_phase_native_test)
+    bloom_add_test(NAME bloom.ui.gpu_processing_phase_native
+        COMMAND bloom_ui_gpu_processing_phase_native_test LABELS ui gpu memory
+        TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    set_tests_properties(bloom.ui.gpu_processing_phase_native PROPERTIES SKIP_RETURN_CODE 77)
+
     add_executable(bloom_ui_gpu_packed_viewer_test gpu_packed_viewer_tests.cpp)
     target_include_directories(bloom_ui_gpu_packed_viewer_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
@@ -1741,3 +1752,10 @@ bloom_add_test(
     TIMEOUT 120
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
+
+add_executable(bloom_ui_processing_capacity_retry_test processing_capacity_retry_tests.cpp)
+target_link_libraries(bloom_ui_processing_capacity_retry_test PRIVATE bloom_ui bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_ui_processing_capacity_retry_test)
+bloom_enable_strict_floating_point(bloom_ui_processing_capacity_retry_test)
+bloom_add_test(NAME bloom.ui.processing_capacity_retry COMMAND bloom_ui_processing_capacity_retry_test
+    LABELS ui runtime memory TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

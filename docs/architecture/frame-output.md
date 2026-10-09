@@ -16,11 +16,18 @@ export command's preset choice) are implemented. MEDIA-4 enables TIFF through th
 and adds ProRes MOV, DNxHR MXF and PCM WAV composition export. The supervised external-config
 helper and non-built-in locator kinds remain pending color-side work.
 
-The GPU final-render route is now wired through ONE application-owned, cheap-to-construct
-`bloom::host::GpuExportProvider`: every existing output-analysis caller (desktop frame export,
-frame-range/video sequence export, headless scripting, and MCP) shares the same lazily bootstrapped
-`runtime::GpuProcessFrameEvaluator`, and the async attempt retains the provider so an in-flight
-evaluation never borrows a UI-owned object. The attempt graph defers its Evaluating stage until the
+The GPU final-render route uses an explicitly owned, cheap-to-construct
+`bloom::host::GpuExportProvider`. Still, range and video requests within one application/server
+share its lazily bootstrapped `runtime::GpuProcessFrameEvaluator`; this does not imply one evaluator
+or reservation allowance across independent processes or owners. Roots constructing independent
+owners must explicitly inject the policy they intend to share. Async attempts retain their provider,
+so in-flight evaluation never borrows a UI-owned object. `scripting::Render::run` requires provider
+injection and refuses a missing root with `MissingProcessingRoot` before compilation. A disabled
+provider still supplies the admitted CPU path. `SequenceExportRunnerV1` normalizes its documented
+null-provider CPU default to one cheap, disabled provider with an off-thread processing root shared
+by all per-frame attempts; an injected application provider remains unchanged. GPU unavailability
+or a processing-budget refusal
+must not become an unconstrained CPU escape. The attempt graph defers its Evaluating stage until the
 provider's off-thread bootstrap is terminal, so the first export on a supported device is genuinely
 GPU rather than a CPU fallback that raced the bootstrap. The blocking CPU color stage resolves the
 general output-colour production context -- the OCIO display/effect program -- and prepares the
@@ -31,12 +38,22 @@ provenance and counters (status, native dispatches, one final combined readback)
 only; this never enters the report, the approval digest, or the resource ledger. The CPU reference
 evaluator remains the correctness oracle and the explicit `Disabled`/unavailable fallback,
 unsupported scenes stay typed `UnsupportedGpuSubset`, and no operation qualification is changed.
-Provider/evaluator teardown is always handed to a scheduled worker, never joined on the caller or UI
-thread. Encoding, file writing, and the font load/shaping and geometry resolution that feed text
+Explicit final-evaluator `executorBudgets` remain authoritative. With a processing root and no
+override, the producer image upper ceiling follows `requestByteBudget` rather than a startup
+reusable-cache allocation; the admitted per-request allowance, live pins and native resource limits
+still constrain execution. The owning GPU contract defines phase-retirement proof on budget refusal.
+GUI provider/evaluator retirement does not join the native owner on the UI thread. An independently
+owned headless root may retire synchronously on its non-UI host thread after its renders finish;
+an injected caller neither retires nor destroys the shared provider after each request. Encoding, file writing, and the font load/shaping and geometry resolution that feed text
 remain CPU host preparation at this boundary: the GPU route evaluates and composites pixels but does
 not move codec or font work onto the device. A 6000x4000 media+CST+text export has locally verified
 native execution. `docs/architecture/gpu-backend.md` remains the owning document for GPU
 qualification policy.
+
+Processing-root ownership, CPU admission and the first live-phase reservation slice are accepted
+bounded contracts. Required still/range/video/headless route evidence and the full 6000x4000 native
+parity fixture pass, including explicit-cap refusal and proven retirement. Conservative envelopes
+are not unique physical RAM/VRAM charges or width-two qualification.
 
 Updated: 2026-09-20
 

@@ -693,20 +693,32 @@ hard reusable ceiling = min(host allowance, every finite domain ceiling)
 The parser follows actual membership and compatible mounts, preserving visible ancestors with a
 bounded 32-domain walk. A finite limit with unavailable usage can still tighten the absolute `L-P`
 bound. Partial, stale, failed and unsupported samples never expand a previously finite constraint.
-Verified no-visible-finite-limit is distinct from unknown or unlimited: it describes only the
-visible hierarchy. Linux memory-v1 and Windows/macOS process limits are explicitly Unsupported in
-this slice. With no prior finite constraint, explicit unsupported/no-finite results permit host-only
-best effort; otherwise the prior finite ceiling remains latched. Native Windows/macOS execution
-qualification is still pending.
+Verified no-visible-finite-limit is distinct from unknown or globally unlimited. Removal of an
+observed finite constraint requires fresh monotonic complete paired data from the same verified
+membership, selected mount/filesystem and cgroup/mount namespace view, with explicit `max` and
+valid current usage for every remembered finite domain. The worker checks that view before and
+after scalar reads. Missing, malformed, incomplete, changed-view or stale observations retain the
+constraint, as does failure to retain its bounded history. Initial verified hierarchy-root absence
+can initialize host-only policy but cannot omit a remembered domain from a removal proof. This
+proves removal of observed constraints within the trusted visible view; hidden limits are not
+proved absent. Linux memory-v1 and Windows/macOS process limits remain explicitly Unsupported.
+With no prior finite constraint, explicit unsupported/no-finite results permit host-only best effort.
+Native Windows/macOS execution qualification is still pending.
 
-Only monotonic complete finite samples no more than fifteen seconds old authorize measured-ceiling
-growth. The first finite sample seeds at most half the hard allowance. Recovery waits ten seconds;
+Monotonic complete finite samples no more than fifteen seconds old, or verified observed-constraint
+removal as above, authorize measured-ceiling recovery. The first finite sample seeds at most half the hard allowance. Recovery waits ten seconds;
 upward changes retain the five-second/ten-percent gating and grow by at most the smaller of 25% of
 the effective allowance and half the remaining gap. Recovery from zero uses a half-gap seed after
 the hold. Reliable hard shrink applies immediately at any delta, overriding floors, hysteresis and
 cooldown. Reusable retention is bounded by this policy; it is not a whole-process reservation or
 OOM guarantee. GPU/driver allocations, processing scratch, live pins and export admission require
 separate aggregate accounting.
+
+The phase policy separately consumes verified host headroom for conservative processing admission;
+held leases and request counts survive quota updates, while zero refuses new growth. This is not
+physical allocation accounting. Shared preview/final roots, bounded readiness/release retry, legacy
+admission and required-route validation pass within the first conservative G6B slice; published
+products, shared aliases and later presentation still require allocation-owned accounting.
 
 Missing, invalid or zero settings use the default split. Overrides determine configured ceilings:
 one override reduces the other allocation if necessary; two overcommitted overrides are reduced

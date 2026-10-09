@@ -41,6 +41,7 @@ enum class BuildFailureKindV1 : std::uint8_t {
     Identity,
     Analyzer,
     AttemptBuild,
+    ProcessingAdmission,
 };
 
 // The successful Evaluating/Identifying/Analyzing product, heap-shared as one handle so the task
@@ -65,6 +66,9 @@ translateBuildFailure(const BuildOutcomeV1& outcome) noexcept {
     case BuildFailureKindV1::Evaluation:
         return {OutputAnalysisAttemptStageV1::Evaluating, false,
                 static_cast<runtime::EvaluationDiagnosticCode>(outcome.rawCode)};
+    case BuildFailureKindV1::ProcessingAdmission:
+        return {OutputAnalysisAttemptStageV1::Evaluating, false,
+                static_cast<runtime::GpuProcessFrameDiagnosticCode>(outcome.rawCode)};
     case BuildFailureKindV1::Identity:
         return {OutputAnalysisAttemptStageV1::Identifying, false,
                 static_cast<output::ProcessFrameSemanticIdentityErrorCode>(outcome.rawCode)};
@@ -229,6 +233,8 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
         const auto preset = state_->request.preset;
         auto* ledger = state_->ledger;
         auto gpuProvider = state_->request.gpuProvider; // shared ownership travels with the task
+        auto processingPolicy = gpuProvider ? gpuProvider->processingPhasePolicy()
+                                            : state_->request.processingPhasePolicy;
         // The command the combined readback will run. The canonical command was prepared on the
         // Resolving CPU task from the EXACT resolved config/working space/display/view and the
         // exact data-window geometry. `request.outputColorCommand` is an explicit test seam and is
@@ -256,8 +262,8 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
         auto submission = state_->scheduler->submit<BuildOutcomeV1>(
             std::move(cpuRequest),
             [plan = std::move(plan), evaluation, resolved, preset, ledger,
-             gpuProvider = std::move(gpuProvider), forceCpuFallback,
-             outputColorCommand = std::move(outputColorCommand)](
+             gpuProvider = std::move(gpuProvider), processingPolicy = std::move(processingPolicy),
+             forceCpuFallback, outputColorCommand = std::move(outputColorCommand)](
                 runtime::TaskContext& context) -> runtime::TaskResult<BuildOutcomeV1> {
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
@@ -275,12 +281,39 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                 // silently substitute for the display transform the caller asked to run.
                 OutputAnalysisAttemptGpuProvenanceV1 gpuProvenance;
                 output::OutputAnalysisAttemptGpuDisplayV1 gpuDisplay;
+                std::shared_ptr<render::GpuProcessingPhaseLease> hostPhase;
                 std::shared_ptr<const runtime::ProcessFrame> evaluatedFrame;
+                const auto admissionFailure =
+                    [](const runtime::GpuProcessFrameDiagnosticCode code) {
+                        return runtime::TaskResult<BuildOutcomeV1>::succeeded(
+                            {.succeeded = false,
+                             .failureKind = BuildFailureKindV1::ProcessingAdmission,
+                             .rawCode = static_cast<std::uint8_t>(code)});
+                    };
+                if (!processingPolicy) {
+                    return admissionFailure(runtime::GpuProcessFrameDiagnosticCode::InvalidRequest);
+                }
+                if (gpuProvider) {
+                    gpuProvider->refreshProcessingCapacity(context.cancellation());
+                }
+                if (context.isCancellationRequested()) {
+                    return runtime::TaskResult<BuildOutcomeV1>::cancelled();
+                }
                 if (gpuProvider != nullptr && !forceCpuFallback) {
                     auto evaluator = gpuProvider->evaluator();
                     if (evaluator != nullptr) {
                         auto gpuOutcome = evaluator->evaluate(
                             plan, evaluation, context.cancellation(), {}, outputColorCommand);
+                        if (context.isCancellationRequested() ||
+                            gpuOutcome.status == runtime::GpuProcessFrameStatus::Cancelled) {
+                            return runtime::TaskResult<BuildOutcomeV1>::cancelled();
+                        }
+                        if (gpuOutcome.diagnostic.code ==
+                                runtime::GpuProcessFrameDiagnosticCode::AwaitingCapacity ||
+                            gpuOutcome.diagnostic.code ==
+                                runtime::GpuProcessFrameDiagnosticCode::BudgetRefused) {
+                            return admissionFailure(gpuOutcome.diagnostic.code);
+                        }
                         gpuProvenance.status = gpuOutcome.status;
                         gpuProvenance.counters = gpuOutcome.counters;
                         gpuProvenance.deviceOwnershipEpoch = gpuOutcome.deviceOwnershipEpoch;
@@ -321,8 +354,42 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                     }
                 }
                 if (evaluatedFrame == nullptr) {
+                    if (context.isCancellationRequested()) {
+                        return runtime::TaskResult<BuildOutcomeV1>::cancelled();
+                    }
+                    if (!plan) {
+                        return admissionFailure(
+                            runtime::GpuProcessFrameDiagnosticCode::InvalidRequest);
+                    }
+                    std::uint64_t pixels = static_cast<std::uint64_t>(plan->format().width()) *
+                                           plan->format().height();
+                    if (const auto* proxy =
+                            std::get_if<runtime::ProxyResolution>(&evaluation.resolution)) {
+                        pixels = static_cast<std::uint64_t>(proxy->extent.width()) *
+                                 proxy->extent.height();
+                    }
+                    if (evaluation.roi) {
+                        pixels = static_cast<std::uint64_t>(evaluation.roi->extent().width()) *
+                                 evaluation.roi->extent().height();
+                    }
+                    auto grant = runtime::reserveHostEvaluationPhase(
+                        *processingPolicy, pixels, evaluation.pixelStorageByteLimit,
+                        runtime::GpuProcessingPhaseOutput::FloatFinal,
+                        preset == output::OutputPresetV1::PngRgba8SrgbV1);
+                    if (grant.status != render::GpuProcessingPhaseAdmission::Accepted ||
+                        !grant.lease) {
+                        return admissionFailure(
+                            grant.status == render::GpuProcessingPhaseAdmission::AwaitingCapacity
+                                ? runtime::GpuProcessFrameDiagnosticCode::AwaitingCapacity
+                                : runtime::GpuProcessFrameDiagnosticCode::BudgetRefused);
+                    }
+                    hostPhase = std::move(grant.lease);
+                    auto cpuEvaluation = evaluation;
+                    cpuEvaluation.pixelStorageByteLimit =
+                        static_cast<std::size_t>(hostPhase->sourceByteLimit());
                     const runtime::CpuCompositionEvaluator evaluator;
-                    auto evalResult = evaluator.evaluate(plan, evaluation, context.cancellation());
+                    auto evalResult =
+                        evaluator.evaluate(plan, cpuEvaluation, context.cancellation());
                     if (evalResult.status() == runtime::EvaluationStatus::Cancelled) {
                         return runtime::TaskResult<BuildOutcomeV1>::cancelled();
                     }

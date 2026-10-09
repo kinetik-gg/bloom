@@ -206,6 +206,13 @@ void retireNativeOnOwner(const std::shared_ptr<PreviewDisplayServiceCore>& core)
     if (core->device != nullptr) {
         core->device->reclaimReleasedImages();
     }
+    if (core->device && core->options.processingPhasePolicy) {
+        // Removing a normal retired owner report does not release any surviving phase token.
+        // An occupied/unproven generation keeps its report and quota through native quarantine.
+        static_cast<void>(core->options.processingPhasePolicy->retireDeviceReport(
+            core->device->ownershipEpoch(),
+            !core->device->processingPhaseOccupied() && !core->presentationRetirementUnproven));
+    }
     if (core->presentationRetirementUnproven) {
         // A native presentation generation could not be proven retired. The process quarantine now
         // holds raw native targets that reference this device, so the device is deliberately
@@ -366,8 +373,11 @@ bool residentExecutorBegin(const std::shared_ptr<PreviewDisplayServiceCore>& cor
         reason = "the resident executor is unavailable";
         return false;
     }
+    const auto& phase = stage.gpuStage->phaseLease();
     const std::uint64_t budget =
-        stage.gpuByteAllowance != 0 ? stage.gpuByteAllowance : core->previewByteAllowance();
+        phase
+            ? phase->executorByteLimit()
+            : (stage.gpuByteAllowance != 0 ? stage.gpuByteAllowance : core->previewByteAllowance());
     const auto diagnostic = core->residentExecutor->begin(stage.gpuStage->scene(), budget);
     if (diagnostic.code != GpuSceneExecutorDiagnosticCode::None) {
         reason = diagnostic.message.empty() ? std::string("the resident scene begin was refused")

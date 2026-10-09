@@ -975,6 +975,7 @@ target_sources(
     bloom_render
     PRIVATE
         cpu_image_primitives.cpp
+        gpu_processing_phase_budget.cpp
         display_buffer.cpp
         gpu_affine_host.cpp
         gpu_point_resample_host.cpp
@@ -995,6 +996,7 @@ target_sources(
             include/bloom/render/gpu_blend.hpp
             include/bloom/render/gpu_composite.hpp
             include/bloom/render/gpu_device.hpp
+            include/bloom/render/gpu_processing_phase_budget.hpp
             include/bloom/render/gpu_display_transfer.hpp
             include/bloom/render/gpu_image.hpp
             include/bloom/render/gpu_image_upload.hpp

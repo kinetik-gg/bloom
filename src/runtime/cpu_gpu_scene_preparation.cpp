@@ -20,6 +20,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <new>
 #include <optional>
@@ -93,18 +94,33 @@ PreparedGpuSceneBuildResult
 CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPlan>& plan,
                               const EvaluationRequest& request,
                               const CancellationToken& cancellation) const {
+    auto phaseLease = phase_.admittedLease;
+    std::optional<TaskAdmissionRetry> refusalRetry;
+    const auto fail = [&](const PreparedGpuSceneDiagnosticCode code, std::string message,
+                          GpuSceneMediaStatistics statistics = {}) {
+        auto result = failed(code, std::move(message), statistics);
+        if (code == PreparedGpuSceneDiagnosticCode::AwaitingCapacity ||
+            code == PreparedGpuSceneDiagnosticCode::BudgetRefused) {
+            result.diagnostic.admissionRetry =
+                phaseLease
+                    ? std::optional<TaskAdmissionRetry>{{phaseLease->revisionAfterOwnRelease(),
+                                                         phase_.envelope.native}}
+                    : refusalRetry;
+        }
+        return result;
+    };
     if (plan == nullptr) {
-        return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan, "No compiled plan");
+        return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan, "No compiled plan");
     }
     if (plan->planSemanticsVersion() != kCompiledCompositionPlanSemanticsVersion ||
         plan->animationSamplingSemanticsVersion() != kAnimationSamplingSemanticsVersion) {
-        return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                      "Compiled plan semantics are unsupported");
+        return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                    "Compiled plan semantics are unsupported");
     }
     if (request.quality != EvaluationQuality::Reference ||
         request.colorIntent.workingColorSpaceId.find('\0') != std::string_view::npos) {
-        return failed(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
-                      "Only Reference quality is prepared");
+        return fail(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
+                    "Only Reference quality is prepared");
     }
     // The non-media prepared subset (solid pixels, vector coverage, image effects) assumes
     // lin_rec709_scene pixel semantics, so a different working space is refused for it. A
@@ -117,11 +133,11 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         request.output != plan->output() ||
         !std::holds_alternative<CompiledCompositionOutput>(
             plan->operations()[request.output.value()])) {
-        return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                      "Request output is not the plan's terminal Composition Output");
+        return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                    "Request output is not the plan's terminal Composition Output");
     }
     if (cancellation.isCancellationRequested()) {
-        return failed(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");
+        return fail(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");
     }
 
     const std::size_t operationCount = plan->operations().size();
@@ -129,7 +145,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     std::vector<bool> reachable;
     if (const auto error = detail::computeReachablePreparedOperations(*plan, request.output.value(),
                                                                       cancellation, reachable)) {
-        return failed(error->code, error->message);
+        return fail(error->code, error->message);
     }
     // A non-neutral working space is admitted for every operation whose pixels the CPU reference
     // resolves in the effective working space (see isWorkingSpaceAgnosticOperation). The display
@@ -137,16 +153,16 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     if (!neutralWorkingSpace) {
         for (std::size_t index = 0; index < operationCount; ++index) {
             if (reachable[index] && !isWorkingSpaceAgnosticOperation(plan->operations()[index])) {
-                return failed(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
-                              "A non-lin_rec709_scene working space reached an operation without "
-                              "verified working-space semantics");
+                return fail(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
+                            "A non-lin_rec709_scene working space reached an operation without "
+                            "verified working-space semantics");
             }
         }
     }
 
     auto checked = detail::preflight(plan, request, cancellation, {}, nullptr, nullptr);
     if (checked.cancelled || cancellation.isCancellationRequested()) {
-        return failed(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");
+        return fail(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");
     }
     if (!checked.resolved.has_value()) {
         const auto code = checked.diagnostic.has_value()
@@ -162,22 +178,96 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         if (message.empty()) {
             message = "Preflight failed";
         }
-        return failed(code == EvaluationDiagnosticCode::PixelStorageBudgetExceeded
-                          ? PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded
-                          : PreparedGpuSceneDiagnosticCode::PreflightFailure,
-                      std::move(message));
+        return fail(code == EvaluationDiagnosticCode::PixelStorageBudgetExceeded
+                        ? PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded
+                        : PreparedGpuSceneDiagnosticCode::PreflightFailure,
+                    std::move(message));
     }
     const detail::ResolvedEvaluation& resolved = *checked.resolved;
     if (resolved.imageDescriptor.dataWindow().extent().width() == 0) {
-        return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                      "Preflight produced an invalid process descriptor");
+        return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                    "Preflight produced an invalid process descriptor");
     }
+    std::uint64_t retainedAllowance = request.pixelStorageByteLimit;
+    std::uint64_t sourceAllowance = request.pixelStorageByteLimit;
+    std::uint64_t coverageAllowance = request.pixelStorageByteLimit;
+    if (phase_.policy && !phaseLease) {
+        auto envelope = phase_.envelope;
+        const auto extent = resolved.imageDescriptor.dataWindow().extent();
+        envelope.pixels = static_cast<std::uint64_t>(extent.width()) * extent.height();
+        envelope.requestedSourceBytes = request.pixelStorageByteLimit;
+        envelope.sourceFree = true;
+        for (std::size_t index = 0; index < operationCount; ++index) {
+            if (reachable[index] &&
+                (std::holds_alternative<CompiledImageSource>(plan->operations()[index]) ||
+                 std::holds_alternative<CompiledVideoSource>(plan->operations()[index]) ||
+                 std::holds_alternative<CompiledCompositionSource>(plan->operations()[index]))) {
+                envelope.sourceFree = false;
+                break;
+            }
+        }
+        if (cancellation.isCancellationRequested()) {
+            return fail(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");
+        }
+        auto grant = phase_.policy->reserve(envelope);
+        if (!grant.lease) {
+            using Admission = render::GpuProcessingPhaseAdmission;
+            switch (grant.status) {
+            case Admission::AwaitingCapacity:
+                refusalRetry = TaskAdmissionRetry{grant.admissionRevision, envelope.native};
+                return fail(PreparedGpuSceneDiagnosticCode::AwaitingCapacity,
+                            "GPU preparation is awaiting sampled processing capacity");
+            case Admission::BudgetRefused:
+                refusalRetry = TaskAdmissionRetry{grant.admissionRevision, envelope.native};
+                return fail(PreparedGpuSceneDiagnosticCode::BudgetRefused,
+                            "The paired processing phase envelope was refused before preparation");
+            case Admission::InvalidRequest:
+                return fail(PreparedGpuSceneDiagnosticCode::InvalidRequest,
+                            "The processing phase envelope is invalid");
+            case Admission::AllocationFailure:
+                return fail(PreparedGpuSceneDiagnosticCode::AllocationFailure,
+                            "Processing phase reservation storage allocation failed");
+            case Admission::SerialExhausted:
+                return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                            "Processing phase admission identifiers are exhausted");
+            case Admission::Accepted:
+                return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                            "Processing phase admission returned no accepted lease");
+            }
+        }
+        phaseLease = std::move(grant.lease);
+    }
+    if (phaseLease) {
+        sourceAllowance =
+            std::min(phase_.remainingSourceBytes.value_or(phaseLease->sourceByteLimit()),
+                     phaseLease->sourceByteLimit());
+        coverageAllowance = std::min(
+            phase_.remainingCoverageBytes.value_or(phase_.envelope.retainedCoverageByteLimit),
+            phase_.envelope.retainedCoverageByteLimit);
+        if (sourceAllowance > std::numeric_limits<std::uint64_t>::max() - coverageAllowance) {
+            return fail(PreparedGpuSceneDiagnosticCode::BudgetRefused,
+                        "The admitted source/coverage ceilings overflow");
+        }
+        retainedAllowance = sourceAllowance + coverageAllowance;
+        if (phase_.admittedLease && coverageAllowance == 0) {
+            for (std::size_t index = 0; index < operationCount; ++index) {
+                if (reachable[index] &&
+                    (std::holds_alternative<CompiledText>(plan->operations()[index]) ||
+                     std::holds_alternative<CompiledShape>(plan->operations()[index]))) {
+                    return fail(
+                        PreparedGpuSceneDiagnosticCode::BudgetRefused,
+                        "Borrowed coverage capacity is exhausted before vector preparation");
+                }
+            }
+        }
+    }
+
     const auto fullDescriptor = render::Rgba32fImageDescriptor::create(
         resolved.imageDescriptor.displayWindow(), resolved.imageDescriptor.displayWindow(),
         resolved.imageDescriptor.pixelAspect());
     if (!fullDescriptor) {
-        return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                      "Composition descriptor is invalid");
+        return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                    "Composition descriptor is invalid");
     }
     const auto fullWindow = fullDescriptor.value()->dataWindow();
     const auto fullDisplayWindow = fullDescriptor.value()->displayWindow();
@@ -192,7 +282,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     // and is therefore not screened.
     if (const auto error =
             detail::screenUnsupportedLayers(*plan, request, resolved, cancellation)) {
-        return failed(error->code, error->message);
+        return fail(error->code, error->message);
     }
 
     // This build's own CPU work counters. They are local to the call -- never shared across
@@ -230,8 +320,10 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     // run (for example a 4608x3164 source over an FHD solid and text). Only the retained host set
     // is bounded here; GPU residency is bounded by GpuSceneExecutor::begin(scene, budget), which
     // takes the honest CPU fallback on refusal. Overflow-checked with subtraction-only comparators.
-    const std::uint64_t allowance = request.pixelStorageByteLimit;
+    const std::uint64_t allowance = retainedAllowance;
     std::uint64_t retainedBytes = 0;
+    std::uint64_t coverageBytes = 0;
+    std::uint64_t sourceBytes = 0;
     std::unordered_set<const void*> countedCoverage;
     const auto chargeRetained =
         [&](const std::uint64_t width, const std::uint64_t height,
@@ -247,11 +339,13 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
                 "Prepared command size overflows"};
         }
-        if (retainedBytes > allowance || *bytes > allowance - retainedBytes) {
+        if (sourceBytes > sourceAllowance || *bytes > sourceAllowance - sourceBytes ||
+            (!phaseLease && (retainedBytes > allowance || *bytes > allowance - retainedBytes))) {
             return detail::GpuSceneLeafFailure{
                 PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
                 "Prepared scene exceeds the request pixel allowance"};
         }
+        sourceBytes += *bytes;
         retainedBytes += *bytes;
         return std::nullopt;
     };
@@ -269,6 +363,13 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             return std::nullopt;
         }
         const std::uint64_t bytes = detail::gpuSceneCoverageHostBytes(command);
+        if (phaseLease &&
+            (coverageBytes > coverageAllowance || bytes > coverageAllowance - coverageBytes)) {
+            return detail::GpuSceneLeafFailure{
+                PreparedGpuSceneDiagnosticCode::BudgetRefused,
+                "Prepared coverage exceeds its admitted retained coverage ceiling"};
+        }
+        coverageBytes += bytes;
         if (retainedBytes > allowance || bytes > allowance - retainedBytes) {
             return detail::GpuSceneLeafFailure{
                 PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
@@ -289,7 +390,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             continue;
         }
         if (cancellation.isCancellationRequested()) {
-            return failed(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");
+            return fail(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");
         }
         const OperationIndex operationIndex = OperationIndex::fromRaw(index);
         const auto& operation = plan->operations()[index];
@@ -299,7 +400,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                     *solid, *plan, resolved, index, operationIndex, fullWindow, fullDisplayWindow,
                     fullPixelAspect, hScale, vScale, emit, chargeTransient, commandForOperation,
                     keyOf, outputWindowOf, bounds, vectors)) {
-                return failed(error->code, error->message);
+                return fail(error->code, error->message);
             }
             continue;
         }
@@ -314,7 +415,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             if (const auto error = detail::publishVectorLeafBounds(
                     operation, *plan, resolved, allowance, hScale, vScale, cancellation, index,
                     outputWindowOf, bounds)) {
-                return failed(error->code, error->message, mediaStatistics);
+                return fail(error->code, error->message, mediaStatistics);
             }
             vectors[index] = GpuSceneVectorChain{index, {}, 1.0};
             continue;
@@ -326,7 +427,17 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             // and OCIO outputs are GPU-transient and charged through `chargeTransient` (a no-op
             // under main's host-only accounting, where the executor's live-pin ledger bounds GPU
             // residency).
-            const auto remainingBudget = allowance > retainedBytes ? allowance - retainedBytes : 0;
+            const auto consumedSource = phaseLease ? sourceBytes : retainedBytes;
+            const auto remainingSource =
+                sourceAllowance > consumedSource ? sourceAllowance - consumedSource : 0;
+            // S caps retained uploads. The existing decoder accepts a working-set ceiling (final
+            // image plus band/row scratch), so admit its work from the already reserved3*S phase
+            // envelope while enforcing the returned upload against S through chargeRetained.
+            // Prior retained sources plus3*remainingSource cannot exceed the reserved3*S.
+            const auto remainingBudget =
+                phaseLease
+                    ? std::min<std::uint64_t>(request.pixelStorageByteLimit, 3 * remainingSource)
+                    : remainingSource;
             detail::GpuSceneUploadLeafResult leaf;
             const auto error = detail::buildAndEmitMediaLeaf(
                 operation, operationIndex, request, *plan, resolved, mediaContext_, ocioContext_,
@@ -334,7 +445,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 mediaStatistics, emit, outputWindowOf[index], commandForOperation[index],
                 keyOf[index], leaf);
             if (error) {
-                return failed(error->code, error->message, mediaStatistics);
+                return fail(error->code, error->message, mediaStatistics);
             }
             bounds[index] = leaf.bounds;
             continue;
@@ -363,7 +474,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                     *effect, operationIndex, effectContext, ocioContext_, cancellation, emit,
                     chargeTransient, chargeCoverage, commandForOperation, keyOf, outputWindowOf,
                     bounds, vectors, textConsumed, shapeConsumed)) {
-                return failed(error->code, error->message, mediaStatistics);
+                return fail(error->code, error->message, mediaStatistics);
             }
             continue;
         }
@@ -378,17 +489,42 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             const auto error = detail::prepareNestedComposition(
                 *source, *plan, request, resolved, hScale, vScale, detail::nestedCompositionDepth(),
                 allowance, retainedBytes, cancellation,
-                [this](const std::shared_ptr<const CompiledCompositionPlan>& childPlan,
-                       const EvaluationRequest& childRequest, const CancellationToken& cancel) {
-                    return build(childPlan, childRequest, cancel);
+                [this, &phaseLease, sourceAllowance, coverageAllowance, sourceBytes, coverageBytes,
+                 foregroundLimit = request.pixelStorageByteLimit](
+                    const std::shared_ptr<const CompiledCompositionPlan>& childPlan,
+                    const EvaluationRequest& childRequest, const CancellationToken& cancel) {
+                    // The parent phase covers this bounded nested preparation; a child must not
+                    // create another independent reservation for the same retained source set.
+                    auto childPhase = phase_;
+                    childPhase.admittedLease = phaseLease;
+                    childPhase.remainingSourceBytes =
+                        sourceAllowance > sourceBytes ? sourceAllowance - sourceBytes : 0;
+                    childPhase.remainingCoverageBytes =
+                        coverageAllowance > coverageBytes ? coverageAllowance - coverageBytes : 0;
+                    const CpuGpuSceneBuilder child(coverageCache_, mediaContext_, ocioContext_,
+                                                   std::move(childPhase));
+                    auto admittedRequest = childRequest;
+                    if (phaseLease) {
+                        // Retained quotas are carried separately. They must not become the child's
+                        // foreground preflight/decoder working-set ceiling.
+                        admittedRequest.pixelStorageByteLimit = foregroundLimit;
+                    }
+                    return child.build(childPlan, admittedRequest, cancel);
                 },
                 commands, nested);
             if (error) {
-                return failed(error->code, error->message, mediaStatistics);
+                return fail(error->code, error->message, mediaStatistics);
             }
+            if (nested.sourceResidentBytes > sourceAllowance - sourceBytes ||
+                nested.coverageResidentBytes > coverageAllowance - coverageBytes) {
+                return fail(PreparedGpuSceneDiagnosticCode::BudgetRefused,
+                            "Nested retained source/coverage exceeds its parent's admitted quotas");
+            }
+            sourceBytes += nested.sourceResidentBytes;
+            coverageBytes += nested.coverageResidentBytes;
             if (!nested.outputWindow.has_value()) {
-                return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                              "Nested composition published no output window", mediaStatistics);
+                return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                            "Nested composition published no output window", mediaStatistics);
             }
             bounds[index] = nested.bounds;
             outputWindowOf[index] = *nested.outputWindow;
@@ -404,13 +540,12 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             const auto rotation = detail::resolveParameter(layer->rotation, *plan, resolved);
             const auto opacity = detail::resolveParameter(layer->opacity, *plan, resolved);
             if (!position || !anchor || !scale || !rotation || !opacity) {
-                return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                              "Layer parameters are not evaluable");
+                return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                            "Layer parameters are not evaluable");
             }
             const std::size_t inputIndexValue = layer->input.value();
             if (inputIndexValue >= operationCount) {
-                return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                              "Layer input is invalid");
+                return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan, "Layer input is invalid");
             }
             // The input's command, window and authored content bounds. A vector leaf (solid, text,
             // shape) published them when it was reached; a merge or another layer published its own
@@ -446,13 +581,13 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             if (layer->parent) {
                 const auto parentIndex = layer->parent->value();
                 if (parentIndex >= operationCount) {
-                    return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                                  "Layer parent matrix is unavailable");
+                    return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                                "Layer parent matrix is unavailable");
                 }
                 const auto& parentMatrix = layerMatrices[parentIndex];
                 if (!parentMatrix.has_value()) {
-                    return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                                  "Layer parent matrix is unavailable");
+                    return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                                "Layer parent matrix is unavailable");
                 }
                 composed = parentMatrix->times(authoredMatrix);
             }
@@ -491,22 +626,22 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             authored.anchorY = centre.y - bufferCentre.y + anchor->value.y;
             if (!std::isfinite(authored.translationX * hScale) ||
                 !std::isfinite(authored.translationY * vScale)) {
-                return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                              "Layer position produces a non-finite translation");
+                return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                            "Layer position produces a non-finite translation");
             }
             const auto transform =
                 render::LayerTransform::create(authored, sourceWindow, hScale, vScale);
             if (!transform) {
-                return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                              "Layer transform is not evaluable");
+                return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                            "Layer transform is not evaluable");
             }
             std::optional<detail::ParentedLayerTransform> parented;
             if (layer->parent) {
                 parented.emplace(composed, sourceWindow, hScale, vScale,
                                  static_cast<float>(opacity->value));
                 if (!parented->finite()) {
-                    return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                                  "Parented transform exceeds the supported numeric range");
+                    return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                                "Parented transform exceeds the supported numeric range");
                 }
                 if (!parented->invertible()) {
                     continue;
@@ -570,15 +705,15 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                     const auto delta = detail::translationOnlyDeviceDelta(
                         transformValue, sourceWindow, *layerWindow);
                     if (!delta.has_value()) {
-                        return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                                      "Translation-only transform lost its device translation");
+                        return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                                    "Translation-only transform lost its device translation");
                     }
                     if (const auto error = detail::emitTranslationOpacityCommand(
                             inputIndex, keyOf[inputIndexValue], sourceWindow, *layerWindow,
                             delta->first, delta->second, opacity->value, fullPixelAspect,
                             operationIndex, chargeTransient, emit, commandForOperation[index],
                             keyOf[index])) {
-                        return failed(error->code, error->message);
+                        return fail(error->code, error->message);
                     }
                     continue;
                 }
@@ -594,7 +729,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                         operationIndex, &transformValue, coverageCache_, cancellation, emit,
                         chargeTransient, chargeCoverage, composedIndex, semanticKey,
                         consumedTextLeaf, consumedShapeLeaf)) {
-                    return failed(error->code, error->message);
+                    return fail(error->code, error->message);
                 }
                 keyOf[index] = semanticKey;
                 commandForOperation[index] = composedIndex;
@@ -615,7 +750,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                             delta->first, delta->second, opacity->value, fullPixelAspect,
                             operationIndex, chargeTransient, emit, commandForOperation[index],
                             keyOf[index])) {
-                        return failed(error->code, error->message);
+                        return fail(error->code, error->message);
                     }
                     continue;
                 }
@@ -624,7 +759,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                     inputIndex, keyOf[inputIndexValue], sourceWindow, *layerWindow, composed,
                     hScale, vScale, opacity->value, fullPixelAspect, operationIndex,
                     chargeTransient, emit, commandForOperation[index], keyOf[index])) {
-                return failed(error->code, error->message);
+                return fail(error->code, error->message);
             }
             continue;
         }
@@ -633,7 +768,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             if (const auto error = detail::emitMergeCommand(
                     *stack, *plan, resolved, index, bounds, outputWindowOf, commandForOperation,
                     keyOf, operationIndex, emit, chargeTransient)) {
-                return failed(error->code, error->message);
+                return fail(error->code, error->message);
             }
             continue;
         }
@@ -642,20 +777,20 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             if (const auto error = detail::emitCompositionOutputCommand(
                     *output, resolved, index, operationIndex, emit, chargeTransient,
                     commandForOperation, keyOf, bounds)) {
-                return failed(error->code, error->message);
+                return fail(error->code, error->message);
             }
             continue;
         }
 
-        return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                      "Reachable operation was not handled");
+        return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                    "Reachable operation was not handled");
     }
 
     // A reachable vector leaf that no prepared layer consumed has no representation in this subset;
     // fail closed rather than publish a scene whose output silently omits it.
     if (detail::hasUnconsumedVectorLeaf(*plan, reachable, textConsumed, shapeConsumed)) {
-        return failed(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
-                      "A vector source not consumed by a prepared layer is not prepared");
+        return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                    "A vector source not consumed by a prepared layer is not prepared");
     }
 
     ProcessFrameIdentity identity{
@@ -676,7 +811,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     auto scene = std::shared_ptr<const PreparedGpuScene>(new PreparedGpuScene(
         std::move(commands), std::move(commandForOperation), outputCommand, std::move(identity),
         std::move(bounds), resolved.imageDescriptor, mediaStatistics));
-    return {std::move(scene), PreparedGpuSceneDiagnostic{}};
+    return {std::move(scene), PreparedGpuSceneDiagnostic{}, std::move(phaseLease)};
 }
 
 } // namespace bloom::runtime

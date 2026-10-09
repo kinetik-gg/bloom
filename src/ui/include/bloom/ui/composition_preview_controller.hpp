@@ -2,6 +2,7 @@
 
 #include <bloom/document/document.hpp>
 #include <bloom/runtime/gpu_memory_budget.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -136,13 +137,13 @@ class CompositionPreviewController final : public QObject {
     // and frames without diagnostics enter it -- so playing a warning-free range once makes the
     // second pass a sequence of lookups. Pass one to share it with the RAM preview controller; omit
     // it and this controller owns a cache of its own.
-    CompositionPreviewController(CompositionSession& session, runtime::TaskScheduler& scheduler,
-                                 TaskUiBridge& taskUiBridge, PreviewPreparationFunction preparation,
-                                 const CompositionPreviewSettings& settings = {},
-                                 PreviewFrameCacheHandle frameCache = nullptr,
-                                 QObject* parent = nullptr,
-                                 PreviewPreparationSubmitter submitter = {},
-                                 std::shared_ptr<PreviewFrameTrace> trace = nullptr);
+    CompositionPreviewController(
+        CompositionSession& session, runtime::TaskScheduler& scheduler, TaskUiBridge& taskUiBridge,
+        PreviewPreparationFunction preparation, const CompositionPreviewSettings& settings = {},
+        PreviewFrameCacheHandle frameCache = nullptr, QObject* parent = nullptr,
+        PreviewPreparationSubmitter submitter = {},
+        std::shared_ptr<PreviewFrameTrace> trace = nullptr,
+        std::shared_ptr<runtime::GpuProcessingPhasePolicy> processingPolicy = nullptr);
     ~CompositionPreviewController() override;
 
     [[nodiscard]] const CompositionPreviewState& state() const noexcept;
@@ -217,6 +218,9 @@ class CompositionPreviewController final : public QObject {
 
   public slots:
     void requestRefresh();
+    // Completion/sample notification only: retries one deferred newest admission after capacity
+    // actually changes. It preserves current pixels and never changes their cache identity.
+    void notifyProcessingCapacityChanged();
     // "Purge preview cache" (Edit | Purge…): retires any in-flight or pending foreground
     // derivation without publishing it, clears the shared RAM preview frame cache including its
     // GPU-resident references, and advances the request generation so a late old-generation result
@@ -344,6 +348,8 @@ class CompositionPreviewController final : public QObject {
     CompositionPreviewSettings settings_;
     PreviewFrameCacheHandle frameCache_;
     CompositionPreviewState state_;
+    std::shared_ptr<runtime::GpuProcessingPhasePolicy> processingPolicy_;
+    std::optional<runtime::TaskAdmissionRetry> deferredAdmission_;
     std::optional<ActiveRequest> active_;
     std::optional<PendingRequest> pending_;
     QTimer interactiveCadenceTimer_;

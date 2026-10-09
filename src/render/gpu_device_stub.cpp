@@ -57,6 +57,14 @@ void GpuDevice::reclaimReleasedImages() noexcept {}
 GpuImageReclamationStats GpuDevice::imageReclamationStats() const noexcept { return {}; }
 GpuImageReclamationStats GpuDevice::processImageReclamationStats() noexcept { return {}; }
 
+// Inert portable implementation preserves the owning native API without retaining a lease.
+// NOLINTNEXTLINE(performance-unnecessary-value-param): native implementation retains shared lease.
+bool GpuDevice::retainProcessingPhase(std::shared_ptr<GpuProcessingPhaseLease>) noexcept {
+    return false;
+}
+void GpuDevice::retireProcessingPhase(std::uint64_t, bool) noexcept {}
+bool GpuDevice::processingPhaseOccupied() const noexcept { return true; }
+
 GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept { return {}; }
 
 GpuQualification GpuDevice::qualificationFor(const GpuOperationId operation,

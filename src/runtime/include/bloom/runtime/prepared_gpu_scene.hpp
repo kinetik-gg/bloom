@@ -43,6 +43,8 @@
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/gpu_ocio_command.hpp>
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
+#include <bloom/runtime/task_types.hpp>
 
 #include <charconv>
 #include <cmath>
@@ -87,6 +89,8 @@ enum class PreparedGpuSceneDiagnosticCode : std::uint8_t {
     MediaUnavailable,
     PixelStorageBudgetExceeded,
     AllocationFailure,
+    AwaitingCapacity,
+    BudgetRefused,
     Cancelled,
     PreflightFailure,
     InternalInvariant,
@@ -118,6 +122,7 @@ struct PreparedGpuSceneDiagnostic final {
     std::string message;
     // CPU work performed before the failure. Zero for every screen that precedes media resolution.
     GpuSceneMediaStatistics mediaStatistics;
+    std::optional<TaskAdmissionRetry> admissionRetry = {};
 
     friend bool operator==(const PreparedGpuSceneDiagnostic&,
                            const PreparedGpuSceneDiagnostic&) = default;
@@ -566,6 +571,15 @@ class PreparedGpuScene final {
 };
 
 struct PreparedGpuSceneBuildResult final {
+    PreparedGpuSceneBuildResult() = default;
+    PreparedGpuSceneBuildResult(
+        std::shared_ptr<const PreparedGpuScene> sceneValue,
+        PreparedGpuSceneDiagnostic diagnosticValue,
+        std::shared_ptr<render::GpuProcessingPhaseLease> lease = {}) noexcept
+        : phaseLease(std::move(lease)), scene(std::move(sceneValue)),
+          diagnostic(std::move(diagnosticValue)) {}
+    // Declared first so CPU scene storage is released before the conservative phase quota.
+    std::shared_ptr<render::GpuProcessingPhaseLease> phaseLease;
     // Null exactly when preparation failed closed (Unsupported or a diagnosed failure).
     std::shared_ptr<const PreparedGpuScene> scene;
     PreparedGpuSceneDiagnostic diagnostic;
@@ -590,6 +604,16 @@ struct GpuSceneOcioContext final {
 // the returned scene.
 class GpuSceneCoverageCache;
 
+struct GpuScenePreparationPhase final {
+    std::shared_ptr<GpuProcessingPhasePolicy> policy;
+    GpuProcessingPhaseEnvelope envelope;
+    // Nested preparations borrow the parent's accepted lease and remaining disjoint quotas;
+    // they do not reserve a second phase for the same source/coverage set.
+    std::shared_ptr<render::GpuProcessingPhaseLease> admittedLease = {};
+    std::optional<std::uint64_t> remainingSourceBytes = {};
+    std::optional<std::uint64_t> remainingCoverageBytes = {};
+};
+
 class CpuGpuSceneBuilder final {
   public:
     // An optional coverage cache avoids re-rasterizing an unchanged geometry subtree. Null means no
@@ -606,9 +630,10 @@ class CpuGpuSceneBuilder final {
     // mis-rendering it.
     explicit CpuGpuSceneBuilder(std::shared_ptr<GpuSceneCoverageCache> coverageCache = nullptr,
                                 GpuSceneMediaContext mediaContext = {},
-                                GpuSceneOcioContext ocioContext = {})
+                                GpuSceneOcioContext ocioContext = {},
+                                GpuScenePreparationPhase phase = {})
         : coverageCache_(std::move(coverageCache)), mediaContext_(std::move(mediaContext)),
-          ocioContext_(std::move(ocioContext)) {}
+          ocioContext_(std::move(ocioContext)), phase_(std::move(phase)) {}
 
     [[nodiscard]] PreparedGpuSceneBuildResult
     build(const std::shared_ptr<const CompiledCompositionPlan>& plan,
@@ -627,6 +652,7 @@ class CpuGpuSceneBuilder final {
     std::shared_ptr<GpuSceneCoverageCache> coverageCache_;
     GpuSceneMediaContext mediaContext_;
     GpuSceneOcioContext ocioContext_;
+    GpuScenePreparationPhase phase_;
     std::function<void()> checkpoint_;
 };
 

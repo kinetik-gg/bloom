@@ -1689,3 +1689,16 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
         COMMAND bloom_runtime_gpu_image_reclamation_test LABELS unit gpu render TIMEOUT 120)
     set_tests_properties(bloom.runtime.gpu_image_reclamation PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+add_executable(bloom_runtime_gpu_processing_phase_policy_test gpu_processing_phase_policy_tests.cpp)
+target_link_libraries(bloom_runtime_gpu_processing_phase_policy_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_gpu_processing_phase_policy_test)
+bloom_add_test(NAME bloom.runtime.gpu_processing_phase_policy
+    COMMAND bloom_runtime_gpu_processing_phase_policy_test LABELS unit gpu memory)
+
+add_executable(bloom_runtime_gpu_processing_phase_preparation_test gpu_processing_phase_preparation_tests.cpp)
+target_link_libraries(bloom_runtime_gpu_processing_phase_preparation_test PRIVATE bloom_runtime_evaluator OpenEXR::OpenEXR)
+target_include_directories(bloom_runtime_gpu_processing_phase_preparation_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+bloom_enable_warnings(bloom_runtime_gpu_processing_phase_preparation_test)
+bloom_add_test(NAME bloom.runtime.gpu_processing_phase_preparation
+    COMMAND bloom_runtime_gpu_processing_phase_preparation_test LABELS unit gpu memory)

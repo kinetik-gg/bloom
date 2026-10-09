@@ -36,6 +36,10 @@ std::string gpuSceneDiagnosticCodeId(const bloom::runtime::PreparedGpuSceneDiagn
         return "bloom.preview.gpu-scene.media-unavailable";
     case PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded:
         return "bloom.preview.gpu-scene.pixel-budget-exceeded";
+    case PreparedGpuSceneDiagnosticCode::AwaitingCapacity:
+        return "bloom.preview.gpu-scene.awaiting-capacity";
+    case PreparedGpuSceneDiagnosticCode::BudgetRefused:
+        return "bloom.preview.gpu-scene.phase-budget-refused";
     case PreparedGpuSceneDiagnosticCode::AllocationFailure:
         return "bloom.preview.gpu-scene.allocation-failure";
     case PreparedGpuSceneDiagnosticCode::Cancelled:
@@ -62,6 +66,9 @@ bool gpuScenePreparationIsFailure(
     const bloom::runtime::PreparedGpuSceneDiagnosticCode code) noexcept {
     using bloom::runtime::PreparedGpuSceneDiagnosticCode;
     switch (code) {
+    case PreparedGpuSceneDiagnosticCode::AwaitingCapacity:
+    case PreparedGpuSceneDiagnosticCode::BudgetRefused:
+    case PreparedGpuSceneDiagnosticCode::InvalidRequest:
     case PreparedGpuSceneDiagnosticCode::InvalidPlan:
     case PreparedGpuSceneDiagnosticCode::AllocationFailure:
     case PreparedGpuSceneDiagnosticCode::PreflightFailure:
@@ -90,7 +97,8 @@ gpuSceneFailureDiagnostic(const bloom::runtime::PreparedGpuSceneDiagnostic& diag
             .summary = diagnostic.message.empty() ? std::string{"GPU scene preparation failed"}
                                                   : diagnostic.message,
             .detail = {},
-            .suggestedAction = "Review the request and preview memory settings."};
+            .suggestedAction = "Review the request and preview memory settings.",
+            .admissionRetry = diagnostic.admissionRetry};
 }
 
 } // namespace
@@ -260,10 +268,12 @@ runtime::PreviewGpuSceneStageFunction makeCompositionPreviewGpuSceneStage(
             displayProgram != nullptr
                 ? std::make_shared<const runtime::PreviewGpuSceneStage>(
                       desiredIdentity, std::move(buildResult.scene), std::move(selection.handle),
-                      std::move(displayProgram), pixelStorageByteLimit, std::move(diagnostics))
+                      std::move(displayProgram), pixelStorageByteLimit, std::move(diagnostics),
+                      std::move(buildResult.phaseLease))
                 : std::make_shared<const runtime::PreviewGpuSceneStage>(
                       desiredIdentity, std::move(buildResult.scene), std::move(selection.handle),
-                      pixelStorageByteLimit, std::move(diagnostics));
+                      pixelStorageByteLimit, std::move(diagnostics),
+                      std::move(buildResult.phaseLease));
         return StageResult::succeeded(std::make_shared<const runtime::PreviewGpuSceneStageOutcome>(
             runtime::PreviewGpuSceneStageOutcome{.status =
                                                      runtime::PreviewGpuSceneStageStatus::Prepared,

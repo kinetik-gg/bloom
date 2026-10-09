@@ -174,8 +174,15 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     auto& taskUiBridge = *taskUiBridgeOwner;
+    const auto processingPhasePolicy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>();
     bloom::ui::MemoryBudgetController memoryBudgetController(
         taskScheduler, taskUiBridge, bloom::runtime::processMemoryBudgetLedger());
+    QObject::connect(&memoryBudgetController, &bloom::ui::MemoryBudgetController::sampleApplied,
+                     &application, [processingPhasePolicy] {
+                         auto& ledger = bloom::runtime::processMemoryBudgetLedger();
+                         processingPhasePolicy->applyHostSample(ledger.state(),
+                                                                ledger.physicalByteBudget());
+                     });
     // Explicit opt-in, one bounded numeric-only buffer. The path is only an export destination;
     // it and media locators never enter trace records. No formatting or I/O runs in UI callbacks.
     const QString previewTraceDestination = qEnvironmentVariable("BLOOM_PREVIEW_TRACE");
@@ -288,11 +295,19 @@ int main(int argc, char* argv[]) {
     }
     auto gpuPreviewGpuSceneStage = bloom::ui::makeSessionRefreshingGpuSceneStage(
         snapshotCompiler, cpuEvaluator, qualifiedDisplayProcessorProvider, gpuSceneCoverageCache,
-        gpuPreparedUploadCache, compiledPlanCache, gpuOcioContextResolver);
+        gpuPreparedUploadCache, compiledPlanCache, gpuOcioContextResolver,
+        {.policy = processingPhasePolicy,
+         .envelope = {.metadataBytes = 16ULL * 1024 * 1024,
+                      .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                      .requestedExecutorBytes = gpuPreviewDisplayOptions.previewByteAllowance,
+                      // The general OCIO arm's 512 MiB ceiling plus concurrent transfer storage.
+                      .deviceWorkingBytes = 512ULL * 1024 * 1024 +
+                                            gpuPreviewDisplayOptions.packedTransferByteAllowance}});
     auto gpuPreviewCpuStage = bloom::ui::makeCompositionPreviewCpuStage(
         snapshotCompiler, cpuEvaluator, qualifiedDisplayProcessorProvider, compiledPlanCache);
     auto gpuPreviewCpuDisplayFallback =
         bloom::ui::makeCompositionPreviewCpuDisplayFallback(referenceDisplayPreparer);
+    gpuPreviewDisplayOptions.processingPhasePolicy = processingPhasePolicy;
     bloom::runtime::GpuPreviewDisplayService gpuPreviewDisplayService(
         taskScheduler, std::move(gpuPreviewGpuSceneStage), std::move(gpuPreviewCpuStage),
         std::move(gpuPreviewCpuDisplayFallback), gpuPreviewDisplayOptions);
@@ -314,7 +329,11 @@ int main(int argc, char* argv[]) {
          .displayName = {},
          .viewName = {},
          .showLook = true},
-        previewFrameCache, nullptr, gpuPreviewDisplaySubmitter, previewTrace);
+        previewFrameCache, nullptr, gpuPreviewDisplaySubmitter, previewTrace,
+        processingPhasePolicy);
+    QObject::connect(&memoryBudgetController, &bloom::ui::MemoryBudgetController::sampleApplied,
+                     &previewController,
+                     &bloom::ui::CompositionPreviewController::notifyProcessingCapacityChanged);
     bloom::ui::BackgroundPreviewController backgroundPreviewController(
         compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline,
         nullptr, gpuPreviewDisplaySubmitter);
@@ -328,6 +347,7 @@ int main(int argc, char* argv[]) {
     // beginShutdown and polls genuine retirement completion from the UI event loop, so the UI
     // never waits on the native owner even after task admission closes.
     bloom::runtime::GpuProcessFrameEvaluatorOptions gpuExportOptions;
+    gpuExportOptions.processingPhasePolicy = processingPhasePolicy;
     gpuExportOptions.enabled = bundledNativeLoader;
     if (bundledNativeLoader) {
         gpuExportOptions.loaderPath = gpuPreviewDisplayOptions.loaderPath;
@@ -420,7 +440,7 @@ int main(int argc, char* argv[]) {
     // not on offer in the interface.
     const bool editorsRegistered = bloom::ui::registerFoundationEditors(
         editorRegistry, compositionSession, previewController, &ramPreviewController, &projectHost,
-        &viewerGpuDependencies);
+        &viewerGpuDependencies, gpuExportProvider);
     if (!editorsRegistered) {
         QEventLoop shutdownLoop;
         QObject::connect(&shutdownCoordinator,

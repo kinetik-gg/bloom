@@ -68,6 +68,7 @@ int main(const int argc, char** argv) {
         }
     }
     testFullGraphProducesStableDigestAcrossTwoRuns(expectations);
+    testProcessingAdmissionBeforeCpuFallback(expectations);
     testCancellationBeforeResolvingCompletes(expectations);
     testResourceExhaustionIsTypedWithZeroLeak(expectations);
     testGpuExportProviderDisabledFallback(expectations);

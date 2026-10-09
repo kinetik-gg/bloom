@@ -52,6 +52,10 @@ void GpuNeutralDisplay::releaseImpl() noexcept {
     }
     if (!impl_->drainAndRetire()) {
         // Retirement could not be proved within the bounded drain; leak deliberately.
+        if (impl_->state->processingPhase) {
+            impl_->state->processingPhaseUnproven = true;
+            impl_->state->processingPhase->markUnproven();
+        }
         neutral_display_detail::noteQuarantine();
         [[maybe_unused]] const auto* const quarantined = impl_.release();
         return;
@@ -113,6 +117,10 @@ GpuNeutralDisplayCreateResult GpuNeutralDisplay::create(GpuDevice& device,
 
 GpuNeutralDisplayJobState GpuNeutralDisplay::state() const noexcept {
     return impl_ != nullptr ? impl_->jobState : GpuNeutralDisplayJobState::Idle;
+}
+
+bool GpuNeutralDisplay::hasUnretiredSubmission() const noexcept {
+    return impl_ && (!impl_->onOwnerThread() || impl_->queueSubmitted || impl_->deviceLost);
 }
 
 bool GpuNeutralDisplay::isBoundTo(GpuDevice& device) const noexcept {

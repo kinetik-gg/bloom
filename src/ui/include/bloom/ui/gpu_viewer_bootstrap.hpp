@@ -141,7 +141,8 @@ gpuSceneMediaContextFor(const runtime::CpuCompositionEvaluator& evaluator,
     std::shared_ptr<runtime::GpuSceneCoverageCache> coverageCache,
     std::shared_ptr<runtime::GpuPreparedUploadCache> uploadCache,
     CompiledPlanCacheHandle planCache = nullptr,
-    std::shared_ptr<runtime::GpuOcioContextResolver> ocioContextResolver = nullptr);
+    std::shared_ptr<runtime::GpuOcioContextResolver> ocioContextResolver = nullptr,
+    runtime::GpuScenePreparationPhase processingPhase = {});
 
 // Owns the cached presentation capability for the whole application. It is not a QObject, holds no
 // native handle, and never blocks. The application refreshes it from the EXISTING TaskUiBridge poll

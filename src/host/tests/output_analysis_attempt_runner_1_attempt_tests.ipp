@@ -54,6 +54,65 @@ void testFullGraphProducesStableDigestAcrossTwoRuns(Expectations& expectations) 
     }
 }
 
+void testProcessingAdmissionBeforeCpuFallback(Expectations& expectations) {
+    TempDirectory directory;
+    if (!directory.isValid()) {
+        expectations.expect(false, "phase admission: fixture directory");
+        return;
+    }
+    runtime::TaskScheduler scheduler;
+    auto artifacts = platform::StagedArtifactCoordinator::create({});
+    if (!artifacts) {
+        expectations.expect(false, "phase admission: artifact coordinator");
+        return;
+    }
+    auto coordinator = std::move(artifacts).takeCoordinator();
+    output::ExportResourceLedgerV1 ledger;
+    const auto run = [&](std::shared_ptr<runtime::GpuProcessingPhasePolicy> policy,
+                         std::shared_ptr<host::GpuExportProvider> provider = nullptr) {
+        auto request = requestFor(directory.path() / "phase.exr");
+        request.processingPhasePolicy = std::move(policy);
+        request.gpuProvider = std::move(provider);
+        auto begin = host::beginOutputAnalysisAttemptV1(scheduler, coordinator, ledger,
+                                                       std::move(request));
+        expectations.expect(static_cast<bool>(begin), "phase admission: resolving admitted");
+        if (!begin) {
+            return std::optional<host::OutputAnalysisAttemptOutcomeV1>{};
+        }
+        auto runner = std::move(begin).takeHandle();
+        return pumpUntilComplete(runner);
+    };
+    const auto refused = [&](const auto& outcome, const runtime::GpuProcessFrameDiagnosticCode code) {
+        const auto* failure = outcome ? outcome->failure() : nullptr;
+        const auto* payload = failure ? failure->template payloadAs<runtime::GpuProcessFrameDiagnosticCode>() : nullptr;
+        expectations.expect(payload && *payload == code && ledger.chargedBytes() == 0,
+                            "phase admission: typed refusal without analyzed payload or ledger charge");
+    };
+    refused(run(nullptr), runtime::GpuProcessFrameDiagnosticCode::InvalidRequest);
+    refused(run(std::make_shared<runtime::GpuProcessingPhasePolicy>()),
+            runtime::GpuProcessFrameDiagnosticCode::AwaitingCapacity);
+    const auto zero = fixturePhasePolicy(1, 8ULL * 1024 * 1024 * 1024);
+    auto disabledOptions = gpuOptions(false);
+    disabledOptions.processingPhasePolicy = zero;
+    auto disabled = host::GpuExportProvider::create(disabledOptions);
+    disabled->prepare(scheduler);
+    refused(run(nullptr, disabled), runtime::GpuProcessFrameDiagnosticCode::BudgetRefused);
+    expectations.expect(zero->snapshot().reservations.admittedPhases == 0,
+                        "measured zero cannot escape through disabled-provider CPU fallback");
+    const auto shared = fixturePhasePolicy(1);
+    auto held = runtime::reserveHostEvaluationPhase(*shared, 4, 4096,
+                                                    runtime::GpuProcessingPhaseOutput::FloatFinal);
+    expectations.expect(held.lease != nullptr, "phase admission: competing root lease held");
+    refused(run(shared), runtime::GpuProcessFrameDiagnosticCode::BudgetRefused);
+    held.lease.reset();
+    auto recovered = run(shared);
+    expectations.expect(recovered && static_cast<bool>(*recovered) &&
+                            shared->snapshot().reservations.admittedPhases == 0,
+                        "shared root release enables later CPU attempt and returns phase quota");
+    disabled->beginShutdown();
+    disabled->collectRetired();
+}
+
 void testCancellationBeforeResolvingCompletes(Expectations& expectations) {
     TempDirectory directory;
     expectations.expect(directory.isValid(), "cancel: temp directory is available");

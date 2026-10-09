@@ -12,7 +12,8 @@ containment/adoption slice and its bounded cold-progress prerequisite are now ac
 the measured panel/top-level spill gate for that route; broader G3/G4–G10 qualification remains
 incomplete. Bounded G4A completion delivery/refill and G4B rational transport/deadlines are accepted.
 G6A process-aware reusable headroom/off-UI sampling and terminal mailbox ownership are accepted
-within the bounds below. Broader aggregate reservations remain the next G6B slice.
+within the bounds below. The first conservative G6B phase-reservation slice is accepted after
+independent review and integrated closure. Allocation-owned aggregate accounting remains separate.
 
 Implementation proceeds sequentially from `e1086c13`. Each slice requires source review, focused
 regressions, and the applicable native/product evidence before its successor is accepted. A passing
@@ -37,10 +38,49 @@ and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 | G4B rational transport | Accepted as a bounded clock/deadline slice | Exact cache-independent elapsed/audio targets, valid-grid reanchor, intent deadlines, five-rate real-clock gate, private animation pixels, Linux CPU fallback and 62 affected translation units pass |
 | G6A reusable process headroom | Accepted as a bounded retention/sampling slice | Paired visible Linux v2 limits, zero credit, requested/effective separation, pressure/recovery cycles, off-UI lifetime tests, private finite helper and Linux CPU-only gate pass; mailbox accepted separately, aggregate reservations remain pending |
 | G6A terminal result ownership | Accepted as a bounded lifetime slice | Handle-owned mailboxes, weak writers, unlocked payload disposal, expired-consumer outcomes and forced/late mock GPU tests pass; history/accounting/notification sites unchanged |
+| G6B first phase reservations | Accepted as a bounded admission/lifetime slice | Shared explicit roots, conservative host/device/count envelopes, native retirement/quarantine, observed-constraint release and bounded readiness/release retries; required native routes, affected strict, application and Linux CPU-only closure pass; no unique physical accounting or width two |
 | G4C prerequisite | Accepted only as the bounded cold-progress prerequisite | One active/newest intent, useful older Stale publication and guarded pause/shutdown pass source review and short real playing pixels; remaining G4 scheduling is pending |
 | G7A / G9 bounded display work | Packed immutable borrowing, off-UI CPU channel derivation and finished-display host choice accepted | Explicit provenance and measured bytes; remaining CPU storage/process/channel work and broader cache policy remain pending |
 | G8 optional two-frame throughput | Investigation complete; implementation and benchmark pending | Source confirms per-service frame serialization; no multi-frame speedup or GPU-utilization result is established |
 | Remaining G4–G10 | Pending | Remaining scheduling, native public hooks, media reuse, aggregate memory, batching and sustained/platform qualification are not completed |
+
+First G6B phase-reservation checkpoint (2026-10-09), accepted within bounded scope:
+independent reviews cover coordinator/policy/builder quotas, resident and final phase lifetimes,
+explicit application/host/Render/Python roots, admitted CPU fallback, observed-constraint removal
+in the same verified view, legacy packed preparation, and bounded readiness/capacity-release retry.
+The final private required-device retry witness passes in 4.885 s with six submissions, six
+preparations and three warm graph jobs; it preserves native metadata, own-release no-spin and warm
+cache invariance. Required native coverage passes 56/56 with zero missing fixtures and six matching
+production route proofs: viewer, RAM preview, still, range, video and headless. The full 6000x4000
+media+CST+text fixture passes native parity and one combined readback with two exact payloads.
+An explicit 256 MiB producer cap refuses after thirteen completed dispatches with phase
+host/device/count/unproven charges zero and its limited-owner report retired; the rooted default
+then succeeds. Independent unknown-submission retirement remains sticky.
+
+Evidence is split across the original batches and corrected owning runs. Cross-module tests
+initially passed 18/21; module/fixture repairs passed their three owning reruns. The first native
+batch failed still/video and did not run aggregate coverage; repaired route writers and the genuine
+required-device aggregate subsequently passed. Strict checks initially passed 193/195 translation
+units; two fixture repairs and their final reruns close all 195 without checker suppression.
+Latest application/CLI/media and repository quality pass, including 1,440 format checks. Linux
+no-Vulkan app and fourteen suites passed before the final producer API change; the affected
+33-step API/app refresh and five root suites subsequently passed in 3.65 s, with no Vulkan or
+missing dependency in the final app's loader inventory. These are owning reruns, not a newly
+repeated whole suite. Exact failures, repairs, commands and frozen source hashes remain in the
+private integration evidence report.
+
+Source acceptance does not replace the running user application. The separately staged immutable
+development snapshot remains a development build; a verified milestone package and launch are
+distinct coordinator actions.
+
+The [owning GPU contract](../architecture/gpu-backend.md#conservative-processing-phase-reservations-first-g6b-slice)
+defines conservative per-phase host/device/count envelopes and exact retirement/quarantine leases.
+Budget refusal has no unconstrained CPU bypass. This is the first bounded admission/lifetime slice;
+unique physical allocation accounting for cache aliases, published products, external pins and
+later presentation remains open. Width remains one. It proves neither aggregate process/OOM safety,
+sustained FPS, all-workload capacity, nor native macOS/Windows execution. Normal user launch policy
+must not inherit a private diagnostic 8 GiB cap; the previously reported full-cache recovery was
+user startup evidence, not qualification of this moving slice.
 
 G6A terminal-result checkpoint (2026-10-09), accepted after independent source/lifetime review:
 CPU/I/O and GPU work retain weak mailbox writers; accepted handles and copies own unconsumed

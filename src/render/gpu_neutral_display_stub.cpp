@@ -55,6 +55,8 @@ GpuNeutralDisplayReadback GpuNeutralDisplay::readback() {
 
 void GpuNeutralDisplay::cancel() noexcept {}
 
+bool GpuNeutralDisplay::hasUnretiredSubmission() const noexcept { return false; }
+
 bool GpuNeutralDisplay::teardownDrainIncomplete() noexcept { return false; }
 
 } // namespace bloom::render

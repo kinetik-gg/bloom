@@ -504,6 +504,9 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
                                                                                       : "mix.wav");
         const auto result = f.run(f.request(path, preset));
         verify(result, path, preset != output::OutputPresetV1::PcmWavV1);
+        check(result.encodedFrames == 48 && result.gpuEvaluatedFrames == 0 &&
+                  result.gpuNativeDispatches == 0 && result.gpuReadbacks == 0,
+              "null-provider default preserves complete actual CPU output with no GPU provenance");
         if (preset == output::OutputPresetV1::ProResMovV1) {
             cpuProResPath = path;
             check(need(result.evidence)
@@ -511,6 +514,30 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
                   "required ProRes evidence wording");
         }
     }
+    // The public null-provider default above remains an actual CPU export. An explicitly injected
+    // disabled provider uses the same single policy for all admitted frames and releases the phase
+    // before the next frame; it never acquires a native generation or labels CPU output GPU.
+    runtime::GpuProcessFrameEvaluatorOptions cpuOptions;
+    cpuOptions.enabled = false;
+    const auto cpuProvider = host::GpuExportProvider::create(cpuOptions);
+    const auto cpuPolicy = cpuProvider->processingPhasePolicy();
+    cpuProvider->prepare(f.scheduler);
+    auto cpuRequest = f.request(directory / "phase-cpu.mov", output::OutputPresetV1::ProResMovV1);
+    cpuRequest.range.lastFrame = 2;
+    cpuRequest.gpuProvider = cpuProvider;
+    const auto cpuResult = f.run(std::move(cpuRequest));
+    check(cpuResult.published() && cpuResult.encodedFrames == 3 &&
+              cpuResult.gpuEvaluatedFrames == 0 && cpuResult.gpuNativeDispatches == 0 &&
+              cpuResult.gpuReadbacks == 0,
+          "disabled shared CPU root publishes three real frames with no GPU provenance");
+    const auto phases = cpuPolicy->snapshot();
+    check(cpuProvider->processingPhasePolicy() == cpuPolicy && phases.sampleSerial > 0 &&
+              phases.deviceReports == 0 && phases.reservations.peakHostReservedBytes > 0 &&
+              phases.reservations.admittedPhases == 0 &&
+              phases.reservations.hostReservedBytes == 0 &&
+              phases.reservations.deviceReservedBytes == 0,
+          "all CPU sequence frames use one sampled policy and retire every processing phase");
+    check(cpuProvider->shutdownAndWait(std::chrono::seconds(3)), "disabled CPU provider retires");
     const auto path = directory / "cancel.mov";
     {
         std::ofstream file(path);

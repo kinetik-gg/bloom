@@ -106,9 +106,29 @@ constexpr auto kBlendModeParameterId = document::ParameterId::fromRaw(0x1010);
                                                    .output = runtime::OperationIndex::fromRaw(3)});
 }
 
+[[nodiscard]] std::shared_ptr<runtime::GpuProcessingPhasePolicy>
+fixturePhasePolicy(const std::size_t capacity = 32,
+                   const std::uint64_t usedBytes = 6ULL * 1024 * 1024 * 1024) {
+        auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(capacity);
+        constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
+        runtime::MemoryBudgetState sample;
+        sample.machine.availableBytes = 60 * gib;
+        sample.process.status = runtime::ProcessMemoryStatus::Finite;
+        sample.process.source = runtime::ProcessMemorySource::LinuxCgroupV2;
+        sample.process.sampledAt = runtime::GpuProcessingPhasePolicy::Clock::now();
+        sample.process.domains.push_back({.path = "/fixture",
+                                          .kind = runtime::ProcessMemoryLimitKind::Finite,
+                                          .limitBytes = 8 * gib, .currentBytes = usedBytes});
+        sample.sampleSerial = 1;
+        sample.processSampleFresh = true;
+        policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+        return policy;
+}
+
 [[nodiscard]] host::OutputAnalysisAttemptRequestV1
 requestFor(const std::filesystem::path& targetPath) {
     const auto plan = smallSolidPlan();
+    static const auto phasePolicy = fixturePhasePolicy();
     return {
         .plan = plan,
         .evaluation = {.time = bloom::core::RationalTime::fromInteger(0),
@@ -119,7 +139,8 @@ requestFor(const std::filesystem::path& targetPath) {
                        .pixelStorageByteLimit = 4096},
         .targetPath = targetPath,
         .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
-        .owner = {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(1)}};
+        .owner = {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(1)},
+        .processingPhasePolicy = phasePolicy};
 }
 
 [[nodiscard]] runtime::GpuProcessFrameEvaluatorOptions

@@ -8,6 +8,7 @@
 // gpu_preview_display_service.cpp includes this header, so the split adds no shared dependency and
 // no public symbol. The public client API and the observable service behavior are unchanged.
 
+#include "gpu_preview_display_service_cpu_phase.hpp"
 #include "gpu_preview_display_service_private.hpp"
 
 #include <bloom/runtime/gpu_preview_display_product.hpp>
@@ -61,8 +62,17 @@ runCpuPipeline(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core,
     if (context.isCancellationRequested()) {
         return Result::cancelled();
     }
-    auto stageResult =
-        core->stageFunction(snapshot, identity, pixelStorageByteLimit, overrides, context);
+    auto phase = detail::reservePreviewCpuPhase(core->options.processingPhasePolicy, snapshot,
+                                                identity, pixelStorageByteLimit);
+    if (context.isCancellationRequested()) {
+        return Result::cancelled();
+    }
+    if (phase.status != render::GpuProcessingPhaseAdmission::Accepted || !phase.lease) {
+        return Result::failed(detail::previewCpuPhaseDiagnostic(phase));
+    }
+    auto stageResult = core->stageFunction(snapshot, identity,
+                                           static_cast<std::size_t>(phase.lease->sourceByteLimit()),
+                                           overrides, context);
     if (stageResult.state() == TaskState::Cancelled) {
         return Result::cancelled(stageResult.diagnostics());
     }

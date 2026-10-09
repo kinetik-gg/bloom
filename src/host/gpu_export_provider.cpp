@@ -9,9 +9,18 @@ namespace bloom::host {
 
 struct GpuExportProvider::State final {
     explicit State(runtime::GpuProcessFrameEvaluatorOptions optionsValue)
-        : options(std::move(optionsValue)) {}
+        : options(std::move(optionsValue)),
+          ownsProcessSampling(options.processingPhasePolicy == nullptr) {
+        if (ownsProcessSampling) {
+            options.processingPhasePolicy = std::make_shared<runtime::GpuProcessingPhasePolicy>();
+        }
+    }
 
     runtime::GpuProcessFrameEvaluatorOptions options;
+    const bool ownsProcessSampling;
+    std::mutex samplingMutex;
+    std::unique_ptr<runtime::MemoryBudgetLedger> samplingLedger;
+    std::optional<std::chrono::steady_clock::time_point> sampledAt;
     mutable std::mutex mutex;
     std::shared_ptr<runtime::GpuProcessFrameEvaluator> evaluator;
     // The owned bootstrap task. Kept so retirementComplete() can observe a genuinely terminal task
@@ -34,6 +43,33 @@ struct GpuExportProvider::State final {
     bool bootstrapScheduled = false;
     bool bootstrapComplete = false;
     bool stopping = false;
+
+    void refreshCapacity(const runtime::CancellationToken& cancellation) {
+        if (!ownsProcessSampling || cancellation.isCancellationRequested()) {
+            return;
+        }
+        // This bounded probe is serialized only with other probes from the same process root;
+        // evaluator coordination and publication never acquire this mutex.
+        const std::lock_guard samplingLock(samplingMutex);
+        const auto now = std::chrono::steady_clock::now();
+        if (sampledAt && now >= *sampledAt && now - *sampledAt < std::chrono::seconds(5)) {
+            return;
+        }
+        auto sample = runtime::memoryBudgetSample(cancellation);
+        if (cancellation.isCancellationRequested()) {
+            return;
+        }
+        if (!samplingLedger) {
+            samplingLedger = std::make_unique<runtime::MemoryBudgetLedger>(
+                sample.physicalBytes, sample.machine.availableBytes.value_or(0));
+            samplingLedger->beginProcessSampling();
+        }
+        const auto deliveredAt = std::chrono::steady_clock::now();
+        const auto state = samplingLedger->applySample(std::move(sample), deliveredAt);
+        options.processingPhasePolicy->applyHostSample(state, samplingLedger->physicalByteBudget(),
+                                                       deliveredAt);
+        sampledAt = deliveredAt;
+    }
 };
 
 GpuExportProvider::GpuExportProvider(runtime::GpuProcessFrameEvaluatorOptions options)
@@ -90,6 +126,7 @@ void GpuExportProvider::prepare(runtime::TaskScheduler& scheduler) {
                 stopping = state->stopping;
             }
             if (!stopping) {
+                state->refreshCapacity(context.cancellation());
                 // Qualify the packaged GPU shader tools exactly once on this CPU worker (never the
                 // UI thread or the evaluator's GPU owner thread) and publish the one shared context
                 // to both the evaluator it creates and its own output-display preparation. A typed
@@ -155,6 +192,17 @@ bool GpuExportProvider::prepared() const noexcept {
 bool GpuExportProvider::deviceAvailable() const {
     const auto handle = evaluator();
     return handle != nullptr && handle->gpuAvailable();
+}
+
+std::shared_ptr<runtime::GpuProcessingPhasePolicy>
+GpuExportProvider::processingPhasePolicy() const noexcept {
+    return state_ ? state_->options.processingPhasePolicy : nullptr;
+}
+
+void GpuExportProvider::refreshProcessingCapacity(const runtime::CancellationToken& cancellation) {
+    if (state_) {
+        state_->refreshCapacity(cancellation);
+    }
 }
 
 void GpuExportProvider::beginShutdown() noexcept {

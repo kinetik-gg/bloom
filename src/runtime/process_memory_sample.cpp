@@ -8,6 +8,10 @@
 #include <limits>
 #include <utility>
 
+#if defined(__linux__)
+#include <sys/stat.h>
+#endif
+
 namespace bloom::runtime {
 namespace {
 constexpr std::size_t kMaximumMountInfoBytes = std::size_t{1024} * 1024U;
@@ -100,6 +104,17 @@ bool below(const std::filesystem::path& path, const std::filesystem::path& root)
 }
 
 #if defined(__linux__)
+std::optional<ProcessMemoryNamespaceIdentity> namespaceIdentity(const char* path) noexcept {
+    struct stat identity{};
+    if (::stat(path, &identity) != 0 || identity.st_ino == 0)
+        return {};
+    return ProcessMemoryNamespaceIdentity{.device = static_cast<std::uint64_t>(identity.st_dev),
+                                          .inode = static_cast<std::uint64_t>(identity.st_ino)};
+}
+ProcessMemoryNamespaces namespaceIdentities() noexcept {
+    return {.cgroup = namespaceIdentity("/proc/self/ns/cgroup"),
+            .mount = namespaceIdentity("/proc/self/ns/mnt")};
+}
 ProcessMemoryFileRead readBounded(const std::filesystem::path& path, const std::size_t limit) {
     errno = 0;
     std::ifstream input(path, std::ios::binary);
@@ -124,7 +139,8 @@ ProcessMemorySample
 parseLinuxProcessMemorySample(const std::string_view cgroupText,
                               const std::string_view mountInfoText,
                               const ProcessMemoryFileReader& readScalar,
-                              const std::chrono::steady_clock::time_point sampledAt) noexcept {
+                              const std::chrono::steady_clock::time_point sampledAt,
+                              ProcessMemoryNamespaces verifiedNamespaces) noexcept {
     ProcessMemorySample sample;
     sample.sampledAt = sampledAt;
     try {
@@ -154,6 +170,8 @@ parseLinuxProcessMemorySample(const std::string_view cgroupText,
         std::optional<std::filesystem::path> mountRoot;
         std::optional<std::filesystem::path> leaf;
         bool v1Mount = false;
+        std::string selectedDevice;
+        std::uint64_t selectedMountId = 0;
         remaining = mountInfoText;
         while (!remaining.empty()) {
             const auto end = remaining.find('\n');
@@ -175,6 +193,9 @@ parseLinuxProcessMemorySample(const std::string_view cgroupText,
                             mount = *point;
                             mountRoot = *root;
                             leaf = candidate;
+                            selectedDevice = std::string(parts[2]);
+                            const auto id = bytes(parts[0]);
+                            selectedMountId = id.value_or(0);
                         }
                     }
                 }
@@ -194,6 +215,11 @@ parseLinuxProcessMemorySample(const std::string_view cgroupText,
             return sample;
         sample.source = ProcessMemorySource::LinuxCgroupV2;
         sample.membershipPath = membership->generic_string();
+        sample.view = ProcessMemoryView{.mountRoot = mountRoot->generic_string(),
+                                        .mountPoint = mount->generic_string(),
+                                        .filesystemDevice = std::move(selectedDevice),
+                                        .mountId = selectedMountId,
+                                        .namespaces = verifiedNamespaces};
         bool complete = true;
         bool finite = false;
         auto path = *leaf;
@@ -210,8 +236,10 @@ parseLinuxProcessMemorySample(const std::string_view cgroupText,
             // Constrained/bind roots and inaccessible files stay incomplete.
             if (path == *mount && *mountRoot == "/" &&
                 maximum.status == ProcessMemoryReadStatus::Missing &&
-                current.status == ProcessMemoryReadStatus::Missing)
+                current.status == ProcessMemoryReadStatus::Missing) {
+                sample.rootInterfacesAbsent = true;
                 break;
+            }
             if (maximum.status == ProcessMemoryReadStatus::Value &&
                 maximum.text.size() <= kMaximumProcessMemoryScalarBytes) {
                 if (trim(maximum.text) == "max")
@@ -254,19 +282,34 @@ ProcessMemorySample sampleProcessMemory(CancellationToken cancellation) noexcept
     try {
         if (cancellation.isCancellationRequested())
             return sample;
+        const auto before = namespaceIdentities();
         const auto membership = readBounded("/proc/self/cgroup", kMaximumMembershipBytes);
         const auto mounts = readBounded("/proc/self/mountinfo", kMaximumMountInfoBytes);
         if (membership.status != ProcessMemoryReadStatus::Value ||
             mounts.status != ProcessMemoryReadStatus::Value)
             return sample;
-        return parseLinuxProcessMemorySample(
+        auto parsed = parseLinuxProcessMemorySample(
             membership.text, mounts.text,
             [&cancellation](const std::filesystem::path& path) {
                 return cancellation.isCancellationRequested()
                            ? ProcessMemoryFileRead{}
                            : readBounded(path, kMaximumProcessMemoryScalarBytes);
             },
-            sample.sampledAt);
+            sample.sampledAt, before);
+        const auto membershipAfter = readBounded("/proc/self/cgroup", kMaximumMembershipBytes);
+        const auto mountsAfter = readBounded("/proc/self/mountinfo", kMaximumMountInfoBytes);
+        const auto after = namespaceIdentities();
+        const bool changed =
+            before != after || membershipAfter.status != ProcessMemoryReadStatus::Value ||
+            mountsAfter.status != ProcessMemoryReadStatus::Value ||
+            membershipAfter.text != membership.text || mountsAfter.text != mounts.text;
+        if (changed)
+            parsed.status = ProcessMemoryStatus::Partial;
+        if (changed || !before.cgroup || !before.mount) {
+            if (parsed.view)
+                parsed.view->namespaces = {};
+        }
+        return parsed;
     } catch (...) {
         return sample;
     }
@@ -284,6 +327,156 @@ ProcessMemorySample sampleProcessMemory(CancellationToken cancellation) noexcept
     sample.status = ProcessMemoryStatus::Unsupported;
 #endif
     return sample;
+}
+
+namespace {
+bool boundedPosixPath(const std::string_view path) noexcept {
+    if (path.empty() || path.front() != '/' || path.size() > kMaximumPathBytes)
+        return false;
+    if (path == "/")
+        return true;
+    auto remaining = path.substr(1);
+    while (!remaining.empty()) {
+        const auto end = remaining.find('/');
+        const auto part = remaining.substr(0, end);
+        if (part.empty() || part == "." || part == ".." ||
+            part.find('\0') != std::string_view::npos)
+            return false;
+        if (end == std::string_view::npos)
+            return true;
+        remaining.remove_prefix(end + 1);
+    }
+    return false;
+}
+bool trustedView(const ProcessMemorySample& sample) noexcept {
+    if (!sample.view || !boundedPosixPath(sample.membershipPath))
+        return false;
+    const auto& view = *sample.view;
+    const auto separator = view.filesystemDevice.find(':');
+    return boundedPosixPath(view.mountRoot) && boundedPosixPath(view.mountPoint) &&
+           view.mountId != 0 && view.filesystemDevice.size() <= 64 &&
+           separator != std::string::npos &&
+           bytes(std::string_view(view.filesystemDevice).substr(0, separator)).has_value() &&
+           bytes(std::string_view(view.filesystemDevice).substr(separator + 1)).has_value() &&
+           view.namespaces.cgroup && view.namespaces.cgroup->inode != 0 && view.namespaces.mount &&
+           view.namespaces.mount->inode != 0;
+}
+bool domainInView(const std::string_view path, const ProcessMemoryView& view) noexcept {
+    return path == view.mountPoint ||
+           (path.starts_with(view.mountPoint) &&
+            (view.mountPoint == "/" ||
+             (path.size() > view.mountPoint.size() && path[view.mountPoint.size()] == '/')));
+}
+} // namespace
+
+bool isCompleteProcessMemorySample(const ProcessMemorySample& sample) noexcept {
+    if (sample.source != ProcessMemorySource::LinuxCgroupV2 ||
+        sample.domains.size() > kMaximumProcessMemoryDomains ||
+        (sample.status != ProcessMemoryStatus::Finite &&
+         sample.status != ProcessMemoryStatus::NoFiniteVisibleLimit))
+        return false;
+    if (sample.domains.empty())
+        return sample.status == ProcessMemoryStatus::NoFiniteVisibleLimit &&
+               sample.rootInterfacesAbsent && sample.view && trustedView(sample) &&
+               sample.membershipPath == "/" && sample.view->mountRoot == "/";
+    bool finite = false;
+    for (std::size_t index = 0; index < sample.domains.size(); ++index) {
+        const auto& domain = sample.domains[index];
+        if (!boundedPosixPath(domain.path) || !domain.currentBytes ||
+            (domain.kind != ProcessMemoryLimitKind::Finite &&
+             domain.kind != ProcessMemoryLimitKind::Unlimited))
+            return false;
+        for (std::size_t previous = 0; previous < index; ++previous)
+            if (sample.domains[previous].path == domain.path)
+                return false;
+        finite = finite || domain.kind == ProcessMemoryLimitKind::Finite;
+    }
+    return finite == (sample.status == ProcessMemoryStatus::Finite);
+}
+
+void ProcessMemoryConstraintHistory::recordFinite(const ProcessMemorySample& sample,
+                                                  const bool replaceComplete) noexcept {
+    const bool hasFinite = std::ranges::any_of(sample.domains, [](const auto& domain) {
+        return domain.kind == ProcessMemoryLimitKind::Finite;
+    });
+    if (!hasFinite)
+        return;
+    try {
+        if (!sample.view || !trustedView(sample) ||
+            sample.domains.size() > kMaximumProcessMemoryDomains) {
+            valid_ = false;
+            return;
+        }
+        if (replaceComplete && isCompleteProcessMemorySample(sample)) {
+            // Never forget a previously finite domain within the same view merely because a
+            // later finite snapshot omits it. A removal proof must still read that old path.
+            std::vector<std::string> paths =
+                view_ == sample.view && membership_ == sample.membershipPath
+                    ? finitePaths_
+                    : std::vector<std::string>{};
+            for (const auto& domain : sample.domains) {
+                if (!domainInView(domain.path, *sample.view)) {
+                    valid_ = false;
+                    return;
+                }
+                if (domain.kind == ProcessMemoryLimitKind::Finite &&
+                    std::ranges::find(paths, domain.path) == paths.end()) {
+                    if (paths.size() == kMaximumProcessMemoryDomains) {
+                        valid_ = false;
+                        return;
+                    }
+                    paths.push_back(domain.path);
+                }
+            }
+            auto view = sample.view;
+            auto membership = sample.membershipPath;
+            finitePaths_.swap(paths);
+            view_.swap(view);
+            membership_.swap(membership);
+            valid_ = true;
+            return;
+        }
+        if (!valid_ || view_ != sample.view || membership_ != sample.membershipPath) {
+            valid_ = false;
+            return;
+        }
+        for (const auto& domain : sample.domains) {
+            if (domain.kind != ProcessMemoryLimitKind::Finite)
+                continue;
+            if (!boundedPosixPath(domain.path) || !domainInView(domain.path, *sample.view)) {
+                valid_ = false;
+                return;
+            }
+            if (std::ranges::find(finitePaths_, domain.path) == finitePaths_.end()) {
+                if (finitePaths_.size() == kMaximumProcessMemoryDomains) {
+                    valid_ = false;
+                    return;
+                }
+                finitePaths_.push_back(domain.path);
+            }
+        }
+    } catch (...) {
+        valid_ = false;
+    }
+}
+
+bool ProcessMemoryConstraintHistory::verifiesRemoval(
+    const ProcessMemorySample& sample) const noexcept {
+    if (!valid_ || finitePaths_.empty() || !sample.view || !trustedView(sample) ||
+        sample.status != ProcessMemoryStatus::NoFiniteVisibleLimit ||
+        !isCompleteProcessMemorySample(sample) || view_ != sample.view ||
+        membership_ != sample.membershipPath)
+        return false;
+    for (const auto& domain : sample.domains)
+        if (!domainInView(domain.path, *sample.view))
+            return false;
+    for (const auto& path : finitePaths_) {
+        const auto domain = std::ranges::find(sample.domains, path, &ProcessMemoryDomain::path);
+        if (domain == sample.domains.end() || domain->kind != ProcessMemoryLimitKind::Unlimited ||
+            !domain->currentBytes)
+            return false;
+    }
+    return true;
 }
 
 std::size_t reserveForProcessMemoryLimit(const std::size_t limit) noexcept {

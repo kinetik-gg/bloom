@@ -181,6 +181,7 @@ class MemoryBudgetLedger final {
     bool hasPolled_ = false;
     bool processSampling_ = false;
     std::optional<Clock::time_point> lastProcessSample_;
+    ProcessMemoryConstraintHistory processConstraintHistory_;
     std::optional<Clock::time_point> lastReusableChange_;
     std::size_t usableByteBudget_ = 0;
     std::size_t defaultTotalByteBudget_ = 0;

@@ -121,6 +121,9 @@ struct OutputAnalysisAttemptRequestV1 final {
     // without dangling the in-flight evaluation; the provider hands the same evaluator to every
     // frame of a range.
     std::shared_ptr<GpuExportProvider> gpuProvider = nullptr;
+    // Direct CPU-only callers inject ONE shared process root, sampled by their owner. A provider
+    // is authoritative when present; no independent per-attempt ledger is made.
+    std::shared_ptr<runtime::GpuProcessingPhasePolicy> processingPhasePolicy = nullptr;
     // Optional already-compiled, immutable OCIO output command prepared on a CPU task before the
     // GPU owner dispatch (null = identity arm: process payload only). When present the one combined
     // readback also transfers the encoded output (process-effect RGBA32F or straight display RGBA8)
@@ -153,7 +156,8 @@ enum class OutputAnalysisAttemptStageV1 : std::uint8_t {
 // cancellation (no per-stage diagnostic payload beyond "which stage was current").
 using OutputAnalysisAttemptFailurePayloadV1 =
     std::variant<std::monostate, runtime::TaskSubmissionStatus, platform::StagedArtifactError,
-                 runtime::EvaluationDiagnosticCode, output::ProcessFrameSemanticIdentityErrorCode,
+                 runtime::EvaluationDiagnosticCode, runtime::GpuProcessFrameDiagnosticCode,
+                 output::ProcessFrameSemanticIdentityErrorCode,
                  output::OutputAnalysisAnalyzerErrorCodeV1,
                  output::OutputAnalysisAttemptErrorCodeV1>;
 

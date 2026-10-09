@@ -8,6 +8,7 @@
 // drain/quarantine. Bounded shutdown of final packed transfers explicitly hands physical ownership
 // to an independent, still-charged transfer reservation before releasing unrelated stage context.
 
+#include "gpu_preview_display_service_cpu_phase.hpp"
 #include "gpu_preview_display_service_private.hpp"
 
 #include <bloom/runtime/prepared_preview_frame.hpp>
@@ -86,6 +87,22 @@ pickResidentReadyStage(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
     return stage;
 }
 
+// The allocator-generation slot protects all native quarantine families, including synchronous
+// OCIO LUT upload. Planning alone submits nothing. Once poll/display/transfer can submit, a failure
+// without whole-phase proof is sticky even when a wrapper's logical state no longer reports work.
+void releaseProcessingPhase(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                            const std::shared_ptr<PreviewDisplayStageRecord>& stage,
+                            const bool proven) noexcept {
+    if (stage->processingPhaseArmed && core->device && stage->gpuStage &&
+        stage->gpuStage->phaseLease()) {
+        core->device->retireProcessingPhase(stage->gpuStage->phaseLease()->id(), proven);
+        stage->processingPhaseArmed = false;
+    }
+    // Dispose the prepared scene before terminal publication or admitting a fallback. A sticky
+    // generation slot independently keeps the conservative lease charged through native teardown.
+    stage->gpuStage.reset();
+}
+
 // A failure with NO unretired native submission: safe to release admission immediately.
 void finishResidentImmediately(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                                const std::shared_ptr<PreviewDisplayStageRecord>& stage,
@@ -93,6 +110,8 @@ void finishResidentImmediately(const std::shared_ptr<PreviewDisplayServiceCore>&
     if (nativeFailure) {
         core->counterResidentFailures.fetch_add(1, std::memory_order_relaxed);
     }
+    releaseProcessingPhase(core, stage,
+                           !stage->processingPhaseTouched || stage->processingPhaseRetired);
     if (stage->cancellationRequested || stage->nativeDiscard ||
         core->stopping.load(std::memory_order_acquire)) {
         completeCancelled(stage);
@@ -118,6 +137,7 @@ void beginResidentRetirement(const std::shared_ptr<PreviewDisplayServiceCore>& c
     } else if (nativeFailure) {
         core->counterResidentFailures.fetch_add(1, std::memory_order_relaxed);
     }
+    stage->processingPhaseFailed = stage->processingPhaseFailed || nativeFailure;
     residentCancelNative(core);
     stage->nativeDiscard = stage->nativeDiscard || stage->cancellationRequested ||
                            core->stopping.load(std::memory_order_acquire);
@@ -136,6 +156,8 @@ void finishResidentRetirement(const std::shared_ptr<PreviewDisplayServiceCore>& 
     core->residentNativeActive.reset();
     core->residentNativeInFlight = false;
     stage->residentPhase = ResidentNativePhase::Done;
+    releaseProcessingPhase(
+        core, stage, !stage->processingPhaseFailed && core->device && !residentDeviceLost(core));
     if (cancelled) {
         completeCancelled(stage);
         return;
@@ -251,9 +273,19 @@ void dispatchResidentCpuFallbackChild(const std::shared_ptr<PreviewDisplayServic
                         residentJobDiagnostic("bloom.runtime.gpu-preview-missing-snapshot",
                                               "The resident fallback has no snapshot."));
                 }
+                auto phase =
+                    reservePreviewCpuPhase(core->options.processingPhasePolicy, *stage->snapshot,
+                                           stage->identity, stage->pixelStorageByteLimit);
+                if (context.isCancellationRequested()) {
+                    return Result::cancelled();
+                }
+                if (phase.status != render::GpuProcessingPhaseAdmission::Accepted || !phase.lease) {
+                    return Result::failed(previewCpuPhaseDiagnostic(phase));
+                }
                 auto stageResult =
                     core->stageFunction(*stage->snapshot, stage->identity,
-                                        stage->pixelStorageByteLimit, stage->overrides, context);
+                                        static_cast<std::size_t>(phase.lease->sourceByteLimit()),
+                                        stage->overrides, context);
                 if (stageResult.state() == TaskState::Cancelled) {
                     return Result::cancelled(stageResult.diagnostics());
                 }
@@ -345,7 +377,7 @@ void handleGpuStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>&
         // The composition compiled but is outside the prepared GPU subset: take the FULL original
         // CPU path. No fake empty frame and no silently different subset.
         core->counterCpuFallbacks.fetch_add(1, std::memory_order_relaxed);
-        dispatchResidentCpuFallbackChild(core, stage);
+        stage->phase = StagePhase::AwaitingCpuFallbackDispatch;
         return;
     }
     stage->gpuStage = outcome.stage;
@@ -368,7 +400,12 @@ void handleGpuStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>&
             std::lock_guard lock(core->stateMutex);
             core->publishedResidentDetail = "resident stage ineligible: " + detail;
         }
-        dispatchResidentCpuFallbackChild(core, stage);
+        // The child result still aliases this prepared scene until the caller finishes consuming
+        // it. Defer fallback admission until that result and every service-owned scene alias are
+        // disposed; otherwise a count-one root would contend with its own abandoned preparation.
+        stage->gpuStage.reset();
+        stage->residentProcessor.reset();
+        stage->phase = StagePhase::AwaitingCpuFallbackDispatch;
         return;
     }
     stage->phase = StagePhase::AwaitingNative;
@@ -404,6 +441,20 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             completeCancelled(stage);
             return;
         }
+        const auto& phase = stage->gpuStage->phaseLease();
+        if ((core->options.processingPhasePolicy && !phase) ||
+            (phase && (!core->device || !core->device->retainProcessingPhase(phase)))) {
+            auto diagnostic = residentJobDiagnostic(
+                "preview.processing-phase.budget-refused",
+                "The native generation cannot admit another processing phase");
+            if (phase)
+                diagnostic.admissionRetry =
+                    TaskAdmissionRetry{phase->revisionAfterOwnRelease(), true};
+            stage->gpuStage.reset();
+            completeFailed(stage, {std::move(diagnostic)});
+            return;
+        }
+        stage->processingPhaseArmed = static_cast<bool>(phase);
         std::string reason;
         if (!residentExecutorBegin(core, *stage, reason)) {
             const std::uint64_t admitted = residentStageAdmittedBytes(core, *stage);
@@ -443,6 +494,8 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
                            core->stopping.load(std::memory_order_acquire);
     switch (stage->residentPhase) {
     case ResidentNativePhase::Executor: {
+        // begin() only plans/pins. This is the first native-capable step, including OCIO upload.
+        stage->processingPhaseTouched = true;
         const auto poll = residentExecutorPoll(core);
         if (poll == GpuSceneExecutorPollResult::Pending) {
             if (cancelled ||
@@ -526,10 +579,12 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             publishResidentJobDetail(core, "GPU packed transfer begin refused: " + reason);
         } else {
             // The display submission is retired (or never submitted); no unretired pin remains.
+            stage->processingPhaseRetired = poll == render::GpuResidentDisplayPollResult::Ready;
             core->residentNativeInFlight = false;
             core->residentNativeActive.reset();
             stage->residentPhase = ResidentNativePhase::Done;
             if (cancelled) {
+                releaseProcessingPhase(core, stage, !nativeFailure);
                 if (nativeFailure) {
                     core->counterResidentFailures.fetch_add(1, std::memory_order_relaxed);
                 }
@@ -543,6 +598,7 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
                     auto prepared = PreviewPreparationResult::prepared(
                         std::make_shared<const PreparedPreviewFrame>(std::move(*frame)));
                     if (prepared.has_value()) {
+                        releaseProcessingPhase(core, stage, true);
                         if (stage->completion.isValid()) {
                             static_cast<void>(
                                 std::move(stage->completion)
@@ -584,20 +640,27 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
         core->residentNativeActive.reset();
         stage->residentPhase = ResidentNativePhase::Done;
         if (cancelled) {
+            const bool proven =
+                poll == render::GpuDisplayTransferState::Ready ||
+                (core->packedTransfer && core->packedTransfer->diagnostic().code ==
+                                             render::GpuDisplayTransferCode::Cancelled);
             if (core->packedTransfer) {
                 core->packedTransfer->cancel();
                 static_cast<void>(core->packedTransfer->reset());
             }
+            releaseProcessingPhase(core, stage, proven);
             completeCancelled(stage);
             return;
         }
         if (poll == render::GpuDisplayTransferState::Ready) {
+            stage->processingPhaseRetired = true;
             std::string reason;
             auto frame = residentPackedTransferFinish(core, *stage, reason);
             if (frame) {
                 auto prepared = PreviewPreparationResult::prepared(
                     std::make_shared<const PreparedPreviewFrame>(std::move(*frame)));
                 if (prepared && stage->completion.isValid()) {
+                    releaseProcessingPhase(core, stage, true);
                     static_cast<void>(std::move(stage->completion)
                                           .succeed(std::make_shared<const PreviewPreparationResult>(
                                               std::move(*prepared))));
@@ -634,6 +697,8 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
         }
         if (residentDeviceLost(core)) {
             publishResidentLossDetail(core, *stage);
+            stage->processingPhaseFailed = true;
+            releaseProcessingPhase(core, stage, false);
             teardownTerminalResidentRoute(core);
             finishResidentRetirement(core, stage);
             return;
@@ -661,6 +726,8 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
                 stage->residentRetirePumps = kResidentRetirementPumpBudget;
                 return; // bounded late backoff still offers the exact owner real fence observations
             }
+            stage->processingPhaseFailed = true;
+            releaseProcessingPhase(core, stage, false);
             teardownTerminalResidentRoute(core);
             if (transferQuarantined) {
                 publishResidentJobDetail(core,

@@ -75,6 +75,8 @@ enum class GpuProcessFrameDiagnosticCode : std::uint8_t {
     InvalidArgument,
     InvalidRequest,
     OverBudget,
+    AwaitingCapacity,
+    BudgetRefused,
     DeadlineExceeded,
     Cancelled,
     DeviceLost,
@@ -154,6 +156,7 @@ gpuProcessFrameByteBudgetForAvailable(std::optional<std::size_t> availableBytes)
 [[nodiscard]] std::size_t defaultGpuProcessFrameByteBudget() noexcept;
 
 struct GpuProcessFrameEvaluatorOptions final {
+    std::shared_ptr<GpuProcessingPhasePolicy> processingPhasePolicy = {};
     // Explicit activation: false never touches a device and every request is Disabled.
     bool enabled = true;
     // Explicit native loader override (empty means the platform loader). No workspace/build path is
@@ -171,10 +174,11 @@ struct GpuProcessFrameEvaluatorOptions final {
     // beyond this is refused with a typed OverBudget and no frame.
     std::size_t maxQueuedRequests = 16;
     GpuSceneCacheBudgets cacheBudgets{};
-    // Per-operation native ceilings stay at the render layer's own bounded defaults (its per-image
-    // hard cap is fixed there); only the request/readback budgets above scale with the host. A
-    // composition larger than a single render operation is handled by the CPU reference path.
-    GpuSceneExecutorBudgets executorBudgets{};
+    // Explicit producer overrides are honored verbatim. Without an override, a rooted evaluator
+    // uses requestByteBudget as the producer image upper ceiling; actual work remains bounded by
+    // the admitted phase, live-pin accounting and native resource limits. Metadata/structural
+    // defaults remain bounded. An unrooted legacy evaluator retains the reusable-cache defaults.
+    std::optional<GpuSceneExecutorBudgets> executorBudgets = {};
     // Off-UI resolved, immutable OCIO context (one shared preparer + qualified compile options) for
     // media-source colour conversion and image-effect transforms. Null fails every non-identity
     // transform closed, so the caller keeps the CPU reference path rather than mis-rendering.

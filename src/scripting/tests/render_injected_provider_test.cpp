@@ -1,5 +1,5 @@
 // Proves that Render::run reuses an injected GpuExportProvider without retiring it, while a
-// locally created provider is still retired with proof before the call returns. This is the
+// missing process provider is refused before compilation. This is the
 // contract the MCP server relies on to share ONE server-lifetime provider across still and video
 // renders instead of re-bootstrapping (or prematurely retiring) a device per frame.
 //
@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
     }
     try {
         testInjectedProviderIsReusedAndNotRetired(expectations);
-        testLocalProviderIsRetired(expectations);
+        testMissingProcessingRootIsRefused(expectations);
         if (proofRoute != "sequence") {
             headlessOutcome =
                 testNativeHeadlessRenderProvenanceAndParity(expectations, requireDevice, proofDir);

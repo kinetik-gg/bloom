@@ -42,9 +42,15 @@ constexpr std::array<const char*, 6> kContextSources{"",     "project", "composi
 
 NativeHost::NativeHost(const std::string& project) : NativeHost(makeSession(project)) {}
 
-NativeHost::NativeHost(std::shared_ptr<Session> session) : session_(std::move(session)) {
+NativeHost::NativeHost(std::shared_ptr<Session> session,
+                       std::shared_ptr<host::GpuExportProvider> provider)
+    : session_(std::move(session)), gpuExportProvider_(std::move(provider)) {
     if (!session_ || !session_->isValid()) {
         throw std::invalid_argument("A live Bloom session is required");
+    }
+    ownsGpuExportProvider_ = gpuExportProvider_ == nullptr;
+    if (ownsGpuExportProvider_) {
+        gpuExportProvider_ = host::GpuExportProvider::create();
     }
     facade_ = std::make_unique<Facade>(*session_);
     subscription_ = facade_->events.subscribe([this](const commands::CommandEvent& event) {
@@ -55,6 +61,18 @@ NativeHost::NativeHost(std::shared_ptr<Session> session) : session_(std::move(se
         }
         pendingEvents_.push_back(event);
     });
+}
+
+NativeHost::~NativeHost() {
+    shutdownRendering();
+    // Owned roots are released here on the supported headless interpreter thread. Live hosts
+    // always inject the app root, so their teardown cannot join a live native owner on the UI.
+}
+
+void NativeHost::shutdownRendering() {
+    if (ownsGpuExportProvider_ && gpuExportProvider_) {
+        static_cast<void>(gpuExportProvider_->shutdownAndWait(std::chrono::seconds(10)));
+    }
 }
 
 std::unique_lock<std::mutex> NativeHost::lockSession() const {

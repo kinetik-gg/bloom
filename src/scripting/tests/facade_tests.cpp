@@ -2,6 +2,7 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/node_definition_registry.hpp>
+#include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -119,13 +120,18 @@ int main() {
     bloom::runtime::SnapshotCompiler compiler(bloom::document::builtInNodeDefinitions());
     const auto outputPath =
         std::filesystem::temp_directory_path() / "bloom-scripting-facade-frame-12.png";
+    bloom::runtime::GpuProcessFrameEvaluatorOptions renderOptions;
+    renderOptions.enabled = false;
+    const auto renderProvider = bloom::host::GpuExportProvider::create(renderOptions);
     const auto render = bloom::scripting::Render::run(
         *renderSession, scheduler, compiler,
         {.composition = renderSession->snapshot().project().compositions().front().id(),
          .frame = 12,
          .range = std::nullopt,
          .preset = bloom::output::OutputPresetV1::PngRgba8SrgbV1,
-         .destination = outputPath});
+         .destination = outputPath},
+        {}, renderProvider);
+    static_cast<void>(renderProvider->shutdownAndWait(std::chrono::seconds(10)));
     if (!render.succeeded || render.publishedFrames != 1 || !std::filesystem::exists(outputPath)) {
         std::cerr << "headless script render failed\n";
         return 11;

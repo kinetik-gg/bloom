@@ -221,6 +221,9 @@ struct GpuPreviewDisplayServiceStatus final {
 enum class GpuPreviewDisplayProductMode : std::uint8_t { NativeResident, GpuPreparedPacked };
 
 struct GpuPreviewDisplayServiceOptions final {
+    // Explicit composition-root injection, shared with final rendering; no physical accounting
+    // claim.
+    std::shared_ptr<GpuProcessingPhasePolicy> processingPhasePolicy = {};
     bool enabled = false;
     GpuPreviewDisplayProductMode product = GpuPreviewDisplayProductMode::NativeResident;
     std::filesystem::path loaderPath;
@@ -236,6 +239,9 @@ struct GpuPreviewDisplayServiceOptions final {
     GpuSceneExecutorBudgets residentExecutorBudgets{};
     // Bounded resident display pipeline owned-bytes budget per job.
     render::GpuResidentDisplayBudgets residentDisplayBudgets{};
+    // Concurrent packed transfer staging/host capacity, separate from the display's native owner.
+    // Composition roots reserve this ceiling in the conservative phase working envelope.
+    std::uint64_t packedTransferByteAllowance = 320ULL * 1024 * 1024;
     // Bounded resident qualification native budgets (the qualification reads back only internally).
     GpuResidentPreviewBudgets residentQualificationBudgets{};
     // Bounded presentation coordinator admission/overlay/drain options.

@@ -59,6 +59,10 @@ codeName(const bloom::runtime::PreparedGpuSceneDiagnosticCode code) {
         return "MediaUnavailable";
     case PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded:
         return "PixelStorageBudgetExceeded";
+    case PreparedGpuSceneDiagnosticCode::AwaitingCapacity:
+        return "AwaitingCapacity";
+    case PreparedGpuSceneDiagnosticCode::BudgetRefused:
+        return "BudgetRefused";
     case PreparedGpuSceneDiagnosticCode::AllocationFailure:
         return "AllocationFailure";
     case PreparedGpuSceneDiagnosticCode::Cancelled:

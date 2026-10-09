@@ -83,6 +83,7 @@ target_sources(
         cpu_composition_evaluator.cpp
         cpu_composition_resolution.hpp
         cpu_gpu_scene_preparation.cpp
+        gpu_processing_phase_policy.cpp
         gpu_scene_nested.cpp
         gpu_scene_nested.hpp
         gpu_scene_preparation_builders.hpp
@@ -192,6 +193,7 @@ target_sources(
             include/bloom/runtime/gpu_prepared_upload_cache.hpp
             include/bloom/runtime/gpu_scene_executor.hpp
             include/bloom/runtime/gpu_process_frame.hpp
+            include/bloom/runtime/gpu_processing_phase_policy.hpp
             include/bloom/runtime/gpu_ocio_wrapper.hpp
             include/bloom/runtime/gpu_ocio_command.hpp
             include/bloom/runtime/gpu_ocio_preparation.hpp

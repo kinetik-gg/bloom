@@ -5,6 +5,10 @@
 #include <memory>
 #include <thread>
 
+namespace bloom::host {
+class GpuExportProvider;
+}
+
 namespace bloom::ui {
 class CompositionSession;
 class ProjectHost;
@@ -13,7 +17,8 @@ class ProjectHost;
 class ScriptPanelRuntime final : public QObject {
     Q_OBJECT
   public:
-    ScriptPanelRuntime(CompositionSession& session, ProjectHost& host);
+    ScriptPanelRuntime(CompositionSession& session, ProjectHost& host,
+                       std::shared_ptr<host::GpuExportProvider> provider);
     ~ScriptPanelRuntime() override;
     [[nodiscard]] bool submit(const QString& source);
     void cancel();

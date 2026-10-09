@@ -220,6 +220,18 @@ Python tracing, Python task tickets and native render tasks. The GUI console bou
 Python CPU slice; long work belongs in `bloom.tasks`. Integration tests exercise a Python-keyed
 parameter through UI Undo and compare frame-12 bytes from Python, CLI and UI exports.
 
+Native `Render::run` callers explicitly inject one `GpuExportProvider` shared across their still,
+range and concurrent requests; a missing provider is a typed `MissingProcessingRoot` refusal before
+compilation. The Python native host retains a provider for its lifetime. A live GUI Python host
+borrows the application's injected provider; an independent headless host owns its provider and
+retires it on its non-UI host thread after rendering. Neither an individual Render call nor an
+injected Python host retires a shared root. Independent owners do not implicitly aggregate process
+or device allowances: their composition root must inject shared policy. Public `bloom.render.frame`
+and `bloom.render.range` signatures are unchanged. The
+[output contract](frame-output.md) owns provider, admitted CPU fallback and the accepted first
+phase-reservation slice's limits. Required native headless/range route proofs and Linux CPU-only
+root tests pass; this does not establish shared allocation accounting across independent processes.
+
 `bloom-cli run <script.py>` and `bloom-cli python` embed the interpreter in isolated mode. Native
 latency-variable work releases the GIL; Python tasks run on a dedicated bounded Python worker,
 with native progress/cancellation tickets in `TaskScheduler`. Callbacks are delivered by the

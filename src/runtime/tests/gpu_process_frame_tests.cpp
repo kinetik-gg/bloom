@@ -14,6 +14,7 @@
 #include <bloom/core/color.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <atomic>
@@ -415,6 +416,80 @@ void runLifecycleTests(Expectations& expectations, const Options& options) {
     runShutdownDuringPreparationTest(expectations, options);
 }
 
+void runProcessingPhaseTest(Expectations& expectations, const Options& options) {
+    using namespace bloom::runtime;
+    constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
+    const auto policy = std::make_shared<GpuProcessingPhasePolicy>(1);
+    auto configured = gpuEvaluatorOptions(options.loader_path);
+    configured.processingPhasePolicy = policy;
+    const auto evaluator = GpuProcessFrameEvaluator::create(configured);
+    if (!evaluator || !evaluator->gpuAvailable()) {
+        expectations.expect(false, "phase final: independent owner reaches native readiness");
+        return;
+    }
+    const auto plan =
+        twoSolidPlan(format(1920, 1080), Color4d{0.5, 0.25, 0.125, 1.0}, LayerValues{},
+                     Color4d{0.125, 0.375, 0.75, 0.5}, LayerValues{}, 960.0, 540.0, 9500);
+    auto request = requestFor(*plan);
+    request.pixelStorageByteLimit = gib;
+    const auto cold = evaluator->evaluate(plan, request);
+    expectations.expect(cold.diagnostic.code == GpuProcessFrameDiagnosticCode::AwaitingCapacity &&
+                            !cold.frame,
+                        "phase final: missing host sample cannot bypass paired admission");
+    MemoryBudgetState sample;
+    sample.machine.availableBytes = 60 * gib;
+    sample.process.status = ProcessMemoryStatus::Finite;
+    sample.process.source = ProcessMemorySource::LinuxCgroupV2;
+    sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
+    sample.process.domains.push_back({.path = "/fixture",
+                                      .kind = ProcessMemoryLimitKind::Finite,
+                                      .limitBytes = 8 * gib,
+                                      .currentBytes = 6 * gib});
+    sample.processSampleFresh = true;
+    sample.sampleSerial = 1;
+    policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+    const auto cpu = evaluateCpu(plan, request);
+    const auto first = evaluator->evaluate(plan, request);
+    expectations.expect(
+        first.frame && cpu &&
+            pixelsClose(first.frame->processImage().pixels(), cpu->processImage().pixels()) &&
+            first.counters.readbacks == 1,
+        "phase final: real Full1080 GPU pixels match CPU with one readback");
+    expectations.expect(policy->snapshot().reservations.admittedPhases == 0 &&
+                            policy->snapshot().reservations.unprovenPhases == 0,
+                        "phase final: all successful native work proves retirement before return");
+    sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
+    sample.process.domains[0].currentBytes = 5 * gib;
+    sample.sampleSerial = 2;
+    policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+    const auto warm = evaluator->evaluate(plan, request);
+    expectations.expect(
+        warm.frame && first.frame &&
+            pixelsExact(warm.frame->processImage().pixels(),
+                        first.frame->processImage().pixels()) &&
+            warm.counters.nativeDispatches == first.counters.nativeDispatches &&
+            warm.counters.readbacks == 1,
+        "phase final: capacity revision preserves warm scene identity and native reuse");
+    auto held = policy->reserve({.pixels = 1,
+                                 .metadataBytes = 1024,
+                                 .requestedExecutorBytes = 1024,
+                                 .deviceWorkingBytes = 1024,
+                                 .sourceFree = true});
+    expectations.expect(static_cast<bool>(held.lease),
+                        "phase final: competing preview lease admitted");
+    const auto refused = evaluator->evaluate(plan, request);
+    expectations.expect(refused.diagnostic.code == GpuProcessFrameDiagnosticCode::BudgetRefused &&
+                            !refused.frame,
+                        "phase final: shared count pressure refuses without CPU substitution");
+    held.lease.reset();
+    const auto recovered = evaluator->evaluate(plan, request);
+    expectations.expect(
+        recovered.frame && recovered.counters.nativeDispatches == warm.counters.nativeDispatches,
+        "phase final: released competing reservation recovers with warm native pixels");
+    evaluator->beginShutdown();
+    std::cout << "PHASE_FINAL Full1080 parity/readback=1 warm-native-reuse/refusal/recovery\n";
+}
+
 int run(int argc, char** argv) {
     const Options options = parseOptions(argc, argv);
     if (!options.valid) {
@@ -512,6 +587,7 @@ int run(int argc, char** argv) {
     evaluator->beginShutdown();
 
     runLifecycleTests(expectations, options);
+    runProcessingPhaseTest(expectations, options);
 
     if (!expectations.ok()) {
         std::cerr << "FAIL: GPU process-frame expectations failed\n";

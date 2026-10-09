@@ -23,6 +23,7 @@
 #include <mutex>
 #include <new>
 #include <optional>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <variant>
@@ -51,12 +52,28 @@ std::size_t defaultGpuProcessFrameByteBudget() noexcept {
 // `done` observation under the shared mutex. Each request carries its own completion condition
 // variable, so two concurrent callers each wake exactly once and a queued request is cancelled
 // independently of the running one.
+// The exact-generation independent LUT witness overrides any nominal true proof on this guard.
+struct FinalProcessingPhase final {
+    render::GpuDevice* device = nullptr;
+    std::shared_ptr<render::GpuProcessingPhaseLease> lease;
+    bool armed = false;
+    bool touched = false;
+    bool retired = false;
+    ~FinalProcessingPhase() {
+        if (armed)
+            device->retireProcessingPhase(lease->id(), !touched || retired);
+    }
+};
+
 struct GpuProcessFrameRequest final {
     std::shared_ptr<const CompiledCompositionPlan> plan;
     std::optional<EvaluationRequest> evaluation;
     CancellationToken cancellation;
     EvaluationProgressCallback progress;
     std::shared_ptr<const PreparedGpuOcioCommand> outputCommand;
+    // Scene storage is destroyed before this conservative quota alias.
+    std::shared_ptr<render::GpuProcessingPhaseLease> phaseLease;
+    std::uint64_t readbackByteAllowance = 0;
     // Built on the calling CPU worker (never the GPU owner) and immutable thereafter.
     std::shared_ptr<const PreparedGpuScene> scene;
 
@@ -102,17 +119,20 @@ struct GpuProcessFrameEvaluator::Impl final {
     bool stopping = false;
 
     void runOwner();
-    GpuProcessFrameOutcome runRequest(const std::shared_ptr<const CompiledCompositionPlan>& plan,
-                                      const EvaluationRequest& request,
-                                      const std::shared_ptr<const PreparedGpuScene>& scene,
-                                      const CancellationToken& cancellation,
-                                      const EvaluationProgressCallback& progress,
-                                      std::shared_ptr<const PreparedGpuOcioCommand> outputCommand);
+    GpuProcessFrameOutcome
+    runRequest(const std::shared_ptr<const CompiledCompositionPlan>& plan,
+               const EvaluationRequest& request,
+               const std::shared_ptr<const PreparedGpuScene>& scene,
+               const CancellationToken& cancellation, const EvaluationProgressCallback& progress,
+               std::shared_ptr<const PreparedGpuOcioCommand> outputCommand,
+               const std::shared_ptr<render::GpuProcessingPhaseLease>& phaseLease,
+               std::uint64_t readbackByteAllowance);
     GpuProcessFrameOutcome runRequestImpl(
         const std::shared_ptr<const CompiledCompositionPlan>& plan,
         const EvaluationRequest& request, const std::shared_ptr<const PreparedGpuScene>& scene,
         const CancellationToken& cancellation, const EvaluationProgressCallback& progress,
-        std::shared_ptr<const PreparedGpuOcioCommand> outputCommand);
+        std::shared_ptr<const PreparedGpuOcioCommand> outputCommand, FinalProcessingPhase& phase,
+        std::uint64_t readbackByteAllowance);
 };
 
 // Marks a queued-but-not-yet-run request done with a Cancelled outcome and wakes its caller. Called
@@ -129,10 +149,19 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequest(
     const std::shared_ptr<const CompiledCompositionPlan>& plan, const EvaluationRequest& request,
     const std::shared_ptr<const PreparedGpuScene>& scene, const CancellationToken& cancellation,
     const EvaluationProgressCallback& progress,
-    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand) {
+    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand,
+    const std::shared_ptr<render::GpuProcessingPhaseLease>& phaseLease,
+    const std::uint64_t readbackByteAllowance) {
+    FinalProcessingPhase phase{.device = device.get(), .lease = phaseLease};
+    if ((options.processingPhasePolicy && !phaseLease) ||
+        (phaseLease && (!device || !device->retainProcessingPhase(phaseLease)))) {
+        return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::BudgetRefused,
+                       "The native generation cannot admit another processing phase");
+    }
+    phase.armed = static_cast<bool>(phaseLease);
     try {
         return runRequestImpl(plan, request, scene, cancellation, progress,
-                              std::move(outputCommand));
+                              std::move(outputCommand), phase, readbackByteAllowance);
     } catch (const std::bad_alloc&) {
         return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::BadAllocation,
                        "the request failed to allocate its host buffers");
@@ -151,7 +180,8 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
     const std::shared_ptr<const CompiledCompositionPlan>& plan, const EvaluationRequest& request,
     const std::shared_ptr<const PreparedGpuScene>& scene, const CancellationToken& cancellation,
     const EvaluationProgressCallback& progress,
-    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand) {
+    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand, FinalProcessingPhase& phase,
+    const std::uint64_t readbackByteAllowance) {
     if (executor == nullptr || device == nullptr || cache == nullptr) {
         return failure(GpuProcessFrameStatus::DeviceUnavailable,
                        GpuProcessFrameDiagnosticCode::DeviceUnavailable,
@@ -196,7 +226,8 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
     }
 
     // 2. Admit the scene through the real executor.
-    const auto begun = executor->begin(scene, options.requestByteBudget);
+    const auto begun = executor->begin(scene, phase.lease ? phase.lease->executorByteLimit()
+                                                          : options.requestByteBudget);
     if (begun.code != GpuSceneExecutorDiagnosticCode::None) {
         const auto code = mapExecutorDiagnostic(begun.code);
         return failure(code == GpuProcessFrameDiagnosticCode::Cancelled
@@ -220,6 +251,7 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
         if (cancellation.isCancellationRequested() || stopRequested.load()) {
             executor->cancel();
         }
+        phase.touched = true;
         poll = executor->poll();
         if (poll != GpuSceneExecutorPollResult::Pending) {
             break;
@@ -241,6 +273,17 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
+    // An image ceiling can refuse a later scene step after every earlier native submission has
+    // retired. Prove that specific terminal failure before releasing its phase; unknown failures
+    // and the device's independent unproven-submission latch remain conservative.
+    const bool retiredBudgetRefusal =
+        poll == GpuSceneExecutorPollResult::Failure &&
+        executor->diagnostic().code == GpuSceneExecutorDiagnosticCode::OverBudget &&
+        !executor->deviceLost() && !executor->hasUnretiredSubmission() &&
+        !executor->ownerDrainRequired() && !outputColorUnretired();
+    phase.retired = poll == GpuSceneExecutorPollResult::Ready || retiredBudgetRefusal ||
+                    (executor->diagnostic().code == GpuSceneExecutorDiagnosticCode::Cancelled &&
+                     !executor->hasUnretiredSubmission() && !executor->ownerDrainRequired());
     GpuProcessFrameOutcome outcome;
     outcome.counters = snapshotCounters(*executor);
     // Genuine device identity for diagnostics: read directly from the actual native device on this
@@ -290,15 +333,17 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
                               "the GPU output-colour stage is not initialized"};
         return outcome;
     }
+    phase.retired = false; // output-colour begin may synchronously submit another LUT upload
     auto transfer = detail::runFinalCombinedReadback(
-        *outputColor, descriptor, std::move(outputCommand), std::move(image),
-        options.readbackByteBudget, options.nativeDeadline, cancellation, stopRequested);
+        *outputColor, descriptor, std::move(outputCommand), std::move(image), readbackByteAllowance,
+        options.nativeDeadline, cancellation, stopRequested, phase.retired);
     if (transfer.status != GpuProcessFrameStatus::Evaluated || transfer.processImage == nullptr) {
         outcome.counters.readbacks = transfer.readbacks;
         outcome.status = transfer.status;
         outcome.diagnostic = {transfer.diagnosticCode, std::move(transfer.diagnosticMessage)};
         return outcome;
     }
+    phase.retired = true; // combined take is available only after positive fence retirement
     outcome.counters.readbacks = transfer.readbacks;
     auto processImage = std::move(transfer.processImage);
 
@@ -356,14 +401,25 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
         auto created = render::GpuDevice::create(creation);
         if (created) {
             device = std::move(created.device);
+            if (options.processingPhasePolicy &&
+                !options.processingPhasePolicy->reportDevice(device->ownershipEpoch(),
+                                                             device->availableAllocationBudget())) {
+                throw std::runtime_error("The shared processing device-report slots are exhausted");
+            }
             auto createdCache = GpuSceneCache::create(*device, options.cacheBudgets);
             if (!createdCache) {
                 availability = {GpuProcessFrameDiagnosticCode::CacheUnavailable,
                                 createdCache.diagnostic.message};
             } else {
                 cache = std::move(createdCache.cache);
-                auto createdExecutor =
-                    GpuSceneExecutor::create(*device, *cache, options.executorBudgets);
+                auto executorBudgets = options.executorBudgets.value_or(GpuSceneExecutorBudgets{});
+                if (!options.executorBudgets && options.processingPhasePolicy) {
+                    // Producer construction allocates no image. The per-request phase allowance
+                    // and live-pin/native limits remain the authority when begin() runs; a cold
+                    // reusable-cache split must not impose an unrelated per-image ceiling.
+                    executorBudgets.maxImageBytes = options.requestByteBudget;
+                }
+                auto createdExecutor = GpuSceneExecutor::create(*device, *cache, executorBudgets);
                 if (!createdExecutor) {
                     availability = {GpuProcessFrameDiagnosticCode::ExecutorUnavailable,
                                     createdExecutor.diagnostic.message};
@@ -436,7 +492,8 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
         }
 
         auto outcome = runRequest(active->plan, *evaluation, active->scene, active->cancellation,
-                                  active->progress, std::move(active->outputCommand));
+                                  active->progress, std::move(active->outputCommand),
+                                  active->phaseLease, active->readbackByteAllowance);
 
         std::lock_guard lock(mutex);
         active->outcome = std::move(outcome);
@@ -448,6 +505,10 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
     outputColor.reset();
     executor.reset();
     cache.reset();
+    if (device && options.processingPhasePolicy) {
+        static_cast<void>(options.processingPhasePolicy->retireDeviceReport(
+            device->ownershipEpoch(), !device->processingPhaseOccupied()));
+    }
     device.reset();
     // Publish retirement last: a caller that observes this true may release the evaluator without
     // joining a live owner thread; the thread function is about to return.
@@ -596,7 +657,8 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
         // Prepare the immutable scene HERE, on the calling CPU worker, never on the GPU owner
         // thread. Media decode, OCIO configuration, and shader compilation all run on this thread;
         // the owner only performs native work on the finished scene.
-        auto preparation = detail::prepareExportScene(impl_->options, plan, request, cancellation);
+        auto preparation = detail::prepareExportScene(impl_->options, plan, request, cancellation,
+                                                      static_cast<bool>(outputCommand));
         if (preparation.scene == nullptr) {
             return failure(preparation.status, preparation.diagnosticCode,
                            std::move(preparation.diagnosticMessage));
@@ -616,6 +678,8 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
         slot->cancellation = cancellation;
         slot->progress = std::move(progress);
         slot->outputCommand = std::move(outputCommand);
+        slot->phaseLease = std::move(preparation.phaseLease);
+        slot->readbackByteAllowance = preparation.readbackByteAllowance;
         slot->scene = std::move(preparation.scene);
         {
             std::lock_guard lock(impl_->mutex);

@@ -133,6 +133,10 @@ class GpuNeutralDisplay final {
     // signals; the job is never freed in flight.
     void cancel() noexcept;
 
+    // Owner-thread lifetime query, independent of API job state. Foreign callers conservatively
+    // report unretired ownership. Device-loss/unknown queue retirement also stays unproven.
+    [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
+
     // Process-global reported limitation: teardown could not drain an in-flight job within its
     // bounded budget and therefore abandoned (did not destroy) busy Vulkan resources.
     [[nodiscard]] static bool teardownDrainIncomplete() noexcept;

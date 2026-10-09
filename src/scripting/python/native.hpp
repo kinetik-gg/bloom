@@ -3,6 +3,7 @@
 #include "runtime.hpp"
 #include "task_ticket.hpp"
 
+#include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/scripting/facade.hpp>
 #include <nanobind/nanobind.h>
 
@@ -21,8 +22,12 @@ namespace nb = nanobind;
 class NativeHost final {
   public:
     explicit NativeHost(const std::string& project = {});
-    explicit NativeHost(std::shared_ptr<Session> session);
-    ~NativeHost() = default;
+    explicit NativeHost(std::shared_ptr<Session> session,
+                        std::shared_ptr<host::GpuExportProvider> provider = {});
+    ~NativeHost();
+    // Owned headless roots retire on the interpreter/scripting thread before Python finalization.
+    // Injected application roots remain owned by their existing application shutdown coordinator.
+    void shutdownRendering();
     NativeHost(const NativeHost&) = delete;
     NativeHost& operator=(const NativeHost&) = delete;
 
@@ -67,6 +72,8 @@ class NativeHost final {
     std::unique_ptr<Facade> facade_;
     std::thread::id owner_ = std::this_thread::get_id();
     runtime::TaskScheduler scheduler_;
+    std::shared_ptr<host::GpuExportProvider> gpuExportProvider_;
+    bool ownsGpuExportProvider_ = false;
     mutable std::mutex eventMutex_;
     std::deque<commands::CommandEvent> pendingEvents_;
     bool eventsDropped_ = false;

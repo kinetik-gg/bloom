@@ -9,6 +9,10 @@
 
 class QWidget;
 
+namespace bloom::host {
+class GpuExportProvider;
+}
+
 namespace bloom::runtime {
 class GpuPresentationClient;
 class TaskScheduler;
@@ -62,6 +66,7 @@ class EditorRegistry final {
 [[nodiscard]] bool registerFoundationEditors(
     EditorRegistry& registry, CompositionSession& session,
     CompositionPreviewController& previewController, RamPreviewController* ramPreview = nullptr,
-    ProjectHost* projectHost = nullptr, const ViewerGpuDependencies* gpuDependencies = nullptr);
+    ProjectHost* projectHost = nullptr, const ViewerGpuDependencies* gpuDependencies = nullptr,
+    std::shared_ptr<host::GpuExportProvider> gpuExportProvider = {});
 
 } // namespace bloom::ui

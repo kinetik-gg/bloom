@@ -55,7 +55,8 @@ bool residentPackedTransferBegin(const std::shared_ptr<PreviewDisplayServiceCore
         }
         core->packedTransfer = std::make_unique<render::GpuDisplayTransfer>();
         if (!core->packedTransfer->begin(*core->device, std::move(source),
-                                         allowance - metadata - sourceBytes)) {
+                                         std::min(allowance - metadata - sourceBytes,
+                                                  core->options.packedTransferByteAllowance))) {
             reason = core->packedTransfer->diagnostic().message;
             return false;
         }

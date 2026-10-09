@@ -3,6 +3,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -40,6 +41,9 @@ void pairedHierarchy() {
     files.domain("/sys/fs/cgroup/leaf", std::to_string(8 * gib), std::to_string(6 * gib));
     files.domain("/sys/fs/cgroup", std::to_string(12 * gib), std::to_string(23 * gib / 2));
     const auto sample = parseLinuxProcessMemorySample("0::/leaf\n", mount, files.reader());
+    expect(sample.view && sample.view->mountId == 36 && sample.view->filesystemDevice == "0:32" &&
+               sample.view->mountRoot == "/" && sample.view->mountPoint == "/sys/fs/cgroup",
+           "selected mount provenance retained without inferring namespace identity");
     expect(sample.status == ProcessMemoryStatus::Finite && sample.domains.size() == 2,
            "both own and ancestor domains are paired and finite");
     expect(minimumProcessCacheAllowance(sample, gib) == gib / 2,
@@ -88,6 +92,17 @@ void pathsAndProvenance() {
 
 void rootAndAlternateMounts() {
     Files files;
+    const auto bareRoot =
+        parseLinuxProcessMemorySample("0::/\n", mount, files.reader(), {},
+                                      {.cgroup = ProcessMemoryNamespaceIdentity{1, 2},
+                                       .mount = ProcessMemoryNamespaceIdentity{1, 3}});
+    expect(bareRoot.domains.empty() && bareRoot.rootInterfacesAbsent &&
+               isCompleteProcessMemorySample(bareRoot),
+           "trusted true-root interface absence is complete for initial host-only admission");
+    auto inventedRoot = bareRoot;
+    inventedRoot.rootInterfacesAbsent = false;
+    expect(!isCompleteProcessMemorySample(inventedRoot),
+           "empty no-finite label without parser root evidence stays incomplete");
     files.domain("/sys/fs/cgroup/parent/child", "max", "0");
     files.domain("/sys/fs/cgroup/parent", std::to_string(gib), "0");
     // Real hierarchy root intentionally has no memory.max/current controller interfaces.
@@ -181,6 +196,111 @@ void failuresAndBounds() {
 }
 #endif
 
+ProcessMemorySample proofSample() {
+    ProcessMemorySample sample;
+    sample.source = ProcessMemorySource::LinuxCgroupV2;
+    sample.status = ProcessMemoryStatus::Finite;
+    sample.membershipPath = "/leaf";
+    sample.view = ProcessMemoryView{.mountRoot = "/",
+                                    .mountPoint = "/cgroup",
+                                    .filesystemDevice = "0:32",
+                                    .mountId = 36,
+                                    .namespaces = {.cgroup = ProcessMemoryNamespaceIdentity{1, 2},
+                                                   .mount = ProcessMemoryNamespaceIdentity{1, 3}}};
+    sample.domains = {{"/cgroup/leaf", ProcessMemoryLimitKind::Finite, gib, 0},
+                      {"/cgroup", ProcessMemoryLimitKind::Unlimited, 0, 0}};
+    return sample;
+}
+ProcessMemoryView& checkedView(ProcessMemorySample& sample) {
+    if (!sample.view)
+        throw std::runtime_error("fixture view missing");
+    return *sample.view;
+}
+void constraintRemovalProof() {
+    const auto finite = proofSample();
+    ProcessMemoryConstraintHistory history;
+    history.recordFinite(finite, true);
+    auto unlimited = finite;
+    unlimited.status = ProcessMemoryStatus::NoFiniteVisibleLimit;
+    unlimited.domains[0].kind = ProcessMemoryLimitKind::Unlimited;
+    unlimited.domains[0].limitBytes = 0;
+    expect(history.verifiesRemoval(unlimited),
+           "same verified view explicitly removes every observed finite constraint");
+    auto outside = finite;
+    outside.domains.push_back({"/elsewhere", ProcessMemoryLimitKind::Finite, 0, 0});
+    ProcessMemoryConstraintHistory outsideHistory;
+    outsideHistory.recordFinite(finite, true);
+    outsideHistory.recordFinite(outside, true);
+    expect(!outsideHistory.verifiesRemoval(unlimited),
+           "out-of-view finite constraint invalidates otherwise-valid old removal proof");
+    ProcessMemoryConstraintHistory empty;
+    expect(!empty.verifiesRemoval(unlimited), "empty history cannot prove removal");
+    const auto rejects = [&](const ProcessMemorySample& candidate, const std::string_view reason) {
+        expect(!history.verifiesRemoval(candidate), reason);
+    };
+    auto changed = unlimited;
+    checkedView(changed).namespaces.cgroup = ProcessMemoryNamespaceIdentity{1, 4};
+    rejects(changed, "same paths in a different cgroup namespace do not prove removal");
+    changed = unlimited;
+    checkedView(changed).namespaces.mount = ProcessMemoryNamespaceIdentity{1, 4};
+    rejects(changed, "same paths in a different mount namespace do not prove removal");
+    changed = unlimited;
+    checkedView(changed).namespaces.mount.reset();
+    rejects(changed, "unverified namespace identity cannot prove removal");
+    changed = unlimited;
+    checkedView(changed).mountId += 1;
+    rejects(changed, "replaced mount cannot prove removal");
+    changed = unlimited;
+    checkedView(changed).filesystemDevice = "0:33";
+    rejects(changed, "changed filesystem identity cannot prove removal");
+    changed = unlimited;
+    changed.membershipPath = "/other";
+    rejects(changed, "membership migration cannot prove removal");
+    changed = unlimited;
+    changed.domains.erase(changed.domains.begin());
+    rejects(changed, "missing old finite domain cannot prove removal");
+    changed = unlimited;
+    changed.domains[0].currentBytes.reset();
+    rejects(changed, "missing current read cannot prove removal despite unlimited label");
+    changed = unlimited;
+    changed.domains[0].kind = ProcessMemoryLimitKind::Unknown;
+    rejects(changed, "unknown domain cannot impersonate complete no-finite data");
+    changed = unlimited;
+    changed.domains[0].kind = ProcessMemoryLimitKind::Finite;
+    rejects(changed, "finite domain under no-finite label cannot prove removal");
+    changed = unlimited;
+    changed.domains.push_back(changed.domains[0]);
+    rejects(changed, "duplicate domain is malformed, not a complete proof");
+    changed = unlimited;
+    changed.domains.clear();
+    rejects(changed, "empty domain list cannot prove removal");
+    changed = unlimited;
+    changed.status = ProcessMemoryStatus::Partial;
+    rejects(changed, "partial probe cannot prove removal");
+    changed = unlimited;
+    changed.domains[0].path = "/cgroup/../leaf";
+    rejects(changed, "malformed domain path cannot prove removal");
+    auto ancestor = finite;
+    ancestor.domains[1].kind = ProcessMemoryLimitKind::Finite;
+    ancestor.domains[1].limitBytes = gib;
+    history.recordFinite(ancestor, true);
+    history.recordFinite(finite, true);
+    changed = unlimited;
+    changed.domains.pop_back();
+    rejects(changed, "later finite snapshot cannot forget observed finite ancestor");
+    history.recordFinite(ancestor, true);
+    changed = unlimited;
+    changed.domains[1].currentBytes = 0;
+    expect(history.verifiesRemoval(changed), "all previously finite ancestors explicitly max");
+    auto malformed = finite;
+    malformed.domains[0].currentBytes.reset();
+    history.recordFinite(malformed, true);
+    expect(history.verifiesRemoval(changed),
+           "malformed finite replacement does not erase previous matched history");
+    changed.domains.pop_back();
+    rejects(changed, "malformed replacement cannot forget previously finite ancestor");
+}
+
 void arithmeticAndPlatformFallback() {
     expect(processCacheAllowanceForDomain(8 * gib, 6 * gib, gib, gib) == 2 * gib &&
                processCacheAllowanceForDomain(8 * gib, 6 * gib, 0, gib) == gib,
@@ -207,13 +327,17 @@ void arithmeticAndPlatformFallback() {
 
 } // namespace
 
-int main() {
+int main() try {
 #if defined(__linux__)
     pairedHierarchy();
     pathsAndProvenance();
     rootAndAlternateMounts();
     failuresAndBounds();
 #endif
+    constraintRemovalProof();
     arithmeticAndPlatformFallback();
     return failures == 0 ? 0 : 1;
+} catch (const std::exception& error) {
+    std::cerr << error.what() << '\n';
+    return 1;
 }

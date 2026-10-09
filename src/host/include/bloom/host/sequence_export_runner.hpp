@@ -26,10 +26,10 @@ struct SequenceExportRequestV1 {
     std::string ocioConfigUri = std::string(runtime::kBloomNeutralOcioConfigUri);
     std::string displayName = {}, viewName = {};
     std::uint64_t queueByteLimit = 512ULL * 1024U * 1024U;
-    // Shared GPU final-render provider for every frame of the sequence. Null keeps the unchanged
-    // CPU reference path. The runner copies this exact provider into each per-frame attempt, so the
-    // evaluator stays alive across the whole range and an application-owned provider may retire
-    // independently.
+    // Shared final-render provider for every frame of the sequence. Null creates one runner-owned,
+    // disabled CPU provider with a worker-sampled processing root. The runner copies the exact
+    // provider into every per-frame attempt; an injected application provider retains its shared
+    // policy and independent retirement ownership.
     std::shared_ptr<GpuExportProvider> gpuProvider = nullptr;
 };
 enum class SequenceExportStageV1 : std::uint8_t {

@@ -559,10 +559,14 @@ MemoryBudgetState MemoryBudgetLedger::applySample(MemoryBudgetSample sample,
         ageSeconds >= 0 && ageSeconds <= 15 && (!lastProcessSample_ || stamp > *lastProcessSample_);
     state_.processSampleFresh = fresh;
     const auto measured = minimumProcessCacheAllowance(sample.process, 0);
-    const bool complete =
-        fresh && (sample.process.status == ProcessMemoryStatus::Finite ||
-                  sample.process.status == ProcessMemoryStatus::NoFiniteVisibleLimit ||
-                  sample.process.status == ProcessMemoryStatus::Unsupported);
+    const bool complete = fresh && (isCompleteProcessMemorySample(sample.process) ||
+                                    sample.process.status == ProcessMemoryStatus::Unsupported);
+    processConstraintHistory_.recordFinite(
+        sample.process, complete && sample.process.status == ProcessMemoryStatus::Finite);
+    // Remove only constraints explicitly observed as unlimited in the same verified view.
+    // Effective retention still grows through the existing host/recovery policy below.
+    if (complete && processConstraintHistory_.verifiesRemoval(sample.process))
+        state_.processCacheCeilingBytes.reset();
     if (measured) {
         if (!state_.processCacheCeilingBytes || *measured < *state_.processCacheCeilingBytes ||
             (complete && sample.process.status == ProcessMemoryStatus::Finite))

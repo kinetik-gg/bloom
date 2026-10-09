@@ -86,7 +86,8 @@ runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
     const runtime::QualifiedDisplayProcessorProvider& qualifiedProcessorProvider,
     std::shared_ptr<runtime::GpuSceneCoverageCache> coverageCache,
     std::shared_ptr<runtime::GpuPreparedUploadCache> uploadCache, CompiledPlanCacheHandle planCache,
-    std::shared_ptr<runtime::GpuOcioContextResolver> ocioContextResolver) {
+    std::shared_ptr<runtime::GpuOcioContextResolver> ocioContextResolver,
+    runtime::GpuScenePreparationPhase processingPhase) {
     // The one general-display service is created ONCE and consumes the shared resolver, so the
     // display program uses the exact same shared GpuOcioProgramPreparer as the scene builder.
     auto displayProgramService =
@@ -94,7 +95,8 @@ runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
     return [&compiler, &evaluator, &qualifiedProcessorProvider,
             coverageCache = std::move(coverageCache), uploadCache = std::move(uploadCache),
             planCache = std::move(planCache), ocioContextResolver = std::move(ocioContextResolver),
-            displayProgramService = std::move(displayProgramService)](
+            displayProgramService = std::move(displayProgramService),
+            processingPhase = std::move(processingPhase)](
                const document::Snapshot& snapshot,
                const runtime::PreviewRequestIdentity& desiredIdentity,
                const std::size_t pixelStorageByteLimit,
@@ -125,7 +127,7 @@ runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
             }
         }
         const runtime::CpuGpuSceneBuilder builder(coverageCache, std::move(mediaContext),
-                                                  std::move(ocioContext));
+                                                  std::move(ocioContext), processingPhase);
         auto stage = makeCompositionPreviewGpuSceneStage(
             compiler, builder, qualifiedProcessorProvider, planCache, displayProgramService);
         return stage(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride,

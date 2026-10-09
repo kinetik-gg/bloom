@@ -114,8 +114,16 @@ provide research or rationale, but they are not binding until adopted here.
 - Typed task results now belong to live handles rather than retained terminal history. Weak writers,
   admission pins and pointer-only lock exchange preserve take-once delivery while releasing abandoned
   results outside locks. CPU/I/O and mock GPU forced/late/reentrant lifetime gates pass; scheduler
-  history, accounting and completion ordering remain unchanged. Aggregate G6B reservations are next;
+  history, accounting and completion ordering remain unchanged. The first G6B phase-reservation slice is accepted separately;
   this adds no native GPU performance or whole-process memory guarantee.
+
+- The first conservative G6B processing-phase reservation slice is accepted within bounded scope:
+  explicit shared roots, checked host/device/count envelopes, admitted CPU fallback,
+  retirement/quarantine lifetime and bounded readiness/capacity-release retry. Required native
+  coverage/routes, affected strict checks, application quality and Linux CPU-only closure pass,
+  including corrected owning reruns; the reliability plan records their distinct evidence.
+  Allocation-owned physical accounting, width two and sustained/platform qualification remain open;
+  see the [owning GPU contract](architecture/gpu-backend.md#conservative-processing-phase-reservations-first-g6b-slice).
 
 The detailed implementation status and next merge gates live in [`roadmap.md`](roadmap.md).
 

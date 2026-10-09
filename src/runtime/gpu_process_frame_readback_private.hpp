@@ -46,6 +46,6 @@ struct FinalReadbackOutcome final {
     std::shared_ptr<const PreparedGpuOcioCommand> outputCommand,
     std::shared_ptr<const render::GpuImage> image, std::uint64_t readbackByteBudget,
     std::chrono::milliseconds nativeDeadline, const CancellationToken& cancellation,
-    const std::atomic_bool& stopRequested);
+    const std::atomic_bool& stopRequested, bool& nativeRetirementProven);
 
 } // namespace bloom::runtime::detail

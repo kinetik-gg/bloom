@@ -25,6 +25,7 @@
 
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_presentation_types.hpp>
+#include <bloom/render/gpu_processing_phase_budget.hpp>
 
 #include <vulkan/vulkan_raii.hpp>
 
@@ -83,6 +84,11 @@ struct DeviceAllocatorState final {
     std::atomic<std::uint64_t> pendingImageReclaims{0};
     std::atomic<std::uint64_t> pendingOracleReadbacks{0};
     std::atomic<std::uint64_t> imageReclamationScans{0};
+
+    // Declared before native RAII fields: all native teardown precedes final quota release. The
+    // lease points only to a neutral ledger, never back to this generation (no reference cycle).
+    std::shared_ptr<GpuProcessingPhaseLease> processingPhase;
+    bool processingPhaseUnproven = false;
 
     DynamicLibrary loader;
     vk::raii::Instance instance{nullptr};

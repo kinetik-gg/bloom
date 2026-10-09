@@ -246,6 +246,13 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
         (request.cancelled && request.cancelled())) {
         return failed("Render request is invalid");
     }
+    if (!injectedGpuProvider) {
+        auto missing = failed(
+            "Render requires an explicitly owned processing provider. Share one GpuExportProvider "
+            "across requests; a disabled provider supports CPU rendering.");
+        missing.diagnosticCode = RenderDiagnosticCode::MissingProcessingRoot;
+        return missing;
+    }
     const auto snapshot = session.snapshot();
     const auto* composition = snapshot.project().findComposition(request.composition);
     if (composition == nullptr) {
@@ -261,29 +268,9 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
         return compileResult;
     }
     output::ExportResourceLedgerV1 ledger;
-    // GPU final-render provider for this whole render. When the caller injects one (the
-    // server-lifetime MCP provider), it is reused and NOT retired here -- the owner manages its
-    // lifetime. Otherwise this call creates its own, bootstrapped once on the scheduler's worker
-    // (never on the calling thread) and retired with proof before returning. The unchanged CPU
-    // reference path is the fallback whenever the device is disabled, unavailable, or the scene is
-    // outside the prepared-GPU subset.
-    const bool ownsGpuProvider = injectedGpuProvider == nullptr;
-    auto gpuProvider =
-        ownsGpuProvider ? host::GpuExportProvider::create() : std::move(injectedGpuProvider);
+    // One caller-owned root shared by still/range/concurrent requests, including CPU fallback.
+    auto gpuProvider = std::move(injectedGpuProvider);
     gpuProvider->prepare(scheduler);
-    // Headless callers are synchronous request threads (never the UI event loop): retire a locally
-    // owned evaluator owner and prove completion before this provider is destroyed. An injected
-    // provider is deliberately left alone, so a repeated still render in one server does not retire
-    // the shared provider after every frame.
-    struct GpuProviderShutdownGuard final {
-        std::shared_ptr<host::GpuExportProvider> provider;
-        bool owns;
-        ~GpuProviderShutdownGuard() {
-            if (owns && provider != nullptr) {
-                static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
-            }
-        }
-    } gpuProviderShutdown{gpuProvider, ownsGpuProvider};
     if (request.range.has_value()) {
         const auto [first, last] = *request.range;
         host::FrameRangeRequestV1 range{.destination = request.destination,

@@ -29,6 +29,8 @@ struct RenderRequest final {
     std::function<bool()> cancelled = {};
 };
 
+enum class RenderDiagnosticCode { None, MissingProcessingRoot };
+
 struct RenderResult final {
     bool succeeded = false;
     std::uint64_t publishedFrames = 0;
@@ -51,10 +53,14 @@ struct RenderResult final {
     std::uint64_t gpuProcessPayloadBytes = 0;
     std::uint64_t gpuEncodedPayloadBytes = 0;
     std::uint64_t gpuDeviceOwnershipEpoch = 0;
+    RenderDiagnosticCode diagnosticCode = RenderDiagnosticCode::None;
 };
 
 class Render final {
   public:
+    // The caller owns/injects one provider shared across concurrent/still/range requests and
+    // retires it after all renders. A disabled provider still supplies host-only phase admission.
+    // Missing injection is a typed refusal before compilation, never an independent per-run root.
     [[nodiscard]] static RenderResult
     run(Session& session, runtime::TaskScheduler& scheduler,
         const runtime::SnapshotCompiler& compiler, RenderRequest request,

@@ -43,7 +43,9 @@ FinalReadbackOutcome runFinalCombinedReadback(
     std::shared_ptr<const PreparedGpuOcioCommand> outputCommand,
     std::shared_ptr<const render::GpuImage> image, const std::uint64_t readbackByteBudget,
     const std::chrono::milliseconds nativeDeadline, const CancellationToken& cancellation,
-    const std::atomic_bool& stopRequested) {
+    const std::atomic_bool& stopRequested, bool& nativeRetirementProven) {
+    // No output submission before begin: the caller's already-Ready scene remains proven.
+    nativeRetirementProven = true;
     FinalReadbackOutcome outcome;
     const std::uint64_t width = descriptor.dataWindow().extent().width();
     const std::uint64_t height = descriptor.dataWindow().extent().height();
@@ -56,6 +58,7 @@ FinalReadbackOutcome runFinalCombinedReadback(
         return outcome;
     }
 
+    nativeRetirementProven = false; // begin can synchronously upload/quarantine an OCIO LUT
     const auto accepted =
         stage.begin(std::move(outputCommand), std::move(image), readbackByteBudget);
     if (accepted.code != GpuOutputColorDiagnosticCode::None) {
@@ -63,6 +66,10 @@ FinalReadbackOutcome runFinalCombinedReadback(
         outcome.status = code == GpuProcessFrameDiagnosticCode::Cancelled
                              ? GpuProcessFrameStatus::Cancelled
                              : GpuProcessFrameStatus::Failed;
+        nativeRetirementProven =
+            accepted.code == GpuOutputColorDiagnosticCode::GeometryMismatch ||
+            accepted.code == GpuOutputColorDiagnosticCode::InvalidArgument ||
+            (code == GpuProcessFrameDiagnosticCode::Cancelled && !stage.hasUnretiredSubmission());
         outcome.diagnosticCode = code;
         outcome.diagnosticMessage = accepted.message;
         return outcome;
@@ -96,10 +103,15 @@ FinalReadbackOutcome runFinalCombinedReadback(
         outcome.status = code == GpuProcessFrameDiagnosticCode::Cancelled
                              ? GpuProcessFrameStatus::Cancelled
                              : GpuProcessFrameStatus::Failed;
+        nativeRetirementProven =
+            code == GpuProcessFrameDiagnosticCode::Cancelled && !stage.hasUnretiredSubmission();
         outcome.diagnosticCode = code;
         outcome.diagnosticMessage = stage.diagnostic().message;
         return outcome;
     }
+    // Positive fence completion precedes all host adoption/publication, including throwing work.
+    // Any exact-generation independent upload witness still overrides nominal release at caller.
+    nativeRetirementProven = true;
     auto colorFrame = stage.take();
     if (!colorFrame.has_value()) {
         outcome.status = GpuProcessFrameStatus::Failed;

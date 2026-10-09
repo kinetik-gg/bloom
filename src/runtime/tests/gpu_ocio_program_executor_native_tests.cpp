@@ -15,6 +15,7 @@
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/gpu_image_upload.hpp>
+#include <bloom/render/gpu_processing_phase_budget.hpp>
 #include <bloom/render/gpu_resident_display.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/render/image_types.hpp>
@@ -539,6 +540,18 @@ void testUploadFaultRetirement(Expectations& expectations, GpuDevice& device,
         expectations.expect(false, "the fault input uploads");
         return;
     }
+    bloom::render::GpuProcessingPhaseBudget phases;
+    phases.setHostCapacity(kBudget, true);
+    phases.setDeviceCapacity(kBudget, true);
+    auto phase = phases.reserve({.fixedHostBytes = 4096,
+                                 .deviceWorkingBytes = 4096,
+                                 .requestedExecutorBytes = 4096,
+                                 .sourceFree = true});
+    expectations.expect(phase.lease && device.retainProcessingPhase(phase.lease),
+                        "the production native generation arms the LUT fault phase");
+    if (!phase.lease) {
+        return;
+    }
     bloom::render::ocio_program_detail::setUploadFenceOverrideForTest(
         bloom::render::ocio_program_detail::UploadFenceOverride::CancelAfterSubmit);
     const auto faulted = executor.executor->begin(prepared.command, input, {}, kBudget);
@@ -546,6 +559,12 @@ void testUploadFaultRetirement(Expectations& expectations, GpuDevice& device,
                         "a cancelled post-submit LUT upload is a typed failure");
     expectations.expect(bloom::render::ocio_program_detail::uploadQuarantineOccupiedForTest(),
                         "the unproven upload retains its resources in the quarantine");
+    device.retireProcessingPhase(phase.lease->id(), true);
+    expectations.expect(device.processingPhaseOccupied() && phases.snapshot().unprovenPhases == 1,
+                        "cancelled independent LUT quarantine overrides claimed executor proof");
+    phase.lease.reset();
+    expectations.expect(phases.snapshot().admittedPhases == 1,
+                        "generation ownership retains the phase after consumer terminal disposal");
     bloom::render::ocio_program_detail::setUploadFenceOverrideForTest(
         bloom::render::ocio_program_detail::UploadFenceOverride::None);
     for (int attempt = 0;

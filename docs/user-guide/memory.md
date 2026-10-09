@@ -12,6 +12,11 @@ finished frame. A tight Full 1920×1080 display has 8,294,400 pixel bytes; Half 
 metadata. The GPU native route remains separately supported. Channel display changes use a bounded
 CPU worker and disclose CPU presentation; they do not change the scene's GPU provenance.
 
+Finished packed preview retention is admitted by bytes, not a fixed frame count. The count depends
+on the returned display extent, format/metadata and current per-pool allowance; the resolution
+selector alone does not prove the actual returned extent. A range that outgrows that allowance is
+partial, and later requests can evict older least-recently-used frames, shifting green coverage.
+
 Cache counters describe held products, not total process or driver memory. Active work, temporary
 transfers, live display pins and retirement can hold additional memory. Process/container-limit
 headroom now constrains reusable cache retention; complete aggregate reservation accounting remains
@@ -38,6 +43,11 @@ considers half of physical RAM and 80% of currently available memory, with a phy
 3 GiB fallback floor. Current cache counters are not added back as reclaimable credit. Auxiliary
 caches share the allowance, so operation and preview budgets can be smaller than the table.
 
+Automatic budgets leave room for the operating system and rendering; a configured ceiling is not
+an allocation guarantee. Saved override values remain intact while host capacity, per-pool shares
+and verified process ceilings determine the effective allowance. An 8 GiB diagnostic launcher limit
+belongs to a private test/launch harness, not the normal user cache default or launch policy.
+
 On Linux cgroup v2, Bloom pairs each visible process/ancestor memory limit with its own usage and
 reserves the smaller of 1 GiB and the larger of 16 MiB or one eighth of that limit. Remaining
 headroom further clamps reusable retention. A hard limit, including zero headroom, takes precedence
@@ -48,8 +58,16 @@ it does not immediately reclaim all apparent free space.
 Linux memory-v1 and Windows/macOS currently use explicit host-only best effort for process limits.
 Unavailable or partial readings are disclosed. Once a finite process ceiling has been measured,
 failed, stale or unsupported samples retain that constraint rather than expanding it. A verified
-absence of a finite limit refers only to the visible hierarchy. This is reusable-cache protection,
-not a guarantee for live processing, exports, GPU/driver allocations or total process memory.
+removal of previously observed limits permits bounded recovery only when all remembered domains
+explicitly report no finite limit in the same verified hierarchy view. It does not prove hidden
+limits absent. See [the owning policy](../architecture/evaluation-primitives.md) for that proof.
+This is reusable-cache protection, not a guarantee for live processing, exports, GPU/driver
+allocations or total process memory.
+
+Live preview and export work additionally use conservative phase reservations before preparation
+and execution. A refused phase can defer eligible preview work until capacity changes; it cannot
+bypass admission through CPU rendering. These reservations are separate from cache counters and
+do not prove unique physical memory accounting or guarantee that every workload fits.
 
 Hover over the cache cell for **Effective reusable cache allowance**, **Configured cache ceiling**,
 process-limit provenance, available memory and pressure/admission state. The configured ceiling is

@@ -58,13 +58,15 @@ CompositionPreviewController::CompositionPreviewController(
     CompositionSession& session, runtime::TaskScheduler& scheduler, TaskUiBridge& taskUiBridge,
     PreviewPreparationFunction preparation, const CompositionPreviewSettings& settings,
     PreviewFrameCacheHandle frameCache, QObject* parent, PreviewPreparationSubmitter submitter,
-    std::shared_ptr<PreviewFrameTrace> trace)
+    std::shared_ptr<PreviewFrameTrace> trace,
+    std::shared_ptr<runtime::GpuProcessingPhasePolicy> processingPolicy)
     : QObject(parent), trace_(std::move(trace)), session_(session), scheduler_(scheduler),
       taskUiBridge_(taskUiBridge), preparation_(std::move(preparation)),
       submitter_(std::move(submitter)), settings_(settings),
       frameCache_(frameCache != nullptr
                       ? std::move(frameCache)
-                      : std::make_shared<PreviewFrameCache>(settings.ramPreviewByteBudget)) {
+                      : std::make_shared<PreviewFrameCache>(settings.ramPreviewByteBudget)),
+      processingPolicy_(std::move(processingPolicy)) {
     if (trace_) {
         frameCache_->setFrameTrace(trace_);
         taskUiBridge_.setFrameTrace(trace_);
@@ -124,6 +126,8 @@ CompositionPreviewController::CompositionPreviewController(
             &CompositionPreviewController::consumeReadyResult);
     connect(&taskUiBridge_, &TaskUiBridge::resultsAvailable, this,
             &CompositionPreviewController::viewerResultsAvailable);
+    connect(&taskUiBridge_, &TaskUiBridge::resultsAvailable, this,
+            &CompositionPreviewController::notifyProcessingCapacityChanged);
     interactiveCadenceTimer_.setSingleShot(true);
     interactiveCadenceTimer_.setTimerType(Qt::PreciseTimer);
     connect(&interactiveCadenceTimer_, &QTimer::timeout, this,
@@ -378,6 +382,29 @@ void CompositionPreviewController::setDisplayedCompositionScale(const double sca
     preparationEstimate_.reset();
     emit resolutionChanged();
     requestPreview(false, PreviewRequestKind::Visible);
+}
+
+void CompositionPreviewController::notifyProcessingCapacityChanged() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!processingPolicy_ || !deferredAdmission_ || active_ || pending_ || shuttingDown_ ||
+        cachePurgeGate_)
+        return;
+    const auto capacity = processingPolicy_->snapshot().reservations;
+    if (capacity.admissionRevision <= deferredAdmission_->revision || !capacity.hostReady ||
+        !capacity.hostCapacityBytes || *capacity.hostCapacityBytes == 0 ||
+        capacity.hostReservedBytes >= *capacity.hostCapacityBytes ||
+        capacity.admittedPhases >= capacity.requestCapacity ||
+        (deferredAdmission_->requiresDeviceCapacity &&
+         (!capacity.deviceReady || !capacity.deviceCapacityBytes ||
+          *capacity.deviceCapacityBytes == 0)))
+        return;
+    deferredAdmission_.reset();
+    if (interactiveTimeChangeArmed_) {
+        preparationEstimate_.reset();
+        requestPreview(false, PreviewRequestKind::Interactive, false);
+    } else {
+        requestRefresh();
+    }
 }
 
 void CompositionPreviewController::requestRefresh() {
@@ -745,6 +772,7 @@ void CompositionPreviewController::requestPreview(
     if (shuttingDown_ || cachePurgeGate_) {
         return;
     }
+    deferredAdmission_.reset();
     // Overrides ride ONLY Interactive requests from an active gesture (docs/architecture/
     // animation-and-time.md), and are read fresh here -- never cached across requests. They are
     // assembled BEFORE the snapshot is selected because an override names the live document

@@ -32,6 +32,7 @@
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/qualified_display_preparation.hpp>
 
 #include <cstdint>
@@ -310,7 +311,15 @@ mixedPlan(const CompositionFormat compositionFormat, const document::AssetRecord
 #endif // BLOOM_GPU_TOOLS_AVAILABLE
 
 int run(int argc, char** argv) {
-    const auto options = parseOptions(argc, argv);
+    [[maybe_unused]] bool phaseCheckpoint = false;
+    std::vector<char*> forwarded{argv[0]};
+    for (int index = 1; index < argc; ++index) {
+        if (std::string_view(argv[index]) == "--phase-checkpoint")
+            phaseCheckpoint = true;
+        else
+            forwarded.push_back(argv[index]);
+    }
+    const auto options = parseOptions(static_cast<int>(forwarded.size()), forwarded.data());
     if (!options.valid) {
         std::cerr << "invalid arguments\n";
         return 2;
@@ -350,6 +359,41 @@ int run(int argc, char** argv) {
     cpuEvaluator.setAssetBaseDirectory(fixture.directory);
 
     GpuProcessFrameEvaluatorOptions evaluatorOptions;
+    auto phasePolicy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>();
+    std::optional<bloom::runtime::MemoryBudgetLedger> liveLedger;
+    const auto refreshLivePolicy = [&] {
+        auto sample = bloom::runtime::memoryBudgetSample();
+        if (!liveLedger) {
+            liveLedger.emplace(sample.physicalBytes, sample.machine.availableBytes.value_or(0));
+            liveLedger->beginProcessSampling();
+        }
+        const auto deliveredAt = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
+        const auto state = liveLedger->applySample(std::move(sample), deliveredAt);
+        phasePolicy->applyHostSample(state, liveLedger->physicalByteBudget(), deliveredAt);
+    };
+    if (phaseCheckpoint) {
+        constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
+        bloom::runtime::MemoryBudgetState sample;
+        sample.machine.availableBytes = 60 * gib;
+        sample.process.status = bloom::runtime::ProcessMemoryStatus::Finite;
+        sample.process.source = bloom::runtime::ProcessMemorySource::LinuxCgroupV2;
+        sample.process.sampledAt = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
+        sample.process.domains.push_back({.path = "/fixture",
+                                          .kind = bloom::runtime::ProcessMemoryLimitKind::Finite,
+                                          .limitBytes = 8 * gib,
+                                          .currentBytes = 6 * gib});
+        sample.processSampleFresh = true;
+        sample.sampleSerial = 1;
+        phasePolicy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+    } else {
+        // This direct-evaluator fixture owns the same explicit root as the production provider.
+        // Probe the actual host/process on this non-UI fixture thread; no synthetic capacity lifts
+        // the large native route over a real limit, and every original parity assertion remains.
+        refreshLivePolicy();
+        expectations.expect(phasePolicy->snapshot().reservations.hostReady,
+                            "the actual default-factory host/process root is sampled and ready");
+    }
+    evaluatorOptions.processingPhasePolicy = phasePolicy;
     evaluatorOptions.enabled = true;
     evaluatorOptions.loaderPath = options.loader_path;
     // Deliberately leave requestByteBudget/readbackByteBudget at their DEFAULTS: the production
@@ -357,12 +401,12 @@ int run(int argc, char** argv) {
     // budget path the desktop/CLI/MCP roots take.
     evaluatorOptions.ocioContext = ocioContext;
     evaluatorOptions.mediaContext = GpuSceneMediaContext::fromEvaluator(cpuEvaluator);
-    expectations.expect(evaluatorOptions.requestByteBudget ==
-                                bloom::runtime::defaultGpuProcessFrameByteBudget() &&
-                            evaluatorOptions.readbackByteBudget ==
-                                bloom::runtime::defaultGpuProcessFrameByteBudget() &&
-                            evaluatorOptions.requestByteBudget > 0,
-                        "the default factory budget is the host-availability-derived budget");
+    // Availability can change between real OS probes; the untouched default initializers sample
+    // it independently, so comparing them with a later probe is not a stable budget assertion.
+    expectations.expect(
+        evaluatorOptions.requestByteBudget > 0 && evaluatorOptions.readbackByteBudget > 0 &&
+            !evaluatorOptions.executorBudgets,
+        "the default factory uses positive host budgets without a producer override");
     // Pure policy: a conservative quarter of available, no fixed floor or ceiling; unknown
     // availability is a small typed fallback.
     expectations.expect(
@@ -436,6 +480,24 @@ int run(int argc, char** argv) {
     if (!prepared.hasValue()) {
         evaluator->beginShutdown();
         return 1;
+    }
+
+    if (phasePolicy) {
+        const auto wrong = ocioContext->preparer->prepare(
+            *config, spec, {geometry.width + 1, geometry.height}, ocioContext->compileOptions);
+        expectations.expect(wrong.hasValue(), "wrong-geometry command is genuinely prepared");
+        if (wrong.hasValue()) {
+            const auto mismatch = evaluator->evaluate(plan, request, {}, {}, wrong.command);
+            expectations.expect(
+                mismatch.status == GpuProcessFrameStatus::Failed &&
+                    mismatch.diagnostic.code ==
+                        bloom::runtime::GpuProcessFrameDiagnosticCode::InvalidRequest &&
+                    !mismatch.frame,
+                "pre-native output geometry refusal stays typed InvalidRequest");
+            expectations.expect(phasePolicy->snapshot().reservations.admittedPhases == 0 &&
+                                    phasePolicy->snapshot().reservations.unprovenPhases == 0,
+                                "wrong output geometry releases the proven scene phase normally");
+        }
     }
 
     // Display arm: the ONE combined readback transfers the process payload plus the encoded output.
@@ -517,6 +579,19 @@ int run(int argc, char** argv) {
         }
     }
 
+    if (phasePolicy) {
+        expectations.expect(phasePolicy->snapshot().reservations.admittedPhases == 0 &&
+                                phasePolicy->snapshot().reservations.unprovenPhases == 0,
+                            "matching encoded command recovers and proves whole phase retirement");
+        const auto recovered = evaluator->evaluate(plan, request, {}, {}, prepared.command);
+        expectations.expect(recovered.frame && display.frame &&
+                                recovered.outputColorCounters.transferredPayloads == 2 &&
+                                recovered.outputColorCounters.readbackSubmissions == 1 &&
+                                pixelsExact(recovered.frame->processImage().pixels(),
+                                            display.frame->processImage().pixels()),
+                            "later matching encoded request reuses the healthy native generation");
+    }
+
     // Identity arm: exactly one process payload, no colour work.
     const auto identity = evaluator->evaluate(plan, request);
     expectations.expect(identity.status == GpuProcessFrameStatus::Evaluated &&
@@ -536,7 +611,7 @@ int run(int argc, char** argv) {
     // counters, and its process payload must match the strict CPU oracle. The full-resolution
     // producer limits are host-capacity-derived, so a 384 MB frame is admitted whenever the host
     // genuinely has the memory; the budget is never a fixed 1 GiB gate.
-    {
+    if (!phaseCheckpoint) {
         constexpr std::uint32_t kLargeWidth = 6000;
         constexpr std::uint32_t kLargeHeight = 4000;
         const auto largePlan = mixedPlan(format(kLargeWidth, kLargeHeight), fixture.asset,
@@ -555,12 +630,59 @@ int run(int argc, char** argv) {
         expectations.expect(largePrepared.hasValue(),
                             "the 6000x4000 display command compiles from the shared preparer");
         if (largePrepared.hasValue() && largeOracle.frame() != nullptr) {
+            // CPU oracle/shader preparation may take longer than the ten-second admission age.
+            // Refresh the same ledger/root from the actual process before heavy GPU admission.
+            refreshLivePolicy();
+            const auto legacyBudgets = bloom::runtime::GpuSceneExecutorBudgets{};
+            expectations.expect(legacyBudgets.maxImageBytes < 384ULL * 1000 * 1000 &&
+                                    !evaluatorOptions.executorBudgets,
+                                "a cold reusable-cache ceiling cannot override the rooted default");
+            auto explicitOptions = evaluatorOptions;
+            explicitOptions.executorBudgets = legacyBudgets;
+            auto limitedEvaluator = GpuProcessFrameEvaluator::create(explicitOptions);
+            expectations.expect(limitedEvaluator && limitedEvaluator->gpuAvailable(),
+                                "the explicit small producer-ceiling evaluator is native");
+            if (limitedEvaluator && limitedEvaluator->gpuAvailable()) {
+                const auto limited = limitedEvaluator->evaluate(largePlan, largeRequest, {}, {},
+                                                                largePrepared.command);
+                expectations.expect(
+                    limited.status == GpuProcessFrameStatus::Failed &&
+                        limited.diagnostic.code ==
+                            bloom::runtime::GpuProcessFrameDiagnosticCode::OverBudget &&
+                        !limited.frame,
+                    "the explicit small image ceiling still refuses large output");
+                const auto refused = phasePolicy->snapshot().reservations;
+                expectations.expect(refused.admittedPhases == 0 && refused.unprovenPhases == 0 &&
+                                        refused.hostReservedBytes == 0 &&
+                                        refused.deviceReservedBytes == 0,
+                                    "explicit image refusal proves native phase retirement");
+                std::cout << "explicit image refusal retired native dispatches="
+                          << limited.counters.nativeDispatches << '\n';
+                const auto reportsBeforeShutdown = phasePolicy->snapshot().deviceReports;
+                limitedEvaluator->beginShutdown();
+                limitedEvaluator.reset();
+                expectations.expect(phasePolicy->snapshot().deviceReports + 1 ==
+                                        reportsBeforeShutdown,
+                                    "the limited native owner's device report retires on teardown");
+            }
+            refreshLivePolicy();
             const auto large =
                 evaluator->evaluate(largePlan, largeRequest, {}, {}, largePrepared.command);
+            if (large.status != GpuProcessFrameStatus::Evaluated) {
+                std::cerr << "large-default status=" << static_cast<int>(large.status)
+                          << " code=" << static_cast<int>(large.diagnostic.code)
+                          << " requestBudget=" << largeRequest.pixelStorageByteLimit
+                          << " message=" << large.diagnostic.message << '\n';
+            }
             expectations.expect(large.status == GpuProcessFrameStatus::Evaluated &&
                                     large.frame != nullptr,
                                 "a 6000x4000 media+CST+text export evaluates on the GPU under the "
                                 "default host-derived budget");
+            const auto published = phasePolicy->snapshot().reservations;
+            expectations.expect(published.admittedPhases == 0 && published.unprovenPhases == 0 &&
+                                    published.hostReservedBytes == 0 &&
+                                    published.deviceReservedBytes == 0,
+                                "large native publication releases its host/device/count phase");
             const auto expectedProcessBytes =
                 static_cast<std::uint64_t>(kLargeWidth) * kLargeHeight * sizeof(float) * 4U;
             const auto expectedEncodedBytes =

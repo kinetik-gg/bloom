@@ -59,9 +59,10 @@ class PreviewGpuSceneStage final {
     PreviewGpuSceneStage(
         PreviewRequestIdentity desiredIdentity, std::shared_ptr<const PreparedGpuScene> scene,
         std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> displayProcessor,
-        std::size_t pixelStorageByteLimit, std::vector<TaskDiagnostic> diagnostics) noexcept
-        : desiredIdentity_(std::move(desiredIdentity)), scene_(std::move(scene)),
-          displayProcessor_(std::move(displayProcessor)),
+        std::size_t pixelStorageByteLimit, std::vector<TaskDiagnostic> diagnostics,
+        std::shared_ptr<render::GpuProcessingPhaseLease> phaseLease = {}) noexcept
+        : desiredIdentity_(std::move(desiredIdentity)), phaseLease_(std::move(phaseLease)),
+          scene_(std::move(scene)), displayProcessor_(std::move(displayProcessor)),
           pixelStorageByteLimit_(pixelStorageByteLimit), diagnostics_(std::move(diagnostics)) {}
 
     // The general-display form: additionally carries the off-UI-prepared immutable GPU display
@@ -73,9 +74,10 @@ class PreviewGpuSceneStage final {
         PreviewRequestIdentity desiredIdentity, std::shared_ptr<const PreparedGpuScene> scene,
         std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> displayProcessor,
         std::shared_ptr<const GpuDisplayProgram> displayProgram, std::size_t pixelStorageByteLimit,
-        std::vector<TaskDiagnostic> diagnostics) noexcept
-        : desiredIdentity_(std::move(desiredIdentity)), scene_(std::move(scene)),
-          displayProcessor_(std::move(displayProcessor)),
+        std::vector<TaskDiagnostic> diagnostics,
+        std::shared_ptr<render::GpuProcessingPhaseLease> phaseLease = {}) noexcept
+        : desiredIdentity_(std::move(desiredIdentity)), phaseLease_(std::move(phaseLease)),
+          scene_(std::move(scene)), displayProcessor_(std::move(displayProcessor)),
           displayProgram_(std::move(displayProgram)), pixelStorageByteLimit_(pixelStorageByteLimit),
           diagnostics_(std::move(diagnostics)) {}
 
@@ -126,8 +128,14 @@ class PreviewGpuSceneStage final {
         return diagnostics_;
     }
 
+    [[nodiscard]] const std::shared_ptr<render::GpuProcessingPhaseLease>&
+    phaseLease() const noexcept {
+        return phaseLease_;
+    }
+
   private:
     PreviewRequestIdentity desiredIdentity_;
+    std::shared_ptr<render::GpuProcessingPhaseLease> phaseLease_;
     std::shared_ptr<const PreparedGpuScene> scene_;
     std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> displayProcessor_;
     std::shared_ptr<const GpuDisplayProgram> displayProgram_;

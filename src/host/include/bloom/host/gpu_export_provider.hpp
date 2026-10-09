@@ -3,6 +3,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <chrono>
@@ -53,8 +54,9 @@ namespace bloom::host {
 
 class GpuExportProvider final {
   public:
-    // Cheap: stores options only. `options.enabled` is the explicit off switch; when false the
-    // scheduled bootstrap creates the existing CPU-unavailable evaluator with no owner thread.
+    // Cheap: stores options only. A missing injected phase policy creates ONE provider-owned
+    // process root, sampled on its bootstrap/evaluation workers, including disabled CPU roots.
+    // Injected application policies remain externally sampled; no OS reads occur in create().
     [[nodiscard]] static std::shared_ptr<GpuExportProvider>
     create(runtime::GpuProcessFrameEvaluatorOptions options = {});
 
@@ -79,6 +81,12 @@ class GpuExportProvider final {
     [[nodiscard]] bool prepared() const noexcept;
     // True only when the published evaluator genuinely reports an available device.
     [[nodiscard]] bool deviceAvailable() const;
+
+    [[nodiscard]] std::shared_ptr<runtime::GpuProcessingPhasePolicy>
+    processingPhasePolicy() const noexcept;
+    // Worker-only. Provider-owned roots refresh at most once per five seconds; injected GUI
+    // roots use their existing asynchronous application sampler and never sample here.
+    void refreshProcessingCapacity(const runtime::CancellationToken& cancellation = {});
 
     // Non-blocking: signals the evaluator owner to retire. Never joins. Idempotent. Once called,
     // new evaluations are refused by the evaluator itself.

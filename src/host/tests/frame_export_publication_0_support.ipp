@@ -118,6 +118,24 @@ constexpr auto kBlendModeParameterId = document::ParameterId::fromRaw(0x2010);
                                                    .output = runtime::OperationIndex::fromRaw(3)});
 }
 
+[[nodiscard]] std::shared_ptr<runtime::GpuProcessingPhasePolicy> publicationPhasePolicy() {
+    auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(1);
+    constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
+    runtime::MemoryBudgetState sample;
+    sample.machine.availableBytes = 60 * gib;
+    sample.process.status = runtime::ProcessMemoryStatus::Finite;
+    sample.process.source = runtime::ProcessMemorySource::LinuxCgroupV2;
+    sample.process.sampledAt = runtime::GpuProcessingPhasePolicy::Clock::now();
+    sample.process.domains.push_back({.path = "/fixture",
+                                      .kind = runtime::ProcessMemoryLimitKind::Finite,
+                                      .limitBytes = 8 * gib,
+                                      .currentBytes = 0});
+    sample.sampleSerial = 1;
+    sample.processSampleFresh = true;
+    policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+    return policy;
+}
+
 [[nodiscard]] host::OutputAnalysisAttemptRequestV1 attemptRequestFor(
     const std::filesystem::path& target,
     const output::OutputPresetV1 preset = output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1) {
@@ -133,7 +151,8 @@ constexpr auto kBlendModeParameterId = document::ParameterId::fromRaw(0x2010);
         .targetPath = target,
         .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
         .owner = {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(1)},
-        .preset = preset};
+        .preset = preset,
+        .processingPhasePolicy = publicationPhasePolicy()};
 }
 
 // Owns a real TaskScheduler/StagedArtifactCoordinator/PublicationCoordinator/ExportResourceLedgerV1

@@ -1092,6 +1092,16 @@ QString FrameExportController::describeAttemptFailure(
     if (failure->cancelled()) {
         return tr("The export was cancelled while %1.").arg(stageName(failure->stage()));
     }
+    if (const auto* phase = failure->payloadAs<runtime::GpuProcessFrameDiagnosticCode>()) {
+        if (*phase == runtime::GpuProcessFrameDiagnosticCode::AwaitingCapacity) {
+            return tr("The export is waiting for a current processing-capacity sample. Retry when "
+                      "capacity is ready.");
+        }
+        if (*phase == runtime::GpuProcessFrameDiagnosticCode::BudgetRefused) {
+            return tr("The export could not reserve its processing memory. Release other work or "
+                      "reduce the request.");
+        }
+    }
     if (const auto* resourceError = failure->payloadAs<output::OutputAnalysisAttemptErrorCodeV1>();
         resourceError != nullptr &&
         *resourceError == output::OutputAnalysisAttemptErrorCodeV1::ResourceReservationFailed) {

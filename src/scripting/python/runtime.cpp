@@ -89,10 +89,18 @@ EmbeddedPython::~EmbeddedPython() {
             }
         }
         Py_XDECREF(state_->console);
+        std::shared_ptr<NativeHost> host;
         {
             const std::lock_guard lock(state_->mutex);
-            state_->host.reset();
+            host = std::move(state_->host);
         }
+        if (host) {
+            // Python task shutdown above has finished. Retirement waits on this interpreter
+            // thread with the GIL released, never under the state mutex or in a Qt callback.
+            const nb::gil_scoped_release release;
+            host->shutdownRendering();
+        }
+        host.reset();
         Py_FinalizeEx();
     }
 }
@@ -106,9 +114,14 @@ void EmbeddedPython::bind(std::shared_ptr<NativeHost> host) {
 
 void EmbeddedPython::bindLive(std::shared_ptr<Session> session,
                               std::function<PythonContext()> context,
-                              std::function<bool()> cancelled) {
+                              std::function<bool()> cancelled,
+                              std::shared_ptr<host::GpuExportProvider> provider) {
+    if (!provider) {
+        throw std::invalid_argument(
+            "Live Python requires the application's shared processing provider");
+    }
     const nb::gil_scoped_acquire acquire;
-    auto host = std::make_shared<NativeHost>(std::move(session));
+    auto host = std::make_shared<NativeHost>(std::move(session), std::move(provider));
     host->contextProvider = std::move(context);
     host->headless = false;
     host->cancelProvider = std::move(cancelled);

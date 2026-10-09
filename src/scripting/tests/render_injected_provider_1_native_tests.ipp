@@ -77,7 +77,7 @@ void testInjectedProviderIsReusedAndNotRetired(Expectations& expectations) {
                         "the owner can still retire the injected provider explicitly");
 }
 
-void testLocalProviderIsRetired(Expectations& expectations) {
+void testMissingProcessingRootIsRefused(Expectations& expectations) {
     auto created = scripting::Session::createNew("Local Provider", "Composition");
     expectations.expect(static_cast<bool>(created), "local session is created");
     if (!created) {
@@ -101,8 +101,11 @@ void testLocalProviderIsRetired(Expectations& expectations) {
          .range = std::nullopt,
          .preset = bloom::output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
          .destination = directory.path() / "local.exr"});
-    expectations.expect(result.succeeded,
-                        "a locally owned provider still renders and retires with proof");
+    expectations.expect(!result.succeeded &&
+                            result.diagnosticCode == scripting::RenderDiagnosticCode::MissingProcessingRoot &&
+                            scheduler.snapshots().empty() &&
+                            !std::filesystem::exists(directory.path() / "local.exr"),
+                        "missing shared process root is typed refusal before compilation/publication");
 }
 
 // Real headless render integration over the production Render::run: at least two PNG frames through

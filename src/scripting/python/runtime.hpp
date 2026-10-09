@@ -8,6 +8,10 @@
 #include <string>
 #include <string_view>
 
+namespace bloom::host {
+class GpuExportProvider;
+}
+
 namespace bloom::scripting::python {
 
 class NativeHost;
@@ -37,7 +41,8 @@ class EmbeddedPython final {
     [[nodiscard]] int interactive();
     void bind(std::shared_ptr<NativeHost> host);
     void bindLive(std::shared_ptr<Session> session, std::function<PythonContext()> context,
-                  std::function<bool()> cancelled);
+                  std::function<bool()> cancelled,
+                  std::shared_ptr<host::GpuExportProvider> provider);
     void requestCancellation();
     [[nodiscard]] std::vector<runtime::TaskSnapshot> tasks() const;
 

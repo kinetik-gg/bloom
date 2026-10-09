@@ -136,6 +136,8 @@ struct GpuSceneNestedResult final {
     // an optional exactly like the media upload leaf result does.
     std::optional<render::ImageWindow> outputWindow;
     std::uint64_t residentBytes = 0;
+    std::uint64_t sourceResidentBytes = 0;
+    std::uint64_t coverageResidentBytes = 0;
 };
 
 // The visitor guard for the spliced-command helpers below. A future GpuSceneCommand alternative
@@ -378,6 +380,15 @@ template <typename BuildChild>
                     "Nested composition published no output window");
     }
     result.residentBytes = nestedSceneResidentBytes(childScene);
+    for (const auto& command : childScene.commands()) {
+        if (const auto* upload = std::get_if<GpuSceneUploadCommand>(&command)) {
+            nested_detail::addWindowBytes(result.sourceResidentBytes,
+                                          upload->descriptor.dataWindow());
+        }
+    }
+    result.coverageResidentBytes = result.residentBytes >= result.sourceResidentBytes
+                                       ? result.residentBytes - result.sourceResidentBytes
+                                       : std::numeric_limits<std::uint64_t>::max();
     if (result.residentBytes != 0) {
         if (chargedBytes > allowance || result.residentBytes > allowance - chargedBytes) {
             return fail(PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,

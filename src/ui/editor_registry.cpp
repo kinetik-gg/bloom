@@ -34,13 +34,16 @@ const std::vector<EditorDescriptor>& EditorRegistry::editors() const noexcept { 
 bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& session,
                                CompositionPreviewController& previewController,
                                RamPreviewController* const ramPreview, ProjectHost* projectHost,
-                               const ViewerGpuDependencies* const gpuDependencies) {
+                               const ViewerGpuDependencies* const gpuDependencies,
+                               std::shared_ptr<host::GpuExportProvider> gpuExportProvider) {
     std::shared_ptr<ScriptPanelRuntime> script;
 #ifdef BLOOM_BUILD_PYTHON
     if (projectHost)
-        script = std::make_shared<ScriptPanelRuntime>(session, *projectHost);
+        script = std::make_shared<ScriptPanelRuntime>(session, *projectHost,
+                                                      std::move(gpuExportProvider));
 #else
     (void)projectHost;
+    (void)gpuExportProvider;
 #endif
     const auto addEditor = [&registry](std::string id, QString name, EditorFactory factory) {
         return registry.registerEditor(

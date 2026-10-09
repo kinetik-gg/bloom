@@ -444,6 +444,12 @@ SequenceExportRunnerV1::SequenceExportRunnerV1(runtime::TaskScheduler& scheduler
                                                SequenceExportRequestV1 request)
     : state_(
           std::make_unique<State>(scheduler, publications, artifacts, ledger, std::move(request))) {
+    if (!state_->work->request.gpuProvider) {
+        runtime::GpuProcessFrameEvaluatorOptions options;
+        options.enabled = false;
+        state_->work->request.gpuProvider = GpuExportProvider::create(std::move(options));
+        state_->work->request.gpuProvider->prepare(scheduler);
+    }
     state_->submit(Stage::Compiling,
                    [&compiler, &ledger](Work& work, runtime::TaskContext& context) {
                        work.prepare(compiler, ledger, context);

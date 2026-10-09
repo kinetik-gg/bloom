@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <stdexcept>
 #include <string_view>
 #include <vector>
 
@@ -269,6 +270,99 @@ void processAdmissionAndFailures() {
            "initial explicit unsupported sample activates honest host-only best effort");
 }
 
+bloom::runtime::ProcessMemoryView& checkedView(bloom::runtime::ProcessMemorySample& sample) {
+    if (!sample.view)
+        throw std::runtime_error("fixture view missing");
+    return *sample.view;
+}
+void verifiedConstraintRemovalRecovery() {
+    using namespace bloom::runtime;
+    const auto trusted = [](const int seconds) {
+        auto result = processSample(2 * gib, 0, seconds);
+        result.process.view =
+            ProcessMemoryView{.mountRoot = "/",
+                              .mountPoint = "/",
+                              .filesystemDevice = "0:32",
+                              .mountId = 36,
+                              .namespaces = {.cgroup = ProcessMemoryNamespaceIdentity{1, 2},
+                                             .mount = ProcessMemoryNamespaceIdentity{1, 3}}};
+        return result;
+    };
+#if defined(__linux__)
+    auto root = trusted(0);
+    root.process = parseLinuxProcessMemorySample(
+        "0::/\n", "36 25 0:32 / /cgroup rw - cgroup2 cgroup rw\n",
+        [](const std::filesystem::path&) {
+            return ProcessMemoryFileRead{ProcessMemoryReadStatus::Missing, {}};
+        },
+        at(0),
+        {.cgroup = ProcessMemoryNamespaceIdentity{1, 2},
+         .mount = ProcessMemoryNamespaceIdentity{1, 3}});
+    MemoryBudgetLedger rootLedger(60 * gib, 60 * gib);
+    rootLedger.beginProcessSampling();
+    const auto rootState = rootLedger.applySample(root, at(0));
+    expect(!rootState.awaitingProcessSample && rootState.effectiveBytes > 0,
+           "parser-proven cold hierarchy root can admit reusable retention");
+#endif
+    MemoryBudgetLedger ledger(60 * gib, 60 * gib);
+    ledger.beginProcessSampling();
+    auto state = ledger.applySample(trusted(0), at(0));
+    const auto prior = state.effectiveBytes;
+    const auto cap = state.processCacheCeilingBytes;
+    const auto requested = state.configuredBytes;
+    auto unlimited = trusted(1);
+    unlimited.process.status = ProcessMemoryStatus::NoFiniteVisibleLimit;
+    unlimited.process.domains[0].kind = ProcessMemoryLimitKind::Unlimited;
+    unlimited.process.domains[0].limitBytes = 0;
+    auto wrongView = unlimited;
+    checkedView(wrongView.process).namespaces.cgroup = ProcessMemoryNamespaceIdentity{1, 4};
+    state = ledger.applySample(wrongView, at(1));
+    expect(state.processCacheCeilingBytes == cap && state.effectiveBytes == prior,
+           "same paths under a changed cgroup namespace cannot release retention ceiling");
+    wrongView = unlimited;
+    wrongView.process.sampledAt = at(2);
+    checkedView(wrongView.process).mountId += 1;
+    state = ledger.applySample(wrongView, at(2));
+    expect(state.processCacheCeilingBytes == cap && state.effectiveBytes == prior,
+           "changed mount cannot authorize retention growth");
+    wrongView = unlimited;
+    wrongView.process.sampledAt = at(3);
+    checkedView(wrongView.process).namespaces.mount.reset();
+    state = ledger.applySample(wrongView, at(3));
+    expect(state.processCacheCeilingBytes == cap, "missing namespace verification stays latched");
+    wrongView = unlimited;
+    wrongView.process.sampledAt = at(4);
+    wrongView.process.domains.clear();
+    state = ledger.applySample(wrongView, at(4));
+    expect(state.processCacheCeilingBytes == cap, "missing observed domain stays latched");
+    state = ledger.applySample(unlimited, at(5));
+    expect(state.processCacheCeilingBytes == cap && !state.processSampleFresh,
+           "superseded otherwise-valid unlimited proof cannot release constraint");
+    unlimited.process.sampledAt = at(6);
+    state = ledger.applySample(unlimited, at(30));
+    expect(state.processCacheCeilingBytes == cap && state.effectiveBytes == prior,
+           "expired valid unlimited proof cannot release constraint");
+    unlimited.process.sampledAt = at(31);
+    state = ledger.applySample(unlimited, at(31));
+    expect(
+        !state.processCacheCeilingBytes && state.effectiveBytes == prior &&
+            state.configuredBytes == requested,
+        "fresh same-view explicit max removes old ceiling without instant growth/settings change");
+    unlimited.process.sampledAt = at(40);
+    state = ledger.applySample(unlimited, at(40));
+    expect(state.effectiveBytes > prior && state.effectiveBytes <= prior + prior / 4 &&
+               state.effectiveBytes < state.processingEffectiveBytes,
+           "removed finite ceiling recovers through existing bounded hold and growth policy");
+    auto failed = unlimited;
+    failed.process.status = ProcessMemoryStatus::Partial;
+    failed.process.sampledAt = at(50);
+    failed.process.domains[0].currentBytes.reset();
+    const auto recovered = state.effectiveBytes;
+    state = ledger.applySample(failed, at(50));
+    expect(state.effectiveBytes == recovered,
+           "failed later reads do not authorize further recovery");
+}
+
 void processHierarchyAndStableFill() {
     MemoryBudgetLedger hierarchy(60 * gib, 60 * gib);
     hierarchy.beginProcessSampling();
@@ -415,7 +509,7 @@ int liveProcessProbe() {
 
 } // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) try {
     if (argc == 2 && std::string_view(argv[1]) == "--live-process-probe")
         return liveProcessProbe();
     sequence();
@@ -423,6 +517,10 @@ int main(int argc, char** argv) {
     ceilings();
     machineExamplesAndOverflow();
     processAdmissionAndFailures();
+    verifiedConstraintRemovalRecovery();
     processHierarchyAndStableFill();
     return failures == 0 ? 0 : 1;
+} catch (const std::exception& error) {
+    std::cerr << error.what() << '\n';
+    return 1;
 }

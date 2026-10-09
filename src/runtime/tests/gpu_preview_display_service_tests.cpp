@@ -2,6 +2,7 @@
 // Non-device cases run the real compiler/evaluator/qualified-processor fixture through the
 // service's CPU path. Device-gated cases drive full submit -> native -> product and are SKIPPED
 // (never fabricated) when no device is available. The benchmark records nothing as truth.
+#include "gpu_preview_display_service_phase_support.hpp"
 #include "gpu_preview_display_service_private.hpp"
 #include <algorithm>
 #include <array>
@@ -46,7 +47,6 @@ using runtime::TaskScheduler;
 using runtime::TaskSchedulerConfig;
 using runtime::TaskState;
 constexpr std::size_t kBudget = std::size_t{1} << 28;
-constexpr auto kProjectId = document::ProjectId::fromRaw(1);
 constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 4> kSizes{
     {{1920, 1080}, {1280, 720}, {960, 540}, {256, 144}}};
 class Expectations final {
@@ -84,10 +84,6 @@ class Expectations final {
     return {.kind = runtime::TaskOwnerKind::Composition,
             .id = runtime::TaskOwnerId::fromRaw(value)};
 }
-[[nodiscard]] document::Snapshot makeSnapshot() {
-    document::Document doc(document::Project(kProjectId, "svc-test"));
-    return doc.snapshot();
-}
 template <typename Value>
 [[nodiscard]] std::optional<TaskResult<Value>>
 awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds timeout = 10s) {
@@ -116,6 +112,7 @@ template <typename Predicate>
     options.enabled = true;
     options.loaderPath = loader;
     options.previewByteAllowance = kBudget;
+    options.processingPhasePolicy = runtime::detail::previewTestPolicy();
     return options;
 }
 [[nodiscard]] bool ensureReady(Expectations& expectations,
@@ -144,6 +141,37 @@ selectableSize(const runtime::GpuNeutralDisplayQualificationReport& report) {
     }
     return std::nullopt;
 }
+// No callback may run before the actual shared root has a complete host sample.
+void testColdCpuRootRecovery(Expectations& expectations) {
+    runtime::detail::PreviewDisplayServiceTestFixture fixture(32, 18);
+    TaskScheduler scheduler(config());
+    runtime::GpuPreviewDisplayServiceOptions options;
+    options.enabled = false;
+    options.processingPhasePolicy = std::make_shared<runtime::GpuProcessingPhasePolicy>(1);
+    runtime::GpuPreviewDisplayService service(scheduler, fixture.stageFn(), fixture.fallback(),
+                                              options);
+    const auto snapshot = runtime::detail::previewTestSnapshot(*fixture.plan);
+    const auto identity = runtime::detail::testIdentity(*fixture.plan);
+    auto cold =
+        service.submit(runtime::TaskRequest("cold", owner(901)), snapshot, identity, kBudget, {});
+    const auto refused = awaitResult(cold.handle);
+    expectations.expect(
+        refused && refused->state() == TaskState::Failed && !refused->diagnostics().empty() &&
+            refused->diagnostics().front().admissionRetry &&
+            !refused->diagnostics().front().admissionRetry->requiresDeviceCapacity &&
+            fixture.evaluations->load() == 0 && fixture.fallbacks->load() == 0,
+        "cold CPU root refuses with typed host retry before any callback");
+    runtime::detail::samplePreviewTestPolicy(*options.processingPhasePolicy);
+    auto recovery = service.submit(runtime::TaskRequest("recovery", owner(902)), snapshot, identity,
+                                   kBudget, {});
+    const auto prepared = awaitResult(recovery.handle);
+    expectations.expect(prepared && prepared->state() == TaskState::Succeeded &&
+                            prepared->value() && (*prepared->value())->frame() &&
+                            fixture.evaluations->load() == 1 && fixture.fallbacks->load() == 1,
+                        "sampling the same CPU root reaches actual evaluation and prepared output");
+    expectations.expect(options.processingPhasePolicy->snapshot().reservations.admittedPhases == 0,
+                        "successful CPU output retires its processing phase");
+}
 // Non-device: disabled and missing-loader both take the ordinary CPU task, one evaluation each.
 void testCpuPaths(Expectations& expectations) {
     runtime::detail::PreviewDisplayServiceTestFixture fixture(32, 18);
@@ -151,11 +179,12 @@ void testCpuPaths(Expectations& expectations) {
     if (fixture.processor == nullptr) {
         return;
     }
-    const auto snapshot = makeSnapshot();
+    const auto snapshot = runtime::detail::previewTestSnapshot(*fixture.plan);
     {
         TaskScheduler scheduler(config());
         runtime::GpuPreviewDisplayServiceOptions options;
         options.enabled = false;
+        options.processingPhasePolicy = runtime::detail::previewTestPolicy();
         runtime::GpuPreviewDisplayService service(scheduler, fixture.stageFn(), fixture.fallback(),
                                                   options);
         auto submission = service.submit(runtime::TaskRequest("preview", owner(1)), snapshot,
@@ -203,7 +232,6 @@ void testGpuProvenanceAndParity(Expectations& expectations, const std::string& l
         expectations.expect(!requireDevice, "the neutral processor builds");
         return;
     }
-    const auto snapshot = makeSnapshot();
     TaskScheduler scheduler(config());
     std::shared_ptr<const runtime::GpuNeutralDisplayQualificationReport> report;
     {
@@ -224,6 +252,7 @@ void testGpuProvenanceAndParity(Expectations& expectations, const std::string& l
     if (!ensureReady(expectations, service, requireDevice)) {
         return;
     }
+    const auto snapshot = runtime::detail::previewTestSnapshot(*fixture.plan);
     const auto identity = runtime::detail::testIdentity(*fixture.plan);
     auto submission =
         service.submit(runtime::TaskRequest("preview", owner(4)), snapshot, identity, kBudget, {});
@@ -266,7 +295,7 @@ void testLateFallbackSameFrame(Expectations& expectations, const std::string& lo
     if (fixture.processor == nullptr) {
         return;
     }
-    const auto snapshot = makeSnapshot();
+    const auto snapshot = runtime::detail::previewTestSnapshot(*fixture.plan);
     TaskScheduler scheduler(config());
     runtime::GpuPreviewDisplayService service(scheduler, fixture.stageFn(), fixture.fallback(),
                                               gpuOptions(loader));
@@ -289,7 +318,7 @@ void testWorkerFreedWhilePending(Expectations& expectations, const std::string& 
     if (fixture.processor == nullptr) {
         return;
     }
-    const auto snapshot = makeSnapshot();
+    const auto snapshot = runtime::detail::previewTestSnapshot(*fixture.plan);
     TaskScheduler scheduler(config(1));
     runtime::GpuPreviewDisplayService service(scheduler, fixture.stageFn(), fixture.fallback(),
                                               gpuOptions(loader));
@@ -347,7 +376,7 @@ void testHeldStageCancellation(Expectations& expectations, const std::string& lo
             std::make_shared<const runtime::PreviewCpuStageOutcome>(runtime::PreviewCpuStageOutcome{
                 runtime::PreviewCpuStageStatus::Evaluated, std::move(stage), {}}));
     };
-    const auto snapshot = makeSnapshot();
+    const auto snapshot = runtime::detail::previewTestSnapshot(*fixture.plan);
     TaskScheduler scheduler(config(1));
     runtime::GpuPreviewDisplayService service(scheduler, std::move(blocking), {},
                                               gpuOptions(loader));
@@ -377,10 +406,11 @@ void testSubmitAfterShutdownRejects(Expectations& expectations) {
     if (fixture.processor == nullptr) {
         return;
     }
-    const auto snapshot = makeSnapshot();
+    const auto snapshot = runtime::detail::previewTestSnapshot(*fixture.plan);
     TaskScheduler scheduler(config(2));
     runtime::GpuPreviewDisplayServiceOptions options;
     options.enabled = false;
+    options.processingPhasePolicy = runtime::detail::previewTestPolicy();
     runtime::GpuPreviewDisplayService service(scheduler, fixture.stageFn(), fixture.fallback(),
                                               options);
     expectations.expect(service
@@ -422,12 +452,13 @@ void testManyOrdinaryRootsRetainOwnership(Expectations& expectations) {
     if (fixture.processor == nullptr) {
         return;
     }
-    const auto snapshot = makeSnapshot();
+    const auto snapshot = runtime::detail::previewTestSnapshot(*fixture.plan);
     TaskSchedulerConfig schedulerConfig = config(1);
     schedulerConfig.cpuQueueCapacity = 128;
     TaskScheduler scheduler(schedulerConfig);
     runtime::GpuPreviewDisplayServiceOptions options;
     options.enabled = false;
+    options.processingPhasePolicy = runtime::detail::previewTestPolicy();
     runtime::GpuPreviewDisplayService service(scheduler, fixture.stageFn(), fixture.fallback(),
                                               options);
     std::vector<TaskHandle<PreviewPreparationResultHandle>> handles;
@@ -458,6 +489,7 @@ void testUnrelatedTasksPreserved(Expectations& expectations) {
     TaskScheduler scheduler(config(2));
     runtime::GpuPreviewDisplayServiceOptions options;
     options.enabled = false;
+    options.processingPhasePolicy = runtime::detail::previewTestPolicy();
     runtime::GpuPreviewDisplayService service(scheduler, {}, {}, options);
     auto unrelated = scheduler.submit<int>(
         runtime::TaskRequest("unrelated", owner(200), runtime::TaskPriority::Background),
@@ -529,6 +561,7 @@ int main(const int argc, char** argv) {
             }
         }
         Expectations expectations;
+        testColdCpuRootRecovery(expectations);
         testCpuPaths(expectations);
         testSubmitAfterShutdownRejects(expectations);
         testShutdownBeforeStartupDispatch(expectations);

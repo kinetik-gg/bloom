@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -45,6 +46,25 @@ struct ProcessMemoryDomain final {
     std::optional<std::size_t> currentBytes;
 };
 
+struct ProcessMemoryNamespaceIdentity final {
+    std::uint64_t device = 0;
+    std::uint64_t inode = 0;
+    bool operator==(const ProcessMemoryNamespaceIdentity&) const = default;
+};
+struct ProcessMemoryNamespaces final {
+    std::optional<ProcessMemoryNamespaceIdentity> cgroup = {};
+    std::optional<ProcessMemoryNamespaceIdentity> mount = {};
+    bool operator==(const ProcessMemoryNamespaces&) const = default;
+};
+struct ProcessMemoryView final {
+    std::string mountRoot;
+    std::string mountPoint;
+    std::string filesystemDevice;
+    std::uint64_t mountId = 0;
+    ProcessMemoryNamespaces namespaces;
+    bool operator==(const ProcessMemoryView&) const = default;
+};
+
 // A bounded neutral worker snapshot. Every usage belongs to its own limit domain; callers must
 // never combine a leaf usage with an ancestor limit or sum independent domain headrooms.
 struct ProcessMemorySample final {
@@ -52,6 +72,11 @@ struct ProcessMemorySample final {
     ProcessMemoryStatus status = ProcessMemoryStatus::Unavailable;
     std::chrono::steady_clock::time_point sampledAt{};
     std::string membershipPath;
+    // Namespace identities are verified across the entire worker probe. Missing identities
+    // prevent removal of a previously observed constraint, even when paths look unchanged.
+    std::optional<ProcessMemoryView> view = {};
+    // Parser-observed absence of both non-root interfaces at the true hierarchy root.
+    bool rootInterfacesAbsent = false;
     std::vector<ProcessMemoryDomain> domains;
 };
 
@@ -68,7 +93,26 @@ using ProcessMemoryFileReader = std::function<ProcessMemoryFileRead(const std::f
 [[nodiscard]] ProcessMemorySample parseLinuxProcessMemorySample(
     std::string_view cgroupText, std::string_view mountInfoText,
     const ProcessMemoryFileReader& readScalar,
-    std::chrono::steady_clock::time_point sampledAt = std::chrono::steady_clock::now()) noexcept;
+    std::chrono::steady_clock::time_point sampledAt = std::chrono::steady_clock::now(),
+    ProcessMemoryNamespaces verifiedNamespaces = {}) noexcept;
+
+// Validates bounded paired domain contents rather than trusting the status label alone.
+[[nodiscard]] bool isCompleteProcessMemorySample(const ProcessMemorySample&) noexcept;
+
+// Proof of removal of observed finite constraints within one verified visible view only.
+// This never proves hidden ancestors or whole-process memory are unlimited. Failed allocation,
+// excessive history or changed/unverified views fail closed; no result payload is retained.
+class ProcessMemoryConstraintHistory final {
+  public:
+    void recordFinite(const ProcessMemorySample&, bool replaceComplete) noexcept;
+    [[nodiscard]] bool verifiesRemoval(const ProcessMemorySample&) const noexcept;
+
+  private:
+    std::optional<ProcessMemoryView> view_;
+    std::string membership_;
+    std::vector<std::string> finitePaths_;
+    bool valid_ = false;
+};
 
 // OS/filesystem sampling belongs on a worker, never a UI thread. Windows/macOS return explicit
 // host-only process-limit-unavailable provenance; their existing host sampler remains separate.

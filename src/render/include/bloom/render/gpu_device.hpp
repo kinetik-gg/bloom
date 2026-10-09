@@ -19,6 +19,7 @@
 #include <vector>
 
 namespace bloom::render {
+class GpuProcessingPhaseLease;
 
 // Per-operation-and-precision outcome. It is never a device-wide marketing tier: a Ready device
 // grants no operation a qualification outcome.
@@ -261,6 +262,13 @@ class GpuDevice final {
     // qualification identity must use this instead. Zero only for a null/moved-from or
     // portable-stub device. No native handle is exposed.
     [[nodiscard]] std::uint64_t ownershipEpoch() const noexcept;
+
+    // Owner-only, one-slot conservative phase retention. Arm before any native work, including
+    // synchronous preparation uploads. Only an explicit whole-phase retirement proof releases it;
+    // unknown retirement closes this generation and keeps the quota through native quarantines.
+    [[nodiscard]] bool retainProcessingPhase(std::shared_ptr<GpuProcessingPhaseLease>) noexcept;
+    void retireProcessingPhase(std::uint64_t leaseId, bool retirementProven) noexcept;
+    [[nodiscard]] bool processingPhaseOccupied() const noexcept;
 
     // Missing operation/precision entries are Unavailable, matching the architecture contract.
     [[nodiscard]] GpuQualification qualificationFor(GpuOperationId operation,

@@ -12,7 +12,10 @@
 namespace bloom::runtime::detail {
 
 struct ExportScenePreparation final {
+    // Prepared scene storage is destroyed before its conservative quota alias.
+    std::shared_ptr<render::GpuProcessingPhaseLease> phaseLease;
     std::shared_ptr<const PreparedGpuScene> scene;
+    std::uint64_t readbackByteAllowance = 0;
     GpuProcessFrameStatus status = GpuProcessFrameStatus::Evaluated;
     GpuProcessFrameDiagnosticCode diagnosticCode = GpuProcessFrameDiagnosticCode::None;
     std::string diagnosticMessage;
@@ -21,6 +24,7 @@ struct ExportScenePreparation final {
 [[nodiscard]] ExportScenePreparation
 prepareExportScene(const GpuProcessFrameEvaluatorOptions& options,
                    const std::shared_ptr<const CompiledCompositionPlan>& plan,
-                   const EvaluationRequest& request, const CancellationToken& cancellation);
+                   const EvaluationRequest& request, const CancellationToken& cancellation,
+                   bool encodedOutput = false);
 
 } // namespace bloom::runtime::detail

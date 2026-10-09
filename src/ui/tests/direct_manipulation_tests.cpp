@@ -504,10 +504,20 @@ void testAdmissionRejectedOverrideSurfacesErrorWithoutKillingInteraction(
 
 void sendMouse(QWidget& widget, const QEvent::Type type, const QPointF& local,
                const Qt::MouseButton button, const Qt::MouseButtons buttons) {
-    // Passive hit testing follows actual CPU publication. Hidden offscreen fixtures must paint
-    // the frame/transform before beginning a gesture; no paint is forced during the held gesture.
-    if (type == QEvent::MouseButtonPress)
+    // Passive hit testing follows actual visible CPU publication. Expose pointer fixtures only
+    // on main's enforced offscreen platform; no paint is forced during the held gesture.
+    // Keyboard-only handler fixtures retain their original hidden scope (no window shortcuts).
+    if (type == QEvent::MouseButtonPress) {
+        widget.show();
+        QCoreApplication::processEvents();
         static_cast<void>(widget.grab());
+        const auto* viewer = dynamic_cast<const bloom::ui::ViewerEditor*>(&widget);
+        const auto display = viewer ? viewer->actualDisplayDescriptor() : std::nullopt;
+        if (viewer && (!display || !display->frame || !display->mapping)) {
+            std::cerr << "Gesture fixture has no actual painted frame and mapping before press\n";
+            std::abort();
+        }
+    }
     QMouseEvent mouseEvent(type, local, local, button, buttons, Qt::NoModifier);
     QCoreApplication::sendEvent(&widget, &mouseEvent);
 }
