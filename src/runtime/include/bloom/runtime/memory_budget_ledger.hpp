@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/runtime/process_memory_sample.hpp>
+
 #include <chrono>
 #include <cstddef>
 #include <functional>
@@ -45,10 +47,28 @@ struct MachineMemorySample final {
 [[nodiscard]] std::size_t availableMemoryBytes() noexcept;
 [[nodiscard]] std::size_t startupAvailableMemoryBytes() noexcept;
 
+struct MemoryBudgetSample final {
+    MachineMemorySample machine;
+    std::size_t physicalBytes = 0;
+    ProcessMemorySample process;
+};
+// Sampling is worker-only; applying a completed snapshot remains the owner's thread responsibility.
+[[nodiscard]] MemoryBudgetSample
+memoryBudgetSample(const CancellationToken& cancellation = {}) noexcept;
+
+enum class MemoryBudgetOwnerKind { ReusableRetention, LiveWork };
+
 struct MemoryBudgetState final {
     std::size_t configuredBytes = 0;
     std::size_t effectiveBytes = 0;
     std::size_t retainedBytes = 0;
+    std::size_t reusableHostCreditBytes = 0;
+    std::size_t processingEffectiveBytes = 0;
+    ProcessMemorySample process;
+    std::optional<std::size_t> processCacheCeilingBytes;
+    bool awaitingProcessSample = false;
+    bool processSampleFresh = false;
+    std::uint64_t sampleSerial = 0;
     MachineMemorySample machine;
     // Admission stays reduced between polls: 100 -> 25 -> 10, then 25 -> 50 -> 100 on recovery.
     unsigned retentionPercent = 100;
@@ -61,9 +81,9 @@ struct MemoryBudgetState final {
 class MemoryBudgetLedger final {
   public:
     using Clock = std::chrono::steady_clock;
-    // Zero availability leaves the configured defaults independent of startup contention. The
-    // process ledger passes the startup sample explicitly to establish its initial effective cap.
-    explicit MemoryBudgetLedger(std::size_t physicalMemory = physicalMemoryBytes(),
+    // Construction never probes the operating system. Explicit injected host capacity is useful
+    // for standalone owners/tests; production activates bounded asynchronous process sampling.
+    explicit MemoryBudgetLedger(std::size_t physicalMemory = 0,
                                 std::size_t availableMemory = 0) noexcept;
 
     // Every registered pool gets the same proportional policy. Ceilings are weights as well as
@@ -73,29 +93,46 @@ class MemoryBudgetLedger final {
     // wait for workers, or modify registrations. Cache locks must never enclose ledger calls.
     void registerCache(const void* owner, std::size_t ceiling,
                        std::function<std::size_t()> retained,
-                       std::function<void(std::size_t)> applyBudget);
+                       std::function<void(std::size_t)> applyBudget,
+                       MemoryBudgetOwnerKind kind = MemoryBudgetOwnerKind::ReusableRetention);
     void unregisterCache(const void* owner);
     [[nodiscard]] std::size_t setCacheCeiling(const void* owner, std::size_t ceiling);
     [[nodiscard]] std::size_t cacheByteBudget(const void* owner) const;
     void setConfiguredTotal(std::size_t bytes);
     [[nodiscard]] MemoryBudgetState poll(MachineMemorySample sample,
                                          Clock::time_point now = Clock::now());
+    [[nodiscard]] MemoryBudgetState applySample(MemoryBudgetSample sample,
+                                                Clock::time_point now = Clock::now());
+    // Production activates this before constructing cache owners; it never gates live processing.
+    void beginProcessSampling();
     [[nodiscard]] MemoryBudgetState state() const;
 
     // Upper bound for configured override weights. The live cap and callback budgets can be
     // smaller; an override is never a guaranteed minimum.
-    [[nodiscard]] std::size_t usableByteBudget() const noexcept { return usableByteBudget_; }
+    [[nodiscard]] std::size_t usableByteBudget() const noexcept {
+        const std::lock_guard lock(mutex_);
+        return usableByteBudget_;
+    }
 
     // The ceiling the DEFAULT split may reach: min(usable, 50% of physical, 80% of available),
     // never below the 3 GiB low-memory floor. This is the number that keeps Bloom from planning to
     // own the machine when nobody configured anything.
     [[nodiscard]] std::size_t defaultTotalByteBudget() const noexcept {
+        const std::lock_guard lock(mutex_);
         return defaultTotalByteBudget_;
     }
 
     // What this ledger left to the rest of the machine: max(8 GiB, 40% of physical). Also the
     // threshold the runtime pressure response compares MemAvailable against.
-    [[nodiscard]] std::size_t reserveByteBudget() const noexcept { return reserveByteBudget_; }
+    [[nodiscard]] std::size_t reserveByteBudget() const noexcept {
+        const std::lock_guard lock(mutex_);
+        return reserveByteBudget_;
+    }
+
+    [[nodiscard]] std::size_t physicalByteBudget() const noexcept {
+        const std::lock_guard lock(mutex_);
+        return physicalMemory_;
+    }
 
     // Missing overrides split `defaultTotalByteBudget()` 60/40 operation/preview. A single override
     // keeps its exact value where possible, clamped to `usableByteBudget()`, and reduces the other
@@ -112,10 +149,11 @@ class MemoryBudgetLedger final {
   private:
     struct Cache final {
         std::size_t ceiling;
+        MemoryBudgetOwnerKind kind;
         std::function<std::size_t()> retained;
         std::function<void(std::size_t)> applyBudget;
     };
-    [[nodiscard]] std::size_t cacheByteBudgetLocked(std::size_t ceiling) const;
+    [[nodiscard]] std::size_t cacheByteBudgetLocked(const Cache& cache) const;
     [[nodiscard]] std::size_t capFor(const MachineMemorySample& sample,
                                      std::size_t retained) const noexcept;
     // Returns true only while swap is actively growing beyond the entry/sustain threshold. Static
@@ -123,7 +161,13 @@ class MemoryBudgetLedger final {
     // rebaseline and assert nothing.
     [[nodiscard]] bool observeSwapActivity(const MachineMemorySample& sample, Clock::time_point now,
                                            bool wasSwapPressure) noexcept;
-    const std::size_t physicalMemory_;
+    void updatePhysicalCapacity(std::size_t physical, std::optional<std::size_t> available);
+    void applyBudgetsLocked();
+    void applyProcessCeilingLocked(bool allowGrowth, bool initialize, bool restore,
+                                   Clock::time_point now);
+    [[nodiscard]] MemoryBudgetState pollHostLocked(MachineMemorySample sample,
+                                                   Clock::time_point now);
+    std::size_t physicalMemory_;
     // Recursive only for readback from synchronous UI budget-change notifications.
     mutable std::recursive_mutex mutex_;
     std::map<const void*, Cache> caches_;
@@ -135,6 +179,9 @@ class MemoryBudgetLedger final {
     std::optional<Clock::time_point> lastSwapSampleTime_;
     unsigned pressurePolls_ = 0;
     bool hasPolled_ = false;
+    bool processSampling_ = false;
+    std::optional<Clock::time_point> lastProcessSample_;
+    std::optional<Clock::time_point> lastReusableChange_;
     std::size_t usableByteBudget_ = 0;
     std::size_t defaultTotalByteBudget_ = 0;
     std::size_t reserveByteBudget_ = 0;

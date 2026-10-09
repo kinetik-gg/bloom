@@ -32,6 +32,7 @@
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/media_disk_cache_settings.hpp>
+#include <bloom/ui/memory_budget_controller.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/preview_frame_trace.hpp>
 #include <bloom/ui/project_host.hpp>
@@ -88,6 +89,7 @@ int main(int argc, char* argv[]) {
     // createNew() project itself. taskScheduler is shared with CompositionPreviewController below
     // (both need a TaskExecutor::BlockingIo-capable scheduler; TaskSchedulerConfig::defaults()
     // already provisions one BlockingIo worker, so a single scheduler instance serves both).
+    bloom::runtime::processMemoryBudgetLedger().beginProcessSampling();
     bloom::runtime::TaskScheduler taskScheduler;
     bloom::ui::ProjectHost projectHost(taskScheduler);
 
@@ -172,6 +174,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     auto& taskUiBridge = *taskUiBridgeOwner;
+    bloom::ui::MemoryBudgetController memoryBudgetController(
+        taskScheduler, taskUiBridge, bloom::runtime::processMemoryBudgetLedger());
     // Explicit opt-in, one bounded numeric-only buffer. The path is only an export destination;
     // it and media locators never enter trace records. No formatting or I/O runs in UI callbacks.
     const QString previewTraceDestination = qEnvironmentVariable("BLOOM_PREVIEW_TRACE");
@@ -200,6 +204,24 @@ int main(int argc, char* argv[]) {
     // here.
     auto previewFrameCache =
         std::make_shared<bloom::ui::PreviewFrameCache>(cacheBudgets.previewFrameCacheByteBudget);
+    // Refresh automatic/requested cache weights once worker-delivered host capacity is known.
+    // Stored overrides remain unchanged, and ledger callbacks still enforce the effective cap.
+    bool cacheCapacityInitialized = false;
+    QObject::connect(&memoryBudgetController, &bloom::ui::MemoryBudgetController::sampleApplied,
+                     &application, [&] {
+                         if (cacheCapacityInitialized ||
+                             bloom::runtime::processMemoryBudgetLedger().physicalByteBudget() == 0)
+                             return;
+                         cacheCapacityInitialized = true;
+                         const auto requested =
+                             bloom::ui::cacheMemoryBudgetsFromSettings(playbackSettings);
+                         const auto videoBytes = std::min(std::size_t{256} * 1024U * 1024U,
+                                                          requested.operationCacheByteBudget / 4U);
+                         cpuEvaluator.setVideoCacheByteBudget(videoBytes);
+                         cpuEvaluator.operationCache()->setByteBudget(
+                             requested.operationCacheByteBudget - videoBytes);
+                         previewFrameCache->setByteBudget(requested.previewFrameCacheByteBudget);
+                     });
     // One compiled-plan cache for every consumer of the live revision: the preview surfaces below
     // and the audio mix, which derives from the document rather than from a shown frame.
     auto compiledPlanCache = std::make_shared<bloom::ui::CompiledPlanCache>();
@@ -325,6 +347,9 @@ int main(int argc, char* argv[]) {
     auto gpuExportProvider = bloom::host::GpuExportProvider::create(gpuExportOptions);
     gpuExportProvider->prepare(taskScheduler);
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);
+    QObject::connect(&shutdownCoordinator,
+                     &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
+                     &memoryBudgetController, &bloom::ui::MemoryBudgetController::beginShutdown);
     shutdownCoordinator.setGpuExportRetirement(
         [&gpuExportProvider] { gpuExportProvider->beginShutdown(); },
         [&gpuExportProvider] {

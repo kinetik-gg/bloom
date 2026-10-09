@@ -14,11 +14,14 @@ CPU worker and disclose CPU presentation; they do not change the scene's GPU pro
 
 Cache counters describe held products, not total process or driver memory. Active work, temporary
 transfers, live display pins and retirement can hold additional memory. Process/container-limit
-headroom and complete aggregate accounting remain under development.
+headroom now constrains reusable cache retention; complete aggregate reservation accounting remains
+under development. These limits do not guarantee total process memory or prevent every OOM.
 
 ## How much memory Bloom gives itself
 
-Bloom adjusts its cache cap every five seconds as other applications use or release memory.
+Bloom samples memory on a worker every five seconds as other applications use or release memory.
+At startup reusable cache retention stays at zero until the first usable sample; ordinary frame
+processing still works. Status bars observe one shared sampler and never read OS memory directly.
 Its configured default leaves the larger of 8 GiB or 40% of physical RAM for the rest of the
 machine, and never takes more than half of physical RAM. The operation/preview ceilings start
 with this split:
@@ -30,22 +33,27 @@ with this split:
 | 32 GiB | 9.6 GiB | 6.4 GiB | 16 GiB |
 | 60 GiB | 18 GiB | 12 GiB | 30 GiB |
 
-The effective cap is the smallest of the configured total, half of physical RAM, and 80% of
-**currently available memory plus the bytes Bloom's caches already hold**. Adding those held bytes
-back means filling a cache does not by itself make Bloom shrink it again. The policy has a 3 GiB
-floor, bounded by physical RAM on smaller machines; pressure can still reduce actual cache
-budgets below that floor. Auxiliary caches share the total, so the operation and preview budgets
-shown in the status bar can be smaller than the table's ceilings.
+The effective reusable allowance can be smaller than these configured ceilings. Host policy also
+considers half of physical RAM and 80% of currently available memory, with a physical-bounded
+3 GiB fallback floor. Current cache counters are not added back as reclaimable credit. Auxiliary
+caches share the allowance, so operation and preview budgets can be smaller than the table.
 
-For example, on a 16 GiB machine with 3 GiB available and 4 GiB cached, the cap can fall from
-8 GiB to 5.6 GiB. On a 60 GiB machine with 12 GiB available and 8 GiB cached, it can fall from
-30 GiB to 16 GiB. Changes must exceed 10%, with at least five seconds between cap changes, to
-avoid reacting to every small fluctuation.
+On Linux cgroup v2, Bloom pairs each visible process/ancestor memory limit with its own usage and
+reserves the smaller of 1 GiB and the larger of 16 MiB or one eighth of that limit. Remaining
+headroom further clamps reusable retention. A hard limit, including zero headroom, takes precedence
+over the host floor and immediately lowers retention even during cooldown. The first finite sample
+starts at no more than half that headroom. Recovery waits ten seconds and increases conservatively;
+it does not immediately reclaim all apparent free space.
 
-Hover over the status bar's cache cell to see the **effective cap**, **configured total**,
-**MemAvailable**, pressure state and the percentage currently allowed for cache admission.
-"MemAvailable" uses the operating system's available-memory estimate; an unavailable reading is
-shown explicitly.
+Linux memory-v1 and Windows/macOS currently use explicit host-only best effort for process limits.
+Unavailable or partial readings are disclosed. Once a finite process ceiling has been measured,
+failed, stale or unsupported samples retain that constraint rather than expanding it. A verified
+absence of a finite limit refers only to the visible hierarchy. This is reusable-cache protection,
+not a guarantee for live processing, exports, GPU/driver allocations or total process memory.
+
+Hover over the cache cell for **Effective reusable cache allowance**, **Configured cache ceiling**,
+process-limit provenance, available memory and pressure/admission state. The configured ceiling is
+resolved against host capacity; it may differ from the raw values saved in Preferences.
 
 ## Changing the budgets
 
@@ -60,11 +68,13 @@ counts written as decimal numbers**:
 
 For example, `playback/operation-cache-bytes = 10737418240` and
 `playback/ram-preview-memory-bytes = 6442450944` request 10 GiB and 6 GiB: a 16 GiB configured
-total. Those numbers are ceilings, not guaranteed allocations. If available memory plus held
-cache bytes falls to 10 GiB, the effective cap can fall to 8 GiB even with these overrides.
+total. Those numbers are ceilings, not guaranteed allocations. If available memory falls to 10 GiB,
+the host allowance can fall to 8 GiB even with these overrides;
+process headroom can clamp reusable retention further.
 
 Setting one key leaves the other at its default where space permits. Oversized overrides are
-reduced proportionally; they cannot bypass the machine's live cap. A missing, zero or unreadable
+resolved proportionally against host capacity; saved override values remain unchanged. They cannot
+bypass the effective reusable clamp. A missing, zero or unreadable
 value uses the default. An explicitly small ceiling is never enlarged to satisfy the policy
 floor. The status bar shows the budgets actually in use.
 
@@ -84,7 +94,9 @@ settings are unchanged; evicted results can be computed again. Active decoding, 
 writes may still hold references until that work releases them, so process memory need not fall
 by exactly the cache counter's change.
 
-The export queue's usual 4 GiB concurrent allowance also falls with the shared cap; each job
+The export queue's usual 4 GiB concurrent allowance follows separate host/live-work admission,
+including host-pressure reductions; cold reusable zero and the process-retention clamp do not
+disable live export reservations. Each job
 still has a 2 GiB limit. Bloom keeps memory already reserved by active exports. New export
 reservations, or requests for more memory by an existing export, are refused if they would exceed
 the reduced allowance. Admission becomes possible again when active exports release enough
@@ -92,7 +104,8 @@ memory or recovery raises the allowance. Trimming never frees a live export prod
 
 After the machine recovers, Bloom waits ten seconds, then restores budgets one step every ten
 seconds: 10% to 25%, then 50%, then 100%. The effective cap itself grows by at most 25% per
-step. New pressure interrupts recovery immediately, and a swap file that stays full but unchanged
+step, with process-headroom growth additionally limited to half the remaining gap. New pressure
+interrupts recovery immediately, and a swap file that stays full but unchanged
 no longer counts as pressure, so it does not keep the caches trimmed.
 
 Decoded media stored on disk has a separate disk-space budget. Its pending writes consume RAM

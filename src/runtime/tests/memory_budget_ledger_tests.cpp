@@ -1,9 +1,12 @@
 #include <bloom/runtime/memory_budget_ledger.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <string_view>
+#include <vector>
 
 namespace {
 using bloom::runtime::MemoryBudgetLedger;
@@ -179,12 +182,247 @@ void machineExamplesAndOverflow() {
            "overflow-sized ceiling sums still divide one aggregate cap");
 }
 
+using namespace bloom::runtime;
+MemoryBudgetSample processSample(const std::size_t limit, const std::optional<std::size_t> used,
+                                 const int seconds,
+                                 const ProcessMemoryStatus status = ProcessMemoryStatus::Finite) {
+    return {.machine = {.availableBytes = 60 * gib},
+            .physicalBytes = 60 * gib,
+            .process = {.source = ProcessMemorySource::LinuxCgroupV2,
+                        .status = status,
+                        .sampledAt = at(seconds),
+                        .membershipPath = "/test",
+                        .domains = {{"/test", ProcessMemoryLimitKind::Finite, limit, used}}}};
+}
+
+void processAdmissionAndFailures() {
+    MemoryBudgetLedger legacy(60 * gib, 60 * gib);
+    const auto legacyState = legacy.applySample(processSample(0, 0, 0), at(0));
+    expect(legacyState.effectiveBytes == 30 * gib && !legacyState.processCacheCeilingBytes &&
+               !legacyState.awaitingProcessSample,
+           "unactivated standalone policy ignores process constraints until explicit activation");
+    MemoryBudgetLedger ledger(60 * gib, 60 * gib);
+    std::size_t cache = 0, live = 0;
+    ledger.beginProcessSampling();
+    ledger.registerCache(
+        &cache, 20 * gib, [] { return 0; }, [&](const std::size_t value) { cache = value; });
+    ledger.registerCache(
+        &live, gib, [] { return 0; }, [&](const std::size_t value) { live = value; },
+        MemoryBudgetOwnerKind::LiveWork);
+    expect(cache == 0 && live > 0 && ledger.allocate().usableByteBudget > 0,
+           "cold process sampling gates reusable retention only, not live work or processing");
+    ledger.setConfiguredTotal(40 * gib);
+    auto state = ledger.applySample(processSample(8 * gib, 6 * gib, 0), at(0));
+    expect(state.effectiveBytes == gib / 2 && state.processCacheCeilingBytes == gib &&
+               state.reusableHostCreditBytes == 0 && !state.awaitingProcessSample,
+           "first finite sample starts below half paired hard allowance without retained credit");
+    const auto requested = state.configuredBytes;
+    auto partial =
+        processSample(std::size_t{256} * 1024 * 1024, {}, 1, ProcessMemoryStatus::Partial);
+    state = ledger.applySample(partial, at(1));
+    expect(state.effectiveBytes <= std::size_t{224} * 1024 * 1024 &&
+               state.configuredBytes == requested,
+           "partial tighter limit applies immediately inside cooldown while requested ceiling "
+           "persists");
+    state = ledger.applySample(processSample(0, {}, 2, ProcessMemoryStatus::Partial), at(2));
+    expect(state.effectiveBytes == 0 && live > 0,
+           "finite zero with unread usage defeats the floor");
+    auto unknown = processSample(8 * gib, {}, 20, ProcessMemoryStatus::Unavailable);
+    unknown.process.domains.clear();
+    state = ledger.applySample(unknown, at(20));
+    expect(state.effectiveBytes == 0 && state.processCacheCeilingBytes == 0,
+           "failed sampling cannot expand a previously finite zero cap");
+    unknown.process.status = ProcessMemoryStatus::Unsupported;
+    unknown.process.source = ProcessMemorySource::LinuxCgroupV1Unsupported;
+    unknown.process.sampledAt = at(30);
+    state = ledger.applySample(unknown, at(30));
+    expect(state.effectiveBytes == 0 && state.processCacheCeilingBytes == 0,
+           "unsupported fallback never erases prior finite protection");
+    unknown.process.status = ProcessMemoryStatus::NoFiniteVisibleLimit;
+    unknown.process.source = ProcessMemorySource::LinuxCgroupV2;
+    unknown.process.sampledAt = at(35);
+    state = ledger.applySample(unknown, at(35));
+    expect(state.effectiveBytes == 0 && state.processCacheCeilingBytes == 0,
+           "later no-finite-visible topology cannot silently discard prior finite constraint");
+    state = ledger.applySample(processSample(8 * gib, 2 * gib, 0), at(40));
+    expect(state.effectiveBytes == 0 && !state.processSampleFresh,
+           "stale snapshot cannot authorize growth and freshness remains explicit");
+    state = ledger.applySample(processSample(8 * gib, 2 * gib, 50), at(50));
+    expect(state.effectiveBytes > 0 && state.effectiveBytes <= 5 * gib / 2,
+           "verified recovery from zero uses bounded half-headroom seed after recovery hold");
+    const auto before = state.effectiveBytes;
+    state = ledger.applySample(processSample(8 * gib, 8 * gib - before + before / 20 - gib, 51),
+                               at(51));
+    expect(state.effectiveBytes == before - before / 20,
+           "even a five-percent newly hard shrink applies without cooldown or hysteresis");
+    ledger.unregisterCache(&cache);
+    ledger.unregisterCache(&live);
+
+    MemoryBudgetLedger fallback(60 * gib, 60 * gib);
+    fallback.beginProcessSampling();
+    unknown.process.status = ProcessMemoryStatus::Unsupported;
+    unknown.process.source = ProcessMemorySource::LinuxCgroupV1Unsupported;
+    unknown.process.sampledAt = at(0);
+    state = fallback.applySample(unknown, at(0));
+    expect(state.effectiveBytes > 0 && !state.processCacheCeilingBytes &&
+               state.process.status == ProcessMemoryStatus::Unsupported,
+           "initial explicit unsupported sample activates honest host-only best effort");
+}
+
+void processHierarchyAndStableFill() {
+    MemoryBudgetLedger hierarchy(60 * gib, 60 * gib);
+    hierarchy.beginProcessSampling();
+    auto sample = processSample(8 * gib, 2 * gib, 0);
+    sample.process.domains.push_back(
+        {"/parent", ProcessMemoryLimitKind::Finite, 12 * gib, 11 * gib});
+    auto state = hierarchy.applySample(sample, at(0));
+    expect(state.effectiveBytes == 0 && state.processCacheCeilingBytes == 0,
+           "each ancestor's own usage and reserve beats a roomy leaf");
+    for (const auto limit : {std::size_t{0}, std::size_t{1024}, std::size_t{2} * gib}) {
+        MemoryBudgetLedger tiny(60 * gib, 60 * gib);
+        tiny.beginProcessSampling();
+        const auto result = tiny.applySample(processSample(limit, 0, 0), at(0));
+        expect(result.effectiveBytes <= limit &&
+                   (limit >= std::size_t{16} * 1024 * 1024 || result.effectiveBytes == 0),
+               "tiny process limits never inherit the host cache floor");
+    }
+    MemoryBudgetLedger ledger(60 * gib, 60 * gib);
+    ledger.beginProcessSampling();
+    std::size_t held = 0, allowance = 0;
+    unsigned evictions = 0;
+    ledger.registerCache(
+        &held, 30 * gib, [&] { return held; },
+        [&](const std::size_t value) {
+            allowance = value;
+            if (held > value) {
+                held = value;
+                ++evictions;
+            }
+        });
+    std::size_t previous = 0;
+    unsigned stable = 0;
+    for (int index = 0; index < 40; ++index) {
+        state =
+            ledger.applySample(processSample(8 * gib, 2 * gib + held, index * 10), at(index * 10));
+        held = allowance; // A real consumer fills its current allowance between samples.
+        stable = held == previous ? stable + 1 : 0;
+        previous = held;
+    }
+    expect(held > 0 && stable >= 30 && evictions == 0 && state.reusableHostCreditBytes == 0,
+           "zero-credit fill/poll/refill converges positively without recurring eviction cycles");
+    const auto settled = held;
+    state = ledger.applySample(processSample(8 * gib, 3 * gib + held, 401), at(401));
+    expect(held < settled && evictions == 1 &&
+               state.effectiveBytes <= state.processCacheCeilingBytes,
+           "real unrelated usage immediately trims a settled cache");
+    const auto afterPressure = evictions;
+    for (int index = 41; index < 80; ++index) {
+        state =
+            ledger.applySample(processSample(8 * gib, 2 * gib + held, index * 10), at(index * 10));
+        held = allowance;
+    }
+    expect(held > 0 && evictions == afterPressure,
+           "pressure release recovers without an alternating fill/evict loop");
+    ledger.unregisterCache(&held);
+    MemoryBudgetLedger shares(60 * gib, 60 * gib);
+    shares.beginProcessSampling();
+    std::size_t first = 0, second = 0;
+    shares.registerCache(
+        &first, 18 * gib, [] { return 20 * gib; }, [&](const std::size_t bytes) { first = bytes; });
+    shares.registerCache(
+        &second, 12 * gib, [] { return 20 * gib; },
+        [&](const std::size_t bytes) { second = bytes; });
+    state = shares.applySample(processSample(8 * gib, 6 * gib, 0), at(0));
+    expect(
+        first + second <= state.effectiveBytes && first > second &&
+            state.retainedBytes == 40 * gib && state.reusableHostCreditBytes == 0,
+        "many owners split one allowance and shared retained gauges never become reusable credit");
+    shares.unregisterCache(&first);
+    shares.unregisterCache(&second);
+}
+
+int liveProcessProbe() {
+#if defined(__linux__)
+    for (const auto* const name : {"/proc/self/cgroup", "/proc/self/mountinfo"}) {
+        std::ifstream input(name);
+        std::string line;
+        std::size_t bytes = 0;
+        while (std::getline(input, line) && bytes <= std::size_t{1024} * 1024) {
+            bytes += line.size();
+            if (std::string_view(name).ends_with("cgroup") ||
+                line.find(" - cgroup2 ") != std::string::npos)
+                std::cout << "raw " << name << ' ' << line << '\n';
+        }
+    }
+    MemoryBudgetLedger ledger;
+    ledger.beginProcessSampling();
+    auto before = memoryBudgetSample();
+    expect(before.process.source == ProcessMemorySource::LinuxCgroupV2 &&
+               before.process.status == ProcessMemoryStatus::Finite,
+           "live private helper discovers finite Linux cgroup v2");
+    auto state = ledger.applySample(before);
+    ledger.setConfiguredTotal(8 * gib);
+    const auto print = [&ledger](const char* phase, const MemoryBudgetSample& snapshot) {
+        const auto current = ledger.state();
+        std::cout << phase << " source=" << static_cast<int>(snapshot.process.source)
+                  << " status=" << static_cast<int>(snapshot.process.status)
+                  << " membership=" << snapshot.process.membershipPath
+                  << " requested=" << current.configuredBytes
+                  << " effective=" << current.effectiveBytes
+                  << " process_ceiling=" << current.processCacheCeilingBytes.value_or(0)
+                  << " credit=" << current.reusableHostCreditBytes << '\n';
+        for (const auto& domain : snapshot.process.domains)
+            std::cout << phase << " domain=" << domain.path
+                      << " kind=" << static_cast<int>(domain.kind) << " limit=" << domain.limitBytes
+                      << " current=" << domain.currentBytes.value_or(0)
+                      << " usage_known=" << domain.currentBytes.has_value() << '\n';
+    };
+    print("before", before);
+    constexpr auto touchedBytes = std::size_t{16} * 1024 * 1024;
+    const std::vector<std::byte> touched(touchedBytes, std::byte{0x5a});
+    std::cout << "touched=" << touched.size()
+              << " first=" << std::to_integer<unsigned>(touched.front())
+              << " last=" << std::to_integer<unsigned>(touched.back()) << '\n';
+    const auto after = memoryBudgetSample();
+    state = ledger.applySample(after);
+    print("after", after);
+    const auto own = std::find_if(before.process.domains.begin(), before.process.domains.end(),
+                                  [](const auto& domain) {
+                                      return domain.kind == ProcessMemoryLimitKind::Finite &&
+                                             domain.limitBytes == std::size_t{256} * 1024 * 1024;
+                                  });
+    expect(own != before.process.domains.end() && own->currentBytes.has_value(),
+           "private helper finds its actual matched 256MiB domain");
+    if (own != before.process.domains.end() && own->currentBytes.has_value()) {
+        const auto usageBefore = own->currentBytes.value_or(0);
+        const auto updated =
+            std::find_if(after.process.domains.begin(), after.process.domains.end(),
+                         [&](const auto& domain) { return domain.path == own->path; });
+        expect(updated != after.process.domains.end() && updated->currentBytes &&
+                   *updated->currentBytes > usageBefore,
+               "touched allocation appears in the same measured domain usage");
+    }
+    expect(state.configuredBytes == 8 * gib &&
+               state.effectiveBytes <= std::size_t{256} * 1024 * 1024 &&
+               minimumProcessCacheAllowance(after.process, 0) <=
+                   minimumProcessCacheAllowance(before.process, 0),
+           "effective allowance follows measured domain while requested ceiling remains unchanged");
+    return failures == 0 ? 0 : 1;
+#else
+    return 77;
+#endif
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--live-process-probe")
+        return liveProcessProbe();
     sequence();
     swapActivityPolicy();
     ceilings();
     machineExamplesAndOverflow();
+    processAdmissionAndFailures();
+    processHierarchyAndStableFill();
     return failures == 0 ? 0 : 1;
 }

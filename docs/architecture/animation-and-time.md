@@ -533,19 +533,16 @@ ROI or viewer adjustment. The compiled-plan cache is unaffected by either viewer
 
 **Budget.** `playback/ram-preview-memory-bytes` and
 `playback/operation-cache-bytes` are resolved together by the session's one memory-budget ledger.
-The usable budget is physical memory less a reserve for the operating system, decoders, and other
-applications (40% of physical memory, never less than 8 GiB), and it is the ceiling an explicit
-override may reach. The DEFAULT total is capped more tightly still: never more than half of physical
-memory, and never more than 80% of what the operating system reported as available at startup. See
-docs/architecture/evaluation-primitives.md for the full rule and its per-machine table. Missing,
-unparseable, or zero settings use a 60% operation-cache / 40% RAM-preview split of that default
-total; the preview side retains its 2 GiB floor when the default total allows it. A single override
-keeps its requested value where possible and reduces the other cache; two overrides that overcommit
-the machine are proportionally clamped. When physical memory is unavailable or too small to leave
-that reserve, the ledger uses the 3 GiB low-memory floor so the preview floor remains useful without
-exceeding reported physical memory. When available memory later drops below the reserve, both caches
-are trimmed to half their budgets and the status bar says so; the budgets themselves do not change.
-The effective operation and preview budgets are shown together in the window status-bar cache cell.
+Configured ceilings leave a host reserve and use the default 60/40 split; overrides are resolved
+against host capacity without rewriting requested settings. Production reusable retention starts
+at zero until an off-UI sample permits it. Foreground preparation remains possible without cache
+retention. Visible finite Linux cgroup v2 headroom further clamps reusable budgets, with zero
+reclaimable-host credit; hard shrink overrides floors and cooldown. Unsupported process-limit
+platforms use explicit host-only best effort, retaining any earlier finite constraint. See
+[evaluation primitives](evaluation-primitives.md) for provenance, reserve, recovery and live-work
+rules. This is retention policy, not a whole-process memory guarantee. Host pressure trims admission
+to 25%, then 10%; it does not free active frame/export references. The status bar separates the
+configured cache ceiling from the effective reusable allowance.
 Least-recently-used entries are evicted until each effective budget is satisfied, and a frame larger
 than the whole preview budget is refused rather than allowed to evict everything for itself. At
 about 8 MB a frame, a 2 GiB preview budget holds roughly 250 frames of a 1920x1080 composition --

@@ -102,8 +102,14 @@ provide research or rationale, but they are not binding until adopted here.
   valid-grid origins, live reanchoring and absolute intent-time deadlines. Five competing 60-second
   CPU-reference sessions show zero exact desired-grid mismatches; private GPU animation pixels
   separately qualify short visible progress. This is clock/image correctness, not painted FPS or
-  real-audio/sustained/platform qualification. Process-aware cache headroom and terminal mailbox
-  ownership are the next bounded reliability slices.
+  real-audio/sustained/platform qualification.
+
+- Reusable cache retention now uses off-UI process-aware sampling, pairing visible Linux cgroup v2
+  limits/usage with conservative reserve and zero reclaimable credit. Cold zero retention preserves
+  foreground preparation and separate live export reservations. Saved requests, configured ceilings
+  and effective reusable allowances remain distinct; unsupported platforms disclose host-only fallback.
+  Bounded policy/lifetime tests and a private capped helper pass. This is not an aggregate process/OOM
+  guarantee. Terminal mailbox ownership is next; broader reservations and remaining G4–G10 gates stay open.
 
 The detailed implementation status and next merge gates live in [`roadmap.md`](roadmap.md).
 

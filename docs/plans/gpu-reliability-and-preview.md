@@ -11,8 +11,8 @@ slices and G3A retention truth are accepted within the limits below. The packed 
 containment/adoption slice and its bounded cold-progress prerequisite are now accepted. This closes
 the measured panel/top-level spill gate for that route; broader G3/G4–G10 qualification remains
 incomplete. Bounded G4A completion delivery/refill and G4B rational transport/deadlines are accepted.
-After the immutable user-build checkpoint, G6A proceeds as two sequential slices: process-aware
-headroom/off-UI sampling, then terminal mailbox ownership. Broader aggregate accounting remains G6B.
+G6A process-aware reusable headroom/off-UI sampling is accepted within the bounds below. Terminal
+mailbox ownership is the next separate slice; broader aggregate accounting remains G6B.
 
 Implementation proceeds sequentially from `e1086c13`. Each slice requires source review, focused
 regressions, and the applicable native/product evidence before its successor is accepted. A passing
@@ -35,10 +35,38 @@ and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 | G3B packed Viewer Stage 2 | Accepted as a bounded containment/adoption slice | Independent external pixels, real animation/drag/undo, exact host-only Full/Half 100-frame reuse, portable regressions, final builds/quality/static analysis pass |
 | G4A shared-preview completion | Accepted as a bounded delivery/refill slice | Neutral terminal subscriptions, coalesced UI drain, typed consumers, private Half100 refill/animation, portable tests, final build/quality and 115 affected translation units pass |
 | G4B rational transport | Accepted as a bounded clock/deadline slice | Exact cache-independent elapsed/audio targets, valid-grid reanchor, intent deadlines, five-rate real-clock gate, private animation pixels, Linux CPU fallback and 62 affected translation units pass |
+| G6A reusable process headroom | Accepted as a bounded retention/sampling slice | Paired visible Linux v2 limits, zero credit, requested/effective separation, pressure/recovery cycles, off-UI lifetime tests, private finite helper and Linux CPU-only gate pass; mailbox and aggregate reservations remain pending |
 | G4C prerequisite | Accepted only as the bounded cold-progress prerequisite | One active/newest intent, useful older Stale publication and guarded pause/shutdown pass source review and short real playing pixels; remaining G4 scheduling is pending |
 | G7A / G9 bounded display work | Packed immutable borrowing, off-UI CPU channel derivation and finished-display host choice accepted | Explicit provenance and measured bytes; remaining CPU storage/process/channel work and broader cache policy remain pending |
 | G8 optional two-frame throughput | Investigation complete; implementation and benchmark pending | Source confirms per-service frame serialization; no multi-frame speedup or GPU-utilization result is established |
 | Remaining G4–G10 | Pending | Remaining scheduling, native public hooks, media reuse, aggregate memory, batching and sustained/platform qualification are not completed |
+
+G6A reusable-headroom checkpoint (2026-10-09), accepted after independent source/evidence review:
+production activates sampling before cache construction; cold reusable retention is zero while
+foreground processing and actual live export reservations remain separately allowed. One
+application-owned BlockingIo sampler has no backlog, and completion/UI application is independent
+of Jobs polling. Cached status observers perform no OS reads. Requested settings are unchanged;
+the tooltip distinguishes host-resolved configured ceiling from effective reusable allowance.
+
+Visible Linux cgroup v2 domains pair limit/usage individually; reserve is
+`min(1 GiB, max(16 MiB, limit/8))`. All current reusable-host credits are zero. Reliable hard shrink
+beats floors/hysteresis/cooldown. Partial/stale/failure/fallback cannot erase a prior finite ceiling;
+fresh complete finite samples alone authorize its growth. First seed is at most half headroom;
+recovery waits ten seconds and grows by at most 25% or half the gap, with a bounded zero-recovery
+seed. Linux v1 and Windows/macOS explicitly fall back to host-only process-limit-unavailable policy,
+not measured process protection. Unactivated standalone ledgers preserve legacy host behavior.
+
+Held-worker tests qualify UI heartbeat, twenty requests → one admission, zero Jobs polls, safe
+active/queued/observer deletion, two statusbars and unchanged oversized raw settings. A real 4×3
+CPU Visible preparation reaches Ready at zero retention; this does not prove painting or GPU rate.
+A private 256 MiB capped helper discovers five paired domains: own usage rises by 16 MiB and its
+hard ceiling falls from 232,890,368 to 216,117,248 B; conservative effective 116,445,184 B remains
+below both. This proves bounded discovery/headroom response, not actual eviction or RSS plateau.
+Injected policy cycles separately qualify stable positive fill/evict/refill and pressure/recovery.
+Nine affected suites, caption/guard regressions, final Bloom/repository quality, 26 unique strict
+translation units and Linux CPU-only/no-Vulkan app/five tests pass. No native Windows/macOS execution
+or whole-process/OOM guarantee is claimed. GPU coverage is unchanged. Terminal mailbox ownership,
+G6B reservations and remaining G4–G10 work remain pending.
 
 G3B1 checkpoint (2026-10-09), accepted after independent source review and focused reruns: coherent required-outline publication and exact
 owner-applied metadata are implemented as a bounded slice. Deterministic delayed raster, changing
@@ -932,8 +960,9 @@ service/container memory limits as well as host capacity, reserving room beyond 
 host-only defaults exceeded the imposed 8 GiB process cap. Also distinguish result delivery owned
 by live handles from unnecessary history retention: terminal `TaskRecord::work` still owns its
 result mailbox, so an unconsumed result can remain until history eviction after consumer handles
-are gone. The accepted capture-release checkpoint preserves this separate result policy. Neither
-container-aware budgeting nor mailbox retirement is resolved by that checkpoint.
+are gone. The accepted capture-release checkpoint preserves this separate result policy. That
+historical checkpoint resolved neither issue. The accepted reusable-headroom
+slice above now bounds process-aware retention; terminal mailbox retirement remains pending.
 
 **Slice B owns:** an explicit application-owned reservation/budget coordinator passed to the
 existing owners. Preview and export share the device allowance even before they share a device.

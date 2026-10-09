@@ -114,6 +114,9 @@ add_executable(bloom_project_host_test
 add_executable(bloom_task_monitor_test
     task_monitor_test.cpp
 )
+add_executable(bloom_memory_budget_controller_test memory_budget_controller_tests.cpp)
+target_link_libraries(bloom_memory_budget_controller_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_memory_budget_controller_test)
 add_executable(bloom_task_completion_bridge_test task_completion_bridge_tests.cpp)
 target_link_libraries(bloom_task_completion_bridge_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_task_completion_bridge_test)
@@ -412,6 +415,14 @@ target_link_libraries(bloom_assets_editor_test PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_assets_editor_test)
 
 include(BloomTesting)
+
+bloom_add_test(
+    NAME bloom.ui.memory_budget_controller
+    COMMAND bloom_memory_budget_controller_test
+    LABELS ui runtime unit
+    TIMEOUT 30
+)
+set_tests_properties(bloom.ui.memory_budget_controller PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 bloom_add_test(
     NAME bloom.ui.task_completion_bridge

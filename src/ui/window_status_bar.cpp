@@ -286,12 +286,9 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     mediaDiskCacheTimer_->setInterval(5'000);
     connect(mediaDiskCacheTimer_, &QTimer::timeout, this,
             &WindowStatusBar::refreshMediaDiskCacheCell);
-    // CACHEFIX-1: the memory-pressure poll rides the same five-second cadence rather than adding a
-    // timer of its own. Deliberately NOT called here at construction: a window that opens on an
-    // already-busy machine has nothing to report yet -- the caches it would trim are empty -- and a
-    // notice in the first painted frame would be a claim about the artist's machine made before
-    // Bloom had done anything to it.
-    connect(mediaDiskCacheTimer_, &QTimer::timeout, this, &WindowStatusBar::pollMemoryPressure);
+    // One application-owned worker sampler supplies every window; the status surface only
+    // observes the cached state on its existing coarse reporting cadence.
+    connect(mediaDiskCacheTimer_, &QTimer::timeout, this, &WindowStatusBar::observeMemoryBudget);
     mediaDiskCacheTimer_->start();
     memoryReserveBytes_ = memoryLedger_.reserveByteBudget();
 
@@ -331,8 +328,15 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     refreshMessage();
 }
 
-void WindowStatusBar::pollMemoryPressure() {
-    applyMemoryPressure(runtime::machineMemorySample(), runtime::MemoryBudgetLedger::Clock::now());
+void WindowStatusBar::observeMemoryBudget() {
+    const auto state = memoryLedger_.state();
+    memoryReserveBytes_ = memoryLedger_.reserveByteBudget();
+    if (state.sampleSerial != observedMemorySerial_) {
+        observedMemorySerial_ = state.sampleSerial;
+        reportMemoryState(state);
+    } else {
+        refreshMemoryToolTip();
+    }
 }
 
 void WindowStatusBar::pollMemoryPressureForTest(const std::size_t availableBytes) {
@@ -349,7 +353,10 @@ void WindowStatusBar::pollMemoryPressureForTest(
 
 void WindowStatusBar::applyMemoryPressure(runtime::MachineMemorySample sample,
                                           runtime::MemoryBudgetLedger::Clock::time_point now) {
-    const auto state = memoryLedger_.poll(sample, now);
+    reportMemoryState(memoryLedger_.poll(sample, now));
+}
+
+void WindowStatusBar::reportMemoryState(const runtime::MemoryBudgetState& state) {
     if (state.memoryNotice)
         showTransientMessage(tr("Memory pressure: caches trimmed"));
     if (state.swapNotice) {
@@ -370,13 +377,31 @@ void WindowStatusBar::refreshMemoryToolTip() {
                           : state.memoryPressure         ? tr("Memory pressure")
                           : state.retentionPercent < 100 ? tr("Recovering")
                                                          : tr("Normal");
+    QString process;
+    if (state.awaitingProcessSample)
+        process = tr("Waiting for process-limit sample");
+    else if (state.process.status == runtime::ProcessMemoryStatus::Unsupported)
+        process = tr("Host-only fallback: process limits unavailable");
+    else if (state.process.status == runtime::ProcessMemoryStatus::NoFiniteVisibleLimit)
+        process = tr("No finite limit in the visible cgroup hierarchy");
+    else if (state.process.status == runtime::ProcessMemoryStatus::Finite &&
+             state.processSampleFresh)
+        process = tr("Linux cgroup v2 limits sampled");
+    else
+        process = tr("Incomplete or stale process sample: previous constraint retained");
+    const auto ceiling = state.processCacheCeilingBytes
+                             ? formatBytes(*state.processCacheCeilingBytes)
+                             : tr("Unavailable");
     cache_->setToolTip(tr("RAM preview and operation-cache statistics.\n"
-                          "Effective cap: %1 · Configured total: %2\n"
+                          "Effective reusable cache allowance: %1 · Configured cache ceiling: %2\n"
                           "MemAvailable: %3 · Pressure state: %4\n"
-                          "Cache admission: %5% of effective budgets")
+                          "Cache admission: %5% of effective budgets\n"
+                          "%6 · Process cache ceiling: %7\n"
+                          "Live processing uses separate bounded admission")
                            .arg(formatBytes(state.effectiveBytes),
                                 formatBytes(state.configuredBytes), available, pressure)
-                           .arg(state.retentionPercent));
+                           .arg(state.retentionPercent)
+                           .arg(process, ceiling));
 }
 
 QString WindowStatusBar::cacheToolTipForTest() const { return cache_->toolTip(); }
@@ -438,7 +463,7 @@ void WindowStatusBar::refreshPreviewCells() {
                 .arg(progress->preparedFrames)
                 .arg(progress->playableFrames));
     } else {
-        cache_->setToolTip({});
+        refreshMemoryToolTip();
     }
     const auto previewText = previewCacheText(*previewController_);
     const auto operationText =

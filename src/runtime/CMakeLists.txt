@@ -7,6 +7,7 @@ target_sources(
     PRIVATE
         row_band_execution.cpp
         memory_budget_ledger.cpp
+        process_memory_sample.cpp
         task_primitives.cpp
         task_completion.cpp
         task_gpu_executor.cpp
@@ -19,6 +20,7 @@ target_sources(
         FILES
             include/bloom/runtime/cancellation.hpp
             include/bloom/runtime/memory_budget_ledger.hpp
+            include/bloom/runtime/process_memory_sample.hpp
             include/bloom/runtime/row_band_execution.hpp
             include/bloom/runtime/task_gpu_executor.hpp
             include/bloom/runtime/task_completion.hpp

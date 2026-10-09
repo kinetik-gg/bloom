@@ -132,10 +132,9 @@ class WindowStatusBar final : public kit::KSurface {
     void refreshProbeCell(const ProbeReadout& readout);
     void refreshMediaDiskCacheCell();
     void refreshMessage();
-    // Reads host memory and swap use and polls the shared ledger. Driven by the same
-    // five-second timer as the disk-cache cell -- a memory reading does not need sub-second
-    // freshness either, and adding a second timer for it would only add a second cadence.
-    void pollMemoryPressure();
+    // Observes the application-owned worker snapshot. This surface never samples the OS.
+    void observeMemoryBudget();
+    void reportMemoryState(const runtime::MemoryBudgetState& state);
     void applyMemoryPressure(runtime::MachineMemorySample sample,
                              runtime::MemoryBudgetLedger::Clock::time_point now);
     void refreshMemoryToolTip();
@@ -168,6 +167,7 @@ class WindowStatusBar final : public kit::KSurface {
     std::size_t memoryReserveBytes_ = 0;
     // When swap starts the same episode, its distinct notice follows the ordinary trim notice.
     bool pendingSwapNotice_ = false;
+    std::uint64_t observedMemorySerial_ = 0;
     ProbeReadout probeReadout_{};
     bool probeFloatFormat_ = false;
 };

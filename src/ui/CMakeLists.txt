@@ -402,6 +402,7 @@ target_sources(
         composition_driver_probe.cpp
         properties_anchor_grid.cpp
         properties_sections.cpp
+        memory_budget_controller.cpp
         qualified_display_processor_bootstrap.cpp
         task_monitor_model.cpp
         task_ui_bridge.cpp
@@ -480,6 +481,7 @@ target_sources(
             include/bloom/ui/project_host.hpp
             include/bloom/ui/ram_preview_controller.hpp
             include/bloom/ui/properties_editor.hpp
+            include/bloom/ui/memory_budget_controller.hpp
             include/bloom/ui/qualified_display_processor_bootstrap.hpp
             include/bloom/ui/task_monitor_model.hpp
             include/bloom/ui/task_ui_bridge.hpp

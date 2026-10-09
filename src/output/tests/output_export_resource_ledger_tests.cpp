@@ -260,6 +260,33 @@ void testDefaultUsesProcessLedger(Expectations& expectations) {
                         "the process ledger has no dangling participant after normal destruction");
 }
 
+void testColdReusableClampPreservesLiveWork(Expectations& expectations) {
+    MemoryBudgetLedger memory(60 * gib, 60 * gib);
+    memory.beginProcessSampling();
+    output::ExportResourceLedgerV1 ledger(memory, 1024);
+    output::ExportResourceAdmissionStatusV1 status{};
+    auto reservation = ledger.reserve(100, status, 512);
+    expectations.expect(reservation && ledger.concurrentAllowance() == 1024 &&
+                            memory.state().effectiveBytes == 0,
+                        "cold reusable zero preserves actual bounded export scratch admission");
+    const bloom::runtime::MemoryBudgetSample zero{
+        .machine = {.availableBytes = 60 * gib},
+        .physicalBytes = 60 * gib,
+        .process = {
+            .source = bloom::runtime::ProcessMemorySource::LinuxCgroupV2,
+            .status = bloom::runtime::ProcessMemoryStatus::Finite,
+            .sampledAt = at(0),
+            .membershipPath = "/fixture",
+            .domains = {{"/fixture", bloom::runtime::ProcessMemoryLimitKind::Finite, 0, 0}}}};
+    const auto state = memory.applySample(zero, at(0));
+    expectations.expect(
+        state.effectiveBytes == 0 && ledger.chargedBytes() == 100 && reservation &&
+            reservation->chargedBytes() == 100 && ledger.concurrentAllowance() == 1024,
+        "cache hard zero neither destroys live reservations nor changes their existing bound");
+    reservation.reset();
+    expectations.expect(ledger.chargedBytes() == 0, "live reservation still releases exactly once");
+}
+
 } // namespace
 
 int main() {
@@ -275,5 +302,6 @@ int main() {
     testUnregisterAfterFacadeAndLastReservation(expectations);
     testEmptyFacadeUnregisters(expectations);
     testDefaultUsesProcessLedger(expectations);
+    testColdReusableClampPreservesLiveWork(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

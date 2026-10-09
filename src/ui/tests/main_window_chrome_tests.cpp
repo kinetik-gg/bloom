@@ -673,8 +673,9 @@ void testWindowStatusBarTrimsCachesUnderMemoryPressure(Expectations& expectation
                             QStringLiteral("Memory pressure: caches trimmed"),
                         "memory pressure: a second episode is reported again");
     expectations.expect(
-        strip.cacheToolTipForTest().contains(QStringLiteral("Effective cap:")) &&
-            strip.cacheToolTipForTest().contains(QStringLiteral("Configured total:")) &&
+        strip.cacheToolTipForTest().contains(
+            QStringLiteral("Effective reusable cache allowance:")) &&
+            strip.cacheToolTipForTest().contains(QStringLiteral("Configured cache ceiling:")) &&
             strip.cacheToolTipForTest().contains(QStringLiteral("MemAvailable:")) &&
             strip.cacheToolTipForTest().contains(QStringLiteral("Memory pressure")),
         "the tooltip exposes the effective cap, configured total, sample and state");

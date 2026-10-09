@@ -198,6 +198,12 @@ bloom_enable_warnings(bloom_runtime_memory_budget_ledger_test)
 bloom_add_test(NAME bloom.runtime.memory_budget_ledger COMMAND bloom_runtime_memory_budget_ledger_test
               LABELS unit runtime TIMEOUT 30)
 
+add_executable(bloom_runtime_process_memory_sample_test process_memory_sample_tests.cpp)
+target_link_libraries(bloom_runtime_process_memory_sample_test PRIVATE bloom_runtime)
+bloom_enable_warnings(bloom_runtime_process_memory_sample_test)
+bloom_add_test(NAME bloom.runtime.process_memory_sample COMMAND bloom_runtime_process_memory_sample_test
+              LABELS unit runtime TIMEOUT 30)
+
 bloom_add_test(
     NAME bloom.runtime.input-color-context
     COMMAND bloom_runtime_input_color_context_test

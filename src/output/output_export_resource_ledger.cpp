@@ -61,7 +61,8 @@ ExportResourceLedgerV1::ExportResourceLedgerV1(runtime::MemoryBudgetLedger& memo
             std::lock_guard lock(state->mutex);
             // Live products keep their charges; only further admission is constrained.
             state->concurrentAllowance = bytes;
-        });
+        },
+        runtime::MemoryBudgetOwnerKind::LiveWork);
 }
 
 std::shared_ptr<ExportResourceReservationV1>

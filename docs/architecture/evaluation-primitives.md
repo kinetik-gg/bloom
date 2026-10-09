@@ -662,19 +662,51 @@ operation/preview split remains 60/40, except at the floor where it is 1/2 GiB:
 | 32 GiB | 12.8 GiB | 19.2 GiB | 16 GiB | 9.6 GiB | 6.4 GiB |
 | 60 GiB | 24 GiB | 36 GiB | 30 GiB | 18 GiB | 12 GiB |
 
-`MemoryBudgetLedger` recalculates the live cap on each status-bar poll (five seconds):
+Production calls `MemoryBudgetLedger::beginProcessSampling()` before constructing cache owners.
+Reusable retention starts at zero until a completed worker sample permits it. Foreground processing
+capacity and actual export reservations use a separate bounded allowance, so cold zero retention
+does not disable frame preparation. Default construction and settings getters perform no OS reads;
+unactivated standalone ledgers retain the legacy host-only policy.
+
+The application owns one `MemoryBudgetController`, with at most one `BlockingIo` sampling task,
+no sampling backlog and a five-second cadence. A worker captures host/process data; ordinary task
+completion delivers it independently of Jobs monitoring. The UI applies cache callbacks and updates
+cached settings-derived weights. Status bars only observe that cached state. Shutdown cancels and
+stops admission without waiting on a held worker. The first delivered host capacity refreshes
+configured weights without writing settings.
+
+Activated host policy uses configured capacity, half of physical memory and 80% of available
+memory, subject to the historical physical-bounded floor. No currently registered retained bytes
+qualify as exclusive reclaimable credit, so production credits **zero** to both host and process
+headroom. An unactivated legacy ledger may still add its registered retained bytes to availability.
+Missing availability omits that host term; measured zero remains a real pressure sample.
+
+For each visible finite Linux cgroup v2 domain, pair its own limit `L` with its own usage `U`:
 
 ```text
-candidate = max(3 GiB, min(configured total, 50% physical,
-                          80% × (MemAvailable + registered retained bytes)))
+reserve P = min(1 GiB, max(16 MiB, L/8))
+domain ceiling = max(0, L - (max(U - reusableHostCredit, 0) + P))
+reusableHostCredit = 0
+hard reusable ceiling = min(host allowance, every finite domain ceiling)
 ```
 
-The floor is bounded by physical memory on a machine reporting less than 3 GiB. Unknown physical
-memory uses the 3 GiB fallback. Missing availability omits only that term; a measured zero is a
-real pressure sample. Adding retained bytes back prevents Bloom's own cache fill from repeatedly
-shrinking the cap. Startup availability seeds the first effective cap; subsequent samples replace
-it. A cap change requires a difference strictly greater than 10% and at least five seconds since
-the previous change. Increases additionally use the recovery cadence below.
+The parser follows actual membership and compatible mounts, preserving visible ancestors with a
+bounded 32-domain walk. A finite limit with unavailable usage can still tighten the absolute `L-P`
+bound. Partial, stale, failed and unsupported samples never expand a previously finite constraint.
+Verified no-visible-finite-limit is distinct from unknown or unlimited: it describes only the
+visible hierarchy. Linux memory-v1 and Windows/macOS process limits are explicitly Unsupported in
+this slice. With no prior finite constraint, explicit unsupported/no-finite results permit host-only
+best effort; otherwise the prior finite ceiling remains latched. Native Windows/macOS execution
+qualification is still pending.
+
+Only monotonic complete finite samples no more than fifteen seconds old authorize measured-ceiling
+growth. The first finite sample seeds at most half the hard allowance. Recovery waits ten seconds;
+upward changes retain the five-second/ten-percent gating and grow by at most the smaller of 25% of
+the effective allowance and half the remaining gap. Recovery from zero uses a half-gap seed after
+the hold. Reliable hard shrink applies immediately at any delta, overriding floors, hysteresis and
+cooldown. Reusable retention is bounded by this policy; it is not a whole-process reservation or
+OOM guarantee. GPU/driver allocations, processing scratch, live pins and export admission require
+separate aggregate accounting.
 
 Missing, invalid or zero settings use the default split. Overrides determine configured ceilings:
 one override reduces the other allocation if necessary; two overcommitted overrides are reduced
@@ -683,22 +715,17 @@ Explicit ceilings below the policy floor stay small. The configured total is the
 operation/preview sum, and every registered pool's ceiling supplies its proportional weight.
 Weights are normalized by `max(configured total, sum of registered ceilings)`, so auxiliary caches
 share the total rather than add unbounded allowances on top. Video's configured allowance is
-reserved from operation space by the composition root. Each callback receives its weighted
-fraction of the effective cap, further reduced by the current pressure percentage.
-
-For example, on 16 GiB with the default 8 GiB configured total, 3 GiB available plus 4 GiB held
-produces a 5.6 GiB candidate. On 60 GiB with the default 30 GiB total, 12 GiB available plus 8 GiB
-held produces 16 GiB. The 10/6 GiB overrides configure a 16 GiB ceiling on that machine; if
-availability plus held bytes later falls to 10 GiB, the candidate becomes 8 GiB. Hysteresis can
-retain the previous cap for a small change or until the next eligible poll.
+reserved from operation space by the composition root. Each reusable callback receives its weighted
+fraction of the effective reusable cap; `LiveWork` uses the separate processing allowance. Both
+are further reduced by the current host-pressure percentage.
 
 Linux reads `MemAvailable`, `SwapTotal` and `SwapFree` from `/proc/meminfo`, falling back to
 available physical pages when necessary. Windows reads available physical RAM with
 `GlobalMemoryStatusEx` and actual page-file use with `K32EnumPageFilesW`, rather than treating
 commit charge as swap. macOS uses free plus inactive VM pages as a conservative availability
 estimate, `hw.memsize` for physical RAM and `vm.swapusage` for swap. When swap sampling is
-unavailable, availability pressure remains supported. These policies are Qt-free; UI-owned pools
-are polled on the UI thread, and cache registration/removal serializes against callbacks.
+unavailable, availability pressure remains supported. These policies are Qt-free; OS sampling runs on the worker, cache callbacks run on the UI
+thread, and cache registration/removal serializes against callbacks.
 
 ### Memory pressure response
 
@@ -711,7 +738,7 @@ threshold keeps it latched so a borderline value cannot flap. The first valid sa
 released sample, and a non-advancing or rolled-back clock rebaseline and assert nothing. Missing
 swap counters also assert no new pressure and drop the growth baseline, but they do not discard an
 active episode; the first valid sample after the gap is a fresh baseline. No swap configured means
-no swap-pressure signal. The ledger applies one ladder to all registered pools:
+no swap-pressure signal. The ledger applies the host-pressure ladder to registered pools, including live-work admission:
 
 1. The first pressure poll trims to 25% of effective budgets and reduces admission to the same
    limits immediately.
@@ -720,7 +747,8 @@ no swap-pressure signal. The ledger applies one ladder to all registered pools:
 3. Recovery requires an observed healthy sample. The first starts a ten-second hold; subsequent
    ten-second steps restore the retention percentage through 25%, 50%, then 100%. Cap increases
    also happen at most once per ten seconds, by at most 25% of the current cap per step, subject to
-   the same 10% hysteresis. Renewed pressure immediately interrupts recovery.
+   the same 10% hysteresis and the measured hard ceiling/growth rules above. Renewed pressure
+   immediately interrupts recovery.
 
 Operation and decoded-media entries, display previews, decoded video frames, the disk write
 queue, proxy thumbnails, decoded audio and the export frame queue all use the same callback
@@ -734,7 +762,8 @@ writes are refused while its charge exceeds the allowance. Pressure callbacks ne
 I/O or wait for the writer.
 
 `ExportResourceLedgerV1` registers its shared reservation state directly with the memory ledger
-through the existing `output` → `runtime` dependency. Its 4 GiB concurrent allowance is a ceiling
+through the existing `output` → `runtime` dependency as `LiveWork`, independently of the
+reusable-retention process clamp. Its 4 GiB concurrent allowance is a ceiling
 and proportional weight within the cap; the 2 GiB per-job limit still applies. Pressure lowers
 admission without freeing live products or reducing active reservation charges. New reservations
 and growing expansions that would exceed the current allowance return
@@ -745,8 +774,11 @@ destroyed, serialized against any in-progress callback.
 
 The bar reports **Memory pressure: caches trimmed** once per pressure episode. Swap pressure
 also produces a distinct **Swap pressure: caches trimmed** notice; if both start together, it
-follows the existing notice. The cache tooltip shows the effective cap, configured total,
-availability, pressure state and current admission percentage. The main cache cell continues to
+follows the existing notice. The cache tooltip distinguishes **Effective reusable cache allowance**
+from the host-resolved
+**Configured cache ceiling**, and reports process provenance/ceiling, availability, pressure state
+and current admission percentage. The configured ceiling is not the sum of raw override values.
+The main cache cell continues to
 show held bytes and the current admission budgets. Configuration and project truth are unchanged.
 
 Separately, and independent of any poll, a cache insert never takes a process past a failed

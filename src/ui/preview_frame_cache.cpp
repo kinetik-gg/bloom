@@ -507,10 +507,12 @@ void PreviewFrameCache::evictGpuResidentToLimits() {
     }
 }
 
-std::size_t physicalMemoryBytes() noexcept { return runtime::physicalMemoryBytes(); }
+std::size_t physicalMemoryBytes() noexcept {
+    return runtime::processMemoryBudgetLedger().physicalByteBudget();
+}
 
 std::size_t defaultPreviewFrameCacheByteBudget() noexcept {
-    return runtime::MemoryBudgetLedger{}.allocate().previewFrameCacheByteBudget;
+    return runtime::processMemoryBudgetLedger().allocate().previewFrameCacheByteBudget;
 }
 
 namespace {
@@ -527,7 +529,7 @@ namespace {
 } // namespace
 
 runtime::MemoryBudgetAllocation cacheMemoryBudgetsFromSettings(const QSettings& settings) {
-    const runtime::MemoryBudgetLedger ledger(physicalMemoryBytes());
+    auto& ledger = runtime::processMemoryBudgetLedger();
     const auto allocation = ledger.allocate(
         budgetOverride(settings, QLatin1StringView("playback/operation-cache-bytes")),
         budgetOverride(settings, QLatin1StringView(ramPreviewByteBudgetKey)));
