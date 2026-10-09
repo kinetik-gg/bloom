@@ -128,9 +128,27 @@ support reports can correlate a visible operation with its work.
 CPU and blocking-I/O tasks release their callable and captured inputs when they publish a terminal
 outcome. Running cancellation only requests cancellation: the callable stays alive until execution
 returns. Queued cancellation releases it after removal from the queue, without waiting for an
-executor worker. Bounded terminal history retains metadata, and the result mailbox keeps an
-unconsumed typed result until its consumer takes it or its owners release it; history does not
-retain completed work inputs solely for diagnostics.
+executor worker. Bounded terminal history retains metadata, with only weak typed-result writers.
+Accepted `TaskHandle` instances and their copies own the result mailbox. A strong local admission
+pin bridges fast completion until transfer to the accepted handle. A live handle keeps take-once
+result delivery valid across history eviction and scheduler destruction; dropping the last handle
+releases an unconsumed result independently of diagnostic history. An expired consumer does not
+change the task's normalized outcome, accounting or completion notification.
+
+Mailbox and pending storage use owning result pointers. Locks exchange pointers; custom value
+moves, moved-from destruction, discarded payloads and final leases are disposed outside mailbox,
+GPU result and dispatch locks. Failed/Cancelled result storage is prepared before admission, so
+terminal publication allocates no result wrapper and requires no value move assignment. A take
+pins the mailbox locally, extracts its pointer under lock and moves/destroys the value afterward.
+Forced GPU replacement disposes prior pending storage outside locks, and winning publication seals
+staging against late completion. Wrong-thread completion drops its rejected input before failure
+publication, even if diagnostic construction fails. Scheduler winner/history and G4A postcleanup
+notification sites remain unchanged.
+
+The bounded ownership gate covers CPU/I/O abandonment and copied handles, history/scheduler
+teardown, concurrent take, nonassignable reentrant moved-from values, and mock GPU forced/late and
+discard ordering. This is lifetime evidence, not native GPU execution, throughput or aggregate
+allocation accounting.
 
 ## Immutable Inputs And Result Publication
 

@@ -11,8 +11,8 @@ slices and G3A retention truth are accepted within the limits below. The packed 
 containment/adoption slice and its bounded cold-progress prerequisite are now accepted. This closes
 the measured panel/top-level spill gate for that route; broader G3/G4–G10 qualification remains
 incomplete. Bounded G4A completion delivery/refill and G4B rational transport/deadlines are accepted.
-G6A process-aware reusable headroom/off-UI sampling is accepted within the bounds below. Terminal
-mailbox ownership is the next separate slice; broader aggregate accounting remains G6B.
+G6A process-aware reusable headroom/off-UI sampling and terminal mailbox ownership are accepted
+within the bounds below. Broader aggregate reservations remain the next G6B slice.
 
 Implementation proceeds sequentially from `e1086c13`. Each slice requires source review, focused
 regressions, and the applicable native/product evidence before its successor is accepted. A passing
@@ -35,11 +35,36 @@ and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 | G3B packed Viewer Stage 2 | Accepted as a bounded containment/adoption slice | Independent external pixels, real animation/drag/undo, exact host-only Full/Half 100-frame reuse, portable regressions, final builds/quality/static analysis pass |
 | G4A shared-preview completion | Accepted as a bounded delivery/refill slice | Neutral terminal subscriptions, coalesced UI drain, typed consumers, private Half100 refill/animation, portable tests, final build/quality and 115 affected translation units pass |
 | G4B rational transport | Accepted as a bounded clock/deadline slice | Exact cache-independent elapsed/audio targets, valid-grid reanchor, intent deadlines, five-rate real-clock gate, private animation pixels, Linux CPU fallback and 62 affected translation units pass |
-| G6A reusable process headroom | Accepted as a bounded retention/sampling slice | Paired visible Linux v2 limits, zero credit, requested/effective separation, pressure/recovery cycles, off-UI lifetime tests, private finite helper and Linux CPU-only gate pass; mailbox and aggregate reservations remain pending |
+| G6A reusable process headroom | Accepted as a bounded retention/sampling slice | Paired visible Linux v2 limits, zero credit, requested/effective separation, pressure/recovery cycles, off-UI lifetime tests, private finite helper and Linux CPU-only gate pass; mailbox accepted separately, aggregate reservations remain pending |
+| G6A terminal result ownership | Accepted as a bounded lifetime slice | Handle-owned mailboxes, weak writers, unlocked payload disposal, expired-consumer outcomes and forced/late mock GPU tests pass; history/accounting/notification sites unchanged |
 | G4C prerequisite | Accepted only as the bounded cold-progress prerequisite | One active/newest intent, useful older Stale publication and guarded pause/shutdown pass source review and short real playing pixels; remaining G4 scheduling is pending |
 | G7A / G9 bounded display work | Packed immutable borrowing, off-UI CPU channel derivation and finished-display host choice accepted | Explicit provenance and measured bytes; remaining CPU storage/process/channel work and broader cache policy remain pending |
 | G8 optional two-frame throughput | Investigation complete; implementation and benchmark pending | Source confirms per-service frame serialization; no multi-frame speedup or GPU-utilization result is established |
 | Remaining G4–G10 | Pending | Remaining scheduling, native public hooks, media reuse, aggregate memory, batching and sustained/platform qualification are not completed |
+
+G6A terminal-result checkpoint (2026-10-09), accepted after independent source/lifetime review:
+CPU/I/O and GPU work retain weak mailbox writers; accepted handles and copies own unconsumed
+results. The existing admission pin covers completion before handle transfer. Last-handle release
+frees results despite retained terminal history; live handles deliver once across history eviction
+and scheduler destruction. Executing captures survive cancellation until execution returns, and
+expired consumers preserve normalized outcomes and postcleanup completion.
+
+Owning result pointers permit lock-only pointer exchange. Value moves, moved-from destruction,
+discarded payloads and final leases occur outside mailbox/result/dispatch locks. Pre-admission
+Failed/Cancelled storage keeps publication allocation-free without requiring value move assignment.
+Forced GPU replacement retires pending storage outside locks; terminal sealing prevents late payload
+reinstatement. Wrong-thread input is disposed before failure diagnostics/publication. TaskRecord,
+terminal history, winner/accounting and G4A notification sites are unchanged.
+
+CPU/I/O/GPU ordinary abandoned success, copied handles, concurrent take, scheduler/history teardown,
+nonassignable reentrant moved-from values, and mock detach/device-loss/forced-shutdown plus late
+completion pass. A deleter observes release at Running/serial zero; the terminal wake observes
+released payload and quiescent accounting. Observer lifetime/unwind guards preserve that proof.
+Final Bloom/repository quality, nine focused suites, 67 affected strict translation units and Linux
+CPU-only/no-Vulkan app/six suites pass. The initial forced-shutdown Failed expectation was a test
+error: existing normalized policy remains Cancelled. No real device/native or desktop run was
+needed. This closes bounded mailbox retention, not aggregate allocation accounting, throughput,
+other-platform execution qualification or broader G4–G10 work. G6B reservations follow separately.
 
 G6A reusable-headroom checkpoint (2026-10-09), accepted after independent source/evidence review:
 production activates sampling before cache construction; cold reusable retention is zero while
@@ -65,8 +90,8 @@ below both. This proves bounded discovery/headroom response, not actual eviction
 Injected policy cycles separately qualify stable positive fill/evict/refill and pressure/recovery.
 Nine affected suites, caption/guard regressions, final Bloom/repository quality, 26 unique strict
 translation units and Linux CPU-only/no-Vulkan app/five tests pass. No native Windows/macOS execution
-or whole-process/OOM guarantee is claimed. GPU coverage is unchanged. Terminal mailbox ownership,
-G6B reservations and remaining G4–G10 work remain pending.
+or whole-process/OOM guarantee is claimed. GPU coverage is unchanged. Terminal mailbox ownership
+was a separate follow-up checkpoint above; G6B reservations and remaining G4–G10 work remain pending.
 
 G3B1 checkpoint (2026-10-09), accepted after independent source review and focused reruns: coherent required-outline publication and exact
 owner-applied metadata are implemented as a bounded slice. Deterministic delayed raster, changing
@@ -432,8 +457,8 @@ no vendor code/suppression changed. Linux CPU-only/no-Vulkan Bloom/five targets 
 pass. Public C++20/Qt and portable arithmetic do not establish executed macOS/Windows qualification.
 Failed intermediate logs are retained. Stable prior bundle and original app/session are untouched.
 
-Next G6A separates process-aware automatic cache headroom/off-UI sampling from terminal mailbox
-ownership. Requested user settings remain intact while effective clamps are reported; finite hard
+The subsequent two G6A checkpoints above separately accept process-aware automatic cache headroom/
+off-UI sampling and terminal mailbox ownership. Requested user settings remain intact while effective clamps are reported; finite hard
 process ceilings override floors/cooldowns. Platform provenance/fallback stays explicit. Live handles
 must retain take-once results while terminal history releases unnecessary payload ownership after
 safe cleanup. These slices do not implement the full G6B aggregate reservation broker or guarantee
@@ -955,14 +980,11 @@ These source-confirmed gaps require ownership records and reservation transfer, 
 limit. Preserve the presentation engine's separate WSI retirement proof. The accepted G2 primitive,
 image, and oracle slices do not establish aggregate accounting for these other owners.
 
-The 2026-10-09 launcher incident adds two concrete audits. Derive effective process headroom from
-service/container memory limits as well as host capacity, reserving room beyond configured caches;
-host-only defaults exceeded the imposed 8 GiB process cap. Also distinguish result delivery owned
-by live handles from unnecessary history retention: terminal `TaskRecord::work` still owns its
-result mailbox, so an unconsumed result can remain until history eviction after consumer handles
-are gone. The accepted capture-release checkpoint preserves this separate result policy. That
-historical checkpoint resolved neither issue. The accepted reusable-headroom
-slice above now bounds process-aware retention; terminal mailbox retirement remains pending.
+The 2026-10-09 launcher incident added process-headroom and terminal-result audits: host-only
+defaults exceeded an imposed process cap, and retained typed work unnecessarily owned unconsumed
+mailboxes after consumer handles were gone. The two accepted G6A checkpoints above now bound
+reusable process-aware retention and make typed result ownership follow live handles. They do not
+resolve the remaining aggregate native/quarantine/reservation inventory in this section.
 
 **Slice B owns:** an explicit application-owned reservation/budget coordinator passed to the
 existing owners. Preview and export share the device allowance even before they share a device.

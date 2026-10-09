@@ -109,7 +109,13 @@ provide research or rationale, but they are not binding until adopted here.
   foreground preparation and separate live export reservations. Saved requests, configured ceilings
   and effective reusable allowances remain distinct; unsupported platforms disclose host-only fallback.
   Bounded policy/lifetime tests and a private capped helper pass. This is not an aggregate process/OOM
-  guarantee. Terminal mailbox ownership is next; broader reservations and remaining G4–G10 gates stay open.
+  guarantee. Broader reservations and remaining G4–G10 gates stay open.
+
+- Typed task results now belong to live handles rather than retained terminal history. Weak writers,
+  admission pins and pointer-only lock exchange preserve take-once delivery while releasing abandoned
+  results outside locks. CPU/I/O and mock GPU forced/late/reentrant lifetime gates pass; scheduler
+  history, accounting and completion ordering remain unchanged. Aggregate G6B reservations are next;
+  this adds no native GPU performance or whole-process memory guarantee.
 
 The detailed implementation status and next merge gates live in [`roadmap.md`](roadmap.md).
 

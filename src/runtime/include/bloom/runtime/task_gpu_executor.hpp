@@ -134,9 +134,13 @@ class GpuTypedTaskWork final : public TaskWork,
             }
             try {
                 if (std::this_thread::get_id() != core_.serviceThread) {
-                    result = TaskResult<Value>::failed(wrongThreadDiagnostic());
+                    // Discard the rejected input before failure can finalize/notify, even if
+                    // constructing its diagnostic subsequently fails. No sink lock is held.
+                    result.cancelBeforePublication();
+                    publish(TaskResult<Value>::failed(wrongThreadDiagnostic()));
+                } else {
+                    publish(std::move(result));
                 }
-                publish(std::move(result));
             } catch (...) {
                 finishGpuToken(core_, TaskState::Failed);
             }
@@ -257,36 +261,46 @@ class GpuTypedTaskWork final : public TaskWork,
 
   public:
     GpuTypedTaskWork(GpuTaskStarter<Value> starter,
-                     std::shared_ptr<ResultMailbox<TaskResult<Value>>> mailbox)
-        : starter_(std::move(starter)), mailbox_(std::move(mailbox)),
-          fallbackResult_(TaskResult<Value>::failed(unhandledTaskDiagnostic())) {}
+                     const std::shared_ptr<ResultMailbox<TaskResult<Value>>>& mailbox)
+        : starter_(std::move(starter)), mailbox_(mailbox),
+          fallbackResult_(std::make_unique<TaskResult<Value>>(
+              TaskResult<Value>::failed(unhandledTaskDiagnostic()))),
+          cancelledResult_(std::make_unique<TaskResult<Value>>(TaskResult<Value>::cancelled())) {}
 
     [[nodiscard]] TaskState execute(TaskContext&) noexcept override { return TaskState::Failed; }
 
     [[nodiscard]] TaskState publish(const TaskState requestedOutcome) noexcept override {
+        const auto mailbox = mailbox_.lock();
+        GpuTaskStarter<Value> retiredStarter;
         {
             std::lock_guard dispatchLock(dispatchMutex_);
             published_ = true;
-            starter_ = nullptr;
+            retiredStarter.swap(starter_);
         }
-        std::lock_guard resultLock(resultMutex_);
-        std::lock_guard mailboxLock(mailbox_->mutex);
-        if (mailbox_->result.has_value()) {
-            return mailbox_->result->state();
+        std::unique_ptr<TaskResult<Value>> result;
+        {
+            std::lock_guard resultLock(resultMutex_);
+            sealed_ = true;
+            result.swap(pending_);
         }
         if (requestedOutcome == TaskState::Cancelled) {
-            if (pending_.has_value()) {
-                mailbox_->result.emplace(std::move(*pending_).intoCancelled());
+            if (result != nullptr) {
+                result->cancelBeforePublication();
             } else {
-                mailbox_->result.emplace(TaskResult<Value>::cancelled());
+                result = std::move(cancelledResult_);
             }
-        } else if (pending_.has_value() && pending_->state() == requestedOutcome) {
-            mailbox_->result.emplace(std::move(*pending_));
-        } else {
-            mailbox_->result.emplace(std::move(fallbackResult_));
+        } else if (result == nullptr || result->state() != requestedOutcome) {
+            result = std::move(fallbackResult_);
         }
-        pending_.reset();
-        return mailbox_->result->state();
+        const TaskState outcome = result->state();
+        if (mailbox != nullptr) {
+            std::lock_guard mailboxLock(mailbox->mutex);
+            if (mailbox->result != nullptr) {
+                return mailbox->result->state();
+            }
+            mailbox->result.swap(result);
+        }
+        return outcome;
     }
 
     [[nodiscard]] bool isValid() const noexcept override {
@@ -329,35 +343,53 @@ class GpuTypedTaskWork final : public TaskWork,
     }
 
     void stageForcedFailure(TaskDiagnostic diagnostic) noexcept override {
+        std::unique_ptr<TaskResult<Value>> replacement;
         try {
+            replacement = std::make_unique<TaskResult<Value>>(
+                TaskResult<Value>::failed(std::move(diagnostic)));
+        } catch (...) {
+            // Empty replacement selects the preallocated failure at publication.
+            replacement.reset();
+        }
+        std::unique_ptr<TaskResult<Value>> retired;
+        {
             std::lock_guard lock(resultMutex_);
             forced_ = true;
-            pending_.emplace(TaskResult<Value>::failed(std::move(diagnostic)));
-        } catch (...) {
-            return;
+            if (!sealed_) {
+                retired.swap(pending_);
+                pending_.swap(replacement);
+            }
         }
     }
 
   private:
     void tryStage(TaskResult<Value> result) noexcept {
+        std::unique_ptr<TaskResult<Value>> incoming;
         try {
-            std::lock_guard lock(resultMutex_);
-            if (!forced_) {
-                pending_.emplace(std::move(result));
-            }
+            incoming = std::make_unique<TaskResult<Value>>(std::move(result));
         } catch (...) {
             return;
+        }
+        std::unique_ptr<TaskResult<Value>> retired;
+        {
+            std::lock_guard lock(resultMutex_);
+            if (!forced_ && !sealed_) {
+                retired.swap(pending_);
+                pending_.swap(incoming);
+            }
         }
     }
 
     GpuTaskStarter<Value> starter_;
-    std::shared_ptr<ResultMailbox<TaskResult<Value>>> mailbox_;
+    std::weak_ptr<ResultMailbox<TaskResult<Value>>> mailbox_;
     mutable std::mutex dispatchMutex_;
     std::mutex resultMutex_;
-    std::optional<TaskResult<Value>> pending_;
-    TaskResult<Value> fallbackResult_;
+    std::unique_ptr<TaskResult<Value>> pending_;
+    std::unique_ptr<TaskResult<Value>> fallbackResult_;
+    std::unique_ptr<TaskResult<Value>> cancelledResult_;
     bool published_ = false;
     bool forced_ = false;
+    bool sealed_ = false;
 };
 
 } // namespace detail

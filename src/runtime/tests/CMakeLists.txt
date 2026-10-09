@@ -1,3 +1,9 @@
+add_executable(bloom_runtime_result_ownership_test task_result_ownership_tests.cpp)
+target_link_libraries(bloom_runtime_result_ownership_test PRIVATE bloom_runtime)
+bloom_enable_warnings(bloom_runtime_result_ownership_test)
+bloom_add_test(NAME bloom.runtime.result_ownership COMMAND bloom_runtime_result_ownership_test
+    LABELS runtime unit TIMEOUT 30)
+
 add_executable(bloom_runtime_task_test task_scheduler_tests.cpp)
 add_executable(bloom_runtime_completion_test task_completion_tests.cpp)
 add_executable(bloom_runtime_regression_test task_scheduler_regression_tests.cpp)

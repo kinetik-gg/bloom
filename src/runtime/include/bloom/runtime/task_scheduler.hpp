@@ -29,7 +29,8 @@ class GpuTaskWork;
 
 template <typename Result> struct ResultMailbox {
     std::mutex mutex;
-    std::optional<Result> result;
+    // Only task handles own this mailbox; history keeps a weak writer.
+    std::unique_ptr<Result> result;
 };
 
 void requestTaskCancellation(const std::weak_ptr<SchedulerState>& scheduler, TaskId id,
@@ -93,9 +94,14 @@ template <TaskResultValue Value> class TaskResult final {
         return diagnostics_;
     }
 
-    [[nodiscard]] TaskResult intoCancelled() && noexcept {
+    // Called before acquiring the mailbox lock: Value destruction may reenter the runtime.
+    void cancelBeforePublication() noexcept {
         state_ = TaskState::Cancelled;
         value_.reset();
+    }
+
+    [[nodiscard]] TaskResult intoCancelled() && noexcept {
+        cancelBeforePublication();
         return std::move(*this);
     }
 
@@ -133,8 +139,10 @@ template <> class TaskResult<void> final {
         return diagnostics_;
     }
 
+    void cancelBeforePublication() noexcept { state_ = TaskState::Cancelled; }
+
     [[nodiscard]] TaskResult intoCancelled() && noexcept {
-        state_ = TaskState::Cancelled;
+        cancelBeforePublication();
         return std::move(*this);
     }
 
@@ -181,9 +189,11 @@ inline TaskDiagnostic unhandledTaskDiagnostic(std::string detail = {}) {
 template <TaskResultValue Value> class TypedTaskWork final : public TaskWork {
   public:
     TypedTaskWork(TaskFunction<Value> function,
-                  std::shared_ptr<ResultMailbox<TaskResult<Value>>> mailbox)
-        : function_(std::move(function)), mailbox_(std::move(mailbox)),
-          fallbackResult_(TaskResult<Value>::failed(unhandledTaskDiagnostic())),
+                  const std::shared_ptr<ResultMailbox<TaskResult<Value>>>& mailbox)
+        : function_(std::move(function)), mailbox_(mailbox),
+          fallbackResult_(std::make_unique<TaskResult<Value>>(
+              TaskResult<Value>::failed(unhandledTaskDiagnostic()))),
+          cancelledResult_(std::make_unique<TaskResult<Value>>(TaskResult<Value>::cancelled())),
           fallbackSnapshotDiagnostic_(unhandledTaskDiagnostic()) {}
 
     [[nodiscard]] TaskState execute(TaskContext& context) noexcept override {
@@ -191,7 +201,7 @@ template <TaskResultValue Value> class TypedTaskWork final : public TaskWork {
             TaskResult<Value> result = function_(context);
             copyDiagnosticsBestEffort(result, context);
             const TaskState state = result.state();
-            pending_.emplace(std::move(result));
+            pending_ = std::make_unique<TaskResult<Value>>(std::move(result));
             return state;
         } catch (const std::exception& error) {
             return captureFailure(context, error.what());
@@ -201,27 +211,29 @@ template <TaskResultValue Value> class TypedTaskWork final : public TaskWork {
     }
 
     [[nodiscard]] TaskState publish(const TaskState requestedOutcome) noexcept override {
-        // The scheduler publishes only after execute returns, or after removing queued work.
-        // Terminal history needs the outcome and metadata, not the callable's captured inputs.
-        // Release outside the mailbox lock; an executing callable is never destroyed by cancel().
+        // Pin the consumer while dropping captures and publishing. All payload disposal is
+        // outside locks; terminal history retains neither captured inputs nor result ownership.
+        const auto mailbox = mailbox_.lock();
         function_ = nullptr;
-        std::lock_guard lock(mailbox_->mutex);
-        if (mailbox_->result.has_value()) {
-            return mailbox_->result->state();
-        }
+        auto result = std::move(pending_);
         if (requestedOutcome == TaskState::Cancelled) {
-            if (pending_.has_value()) {
-                mailbox_->result.emplace(std::move(*pending_).intoCancelled());
+            if (result != nullptr) {
+                result->cancelBeforePublication();
             } else {
-                mailbox_->result.emplace(TaskResult<Value>::cancelled());
+                result = std::move(cancelledResult_);
             }
-        } else if (pending_.has_value() && pending_->state() == requestedOutcome) {
-            mailbox_->result.emplace(std::move(*pending_));
-        } else {
-            mailbox_->result.emplace(std::move(fallbackResult_));
+        } else if (result == nullptr || result->state() != requestedOutcome) {
+            result = std::move(fallbackResult_);
         }
-        pending_.reset();
-        return mailbox_->result->state();
+        const TaskState outcome = result->state();
+        if (mailbox != nullptr) {
+            std::lock_guard lock(mailbox->mutex);
+            if (mailbox->result != nullptr) {
+                return mailbox->result->state();
+            }
+            mailbox->result.swap(result);
+        }
+        return outcome;
     }
 
     [[nodiscard]] bool isValid() const noexcept override { return static_cast<bool>(function_); }
@@ -260,7 +272,8 @@ template <TaskResultValue Value> class TypedTaskWork final : public TaskWork {
         try {
             TaskDiagnostic diagnostic = unhandledTaskDiagnostic(detail == nullptr ? "" : detail);
             static_cast<void>(addDiagnosticBestEffort(context, diagnostic));
-            pending_.emplace(TaskResult<Value>::failed(std::move(diagnostic)));
+            pending_ = std::make_unique<TaskResult<Value>>(
+                TaskResult<Value>::failed(std::move(diagnostic)));
             return TaskState::Failed;
         } catch (...) {
             return captureFallback(context);
@@ -269,14 +282,15 @@ template <TaskResultValue Value> class TypedTaskWork final : public TaskWork {
 
     [[nodiscard]] TaskState captureFallback(TaskContext& context) noexcept {
         static_cast<void>(addDiagnosticBestEffort(context, std::move(fallbackSnapshotDiagnostic_)));
-        pending_.emplace(std::move(fallbackResult_));
+        pending_ = std::move(fallbackResult_);
         return TaskState::Failed;
     }
 
     TaskFunction<Value> function_;
-    std::shared_ptr<ResultMailbox<TaskResult<Value>>> mailbox_;
-    std::optional<TaskResult<Value>> pending_;
-    TaskResult<Value> fallbackResult_;
+    std::weak_ptr<ResultMailbox<TaskResult<Value>>> mailbox_;
+    std::unique_ptr<TaskResult<Value>> pending_;
+    std::unique_ptr<TaskResult<Value>> fallbackResult_;
+    std::unique_ptr<TaskResult<Value>> cancelledResult_;
     TaskDiagnostic fallbackSnapshotDiagnostic_;
 };
 
@@ -300,16 +314,20 @@ template <TaskResultValue Value> class TaskHandle final {
     }
 
     [[nodiscard]] std::optional<TaskResult<Value>> tryTakeResult() const {
-        if (mailbox_ == nullptr) {
+        const auto mailbox = mailbox_;
+        if (mailbox == nullptr) {
             return std::nullopt;
         }
-        std::lock_guard lock(mailbox_->mutex);
-        if (!mailbox_->result.has_value()) {
+        std::unique_ptr<TaskResult<Value>> stored;
+        {
+            std::lock_guard lock(mailbox->mutex);
+            stored.swap(mailbox->result);
+        }
+        if (stored == nullptr) {
             return std::nullopt;
         }
-        auto result = std::move(mailbox_->result);
-        mailbox_->result.reset();
-        return result;
+        // Both Value's move and its moved-from destructor can reenter tryTakeResult().
+        return std::optional<TaskResult<Value>>(std::move(*stored));
     }
 
   private:
