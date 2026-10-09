@@ -53,6 +53,8 @@ bool ViewerEditor::frameInCurrentDomain(const PreparedPreviewFrameHandle& frame)
 }
 
 PreparedPreviewFrameHandle ViewerEditor::preparedDisplayFrame() const {
+    if (packedHostShutdown_)
+        return nullptr;
     auto base = previewController_.state().frame;
     if (!frameInCurrentDomain(base))
         return nullptr;
@@ -65,6 +67,8 @@ PreparedPreviewFrameHandle ViewerEditor::preparedDisplayFrame() const {
 }
 
 std::optional<ViewerDisplayDescriptor> ViewerEditor::actualDisplayDescriptor() const {
+    if (packedHostShutdown_)
+        return std::nullopt;
     if (!isVisible())
         return std::nullopt;
     if (const auto* topLevel = window()->windowHandle(); topLevel && !topLevel->isExposed())

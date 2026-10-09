@@ -58,8 +58,10 @@ processingPhaseRequest(const GpuProcessingPhaseEnvelope& envelope) noexcept {
                                              .sourceFree = envelope.sourceFree,
                                              .native = envelope.native};
 }
-GpuProcessingPhasePolicy::GpuProcessingPhasePolicy(const std::size_t requestCapacity)
-    : budget_(requestCapacity) {}
+GpuProcessingPhasePolicy::GpuProcessingPhasePolicy(
+    const std::size_t requestCapacity,
+    const std::shared_ptr<render::PackedHostRetirementOwner>& retirementOwner)
+    : budget_(requestCapacity, retirementOwner) {}
 void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
                                                const std::size_t physicalBytes,
                                                const Clock::time_point now) noexcept {

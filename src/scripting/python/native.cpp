@@ -40,17 +40,22 @@ constexpr std::array<const char*, 6> kContextSources{"",     "project", "composi
 
 } // namespace
 
-NativeHost::NativeHost(const std::string& project) : NativeHost(makeSession(project)) {}
+NativeHost::NativeHost(const std::string& project, std::shared_ptr<PythonRootRetirements> roots)
+    : NativeHost(makeSession(project), {}, std::move(roots)) {}
 
 NativeHost::NativeHost(std::shared_ptr<Session> session,
-                       std::shared_ptr<host::GpuExportProvider> provider)
-    : session_(std::move(session)), gpuExportProvider_(std::move(provider)) {
+                       std::shared_ptr<host::GpuExportProvider> provider,
+                       std::shared_ptr<PythonRootRetirements> roots)
+    : session_(std::move(session)), rootRetirements_(std::move(roots)),
+      gpuExportProvider_(std::move(provider)) {
+    if (!rootRetirements_)
+        throw std::invalid_argument("Python hosts require the interpreter retirement registry");
     if (!session_ || !session_->isValid()) {
         throw std::invalid_argument("A live Bloom session is required");
     }
     ownsGpuExportProvider_ = gpuExportProvider_ == nullptr;
     if (ownsGpuExportProvider_) {
-        gpuExportProvider_ = host::GpuExportProvider::create();
+        gpuExportProvider_ = rootRetirements_->createOwnedProvider();
     }
     facade_ = std::make_unique<Facade>(*session_);
     subscription_ = facade_->events.subscribe([this](const commands::CommandEvent& event) {
@@ -61,18 +66,16 @@ NativeHost::NativeHost(std::shared_ptr<Session> session,
         }
         pendingEvents_.push_back(event);
     });
+    // This is the final potentially failing construction step. Every created scheduler is
+    // registered before its threads start; failure cleanup/joins run outside the GIL.
+    const nb::gil_scoped_release release;
+    retirement_ = rootRetirements_->registerHost(gpuExportProvider_, ownsGpuExportProvider_);
 }
 
 NativeHost::~NativeHost() {
-    shutdownRendering();
-    // Owned roots are released here on the supported headless interpreter thread. Live hosts
-    // always inject the app root, so their teardown cannot join a live native owner on the UI.
-}
-
-void NativeHost::shutdownRendering() {
-    if (ownsGpuExportProvider_ && gpuExportProvider_) {
-        static_cast<void>(gpuExportProvider_->shutdownAndWait(std::chrono::seconds(10)));
-    }
+    // Allocation-free GC handoff precedes provider release; no native/host/scheduler join here.
+    if (retirement_)
+        retirement_->release(gpuExportProvider_);
 }
 
 std::unique_lock<std::mutex> NativeHost::lockSession() const {
@@ -312,8 +315,9 @@ nb::list NativeHost::events() {
 }
 
 nb::list NativeHost::tasks() const {
+    auto call = retirement_->acquire();
     nb::list result;
-    for (const auto& task : scheduler_.snapshots()) {
+    for (const auto& task : call.scheduler().snapshots()) {
         nb::dict row;
         row["id"] = task.id.value();
         row["name"] = task.name;
@@ -328,15 +332,19 @@ nb::list NativeHost::tasks() const {
 }
 
 bool NativeHost::cancel(const std::uint64_t id) {
-    return scheduler_.cancel(runtime::TaskId::fromRaw(id));
+    auto call = retirement_->acquire();
+    return call.scheduler().cancel(runtime::TaskId::fromRaw(id));
 }
 
 void NativeHost::requestCancellation() {
     ++cancellationEpoch_;
     cancelled_.store(true);
-    for (const auto& task : scheduler_.snapshots()) {
+    auto call = retirement_->tryAcquire();
+    if (!call)
+        return; // Closing already cancels the scheduler; never dereference a collected handle.
+    for (const auto& task : call->scheduler().snapshots()) {
         if (!runtime::isTerminal(task.state))
-            static_cast<void>(scheduler_.cancel(task.id));
+            static_cast<void>(call->scheduler().cancel(task.id));
     }
 }
 

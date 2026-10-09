@@ -39,7 +39,8 @@ and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 | G6A reusable process headroom | Accepted as a bounded retention/sampling slice | Paired visible Linux v2 limits, zero credit, requested/effective separation, pressure/recovery cycles, off-UI lifetime tests, private finite helper and Linux CPU-only gate pass; mailbox accepted separately, aggregate reservations remain pending |
 | G6A terminal result ownership | Accepted as a bounded lifetime slice | Handle-owned mailboxes, weak writers, unlocked payload disposal, expired-consumer outcomes and forced/late mock GPU tests pass; history/accounting/notification sites unchanged |
 | G6B first phase reservations | Accepted as a bounded admission/lifetime slice | Shared explicit roots, conservative host/device/count envelopes, native retirement/quarantine, observed-constraint release and bounded readiness/release retries; required native routes, affected strict, application and Linux CPU-only closure pass; no unique physical accounting or width two |
-| G6B rooted packed-host payloads | Accepted only for ownership, conservation and off-UI production allocation | Allocator-requested RGBA8 payload, provisional foldback, terminal-success handoff, fault/cancellation, Viewer/cache pins and scoped closure pass; published last-owner free can still run on UI and must move off-thread next |
+| G6B rooted packed-host payloads | Accepted only for ownership, conservation and off-UI production allocation | Historical `6acad4d4` allocator-requested RGBA8 payload/fault/pin scope; its UI last-owner free required the follow-on below |
+| G6B off-UI published-host retirement | Affected retirement qualification gates pass | Payload plus admitted intrusive header, allocation-free final-alias enqueue, charged worker free and explicit actual-exit collection; headless/Linux CPU-only gates and all 103 affected strict TUs pass |
 | G4C prerequisite | Accepted only as the bounded cold-progress prerequisite | One active/newest intent, useful older Stale publication and guarded pause/shutdown pass source review and short real playing pixels; remaining G4 scheduling is pending |
 | G7A / G9 bounded display work | Packed immutable borrowing, off-UI CPU channel derivation and finished-display host choice accepted | Explicit provenance and measured bytes; remaining CPU storage/process/channel work and broader cache policy remain pending |
 | G8 optional two-frame throughput | Investigation complete; implementation and benchmark pending | Source confirms per-service frame serialization; no multi-frame speedup or GPU-utilization result is established |
@@ -85,18 +86,61 @@ no Vulkan linkage and zero missing dependencies are verified. Native branches re
 Unavailable there, never GPU passes. Exact split-run logs and frozen source hashes remain in the
 private owning report; the accepted first phase slice below is unchanged.
 
-Published host backing still frees synchronously on its last-owner thread, potentially the UI
-thread; the Viewer fixture's final external release occurs on Qt. Ownership ordering and
-conservation are proved, off-UI freeing and large-free latency are not. This pre-existing legacy
-behavior remains a required next repair, not an engineering-rule waiver. Before native allocation
-ownership, implement bounded off-UI published host retirement: transfer backing and its charge
-together, retain the charge through queued/active freeing, bound queue bytes/count, and handle
-submission refusal and shutdown without freeing a large published payload on UI. Deterministic
-blocked-worker/final-alias/overflow/shutdown tests must precede actual Viewer lifecycle proof.
-This is the next bounded design gate, not an implementation or completed performance claim.
+At this historical `6acad4d4` checkpoint, published backing freed on its last-owner thread,
+potentially Qt UI; that Viewer fixture's final external release proved ordering/conservation only.
+It did not waive the UI-thread rule. The required follow-on below implements worker retirement;
+its affected gates pass within bounded scope, and large-free/sustained latency is still unqualified.
 
 Allocation headers, debug proxies, malloc/driver overhead, metadata, legacy host storage,
 native/UMA backing and final RGBA32F/final-render host payloads remain outside this slice's charge.
+
+Off-UI published-host retirement follow-on (2026-10-10), bounded affected gates pass: explicitly
+rooted published RGBA8 payload and exact intrusive-header bytes stay charged through live/queued/
+in-progress retirement until actual worker free. Provisional cleanup remains on its attempt worker;
+UI final-alias drop only enqueues/notifies the admitted node, without allocation/free/credit. No new
+fixed frame/allocation cap is introduced. The [owning GPU contract](../architecture/gpu-backend.md#off-ui-rooted-published-host-retirement-bounded-retirement-slice)
+distinguishes payload/header/phase/cache counters and actual exit from post-loop/off-GIL collection.
+
+The eleven-file neutral core increment passes three owning suites (0.03 s), repaired scoped strict
+checks and actual ASAN/UBSAN/LSAN with no findings. Held free preserves charge/revision and refuses
+new work against queued bytes; actual free releases once. Startup acknowledgement allocation fault,
+close-during-startup, nonblocking polling during collection and 1,500 admitted one-pixel allocations
+without a fixed count cap are covered. GUI twenty-two-file increment passes two suites (5.26 s) and
+eleven direct owning strict TUs. Genuine private-compositor RTX5080 Viewer proof passes 1.388 s/
+324.9 MiB: 8,294,400 payload bytes plus this build's exact 64-byte header; outgoing deleteLater and
+external pins keep exit pending; UI last-alias enqueue permits nine Qt heartbeats while real free
+is held, then one release revision and actual exit precede final close/post-loop collection. Earlier
+failed deferred-loop/helper witnesses remain separate; this is not sustained latency qualification.
+
+Headless records pass 0.02 s and actual lifecycle/Embedded suites 0.21 s: heavy Session GC with
+closing provider retained, constructor cleanup off GIL, active calls/shared roots/borrowed app roots,
+held free/false timeout/GIL progress, retained tickets/closed Hosts and actual collection before
+PyFinalize. The original ordinary mixed-ICD Python API's late-bootstrap crash remains failed evidence;
+its actual core identified concurrent NVIDIA ICD initialization. A per-interpreter cancellation-aware
+bootstrap gate repairs owned provider construction without discovery/driver workarounds or frame
+serialization. The unchanged owning API passes 1.03 s then three repeats (1.04/1.09/1.01 s). Initial
+gate-control diagnostic expectation was incorrect; corrected DeviceUnavailable control passes 0.02 s.
+
+The initial app build's eight architecture findings are preserved. Runtime now forwards the same
+render-owned neutral owner through a declared public alias; top-level cross-module tests declare
+their dependencies. Repaired app/CLI/Python/repository quality passes without checker exceptions.
+Owning batch is initially 19/20 plus corrected controller prerequisite rerun (0.35 s), preserving
+RequestCount/own-R+1/no-spin/newest/release assertions. It remains CPU/control, not GPU execution or
+automatic final-alias notification proof. New genuine native phase/retry helper passes 5.126 s/
+551.8 MiB (six preparations, three warm graph jobs); sticky-device helper passes 351 ms/21.2 MiB,
+both private/validated. Initial nonexecutable helper invocation is retained as setup failure; broader
+accepted six-route coverage remains unchanged, not a new run of this slice.
+
+Current source inventory has 53 unique paths. Vulkan-disabled/Python-enabled CPU-stub and unavailable-header app/CLI/module builds pass,
+followed by all twenty affected root/frontend suites in 9.93 s, including the unchanged full API
+and six lifecycle/Embedded suites. Native branches remain explicitly unavailable, never GPU passes.
+The initial Python 3.13/qualified 3.14 nanobind SOABI setup failure is preserved separately from the
+corrected matching-interpreter build. The full 103-TU changed-header strict sweep passes without
+diagnostics or repair reruns.
+These final results remain distinct from earlier incremental maps and corrected owning batches. Legacy/other host buffers,
+FloatFinal, native/driver/UMA and whole-process accounting, width two and sustained/platform performance
+remain open. Controlled mounted-footage qualification follows this closure before deeper native
+allocation ownership; it is not established by uniform local cache fixtures.
 
 First G6B phase-reservation checkpoint (2026-10-09), accepted within bounded scope:
 independent reviews cover coordinator/policy/builder quotas, resident and final phase lifetimes,

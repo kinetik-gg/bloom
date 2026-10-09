@@ -1,5 +1,13 @@
 include(BloomTesting)
 
+add_executable(bloom_render_packed_host_retirement_test packed_host_retirement_tests.cpp)
+target_link_libraries(bloom_render_packed_host_retirement_test PRIVATE bloom_render)
+target_include_directories(bloom_render_packed_host_retirement_test PRIVATE
+    "${PROJECT_SOURCE_DIR}/src/render")
+bloom_enable_warnings(bloom_render_packed_host_retirement_test)
+bloom_add_test(NAME bloom.render.packed_host_retirement
+    COMMAND bloom_render_packed_host_retirement_test LABELS unit memory)
+
 add_executable(bloom_render_gpu_processing_phase_budget_test gpu_processing_phase_budget_tests.cpp)
 target_link_libraries(bloom_render_gpu_processing_phase_budget_test PRIVATE bloom_render)
 bloom_enable_warnings(bloom_render_gpu_processing_phase_budget_test)

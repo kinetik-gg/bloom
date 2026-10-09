@@ -15,12 +15,14 @@
 namespace bloom::render {
 namespace detail {
 class PackedHostCapacityError final : public std::bad_alloc {};
+class PackedHostMissingRetirementError final : public std::bad_alloc {};
 
 // This allocator admits the actual standard-library request before allocating its payload.
 // The private allocation header owns the token; no borrowed span or vector alias owns a charge.
 [[nodiscard]] Rgba8* allocatePackedRgba8(const std::shared_ptr<PackedHostStorageAuthority>&,
                                          std::size_t count);
 void deallocatePackedRgba8(Rgba8*) noexcept;
+[[nodiscard]] std::size_t packedHostAllocationMetadataBytes() noexcept;
 
 template <class T> class PackedStorageAllocator {
   public:

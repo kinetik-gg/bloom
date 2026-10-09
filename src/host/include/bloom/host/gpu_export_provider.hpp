@@ -4,11 +4,13 @@
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
+#include <bloom/runtime/packed_host_retirement.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -57,8 +59,12 @@ class GpuExportProvider final {
     // Cheap: stores options only. A missing injected phase policy creates ONE provider-owned
     // process root, sampled on its bootstrap/evaluation workers, including disabled CPU roots.
     // Injected application policies remain externally sampled; no OS reads occur in create().
+    // An explicit shared gate serializes only native bootstrap construction and failed/raced-stop
+    // cleanup across the owning interpreter's providers. Waiting is cancel-aware on CPU workers;
+    // normal frame execution and borrowed application providers remain independent.
     [[nodiscard]] static std::shared_ptr<GpuExportProvider>
-    create(runtime::GpuProcessFrameEvaluatorOptions options = {});
+    create(runtime::GpuProcessFrameEvaluatorOptions options = {},
+           std::shared_ptr<std::timed_mutex> bootstrapGate = {});
 
     ~GpuExportProvider();
 
@@ -84,6 +90,10 @@ class GpuExportProvider final {
 
     [[nodiscard]] std::shared_ptr<runtime::GpuProcessingPhasePolicy>
     processingPhasePolicy() const noexcept;
+    // Owned only when create() received no injected policy. Borrowed application policies
+    // return null; their composition root alone closes and collects its host retirement owner.
+    [[nodiscard]] std::shared_ptr<runtime::PackedHostRetirementOwner>
+    ownedPackedHostRetirementOwner() const noexcept;
     // Worker-only. Provider-owned roots refresh at most once per five seconds; injected GUI
     // roots use their existing asynchronous application sampler and never sample here.
     void refreshProcessingCapacity(const runtime::CancellationToken& cancellation = {});
@@ -101,17 +111,22 @@ class GpuExportProvider final {
     // after beginShutdown(): stopping is a signal, never completion proof. A cancelled-before-run
     // bootstrap is observed through the owned task handle's terminal result, so this can never wait
     // forever. The app shutdown coordinator polls this; a headless caller uses `shutdownAndWait()`.
+    // This proof is native-only. A started provider-owned packed-host reclaimer additionally
+    // requires ownedPackedHostRetirementOwner()->exitAcknowledged() and off-GIL/nonUI collect.
     [[nodiscard]] bool retirementComplete() const;
 
     // Releases the evaluator if (and only if) retirement is complete; a no-op otherwise. Safe to
     // call repeatedly. Must be called before the provider is destroyed once retirement completes,
     // so the eventual release joins a finished thread. The app shutdown coordinator calls this
     // from its UI poll step after `retirementComplete()` turns true.
+    // Native-only: host collection belongs shutdownAndWait or the explicit lifecycle registry.
     void collectRetired() noexcept;
 
     // Convenience for synchronous headless callers (scripting/MCP render threads, never the UI):
     // begin shutdown, then poll `retirementComplete()` with a bounded sleep until it is true or the
-    // timeout elapses, then `collectRetired()`. Returns true when retirement was proven complete.
+    // timeout elapses. Provider-owned host payload retirement must also actually exit. Only a
+    // complete result collects native and owned-host workers, off the GIL/active UI loop. False
+    // retains incomplete ownership; callers must not unload dependencies or finalize Python.
     [[nodiscard]] bool shutdownAndWait(std::chrono::milliseconds timeout) noexcept;
 
     // Diagnostic/test seam: invoked with the id of the thread that performs the final evaluator
@@ -136,7 +151,8 @@ class GpuExportProvider final {
                              const runtime::GpuOcioCancellation& cancel = {});
 
   private:
-    explicit GpuExportProvider(runtime::GpuProcessFrameEvaluatorOptions options);
+    explicit GpuExportProvider(runtime::GpuProcessFrameEvaluatorOptions options,
+                               std::shared_ptr<std::timed_mutex> bootstrapGate);
 
     struct State;
     std::shared_ptr<State> state_;

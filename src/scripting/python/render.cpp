@@ -45,26 +45,28 @@ nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t
     if (first > last || last - first >= 10000 || destination.empty()) {
         throw nb::value_error("Invalid frame range or destination");
     }
+    auto call = retirement_->acquire(); // Covers session-lock wait and every GIL-released use.
+    auto& scheduler = call.scheduler();
     const auto access = lockSession();
     RenderResult result;
     std::vector<std::pair<std::string, std::string>> files;
     {
         const nb::gil_scoped_release release;
         runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
-        RenderRequest request{.composition = document::CompositionId::fromRaw(composition),
-                              .frame = range ? std::nullopt : std::optional(first),
-                              .range = range ? std::optional(std::pair(first, last)) : std::nullopt,
-                              .preset = selected,
-                              .destination = destination,
-                              .cancelled = [this, cancellationTask] {
-                                  if (cancellationRequested() || !session_->isValid())
-                                      return true;
-                                  const auto task = scheduler_.snapshot(
-                                      runtime::TaskId::fromRaw(cancellationTask));
-                                  return task && task->cancellationRequested;
-                              }};
-        result = Render::run(*session_, scheduler_, compiler, std::move(request), {},
-                             gpuExportProvider_);
+        RenderRequest request{
+            .composition = document::CompositionId::fromRaw(composition),
+            .frame = range ? std::nullopt : std::optional(first),
+            .range = range ? std::optional(std::pair(first, last)) : std::nullopt,
+            .preset = selected,
+            .destination = destination,
+            .cancelled = [this, cancellationTask, &call, &scheduler] {
+                if (call.closing() || cancellationRequested() || !session_->isValid())
+                    return true;
+                const auto task = scheduler.snapshot(runtime::TaskId::fromRaw(cancellationTask));
+                return task && task->cancellationRequested;
+            }};
+        result =
+            Render::run(*session_, scheduler, compiler, std::move(request), {}, gpuExportProvider_);
         if (result.succeeded) {
             if (range) {
                 for (auto index = first; index <= last; ++index) {

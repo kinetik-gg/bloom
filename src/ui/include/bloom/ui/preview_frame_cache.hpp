@@ -202,6 +202,8 @@ class PreviewFrameCache final : public QObject {
     [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }
     [[nodiscard]] Statistics statistics() const noexcept { return statistics_; }
     void clear();
+    // Terminal pin release after producers/native retirement; emits no cache notification.
+    void releaseForShutdown() noexcept;
 
     // Additive GPU-resident sublimits INSIDE the overall byte budget. The default is unlimited, so
     // a standalone cache -- and every pre-existing test -- is unchanged, and the overall CPU cache

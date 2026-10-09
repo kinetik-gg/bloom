@@ -1,6 +1,8 @@
 // Production offscreen GPU preparation -> one packed transfer -> ordinary EditorArea/Viewer.
 // All observation windows run only under the caller's private compositor.
 #include "gpu_service_chain_fixture.hpp"
+#include "packed_host_retirement_private.hpp"
+#include <bloom/ui/application_shutdown_coordinator.hpp>
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
@@ -26,6 +28,7 @@
 
 #include <QApplication>
 #include <QMouseEvent>
+#include <QPointer>
 #include <QSettings>
 #include <QSplitter>
 #include <QTemporaryDir>
@@ -162,11 +165,12 @@ void observe(const char* name, ui::ViewerEditor& viewer, QSplitter& splitter, QW
 
 #include "gpu_packed_animation_proof.ipp"
 #include "gpu_packed_cache100_proof.ipp"
+#include "gpu_packed_host_retirement_proof.ipp"
 #include "gpu_packed_playing_proof.ipp"
 
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     bool cache100 = false, half = false, partial = false, playing = false, animatedDrag = false;
-    bool hostOwnership = false;
+    bool hostOwnership = false, hostRetirement = false;
     std::vector<char*> forwarded{argv[0]};
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument = argv[index];
@@ -181,6 +185,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             playing = true;
         else if (argument == "--animated-drag")
             animatedDrag = true;
+        else if (argument == "--host-retirement")
+            hostOwnership = hostRetirement = true;
         else if (argument == "--host-ownership")
             hostOwnership = true;
         else
@@ -245,8 +251,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     auto resolver =
         host::makePackagedGpuOcioResolver(QCoreApplication::applicationFilePath().toStdString());
     checks.expect(resolver != nullptr, "actual packaged application OCIO resolver is available");
+    const auto retirementOwner = render::PackedHostRetirementOwner::create();
+    PackedHostTestTeardown retirementTeardown(retirementOwner);
     auto processingPolicy =
-        hostOwnership ? std::make_shared<runtime::GpuProcessingPhasePolicy>(4) : nullptr;
+        hostOwnership ? std::make_shared<runtime::GpuProcessingPhasePolicy>(4, retirementOwner)
+                      : nullptr;
     runtime::GpuScenePreparationPhase processingPhase;
     if (processingPolicy) {
         processingPhase = {.policy = processingPolicy,
@@ -396,6 +405,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             !viewer->residentPresentationActiveForTest(),
         "painted provenance is explicit and never native/ownerApplied");
     exactPackedCacheAdmission(checks, viewer->displayedFrameForTest());
+    if (hostRetirement)
+        return exercisePackedHostRetirement(checks, *viewer, *area, registry, splitter, controller,
+                                            bridge, service, processingPolicy, retirementOwner);
     if (hostOwnership) {
         auto external = viewer->displayedFrameForTest();
         const auto view = external ? external->displayBufferView() : std::nullopt;

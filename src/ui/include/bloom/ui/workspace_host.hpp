@@ -79,6 +79,8 @@ class WorkspaceHost final : public QFrame {
     // WorkspaceHost does not gain a second QObject base (which would desynchronize the frozen
     // moc-generated vtable).
     [[nodiscard]] std::vector<EditorNativeSurface*> liveNativeSurfaces() const;
+    // After task/native retirement: visit the existing tree without allocating a surface list.
+    void releasePackedFramesForShutdown();
 
   signals:
     void activeAreaChanged(EditorArea* area);

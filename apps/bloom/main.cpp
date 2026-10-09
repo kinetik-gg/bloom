@@ -1,8 +1,12 @@
+#include "deferred_editor_teardown.hpp"
+#include "packed_host_process_teardown.hpp"
+
 #include <algorithm>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
+#include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
@@ -60,7 +64,7 @@
 #include <memory>
 #include <thread>
 
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[]) try {
     QApplication application(argc, argv);
 
     QCoreApplication::setApplicationName("Bloom");
@@ -164,6 +168,8 @@ int main(int argc, char* argv[]) {
     // taskUiBridge/qualifiedDisplayProcessorBootstrap/previewController so it outlives every
     // reference into it those objects hold (locals destruct in reverse declaration order).
     bloom::runtime::QualifiedDisplayProcessorProvider qualifiedDisplayProcessorProvider;
+    const auto packedHostRetirement = bloom::render::PackedHostRetirementOwner::create();
+    bloom::app::PackedHostProcessTeardown packedHostTeardown(taskScheduler, packedHostRetirement);
     std::unique_ptr<bloom::ui::TaskUiBridge> taskUiBridgeOwner;
     try {
         taskUiBridgeOwner = std::make_unique<bloom::ui::TaskUiBridge>(taskScheduler);
@@ -174,7 +180,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     auto& taskUiBridge = *taskUiBridgeOwner;
-    const auto processingPhasePolicy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>();
+    const auto processingPhasePolicy =
+        std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(32, packedHostRetirement);
     bloom::ui::MemoryBudgetController memoryBudgetController(
         taskScheduler, taskUiBridge, bloom::runtime::processMemoryBudgetLedger());
     QObject::connect(&memoryBudgetController, &bloom::ui::MemoryBudgetController::sampleApplied,
@@ -366,6 +373,7 @@ int main(int argc, char* argv[]) {
     };
     auto gpuExportProvider = bloom::host::GpuExportProvider::create(gpuExportOptions);
     gpuExportProvider->prepare(taskScheduler);
+    bool shutdownQuiescent = false;
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
@@ -382,20 +390,18 @@ int main(int argc, char* argv[]) {
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
                      &ramPreviewController, &bloom::ui::RamPreviewController::beginShutdown);
-    // Non-blocking: the service closes its own admission, cancels the tasks it submitted, and wakes
-    // its thread. Its destructor (which runs before the scheduler's) joins that thread and drains
-    // child/native ownership, so nothing joins the UI thread while GPU work is in flight.
-    //
-    // HOST-RETIREMENT: this is intentionally connected to shutdownQuiescent (both task quiescence
-    // AND native-surface retirement), not shutdownStarted. Beginning service shutdown while a
-    // presenter's native target is still live would cancel the very work whose retirement proof the
-    // shutdown gate waits for; the service must keep pumping until every surface is genuinely
-    // retired. If a future service API exposes a separate "stop admitting, keep pumping" call, add
-    // it on shutdownStarted and keep the destruction hook here.
+    // Pre-host retirement is installed below once the window exists. The early setup path
+    // has no Viewer pins, but still stops the producer before closing the host owner.
+    shutdownCoordinator.setPackedHostRetirement(
+        [&] {
+            gpuPreviewDisplayService.beginShutdown();
+            previewController.releasePublishedFramesForShutdown();
+            packedHostRetirement->beginShutdown();
+        },
+        [&] { return packedHostRetirement->exitAcknowledged(); });
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownQuiescent,
-                     &shutdownCoordinator,
-                     [&gpuPreviewDisplayService] { gpuPreviewDisplayService.beginShutdown(); });
+                     &shutdownCoordinator, [&] { shutdownQuiescent = true; });
     application.installEventFilter(&shutdownCoordinator);
     // Kept live even though no editor shows it (task F1, item F6 removed Jobs from the registry
     // below): this is the model a JobsEditor takes, and it is the bridge's own consumer. Dropping
@@ -432,6 +438,7 @@ int main(int argc, char* argv[]) {
     gpuViewerBootstrap.bindResidentCache(*previewFrameCache);
     bloom::ui::ViewerGpuDependencies viewerGpuDependencies = gpuViewerBootstrap.dependencies();
     bloom::ui::EditorRegistry editorRegistry;
+    bloom::app::DeferredEditorTeardown deferredEditorTeardown;
     // Jobs is deliberately NOT registered (task F1, item F6). An editor in this registry is an
     // editor the panel switcher offers and a workspace can place, and Jobs is wanted in neither
     // for now. The JobsEditor class and registerJobsEditor() both survive untouched -- the single
@@ -447,9 +454,11 @@ int main(int argc, char* argv[]) {
                          &bloom::ui::ApplicationShutdownCoordinator::shutdownQuiescent,
                          &shutdownLoop, &QEventLoop::quit);
         shutdownCoordinator.beginShutdown();
-        if (!taskScheduler.isQuiescent()) {
+        if (!shutdownQuiescent) {
             shutdownLoop.exec();
         }
+        while (!packedHostRetirement->collect())
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         return 1;
     }
 
@@ -577,6 +586,16 @@ int main(int argc, char* argv[]) {
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownQuiescent, &application,
                      &QApplication::quit);
+    shutdownCoordinator.setPackedHostRetirement(
+        [&] {
+            // Tasks, native surfaces and export owners have retired before this callback.
+            // Release every live CPU or native Viewer, not just surfaces with native targets.
+            gpuPreviewDisplayService.beginShutdown();
+            window.workspaceHost()->releasePackedFramesForShutdown();
+            previewController.releasePublishedFramesForShutdown();
+            packedHostRetirement->beginShutdown();
+        },
+        [&] { return packedHostRetirement->exitAcknowledged(); });
     window.show();
 
     // The EXISTING TaskUiBridge poll drives the cached capability refresh and keeps running until
@@ -598,6 +617,19 @@ int main(int argc, char* argv[]) {
 
     // NOLINTEND(clang-analyzer-cplusplus.NewDeleteLeaks)
     const int result = application.exec();
+    if (!shutdownQuiescent) {
+        // Also cover a programmatic quit that bypassed the window close gate. Continue pumping
+        // retirement, never joining an active event loop or treating a timeout as quiescence.
+        QEventLoop shutdownLoop;
+        QObject::connect(&shutdownCoordinator,
+                         &bloom::ui::ApplicationShutdownCoordinator::shutdownQuiescent,
+                         &shutdownLoop, &QEventLoop::quit);
+        shutdownCoordinator.beginShutdown();
+        if (!shutdownQuiescent)
+            shutdownLoop.exec();
+    }
+    while (!packedHostRetirement->collect())
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     if (previewTrace) {
         // Recording has stopped with the event loop. The worker owns formatting and file I/O;
         // joining here cannot stall an active viewer or hold up an event-loop publication.
@@ -616,4 +648,10 @@ int main(int argc, char* argv[]) {
             std::cerr << "Preview trace export failed\n";
     }
     return result;
+} catch (const std::exception& error) {
+    std::cerr << "Bloom could not complete application setup or teardown: " << error.what() << '\n';
+    return 1;
+} catch (...) {
+    std::cerr << "Bloom could not complete application setup or teardown: unknown exception\n";
+    return 1;
 }

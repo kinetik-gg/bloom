@@ -1,4 +1,5 @@
 #include <bloom/render/display_buffer.hpp>
+#include <bloom/render/packed_host_retirement.hpp>
 
 #include <atomic>
 #include <cstdlib>
@@ -28,6 +29,22 @@ std::shared_ptr<GpuProcessingPhaseLease> grant(GpuProcessingPhaseBudget& budget,
            "fixture phase is admitted");
     return std::move(result.lease);
 }
+template <class Predicate> bool wait(Predicate check) {
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!check() && std::chrono::steady_clock::now() < until) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return check();
+}
+struct RetirementFixture final {
+    std::shared_ptr<PackedHostRetirementOwner> owner = PackedHostRetirementOwner::create();
+    ~RetirementFixture() {
+        owner->beginShutdown();
+        if (!wait([&] { return owner->exitAcknowledged(); }) || !owner->collect()) {
+            std::terminate();
+        }
+    }
+};
 ReferenceDisplayBufferDescriptor descriptor() {
     const auto window = ImageWindow::create(0, 0, 8, 4);
     const auto result = ReferenceDisplayBufferDescriptor::create(
@@ -41,7 +58,7 @@ ImageResult<PreparedReferenceDisplayBuffer> tryAdopt(PackedRgba8Storage& source,
     return PreparedReferenceDisplayBuffer::adopt(descriptor(), std::move(source), byteLimit);
 }
 void observeAllocation(const std::size_t payloadBytes) {
-    watchedSize = sizeof(PackedHostStorageToken) + payloadBytes;
+    watchedSize = detail::packedHostAllocationMetadataBytes() + payloadBytes;
     matchingAllocations = 0;
     watchedBlock = nullptr;
     freedWhileCharged = false;
@@ -53,7 +70,8 @@ void clearObservation() {
     failWatchedAllocation = false;
 }
 void allocatorFailureAndBounds() {
-    GpuProcessingPhaseBudget budget(2);
+    RetirementFixture retirement;
+    GpuProcessingPhaseBudget budget(2, retirement.owner);
     budget.setHostCapacity(512, true);
     auto phase = grant(budget, 512);
     const auto revision = phase->revisionAfterOwnRelease();
@@ -114,7 +132,8 @@ void allocatorFailureAndBounds() {
     expect(expiredRefused, "expired origin cannot allocate uncharged storage");
 }
 void moveAdoptPublishAndCopy() {
-    GpuProcessingPhaseBudget budget(2);
+    RetirementFixture retirement;
+    GpuProcessingPhaseBudget budget(2, retirement.owner);
     budget.setHostCapacity(512, true);
     auto phase = grant(budget, 512);
     const auto revision = phase->revisionAfterOwnRelease();
@@ -123,7 +142,9 @@ void moveAdoptPublishAndCopy() {
         while (!stop.load()) {
             const auto snapshot = budget.snapshot();
             if (snapshot.totalHostClaimBytes != 512 ||
-                snapshot.hostReservedBytes + snapshot.ownedPackedHostBytes != 512) {
+                snapshot.hostReservedBytes + snapshot.ownedPackedHostBytes +
+                        snapshot.ownedPackedHostMetadataBytes !=
+                    512) {
                 invalidTotal = true;
             }
         }
@@ -166,7 +187,8 @@ void moveAdoptPublishAndCopy() {
     phase.reset();
     expect(budget.snapshot().admittedPhases == 0 && budget.snapshot().hostReservedBytes == 0 &&
                budget.snapshot().ownedPackedHostBytes == 256 &&
-               budget.snapshot().totalHostClaimBytes == 256 &&
+               budget.snapshot().totalHostClaimBytes ==
+                   256 + 2 * detail::packedHostAllocationMetadataBytes() &&
                budget.snapshot().admissionRevision == revision,
            "published host storage survives independently of phase count/device reservation");
     auto competing = budget.reserve({.fixedHostBytes = 257, .sourceFree = true, .native = false});
@@ -179,12 +201,13 @@ void moveAdoptPublishAndCopy() {
     expect(budget.snapshot().ownedPackedHostBytes == 256,
            "purging one mailbox/cache alias leaves external pin charged exactly once");
     externalPin.reset();
-    expect(budget.snapshot().ownedPackedHostBytes == 128 &&
+    expect(wait([&] { return budget.snapshot().ownedPackedHostBytes == 128; }) &&
                budget.snapshot().ownedPackedHostAllocations == 1,
            "only last alias destruction releases the first allocation");
 }
 void moveAssignmentAndEmptyStorage() {
-    GpuProcessingPhaseBudget budget(1);
+    RetirementFixture retirement;
+    GpuProcessingPhaseBudget budget(1, retirement.owner);
     budget.setHostCapacity(512, true);
     auto phase = grant(budget, 512);
     observeAllocation(64);
@@ -224,7 +247,8 @@ void moveAssignmentAndEmptyStorage() {
            "host storage promotion never authorizes an unproven phase retirement");
 }
 void publicationLifetimeAndOrdering() {
-    auto budget = std::make_unique<GpuProcessingPhaseBudget>(1);
+    RetirementFixture retirement;
+    auto budget = std::make_unique<GpuProcessingPhaseBudget>(1, retirement.owner);
     budget->setHostCapacity(256, true);
     auto phase = grant(*budget, 256);
     observeAllocation(128);
@@ -238,8 +262,8 @@ void publicationLifetimeAndOrdering() {
     phase.reset();
     deletionBudget = budget.get();
     storage.value()->reset();
-    expect(freedWhileCharged && budget->snapshot().ownedPackedHostBytes == 0 &&
-               budget->snapshot().totalHostClaimBytes == 0,
+    expect(wait([&] { return budget->snapshot().ownedPackedHostBytes == 0; }) &&
+               freedWhileCharged && budget->snapshot().totalHostClaimBytes == 0,
            "backing allocation is freed before its published token releases bytes");
     clearObservation();
     phase = grant(*budget, 256);
@@ -254,7 +278,8 @@ void publicationLifetimeAndOrdering() {
 }
 void capacityFailureWatermark() {
     for (const int releaseOrder : {0, 1, 2}) {
-        GpuProcessingPhaseBudget budget(2);
+        RetirementFixture retirement;
+        GpuProcessingPhaseBudget budget(2, retirement.owner);
         budget.setHostCapacity(512, true);
         auto phase = grant(budget, 256);
         auto competitor = grant(budget, 256);

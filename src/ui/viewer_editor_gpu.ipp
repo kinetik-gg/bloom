@@ -18,6 +18,8 @@ void paintViewerEmptyInvitation(QPainter& painter, const QRectF& canvasRect,
 void ViewerEditor::setGpuPresentationDependencies(
     std::shared_ptr<runtime::GpuPresentationClient> client, runtime::TaskScheduler* scheduler,
     std::string vulkanLoaderPath, const double devicePixelRatio) {
+    if (packedHostShutdown_)
+        return;
     if (gpuResidentTimer_ != nullptr) {
         gpuResidentTimer_->stop();
     }
@@ -42,6 +44,8 @@ bool ViewerEditor::residentFrameIsDisplayed() const {
 }
 
 PreparedPreviewFrameHandle ViewerEditor::paintableCpuFrame() {
+    if (packedHostShutdown_)
+        return nullptr;
     auto current = preparedDisplayFrame();
     if (!current)
         return frameInCurrentDomain(lastCpuFrame_) ? lastCpuFrame_ : nullptr;

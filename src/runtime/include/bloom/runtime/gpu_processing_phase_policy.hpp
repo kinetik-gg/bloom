@@ -49,7 +49,9 @@ struct GpuProcessingPhasePolicySnapshot final {
 class GpuProcessingPhasePolicy final {
   public:
     using Clock = std::chrono::steady_clock;
-    explicit GpuProcessingPhasePolicy(std::size_t requestCapacity = 32);
+    explicit GpuProcessingPhasePolicy(
+        std::size_t requestCapacity = 32,
+        const std::shared_ptr<render::PackedHostRetirementOwner>& retirementOwner = {});
     void applyHostSample(const MemoryBudgetState&, std::size_t physicalBytes,
                          Clock::time_point now = Clock::now()) noexcept;
     [[nodiscard]] bool reportDevice(std::uint64_t ownershipEpoch,

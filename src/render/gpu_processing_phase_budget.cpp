@@ -1,4 +1,5 @@
 #include <bloom/render/gpu_processing_phase_budget.hpp>
+#include <bloom/render/packed_host_retirement.hpp>
 
 #include <algorithm>
 #include <limits>
@@ -12,6 +13,7 @@ struct GpuProcessingPhaseBudgetState final {
     mutable std::mutex mutex;
     GpuProcessingPhaseSnapshot counters;
     std::uint64_t nextId = 1;
+    std::shared_ptr<PackedHostRetirementState> retirement;
 };
 } // namespace detail
 namespace {
@@ -60,25 +62,32 @@ void GpuProcessingPhaseLease::markUnproven() noexcept {
 }
 
 PackedHostStorageToken::PackedHostStorageToken(
-    std::shared_ptr<PackedHostStorageAuthority> authority, const std::uint64_t bytes) noexcept
-    : authority_(std::move(authority)), bytes_(bytes) {}
+    std::shared_ptr<PackedHostStorageAuthority> authority, const std::uint64_t bytes,
+    const std::uint64_t metadataBytes) noexcept
+    : authority_(std::move(authority)), bytes_(bytes), metadataBytes_(metadataBytes) {}
 PackedHostStorageToken::PackedHostStorageToken(PackedHostStorageToken&& other) noexcept
-    : authority_(std::move(other.authority_)), bytes_(std::exchange(other.bytes_, 0)) {}
+    : authority_(std::move(other.authority_)), bytes_(std::exchange(other.bytes_, 0)),
+      metadataBytes_(std::exchange(other.metadataBytes_, 0)) {}
 PackedHostStorageToken& PackedHostStorageToken::operator=(PackedHostStorageToken&& other) noexcept {
     if (this != &other) {
         reset();
         authority_ = std::move(other.authority_);
         bytes_ = std::exchange(other.bytes_, 0);
+        metadataBytes_ = std::exchange(other.metadataBytes_, 0);
     }
     return *this;
 }
 PackedHostStorageToken::~PackedHostStorageToken() { reset(); }
 void PackedHostStorageToken::reset() noexcept {
     if (authority_) {
-        authority_->release(bytes_);
+        authority_->release(bytes_, metadataBytes_);
         authority_.reset();
         bytes_ = 0;
+        metadataBytes_ = 0;
     }
+}
+bool PackedHostStorageToken::published() const noexcept {
+    return authority_ && authority_->snapshot().published;
 }
 PackedHostStorageAuthority::PackedHostStorageAuthority(
     const std::shared_ptr<GpuProcessingPhaseLease>& phase, const std::uint64_t limit) noexcept
@@ -93,7 +102,8 @@ PackedHostStorageAuthority::create(const std::shared_ptr<GpuProcessingPhaseLease
         new PackedHostStorageAuthority(phase, limit));
 }
 std::optional<PackedHostStorageToken>
-PackedHostStorageAuthority::reserve(const std::uint64_t bytes) noexcept {
+PackedHostStorageAuthority::reserve(const std::uint64_t bytes,
+                                    const std::uint64_t metadataBytes) noexcept {
     if (bytes == 0) {
         return {};
     }
@@ -104,31 +114,41 @@ PackedHostStorageAuthority::reserve(const std::uint64_t bytes) noexcept {
     }
     const std::lock_guard lock(state_->mutex);
     if (published_ || bytes_ > limit_ || bytes > limit_ - bytes_ ||
-        bytes > origin->remainingHostBytes_) {
+        bytes > origin->remainingHostBytes_ ||
+        metadataBytes > origin->remainingHostBytes_ - bytes) {
         return {};
     }
     // Both counters change under one lock; the total never changes during an ownership handoff.
-    origin->remainingHostBytes_ -= bytes;
-    state_->counters.hostReservedBytes -= bytes;
+    origin->remainingHostBytes_ -= bytes + metadataBytes;
+    state_->counters.hostReservedBytes -= bytes + metadataBytes;
     state_->counters.ownedPackedHostBytes += bytes;
+    state_->counters.ownedPackedHostMetadataBytes += metadataBytes;
     ++state_->counters.ownedPackedHostAllocations;
     bytes_ += bytes;
+    metadataBytes_ += metadataBytes;
     retainedOrigin_ = std::move(origin);
-    return PackedHostStorageToken(std::move(self), bytes);
+    return PackedHostStorageToken(std::move(self), bytes, metadataBytes);
 }
-void PackedHostStorageAuthority::release(const std::uint64_t bytes) noexcept {
+std::shared_ptr<detail::PackedHostRetirementState>
+PackedHostStorageAuthority::retirementState() const noexcept {
+    return state_->retirement;
+}
+void PackedHostStorageAuthority::release(const std::uint64_t bytes,
+                                         const std::uint64_t metadataBytes) noexcept {
     std::shared_ptr<GpuProcessingPhaseLease> releasedOrigin;
     {
         const std::lock_guard lock(state_->mutex);
         bytes_ -= bytes;
+        metadataBytes_ -= metadataBytes;
         state_->counters.ownedPackedHostBytes -= bytes;
+        state_->counters.ownedPackedHostMetadataBytes -= metadataBytes;
         --state_->counters.ownedPackedHostAllocations;
         if (published_) {
-            state_->counters.totalHostClaimBytes -= bytes;
+            state_->counters.totalHostClaimBytes -= bytes + metadataBytes;
             incrementSaturating(state_->counters.admissionRevision);
         } else {
-            retainedOrigin_->remainingHostBytes_ += bytes;
-            state_->counters.hostReservedBytes += bytes;
+            retainedOrigin_->remainingHostBytes_ += bytes + metadataBytes;
+            state_->counters.hostReservedBytes += bytes + metadataBytes;
             if (bytes_ == 0) {
                 releasedOrigin = std::move(retainedOrigin_);
             }
@@ -155,15 +175,18 @@ bool PackedHostStorageAuthority::promote() noexcept {
 }
 PackedHostStorageSnapshot PackedHostStorageAuthority::snapshot() const noexcept {
     const std::lock_guard lock(state_->mutex);
-    return {.bytes = bytes_, .published = published_};
+    return {.bytes = bytes_, .metadataBytes = metadataBytes_, .published = published_};
 }
 
-GpuProcessingPhaseBudget::GpuProcessingPhaseBudget(const std::size_t requestCapacity)
+GpuProcessingPhaseBudget::GpuProcessingPhaseBudget(
+    const std::size_t requestCapacity,
+    const std::shared_ptr<PackedHostRetirementOwner>& retirementOwner)
     : state_(std::make_shared<detail::GpuProcessingPhaseBudgetState>()) {
     if (requestCapacity == 0 || requestCapacity > 1024) {
         throw std::invalid_argument("processing phase request capacity must be in [1, 1024]");
     }
     state_->counters.requestCapacity = requestCapacity;
+    state_->retirement = retirementOwner ? retirementOwner->producerState() : nullptr;
 }
 
 void GpuProcessingPhaseBudget::setHostCapacity(const std::optional<std::uint64_t> bytes,

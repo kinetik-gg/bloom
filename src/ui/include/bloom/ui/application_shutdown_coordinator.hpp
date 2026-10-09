@@ -42,6 +42,13 @@ class ApplicationShutdownCoordinator final : public QObject {
     void setGpuExportRetirement(GpuRetirementBegin beginGpuRetirement,
                                 GpuRetirementComplete gpuRetirementComplete);
 
+    // Starts only after task/native/export prerequisites are satisfied. The begin step stops
+    // preview producers and releases UI/cache pins, then closes the explicit host retirement
+    // owner. The event loop polls actual exit only; collection happens after event processing.
+    void setPackedHostRetirement(GpuRetirementBegin beginHostRetirement,
+                                 GpuRetirementComplete hostExitAcknowledged);
+    [[nodiscard]] bool packedHostRetirementSatisfied() const noexcept;
+
     [[nodiscard]] bool isShuttingDown() const noexcept;
     [[nodiscard]] bool nativeSurfaceRetirementSatisfied() const noexcept;
     [[nodiscard]] bool gpuExportRetirementSatisfied() const noexcept;
@@ -70,6 +77,7 @@ class ApplicationShutdownCoordinator final : public QObject {
     void logStillShuttingDownDiagnostic() const;
     void beginNativeSurfaceRetirement();
     void pollGpuExportRetirement();
+    void pollPackedHostRetirement();
     void publishQuiescenceIfReady();
 
     CompositionPreviewController& previewController_;
@@ -77,14 +85,19 @@ class ApplicationShutdownCoordinator final : public QObject {
     NativeSurfaceSource nativeSurfaceSource_;
     GpuRetirementBegin gpuRetirementBegin_;
     GpuRetirementComplete gpuRetirementComplete_;
+    GpuRetirementBegin hostRetirementBegin_;
+    GpuRetirementComplete hostExitAcknowledged_;
     NativeSurfaceRetirementGate surfaceRetirementGate_;
     std::string nativeSurfaceRefusalDiagnostic_;
     QTimer stuckShutdownDiagnosticTimer_;
     QTimer gpuRetirementPollTimer_;
+    QTimer hostRetirementPollTimer_;
     bool shuttingDown_ = false;
     bool taskQuiescence_ = false;
     bool surfaceRetirementComplete_ = false;
     bool gpuExportRetirementComplete_ = true;
+    bool hostRetirementStarted_ = false;
+    bool hostRetirementComplete_ = true;
     bool quiescencePublished_ = false;
 };
 

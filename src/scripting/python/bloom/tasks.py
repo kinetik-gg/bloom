@@ -10,6 +10,7 @@ from . import _state
 from .errors import CancelledError
 
 _executor = None
+_closing = False
 _executor_lock = Lock()
 _admission = BoundedSemaphore(128)
 
@@ -77,11 +78,12 @@ def submit(function, *args, **kwargs) -> TaskHandle:
     global _executor
     if not callable(function):
         raise TypeError("Task work must be callable")
-    if not _admission.acquire(blocking=False):
-        raise RuntimeError("The Python task queue is full (128 tasks)")
     with _executor_lock:
+        if _closing:
+            raise RuntimeError("Bloom Python tasks are shutting down")
         if _executor is None:
             _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bloom-python")
+        executor = _executor
     handle = TaskHandle()
     ctx = copy_context()
     # Ensure a host has been selected before crossing to another thread.
@@ -117,7 +119,13 @@ def submit(function, *args, **kwargs) -> TaskHandle:
             _state.transaction.reset(transaction_token)
             _state._host.reset(token)
 
-    handle._future = _executor.submit(ctx.run, run)
+    if not _admission.acquire(blocking=False):
+        raise RuntimeError("The Python task queue is full (128 tasks)")
+    try:
+        handle._future = executor.submit(ctx.run, run)
+    except BaseException:
+        _admission.release()
+        raise
     handle._future.add_done_callback(lambda future: _admission.release())
     return handle
 
@@ -131,7 +139,12 @@ def cancel(task_id: int) -> bool:
 
 
 def _shutdown():
-    global _executor
-    if _executor is not None:
-        _executor.shutdown(wait=True, cancel_futures=True)
-        _executor = None
+    global _executor, _closing
+    with _executor_lock:
+        _closing = True
+        executor = _executor
+    if executor is not None:
+        executor.shutdown(wait=True, cancel_futures=True)
+        with _executor_lock:
+            if _executor is executor:
+                _executor = None

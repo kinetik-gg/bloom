@@ -32,6 +32,26 @@ namespace output = bloom::output;
 namespace runtime = bloom::runtime;
 namespace scripting = bloom::scripting;
 
+// Declared after the provider and before render work. Normal return and exception unwind both
+// retain the borrowed media evaluator and scheduler until actual native/owned-host retirement.
+class ExportProviderTeardown final {
+  public:
+    explicit ExportProviderTeardown(std::shared_ptr<bloom::host::GpuExportProvider> provider)
+        : provider_(std::move(provider)) {}
+    ~ExportProviderTeardown() { finish(); }
+    void finish() noexcept {
+        if (finished_)
+            return;
+        while (!provider_->shutdownAndWait(std::chrono::seconds(10)))
+            std::cerr << "CLI export retirement pending; provider/media/scheduler retained\n";
+        finished_ = true;
+    }
+
+  private:
+    std::shared_ptr<bloom::host::GpuExportProvider> provider_;
+    bool finished_ = false;
+};
+
 void printUsage() {
     std::cerr << "usage: bloom-cli new <file> | open <file> | run <script.json|script.py> | "
                  "python | render [--project <file>] (--frame N | --range A-B) --preset <id> --out "
@@ -240,6 +260,7 @@ frameRange(std::string_view value) {
         return runtime::GpuSceneMediaContext::fromEvaluator(gpuMediaEvaluator);
     };
     auto gpuProvider = bloom::host::GpuExportProvider::create(std::move(gpuOptions));
+    ExportProviderTeardown providerTeardown(gpuProvider);
     gpuProvider->prepare(scheduler);
     const auto result = scripting::Render::run(*session, scheduler, compiler,
                                                {.composition = composition,
@@ -248,7 +269,7 @@ frameRange(std::string_view value) {
                                                 .preset = *selectedPreset,
                                                 .destination = destination},
                                                {}, gpuProvider);
-    static_cast<void>(gpuProvider->shutdownAndWait(std::chrono::seconds(10)));
+    providerTeardown.finish();
     std::cout << result.preservationReport << '\n';
     if (!result.succeeded) {
         std::cerr << "error[bloom-cli.render]: " << result.diagnostic << '\n';

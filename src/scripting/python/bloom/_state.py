@@ -24,6 +24,15 @@ def bind(value):
     return _host.set(value)
 
 
+def _release_for_shutdown():
+    """Release runtime-owned references while Python is alive; user globals remain intact."""
+    global _default_host
+    _default_host = None
+    _host.set(None)
+    _task.set(None)
+    transaction.set(None)
+
+
 def freeze(value):
     if isinstance(value, dict):
         return MappingProxyType({key: freeze(child) for key, child in value.items()})

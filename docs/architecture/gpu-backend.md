@@ -1135,13 +1135,66 @@ in the reliability plan. Existing required final-render coverage is unchanged; n
 host-payload route, unrooted legacy route, native allocation accounting, whole-process guarantee,
 width-two execution or sustained/platform qualification is adopted here.
 
-Published backing storage still frees synchronously on the thread dropping its final owner, which
-can be the Qt UI thread. The actual Viewer witness releases its final external alias there; it
-proves ordering and charge conservation, not off-UI freeing or bounded large-free latency. Legacy
-immutable vectors had the same release behavior. Moving published host retirement off the UI
-thread remains a required next repair before native allocation ownership work; this bounded
-acceptance does not waive the UI-thread engineering rule. The next slice must keep charges until
-actual worker-side freeing, bound queued retirement and preserve safe shutdown behavior.
+At the accepted `6acad4d4` ownership checkpoint, published backing still freed synchronously on
+the final owner's thread, potentially Qt UI. Its Viewer witness proved ordering and conservation,
+not off-UI free or large-free latency. The follow-on below implements that required retirement
+repair; its affected qualification gates pass within the bounded scope below. The historical checkpoint is not an engineering-rule
+waiver or a claim that legacy storage retires off UI.
+
+### Off-UI rooted published-host retirement (bounded retirement slice)
+
+The follow-on covers explicitly rooted published RGBA8 backing and its exact intrusive allocation
+header/node. Admission transfers payload and header bytes from the phase estimate before allocation.
+`ownedPackedHostBytes` remains payload-only; `ownedPackedHostMetadataBytes` counts the header/node;
+`ownedPackedHostAllocations` counts backings. `totalHostClaimBytes` now combines remaining phase,
+payload and header claims without duplication. Queue metadata is bounded by admitted bytes, with no
+new fixed frame/allocation-count cap. Cache product retention cost remains separate. Debug/authority
+proxies, malloc/stdlib/thread/stack overhead, other product metadata, legacy vectors, final RGBA32F
+and native/driver/UMA backing remain outside this claim; the counters are not RSS or committed blocks.
+
+Provisional cleanup remains synchronous on the admitted attempt worker, folding payload and header
+back together before the final origin-phase release. The complete product's terminal-success
+handoff still precedes sink/mailbox acceptance. Dropping the last RootedPublished alias performs
+an O(1) intrusive enqueue/notify, without new allocation, backing free or ledger credit. The worker
+frees backing outside the queue mutex and only then releases payload/header claims and registration.
+Live, queued and in-progress backing stays charged until actual free. This does not move legacy
+vector or every host-buffer release off UI, or establish a hard real-time/sustained latency bound.
+
+An explicit joinable per-root `PackedHostRetirementOwner` is created inert; worker-only preparation
+registers actual at-thread-exit acknowledgement before admitting backing. Tokens retain neutral
+producer state, not the lifecycle owner or device. The frontend retains its owner through producer
+stop, pin release, close, actual exit and collection. `beginShutdown()` closes registration/notifies;
+live aliases keep shutdown incomplete. `exitAcknowledged()` polls without joining; `collect()` joins
+only off an active UI loop or after that loop returns, outside the polling mutex. Destruction neither
+joins nor detaches; normal exception/unwind requires the explicit lifecycle guard.
+
+GUI shutdown first reaches task/native/export prerequisites, stops preview producers, releases live
+Viewer/current/cache pins and closes the owner. Already-posted outgoing-editor deleteLater pins may
+remain; their originating loop destroys them while charge/exit remain pending. Post-loop or unwind
+teardown drains only already-posted safe deletion before borrowed dependencies die. Active shutdown
+polls actual exit; collection follows event processing. A timeout is not quiescence.
+
+Owned headless providers preserve worker-sampled roots; injected application roots remain borrowed.
+Python uses module/interpreter-owned light records, shared-provider root identity and separate
+per-Host schedulers. Early GC retains closing provider/native state before Host release; records
+retain no Host, Session or Python object. Close rejects new calls, cancels native admissions, joins
+Python producers and drops only runtime-owned references while Python is alive. Native/host waits
+and collection release the GIL and lifecycle locks. Incomplete shutdown retains provider/owner/
+scheduler and forbids finalize or dependency unload. CLI guards borrowed evaluator/scheduler
+lifetimes through normal return and unwind. The owning scripting/output documents detail these
+boundaries. One interpreter-owned cancellation-aware gate serializes owned native bootstrap only;
+borrowed app providers and frame execution remain independent.
+
+Core and GUI increments, actual held-free Viewer/GIL witnesses and the unchanged ordinary mixed-ICD
+Python API with three repeats pass their focused gates. The repaired module boundary forwards the
+same neutral owner through runtime's public surface, without duplicate state or checker exception.
+Final owning tests close via an initial 19/20 plus a separate corrected controller prerequisite;
+that controller witness is CPU/control evidence. Linux CPU-only/Python-enabled app, CLI and module builds pass, with all twenty affected
+root/frontend suites passing in 9.93 s. Native branches there are unavailable, never GPU passes.
+All 103 changed-header production/owning translation units pass the final strict sweep without
+diagnostics or repair reruns. The reliability plan preserves exact split-run history.
+No native allocation accounting, width-two, aggregate OOM or sustained/platform qualification is
+adopted here.
 
 ### Resident request cancellation and failure retirement (G2E)
 

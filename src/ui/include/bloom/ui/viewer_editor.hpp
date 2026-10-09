@@ -245,6 +245,8 @@ class ViewerEditor final : public QWidget,
     // Test/diagnostic surface only (never read by production code, mirroring kit::KDropdown's own
     // displayedText()/popupView() precedent): exposes state a test needs to assert on without
     // reaching into private members.
+    // Called only after task and native-surface retirement, while the window tree is live.
+    void releasePackedFramesForShutdown();
     [[nodiscard]] PreparedPreviewFrameHandle displayedFrameForTest() const {
         return displayedFrame();
     }
@@ -741,6 +743,7 @@ class ViewerEditor final : public QWidget,
     std::size_t cpuCoverByteBudget_ = kResidentOverlayByteBudget;
     QTimer* gpuResidentTimer_ = nullptr;
     bool residentActive_ = false;
+    bool packedHostShutdown_ = false;
     PreparedPreviewFrameHandle lastCpuFrame_;
     // The explicit same-request CPU fallback for a resident frame that could not be presented. It
     // is produced by the existing async viewer-analysis CPU path (never a GPU readback).

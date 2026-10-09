@@ -2,12 +2,15 @@
 
 #include <bloom/render/packed_rgba8_storage.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
+#include <bloom/runtime/packed_host_retirement.hpp>
 #include <bloom/ui/composition_preview_cpu_stage.hpp>
 
 #include <QApplication>
 #include <QTimer>
 
 #include <exception>
+#include <future>
+#include <thread>
 
 namespace {
 using namespace bloom;
@@ -217,6 +220,19 @@ void run(Expectations& checks) {
 
 // This is a CPU/control fixture for the real controller and neutral admission state. Genuine
 // rooted GPU pixels/publication are independently exercised by the packed native service test.
+class PackedRetryRetirement final {
+  public:
+    std::shared_ptr<runtime::PackedHostRetirementOwner> owner =
+        runtime::PackedHostRetirementOwner::create();
+    ~PackedRetryRetirement() {
+        owner->beginShutdown();
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!owner->exitAcknowledged() && std::chrono::steady_clock::now() < until)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (!owner->collect())
+            std::terminate();
+    }
+};
 void packedProvisionalRetry(Expectations& checks) {
     auto project = makeTestProject("Packed ownership retry", timeAt(10));
     document::Document document(std::move(project.project));
@@ -224,7 +240,19 @@ void packedProvisionalRetry(Expectations& checks) {
     ui::CompositionSession session(document, commands, project.initialCompositionId);
     checks.expect(session.addSolidLayer("Solid", {0.25, 0.5, 0.75, 1}), "retry solid authored");
     PipelineFixture fixture;
-    auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(1);
+    PackedRetryRetirement retirement;
+    checks.expect(std::async(std::launch::async, [&] { return retirement.owner->prepare(); }).get(),
+                  "packed controller control root starts retirement off UI");
+    if (checks.failures())
+        return;
+    auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(1, retirement.owner);
+    const auto actualExternalFree = [&] {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (policy->snapshot().reservations.ownedPackedHostAllocations != 0 &&
+               std::chrono::steady_clock::now() < until)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        return policy->snapshot().reservations.ownedPackedHostAllocations == 0;
+    };
     auto sample = capacity(1);
     policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
     checks.expect(
@@ -301,8 +329,11 @@ void packedProvisionalRetry(Expectations& checks) {
             arithmeticValid = arithmeticValid && after.admissionRevision == revision &&
                               after.admittedPhases == 0 && after.hostReservedBytes == 0 &&
                               after.ownedPackedHostBytes == before.ownedPackedHostBytes;
-            if (releaseBeforeDelivery.exchange(false))
+            if (releaseBeforeDelivery.exchange(false)) {
                 external->reset();
+                // Actual worker free must precede failure delivery, not merely its queue signal.
+                arithmeticValid = arithmeticValid && actualExternalFree();
+            }
             ++failuresAfterAllocation;
             return Result::failed(
                 {{.code = "bloom.preview.gpu-scene.budget-refused",
@@ -326,6 +357,8 @@ void packedProvisionalRetry(Expectations& checks) {
         return;
     const auto oldFrame = controller.state().frame;
     checks.expect(prepareExternal(), "published external host owner prepared without phase count");
+    if (checks.failures())
+        return;
     faultNext = true;
     controller.requestRefresh();
     checks.expect(
@@ -344,10 +377,11 @@ void packedProvisionalRetry(Expectations& checks) {
                       submissions == failedSubmissions && actualPreparations == 1,
                   "own provisional cleanup cannot spin controller across held GUI pulses");
     external->reset();
+    checks.expect(actualExternalFree(), "actual published free precedes existing capacity pulse");
     controller.notifyProcessingCapacityChanged();
-    checks.expect(waitUntil(ready) && submissions == failedSubmissions + 1 &&
-                      actualPreparations == 2,
-                  "external host last release wakes CPU recovery once despite device zero");
+    checks.expect(
+        waitUntil(ready) && submissions == failedSubmissions + 1 && actualPreparations == 2,
+        "external host actual release plus existing pulse recovers CPU once despite device zero");
     checks.expect(prepareExternal(), "second independent published host owner prepared");
     faultNext = true;
     releaseBeforeDelivery = true;

@@ -194,6 +194,7 @@ target_sources(
             include/bloom/runtime/gpu_scene_executor.hpp
             include/bloom/runtime/gpu_process_frame.hpp
             include/bloom/runtime/gpu_processing_phase_policy.hpp
+            include/bloom/runtime/packed_host_retirement.hpp
             include/bloom/runtime/gpu_ocio_wrapper.hpp
             include/bloom/runtime/gpu_ocio_command.hpp
             include/bloom/runtime/gpu_ocio_preparation.hpp

@@ -127,8 +127,9 @@ provide research or rationale, but they are not binding until adopted here.
 
 - Rooted packed-host RGBA8 payload ownership and conservation are accepted within
   [a separate bounded slice](architecture/gpu-backend.md#rooted-packed-host-payload-ownership-bounded-ownership-slice).
-  Production allocation runs off UI; published last-owner freeing can still run on UI and must
-  move off-thread next, before native allocation accounting. No whole-process accounting is implied.
+  Its off-UI published-retirement follow-on implements charged worker freeing with explicit
+  shutdown ownership; core/GUI, headless, Linux CPU-only and all 103 affected strict checks pass.
+  No whole-process accounting is implied.
 
 The detailed implementation status and next merge gates live in [`roadmap.md`](roadmap.md).
 

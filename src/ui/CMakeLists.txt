@@ -336,6 +336,7 @@ target_sources(
         composition_editor_support.cpp
         composition_plan_cache.cpp
         composition_preview_controller.cpp
+    composition_preview_controller_shutdown.cpp
         composition_preview_cpu_stage.cpp
         composition_preview_stage_shared.cpp
         composition_preview_stage_shared.hpp
@@ -421,6 +422,7 @@ target_sources(
         viewer_overlays.cpp
         viewer_overlays_text.cpp
         viewer_editor.cpp
+    viewer_editor_shutdown.cpp
         viewer_channel_display.cpp
         viewer_editor_channel.cpp
         viewer_editor_analysis.cpp
@@ -442,6 +444,7 @@ target_sources(
         native_surface_retirement.cpp
         window_status_bar.cpp
         workspace_host.cpp
+    workspace_host_shutdown.cpp
         "${BLOOM_THIRD_PARTY_LICENSE_CATALOG_CPP}"
     PUBLIC
         FILE_SET HEADERS

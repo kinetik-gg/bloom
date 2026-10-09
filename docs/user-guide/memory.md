@@ -25,11 +25,13 @@ under development. These limits do not guarantee total process memory or prevent
 Cache-held bytes can fall after eviction or purge while the viewer or another consumer still holds
 the same storage. A bounded rooted packed-host ownership slice tracks those pixel payloads across
 their consumers; it does not change the cache's held/budget reading or measure total application memory.
-Its accounting covers explicitly rooted allocator-requested pixel bytes, excluding metadata,
-allocator overhead, legacy storage and native GPU allocations.
-Backing storage currently frees on the last consumer's thread, which can be the interface thread;
-moving that release off-thread remains required. The ownership checks do not qualify release
-latency or guarantee that large releases cannot interrupt interaction.
+The ownership checkpoint counts explicitly rooted pixel payloads. Its retirement follow-on also
+admits the backing's queue header and keeps both charged after the final consumer hands it to a
+worker. That worker frees published backing before releasing its charge; cache-held cost may
+already be zero while an external pin or queued release still owns memory. The bounded follow-on
+passes its affected ownership and shutdown checks. Legacy storage, other metadata,
+allocator overhead and native GPU
+allocations remain separate; these checks do not measure total memory or guarantee release latency.
 
 ## How much memory Bloom gives itself
 

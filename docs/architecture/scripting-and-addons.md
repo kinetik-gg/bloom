@@ -222,15 +222,32 @@ parameter through UI Undo and compare frame-12 bytes from Python, CLI and UI exp
 
 Native `Render::run` callers explicitly inject one `GpuExportProvider` shared across their still,
 range and concurrent requests; a missing provider is a typed `MissingProcessingRoot` refusal before
-compilation. The Python native host retains a provider for its lifetime. A live GUI Python host
-borrows the application's injected provider; an independent headless host owns its provider and
-retires it on its non-UI host thread after rendering. Neither an individual Render call nor an
-injected Python host retires a shared root. Independent owners do not implicitly aggregate process
+compilation. The Python native host retains a provider for its active lifetime. A live GUI host borrows the
+application's injected provider; an independent headless host owns its provider and worker-sampled
+processing root. Module/interpreter-owned light retirement records deduplicate provider roots and
+own separate per-Host schedulers without retaining Host, Session or Python objects. Early GC hands
+provider ownership to a closing record before dropping the Host; direct render holds a checked
+active-call lease through session waits/native work. Closing refuses new calls. Borrowed GUI Host
+retirement drains its local scheduler, never the application's shared root. Neither an individual
+Render call nor an injected Python host retires a shared root. Independent owners do not implicitly aggregate process
 or device allowances: their composition root must inject shared policy. Public `bloom.render.frame`
 and `bloom.render.range` signatures are unchanged. The
 [output contract](frame-output.md) owns provider, admitted CPU fallback and the accepted first
 phase-reservation slice's limits. Required native headless/range route proofs and Linux CPU-only
 root tests pass; this does not establish shared allocation accounting across independent processes.
+
+Standalone direct-extension atexit and Embedded pre-finalize use the same owned-root registry.
+They close/cancel native admissions, finish Python producers and release only runtime-owned
+context/default-host and embedded console/host references while Python is alive. Waits and
+collection release the GIL and lifecycle locks; actual native/host exit and collection precede
+PyFinalize or code unload. A producer-shutdown exception or false retirement timeout remains
+incomplete with provider/owner/scheduler retained. User globals are not cleared broadly; current
+render results expose file/digest/count/report values, not packed pixel storage. Owned providers
+share one cancellation-aware interpreter bootstrap gate through native construction and raced-stop
+cleanup, without holding registry/state locks or serializing frame execution. Focused lifecycle and
+ordinary mixed-ICD API checks pass. Linux CPU-only/Python-enabled builds and all twenty affected
+root/frontend suites pass, including the unchanged full API and six lifecycle/Embedded suites;
+all 103 affected strict translation units pass without diagnostics or repair reruns.
 
 `bloom-cli run <script.py>` and `bloom-cli python` embed the interpreter in isolated mode. Native
 latency-variable work releases the GIL; Python tasks run on a dedicated bounded Python worker,

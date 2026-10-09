@@ -22,7 +22,7 @@ function(bloom_python_require_pic bloom_python_target)
 endfunction()
 bloom_python_require_pic(bloom_scripting)
 
-add_library(bloom_python_binding OBJECT native.cpp projections.cpp render.cpp bindings.cpp task_ticket.cpp)
+add_library(bloom_python_binding OBJECT native.cpp projections.cpp render.cpp bindings.cpp task_ticket.cpp root_retirements.cpp)
 target_link_libraries(bloom_python_binding PRIVATE bloom_scripting nanobind::core Python3::Module)
 target_compile_features(bloom_python_binding PRIVATE cxx_std_20)
 target_compile_definitions(bloom_python_binding PRIVATE BLOOM_PYTHON_VERSION="${PROJECT_VERSION}")
@@ -52,6 +52,28 @@ bloom_enable_warnings(bloom_python_runtime)
 
 if(BUILD_TESTING)
     include(BloomTesting)
+    add_executable(bloom_python_root_retirements_test "${PROJECT_SOURCE_DIR}/tests/scripting/root_retirements_tests.cpp" root_retirements.cpp)
+    target_link_libraries(bloom_python_root_retirements_test PRIVATE bloom_scripting bloom_render)
+    target_include_directories(bloom_python_root_retirements_test PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/render" "${CMAKE_CURRENT_SOURCE_DIR}")
+    bloom_enable_warnings(bloom_python_root_retirements_test)
+    bloom_add_test(NAME bloom.scripting.python-root-retirements
+        COMMAND bloom_python_root_retirements_test
+        LABELS scripting python host unit)
+    add_executable(bloom_python_root_lifecycle_test "${PROJECT_SOURCE_DIR}/tests/scripting/root_lifecycle_tests.cpp")
+    target_link_libraries(bloom_python_root_lifecycle_test PRIVATE
+        bloom_python_runtime bloom_render nanobind::core Python3::Python)
+    target_include_directories(bloom_python_root_lifecycle_test PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/render" "${CMAKE_CURRENT_SOURCE_DIR}")
+    bloom_enable_warnings(bloom_python_root_lifecycle_test)
+    bloom_add_test(NAME bloom.scripting.python-root-lifecycle
+        COMMAND bloom_python_root_lifecycle_test
+        LABELS scripting python host integration)
+    bloom_add_test(NAME bloom.scripting.python-root-subprocess
+        COMMAND "${Python3_EXECUTABLE}" -I
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_root_lifecycle.py"
+            "${CMAKE_BINARY_DIR}/python" $<TARGET_FILE:bloom-cli>
+        LABELS scripting python host integration)
     bloom_add_test(NAME bloom.scripting.python-api
         COMMAND "${Python3_EXECUTABLE}" -I
             "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_api.py"

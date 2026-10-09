@@ -1,3 +1,4 @@
+#include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/render/packed_rgba8_storage.hpp>
 
 #include <algorithm>
@@ -7,12 +8,24 @@
 
 namespace bloom::render {
 namespace {
-struct AllocationHeader final {
+struct AllocationHeader final : detail::PackedHostRetirementNode {
     PackedHostStorageToken token;
+    std::shared_ptr<detail::PackedHostRetirementState> retirement;
 };
 static_assert(alignof(Rgba8) <= alignof(AllocationHeader));
 static_assert(alignof(AllocationHeader) <= alignof(std::max_align_t));
+void destroyAllocation(detail::PackedHostRetirementNode* const node) noexcept {
+    auto* header = static_cast<AllocationHeader*>(node);
+    auto token = std::move(header->token);
+    header->~AllocationHeader();
+    ::operator delete(header);
+    // Token releases payload and metadata together only after backing is actually gone.
+}
 } // namespace
+
+std::size_t detail::packedHostAllocationMetadataBytes() noexcept {
+    return sizeof(AllocationHeader);
+}
 
 Rgba8* detail::allocatePackedRgba8(const std::shared_ptr<PackedHostStorageAuthority>& authority,
                                    const std::size_t count) {
@@ -21,25 +34,51 @@ Rgba8* detail::allocatePackedRgba8(const std::shared_ptr<PackedHostStorageAuthor
         throw PackedHostCapacityError{};
     }
     const auto bytes = count * sizeof(Rgba8);
-    auto token = authority->reserve(bytes);
+    const auto retirement = authority->retirementState();
+    if (!packedHostRetirementAvailable(retirement)) {
+        throw PackedHostMissingRetirementError{};
+    }
+    if (!preparePackedHostRetirement(retirement)) {
+        if (!packedHostRetirementAvailable(retirement)) {
+            throw PackedHostMissingRetirementError{};
+        }
+        throw std::bad_alloc{};
+    }
+    auto token = authority->reserve(bytes, sizeof(AllocationHeader));
     if (!token) {
         throw PackedHostCapacityError{};
     }
-    // A failed operator new destroys the provisional token and atomically folds the debit back.
-    // Only requested RGBA8 payload bytes are tracked, not this header or opaque malloc overhead.
-    void* block = ::operator new(sizeof(AllocationHeader) + bytes);
-    auto* header = ::new (block) AllocationHeader{std::move(*token)};
-    return reinterpret_cast<Rgba8*>(header + 1);
+    if (!registerPackedHostAllocation(retirement)) {
+        throw PackedHostMissingRetirementError{};
+    }
+    try {
+        // Payload AND the exact requested header/node are charged before backing allocation.
+        // Opaque malloc/stdlib/thread overhead remains outside this explicit claim.
+        void* block = ::operator new(sizeof(AllocationHeader) + bytes);
+        auto* header = ::new (block) AllocationHeader;
+        header->destroy = &destroyAllocation;
+        header->token = std::move(*token);
+        header->retirement = retirement;
+        return reinterpret_cast<Rgba8*>(header + 1);
+    } catch (...) {
+        releasePackedHostRegistration(retirement);
+        throw; // The provisional token atomically folds both debits back.
+    }
 }
 void detail::deallocatePackedRgba8(Rgba8* const pixels) noexcept {
     if (!pixels) {
         return;
     }
     auto* header = reinterpret_cast<AllocationHeader*>(pixels) - 1;
-    auto token = std::move(header->token);
-    header->~AllocationHeader();
-    ::operator delete(header);
-    // token releases only after the allocation is gone; no header access follows the delete.
+    const auto retirement = header->retirement;
+    if (header->token.published()) {
+        // No allocation, pixel work, backing free or ledger release on the dropping thread.
+        enqueuePackedHostRetirement(retirement, header);
+    } else {
+        // Provisional attempt-worker cleanup preserves the one own-phase R+1 watermark.
+        destroyAllocation(header);
+        releasePackedHostRegistration(retirement);
+    }
 }
 
 PackedRgba8Storage::PackedRgba8Storage(OwnedVector&& pixels) noexcept
@@ -88,6 +127,9 @@ PackedRgba8Storage::create(const std::size_t pixelCount,
     } catch (const detail::PackedHostCapacityError&) {
         return ImageResult<PackedRgba8Storage>::failure(
             ImageError::pixelStorageBudgetExceeded(bytes, byteLimit));
+    } catch (const detail::PackedHostMissingRetirementError&) {
+        return ImageResult<PackedRgba8Storage>::failure(
+            ImageError::codeOnly(ImageErrorCode::InvalidState));
     } catch (const std::bad_alloc&) {
         return ImageResult<PackedRgba8Storage>::failure(ImageError::allocationFailure(bytes));
     } catch (const std::length_error&) {

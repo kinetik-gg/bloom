@@ -18,6 +18,7 @@ struct EmbeddedPython::State final {
     PyObject* console = nullptr;
     mutable std::mutex mutex;
     std::shared_ptr<NativeHost> host;
+    std::shared_ptr<PythonRootRetirements> roots;
 };
 
 namespace {
@@ -44,6 +45,7 @@ EmbeddedPython::EmbeddedPython(const std::filesystem::path& executable)
     config.site_import = 0;
     config.install_signal_handlers = 0;
     const auto program = executable.empty() ? std::string("bloom-cli") : executable.string();
+    std::string initializationFailure;
     try {
         checkStatus(PyConfig_SetBytesString(&config, &config.program_name, program.c_str()));
         checkStatus(Py_InitializeFromConfig(&config));
@@ -62,6 +64,7 @@ EmbeddedPython::EmbeddedPython(const std::filesystem::path& executable)
     }
     Py_DECREF(bridge);
     try {
+        state_->roots = moduleRootRetirements();
         const auto installed = executable.parent_path().parent_path() / "lib/bloom/python";
         const auto package =
             !executable.empty() && std::filesystem::is_directory(installed / "bloom")
@@ -71,9 +74,18 @@ EmbeddedPython::EmbeddedPython(const std::filesystem::path& executable)
         sys.attr("path").attr("insert")(0, package.string());
         auto console = nb::module_::import_("bloom._console").attr("Console")();
         state_->console = console.release().ptr();
+    } catch (const std::exception& error) {
+        initializationFailure = error.what();
     } catch (...) {
+        initializationFailure = "Could not initialize the Bloom Python package";
+    }
+    if (!initializationFailure.empty()) {
+        if (state_->roots)
+            finishPythonRootShutdown(state_->roots);
+        Py_XDECREF(state_->console);
+        state_->console = nullptr;
         Py_FinalizeEx();
-        throw;
+        throw std::runtime_error(initializationFailure);
     }
     state_->thread = PyEval_SaveThread();
 }
@@ -81,26 +93,18 @@ EmbeddedPython::EmbeddedPython(const std::filesystem::path& executable)
 EmbeddedPython::~EmbeddedPython() {
     if (state_->thread != nullptr) {
         PyEval_RestoreThread(state_->thread);
-        {
-            try {
-                nb::module_::import_("bloom.tasks").attr("_shutdown")();
-            } catch (const nb::python_error& error) {
-                std::cerr << error.what() << '\n';
-            }
-        }
+        preparePythonRootShutdown(state_->roots);
         Py_XDECREF(state_->console);
+        state_->console = nullptr;
         std::shared_ptr<NativeHost> host;
         {
             const std::lock_guard lock(state_->mutex);
             host = std::move(state_->host);
         }
-        if (host) {
-            // Python task shutdown above has finished. Retirement waits on this interpreter
-            // thread with the GIL released, never under the state mutex or in a Qt callback.
-            const nb::gil_scoped_release release;
-            host->shutdownRendering();
-        }
         host.reset();
+        // Includes unbound lazy/default/manual Hosts, while their Python globals still exist.
+        // False timeout retains the interpreter and every incomplete provider/owner/scheduler.
+        finishPythonRootShutdown(state_->roots);
         Py_FinalizeEx();
     }
 }
@@ -121,7 +125,8 @@ void EmbeddedPython::bindLive(std::shared_ptr<Session> session,
             "Live Python requires the application's shared processing provider");
     }
     const nb::gil_scoped_acquire acquire;
-    auto host = std::make_shared<NativeHost>(std::move(session), std::move(provider));
+    auto host =
+        std::make_shared<NativeHost>(std::move(session), std::move(provider), state_->roots);
     host->contextProvider = std::move(context);
     host->headless = false;
     host->cancelProvider = std::move(cancelled);

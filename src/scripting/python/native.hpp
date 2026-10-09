@@ -1,5 +1,6 @@
 #pragma once
 
+#include "root_retirements.hpp"
 #include "runtime.hpp"
 #include "task_ticket.hpp"
 
@@ -21,13 +22,11 @@ namespace nb = nanobind;
 // Owned by the client runtime. Only immutable DTOs cross the Python boundary.
 class NativeHost final {
   public:
-    explicit NativeHost(const std::string& project = {});
+    NativeHost(const std::string& project, std::shared_ptr<PythonRootRetirements>);
     explicit NativeHost(std::shared_ptr<Session> session,
-                        std::shared_ptr<host::GpuExportProvider> provider = {});
+                        std::shared_ptr<host::GpuExportProvider> provider,
+                        std::shared_ptr<PythonRootRetirements>);
     ~NativeHost();
-    // Owned headless roots retire on the interpreter/scripting thread before Python finalization.
-    // Injected application roots remain owned by their existing application shutdown coordinator.
-    void shutdownRendering();
     NativeHost(const NativeHost&) = delete;
     NativeHost& operator=(const NativeHost&) = delete;
 
@@ -43,7 +42,8 @@ class NativeHost final {
     [[nodiscard]] nb::list events();
     [[nodiscard]] nb::list tasks() const;
     [[nodiscard]] std::unique_ptr<TaskTicket> trackTask(std::string name) {
-        return std::make_unique<TaskTicket>(scheduler_, std::move(name));
+        auto call = retirement_->acquire();
+        return std::make_unique<TaskTicket>(call.scheduler(), std::move(name));
     }
     [[nodiscard]] bool cancel(std::uint64_t id);
     [[nodiscard]] nb::dict context() const;
@@ -62,7 +62,8 @@ class NativeHost final {
         return cancelled_.load() || (cancelProvider && cancelProvider());
     }
     [[nodiscard]] std::vector<runtime::TaskSnapshot> taskSnapshots() const {
-        return scheduler_.snapshots();
+        auto call = retirement_->tryAcquire();
+        return call ? call->scheduler().snapshots() : std::vector<runtime::TaskSnapshot>{};
     }
 
   private:
@@ -71,7 +72,8 @@ class NativeHost final {
     std::shared_ptr<Session> session_;
     std::unique_ptr<Facade> facade_;
     std::thread::id owner_ = std::this_thread::get_id();
-    runtime::TaskScheduler scheduler_;
+    std::shared_ptr<PythonRootRetirements> rootRetirements_;
+    std::shared_ptr<PythonHostRetirement> retirement_;
     std::shared_ptr<host::GpuExportProvider> gpuExportProvider_;
     bool ownsGpuExportProvider_ = false;
     mutable std::mutex eventMutex_;
@@ -80,11 +82,18 @@ class NativeHost final {
     Subscription subscription_;
     std::atomic_bool cancelled_ = false;
     std::atomic_uint64_t cancellationEpoch_ = 0;
+    friend struct PythonRootRetirementsTestAccess;
 };
 
 [[nodiscard]] nb::dict projectSnapshot(const document::Snapshot& snapshot);
 [[nodiscard]] nb::dict commandResult(const commands::CommandResult& result);
 [[nodiscard]] Value scriptValue(nb::handle value, std::size_t depth = 0);
 void bindHost(nb::module_& module);
+[[nodiscard]] std::shared_ptr<PythonRootRetirements> moduleRootRetirements();
+// GIL held: close admission, finish Python producers and release runtime-owned context refs.
+void beginPythonRootShutdown(const std::shared_ptr<PythonRootRetirements>&);
+void preparePythonRootShutdown(const std::shared_ptr<PythonRootRetirements>&) noexcept;
+// GIL held on entry; actual waits/joins release it. Never returns while retirement is incomplete.
+void finishPythonRootShutdown(const std::shared_ptr<PythonRootRetirements>&) noexcept;
 
 } // namespace bloom::scripting::python

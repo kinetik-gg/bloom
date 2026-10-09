@@ -335,6 +335,17 @@ void PreviewFrameCache::setByteBudget(const std::size_t bytes) {
     static_cast<void>(ledger_.setCacheCeiling(this, bytes));
 }
 
+void PreviewFrameCache::releaseForShutdown() noexcept {
+    notificationTimer_.stop();
+    residentRefreshTimer_.stop();
+    entries_.clear();
+    residentBytes_ = 0;
+    gpuResidentBytes_ = 0;
+    gpuResidentEntries_ = 0;
+    retentionRange_.reset();
+    retentionSnapshots_.clear();
+}
+
 void PreviewFrameCache::clear() {
     if (!entries_.empty()) {
         scheduleNotification();

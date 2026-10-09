@@ -28,6 +28,9 @@ ApplicationShutdownCoordinator::ApplicationShutdownCoordinator(
     gpuRetirementPollTimer_.setInterval(5);
     connect(&gpuRetirementPollTimer_, &QTimer::timeout, this,
             &ApplicationShutdownCoordinator::pollGpuExportRetirement);
+    hostRetirementPollTimer_.setInterval(5);
+    connect(&hostRetirementPollTimer_, &QTimer::timeout, this,
+            &ApplicationShutdownCoordinator::pollPackedHostRetirement);
     connect(&taskUiBridge_, &TaskUiBridge::shutdownQuiescent, this, [this] {
         Q_ASSERT(QThread::currentThread() == thread());
         if (!shuttingDown_ || quiescencePublished_) {
@@ -50,6 +53,17 @@ const std::string& ApplicationShutdownCoordinator::nativeSurfaceRefusalDiagnosti
 
 bool ApplicationShutdownCoordinator::gpuExportRetirementSatisfied() const noexcept {
     return gpuExportRetirementComplete_;
+}
+bool ApplicationShutdownCoordinator::packedHostRetirementSatisfied() const noexcept {
+    return hostRetirementComplete_;
+}
+void ApplicationShutdownCoordinator::setPackedHostRetirement(
+    GpuRetirementBegin beginHostRetirement, GpuRetirementComplete hostExitAcknowledged) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    Q_ASSERT(!shuttingDown_);
+    hostRetirementBegin_ = std::move(beginHostRetirement);
+    hostExitAcknowledged_ = std::move(hostExitAcknowledged);
+    hostRetirementComplete_ = !hostExitAcknowledged_;
 }
 
 void ApplicationShutdownCoordinator::setGpuExportRetirement(
@@ -120,6 +134,18 @@ void ApplicationShutdownCoordinator::pollGpuExportRetirement() {
         publishQuiescenceIfReady();
     }
 }
+void ApplicationShutdownCoordinator::pollPackedHostRetirement() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (quiescencePublished_ || hostRetirementComplete_) {
+        hostRetirementPollTimer_.stop();
+        return;
+    }
+    if (hostExitAcknowledged_ && hostExitAcknowledged_()) {
+        hostRetirementComplete_ = true;
+        hostRetirementPollTimer_.stop();
+        publishQuiescenceIfReady();
+    }
+}
 
 void ApplicationShutdownCoordinator::beginNativeSurfaceRetirement() {
     if (!nativeSurfaceSource_) {
@@ -167,6 +193,17 @@ void ApplicationShutdownCoordinator::publishQuiescenceIfReady() {
     if (!taskQuiescence_ || !surfaceRetirementComplete_ || !gpuExportRetirementComplete_) {
         return;
     }
+    if (!hostRetirementComplete_) {
+        if (!hostRetirementStarted_) {
+            hostRetirementStarted_ = true;
+            if (hostRetirementBegin_) {
+                hostRetirementBegin_();
+            }
+            hostRetirementPollTimer_.start();
+            pollPackedHostRetirement();
+        }
+        return;
+    }
     quiescencePublished_ = true;
     stuckShutdownDiagnosticTimer_.stop();
     // Publish through the event loop rather than re-entrantly. A task-free application (blank
@@ -192,13 +229,16 @@ void ApplicationShutdownCoordinator::logStillShuttingDownDiagnostic() const {
     qCWarning(applicationShutdownLog).noquote()
         << QStringLiteral("Shutdown has not reached quiescence 5s after beginShutdown(): %1 "
                           "outstanding task(s) of %2 tracked, task bridge shutting down=%3, "
-                          "native surface retirement satisfied=%4, surface diagnostic=\"%5\"")
+                          "native surface retirement satisfied=%4, surface diagnostic=\"%5\", "
+                          "packed host retirement started=%6, exit acknowledged=%7")
                .arg(outstanding)
                .arg(snapshots.size())
                .arg(taskUiBridge_.isShuttingDown() ? QStringLiteral("true")
                                                    : QStringLiteral("false"))
                .arg(surfaceRetirementComplete_ ? QStringLiteral("true") : QStringLiteral("false"))
-               .arg(QString::fromStdString(nativeSurfaceRefusalDiagnostic_));
+               .arg(QString::fromStdString(nativeSurfaceRefusalDiagnostic_))
+               .arg(hostRetirementStarted_)
+               .arg(hostRetirementComplete_);
     for (const auto& snapshot : snapshots) {
         if (runtime::isTerminal(snapshot.state)) {
             continue;

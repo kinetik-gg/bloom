@@ -8,7 +8,9 @@
 namespace bloom::render {
 namespace detail {
 struct GpuProcessingPhaseBudgetState;
-}
+struct PackedHostRetirementState;
+} // namespace detail
+class PackedHostRetirementOwner;
 
 // A conservative quota for simultaneous processing phases, not physical allocation accounting.
 // Runtime owns process/device sampling and injects resolved capacity; this class performs no I/O.
@@ -45,6 +47,9 @@ struct GpuProcessingPhaseSnapshot final {
     // Only allocator-requested payload bytes for explicitly rooted packed RGBA8 storage.
     // Legacy vectors, allocator overhead and native allocations are not included.
     std::uint64_t ownedPackedHostBytes = 0;
+    // Exact requested allocation header, including its intrusive retirement node. This is not
+    // opaque malloc/standard-library/thread overhead; payload and metadata remain distinct.
+    std::uint64_t ownedPackedHostMetadataBytes = 0;
     std::uint64_t totalHostClaimBytes = 0;
     std::size_t ownedPackedHostAllocations = 0;
     std::uint64_t deviceReservedBytes = 0;
@@ -104,17 +109,21 @@ class PackedHostStorageToken final {
     PackedHostStorageToken& operator=(PackedHostStorageToken&&) noexcept;
     ~PackedHostStorageToken();
     [[nodiscard]] std::uint64_t bytes() const noexcept { return bytes_; }
+    [[nodiscard]] bool published() const noexcept;
 
   private:
     friend class PackedHostStorageAuthority;
-    PackedHostStorageToken(std::shared_ptr<PackedHostStorageAuthority>, std::uint64_t) noexcept;
+    PackedHostStorageToken(std::shared_ptr<PackedHostStorageAuthority>, std::uint64_t,
+                           std::uint64_t) noexcept;
     void reset() noexcept;
     std::shared_ptr<PackedHostStorageAuthority> authority_;
     std::uint64_t bytes_ = 0;
+    std::uint64_t metadataBytes_ = 0;
 };
 
 struct PackedHostStorageSnapshot final {
     std::uint64_t bytes = 0;
+    std::uint64_t metadataBytes = 0;
     bool published = false;
 };
 
@@ -126,7 +135,10 @@ class PackedHostStorageAuthority final
   public:
     [[nodiscard]] static std::shared_ptr<PackedHostStorageAuthority>
     create(const std::shared_ptr<GpuProcessingPhaseLease>&, std::uint64_t simultaneousByteLimit);
-    [[nodiscard]] std::optional<PackedHostStorageToken> reserve(std::uint64_t bytes) noexcept;
+    [[nodiscard]] std::optional<PackedHostStorageToken>
+    reserve(std::uint64_t bytes, std::uint64_t metadataBytes = 0) noexcept;
+    [[nodiscard]] std::shared_ptr<detail::PackedHostRetirementState>
+    retirementState() const noexcept;
     [[nodiscard]] bool promote() noexcept;
     [[nodiscard]] PackedHostStorageSnapshot snapshot() const noexcept;
 
@@ -134,12 +146,13 @@ class PackedHostStorageAuthority final
     friend class PackedHostStorageToken;
     PackedHostStorageAuthority(const std::shared_ptr<GpuProcessingPhaseLease>&,
                                std::uint64_t) noexcept;
-    void release(std::uint64_t bytes) noexcept;
+    void release(std::uint64_t bytes, std::uint64_t metadataBytes) noexcept;
     std::shared_ptr<detail::GpuProcessingPhaseBudgetState> state_;
     std::weak_ptr<GpuProcessingPhaseLease> origin_;
     std::shared_ptr<GpuProcessingPhaseLease> retainedOrigin_;
     std::uint64_t limit_ = 0;
     std::uint64_t bytes_ = 0;
+    std::uint64_t metadataBytes_ = 0;
     bool published_ = false;
 };
 
@@ -152,7 +165,9 @@ struct GpuProcessingPhaseGrant final {
 
 class GpuProcessingPhaseBudget final {
   public:
-    explicit GpuProcessingPhaseBudget(std::size_t requestCapacity = 32);
+    explicit GpuProcessingPhaseBudget(
+        std::size_t requestCapacity = 32,
+        const std::shared_ptr<PackedHostRetirementOwner>& retirementOwner = {});
     // Unknown/stale delivery closes new admission but does not erase the last resolved constraint
     // or free live leases. A reliable measured zero is a ready, zero capacity (BudgetRefused).
     void setHostCapacity(std::optional<std::uint64_t> bytes, bool ready) noexcept;

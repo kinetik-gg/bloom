@@ -1,6 +1,7 @@
 #include <bloom/host/gpu_export_provider.hpp>
 
 #include <bloom/runtime/gpu_ocio_context.hpp>
+#include <bloom/runtime/packed_host_retirement.hpp>
 
 #include <mutex>
 #include <utility>
@@ -8,16 +9,22 @@
 namespace bloom::host {
 
 struct GpuExportProvider::State final {
-    explicit State(runtime::GpuProcessFrameEvaluatorOptions optionsValue)
+    explicit State(runtime::GpuProcessFrameEvaluatorOptions optionsValue,
+                   std::shared_ptr<std::timed_mutex> gate)
         : options(std::move(optionsValue)),
-          ownsProcessSampling(options.processingPhasePolicy == nullptr) {
+          ownsProcessSampling(options.processingPhasePolicy == nullptr),
+          bootstrapGate(std::move(gate)) {
         if (ownsProcessSampling) {
-            options.processingPhasePolicy = std::make_shared<runtime::GpuProcessingPhasePolicy>();
+            packedHostOwner = runtime::PackedHostRetirementOwner::create();
+            options.processingPhasePolicy =
+                std::make_shared<runtime::GpuProcessingPhasePolicy>(32, packedHostOwner);
         }
     }
 
     runtime::GpuProcessFrameEvaluatorOptions options;
     const bool ownsProcessSampling;
+    const std::shared_ptr<std::timed_mutex> bootstrapGate;
+    std::shared_ptr<runtime::PackedHostRetirementOwner> packedHostOwner;
     std::mutex samplingMutex;
     std::unique_ptr<runtime::MemoryBudgetLedger> samplingLedger;
     std::optional<std::chrono::steady_clock::time_point> sampledAt;
@@ -72,22 +79,26 @@ struct GpuExportProvider::State final {
     }
 };
 
-GpuExportProvider::GpuExportProvider(runtime::GpuProcessFrameEvaluatorOptions options)
-    : state_(std::make_shared<State>(std::move(options))) {}
+GpuExportProvider::GpuExportProvider(runtime::GpuProcessFrameEvaluatorOptions options,
+                                     std::shared_ptr<std::timed_mutex> gate)
+    : state_(std::make_shared<State>(std::move(options), std::move(gate))) {}
 
 GpuExportProvider::~GpuExportProvider() {
     beginShutdown();
     // Coordinated callers (the app shutdown coordinator in the UI, or shutdownAndWait() headless)
-    // have already proven retirement and released the evaluator, so there is nothing to join. If a
-    // caller violates that contract, releasing here joins the owner worker on this thread; that is
-    // a lifecycle bug, not a supported path.
+    // have already proven retirement and released the evaluator. Any started owned host
+    // reclaimer has separately exited and been collected, so there is nothing to join. If a
+    // caller violates that contract, releasing here joins the native owner worker on this thread;
+    // that is a lifecycle bug, not a supported path.
     collectRetired();
     state_.reset();
 }
 
 std::shared_ptr<GpuExportProvider>
-GpuExportProvider::create(runtime::GpuProcessFrameEvaluatorOptions options) {
-    return std::shared_ptr<GpuExportProvider>(new GpuExportProvider(std::move(options)));
+GpuExportProvider::create(runtime::GpuProcessFrameEvaluatorOptions options,
+                          std::shared_ptr<std::timed_mutex> gate) {
+    return std::shared_ptr<GpuExportProvider>(
+        new GpuExportProvider(std::move(options), std::move(gate)));
 }
 
 void GpuExportProvider::prepare(runtime::TaskScheduler& scheduler) {
@@ -142,6 +153,34 @@ void GpuExportProvider::prepare(runtime::TaskScheduler& scheduler) {
                         state->ocioContext = resolved.context;
                     }
                 }
+                // Interpreters explicitly share this neutral gate across owned provider roots.
+                // Only native construction/its failed or raced-stop cleanup is serialized; task
+                // and frame execution remain independent. Never wait under a state/registry lock.
+                std::unique_lock<std::timed_mutex> bootstrapLock;
+                if (state->bootstrapGate) {
+                    bootstrapLock = std::unique_lock(*state->bootstrapGate, std::defer_lock);
+                    while (!bootstrapLock.try_lock_for(std::chrono::milliseconds(1))) {
+                        {
+                            const std::lock_guard lock(state->mutex);
+                            stopping = state->stopping;
+                        }
+                        if (stopping || context.isCancellationRequested()) {
+                            const std::lock_guard lock(state->mutex);
+                            state->bootstrapComplete = true;
+                            return runtime::TaskResult<void>::cancelled();
+                        }
+                    }
+                }
+                {
+                    const std::lock_guard lock(state->mutex);
+                    stopping = state->stopping;
+                }
+                if (stopping || context.isCancellationRequested()) {
+                    const std::lock_guard lock(state->mutex);
+                    state->bootstrapComplete = true;
+                    return runtime::TaskResult<void>::cancelled();
+                }
+                // Declared AFTER the lock: an unpublishable evaluator joins/cleans before unlock.
                 std::shared_ptr<runtime::GpuProcessFrameEvaluator> created;
                 try {
                     // Blocks only this scheduled worker until the device/cache/executor bootstrap
@@ -152,7 +191,7 @@ void GpuExportProvider::prepare(runtime::TaskScheduler& scheduler) {
                 }
                 if (created != nullptr) {
                     std::lock_guard lock(state->mutex);
-                    if (!state->stopping) {
+                    if (!state->stopping && !context.isCancellationRequested()) {
                         state->evaluator = std::move(created);
                     }
                     // A shutdown that raced in leaves `created` destroyed here on this worker.
@@ -199,6 +238,11 @@ GpuExportProvider::processingPhasePolicy() const noexcept {
     return state_ ? state_->options.processingPhasePolicy : nullptr;
 }
 
+std::shared_ptr<runtime::PackedHostRetirementOwner>
+GpuExportProvider::ownedPackedHostRetirementOwner() const noexcept {
+    return state_ ? state_->packedHostOwner : nullptr;
+}
+
 void GpuExportProvider::refreshProcessingCapacity(const runtime::CancellationToken& cancellation) {
     if (state_) {
         state_->refreshCapacity(cancellation);
@@ -218,6 +262,8 @@ void GpuExportProvider::beginShutdown() noexcept {
     if (handle != nullptr) {
         handle->beginShutdown();
     }
+    if (state_->packedHostOwner)
+        state_->packedHostOwner->beginShutdown();
 }
 
 bool GpuExportProvider::retirementComplete() const {
@@ -272,13 +318,17 @@ void GpuExportProvider::collectRetired() noexcept {
 
 bool GpuExportProvider::shutdownAndWait(const std::chrono::milliseconds timeout) noexcept {
     beginShutdown();
+    const auto owner = ownedPackedHostRetirementOwner();
+    const auto complete = [&] {
+        return retirementComplete() && (!owner || owner->exitAcknowledged());
+    };
     const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (!retirementComplete() && std::chrono::steady_clock::now() < deadline) {
+    while (!complete() && std::chrono::steady_clock::now() < deadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    const bool complete = retirementComplete();
+    if (!complete())
+        return false;
     collectRetired();
-    return complete;
+    return !owner || owner->collect();
 }
 
 void GpuExportProvider::setRetirementObserver(std::function<void(std::thread::id)> observer) {

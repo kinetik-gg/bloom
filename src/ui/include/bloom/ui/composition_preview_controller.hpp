@@ -237,6 +237,8 @@ class CompositionPreviewController final : public QObject {
     void setCachePurgeGate(bool gated);
     [[nodiscard]] bool cachePurgeGateActive() const noexcept { return cachePurgeGate_; }
     void beginShutdown();
+    // After task/native retirement: release current pixels and cache without a new request.
+    void releasePublishedFramesForShutdown();
 
     // Wired from the timeline's mouse-press (or any other Interactive-time-change gesture, e.g. a
     // future playback transport): while armed, the currentTimeChanged-triggered request below

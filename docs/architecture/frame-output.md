@@ -42,9 +42,16 @@ Explicit final-evaluator `executorBudgets` remain authoritative. With a processi
 override, the producer image upper ceiling follows `requestByteBudget` rather than a startup
 reusable-cache allocation; the admitted per-request allowance, live pins and native resource limits
 still constrain execution. The owning GPU contract defines phase-retirement proof on budget refusal.
-GUI provider/evaluator retirement does not join the native owner on the UI thread. An independently
-owned headless root may retire synchronously on its non-UI host thread after its renders finish;
-an injected caller neither retires nor destroys the shared provider after each request. Encoding, file writing, and the font load/shaping and geometry resolution that feed text
+GUI provider/evaluator retirement does not join native or packed-host owners on the active UI loop;
+actual exit is polled and collection follows event processing. Independently owned headless roots
+retire after active renders finish, with the GIL released where applicable. Owned providers retain
+an explicit packed-host retirement owner while preserving worker process sampling; injected app
+providers remain borrowed. Incomplete retirement retains native/provider/host/scheduler lifetimes
+and cannot permit interpreter finalization or dependency unload. CLI normal-return/unwind guards
+keep borrowed media evaluator and scheduler alive until proof. Affected Linux CPU-only frontend/root
+checks and all 103 changed-header strict translation units pass for this bounded published-host
+retirement follow-on. An injected caller neither retires nor
+destroys the shared provider after each request. Encoding, file writing, and the font load/shaping and geometry resolution that feed text
 remain CPU host preparation at this boundary: the GPU route evaluates and composites pixels but does
 not move codec or font work onto the device. A 6000x4000 media+CST+text export has locally verified
 native execution. `docs/architecture/gpu-backend.md` remains the owning document for GPU
