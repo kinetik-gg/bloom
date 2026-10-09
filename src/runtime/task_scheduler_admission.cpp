@@ -533,6 +533,10 @@ std::optional<TaskSnapshot> TaskScheduler::snapshot(const TaskId id) const {
     return state_->snapshot(id);
 }
 
+TaskCompletionSubscribeResult TaskScheduler::subscribeCompletions() noexcept {
+    return state_->subscribeCompletions();
+}
+
 void TaskScheduler::beginShutdown() noexcept { state_->requestShutdown(); }
 
 CpuRowBandExecutor* TaskScheduler::rowBandExecutor() const noexcept {

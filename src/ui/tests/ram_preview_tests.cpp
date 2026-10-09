@@ -233,7 +233,7 @@ struct SessionFixture final {
     explicit SessionFixture(document::NewProject newProject)
         : document(std::move(newProject.project)), commands(document),
           session(document, commands, newProject.initialCompositionId),
-          scheduler(testSchedulerConfig()), bridge(scheduler, nullptr, 1ms),
+          scheduler(testSchedulerConfig()), bridge(scheduler),
           controller(session, scheduler, bridge, countingPipeline(),
                      ui::CompositionPreviewSettings{}, frameCache) {}
 };

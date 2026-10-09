@@ -478,7 +478,6 @@ void ViewerEditor::pollGpuResident() {
         return;
     }
     gpuResident_->poll();
-    pollResidentCpuFallback();
     if (!residentFrameIsDisplayed() && !residentActive_) {
         return;
     }

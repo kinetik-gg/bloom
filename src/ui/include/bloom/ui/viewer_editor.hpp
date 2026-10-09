@@ -565,7 +565,6 @@ class ViewerEditor final : public QWidget,
     void consumeProbe();
     std::optional<QPointF> probePosition_;
     ProbeReadout probeReadout_{};
-    QTimer* probeTimer_ = nullptr;
     std::optional<runtime::TaskHandle<runtime::PreviewPreparationResultHandle>> probeTask_;
     std::optional<runtime::PreviewRequestIdentity> probeIdentity_;
     PreparedPreviewFrameHandle probeTaskFrame_;
@@ -585,7 +584,6 @@ class ViewerEditor final : public QWidget,
     runtime::ViewAdjust viewAdjust_{};
     kit::KValueField* exposureField_ = nullptr;
     kit::KValueField* gammaField_ = nullptr;
-    QTimer* analysisTimer_ = nullptr;
     std::optional<runtime::TaskHandle<runtime::PreviewPreparationResultHandle>> adjustTask_;
     std::optional<runtime::PreviewRequestIdentity> adjustIdentity_;
     PreparedPreviewFrameHandle adjustedFrame_;

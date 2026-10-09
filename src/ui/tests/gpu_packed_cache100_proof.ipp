@@ -72,6 +72,25 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
         return options.require_device ? 1 : 77;
     }
     ui::TaskUiBridge bridge(scheduler);
+    bool insideCompletion = false;
+    std::uint64_t completionSignals = 0, jobsPolls = 0;
+    std::vector<std::uint64_t> measuredTerminals;
+    std::vector<double> terminalDeliveryMicros;
+    QObject::connect(&bridge, &ui::TaskUiBridge::resultsAvailable, &bridge, [&] {
+        insideCompletion = true;
+        ++completionSignals;
+        for (const auto& task : scheduler.snapshots()) {
+            if (task.name == "Cache RAM preview frame" && task.finishedAt &&
+                std::ranges::find(measuredTerminals, task.id.value()) == measuredTerminals.end()) {
+                measuredTerminals.push_back(task.id.value());
+                terminalDeliveryMicros.push_back(
+                    std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() -
+                                                              *task.finishedAt)
+                        .count());
+            }
+        }
+    });
+    QObject::connect(&bridge, &ui::TaskUiBridge::snapshotsPolled, &bridge, [&] { ++jobsPolls; });
     auto pipeline = ui::makeCompositionPreviewPipeline(fixture.compiler, fixture.evaluator,
                                                        displayPreparer, fixture.provider);
     const ui::PreviewPreparationSubmitter submitter =
@@ -92,6 +111,16 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                                                 cache, nullptr, submitter);
     ui::RamPreviewController ram(session, controller, scheduler, bridge, pipeline, nullptr,
                                  submitter);
+    std::uint64_t observedPrepared = 0, fromCompletion = 0, outsideCompletion = 0;
+    QObject::connect(&ram, &ui::RamPreviewController::stateChanged, &bridge, [&] {
+        const auto prepared = ram.preparedFrameCount();
+        if (prepared > observedPrepared) {
+            (insideCompletion ? fromCompletion : outsideCompletion) += prepared - observedPrepared;
+            observedPrepared = prepared;
+        }
+    });
+    QObject::connect(&bridge, &ui::TaskUiBridge::resultsAvailable, &bridge,
+                     [&] { insideCompletion = false; });
     ui::ViewerEditor viewer(session, controller);
     viewer.resize(600, 420);
     viewer.show();
@@ -105,8 +134,28 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                           runtime::PreviewDisplayProvider::GpuPreparedPacked,
                   "actual normal Viewer foreground is GPU-prepared/CPU-painted");
     const auto before = service.status().counters;
+    const auto fillStarted = std::chrono::steady_clock::now();
     ram.start();
     checks.expect(waitUntil([&] { return !ram.isCaching(); }, 110s), "100-frame range terminates");
+    checks.expect(
+        fromCompletion == ram.preparedFrameCount() && outsideCompletion == 0,
+        "every actual RAM result/refill is driven by completion, not Jobs snapshot polling");
+    std::ranges::sort(terminalDeliveryMicros);
+    std::cout << "PACKED_COMPLETION_REFILL prepared=" << ram.preparedFrameCount()
+              << " insideCompletion=" << fromCompletion
+              << " outsideCompletion=" << outsideCompletion
+              << " completionSignals=" << completionSignals
+              << " bridgeWakes=" << bridge.completionWakeCount() << " jobsPolls=" << jobsPolls
+              << " fillWallMs="
+              << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                           fillStarted)
+                     .count();
+    if (!terminalDeliveryMicros.empty())
+        std::cout << " measuredTerminals=" << terminalDeliveryMicros.size()
+                  << " terminalToUiMedianMicros="
+                  << terminalDeliveryMicros[terminalDeliveryMicros.size() / 2]
+                  << " terminalToUiMaxMicros=" << terminalDeliveryMicros.back();
+    std::cout << '\n';
     checks.expect(ram.totalFrameCount() == 100 &&
                       ram.lastCompletion() ==
                           (partial ? ui::RamPreviewController::Completion::PartialBudget

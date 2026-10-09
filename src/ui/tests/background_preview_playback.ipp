@@ -1,10 +1,6 @@
-// A half-cached range (even frames cached, odd cold) with a measured preparation far slower than
-// the tick. The accepted admission policy never starves an IDLE transport: a cold miss submits even
-// when the stale estimate cannot fit the tick, so a slow range still progresses and fills the RAM
-// cache. A miss that arrives while a request is already in flight is never queued behind it -- it
-// is skipped and counted exactly once -- and a cache hit is published immediately without
-// evaluation. A deterministic worker gate holds the single in-flight evaluation, so every drop
-// count and shown frame is exact rather than raced against a fast fixture worker.
+// A half-cached range with a deterministic held producer proves the accepted one-active/newest
+// policy: cached pixels remain immediate and cancel older producers, whose terminal still gates
+// admission; completion dispatches the newest cold request without a Jobs snapshot poll.
 void testHalfCachedPlaybackAdmitsIdleMissesAndBackpressures(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Half cached playback", time(8, 25)));
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "initial ready");
@@ -42,8 +38,10 @@ void testHalfCachedPlaybackAdmitsIdleMissesAndBackpressures(Expectations& expect
     expectations.expect(fixture.preparationCount.load() == before + 1,
                         "exactly one evaluation is in flight for the admitted idle miss");
 
+    const auto heldTask = fixture.controller.state().taskId;
+
     // Tick 2 -> frame 2 (cached). A cached frame is published immediately; the single in-flight
-    // evaluation is superseded, never duplicated.
+    // evaluation is cancelled but retains its admission slot until terminal.
     now += 40ms;
     playback.tick();
     expectations.expect(fixture.session.currentTime() == time(2, 25), "the clock advances");
@@ -54,31 +52,46 @@ void testHalfCachedPlaybackAdmitsIdleMissesAndBackpressures(Expectations& expect
     expectations.expect(
         fixture.preparationCount.load() == before + 1,
         "a cache hit starts no evaluation and does not duplicate the in-flight one");
-    expectations.expect(fixture.controller.droppedFrameCount() == 1,
-                        "superseding the outstanding playback request counts exactly one drop");
+    expectations.expect(
+        fixture.controller.droppedFrameCount() == 0,
+        "a cached hit cancels the producer without prematurely releasing its admission gate");
 
-    // Tick 3 -> frame 3 (cold) while the superseded handle is still the active admission gate.
-    // One-active/one-newest: no second evaluation starts and the busy miss is skipped once.
+    // Tick 3 -> frame 3 (cold): retain the active producer and coalesce one newest request.
     now += 40ms;
     playback.tick();
     expectations.expect(fixture.session.currentTime() == time(3, 25), "the clock advances");
     expectations.expect(fixture.preparationCount.load() == before + 1,
-                        "one active request is never queued behind; no second evaluation starts");
-    expectations.expect(fixture.controller.droppedFrameCount() == 2,
-                        "the busy cold miss is counted exactly once");
+                        "one active producer prevents a second evaluation until terminal");
+    expectations.expect(
+        fixture.controller.droppedFrameCount() == 1,
+        "the older outstanding request is counted once while newest remains pending");
     expectations.expect(fixture.controller.state().frame != nullptr &&
                             fixture.controller.state().frame->desiredIdentity().time == time(2, 25),
                         "the busy miss retains the previous picture");
 
-    // Release the held evaluation and let its terminal result clear the active admission gate.
-    // backgroundWorkAllowed() is true exactly when no active/pending request remains, so it is the
-    // deterministic signal that the superseded handle has been observed and released.
+    std::vector<core::RationalTime> shown;
+    QObject::connect(&fixture.controller, &ui::CompositionPreviewController::stateChanged,
+                     &fixture.controller, [&] {
+                         if (fixture.controller.state().frame)
+                             shown.push_back(
+                                 fixture.controller.state().frame->desiredIdentity().time);
+                     });
     fixture.gate.release();
-    expectations.expect(waitUntil([&] {
-                            return fixture.scheduler.isQuiescent() &&
-                                   fixture.controller.backgroundWorkAllowed();
-                        }),
-                        "the superseded request terminates and clears the active gate");
+    expectations.expect(
+        waitUntil([&] {
+            return fixture.controller.backgroundWorkAllowed() && isReady(fixture.controller) &&
+                   fixture.controller.state().frame->desiredIdentity().time == time(3, 25);
+        }),
+        "completion refills newest frame three after cancelled admission reaches terminal");
+    const auto oldKey = fixture.controller.cacheKeyForTime(time(1, 25));
+    const auto heldSnapshot = heldTask ? fixture.scheduler.snapshot(*heldTask) : std::nullopt;
+    expectations.expect(
+        heldSnapshot && heldSnapshot->state == runtime::TaskState::Cancelled && oldKey &&
+            !fixture.frameCache->contains(*oldKey) &&
+            std::ranges::find(shown, time(1, 25)) == shown.end() &&
+            fixture.preparationCount.load() == before + 2 &&
+            fixture.controller.droppedFrameCount() == 1,
+        "cancelled producer cannot cache or rewind cached pixels, and newest starts exactly once");
 
     // Tick 4 -> frame 4 (cached): immediate, no evaluation, no new drops.
     now += 40ms;
@@ -86,8 +99,8 @@ void testHalfCachedPlaybackAdmitsIdleMissesAndBackpressures(Expectations& expect
     expectations.expect(fixture.controller.state().frame != nullptr &&
                             fixture.controller.state().frame->desiredIdentity().time ==
                                 time(4, 25) &&
-                            fixture.preparationCount.load() == before + 1 &&
-                            fixture.controller.droppedFrameCount() == 2,
+                            fixture.preparationCount.load() == before + 2 &&
+                            fixture.controller.droppedFrameCount() == 1,
                         "a cached frame after the gate clears is immediate and uncounted");
 
     // Tick 5 -> frame 5 (cold) from idle: the transport progresses and the frame fills the cache.
@@ -95,14 +108,14 @@ void testHalfCachedPlaybackAdmitsIdleMissesAndBackpressures(Expectations& expect
     playback.tick();
     expectations.expect(fixture.controller.state().activity == ui::PreviewActivity::Rendering,
                         "a cold miss after backpressure clears submits again");
-    expectations.expect(waitUntil([&] { return fixture.preparationCount.load() == before + 2; }),
+    expectations.expect(waitUntil([&] { return fixture.preparationCount.load() == before + 3; }),
                         "exactly one evaluation starts for the progressed cold frame");
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "the progressed cold frame is displayed");
     expectations.expect(fixture.controller.state().frame != nullptr &&
                             fixture.controller.state().frame->desiredIdentity().time ==
                                 time(5, 25) &&
-                            fixture.controller.droppedFrameCount() == 2,
+                            fixture.controller.droppedFrameCount() == 1,
                         "the displayed frame advances without extra drops");
     const auto filled = fixture.controller.cacheKeyForTime(time(5, 25));
     expectations.expect(filled.has_value() && fixture.frameCache->contains(*filled),
@@ -114,11 +127,11 @@ void testHalfCachedPlaybackAdmitsIdleMissesAndBackpressures(Expectations& expect
     expectations.expect(fixture.controller.state().frame != nullptr &&
                             fixture.controller.state().frame->desiredIdentity().time ==
                                 time(6, 25) &&
-                            fixture.preparationCount.load() == before + 2 &&
-                            fixture.controller.droppedFrameCount() == 2,
+                            fixture.preparationCount.load() == before + 3 &&
+                            fixture.controller.droppedFrameCount() == 1,
                         "the cached second pass adds no evaluation and no drops");
 
     playback.pause();
-    expectations.expect(fixture.controller.droppedFrameCount() == 2, "pause retains the run total");
+    expectations.expect(fixture.controller.droppedFrameCount() == 1, "pause retains the run total");
     finishFixture(fixture, expectations);
 }

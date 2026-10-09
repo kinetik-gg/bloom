@@ -39,7 +39,7 @@ RamPreviewController::RamPreviewController(CompositionSession& session,
     : QObject(parent), session_(session), previewController_(previewController),
       scheduler_(scheduler), taskUiBridge_(taskUiBridge), preparation_(std::move(preparation)),
       submitter_(std::move(submitter)) {
-    connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this,
+    connect(&taskUiBridge_, &TaskUiBridge::resultsAvailable, this,
             &RamPreviewController::consumeReadyResult);
     // A render-affecting edit or a composition switch makes every frame this run would still cache
     // belong to an evaluation the artist has left behind, so the run ends rather than mixing

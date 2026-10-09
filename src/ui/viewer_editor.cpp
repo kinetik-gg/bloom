@@ -1330,9 +1330,6 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     };
     connect(exposureField_, &kit::KValueField::valueChanged, this, changed);
     connect(gammaField_, &kit::KValueField::valueChanged, this, changed);
-    analysisTimer_ = new QTimer(this);
-    analysisTimer_->setInterval(16);
-    connect(analysisTimer_, &QTimer::timeout, this, &ViewerEditor::consumeViewAdjustment);
     loadViewAdjust();
 
     viewerDisplayView_ = new kit::KDropdown(footer);
@@ -1589,9 +1586,6 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     // lets the widget receive Space/Z/F without a prior click.
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
-    probeTimer_ = new QTimer(this);
-    probeTimer_->setInterval(16);
-    connect(probeTimer_, &QTimer::timeout, this, &ViewerEditor::consumeProbe);
     connect(this, &ViewerEditor::probeChanged, &previewController_,
             &CompositionPreviewController::probeChanged);
     connect(&previewController_, &CompositionPreviewController::stateChanged, this, [this] {
@@ -1725,6 +1719,12 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
             &ViewerEditor::refreshViewAdjustment);
     connect(&previewController_, &CompositionPreviewController::viewerResultsAvailable, this,
             &ViewerEditor::consumeChannelDisplay);
+    connect(&previewController_, &CompositionPreviewController::viewerResultsAvailable, this,
+            &ViewerEditor::consumeViewAdjustment);
+    connect(&previewController_, &CompositionPreviewController::viewerResultsAvailable, this,
+            &ViewerEditor::consumeProbe);
+    connect(&previewController_, &CompositionPreviewController::viewerResultsAvailable, this,
+            &ViewerEditor::pollResidentCpuFallback);
     connect(&session_, &CompositionSession::documentRebound, this, [this] {
         resetChannelDisplay();
         // Different document owners may have colliding numeric project/composition/revision IDs.
@@ -1733,7 +1733,6 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
         if (adjustTask_)
             adjustTask_->cancel();
         adjustTask_.reset();
-        analysisTimer_->stop();
         adjustIdentity_.reset();
         adjustedFrame_.reset();
         adjustmentFailure_.clear();

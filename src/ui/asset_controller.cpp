@@ -296,7 +296,7 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
     }
     dragToken_ = QUuid::createUuid().toByteArray();
     session_.setAssetController(this);
-    connect(&bridge_, &TaskUiBridge::snapshotsPolled, this, &AssetController::poll);
+    connect(&bridge_, &TaskUiBridge::resultsAvailable, this, &AssetController::poll);
     connect(&session_, &CompositionSession::snapshotChanged, this, &AssetController::refresh);
     connect(&session_, &CompositionSession::currentTimeChanged, this, &AssetController::refresh);
     connect(&host_, &ProjectHost::sessionReplaced, this, [this] {

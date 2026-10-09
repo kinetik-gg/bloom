@@ -224,7 +224,7 @@ struct SessionFixture final {
     explicit SessionFixture(document::NewProject newProject)
         : document(std::move(newProject.project)), commands(document),
           session(document, commands, newProject.initialCompositionId),
-          scheduler(testSchedulerConfig()), bridge(scheduler, nullptr, 1ms),
+          scheduler(testSchedulerConfig()), bridge(scheduler),
           controller(session, scheduler, bridge, countingPipeline(),
                      ui::CompositionPreviewSettings{}, frameCache) {}
 };
@@ -463,24 +463,38 @@ void testVisibleAdmissionAndSupersession(Expectations& expectations) {
     const auto task = taskId.has_value() ? fixture.scheduler.snapshot(*taskId) : std::nullopt;
     expectations.expect(task.has_value() && task->priority == runtime::TaskPriority::Visible,
                         "a predicted fast miss uses Visible, never Interactive");
-    fixture.gateAtCall = fixture.preparationCount.load();
+    const auto beforeHeld = fixture.preparationCount.load();
+    fixture.gateAtCall = beforeHeld;
     now += 40ms;
     playback.tick();
     expectations.expect(waitUntil([&] { return fixture.gate.entered(); }),
                         "next evaluation held in flight");
     now += 40ms;
     playback.tick();
-    expectations.expect(
-        fixture.controller.droppedFrameCount() == 2,
-        "next tick drops the unfinished request and skips its busy successor once each");
+    expectations.expect(fixture.controller.droppedFrameCount() == 1 &&
+                            fixture.preparationCount.load() == beforeHeld + 1,
+                        "a tick counts older ask once and retains one active/newest pending");
+    bool staleTwo = false;
+    QObject::connect(
+        &fixture.controller, &ui::CompositionPreviewController::stateChanged, &fixture.controller,
+        [&] {
+            if (fixture.controller.state().frame &&
+                fixture.controller.state().frame->desiredIdentity().time == time(2, 25))
+                staleTwo = fixture.controller.state().freshness == ui::FrameFreshness::Stale;
+        });
     fixture.gate.release();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
-                        "cancelled request terminates");
-    expectations.expect(fixture.controller.state().frame != nullptr &&
-                            fixture.controller.state().frame->desiredIdentity().time ==
-                                time(1, 25) &&
-                            fixture.controller.droppedFrameCount() == 2,
-                        "late work neither replaces the displayed frame nor counts twice");
+    expectations.expect(waitUntil([&] {
+                            return fixture.scheduler.isQuiescent() && isReady(fixture.controller) &&
+                                   fixture.controller.state().frame->desiredIdentity().time ==
+                                       time(3, 25);
+                        }),
+                        "terminal notification displays newest pending frame without another tick");
+    const auto staleKey = fixture.controller.cacheKeyForTime(time(2, 25));
+    expectations.expect(
+        staleTwo && staleKey && fixture.frameCache->contains(*staleKey) &&
+            fixture.preparationCount.load() == beforeHeld + 2 &&
+            fixture.controller.droppedFrameCount() == 1,
+        "older clean completion shows exact stale time before newest current frame");
     playback.pause();
     finishFixture(fixture, expectations);
 }

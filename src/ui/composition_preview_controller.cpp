@@ -120,23 +120,16 @@ CompositionPreviewController::CompositionPreviewController(
         // No request here: setColorSettings() also publishes evaluationChanged(), which is the one
         // refresh trigger for this transition -- requesting from both would double the work.
     });
-    connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this,
+    connect(&taskUiBridge_, &TaskUiBridge::resultsAvailable, this,
             &CompositionPreviewController::consumeReadyResult);
-    connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this,
+    connect(&taskUiBridge_, &TaskUiBridge::resultsAvailable, this,
             &CompositionPreviewController::viewerResultsAvailable);
     interactiveCadenceTimer_.setSingleShot(true);
     interactiveCadenceTimer_.setTimerType(Qt::PreciseTimer);
     connect(&interactiveCadenceTimer_, &QTimer::timeout, this,
             &CompositionPreviewController::flushCadence);
-    // Preview presentation must not wait for the Jobs monitor's 100 ms polling interval.
-    // This timer only runs while a worker is active; polling only takes a ready result.
-    completionPollTimer_.setInterval(4);
     if (trace_)
-        trace_->setPollingIntervals(taskUiBridge_.pollingInterval(),
-                                    std::chrono::milliseconds{completionPollTimer_.interval()});
-    completionPollTimer_.setTimerType(Qt::PreciseTimer);
-    connect(&completionPollTimer_, &QTimer::timeout, this,
-            &CompositionPreviewController::consumeReadyResult);
+        trace_->setPollingIntervals(taskUiBridge_.pollingInterval(), std::chrono::milliseconds{0});
     refreshRetentionRange();
     requestPreview(true, PreviewRequestKind::Visible);
 }
@@ -1037,7 +1030,6 @@ void CompositionPreviewController::submitPreview(PendingRequest pendingRequest,
                       .playbackOutstanding = pendingRequest.kind == PreviewRequestKind::Playback});
     if (pendingRequest.kind == PreviewRequestKind::Interactive)
         interactiveSubmissionClock_.restart();
-    completionPollTimer_.start();
     publishRendering(desiredIdentity, taskId, std::move(retainedFrame));
     taskUiBridge_.wake();
 }
@@ -1076,7 +1068,6 @@ void CompositionPreviewController::publishRendering(runtime::PreviewRequestIdent
 }
 
 void CompositionPreviewController::cancelAndDetachActive() noexcept {
-    completionPollTimer_.stop();
     if (!active_.has_value()) {
         return;
     }

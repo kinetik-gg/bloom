@@ -90,9 +90,14 @@ provide research or rationale, but they are not binding until adopted here.
   private Linux checks qualify clipping, ROI, coherent outlines, host-only Full/Half 100-frame reuse,
   real animated text manipulation and short useful cold progress. Channel remapping is a bounded
   CPU worker with explicit provenance. Native preview/final GPU coverage remains required. These
-  checks do not establish sustained playback or cross-platform GPU qualification; broader completion,
+  checks do not establish sustained playback or cross-platform GPU qualification; broader scheduling,
   clock, media, aggregate memory and batching work remains in the
   [GPU reliability plan](plans/gpu-reliability-and-preview.md).
+- Shared preview completion now uses callback-free neutral runtime subscriptions and one coalesced
+  queued UI drain. RAM/background refill and typed Viewer/asset/bootstrap/export/purge consumers
+  receive completed results independently of Jobs progress snapshots. Bounded private tests qualify
+  burst coalescing, held-worker UI activity and GPU Half100 refill; clocks, native acknowledgements,
+  separate text-layout/ProjectHost I/O polling and sustained/platform gates remain separate.
 
 The detailed implementation status and next merge gates live in [`roadmap.md`](roadmap.md).
 

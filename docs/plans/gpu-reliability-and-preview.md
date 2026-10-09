@@ -10,7 +10,8 @@ The owner resumed execution after the G2E checkpoint. G3B outline publication an
 slices and G3A retention truth are accepted within the limits below. The packed QWidget Stage 2
 containment/adoption slice and its bounded cold-progress prerequisite are now accepted. This closes
 the measured panel/top-level spill gate for that route; broader G3/G4–G10 qualification remains
-incomplete. The next narrow G6A work addresses process-limit headroom and unconsumed result mailboxes.
+incomplete. Bounded G4A completion-driven delivery/refill is accepted; G4B rational transport is
+next. G6A process-limit headroom and unconsumed result mailboxes remain required follow-ups.
 
 Implementation proceeds sequentially from `e1086c13`. Each slice requires source review, focused
 regressions, and the applicable native/product evidence before its successor is accepted. A passing
@@ -31,9 +32,10 @@ and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 | G3B resize lifecycle/status | Accepted as a narrow slice; containment was unresolved at that checkpoint | Independent resize completion sequence, exposed previous pixels described as Stale, native/focused/UI checks and 20 affected translation units of static analysis pass |
 | G3B packed service foundation | Accepted as a bounded core slice | Genuine offscreen GPU final transfers, exact provenance/retirement, Vulkan-disabled core build, quality and 45 affected translation units pass |
 | G3B packed Viewer Stage 2 | Accepted as a bounded containment/adoption slice | Independent external pixels, real animation/drag/undo, exact host-only Full/Half 100-frame reuse, portable regressions, final builds/quality/static analysis pass |
+| G4A shared-preview completion | Accepted as a bounded delivery/refill slice | Neutral terminal subscriptions, coalesced UI drain, typed consumers, private Half100 refill/animation, portable tests, final build/quality and 115 affected translation units pass |
 | G4C prerequisite | Accepted only as the bounded cold-progress prerequisite | One active/newest intent, useful older Stale publication and guarded pause/shutdown pass source review and short real playing pixels; remaining G4 scheduling is pending |
 | G7A / G9 bounded display work | Packed immutable borrowing, off-UI CPU channel derivation and finished-display host choice accepted | Explicit provenance and measured bytes; remaining CPU storage/process/channel work and broader cache policy remain pending |
-| Remaining G4–G10 | Pending | Completion delivery, rational clock, native public hooks, media reuse, aggregate memory, batching and sustained/platform qualification are not completed |
+| Remaining G4–G10 | Pending | Rational clock, remaining scheduling, native public hooks, media reuse, aggregate memory, batching and sustained/platform qualification are not completed |
 
 G3B1 checkpoint (2026-10-09), accepted after independent source review and focused reruns: coherent required-outline publication and exact
 owner-applied metadata are implemented as a bounded slice. Deterministic delayed raster, changing
@@ -293,11 +295,64 @@ Failed launcher/build/experience evidence is preserved, not counted as a pass.
 
 All native fixtures used private/offscreen surfaces. Original checkout, running old app, unsaved
 session, preferences and recovery remain untouched. Local uniform EXRs establish dimensions,
-capacity, identity and warm reuse, not heavy EXR/SMB throughput. G4A completion notifications/refill,
-G4B rational transport, remaining G4C scheduling and G4D public native Qt hooks remain required.
+capacity, identity and warm reuse, not heavy EXR/SMB throughput. G4A completion notifications/refill
+were still pending at Stage 2 and are accepted in the bounded checkpoint below. G4B rational
+transport, remaining G4C scheduling and G4D public native Qt hooks remain required.
 Next narrow G6A process-limit/headroom and unconsumed mailbox ownership, CPU-fallback G7A storage,
 G5 source reuse, G6B aggregate budgets, G8 batching, remaining evidence-driven G9 and G10 sustained/
 platform qualification remain open. G3 and the broader program are not declared complete.
+
+## Accepted bounded G4A completion delivery — 2026-10-09
+
+Runtime now owns callback-free Qt-free completion subscriptions: 16 weak slots, typed admission,
+closed-slot reuse, idempotent concurrent close, stop-aware waiting, scheduler teardown wake and
+explicit serial saturation. Winning CPU/I/O/GPU terminals notify after result/history/accounting
+cleanup; rejected admission/shutdown requests do not impersonate completion. The UI adapter waits
+for neutral serial changes, holds at most one queued drain, acknowledges before observers and
+stops/joins before QObject destruction. Already-ready owned handles get one startup/wake drain.
+Startup/dispatch failure reports a diagnostic and closes safely, without fast polling fallback.
+
+Foreground 4 ms result polling, RAM/background reliance on Jobs snapshots and Viewer result-only
+16 ms polling are removed in this slice. Adjustment/probe/channel/resident CPU-fallback and
+qualified-display/bootstrap/assets/export/purge consumers use typed completion delivery. Jobs
+progress remains 100 ms; native acknowledgements remain 16 ms. Export/purge progress/timeouts,
+background idle-start, pointer/transport cadence, text-layout isolation and ProjectHost I/O polling
+remain separate. No GPU preparation, cache semantics or accepted cold-playback policy changed.
+
+A local 64-terminal burst produces one coalesced wake, delivers all 64 results and adds zero Jobs
+polls while monitoring is stopped; four UI heartbeat pulses occur with a barrier-held worker.
+Completion during drain, already-ready ownership, idle/queued destruction and observer deletion
+pass. This small fixture's maximum task-terminal-to-UI observer latency is 52.751 microseconds,
+not an input-to-display or GPU fence timing.
+
+Genuine private required-device Half100 retains 100 products at 207,540,400 B host/native zero,
+with CPU parity and warm 200 Current observations adding zero evaluation/dispatch/final transfer.
+All 99 newly completed products land inside completion callbacks, zero outside. RAM start initiates
+the initial bounded batch; consumption advances/refills subsequent requests. Fill takes 3,635.95 ms.
+Across 99 top-level task terminals, finishedAt-to-UI observer median/max is 326.774/631.787
+microseconds; fixture diagnostic snapshot scans are included and distinct from 39 Jobs polls.
+The 281 completion wakes include child pipeline tasks and explicit wakes; they are not 281 frames
+or proof that all 99 submissions originated in callbacks. Controlled local EXRs do not qualify SMB
+throughput or sustained playback.
+
+Independent seven-phase animation pixels retain visible 0.916667 Stale while playing/request 1.0,
+then stopped Current 2.83333. Seven CPU oracles, eight handles, unchanged neighboring panels,
+real text drag/one-revision commit and exact undo pass with required GPU/core+sync validation.
+Phase holds/capture timing qualify correctness, not animation throughput or pointer latency.
+
+Runtime and focused UI suites, auxiliary shutdown/bootstrap/assets/export/purge consumers, final
+Bloom/repository quality and 115 unique affected translation units of strict analysis pass. Linux
+CPU-only/no-Vulkan build plus five focused suites pass; public C++20/Qt APIs do not establish executed
+macOS/Windows qualification. Prior background assertions still encoded pre-Stage-2 cancellation/
+drop policy; tests now assert the accepted bounded active/newest, old-own-time Stale/current and
+newer-cache winner behavior. A device-free bootstrap test still encoded pre-G3A capacity; it now
+requires 4096 lease/3584 cache metadata slots while preserving byte/overflow/device-clamp checks.
+These are repaired prior coverage gaps, not production-policy changes. Failed logs are retained.
+
+This accepts shared-preview completion delivery/refill only. Rational clocks, remaining cold policy,
+required native Qt acknowledgement hooks, process headroom/mailbox ownership, remaining CPU-storage
+accounting and broader export/sustained/platform qualification remain open. Stable Stage 2 user
+build and original app/session/preferences/recovery are untouched.
 
 ## Decision to make
 

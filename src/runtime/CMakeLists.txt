@@ -8,6 +8,7 @@ target_sources(
         row_band_execution.cpp
         memory_budget_ledger.cpp
         task_primitives.cpp
+        task_completion.cpp
         task_gpu_executor.cpp
         task_gpu_executor_lease.cpp
         task_scheduler.cpp
@@ -20,6 +21,7 @@ target_sources(
             include/bloom/runtime/memory_budget_ledger.hpp
             include/bloom/runtime/row_band_execution.hpp
             include/bloom/runtime/task_gpu_executor.hpp
+            include/bloom/runtime/task_completion.hpp
             include/bloom/runtime/task_scheduler.hpp
             include/bloom/runtime/task_types.hpp
 )

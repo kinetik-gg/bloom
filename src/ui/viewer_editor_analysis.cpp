@@ -239,7 +239,6 @@ void ViewerEditor::refreshViewAdjustment() {
     }
     adjustTask_ = submission.handle;
     exposureField_->setToolTip(tr("Preparing viewer adjustment…"));
-    analysisTimer_->start();
 }
 
 void ViewerEditor::consumeViewAdjustment() {
@@ -249,7 +248,6 @@ void ViewerEditor::consumeViewAdjustment() {
     if (!result)
         return;
     adjustTask_.reset();
-    analysisTimer_->stop();
     if (result->state() == runtime::TaskState::Cancelled)
         adjustIdentity_.reset();
     const auto base = previewController_.state().frame;

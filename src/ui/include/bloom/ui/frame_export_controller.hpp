@@ -125,8 +125,8 @@ using FrameExportApprovalDecisionProvider =
 // -- through: a plan-compile Cpu task (runtime::SnapshotCompiler, this controller's own thin
 // UI-side task submission -- src/output/src/host add no new ABI for it), then
 // bloom::host::beginOutputAnalysisAttemptV1() (Resolving/Evaluating/Identifying/Analyzing, polled
-// off TaskUiBridge::snapshotsPolled per the qualified-display-processor bootstrap's poll-and-
-// publish-once precedent), an artist approval decision, bloom::host::approveFrameExportV1(), and
+// through TaskUiBridge::resultsAvailable; coarse snapshots also update progress), an artist
+// approval decision, bloom::host::approveFrameExportV1(), and
 // finally bloom::host::executeExportPublication() on its own BlockingIo task. Every stage is a real
 // bloom::runtime::TaskScheduler task, so attempt/job progress reaches the ordinary
 // Jobs/task-monitor surface automatically -- no separate progress plumbing is added here.

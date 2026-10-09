@@ -20,7 +20,7 @@ class QualifiedDisplayProcessorBootstrap final : public QObject {
     // Submits the build immediately, at construction -- design decision 3: "at pipeline/session
     // construction, resolve Bloom Neutral through the C2 registry and build the processor". Both
     // `scheduler` and `taskUiBridge` must outlive this object; `provider` is published into exactly
-    // once, from this object's poll handler (TaskUiBridge::snapshotsPolled), never from the
+    // once, from this object's result handler (TaskUiBridge::resultsAvailable), never from the
     // submitted worker itself (the worker runs on a blocking-I/O executor thread, not the
     // authoring/UI thread).
     QualifiedDisplayProcessorBootstrap(runtime::TaskScheduler& scheduler,

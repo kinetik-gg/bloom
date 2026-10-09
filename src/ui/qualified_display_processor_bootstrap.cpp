@@ -16,7 +16,7 @@ QualifiedDisplayProcessorBootstrap::QualifiedDisplayProcessorBootstrap(
     runtime::TaskScheduler& scheduler, TaskUiBridge& taskUiBridge,
     runtime::QualifiedDisplayProcessorProvider& provider, QObject* parent)
     : QObject(parent), scheduler_(scheduler), provider_(provider) {
-    connect(&taskUiBridge, &TaskUiBridge::snapshotsPolled, this,
+    connect(&taskUiBridge, &TaskUiBridge::resultsAvailable, this,
             &QualifiedDisplayProcessorBootstrap::pollOnce);
 
     runtime::TaskRequest request(

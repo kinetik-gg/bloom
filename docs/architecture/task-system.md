@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-09-13
+Updated: 2026-10-09
 
 ## Objective
 
@@ -35,10 +35,13 @@ The Qt-free `src/runtime` kernel currently implements:
   and request-owned-byte caps; transactional coalescing, owner/group cancellation, priority,
   history, quiescence, device loss, and shutdown use the same scheduler truth as CPU and I/O work
 
+- callback-free neutral completion subscriptions with bounded weak slots and stop-aware serial
+  observation; workers and scheduler retain no Qt object or UI callback
+
 The implemented Qt/application layer adds:
 
-- a rate-limited UI-thread bridge that polls bounded value snapshots without registering worker
-  callbacks or retaining Qt objects in runtime work
+- a UI-side completion adapter with one coalesced queued result drain, separate from rate-limited
+  Jobs/progress snapshot polling
 - one shared task-monitor model and disposable Jobs panels with stable-ID cancellation and complete
   structured diagnostic presentation
 - a frozen node-definition registry and deterministic compiler that consumes immutable document
@@ -242,9 +245,42 @@ Nested work aggregates through task groups. Progress is monotonic within a phase
 change its estimate as new work is discovered. The UI must not infer success from reaching 100%;
 only the terminal outcome is authoritative.
 
-The kernel provides structured snapshots and group aggregation. The implemented Qt bridge polls at
-a bounded rate, and the shared Jobs model presents textual progress without turning worker reports
-into an unbounded UI event stream.
+The kernel provides structured snapshots and group aggregation. Jobs/progress snapshots still poll
+at a bounded 100 ms default, independently of completion delivery. The shared Jobs model presents
+textual progress without turning worker reports into an unbounded UI event stream.
+
+### Completion-driven result delivery (G4A)
+
+The Qt-free runtime exposes callback-free completion serial subscriptions with 16 weak slots,
+typed refusal, closed/expired-slot reuse, concurrent idempotent close and stop-aware waiting.
+A winning admitted CPU, blocking-I/O or GPU terminal publication notifies only after mailbox,
+history, accounting and finalizing cleanup. Rejected admission and a shutdown request are not
+completion. Forced GPU termination and late owner completion preserve the existing winner gates.
+Serial exhaustion is explicit and never wraps; scheduler teardown wakes subscribers. Typed result
+handles remain owned and consumed by their existing consumers.
+
+Only the UI adapter owns a lightweight waiting thread and the QObject reference. Neutral serial
+change queues at most one pending UI drain; the adapter then waits for acknowledgement. The UI
+acknowledges before emitting `resultsAvailable`, so completion during a synchronous observer and
+observer deletion remain safe. Already-ready owned handles receive one queued startup/wake drain
+after consumers connect. Both waits are stop-aware; destruction stops and joins this idle adapter
+before QObject base destruction, without waiting for evaluation or GPU work. Subscription/thread
+startup failure follows an explicit application diagnostic/shutdown path. Failed queued dispatch
+clears pending state, closes the subscription and reports failure; no fast-poll fallback is added.
+
+Foreground preview, RAM/background completion and Viewer adjustment/probe/channel/CPU-fallback
+results consume this signal through typed handles. Qualified-display bootstrap, asset import,
+frame export and cache purge completion consumers also use it. RAM start submits its initial
+bounded batch; completion consumption advances and refills it. Coarse export/purge progress,
+timeouts and quiescence remain independent. Native acknowledgement still uses 16 ms sampling;
+transport/pointer cadence, background idle-start, separate text-layout isolation and ProjectHost I/O
+polling are outside this slice. G4A does not mean every application timer or poll has disappeared.
+
+Private local tests qualify a 64-terminal burst coalescing to one wake with all 64 results delivered
+and no additional Jobs snapshot polls while monitoring is stopped. Four UI heartbeat pulses occur
+while a worker is held. A genuine GPU Half100 range lands all 99 new products through completion
+callbacks and retains 100 host products; the initial batch still originates at RAM start. These are
+bounded responsiveness/refill proofs, not sustained playback or cross-platform GPU qualification.
 
 ### Opt-in preview frame trace
 
@@ -261,8 +297,10 @@ submission and native mailbox submission remain separate events. Native acknowle
 the owner's applied sequence with the identity submitted for that sequence using a bounded history;
 lost correlation is explicit. Neither a CPU painter call nor a native owner acknowledgement proves
 compositor scanout. Worker preparation timestamps, GPU timestamps, media/plan/upload substage times
-and fallback diagnostic text are currently unavailable. Polling intervals and UI poll counts are
-recorded; production defaults remain 100 ms for TaskUiBridge and 4 ms for foreground completion.
+and fallback diagnostic text are currently unavailable. Snapshot polling intervals/counts remain
+recorded with completion wake/serial and foreground delivery counts. Jobs snapshots default to
+100 ms; foreground result delivery no longer uses a 4 ms timer. Completion wake totals can include
+child tasks and explicit startup/wake drains, so they are not a count of completed frames.
 CPU-cover visibility, native surface generation and pointer-input timestamps remain G3 probes.
 This initial trace does not prove that an acknowledged native frame is unobscured, nor does it
 qualify visible-pixel correctness or flicker.

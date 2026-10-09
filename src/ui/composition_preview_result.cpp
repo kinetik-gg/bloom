@@ -22,7 +22,7 @@ void CompositionPreviewController::consumeReadyResult() {
         return;
     }
     if (trace_)
-        trace_->noteForegroundPoll();
+        trace_->noteForegroundDelivery();
 
     auto result = active_->handle.tryTakeResult();
     if (!result.has_value()) {
@@ -31,7 +31,6 @@ void CompositionPreviewController::consumeReadyResult() {
 
     ActiveRequest completed = std::move(*active_);
     active_.reset();
-    completionPollTimer_.stop();
     if (shuttingDown_) {
         return;
     }

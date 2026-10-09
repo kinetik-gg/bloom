@@ -193,6 +193,9 @@ void PreviewFrameTrace::writeJson(std::ostream& output) const {
            << bridgeInterval_.count() << ",\"foreground_poll_ms\":" << foregroundInterval_.count()
            << ",\"bridge_polls\":" << bridgePolls_
            << ",\"foreground_mailbox_polls\":" << foregroundPolls_
+           << ",\"completion_wakes\":" << completionWakes_
+           << ",\"completion_serial\":" << completionSerial_
+           << ",\"foreground_deliveries\":" << foregroundDeliveries_
            << ",\"capacity\":" << buffer_.size() << ",\"overwritten\":" << overwritten_
            << ",\"events\":[";
     bool first = true;

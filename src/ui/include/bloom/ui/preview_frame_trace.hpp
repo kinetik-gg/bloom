@@ -90,6 +90,11 @@ class PreviewFrameTrace final {
     [[nodiscard]] std::uint64_t overwritten() const noexcept { return overwritten_; }
     void noteBridgePoll() noexcept { ++bridgePolls_; }
     void noteForegroundPoll() noexcept { ++foregroundPolls_; }
+    void noteForegroundDelivery() noexcept { ++foregroundDeliveries_; }
+    void noteCompletionWake(std::uint64_t serial) noexcept {
+        ++completionWakes_;
+        completionSerial_ = serial;
+    }
     void setPhase(PreviewTracePhase phase) noexcept { phase_ = phase; }
     void setPollingIntervals(std::chrono::milliseconds bridge,
                              std::chrono::milliseconds foreground) noexcept;
@@ -101,6 +106,7 @@ class PreviewFrameTrace final {
     std::size_t next_ = 0, size_ = 0;
     std::uint64_t ordinal_ = 0, overwritten_ = 0, presenterId_ = 0;
     std::uint64_t bridgePolls_ = 0, foregroundPolls_ = 0;
+    std::uint64_t completionWakes_ = 0, completionSerial_ = 0, foregroundDeliveries_ = 0;
     std::chrono::steady_clock::time_point started_ = std::chrono::steady_clock::now();
     std::chrono::milliseconds bridgeInterval_{0}, foregroundInterval_{0};
     std::optional<PreviewTraceEvent> nativeAck_;

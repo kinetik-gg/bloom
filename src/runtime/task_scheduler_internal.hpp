@@ -4,6 +4,8 @@
 #include <bloom/runtime/row_band_execution.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
+#include "task_completion_internal.hpp"
+
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -130,8 +132,12 @@ struct SchedulerState final : std::enable_shared_from_this<SchedulerState> {
     void requestShutdown() noexcept;
     [[nodiscard]] bool isAccepting() const noexcept;
     [[nodiscard]] bool isQuiescent() const noexcept;
+    [[nodiscard]] TaskCompletionSubscribeResult subscribeCompletions() noexcept {
+        return completions.subscribe();
+    }
 
   private:
+    friend struct TaskSchedulerTestAccess;
     struct ExecutorState {
         std::vector<std::shared_ptr<TaskRecord>> pending;
         std::condition_variable available;
@@ -180,6 +186,7 @@ struct SchedulerState final : std::enable_shared_from_this<SchedulerState> {
     void advanceTaskIdLocked() noexcept;
 
     TaskSchedulerConfig config;
+    TaskCompletionSubscriptions completions;
     // Engaged unless the configuration asked for kSerialRowBandWorkers. Declared before `mutex` so
     // it is destroyed after everything below it: its own destructor joins band workers, and no band
     // may outlive a task that is still holding a reference into this state.
@@ -225,6 +232,11 @@ void groupFinished(const std::shared_ptr<TaskGroupControl>& group, TaskState pre
                    GroupProgressContribution contribution) noexcept;
 
 struct TaskSchedulerTestAccess {
+    static void setCompletionSerial(TaskScheduler& scheduler, const std::uint64_t serial) {
+        auto& completions = scheduler.state_->completions;
+        std::lock_guard lock(completions.mutex_);
+        completions.serial_ = serial;
+    }
     [[nodiscard]] static std::unique_ptr<TaskScheduler>
     create(TaskSchedulerConfig config, std::function<void(std::size_t)> workerStartHook) {
         return std::unique_ptr<TaskScheduler>(

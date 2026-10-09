@@ -21,11 +21,13 @@ class TaskUiBridge final : public QObject {
     static constexpr std::chrono::milliseconds defaultPollingInterval{100};
     explicit TaskUiBridge(runtime::TaskScheduler& scheduler, QObject* parent = nullptr,
                           std::chrono::milliseconds pollingInterval = defaultPollingInterval);
+    ~TaskUiBridge() override;
 
     [[nodiscard]] const std::vector<runtime::TaskSnapshot>& snapshots() const noexcept;
     [[nodiscard]] const QString& monitorError() const noexcept;
     [[nodiscard]] bool isRunning() const noexcept;
     [[nodiscard]] bool isShuttingDown() const noexcept;
+    [[nodiscard]] std::uint64_t completionWakeCount() const noexcept;
     [[nodiscard]] std::chrono::milliseconds pollingInterval() const noexcept {
         return pollingInterval_;
     }
@@ -40,17 +42,20 @@ class TaskUiBridge final : public QObject {
     void beginShutdown();
 
   signals:
+    void resultsAvailable();
     void snapshotsPolled();
     void monitorErrorChanged();
     void shutdownQuiescent();
 
   private slots:
     void poll();
+    void drainResults();
 
   private:
     void scheduleNextPoll();
     void setMonitorError(QString error);
     void assertUiThread() const;
+    struct CompletionDelivery;
 
     runtime::TaskScheduler& scheduler_;
     std::shared_ptr<PreviewFrameTrace> trace_;
@@ -61,6 +66,9 @@ class TaskUiBridge final : public QObject {
     bool running_ = false;
     bool shuttingDown_ = false;
     bool quiescenceEmitted_ = false;
+    std::uint64_t completionWakes_ = 0;
+    QString completionError_;
+    std::unique_ptr<CompletionDelivery> completion_;
 };
 
 } // namespace bloom::ui

@@ -251,6 +251,8 @@ FrameExportController::FrameExportController(
     gpuExportProvider_->prepare(scheduler_);
 
     connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this, &FrameExportController::pollOnce);
+    connect(&taskUiBridge_, &TaskUiBridge::resultsAvailable, this,
+            &FrameExportController::pollOnce);
 
     // All frame presets are listed; TIFF uses the supervised worker. The chosen extension -- not
     // the selected filter entry -- is what actually selects the preset (presetForDestination()

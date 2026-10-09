@@ -1,4 +1,5 @@
 add_executable(bloom_runtime_task_test task_scheduler_tests.cpp)
+add_executable(bloom_runtime_completion_test task_completion_tests.cpp)
 add_executable(bloom_runtime_regression_test task_scheduler_regression_tests.cpp)
 add_executable(bloom_runtime_gpu_task_test task_gpu_executor_tests.cpp)
 add_executable(bloom_runtime_registry_test node_definition_registry_tests.cpp)
@@ -15,6 +16,9 @@ add_executable(bloom_runtime_data_block_reader_test data_block_reader_tests.cpp)
 add_executable(bloom_runtime_input_color_context_test input_color_context_tests.cpp)
 
 target_link_libraries(bloom_runtime_task_test PRIVATE bloom_runtime)
+target_link_libraries(bloom_runtime_completion_test PRIVATE bloom_runtime)
+target_include_directories(bloom_runtime_completion_test PRIVATE ..)
+bloom_enable_warnings(bloom_runtime_completion_test)
 target_link_libraries(bloom_runtime_regression_test PRIVATE bloom_runtime)
 target_link_libraries(bloom_runtime_gpu_task_test PRIVATE bloom_runtime)
 target_link_libraries(bloom_runtime_registry_test PRIVATE bloom_runtime_compiler)
@@ -64,6 +68,13 @@ bloom_enable_strict_floating_point(bloom_runtime_animation_sampling_test)
 bloom_enable_strict_floating_point(bloom_runtime_qualified_display_preparation_test)
 
 include(BloomTesting)
+
+bloom_add_test(
+    NAME bloom.runtime.completions
+    COMMAND bloom_runtime_completion_test
+    LABELS runtime unit
+    TIMEOUT 30
+)
 
 bloom_add_test(
     NAME bloom.runtime.tasks

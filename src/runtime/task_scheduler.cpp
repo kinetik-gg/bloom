@@ -124,6 +124,7 @@ SchedulerState::~SchedulerState() {
         static_cast<void>(forceGpuShutdown(*generation, attachmentId));
     }
     joinWorkers();
+    completions.close();
 }
 
 void SchedulerState::startWorkers() {
@@ -312,6 +313,7 @@ void SchedulerState::finishRunning(const std::shared_ptr<TaskRecord>& record,
         }
         retainTerminalLocked(record->snapshot.id);
     }
+    completions.publish();
     cpu.available.notify_all();
     blockingIo.available.notify_all();
 }
@@ -328,6 +330,7 @@ void SchedulerState::finalizeRemoved(const std::shared_ptr<TaskRecord>& record) 
         }
         retainTerminalLocked(record->snapshot.id);
     }
+    completions.publish();
     cpu.available.notify_all();
     blockingIo.available.notify_all();
 }

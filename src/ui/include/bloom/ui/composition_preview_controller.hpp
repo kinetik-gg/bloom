@@ -342,7 +342,6 @@ class CompositionPreviewController final : public QObject {
     std::optional<ActiveRequest> active_;
     std::optional<PendingRequest> pending_;
     QTimer interactiveCadenceTimer_;
-    QTimer completionPollTimer_;
     QElapsedTimer interactiveSubmissionClock_;
     bool interactiveTimeChangeArmed_ = false;
     bool valueEditPreviewActive_ = false;

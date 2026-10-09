@@ -659,7 +659,9 @@ a budget-limited partial range stops and leaves ordinary manual work-area playba
 second RAM preview of an unedited range is immediate. The range is the persisted half-open work
 area when set, otherwise `[0, duration)`, read through `CompositionSession::workArea()`. Playback
 starts inside and loops over those same frame indices. The start frame is included and the end
-frame excluded.
+frame excluded. Start submits the initial bounded batch; terminal completion delivery consumes
+ready typed products and advances/refills without waiting for the Jobs snapshot timer. Completion
+of child work can wake the bridge too, so wake counts are not frame counts.
 
 A work-area edit (`SetWorkArea`/`ClearWorkArea`) is render-neutral: it scopes which frames a range
 command caches, not what a pixel looks like, so it is declared layout-like in the command layer and
@@ -685,6 +687,8 @@ the playhead, then visits the next frame, previous frame, and progressively fart
 directions. During playback it visits frames forward from the moving playhead, wrapping at the
 composition end. An in-flight frame remains useful when playback advances; the next request is
 chosen from the new playhead instead of cancelling slow speculative work on every tick.
+Terminal results are consumed through the shared coalesced completion signal; existing background
+idle-start/yield policy is unchanged and separate from Jobs progress snapshots.
 
 Only one speculative frame may be in flight, at scheduler `Background` priority, below `Visible`
 and `Interactive`. Foreground preview admission and gesture begin cancel it cooperatively. Its
@@ -750,7 +754,8 @@ Each due tick advances the exact session time and asks for its frame:
 - A miss is admitted at `Visible` whenever no foreground request is active/pending. The measured
   delivery estimate does not gate an idle admission: it is only refreshed by a successful
   completion, so refusing to submit on an unknown or slow estimate would starve a cold, uncached
-  range forever. Delivery timing includes queue, preparation, and UI polling.
+  range forever. Delivery timing includes queue, preparation and queued completion dispatch; Jobs
+  progress polling is independent.
 - Same-domain playback keeps one active producer and one newest pending intent. A busy miss
   replaces only that pending intent; newer ticks do not cancel useful active work. Admission remains
   blocked until the active handle reaches terminal state. Missed deadlines count lateness once,
@@ -774,8 +779,10 @@ This bounded cold-progress repair is locally qualified by a short real solid/tex
 actual time 0.916667 is displayed Stale while transport requests 1.0 and remains playing; pause
 converges at 2.83333. Seven CPU pixel oracles, coherent handles, real text drag/commit and exact undo
 pass. It changes no clock/deadline/ticker interval and adds no prewarm or CPU scene substitution.
-Completion notifications/refill, rational transport refinement, required native Qt present hooks and
-remaining scheduling/stress qualification remain G4 work; sustained rate and drift remain G10.
+Shared preview completion notifications/refill are now implemented by the bounded G4A subscription
+and UI drain described in [Task System](task-system.md#completion-driven-result-delivery-g4a).
+Rational transport refinement, required native Qt present hooks and remaining scheduling/stress
+qualification remain G4 work; sustained rate and drift remain G10.
 
 ### Audio Clock Master
 

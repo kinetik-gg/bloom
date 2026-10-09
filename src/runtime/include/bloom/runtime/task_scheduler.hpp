@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/runtime/cancellation.hpp>
+#include <bloom/runtime/task_completion.hpp>
 #include <bloom/runtime/task_types.hpp>
 
 #include <concepts>
@@ -413,6 +414,9 @@ class TaskScheduler final {
 
     [[nodiscard]] std::vector<TaskSnapshot> snapshots() const;
     [[nodiscard]] std::optional<TaskSnapshot> snapshot(TaskId id) const;
+
+    // Independent of Jobs/progress polling. Refusal is typed; no polling fallback is implied.
+    [[nodiscard]] TaskCompletionSubscribeResult subscribeCompletions() noexcept;
 
     // This call only closes admission, requests cancellation, and wakes workers. It never drains.
     void beginShutdown() noexcept;

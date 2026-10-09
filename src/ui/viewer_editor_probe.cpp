@@ -164,7 +164,6 @@ void ViewerEditor::refreshProbe(QPointF position) {
             const auto submission = previewController_.submitViewerAnalysis(desired);
             if (submission.accepted()) {
                 probeTask_ = submission.handle;
-                probeTimer_->start();
             } else {
                 readout.pending = false;
                 probeFailure_ = tr("Pixel probe could not start");
@@ -186,7 +185,6 @@ void ViewerEditor::consumeProbe() {
     if (!result)
         return;
     probeTask_.reset();
-    probeTimer_->stop();
     const auto& value = result->value();
     if (value && *value && (*value)->frame() &&
         (*value)->frame()->desiredIdentity() == probeIdentity_) {

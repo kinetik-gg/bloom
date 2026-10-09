@@ -273,7 +273,7 @@ struct SessionFixture final {
     explicit SessionFixture(document::NewProject newProject)
         : document(std::move(newProject.project)), commands(document),
           session(document, commands, newProject.initialCompositionId),
-          scheduler(twoWorkerConfig()), bridge(scheduler, nullptr, std::chrono::milliseconds{1}),
+          scheduler(twoWorkerConfig()), bridge(scheduler),
           controller(session, scheduler, bridge, pipelineFixture.preparation(coordinator), {},
                      frameCache) {}
 };

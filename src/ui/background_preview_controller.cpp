@@ -24,7 +24,7 @@ BackgroundPreviewController::BackgroundPreviewController(
     qApp->installEventFilter(this);
     idleTimer_.setInterval(50);
     connect(&idleTimer_, &QTimer::timeout, this, &BackgroundPreviewController::fillNextFrame);
-    connect(&bridge_, &TaskUiBridge::snapshotsPolled, this,
+    connect(&bridge_, &TaskUiBridge::resultsAvailable, this,
             &BackgroundPreviewController::consumeReadyResult);
     connect(&previewController_, &CompositionPreviewController::foregroundWorkRequested, this,
             &BackgroundPreviewController::restart);

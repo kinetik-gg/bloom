@@ -390,6 +390,7 @@ void SchedulerState::completeGpu(const GpuCompletionCore& core, TaskState outcom
         }
         retainTerminalLocked(record->snapshot.id);
     }
+    completions.publish();
     wakeBestEffort(wake);
 }
 
@@ -479,6 +480,7 @@ void SchedulerState::finalizeForcedGpu(const std::shared_ptr<TaskRecord>& record
         }
         retainTerminalLocked(record->snapshot.id);
     }
+    completions.publish();
 }
 
 void SchedulerState::terminalizeAllGpu(const TaskState outcome,

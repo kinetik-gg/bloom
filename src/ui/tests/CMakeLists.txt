@@ -114,6 +114,9 @@ add_executable(bloom_project_host_test
 add_executable(bloom_task_monitor_test
     task_monitor_test.cpp
 )
+add_executable(bloom_task_completion_bridge_test task_completion_bridge_tests.cpp)
+target_link_libraries(bloom_task_completion_bridge_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_task_completion_bridge_test)
 add_executable(bloom_viewer_editor_test
     viewer_editor_tests.cpp
 )
@@ -409,6 +412,13 @@ target_link_libraries(bloom_assets_editor_test PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_assets_editor_test)
 
 include(BloomTesting)
+
+bloom_add_test(
+    NAME bloom.ui.task_completion_bridge
+    COMMAND bloom_task_completion_bridge_test
+    LABELS runtime unit
+    TIMEOUT 30
+)
 
 bloom_add_test(
     NAME bloom.ui.editor_area_chrome

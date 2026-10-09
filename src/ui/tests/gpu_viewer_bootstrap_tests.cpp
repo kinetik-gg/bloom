@@ -184,14 +184,16 @@ void testBudgetPlanIsBoundedAndAligned() {
     const auto huge = bloom::ui::gpuResidentBudgetPlanFor(std::size_t{1} << 60U);
     expect(huge.cacheBytes > 0 && huge.cacheBytes > aligned.cacheBytes,
            "an enormous cache budget raises the resident subset");
-    expect(huge.cacheEntries == 4096, "an enormous cache budget caps resident entries");
+    expect(huge.leaseEntries == 4096 &&
+               huge.cacheEntries == huge.leaseEntries - huge.leaseEntries / 8,
+           "an enormous cache budget preserves bounded metadata and active lease headroom");
     expect(huge.leaseEntries >= huge.cacheEntries, "the huge plan keeps the count alignment");
 
     const auto small = bloom::ui::gpuResidentBudgetPlanFor(1ULL * kGib);
     expect(aligned.cacheBytes > small.cacheBytes,
            "a larger frame cache raises the resident subset");
-    expect(aligned.leaseEntries > small.leaseEntries,
-           "a larger frame cache raises the registry entry cap");
+    expect(aligned.leaseEntries == small.leaseEntries && aligned.cacheEntries == small.cacheEntries,
+           "positive byte budgets share metadata caps independent of image extent");
 }
 
 // Pure capacity policy: the owner clamps the configured route to one shared device pool. The

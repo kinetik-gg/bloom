@@ -162,7 +162,16 @@ int main(int argc, char* argv[]) {
     // taskUiBridge/qualifiedDisplayProcessorBootstrap/previewController so it outlives every
     // reference into it those objects hold (locals destruct in reverse declaration order).
     bloom::runtime::QualifiedDisplayProcessorProvider qualifiedDisplayProcessorProvider;
-    bloom::ui::TaskUiBridge taskUiBridge(taskScheduler);
+    std::unique_ptr<bloom::ui::TaskUiBridge> taskUiBridgeOwner;
+    try {
+        taskUiBridgeOwner = std::make_unique<bloom::ui::TaskUiBridge>(taskScheduler);
+    } catch (const std::exception& error) {
+        std::cerr << "Bloom could not initialize task completion delivery: " << error.what()
+                  << ". Close other applications and retry.\n";
+        taskScheduler.beginShutdown();
+        return 1;
+    }
+    auto& taskUiBridge = *taskUiBridgeOwner;
     // Explicit opt-in, one bounded numeric-only buffer. The path is only an export destination;
     // it and media locators never enter trace records. No formatting or I/O runs in UI callbacks.
     const QString previewTraceDestination = qEnvironmentVariable("BLOOM_PREVIEW_TRACE");

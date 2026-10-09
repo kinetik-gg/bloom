@@ -32,6 +32,7 @@ CachePurgeController::CachePurgeController(
       setProducerGate_(std::move(setProducerGate)),
       purgeGpuRetainedCaches_(std::move(purgeGpuRetainedCaches)) {
     connect(&bridge_, &TaskUiBridge::snapshotsPolled, this, &CachePurgeController::poll);
+    connect(&bridge_, &TaskUiBridge::resultsAvailable, this, &CachePurgeController::poll);
 }
 
 CachePurgeController::~CachePurgeController() {

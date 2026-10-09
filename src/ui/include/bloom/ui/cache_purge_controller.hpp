@@ -72,7 +72,8 @@ class CachePurgeController final : public QObject {
 
   public slots:
     // Drains the in-flight purge task and, once the scheduler is quiescent, submits the next one.
-    // Wired to TaskUiBridge::snapshotsPolled and also callable directly by a test.
+    // Terminal delivery is immediate; coarse snapshots retain timeout observation while waiting
+    // for quiescence. Also callable directly by a test.
     void poll();
 
   signals:
