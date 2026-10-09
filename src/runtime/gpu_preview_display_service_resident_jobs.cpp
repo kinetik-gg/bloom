@@ -218,7 +218,11 @@ void startResidentPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>&
         auto child = core->scheduler->submit<PreviewGpuSceneStageOutcomeHandle>(
             std::move(childRequest),
             [core, snapshot = std::move(submission.snapshot),
-             identity = std::move(submission.identity), limit = submission.pixelStorageByteLimit,
+             identity = std::move(submission.identity),
+             limit = (!core->options.previewByteAllowance && core->options.processingPhasePolicy &&
+                      core->options.processingPhasePolicy->budgetView())
+                         ? std::min(submission.pixelStorageByteLimit, submission.gpuByteAllowance)
+                         : submission.pixelStorageByteLimit,
              overrides = std::move(submission.overrides)](
                 TaskContext& context) -> TaskResult<PreviewGpuSceneStageOutcomeHandle> {
                 using Result = TaskResult<PreviewGpuSceneStageOutcomeHandle>;
@@ -520,6 +524,22 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
                     core, executorFailureDetail(*core->residentExecutor,
                                                 residentStageAdmittedBytes(core, *stage),
                                                 "resident scene executor failed", poll));
+            }
+            // A later operation may refuse its image/staging peak after the earlier native
+            // prefix has retired. Only this exact positive proof releases a touched failed phase;
+            // unknown work and the device's independent unproven latch remain sticky.
+            if (core->residentExecutor &&
+                gpuSceneExecutorBudgetRefusalRetired(*core->residentExecutor, poll) &&
+                !residentDeviceLost(core) && !residentExecutorHasUnretiredSubmission(core) &&
+                !residentDisplayHasUnretiredSubmission(core) &&
+                !residentDisplayHasUnretiredSubmissionGeneral(core) &&
+                (!core->residentDisplay || !core->residentDisplay->hasUnretiredSubmission())) {
+                stage->processingPhaseRetired = true;
+                core->residentNativeInFlight = false;
+                core->residentNativeActive.reset();
+                stage->residentPhase = ResidentNativePhase::Done;
+                finishResidentImmediately(core, stage, true);
+                return;
             }
             beginResidentRetirement(core, stage, !expectedCancellation);
             return;

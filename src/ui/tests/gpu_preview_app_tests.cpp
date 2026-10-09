@@ -32,6 +32,7 @@
 #include <bloom/ui/composition_preview_cpu_stage.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/memory_budget_controller.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
@@ -199,12 +200,55 @@ struct AppFixture final {
     }
 };
 
+// Explicit composition-root prerequisite for legacy Neutral/CPU owning tests. This is phase
+// admission evidence, not tracked packed storage. Declaration precedes every borrowing service.
+class AppProcessingRoot final {
+  public:
+    std::shared_ptr<runtime::GpuProcessingPhasePolicy> policy =
+        std::make_shared<runtime::GpuProcessingPhasePolicy>(32);
+    AppProcessingRoot(runtime::TaskScheduler& scheduler, ui::TaskUiBridge& bridge,
+                      Expectations& expectations)
+        : scheduler_(scheduler), expectations_(expectations), sampler_(scheduler, bridge, ledger_) {
+        ledger_.beginProcessSampling();
+        QObject::connect(&sampler_, &ui::MemoryBudgetController::sampleApplied, &sampler_, [this] {
+            const auto delivered = ledger_.state();
+            policy->applyHostSample(delivered, ledger_.physicalByteBudget());
+        });
+        if (!waitUntil([&] { return policy->snapshot().reservations.hostReady; }))
+            throw std::runtime_error("App fixture actual processing root sample unavailable");
+    }
+    ~AppProcessingRoot() {
+        sampler_.beginShutdown();
+        scheduler_.beginShutdown();
+        expectations_.expect(waitUntil([&] { return scheduler_.isQuiescent(); }),
+                             "fixture sampler/tasks retire before borrowed ledger teardown");
+        // A failed timeout never makes a live worker/borrowed fixture safe to destroy.
+        while (!scheduler_.isQuiescent()) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            std::this_thread::yield();
+        }
+        const auto phase = policy->snapshot().reservations;
+        expectations_.expect(phase.admittedPhases == 0 && phase.hostReservedBytes == 0 &&
+                                 phase.deviceReservedBytes == 0 && phase.unprovenPhases == 0 &&
+                                 phase.totalHostClaimBytes == 0,
+                             "legacy app fixture leaves zero phase claims after actual retirement");
+    }
+
+  private:
+    runtime::TaskScheduler& scheduler_;
+    Expectations& expectations_;
+    runtime::MemoryBudgetLedger ledger_{0, 0};
+    ui::MemoryBudgetController sampler_;
+};
+
 [[nodiscard]] runtime::GpuPreviewDisplayServiceOptions
-gpuOptions(const std::filesystem::path& loader) {
+gpuOptions(const std::filesystem::path& loader,
+           const std::shared_ptr<runtime::GpuProcessingPhasePolicy>& policy) {
     runtime::GpuPreviewDisplayServiceOptions options;
     options.enabled = true;
     options.loaderPath = loader;
     options.previewByteAllowance = kBudget;
+    options.processingPhasePolicy = policy;
     return options;
 }
 
@@ -262,9 +306,10 @@ void testControllerGpuPathAndParity(Expectations& expectations, const Options& o
     runtime::TaskScheduler scheduler(serviceSchedulerConfig());
     ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
     AppFixture fixture;
+    AppProcessingRoot processing(scheduler, bridge, expectations);
     auto serviceCalls = std::make_shared<std::atomic<int>>(0);
     runtime::GpuPreviewDisplayService service(scheduler, fixture.stage(), fixture.fallback(),
-                                              gpuOptions(options.loader));
+                                              gpuOptions(options.loader, processing.policy));
     const bool terminal = waitUntil([&] {
         return service.status().state != runtime::GpuPreviewDisplayServiceState::Initializing;
     });
@@ -284,7 +329,7 @@ void testControllerGpuPathAndParity(Expectations& expectations, const Options& o
          .viewName = {},
          .showLook = true,
          .pixelStorageByteLimit = kBudget},
-        frameCache, nullptr, serviceSubmitter(service, serviceCalls));
+        frameCache, nullptr, serviceSubmitter(service, serviceCalls), nullptr, processing.policy);
     expectations.expect(waitUntil([&] { return isReady(controller); }),
                         "the foreground frame is ready through the real service");
     if (ready) {
@@ -433,9 +478,11 @@ void testMissingLoaderCpuFallback(Expectations& expectations) {
     runtime::TaskScheduler scheduler(serviceSchedulerConfig());
     ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
     AppFixture fixture;
+    AppProcessingRoot processing(scheduler, bridge, expectations);
     auto serviceCalls = std::make_shared<std::atomic<int>>(0);
-    runtime::GpuPreviewDisplayService service(scheduler, fixture.stage(), fixture.fallback(),
-                                              gpuOptions("/nonexistent/bloom-loader.so"));
+    runtime::GpuPreviewDisplayService service(
+        scheduler, fixture.stage(), fixture.fallback(),
+        gpuOptions("/nonexistent/bloom-loader.so", processing.policy));
     expectations.expect(
         waitUntil([&] {
             return service.status().state != runtime::GpuPreviewDisplayServiceState::Initializing;
@@ -452,8 +499,8 @@ void testMissingLoaderCpuFallback(Expectations& expectations) {
          .viewName = {},
          .showLook = true,
          .pixelStorageByteLimit = kBudget},
-        std::make_shared<ui::PreviewFrameCache>(), nullptr,
-        serviceSubmitter(service, serviceCalls));
+        std::make_shared<ui::PreviewFrameCache>(), nullptr, serviceSubmitter(service, serviceCalls),
+        nullptr, processing.policy);
     expectations.expect(waitUntil([&] { return isReady(controller); }),
                         "the missing-loader path still publishes a frame");
     expectations.expect(controller.state().frame != nullptr &&
@@ -482,10 +529,11 @@ void testPipelineTiming(Expectations& expectations, const Options& options) {
     runtime::TaskScheduler scheduler(serviceSchedulerConfig());
     ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
     AppFixture fixture;
+    AppProcessingRoot processing(scheduler, bridge, expectations);
     const auto snapshot = session.evaluationSnapshotForTime(time(0));
 
     runtime::GpuPreviewDisplayService gpuService(scheduler, fixture.stage(), fixture.fallback(),
-                                                 gpuOptions(options.loader));
+                                                 gpuOptions(options.loader, processing.policy));
     const bool ready = waitUntil([&] {
                            return gpuService.status().state !=
                                   runtime::GpuPreviewDisplayServiceState::Initializing;
@@ -497,6 +545,7 @@ void testPipelineTiming(Expectations& expectations, const Options& options) {
     }
     runtime::GpuPreviewDisplayServiceOptions cpuOptions;
     cpuOptions.enabled = false;
+    cpuOptions.processingPhasePolicy = processing.policy;
     runtime::GpuPreviewDisplayService cpuService(scheduler, fixture.stage(), fixture.fallback(),
                                                  cpuOptions);
 
@@ -537,6 +586,7 @@ void testPipelineTiming(Expectations& expectations, const Options& options) {
                                           .count(),
                                       result->value().value()->frame()->provenance().provider);
             }
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
             std::this_thread::sleep_for(200us);
         }
         return std::nullopt;

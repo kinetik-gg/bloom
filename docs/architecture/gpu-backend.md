@@ -1093,6 +1093,58 @@ is still constrained by its admitted executor allowance, live pins and native re
 Unrooted legacy defaults remain unchanged. This does not enlarge an admitted phase or guarantee
 that a composition fits.
 
+#### Preview default propagation follow-on
+
+The implemented follow-on distinguishes omitted preview limits from explicit finite ceilings.
+`GpuPreviewDisplayServiceOptions::residentExecutorBudgets` is optional: an explicit value preserves
+its byte and structural limits verbatim. An omitted rooted producer uses the configured request
+ceiling, or the device-owner ceiling when the request default is delivered live, rather than a cold
+reusable-cache snapshot. Actual execution still clamps each request to its admitted phase, unique
+live pins and native resource limits. Omitted unrooted producer budgets retain legacy behavior.
+
+The application explicitly shares one neutral `TaskBudgetView` between Tasks and its processing
+policy. The existing off-UI sampler delivers host/process state; the root resolves configured
+preview/operation shares against the delivered live processing allowance, then publishes an
+immutable numeric snapshot after quota locks are released. Reusable-cache credit is not processing
+headroom. Omitted scheduler aggregate admission, service request allowance, controller host-pixel
+limit and preparation executor envelope read these delivered defaults instead of latching startup
+values. Each request remains subject to real phase and device admission; a snapshot is neither
+allocation ownership nor a new independent allowance.
+
+Cold, failed, future-dated or stale default delivery closes new default admission with typed
+AwaitingCapacity. A fresh sample epoch can retry the newest eligible request through existing
+completion/sample notifications. Its sample serial is distinct from the phase release revision;
+own cleanup cannot manufacture a new sample or create a retry loop. Explicit finite limits remain
+explicit and are never enlarged by default delivery. Owners without a view retain legacy defaults.
+Already admitted bytes and live pins remain held when capacity falls; new work must fit the reduced
+capacity. Saved settings, requested shares and effective constraints remain distinct.
+
+The packed transfer ceiling remains 320 MiB for concurrent staging plus host capacity. Actual native
+source allocation is deducted separately from request headroom before transfer admission; the
+transfer ceiling is not a Float32 source/executor limit. This follow-on adds no native allocation,
+UMA, whole-process or OOM guarantee, batching or additional frame context.
+
+A terminal executor `Failure` with `OverBudget` may now supply positive retirement proof after an
+earlier native prefix finishes: no device loss, unretired submission or required owner drain may
+remain. Preview additionally checks actual Neutral/general display and packed transfer submissions;
+final rendering checks output-colour work. Only this proved path releases the touched phase before
+fallback/recovery. Unknown work and the device's independent unproven latch remain charged; budget
+refusal, cancellation or logical terminality alone does not clear them.
+An independent legacy Neutral service post-submit fault confirms that one phase and one unproven
+claim remain held until allocator-generation teardown. It does not execute the new resident
+OverBudget branch; the explicit-cap refusal/recovery witness and reviewed downstream guards cover
+that proved-retirement path separately.
+
+Configured prior 23-member B Full/Half witnesses and explicit-cap refusal/recovery are recorded in
+the [owning plan](../plans/gpu-reliability-and-preview.md). They use explicit fixture allowances and
+do not prove ordinary omitted defaults. Separate ordinary-default Full/Half witnesses pass through
+the application's saved-settings helper and sampled numeric delivery without request/scheduler/
+producer overrides, retaining explicit 2 GiB cache and 1 GiB oracle allowances. Affected owning,
+246-unit strict, desktop build, 20 Linux no-Vulkan fallback and final repository-quality gates pass.
+This qualifies the bounded default-propagation and proved-retirement companion; native allocation
+ownership, full-GUI/sustained performance and broader platform execution remain open. The accepted
+first phase checkpoint and mounted-footage A evidence are unchanged.
+
 Native work keeps its lease until exact retirement, including cancellation, publication failure
 and retained/quarantined submission ownership. A logical terminal result or timeout is not fence
 proof. A final executor's terminal `Failure`/`OverBudget` may release its phase only when no device

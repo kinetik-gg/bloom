@@ -22,8 +22,9 @@ void testControllerLivenessAfterBudgetRefusal(Expectations& expectations, const 
     runtime::TaskScheduler scheduler(serviceSchedulerConfig());
     ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
     AppFixture fixture;
+    AppProcessingRoot processing(scheduler, bridge, expectations);
     runtime::GpuPreviewDisplayService service(scheduler, fixture.stage(), fixture.fallback(),
-                                              gpuOptions(options.loader));
+                                              gpuOptions(options.loader, processing.policy));
     static_cast<void>(waitUntil([&] {
         return service.status().state != runtime::GpuPreviewDisplayServiceState::Initializing;
     }));
@@ -60,7 +61,7 @@ void testControllerLivenessAfterBudgetRefusal(Expectations& expectations, const 
          .viewName = {},
          .showLook = true,
          .pixelStorageByteLimit = kBudget},
-        frameCache, nullptr, std::move(submitter));
+        frameCache, nullptr, std::move(submitter), nullptr, processing.policy);
 
     expectations.expect(waitUntil([&] {
                             const auto activity = controller.state().activity;
@@ -103,8 +104,9 @@ void testGenuineBuilderBudgetRefusalRecovery(Expectations& expectations, const O
     runtime::TaskScheduler scheduler(serviceSchedulerConfig());
     ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
     AppFixture fixture;
+    AppProcessingRoot processing(scheduler, bridge, expectations);
     runtime::GpuPreviewDisplayService service(scheduler, fixture.stage(), fixture.fallback(),
-                                              gpuOptions(options.loader));
+                                              gpuOptions(options.loader, processing.policy));
     static_cast<void>(waitUntil([&] {
         return service.status().state != runtime::GpuPreviewDisplayServiceState::Initializing;
     }));
@@ -122,7 +124,7 @@ void testGenuineBuilderBudgetRefusalRecovery(Expectations& expectations, const O
          .viewName = {},
          .showLook = true,
          .pixelStorageByteLimit = std::size_t{16} * 1024U * 1024U},
-        frameCache, nullptr, serviceSubmitter(service, calls));
+        frameCache, nullptr, serviceSubmitter(service, calls), nullptr, processing.policy);
 
     expectations.expect(waitUntil([&] {
                             const auto activity = controller.state().activity;

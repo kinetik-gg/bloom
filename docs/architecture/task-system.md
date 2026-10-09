@@ -234,6 +234,34 @@ does not disturb admitted work. External-process execution and format-specific m
 remain owning-adapter responsibilities and must preserve the same cancellation, diagnostics, and
 no-UI-wait contract.
 
+### Delivered default admission budgets
+
+Tasks owns `TaskBudgetView`, an explicitly injected immutable numeric delivery boundary. A
+`TaskBudgetSnapshot` carries sample serial/time/readiness, assigned preview/operation shares and
+per-preview/aggregate GPU request ceilings. It contains no renderer, ledger, settings, UI callback,
+device identity or reservation credit. The composition root publishes after its quota locks are
+released; Tasks loads the snapshot without calling another owner or acquiring its locks.
+Structural request validation checks the request's shape rather than consulting an unrelated
+global memory ledger; the scheduler's explicit or delivered quota owns actual byte admission.
+
+`TaskSchedulerConfig::gpuRequestOwnedByteCapacity` is optional. An explicit capacity is honored;
+an omitted capacity with a view uses fresh delivered aggregate admission. Without a view, the
+legacy construction-time default remains supported. Missing/unready, future-dated or older-than-ten-
+second delivery refuses new nonzero default request-owned admission with a typed sample-epoch
+retry marker. Zero-byte startup/control tasks remain admissible under their other bounds. A
+reliable fresh zero refuses nonzero work. Capacity decreases do not revoke admitted reservations;
+new requests cannot exceed remaining capacity even when held bytes already exceed the new ceiling.
+
+Snapshot publication rejects older sample serials; allocation failure removes default readiness.
+Sample serials are separate from processing-phase release revisions and all image/cache identities.
+Preview retries require a newer fresh usable sample, preserving the active/newest gate and shutdown
+barriers. Completion or own phase disposal is not evidence of a new default epoch. This is default
+propagation, not a second quota ledger or aggregate physical memory accounting.
+
+The numeric/controller controls, bounded ordinary-default Full/Half witnesses, affected strict/
+Linux fallback checks and final repository quality pass within the bounded scope recorded in the
+[GPU reliability plan](../plans/gpu-reliability-and-preview.md).
+
 ## Cancellation
 
 Cancellation is cooperative and transitive:

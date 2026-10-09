@@ -386,19 +386,29 @@ void CompositionPreviewController::setDisplayedCompositionScale(const double sca
 
 void CompositionPreviewController::notifyProcessingCapacityChanged() {
     Q_ASSERT(QThread::currentThread() == thread());
-    if (!processingPolicy_ || !deferredAdmission_ || active_ || pending_ || shuttingDown_ ||
-        cachePurgeGate_)
+    if (!processingPolicy_ || (!deferredAdmission_ && !deferredDefaultBudget_) || active_ ||
+        pending_ || shuttingDown_ || cachePurgeGate_)
         return;
-    const auto capacity = processingPolicy_->snapshot().reservations;
-    if (capacity.admissionRevision <= deferredAdmission_->revision || !capacity.hostReady ||
-        !capacity.hostCapacityBytes || *capacity.hostCapacityBytes == 0 ||
-        capacity.hostReservedBytes >= *capacity.hostCapacityBytes ||
-        capacity.admittedPhases >= capacity.requestCapacity ||
-        (deferredAdmission_->requiresDeviceCapacity &&
-         (!capacity.deviceReady || !capacity.deviceCapacityBytes ||
-          *capacity.deviceCapacityBytes == 0)))
-        return;
-    deferredAdmission_.reset();
+    if (deferredDefaultBudget_) {
+        const auto view = processingPolicy_->budgetView();
+        const auto delivered = view ? view->load() : nullptr;
+        if (!delivered || !delivered->fresh() ||
+            delivered->sampleSerial <= deferredDefaultBudget_->sampleSerial ||
+            effectivePixelStorageByteLimit() == 0)
+            return;
+        deferredDefaultBudget_.reset();
+    } else {
+        const auto capacity = processingPolicy_->snapshot().reservations;
+        if (capacity.admissionRevision <= deferredAdmission_->revision || !capacity.hostReady ||
+            !capacity.hostCapacityBytes || *capacity.hostCapacityBytes == 0 ||
+            capacity.hostReservedBytes >= *capacity.hostCapacityBytes ||
+            capacity.admittedPhases >= capacity.requestCapacity ||
+            (deferredAdmission_->requiresDeviceCapacity &&
+             (!capacity.deviceReady || !capacity.deviceCapacityBytes ||
+              *capacity.deviceCapacityBytes == 0)))
+            return;
+        deferredAdmission_.reset();
+    }
     if (interactiveTimeChangeArmed_) {
         preparationEstimate_.reset();
         requestPreview(false, PreviewRequestKind::Interactive, false);
@@ -661,6 +671,16 @@ void CompositionPreviewController::endRamPreviewProgress() {
     emit ramPreviewProgressChanged();
 }
 
+std::size_t CompositionPreviewController::effectivePixelStorageByteLimit() const noexcept {
+    if (settings_.pixelStorageByteLimit)
+        return *settings_.pixelStorageByteLimit;
+    if (processingPolicy_ && processingPolicy_->budgetView()) {
+        const auto delivered = processingPolicy_->budgetView()->load();
+        return delivered && delivered->fresh() ? delivered->previewRequestBytes : 0;
+    }
+    return legacyPixelStorageByteLimit_;
+}
+
 const CompositionPreviewSettings& CompositionPreviewController::settings() const noexcept {
     return settings_;
 }
@@ -773,6 +793,7 @@ void CompositionPreviewController::requestPreview(
         return;
     }
     deferredAdmission_.reset();
+    deferredDefaultBudget_.reset();
     // Overrides ride ONLY Interactive requests from an active gesture (docs/architecture/
     // animation-and-time.md), and are read fresh here -- never cached across requests. They are
     // assembled BEFORE the snapshot is selected because an override names the live document
@@ -869,7 +890,7 @@ void CompositionPreviewController::requestPreview(
                         tr("No composition preview pipeline is available"));
         return;
     }
-    if (settings_.pixelStorageByteLimit == 0) {
+    if (settings_.pixelStorageByteLimit && *settings_.pixelStorageByteLimit == 0) {
         publishTerminal(PreviewActivity::Failed,
                         tr("The composition preview memory budget is invalid"));
         return;
@@ -901,6 +922,16 @@ void CompositionPreviewController::requestPreview(
         }
     }
 
+    const auto pixelStorageByteLimit = effectivePixelStorageByteLimit();
+    if (pixelStorageByteLimit == 0 && !settings_.pixelStorageByteLimit && processingPolicy_ &&
+        processingPolicy_->budgetView()) {
+        const auto delivered = processingPolicy_->budgetView()->load();
+        deferredDefaultBudget_ =
+            runtime::TaskDefaultBudgetRetry{delivered ? delivered->sampleSerial : 0};
+        publishTerminal(PreviewActivity::Failed, tr("Awaiting delivered preview memory capacity"));
+        return;
+    }
+
     // Cold playback may take longer than a tick. Keep one compatible producer and one newest
     // intent; a missed presentation deadline is accounting, not permission to cancel useful work.
     bool carryPlayback = false;
@@ -924,7 +955,7 @@ void CompositionPreviewController::requestPreview(
         return;
     PendingRequest pendingRequest{.snapshot = snapshot,
                                   .desiredIdentity = desiredIdentity,
-                                  .pixelStorageByteLimit = settings_.pixelStorageByteLimit,
+                                  .pixelStorageByteLimit = pixelStorageByteLimit,
                                   .kind = kind,
                                   .playbackDeadline = playbackDeadline,
                                   .interactionOverride = interactionOverride};
@@ -1037,6 +1068,8 @@ void CompositionPreviewController::submitPreview(PendingRequest pendingRequest,
             .message = submissionFailureMessage(submission.status),
         };
         if (submission.diagnostic.has_value()) {
+            if (submission.diagnostic->defaultBudgetRetry)
+                deferredDefaultBudget_ = submission.diagnostic->defaultBudgetRetry;
             rejected.diagnostics.push_back(std::move(*submission.diagnostic));
         }
         rejected.freshness = freshnessFor(rejected.frame, rejected.desiredIdentity);

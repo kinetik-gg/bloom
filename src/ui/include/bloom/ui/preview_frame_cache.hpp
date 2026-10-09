@@ -321,6 +321,11 @@ using PreviewFrameCacheHandle = std::shared_ptr<PreviewFrameCache>;
 [[nodiscard]] std::size_t operationCacheByteBudgetFromSettings(const QSettings& settings);
 [[nodiscard]] runtime::MemoryBudgetAllocation
 cacheMemoryBudgetsFromSettings(const QSettings& settings);
+// Read-only configured weights for an explicit composition root. Sample delivery must not reset
+// the ledger's pressure recovery state by reapplying unchanged configuration.
+[[nodiscard]] runtime::MemoryBudgetAllocation
+cacheMemoryBudgetAllocationFromSettings(const QSettings& settings,
+                                        const runtime::MemoryBudgetLedger& ledger);
 void setRamPreviewByteBudgetInSettings(QSettings& settings, std::size_t bytes);
 
 } // namespace bloom::ui

@@ -123,6 +123,7 @@ struct PreparedGpuSceneDiagnostic final {
     // CPU work performed before the failure. Zero for every screen that precedes media resolution.
     GpuSceneMediaStatistics mediaStatistics;
     std::optional<TaskAdmissionRetry> admissionRetry = {};
+    std::optional<TaskDefaultBudgetRetry> defaultBudgetRetry = {};
 
     friend bool operator==(const PreparedGpuSceneDiagnostic&,
                            const PreparedGpuSceneDiagnostic&) = default;

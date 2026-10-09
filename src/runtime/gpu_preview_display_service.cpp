@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
@@ -370,8 +371,12 @@ GpuPreviewDisplayService::GpuPreviewDisplayService(TaskScheduler& scheduler,
     core->fallback = std::move(displayFallback);
     core->effectiveResidentLeaseBudgets = core->options.residentLeaseBudgets;
     core->effectiveResidentSceneCacheBudgets = core->options.residentSceneCacheBudgets;
-    core->effectivePreviewByteAllowance.store(core->options.previewByteAllowance,
-                                              std::memory_order_relaxed);
+    core->effectivePreviewByteAllowance.store(
+        core->options.previewByteAllowance.value_or(
+            core->options.processingPhasePolicy && core->options.processingPhasePolicy->budgetView()
+                ? std::numeric_limits<std::size_t>::max()
+                : gpuPreviewRequestByteAllowance()),
+        std::memory_order_relaxed);
     impl_->core = core;
 
     if (!core->options.enabled) {
@@ -432,8 +437,12 @@ GpuPreviewDisplayService::GpuPreviewDisplayService(TaskScheduler& scheduler,
     core->fallback = std::move(displayFallback);
     core->effectiveResidentLeaseBudgets = core->options.residentLeaseBudgets;
     core->effectiveResidentSceneCacheBudgets = core->options.residentSceneCacheBudgets;
-    core->effectivePreviewByteAllowance.store(core->options.previewByteAllowance,
-                                              std::memory_order_relaxed);
+    core->effectivePreviewByteAllowance.store(
+        core->options.previewByteAllowance.value_or(
+            core->options.processingPhasePolicy && core->options.processingPhasePolicy->budgetView()
+                ? std::numeric_limits<std::size_t>::max()
+                : gpuPreviewRequestByteAllowance()),
+        std::memory_order_relaxed);
     impl_->core = core;
 
     if (!core->options.enabled) {
@@ -559,6 +568,23 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
         return rootAdmissionRejected();
     }
 
+    std::shared_ptr<const TaskBudgetSnapshot> deliveredDefault;
+    if (!core->options.previewByteAllowance && core->options.processingPhasePolicy &&
+        core->options.processingPhasePolicy->budgetView()) {
+        deliveredDefault = core->options.processingPhasePolicy->budgetView()->load();
+        if (!deliveredDefault || !deliveredDefault->fresh() ||
+            deliveredDefault->previewRequestBytes == 0) {
+            core->finishRootAdmission({}, false);
+            TaskSubmission<PreviewPreparationResultHandle> awaiting;
+            awaiting.status = TaskSubmissionStatus::QueueFull;
+            awaiting.diagnostic =
+                previewDiagnostic("bloom.runtime.gpu-preview-default-budget-awaiting",
+                                  "Awaiting a fresh delivered preview memory allowance.");
+            awaiting.diagnostic->defaultBudgetRetry =
+                TaskDefaultBudgetRetry{deliveredDefault ? deliveredDefault->sampleSerial : 0};
+            return awaiting;
+        }
+    }
     const auto current = status();
     const bool residentMode = core->gpuStageFunction != nullptr;
     bool gpuMode = false;
@@ -583,9 +609,12 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
     // with the host ceiling clamped down to the owner-resolved GPU request ceiling: a large host
     // ceiling is clamped, never treated as an oversize GPU request. A zero device ceiling (or zero
     // host ceiling) is zero device admission, which honestly takes the CPU path.
-    const std::size_t gpuAllowance = static_cast<std::size_t>(
-        gpuResidentRequestBudget(static_cast<std::uint64_t>(pixelStorageByteLimit),
-                                 static_cast<std::uint64_t>(core->previewByteAllowance())));
+    const std::size_t gpuAllowance = static_cast<std::size_t>(gpuResidentRequestBudget(
+        static_cast<std::uint64_t>(pixelStorageByteLimit),
+        deliveredDefault ? std::min<std::uint64_t>(
+                               core->effectivePreviewByteAllowance.load(std::memory_order_relaxed),
+                               deliveredDefault->previewRequestBytes)
+                         : static_cast<std::uint64_t>(core->previewByteAllowance())));
     // In resident mode the per-request stage decides between the general display program (which may
     // be a non-default display/view and a non-neutral ViewAdjust), the startup Neutral fast path,
     // and the CPU fallback. The submit gate therefore must NOT preempt a non-neutral request: doing
@@ -635,7 +664,8 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
             core->finishRootAdmission(submission.handle.id(), true);
             return submission;
         }
-        if (submission.status == TaskSubmissionStatus::ShuttingDown) {
+        if (submission.status == TaskSubmissionStatus::ShuttingDown ||
+            (submission.diagnostic && submission.diagnostic->defaultBudgetRetry)) {
             core->finishRootAdmission({}, false);
             return submission;
         }

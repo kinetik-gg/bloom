@@ -42,6 +42,7 @@ and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 | G6B rooted packed-host payloads | Accepted only for ownership, conservation and off-UI production allocation | Historical `6acad4d4` allocator-requested RGBA8 payload/fault/pin scope; its UI last-owner free required the follow-on below |
 | G6B off-UI published-host retirement | Affected retirement qualification gates pass | Payload plus admitted intrusive header, allocation-free final-alias enqueue, charged worker free and explicit actual-exit collection; headless/Linux CPU-only gates and all 103 affected strict TUs pass |
 | Controlled mounted-footage A | Accepted only for bounded Full/Half preparation, pixels, ownership and warm reuse | 100 strongly verified members in a controlled 24 fps 1080 composition, independent still-member CPU parity, 200 zero-work warm observations, exact payload/header charges and final release; one affected strict TU and repository quality pass |
+| Preview live-default propagation / mounted-footage B | Bounded companion qualified | Explicit versus omitted producer/request limits, neutral numeric delivery and proved OverBudget retirement; ordinary Full/Half, explicit-cap recovery and independent unknown ownership pass; configured B witnesses remain separate |
 | G4C prerequisite | Accepted only as the bounded cold-progress prerequisite | One active/newest intent, useful older Stale publication and guarded pause/shutdown pass source review and short real playing pixels; remaining G4 scheduling is pending |
 | G7A / G9 bounded display work | Packed immutable borrowing, off-UI CPU channel derivation and finished-display host choice accepted | Explicit provenance and measured bytes; remaining CPU storage/process/channel work and broader cache policy remain pending |
 | G8 optional two-frame throughput | Investigation complete; implementation and benchmark pending | Source confirms per-service frame serialization; no multi-frame speedup or GPU-utilization result is established |
@@ -164,6 +165,108 @@ source-color intent. Digest/probe preparation warms file caches; source read/dec
 throughput, painted FPS and sustained/platform performance remain unqualified. Next is a separate
 23-member 4608x3164 native-resolution B Full/Half check with distinct measured allowances, then
 the bounded native-image allocation-ownership slice. Neither is accepted by this A checkpoint.
+
+Preview live-default companion (2026-10-10), qualified within bounded scope:
+native-resolution B exposed a cold producer ceiling that clamped an admitted 1 GiB request to
+256 MiB. Optional resident executor budgets now preserve explicit byte/structural ceilings and let
+an omitted rooted producer follow its request/device-owner upper ceiling. That repair alone did
+not update ordinary application limits: service/controller/stage defaults and scheduler aggregate
+admission had captured startup values. The companion explicitly shares a Tasks-owned immutable
+numeric view; the existing sampled root publishes assigned shares scaled by live processing
+headroom after releasing quota locks. Default consumers read it; explicit limits and no-view legacy
+fallback remain separate. Sample epochs are not phase release revisions. Stale/unready default
+admission can recover only on a newer fresh usable sample, without invalidating held reservations
+or spinning on own disposal. Three focused numeric/controller controls pass in 0.53 s;
+ordinary-default Full/Half are independently accepted as bounded witnesses. The affected integrated
+gates below pass.
+The three control suites include service delivery expiring after controller selection: synchronous
+typed sample metadata survives refusal, last-good/newest intent does not spin, a fresh sample
+recovers through the CPU control pipeline and stale cached hits remain usable. Tasks rejection is
+separately covered. These control witnesses do not claim native GPU execution; the ordinary B
+witnesses below supply that evidence.
+
+The ordinary-default B fixture omits request, controller, service, stage and Tasks
+aggregate overrides. It uses the application's saved-settings helper with an isolated profile and
+no saved overrides, initial configured-total delivery and the production sampler. Retained-cache
+capacity remains explicitly 2 GiB and the independent oracle allowance 1 GiB; this is a controlled
+production-path witness, not an entirely unconfigured application or full GUI qualification.
+Its first Full attempt failed after 17.884 s, before graph/native work, with two admission refusals: a
+structural validator consulted an unrelated cold global ledger's 3 GiB ceiling while the injected
+root delivered 3,241,497,600 bytes. The narrow follow-on removes that hidden global policy check;
+actual scheduler explicit/view quota remains authoritative. This demonstrates supported injected-
+root divergence, not a demonstrated mismatch in a same-global normal GUI. Two owning Tasks
+regressions accept that correction; the subsequent Full/Half witnesses pass.
+
+Ordinary-default Full retains 23 genuine 4608x3164 GPU products with exact member identity and
+independent CPU pixel/geometry parity. Its 46 warm observations add no preparation, graph work,
+dispatch, transfer or owned allocation. Payload/header/cache charges are respectively
+1,341,333,504/1,472/1,341,382,540 bytes; all phase/host/device/owned charges reach zero and the
+retirement worker exits. Whole-helper/fill times are 123.589/35.3862 s; largest-child peak RSS is
+2,641,156 KiB and the separate cgroup peak 3.1G. Initial delivered sample serial 1 supplies a
+3,241,497,600-byte request ceiling and 19,448,985,600-byte aggregate ceiling, with no request,
+scheduler or producer overrides.
+
+Ordinary-default Half uses the same sampled ceilings and absent saved overrides. Its 23 genuine
+2304x1582 products pass exact member identity and independent CPU pixel/geometry parity; 46 warm
+observations add no work. Payload/header/cache charges are 335,333,376/1,472/335,382,412 bytes,
+with 23 owned allocations, final zero claims and actual retirement-worker exit. Whole-helper/fill
+times are 112.362835/35.3801 s; largest-child peak RSS is 1,607,416 KiB and the separate cgroup
+peak 1.9G. Packed payload is exactly one quarter of Full; similar fill times do not establish a
+bottleneck or source I/O/decode throughput. These measurements qualify the controlled numeric-
+default path, not painted FPS or wholly unconfigured/full-GUI behavior.
+
+Prior configured B witnesses use 23 strongly identified members 1001–1023, native 4608x3164 at
+controlled 24 fps, with explicit 1 GiB processing, 2 GiB scheduler aggregate and retained-cache
+allowances. Full output 4608x3164 owns 1,341,333,504 payload bytes plus 1,472 retirement-header
+bytes; Half 2304x1582 owns 335,333,376 plus 1,472. Separate overlapping cache costs are
+1,341,382,540/335,382,412 bytes. Each run proves independent expected-member CPU pixel/geometry
+parity, 46 zero-work warm observations, final zero claims, actual exit and clean relevant validation.
+Full fill/whole-helper times are 35.305/122.873 s; Half 34.760/111.449 s. Largest-child peak RSS is
+2,716,512/1,593,192 KiB, separately reported cgroup peaks 3.1G/1.9G. These configured witnesses are
+not ordinary omitted-default application evidence or source I/O, bottleneck, painted FPS,
+source-colour-intent, sustained or platform qualification. Auto still assumes `lin_rec709_scene`
+because EXR chromaticities are absent. The final 320 MiB transfer cap covers staging plus packed
+host storage; source allocation is separately deducted, and an earlier 512 MiB fixture setting
+was not established as necessary.
+
+The explicit 256 MiB negative witness passes in 22.286 s after four retired prefix dispatches and
+one graph job, with one honest CPU fallback. It proves phase/unproven/host/device charges zero
+before shutdown, native report retirement after old-facade teardown, same-root genuine default
+packed recovery and final zero claims. Shared executor proof applies only to terminal
+Failure/OverBudget with no loss, unretired submission or required owner drain; preview/final callers
+also check their downstream work. The independent legacy Neutral service regression passes in
+4.874 s with 554.5 MiB helper peak and clean relevant validation: a real post-submit fault after
+native dispatch retains one phase and one unproven claim until its allocator generation is
+destroyed, then reaches zero. This witnesses independent legacy-native sticky ownership; it does
+not execute the new resident OverBudget branch. That branch has the explicit-256-MiB actual-path
+proof and separately reviewed downstream guards. Unknown work remains charged/sticky. The
+earlier B budget failure remains preserved. The
+[GPU contract](../architecture/gpu-backend.md#preview-default-propagation-follow-on)
+and [Tasks boundary](../architecture/task-system.md#delivered-default-admission-budgets)
+own implemented semantics. This is not allocation-owned native or whole-process accounting.
+
+Owning qualification preserves 19 initial passes out of 20 and the separately corrected
+application-fixture pass in 5.96 s. Its first correction failed the 15 s first-ready gate because
+processing sampling had not begun; the repaired fixture now uses the matching production sampler
+and service/controller root. Strict closure covers 246 Bloom-owned translation units: 236 initial
+passes plus eight affected owning reruns after consumed-config moves and two optional-consumer
+reruns. An earlier redundant move of the trivially copyable numeric snapshot is separate
+history. The 247-unit attempted map included one generated Qt `mocs_compilation.cpp`; its generated
+`.cpp`-include diagnostics were excluded only with that aggregation, preserving all actual changed-
+header consumers and checker settings. Final application/CLI/media and native-helper/bootstrap/
+Tasks refresh passes, as do five targeted owning reruns in 0.04 s. All three production artifacts
+have no missing dependencies and are held against the exact 43-path source freeze. The affected
+Linux no-Vulkan application/CLI build and all 20 owning fallback suites pass in 1.87 s. This is
+explicit CPU-fallback qualification, not native GPU or macOS/Windows execution. Final repository
+quality passes schema, architecture, dependency, hygiene, UI grammar and formatting checks across
+1,460 files. Exact source/artifact holds and independent review bound acceptance to this companion.
+
+Freeze exact source plus owning docs, selectively commit and verify an immutable application
+package. That is a checkpoint; the same implementation owner then proceeds sequentially to the
+bounded resident/display native-image
+ownership slice, before media reuse/presentation, batching, bounded concurrency and sustained/platform
+evidence. This companion does not qualify allocation-owned native backing or the remaining roadmap;
+the verified package and user-app replacement are separate deployment steps.
 
 First G6B phase-reservation checkpoint (2026-10-09), accepted within bounded scope:
 independent reviews cover coordinator/policy/builder quotas, resident and final phase lifetimes,

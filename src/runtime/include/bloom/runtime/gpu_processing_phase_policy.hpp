@@ -3,6 +3,7 @@
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_processing_phase_budget.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/task_budget_view.hpp>
 
 #include <array>
 #include <chrono>
@@ -21,7 +22,9 @@ struct GpuProcessingPhaseEnvelope final {
     std::uint64_t retainedCoverageByteLimit = 0;
     std::uint64_t requestedSourceBytes = 0;
     std::uint64_t minimumSourceBytes = 0;
-    std::uint64_t requestedExecutorBytes = 0;
+    // Omitted rooted-view requests derive this ceiling per attempt from the selected request.
+    // Explicit zero/finite values retain their exact meaning; no-view omission stays legacy zero.
+    std::optional<std::uint64_t> requestedExecutorBytes = {};
     std::uint64_t minimumExecutorBytes = 0;
     std::uint64_t deviceWorkingBytes = 0;
     bool sourceFree = false;
@@ -51,9 +54,18 @@ class GpuProcessingPhasePolicy final {
     using Clock = std::chrono::steady_clock;
     explicit GpuProcessingPhasePolicy(
         std::size_t requestCapacity = 32,
-        const std::shared_ptr<render::PackedHostRetirementOwner>& retirementOwner = {});
+        const std::shared_ptr<render::PackedHostRetirementOwner>& retirementOwner = {},
+        std::shared_ptr<TaskBudgetView> budgetView = {});
     void applyHostSample(const MemoryBudgetState&, std::size_t physicalBytes,
                          Clock::time_point now = Clock::now()) noexcept;
+    // Explicit root delivery: allocation reflects the owner's configured cache split/overrides.
+    // Publish the numeric Tasks view only after host-policy locks have been released.
+    void applyHostSample(const MemoryBudgetState&, std::size_t physicalBytes,
+                         const MemoryBudgetAllocation&,
+                         Clock::time_point now = Clock::now()) noexcept;
+    [[nodiscard]] const std::shared_ptr<TaskBudgetView>& budgetView() const noexcept {
+        return budgetView_;
+    }
     [[nodiscard]] bool reportDevice(std::uint64_t ownershipEpoch,
                                     render::GpuAllocationBudget) noexcept;
     // A proven owner teardown removes its report. Unproven generations remain bounded/charged;
@@ -71,6 +83,7 @@ class GpuProcessingPhasePolicy final {
     };
     mutable std::mutex mutex_;
     render::GpuProcessingPhaseBudget budget_;
+    const std::shared_ptr<TaskBudgetView> budgetView_;
     ProcessMemorySource processSource_ = ProcessMemorySource::Unavailable;
     ProcessMemoryStatus processStatus_ = ProcessMemoryStatus::Pending;
     std::uint64_t sampleSerial_ = 0;

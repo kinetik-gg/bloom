@@ -1,3 +1,4 @@
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/task_gpu_executor.hpp>
 
 #include "task_scheduler_internal.hpp"
@@ -353,6 +354,109 @@ void testWrongThreadMoveOverwriteAndThrow(Expectations& expectations) {
                         "a throwing starter terminalizes with a stable diagnostic");
 }
 
+void testDeliveredDefaultBudgets(Expectations& expectations) {
+    using bloom::runtime::TaskBudgetSnapshot;
+    using bloom::runtime::TaskBudgetView;
+    auto view = std::make_shared<TaskBudgetView>();
+    auto defaults = config();
+    defaults.gpuRequestOwnedByteCapacity.reset();
+    defaults.budgetView = view;
+    TaskScheduler scheduler(defaults);
+    std::atomic_size_t wakes = 0;
+    auto attachment = attach(scheduler, 29, wakes);
+    const auto submit = [&](const std::size_t bytes) {
+        return scheduler.submitGpu<int>(TaskRequest("Delivered capacity", owner(29)),
+                                        generation(29), {0, bytes},
+                                        [](TaskContext&, GpuTaskCompletion<int> completion) {
+                                            static_cast<void>(std::move(completion).succeed(1));
+                                        });
+    };
+    auto unknown = submit(1);
+    expectations.expect(unknown.status == TaskSubmissionStatus::QueueFull && unknown.diagnostic &&
+                            unknown.diagnostic->code == "bloom.runtime.gpu-budget-awaiting" &&
+                            unknown.diagnostic->defaultBudgetRetry,
+                        "startup omitted quota awaits typed delivered capacity");
+    auto bootstrap = submit(0);
+    expectations.expect(bootstrap.accepted(), "zero-byte bootstrap works before default readiness");
+    static_cast<void>(attachment.lease.dispatchOne());
+    auto delivered = TaskBudgetSnapshot{.sampleSerial = 1,
+                                        .sampledAt = TaskBudgetSnapshot::Clock::now(),
+                                        .ready = true,
+                                        .previewRequestBytes = 50,
+                                        .aggregateGpuBytes = 100};
+    expectations.expect(view->publish(delivered), "fresh root delivers default capacity");
+    std::optional<GpuTaskCompletion<int>> held;
+    auto active =
+        scheduler.submitGpu<int>(TaskRequest("Held before shrink", owner(29)), generation(29),
+                                 {0, 80}, [&held](TaskContext&, GpuTaskCompletion<int> completion) {
+                                     held.emplace(std::move(completion));
+                                 });
+    static_cast<void>(attachment.lease.dispatchOne());
+    expectations.expect(active.accepted() && held.has_value(), "delivered quota admits real work");
+    delivered.sampleSerial = 2;
+    delivered.aggregateGpuBytes = 20;
+    expectations.expect(view->publish(delivered), "fresh shrink is published");
+    auto shrunk = submit(1);
+    const auto activeSnapshot = scheduler.snapshot(active.handle.id());
+    expectations.expect(shrunk.status == TaskSubmissionStatus::QueueFull && activeSnapshot &&
+                            activeSnapshot->state == TaskState::Running,
+                        "cap below live reservation rejects new work without underflow/revocation");
+    delivered.sampleSerial = 3;
+    delivered.aggregateGpuBytes = 200;
+    expectations.expect(view->publish(delivered), "fresh recovery increases default capacity");
+    auto grown = submit(100);
+    expectations.expect(grown.accepted(), "fresh growth admits beyond old cold/shrunken quota");
+    static_cast<void>(attachment.lease.dispatchOne());
+    if (held) {
+        static_cast<void>(std::move(*held).succeed(1));
+        held.reset();
+    }
+    const auto unrelatedGlobal = bloom::runtime::processMemoryBudgetLedger().usableByteBudget();
+    expectations.expect(unrelatedGlobal < std::numeric_limits<std::size_t>::max(),
+                        "finite unrelated global has room for injected-root boundary witness");
+    if (unrelatedGlobal < std::numeric_limits<std::size_t>::max()) {
+        delivered.sampleSerial = 4;
+        delivered.aggregateGpuBytes = unrelatedGlobal + 1;
+        expectations.expect(view->publish(delivered),
+                            "injected root publishes larger finite quota");
+        auto independent = submit(unrelatedGlobal + 1);
+        expectations.expect(independent.accepted(),
+                            "fresh injected quota is not capped by unrelated cold global ledger");
+        static_cast<void>(attachment.lease.dispatchOne());
+        expectations.expect(takeRequired(independent.handle).state() == TaskState::Succeeded &&
+                                scheduler.isQuiescent(),
+                            "larger admitted control task completes and releases its reservation");
+    }
+    delivered.sampleSerial = 5;
+    delivered.sampledAt -= 11s;
+    expectations.expect(view->publish(delivered), "stale timestamp witness is delivered");
+    auto stale = submit(1);
+    expectations.expect(stale.status == TaskSubmissionStatus::QueueFull && stale.diagnostic &&
+                            stale.diagnostic->code == "bloom.runtime.gpu-budget-awaiting",
+                        "stale delivered capacity cannot manufacture default growth");
+    delivered.sampleSerial = 2;
+    expectations.expect(!view->publish(delivered), "older delivery cannot replace current epoch");
+    auto explicitConfig = config();
+    explicitConfig.budgetView = view;
+    TaskScheduler explicitScheduler(explicitConfig);
+    auto explicitAttachment = attach(explicitScheduler, 28, wakes);
+    auto explicitRequest = explicitScheduler.submitGpu<int>(
+        TaskRequest("Exact explicit cap", owner(28)), generation(28), {0, 2'048},
+        [](TaskContext&, GpuTaskCompletion<int> completion) {
+            static_cast<void>(std::move(completion).succeed(1));
+        });
+    expectations.expect(explicitRequest.accepted(), "explicit quota ignores stale/default view");
+    static_cast<void>(explicitAttachment.lease.dispatchOne());
+    if (unrelatedGlobal < std::numeric_limits<std::size_t>::max()) {
+        auto denied = explicitScheduler.submitGpu<int>(
+            TaskRequest("Larger input against explicit cap", owner(28)), generation(28),
+            {0, unrelatedGlobal + 1}, [](TaskContext&, GpuTaskCompletion<int>) {});
+        expectations.expect(
+            denied.status == TaskSubmissionStatus::QueueFull,
+            "structurally valid larger request still obeys exact small explicit cap");
+    }
+}
+
 void testBoundsCoalescingAndAccounting(Expectations& expectations) {
     auto bounded = config();
     bounded.gpuPendingQueueCapacity = 2;
@@ -628,6 +732,7 @@ int main() {
     testRunningPersistenceCancellationAndDrop(expectations);
     testQueuedScopeCancellation(expectations);
     testWrongThreadMoveOverwriteAndThrow(expectations);
+    testDeliveredDefaultBudgets(expectations);
     testBoundsCoalescingAndAccounting(expectations);
     testDeviceLossRecoveryAndShutdown(expectations);
     testDispatchTransitionAndActiveStarterRaces(expectations);

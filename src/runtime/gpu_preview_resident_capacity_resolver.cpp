@@ -30,7 +30,14 @@ void resolveResidentCapacity(const std::shared_ptr<PreviewDisplayServiceCore>& c
     GpuResidentConfiguredBudgets configured;
     configured.leaseBytes = core->options.residentLeaseBudgets.maxBytes;
     configured.sceneCacheBytes = core->options.residentSceneCacheBudgets.maxRetainedBytes;
-    configured.requestBytes = core->options.previewByteAllowance;
+    // A live default must not freeze the first (or absent) host sample into the owner ceiling.
+    // Resolve the finite physical pool once; each request then applies the delivered default.
+    const bool liveDefault = !core->options.previewByteAllowance &&
+                             core->options.processingPhasePolicy &&
+                             core->options.processingPhasePolicy->budgetView();
+    configured.requestBytes = core->options.previewByteAllowance.value_or(
+        liveDefault && capacity.isKnown() ? capacity.availableBytes
+                                          : gpuPreviewRequestByteAllowance());
     const GpuResidentCapacityPlan plan = gpuResidentCapacityPlanFor(configured, capacity);
 
     // Effective sub-budgets are never above the configured values. They are what the owner actually

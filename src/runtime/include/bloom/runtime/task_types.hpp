@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/core/id.hpp>
+#include <bloom/runtime/task_budget_view.hpp>
 
 #include <chrono>
 #include <compare>
@@ -72,6 +73,11 @@ enum class DiagnosticSeverity {
 };
 
 // Optional admission-only retry watermark. It is never a task/result pixel identity.
+struct TaskDefaultBudgetRetry final {
+    std::uint64_t sampleSerial = 0;
+    friend bool operator==(const TaskDefaultBudgetRetry&, const TaskDefaultBudgetRetry&) = default;
+};
+
 struct TaskAdmissionRetry final {
     std::uint64_t revision = 0;
     bool requiresDeviceCapacity = false;
@@ -85,6 +91,8 @@ struct TaskDiagnostic {
     std::string detail;
     std::string suggestedAction;
     std::optional<TaskAdmissionRetry> admissionRetry = {};
+    // A delivered-default refusal uses a new fresh sample epoch, never a stale root watermark.
+    std::optional<TaskDefaultBudgetRetry> defaultBudgetRetry = {};
 
     friend bool operator==(const TaskDiagnostic&, const TaskDiagnostic&) = default;
 };
@@ -188,7 +196,10 @@ struct TaskSchedulerConfig {
     // GiB: a full-resolution 6000x4000 resident preview legitimately reserves a multi-GiB budget,
     // and a fixed small ceiling would silently force every such request onto the CPU. An explicit
     // small value is still honoured as an intentional refusal.
-    std::size_t gpuRequestOwnedByteCapacity = std::size_t{1024} * 1024U * 1024U;
+    std::optional<std::size_t> gpuRequestOwnedByteCapacity = {};
+    // Default-only numeric delivery; explicit aggregate caps ignore this view. No callbacks or
+    // ownership/quota locks are acquired while Tasks loads an immutable snapshot.
+    std::shared_ptr<const TaskBudgetView> budgetView = {};
     std::size_t terminalHistoryCapacity = 256;
     std::size_t diagnosticsPerTask = 64;
     std::size_t groupRegistryCapacity = 256;

@@ -384,7 +384,7 @@ generalFallback(std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorH
     options.presentationCoordinator.maxRetainedTargets = 64U;
     options.presentationCoordinator.shutdownDrainPumps = 600U;
     options.residentLeaseBudgets.maxBytes = std::size_t{1} << 30U;
-    options.residentExecutorBudgets.maxImageBytes = std::size_t{1} << 28U;
+    options.residentExecutorBudgets.emplace().maxImageBytes = std::size_t{1} << 28U;
     return options;
 }
 

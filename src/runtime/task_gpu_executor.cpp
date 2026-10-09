@@ -171,13 +171,30 @@ SchedulerState::Admission SchedulerState::admitGpu(TaskRequest request,
         const std::size_t remainingAdmitted = gpuAdmittedStates - projectedCount;
         const std::size_t remainingCommandBytes = gpuQueuedCommandBytes - projectedCommandBytes;
         const std::size_t remainingRequestBytes = gpuRequestOwnedBytes - projectedRequestBytes;
+        auto requestCapacity =
+            config.gpuRequestOwnedByteCapacity.value_or(legacyGpuRequestOwnedByteCapacity);
+        if (!config.gpuRequestOwnedByteCapacity && config.budgetView) {
+            const auto delivered = config.budgetView->load();
+            const bool fresh = delivered && delivered->fresh();
+            if (!fresh && admission.requestOwnedBytes != 0) {
+                auto diagnostic = gpuDiagnostic("bloom.runtime.gpu-budget-awaiting",
+                                                "Awaiting delivered GPU admission capacity");
+                diagnostic.defaultBudgetRetry =
+                    TaskDefaultBudgetRetry{delivered ? delivered->sampleSerial : 0};
+                return {.status = TaskSubmissionStatus::QueueFull,
+                        .id = {},
+                        .diagnostic = std::move(diagnostic)};
+            }
+            requestCapacity = fresh ? delivered->aggregateGpuBytes : 0;
+        }
         const bool capacityExceeded =
             remainingPending >= config.gpuPendingQueueCapacity ||
             remainingAdmitted >= config.gpuAdmittedStateCapacity ||
             admission.queuedCommandBytes >
                 config.gpuQueuedCommandByteCapacity - remainingCommandBytes ||
-            admission.requestOwnedBytes >
-                config.gpuRequestOwnedByteCapacity - remainingRequestBytes;
+            (admission.requestOwnedBytes != 0 &&
+             (remainingRequestBytes > requestCapacity ||
+              admission.requestOwnedBytes > requestCapacity - remainingRequestBytes));
         if (capacityExceeded) {
             return {.status = TaskSubmissionStatus::QueueFull,
                     .id = {},

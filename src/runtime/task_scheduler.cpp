@@ -1,3 +1,4 @@
+#include <bloom/runtime/gpu_memory_budget.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include "task_scheduler_internal.hpp"
@@ -85,7 +86,10 @@ namespace detail {
 
 SchedulerState::SchedulerState(TaskSchedulerConfig schedulerConfig,
                                std::function<void(std::size_t)> startHook)
-    : config(schedulerConfig), workerStartHook(std::move(startHook)) {
+    : config(std::move(schedulerConfig)),
+      legacyGpuRequestOwnedByteCapacity(
+          config.gpuRequestOwnedByteCapacity.value_or(defaultGpuRequestOwnedByteCapacity())),
+      workerStartHook(std::move(startHook)) {
     // One row-band pool per scheduler (docs/architecture/task-system.md, "Row bands"): the pixel
     // work of one frame is split across it, which is a different question from how many independent
     // tasks may run at once, so it gets its own bounded width rather than borrowing cpu.workers.

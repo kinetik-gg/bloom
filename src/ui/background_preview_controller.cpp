@@ -226,11 +226,11 @@ void BackgroundPreviewController::fillNextFrame() {
         runtime::TaskSubmission<PreviewPreparationResultHandle> submission;
         if (submitter_) {
             submission = submitter_(std::move(request), snapshot, identity,
-                                    previewController_.settings().pixelStorageByteLimit, {});
+                                    previewController_.effectivePixelStorageByteLimit(), {});
         } else {
             submission = scheduler_.submit<PreviewPreparationResultHandle>(
                 std::move(request), [snapshot, identity, preparation = preparation_,
-                                     limit = previewController_.settings().pixelStorageByteLimit](
+                                     limit = previewController_.effectivePixelStorageByteLimit()](
                                         runtime::TaskContext& context) mutable {
                     if (context.isCancellationRequested()) {
                         return runtime::TaskResult<PreviewPreparationResultHandle>::cancelled();

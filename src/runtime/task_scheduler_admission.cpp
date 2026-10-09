@@ -486,13 +486,14 @@ void SchedulerState::advanceTaskIdLocked() noexcept {
 
 } // namespace detail
 
-TaskScheduler::TaskScheduler(TaskSchedulerConfig config) : TaskScheduler(config, {}) {}
+TaskScheduler::TaskScheduler(TaskSchedulerConfig config) : TaskScheduler(std::move(config), {}) {}
 
 TaskScheduler::TaskScheduler(TaskSchedulerConfig config, WorkerStartHook workerStartHook) {
     if (!config.isValid()) {
         throw std::invalid_argument("TaskScheduler configuration exceeds its bounded limits");
     }
-    auto state = std::make_shared<detail::SchedulerState>(config, std::move(workerStartHook));
+    auto state =
+        std::make_shared<detail::SchedulerState>(std::move(config), std::move(workerStartHook));
     state->startWorkers();
     state_ = std::move(state);
 }

@@ -299,7 +299,10 @@ void testAppConfiguredPlanFlowSeparatesHostAndGpu() {
     bloom::runtime::GpuResidentConfiguredBudgets ownerConfigured;
     ownerConfigured.leaseBytes = options.residentLeaseBudgets.maxBytes;
     ownerConfigured.sceneCacheBytes = options.residentSceneCacheBudgets.maxRetainedBytes;
-    ownerConfigured.requestBytes = options.previewByteAllowance;
+    expect(options.previewByteAllowance.has_value(), "the configured request is explicit");
+    if (!options.previewByteAllowance)
+        return;
+    ownerConfigured.requestBytes = *options.previewByteAllowance;
     bloom::runtime::GpuResidentCapacity device;
     device.source = bloom::runtime::GpuResidentCapacitySource::MemoryBudget;
     device.availableBytes = 16ULL * kGib;

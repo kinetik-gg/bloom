@@ -223,6 +223,10 @@ void CompositionPreviewController::consumeReadyResult() {
     }
     if (processingPolicy_ && result->state() == runtime::TaskState::Failed) {
         for (const auto& diagnostic : next.diagnostics) {
+            if (diagnostic.defaultBudgetRetry) {
+                deferredDefaultBudget_ = diagnostic.defaultBudgetRetry;
+                break;
+            }
             if (diagnostic.admissionRetry) {
                 deferredAdmission_ = diagnostic.admissionRetry;
                 break;

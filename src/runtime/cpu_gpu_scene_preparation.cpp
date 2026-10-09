@@ -96,6 +96,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                               const CancellationToken& cancellation) const {
     auto phaseLease = phase_.admittedLease;
     std::optional<TaskAdmissionRetry> refusalRetry;
+    std::optional<TaskDefaultBudgetRetry> defaultBudgetRetry;
     const auto fail = [&](const PreparedGpuSceneDiagnosticCode code, std::string message,
                           GpuSceneMediaStatistics statistics = {}) {
         auto result = failed(code, std::move(message), statistics);
@@ -193,6 +194,19 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     std::uint64_t coverageAllowance = request.pixelStorageByteLimit;
     if (phase_.policy && !phaseLease) {
         auto envelope = phase_.envelope;
+        if (envelope.native && !envelope.requestedExecutorBytes && phase_.policy->budgetView()) {
+            const auto delivered = phase_.policy->budgetView()->load();
+            if (!delivered || !delivered->fresh()) {
+                defaultBudgetRetry =
+                    TaskDefaultBudgetRetry{delivered ? delivered->sampleSerial : 0};
+                auto outcome = fail(PreparedGpuSceneDiagnosticCode::AwaitingCapacity,
+                                    "Awaiting delivered preview request capacity");
+                outcome.diagnostic.defaultBudgetRetry = defaultBudgetRetry;
+                return outcome;
+            }
+            envelope.requestedExecutorBytes = std::min<std::uint64_t>(
+                request.pixelStorageByteLimit, delivered->previewRequestBytes);
+        }
         const auto extent = resolved.imageDescriptor.dataWindow().extent();
         envelope.pixels = static_cast<std::uint64_t>(extent.width()) * extent.height();
         envelope.requestedSourceBytes = request.pixelStorageByteLimit;

@@ -186,6 +186,7 @@ struct SchedulerState final : std::enable_shared_from_this<SchedulerState> {
     void advanceTaskIdLocked() noexcept;
 
     TaskSchedulerConfig config;
+    std::size_t legacyGpuRequestOwnedByteCapacity = 0;
     TaskCompletionSubscriptions completions;
     // Engaged unless the configuration asked for kSerialRowBandWorkers. Declared before `mutex` so
     // it is destroyed after everything below it: its own destructor joins band workers, and no band
@@ -240,7 +241,7 @@ struct TaskSchedulerTestAccess {
     [[nodiscard]] static std::unique_ptr<TaskScheduler>
     create(TaskSchedulerConfig config, std::function<void(std::size_t)> workerStartHook) {
         return std::unique_ptr<TaskScheduler>(
-            new TaskScheduler(config, std::move(workerStartHook)));
+            new TaskScheduler(std::move(config), std::move(workerStartHook)));
     }
 
     static void setGpuDispatchTransitionHook(TaskScheduler& scheduler, std::function<void()> hook) {

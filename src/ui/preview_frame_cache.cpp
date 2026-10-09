@@ -539,11 +539,17 @@ namespace {
 
 } // namespace
 
-runtime::MemoryBudgetAllocation cacheMemoryBudgetsFromSettings(const QSettings& settings) {
-    auto& ledger = runtime::processMemoryBudgetLedger();
-    const auto allocation = ledger.allocate(
+runtime::MemoryBudgetAllocation
+cacheMemoryBudgetAllocationFromSettings(const QSettings& settings,
+                                        const runtime::MemoryBudgetLedger& ledger) {
+    return ledger.allocate(
         budgetOverride(settings, QLatin1StringView("playback/operation-cache-bytes")),
         budgetOverride(settings, QLatin1StringView(ramPreviewByteBudgetKey)));
+}
+
+runtime::MemoryBudgetAllocation cacheMemoryBudgetsFromSettings(const QSettings& settings) {
+    const auto allocation =
+        cacheMemoryBudgetAllocationFromSettings(settings, runtime::processMemoryBudgetLedger());
     runtime::processMemoryBudgetLedger().setConfiguredTotal(allocation.operationCacheByteBudget +
                                                             allocation.previewFrameCacheByteBudget);
     return allocation;

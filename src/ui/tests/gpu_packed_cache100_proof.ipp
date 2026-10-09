@@ -1,6 +1,35 @@
 // A distinct 100-member 1080 EXR sequence through the real app stage, RAM cache and Viewer.
 // This is a capacity/identity/replay proof, not SMB/EXR production-throughput qualification.
 namespace {
+// Footage-only allowance variant: unrelated fixture CPU oracles keep their existing default.
+ui::PreparedPreviewFrameHandle footageCpuReference(
+    Fixture& fixture, const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan,
+    const runtime::PreviewRequestIdentity& identity, const std::size_t pixelBudget) {
+    if (!plan || !fixture.processor)
+        return nullptr;
+    const auto evaluated = fixture.evaluator.evaluate(
+        plan,
+        {.time = identity.time,
+         .output = plan->output(),
+         .resolution = identity.resolution,
+         .quality = runtime::EvaluationQuality::Reference,
+         .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
+         .pixelStorageByteLimit = pixelBudget},
+        {});
+    if (evaluated.status() != runtime::EvaluationStatus::Evaluated || !evaluated.frame())
+        return nullptr;
+    runtime::CpuQualifiedDisplayPreparer preparer(*fixture.processor);
+    runtime::QualifiedDisplayPreparationRequest request;
+    request.aggregatePixelStorageByteLimit = pixelBudget;
+    const auto prepared = preparer.prepare(evaluated.frame(), request, {});
+    if (prepared.status() != runtime::QualifiedDisplayPreparationStatus::Prepared ||
+        !prepared.frame())
+        return nullptr;
+    auto frame = runtime::PreparedPreviewFrame::createQualified(identity.requestGeneration,
+                                                                prepared.frame());
+    return frame ? std::make_shared<const runtime::PreparedPreviewFrame>(std::move(*frame))
+                 : nullptr;
+}
 int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, const bool half,
                       const bool partial, const std::string& manifestPath) {
     Expectations checks;
@@ -9,6 +38,12 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
     auto sequence = fixture.mediaAsset;
     sequence.kind = document::AssetKind::Sequence;
     std::uint32_t compositionWidth = 1920, compositionHeight = 1080, controlledRate = 25;
+    std::size_t processingBudget = kBudget, oracleBudget = kBudget,
+                retainedCacheBudget = 1ULL << 30;
+    std::uint64_t transferBudget = 320ULL << 20;
+    std::optional<std::uint64_t> explicitExecutorBudget;
+    bool deliveredDefaults = false;
+    std::string sourceRate = "25/1";
     sequence.width = 1920;
     sequence.height = 1080;
     sequence.frames = 100;
@@ -35,11 +70,39 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
             sequence.height = static_cast<std::uint32_t>(object["sourceHeight"].toInt());
             sequence.manifest.first = object["first"].toInteger(-1);
             const auto members = object["members"].toArray();
-            if (compositionWidth != 1920 || compositionHeight != 1080 || controlledRate != 24 ||
-                sequence.width != 1920 || sequence.height != 804 || members.size() != 100 ||
-                sequence.manifest.first != 1001 || object["sourceRate"].toString() != "24000/1001")
+            sourceRate = object["sourceRate"].toString().toStdString();
+            const bool primaryA = compositionWidth == 1920 && compositionHeight == 1080 &&
+                                  sequence.width == 1920 && sequence.height == 804 &&
+                                  members.size() == 100 && sourceRate == "24000/1001";
+            const bool heavierB = compositionWidth == 4608 && compositionHeight == 3164 &&
+                                  sequence.width == 4608 && sequence.height == 3164 &&
+                                  members.size() == 23 && sourceRate == "24/1";
+            if ((!primaryA && !heavierB) || controlledRate != 24 || sequence.manifest.first != 1001)
                 throw std::runtime_error(
-                    "Descriptor does not match the controlled A qualification");
+                    "Descriptor must select the controlled A or native B qualification");
+            if (heavierB) {
+                deliveredDefaults = object["deliveredDefaults"].toBool(false);
+                const auto processing = object["processingByteBudget"].toInteger();
+                const auto oracle = object["oracleByteBudget"].toInteger();
+                const auto retained = object["cacheByteBudget"].toInteger();
+                const auto transfer = object["transferByteBudget"].toInteger();
+                if (processing <= 0 || oracle <= 0 || retained <= 0 || transfer <= 0 ||
+                    static_cast<std::uint64_t>(processing) >
+                        std::numeric_limits<std::size_t>::max() / 2 ||
+                    static_cast<std::uint64_t>(oracle) > std::numeric_limits<std::size_t>::max() ||
+                    static_cast<std::uint64_t>(retained) > std::numeric_limits<std::size_t>::max())
+                    throw std::runtime_error("Invalid explicit B fixture allowances");
+                processingBudget = static_cast<std::size_t>(processing);
+                oracleBudget = static_cast<std::size_t>(oracle);
+                retainedCacheBudget = static_cast<std::size_t>(retained);
+                transferBudget = static_cast<std::uint64_t>(transfer);
+                if (object.contains("explicitExecutorByteBudget")) {
+                    const auto explicitBudget = object["explicitExecutorByteBudget"].toInteger();
+                    if (explicitBudget != (256LL << 20))
+                        throw std::runtime_error("Negative B witness requires explicit 256 MiB");
+                    explicitExecutorBudget = static_cast<std::uint64_t>(explicitBudget);
+                }
+            }
             sequence.frames = static_cast<std::uint64_t>(members.size());
             sequence.rate = controlledRate;
             sequence.manifest.last = sequence.manifest.first + members.size() - 1;
@@ -73,8 +136,11 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                           << " interpretationAssumption=" << probe.value->interpretationAssumption
                           << '\n';
             }
-            std::cout << "PACKED_INPUT controlledRate=24 descriptorSourceRate=24000/1001"
-                      << " composition=1920x1080 source=1920x804 centered=960,540"
+            std::cout << "PACKED_INPUT controlledRate=" << controlledRate
+                      << " descriptorSourceRate=" << sourceRate
+                      << " composition=" << compositionWidth << 'x' << compositionHeight
+                      << " source=" << sequence.width << 'x' << sequence.height
+                      << " centered=" << compositionWidth / 2 << ',' << compositionHeight / 2
                       << " background=opaqueBlack interpretation=Auto"
                       << " sourceIOBytes=unmeasured decodeBytes=unmeasured SMBCold=unqualified\n";
         });
@@ -123,20 +189,31 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
     checks.expect(commands.execute(std::move(add)).succeeded(), "real sequence layer is authored");
     std::atomic<std::uint64_t> preparations{0};
     runtime::CpuReferenceDisplayPreparer displayPreparer;
-    runtime::TaskScheduler scheduler(schedulerConfig());
+    const auto taskBudgetView =
+        deliveredDefaults ? std::make_shared<runtime::TaskBudgetView>() : nullptr;
+    auto taskConfig = schedulerConfig();
+    if (deliveredDefaults) {
+        taskConfig.gpuRequestOwnedByteCapacity.reset();
+        taskConfig.budgetView = taskBudgetView;
+    } else {
+        taskConfig.gpuRequestOwnedByteCapacity = std::max(
+            taskConfig.gpuRequestOwnedByteCapacity.value_or(1ULL << 30), 2 * processingBudget);
+    }
+    runtime::TaskScheduler scheduler(taskConfig);
     auto resolver =
         host::makePackagedGpuOcioResolver(QCoreApplication::applicationFilePath().toStdString());
     checks.expect(resolver != nullptr, "packaged normal application resolver is available");
     const auto retirementOwner = render::PackedHostRetirementOwner::create();
     PackedHostTestTeardown retirementTeardown(retirementOwner);
-    const auto processingPolicy =
-        std::make_shared<runtime::GpuProcessingPhasePolicy>(4, retirementOwner);
+    const auto processingPolicy = std::make_shared<runtime::GpuProcessingPhasePolicy>(
+        deliveredDefaults ? 32 : 4, retirementOwner, taskBudgetView);
     const runtime::GpuScenePreparationPhase processingPhase{
         .policy = processingPolicy,
-        .envelope = {.metadataBytes = 1024ULL * 1024,
+        .envelope = {.metadataBytes = (deliveredDefaults ? 16ULL : 1ULL) * 1024 * 1024,
                      .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
-                     .requestedExecutorBytes = kBudget,
-                     .deviceWorkingBytes = 832ULL * 1024 * 1024}};
+                     .requestedExecutorBytes =
+                         deliveredDefaults ? std::optional<std::uint64_t>{} : processingBudget,
+                     .deviceWorkingBytes = (512ULL << 20) + transferBudget}};
     auto stage = ui::makeSessionRefreshingGpuSceneStage(
         fixture.compiler, fixture.evaluator, fixture.provider,
         std::make_shared<runtime::GpuSceneCoverageCache>(),
@@ -145,11 +222,28 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
     ledger.beginProcessSampling();
     ui::TaskUiBridge bridge(scheduler);
     ui::MemoryBudgetController memoryController(scheduler, bridge, ledger);
-    QObject::connect(&memoryController, &ui::MemoryBudgetController::sampleApplied, &bridge,
-                     [processingPolicy, &ledger] {
-                         processingPolicy->applyHostSample(ledger.state(),
-                                                           ledger.physicalByteBudget());
-                     });
+    const QSettings playbackSettings;
+    bool processingCapacityInitialized = false;
+    QObject::connect(
+        &memoryController, &ui::MemoryBudgetController::sampleApplied, &bridge,
+        [processingPolicy, &ledger, &playbackSettings, &processingCapacityInitialized,
+         deliveredDefaults] {
+            const auto physicalBytes = ledger.physicalByteBudget();
+            if (deliveredDefaults) {
+                const auto allocation =
+                    ui::cacheMemoryBudgetAllocationFromSettings(playbackSettings, ledger);
+                if (!processingCapacityInitialized && physicalBytes != 0) {
+                    processingCapacityInitialized = true;
+                    ledger.setConfiguredTotal(allocation.operationCacheByteBudget +
+                                              allocation.previewFrameCacheByteBudget);
+                }
+                const auto delivered = ledger.state();
+                processingPolicy->applyHostSample(delivered, physicalBytes, allocation);
+            } else {
+                const auto delivered = ledger.state();
+                processingPolicy->applyHostSample(delivered, physicalBytes);
+            }
+        });
     checks.expect(
         waitUntil([&] { return processingPolicy->snapshot().reservations.hostReady; }, 30s),
         "production off-UI sampler delivers genuine first shared-root readiness");
@@ -175,12 +269,23 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
         return result;
     };
     auto configured = serviceOptions(options.loader_path);
+    if (deliveredDefaults) {
+        ui::applyGpuResidentBudgetPlan(configured,
+                                       ui::gpuResidentBudgetPlanFor(retainedCacheBudget));
+        configured.previewByteAllowance.reset();
+    } else {
+        configured.previewByteAllowance = processingBudget;
+    }
+    if (explicitExecutorBudget)
+        configured.residentExecutorBudgets.emplace().maxImageBytes = *explicitExecutorBudget;
+    configured.packedTransferByteAllowance = transferBudget;
     configured.processingPhasePolicy = processingPolicy;
     configured.product = runtime::GpuPreviewDisplayProductMode::GpuPreparedPacked;
     configured.presentation = runtime::GpuPreviewDisplayServicePresentationMode::Disabled;
-    runtime::GpuPreviewDisplayService service(scheduler, stage, fixture.productionCpuStage(),
-                                              fixture.productionCpuFallback(displayPreparer),
-                                              configured);
+    auto serviceOwner = std::make_unique<runtime::GpuPreviewDisplayService>(
+        scheduler, stage, fixture.productionCpuStage(),
+        fixture.productionCpuFallback(displayPreparer), configured);
+    auto& service = *serviceOwner;
     checks.expect(waitUntil(
                       [&] {
                           return service.status().state !=
@@ -219,12 +324,13 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                    const std::vector<runtime::SnapshotParameterOverride>& overrides) {
             return service.submit(std::move(request), snapshot, identity, bytes, overrides);
         };
-    const std::size_t hostBudget = partial ? 64ULL << 20 : 1ULL << 30;
+    const std::size_t hostBudget = partial ? 64ULL << 20 : retainedCacheBudget;
     auto cache = std::make_shared<ui::PreviewFrameCache>(hostBudget);
     const auto ownerLimits = service.status().residentCapacityPlan;
     cache->setGpuResidentLimits(ownerLimits.cacheBytes, ownerLimits.cacheEntries);
     ui::CompositionPreviewSettings settings;
-    settings.pixelStorageByteLimit = kBudget;
+    if (!deliveredDefaults)
+        settings.pixelStorageByteLimit = processingBudget;
     settings.resolutionPolicy =
         half ? runtime::PreviewResolutionPolicy::Half : runtime::PreviewResolutionPolicy::Full;
     ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline, settings,
@@ -232,6 +338,32 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                                                 processingPolicy);
     ui::RamPreviewController ram(session, controller, scheduler, bridge, pipeline, nullptr,
                                  submitter);
+    if (deliveredDefaults) {
+        const auto delivered = taskBudgetView->load();
+        checks.expect(
+            delivered && delivered->fresh() &&
+                processingPolicy->budgetView() == taskConfig.budgetView &&
+                !configured.previewByteAllowance && !settings.pixelStorageByteLimit &&
+                !taskConfig.gpuRequestOwnedByteCapacity &&
+                !processingPhase.envelope.requestedExecutorBytes &&
+                controller.effectivePixelStorageByteLimit() == delivered->previewRequestBytes,
+            "ordinary omitted settings share one actual delivered application budget view");
+        if (!delivered)
+            return 1;
+        std::cout << "PACKED_LIVE_DEFAULT sampleSerial=" << delivered->sampleSerial
+                  << " request=" << delivered->previewRequestBytes
+                  << " aggregate=" << delivered->aggregateGpuBytes
+                  << " assignedOperation=" << delivered->assignedOperationBytes
+                  << " assignedPreview=" << delivered->assignedPreviewBytes
+                  << " configured=" << ledger.state().configuredBytes
+                  << " liveProcessing=" << ledger.state().processingEffectiveBytes
+                  << " savedOperationOverride="
+                  << playbackSettings.contains("playback/operation-cache-bytes")
+                  << " savedPreviewOverride="
+                  << playbackSettings.contains("playback/ram-preview-memory-bytes")
+                  << " retentionFixture=" << retainedCacheBudget
+                  << " oracleFixture=" << oracleBudget << '\n';
+    }
     std::uint64_t observedPrepared = 0, fromCompletion = 0, outsideCompletion = 0;
     QObject::connect(&ram, &ui::RamPreviewController::stateChanged, &bridge, [&] {
         const auto prepared = ram.preparedFrameCount();
@@ -250,6 +382,128 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
             [&] { return viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current; },
             30s),
         "foreground paints genuine GPU-packed sequence before RAM fill");
+    if (explicitExecutorBudget) {
+        const auto status = service.status();
+        const auto frame = viewer.displayedFrameForTest();
+        checks.expect(
+            frame && frame->provenance().provider == runtime::PreviewDisplayProvider::CpuOcio &&
+                frame->processIdentity().provider == runtime::EvaluationProvider::CpuReference &&
+                !frame->provenance().gpuPreparedPacked && !frame->provenance().gpuQualification &&
+                status.counters.residentGraphJobs == 1 && status.counters.nativeDispatches > 0 &&
+                status.counters.cpuFallbacks == 1 && status.counters.packedTransfers == 0 &&
+                status.residentDetail.find(
+                    "the image plus its staging peak exceed the requested byte budget") !=
+                    std::string::npos &&
+                status.residentDetail.find("code=8") != std::string::npos &&
+                status.residentDetail.find("remaining=268435456") != std::string::npos,
+            "explicit producer ceiling still refuses combined upload peak as OverBudget");
+        const auto beforeShutdown = processingPolicy->snapshot().reservations;
+        checks.expect(beforeShutdown.admittedPhases == 0 && beforeShutdown.unprovenPhases == 0 &&
+                          beforeShutdown.hostReservedBytes == 0 &&
+                          beforeShutdown.deviceReservedBytes == 0 &&
+                          beforeShutdown.totalHostClaimBytes == 0,
+                      "explicit refusal releases its phase before service shutdown");
+        std::cout << "PACKED_EXPLICIT_BEFORE_SHUTDOWN phases=" << beforeShutdown.admittedPhases
+                  << " unproven=" << beforeShutdown.unprovenPhases
+                  << " host=" << beforeShutdown.hostReservedBytes
+                  << " device=" << beforeShutdown.deviceReservedBytes << '\n';
+        ram.beginShutdown();
+        controller.beginShutdown();
+        service.beginShutdown();
+        checks.expect(waitUntil(
+                          [&] {
+                              return scheduler.isQuiescent() &&
+                                     service.status().state ==
+                                         runtime::GpuPreviewDisplayServiceState::Stopped;
+                          },
+                          30s),
+                      "explicit refusal retires native owner and tasks");
+        viewer.releasePackedFramesForShutdown();
+        controller.releasePublishedFramesForShutdown();
+        cache->clear();
+        serviceOwner.reset();
+        const auto final = processingPolicy->snapshot();
+        const auto& claims = final.reservations;
+        checks.expect(
+            final.deviceReports == 0 && claims.admittedPhases == 0 && claims.unprovenPhases == 0 &&
+                claims.hostReservedBytes == 0 && claims.deviceReservedBytes == 0 &&
+                claims.totalHostClaimBytes == 0 && claims.ownedPackedHostBytes == 0 &&
+                claims.ownedPackedHostMetadataBytes == 0 && claims.ownedPackedHostAllocations == 0,
+            "explicit refusal leaves no phase, packed payload/header or device reports");
+        std::cout << "PACKED_EXPLICIT ceiling=" << *explicitExecutorBudget
+                  << " request=" << processingBudget << " detail=" << status.residentDetail
+                  << " graphJobs=" << status.counters.residentGraphJobs
+                  << " nativeDispatches=" << status.counters.nativeDispatches
+                  << " cpuFallbacks=" << status.counters.cpuFallbacks
+                  << " finalHost=" << claims.totalHostClaimBytes
+                  << " finalDevice=" << claims.deviceReservedBytes
+                  << " finalPhases=" << claims.admittedPhases
+                  << " deviceReports=" << final.deviceReports << '\n';
+        if (!frame)
+            return 1;
+        // Recreate the immutable service with an omitted override under the SAME live root.
+        // The preceding owner is destroyed, so no stale cached producer/driver state is reused.
+        auto recoveryOptions = configured;
+        recoveryOptions.residentExecutorBudgets.reset();
+        auto recoveryService = std::make_unique<runtime::GpuPreviewDisplayService>(
+            scheduler, stage, fixture.productionCpuStage(),
+            fixture.productionCpuFallback(displayPreparer), recoveryOptions);
+        checks.expect(waitUntil(
+                          [&] {
+                              return recoveryService->status().state !=
+                                     runtime::GpuPreviewDisplayServiceState::Initializing;
+                          },
+                          90s) &&
+                          recoveryService->status().state ==
+                              runtime::GpuPreviewDisplayServiceState::Ready,
+                      "same-root default service recovers after explicit refusal owner retirement");
+        auto recovery = recoveryService->submit(
+            runtime::TaskRequest("Default producer recovery",
+                                 {.kind = runtime::TaskOwnerKind::PanelRequest,
+                                  .id = runtime::TaskOwnerId::fromRaw(999)}),
+            session.evaluationSnapshotForTime(core::RationalTime::fromInteger(0)),
+            frame->desiredIdentity(), processingBudget, {});
+        auto recovered = awaitResult(recovery.handle, 60s);
+        checks.expect(recovered && recovered->value() && *recovered->value() &&
+                          (*recovered->value())->frame() &&
+                          (*recovered->value())->frame()->provenance().provider ==
+                              runtime::PreviewDisplayProvider::GpuPreparedPacked &&
+                          recoveryService->status().counters.packedTransfers == 1 &&
+                          recoveryService->status().counters.cpuFallbacks == 0,
+                      "same-root omitted producer default performs genuine GPU packed recovery");
+        recovered.reset();
+        recoveryService->beginShutdown();
+        checks.expect(waitUntil(
+                          [&] {
+                              return scheduler.isQuiescent() &&
+                                     recoveryService->status().state ==
+                                         runtime::GpuPreviewDisplayServiceState::Stopped;
+                          },
+                          30s),
+                      "same-root default recovery tasks/native owner retire");
+        recoveryService.reset();
+        memoryController.beginShutdown();
+        bridge.beginShutdown();
+        retirementOwner->beginShutdown();
+        checks.expect(waitUntil([&] { return retirementOwner->exitAcknowledged(); }, 30s),
+                      "same-root default recovery published backing actually retires");
+        const auto afterRecovery = processingPolicy->snapshot();
+        const auto& residual = afterRecovery.reservations;
+        checks.expect(afterRecovery.deviceReports == 0 && residual.admittedPhases == 0 &&
+                          residual.unprovenPhases == 0 && residual.totalHostClaimBytes == 0 &&
+                          residual.hostReservedBytes == 0 && residual.deviceReservedBytes == 0 &&
+                          residual.ownedPackedHostBytes == 0 &&
+                          residual.ownedPackedHostMetadataBytes == 0 &&
+                          residual.ownedPackedHostAllocations == 0,
+                      "same-root default recovery conserves all claims after actual retirement");
+        std::cout << "PACKED_DEFAULT_RECOVERY sameRoot=1 finalHost=" << residual.totalHostClaimBytes
+                  << " finalDevice=" << residual.deviceReservedBytes
+                  << " finalPhases=" << residual.admittedPhases
+                  << " deviceReports=" << afterRecovery.deviceReports << '\n';
+        std::cout << (checks.failures() ? "FAIL" : "PASS")
+                  << ": explicit packed producer ceiling refusal/retirement\n";
+        return checks.failures() ? 1 : 0;
+    }
     checks.expect(viewer.displayedFrameForTest() &&
                       viewer.displayedFrameForTest()->provenance().provider ==
                           runtime::PreviewDisplayProvider::GpuPreparedPacked,
@@ -333,6 +587,9 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
               << " ownerCacheBytes=" << ownerLimits.cacheBytes
               << " ownerLeaseBytes=" << ownerLimits.leaseBytes
               << " ownerEntries=" << ownerLimits.cacheEntries
+              << " processingBudget=" << processingBudget << " oracleBudget=" << oracleBudget
+              << " transferBudget=" << transferBudget
+              << " schedulerAggregateGPU=" << taskConfig.gpuRequestOwnedByteCapacity.value_or(0)
               << " samplerDeliveries=" << ledger.state().sampleSerial << '\n';
     if (ram.playableSpan())
         std::cout << "PACKED_SPAN start=" << ram.playableSpan()->start.toSeconds()
@@ -424,8 +681,8 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
             runtime::TaskRequest("CPU sequence parity",
                                  {.kind = runtime::TaskOwnerKind::PanelRequest,
                                   .id = runtime::TaskOwnerId::fromRaw(999)}),
-            [&fixture, snapshot, identity = frame->desiredIdentity(), expectedMember,
-             rate = *rate](runtime::TaskContext& context) {
+            [&fixture, snapshot, identity = frame->desiredIdentity(), expectedMember, rate = *rate,
+             oracleBudget](runtime::TaskContext& context) {
                 const auto compiled =
                     fixture.compiler.compile({.snapshot = snapshot,
                                               .compositionId = identity.compositionId,
@@ -469,10 +726,11 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                 }
                 return runtime::TaskResult<ui::PreparedPreviewFrameHandle>::succeeded(
                     selectedExactMember && sourceCount == 1
-                        ? planCpuReference(fixture,
-                                           std::make_shared<const runtime::CompiledCompositionPlan>(
-                                               std::move(independent)),
-                                           identity, identity.resolution)
+                        ? footageCpuReference(
+                              fixture,
+                              std::make_shared<const runtime::CompiledCompositionPlan>(
+                                  std::move(independent)),
+                              identity, oracleBudget)
                         : nullptr);
             });
         const auto reference = awaitResult(oracle.handle, 15s);

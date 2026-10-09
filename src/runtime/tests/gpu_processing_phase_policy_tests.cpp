@@ -259,6 +259,62 @@ void verifiedConstraintRemoval() {
             "last held phase owner releases normally under measured-zero quota");
 }
 
+void deliveredNumericView() {
+    const auto now = GpuProcessingPhasePolicy::Clock::now();
+    auto view = std::make_shared<TaskBudgetView>();
+    GpuProcessingPhasePolicy policy(4, {}, view);
+    require(!view->load(), "omitted default starts without delivered capacity");
+    const MemoryBudgetAllocation configured{.usableByteBudget = 36 * gib,
+                                            .operationCacheByteBudget = 18 * gib,
+                                            .previewFrameCacheByteBudget = 12 * gib};
+    auto delivered = sample(now);
+    delivered.configuredBytes = 30 * gib;
+    delivered.processingEffectiveBytes = 10 * gib;
+    delivered.process.domains[0].limitBytes = 128 * gib;
+    delivered.process.domains[0].currentBytes = 0;
+    policy.applyHostSample(delivered, 60 * gib, configured, now);
+    auto numeric = view->load();
+    require(numeric && numeric->fresh(now) && numeric->aggregateGpuBytes == 6 * gib &&
+                numeric->previewRequestBytes == gib,
+            "fresh delivered live processing shares determine defaults");
+    auto held = policy.reserve({.pixels = 1, .sourceFree = true, .native = false}, now);
+    require(held.lease != nullptr, "ordinary host phase admitted before default shrink");
+    const auto charged = policy.snapshot().reservations;
+    delivered.sampleSerial = 2;
+    delivered.process.sampledAt = now + std::chrono::seconds(1);
+    delivered.processingEffectiveBytes = 5 * gib;
+    policy.applyHostSample(delivered, 60 * gib, configured, delivered.process.sampledAt);
+    numeric = view->load();
+    require(numeric && numeric->aggregateGpuBytes == 3 * gib &&
+                numeric->previewRequestBytes == gib / 2 &&
+                policy.snapshot().reservations.hostReservedBytes == charged.hostReservedBytes,
+            "live default shrink keeps admitted phase unchanged");
+    delivered.sampleSerial = 3;
+    delivered.process.sampledAt = now + std::chrono::seconds(2);
+    delivered.processingEffectiveBytes = 20 * gib;
+    policy.applyHostSample(delivered, 60 * gib, configured, delivered.process.sampledAt);
+    numeric = view->load();
+    require(numeric && numeric->aggregateGpuBytes == 12 * gib &&
+                numeric->previewRequestBytes == 2 * gib,
+            "fresh delivered recovery grows numeric defaults without revoking held grant");
+    auto superseded = delivered;
+    superseded.sampleSerial = 1;
+    superseded.processingEffectiveBytes = 30 * gib;
+    policy.applyHostSample(superseded, 60 * gib, configured, delivered.process.sampledAt);
+    require(view->load() == numeric, "older delivery cannot replace numeric epoch with growth");
+    delivered.sampleSerial = 4;
+    delivered.process.sampledAt = now + std::chrono::seconds(3);
+    delivered.processSampleFresh = false;
+    policy.applyHostSample(delivered, 60 * gib, configured, delivered.process.sampledAt);
+    numeric = view->load();
+    require(numeric && !numeric->fresh(delivered.process.sampledAt) &&
+                policy.snapshot().reservations.hostReservedBytes == charged.hostReservedBytes,
+            "superseded process sampling closes default readiness without freeing live work");
+    held.lease.reset();
+    require(policy.snapshot().reservations.admittedPhases == 0,
+            "held grant finally releases under default readiness loss");
+}
+
 void envelope() {
     auto input = preview();
     auto packed = processingPhaseRequest(input);
@@ -356,6 +412,7 @@ int main(int argc, char** argv) {
         monotonicRecoveryAndSlots();
         malformedFallbackCannotRecover();
         verifiedConstraintRemoval();
+        deliveredNumericView();
         envelope();
         std::cout << "sampled paired policy/preview+final sizing PASS\n";
         return 0;

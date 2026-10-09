@@ -26,6 +26,7 @@ target_sources(
             include/bloom/runtime/task_completion.hpp
             include/bloom/runtime/task_scheduler.hpp
             include/bloom/runtime/task_types.hpp
+            include/bloom/runtime/task_budget_view.hpp
 )
 
 target_compile_features(bloom_runtime PUBLIC cxx_std_20)

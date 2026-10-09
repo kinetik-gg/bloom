@@ -53,7 +53,7 @@ struct CompositionPreviewSettings final {
     // so the request allowance follows the machine and the operator's memory overrides instead of a
     // fixed constant. A constrained injected budget still refuses cleanly and takes the honest CPU
     // fallback.
-    std::size_t pixelStorageByteLimit = runtime::gpuPreviewRequestByteAllowance();
+    std::optional<std::size_t> pixelStorageByteLimit = {};
     // The first Interactive request is immediate. Subsequent requests inside this 16 ms window
     // coalesce to the newest value; an active worker remains the admission gate.
     std::chrono::milliseconds interactiveTrailingCadence = std::chrono::milliseconds{16};
@@ -199,6 +199,7 @@ class CompositionPreviewController final : public QObject {
     void endRamPreviewProgress();
 
     [[nodiscard]] const CompositionPreviewSettings& settings() const noexcept;
+    [[nodiscard]] std::size_t effectivePixelStorageByteLimit() const noexcept;
     [[nodiscard]] runtime::EvaluationResolution resolution() const;
     [[nodiscard]] std::uint32_t resolutionDivisor() const noexcept;
     void setResolutionPolicy(runtime::PreviewResolutionPolicy policy);
@@ -348,10 +349,12 @@ class CompositionPreviewController final : public QObject {
     PreviewPreparationFunction preparation_;
     PreviewPreparationSubmitter submitter_;
     CompositionPreviewSettings settings_;
+    const std::size_t legacyPixelStorageByteLimit_ = runtime::gpuPreviewRequestByteAllowance();
     PreviewFrameCacheHandle frameCache_;
     CompositionPreviewState state_;
     std::shared_ptr<runtime::GpuProcessingPhasePolicy> processingPolicy_;
     std::optional<runtime::TaskAdmissionRetry> deferredAdmission_;
+    std::optional<runtime::TaskDefaultBudgetRetry> deferredDefaultBudget_;
     std::optional<ActiveRequest> active_;
     std::optional<PendingRequest> pending_;
     QTimer interactiveCadenceTimer_;

@@ -277,10 +277,7 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
     // retired. Prove that specific terminal failure before releasing its phase; unknown failures
     // and the device's independent unproven-submission latch remain conservative.
     const bool retiredBudgetRefusal =
-        poll == GpuSceneExecutorPollResult::Failure &&
-        executor->diagnostic().code == GpuSceneExecutorDiagnosticCode::OverBudget &&
-        !executor->deviceLost() && !executor->hasUnretiredSubmission() &&
-        !executor->ownerDrainRequired() && !outputColorUnretired();
+        gpuSceneExecutorBudgetRefusalRetired(*executor, poll) && !outputColorUnretired();
     phase.retired = poll == GpuSceneExecutorPollResult::Ready || retiredBudgetRefusal ||
                     (executor->diagnostic().code == GpuSceneExecutorDiagnosticCode::Cancelled &&
                      !executor->hasUnretiredSubmission() && !executor->ownerDrainRequired());

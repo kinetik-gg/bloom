@@ -19,15 +19,16 @@ runtime::TaskSubmission<ViewerChannelDisplayHandle>
 CompositionPreviewController::submitViewerChannelDisplay(PreparedPreviewFrameHandle frame,
                                                          const ViewerChannel channel,
                                                          const std::size_t retainedDisplayBytes) {
+    const auto pixelStorageByteLimit = effectivePixelStorageByteLimit();
     if (shuttingDown_ || !frame || !liveSessionMatches(frame->desiredIdentity()) ||
-        retainedDisplayBytes >= settings_.pixelStorageByteLimit)
+        retainedDisplayBytes >= pixelStorageByteLimit)
         return {};
     runtime::TaskRequest request(
         "Prepare Viewer channel",
         {.kind = runtime::TaskOwnerKind::PanelRequest,
          .id = runtime::TaskOwnerId::fromRaw(frame->desiredIdentity().compositionId.value())},
         runtime::TaskPriority::Visible);
-    const auto budget = settings_.pixelStorageByteLimit - retainedDisplayBytes;
+    const auto budget = pixelStorageByteLimit - retainedDisplayBytes;
     auto submission = scheduler_.submit<ViewerChannelDisplayHandle>(
         std::move(request),
         [frame = std::move(frame), channel, budget](runtime::TaskContext& context) {
@@ -81,7 +82,7 @@ CompositionPreviewController::submitViewerPreparation(
         runtime::TaskPriority::Visible);
     request.sourceVersion = {.documentRevision = identity.sourceRevision.value(),
                              .requestGeneration = identity.requestGeneration};
-    const auto budget = settings_.pixelStorageByteLimit;
+    const auto budget = effectivePixelStorageByteLimit();
     if (displayRoute && submitter_) {
         auto submission = submitter_(std::move(request), snapshot, identity, budget, overrides);
         if (submission.accepted())

@@ -116,6 +116,8 @@ residentOwnerDrainRequired(const std::shared_ptr<PreviewDisplayServiceCore>& cor
 // leave behind with an unretired submission).
 [[nodiscard]] bool residentDisplayHasUnretiredSubmission(
     const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
+[[nodiscard]] bool residentDisplayHasUnretiredSubmissionGeneral(
+    const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
 // True while the resident executor's own native-in-flight flag is set or any owned native pipeline
 // still holds an unretired submission. Broader than ownerDrainRequired().
 [[nodiscard]] bool residentExecutorHasUnretiredSubmission(

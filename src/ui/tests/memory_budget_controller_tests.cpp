@@ -1,6 +1,7 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
@@ -156,6 +157,62 @@ void teardown() {
     scheduler.beginShutdown();
     expect(spin([&] { return scheduler.isQuiescent(); }), "teardown scheduler retires");
 }
+void deliveredSettingsRecovery() {
+    runtime::MemoryBudgetLedger ledger(60 * gib, 60 * gib);
+    QTemporaryDir directory;
+    QSettings settings(directory.filePath("recovery.ini"), QSettings::IniFormat);
+    settings.setValue("playback/operation-cache-bytes", QString::number(18 * gib));
+    ui::setRamPreviewByteBudgetInSettings(settings, 12 * gib);
+    const auto configured = ui::cacheMemoryBudgetAllocationFromSettings(settings, ledger);
+    ledger.setConfiguredTotal(configured.operationCacheByteBudget +
+                              configured.previewFrameCacheByteBudget);
+    ledger.beginProcessSampling();
+    auto view = std::make_shared<runtime::TaskBudgetView>();
+    runtime::GpuProcessingPhasePolicy policy(32, {}, view);
+    const auto origin = runtime::MemoryBudgetLedger::Clock::time_point{};
+    const auto deliver = [&](const int seconds, const std::size_t available) {
+        const auto now = origin + std::chrono::seconds(seconds);
+        auto measured = sample();
+        measured.machine.availableBytes = available;
+        measured.process.status = runtime::ProcessMemoryStatus::Unsupported;
+        measured.process.domains.clear();
+        measured.process.sampledAt = now;
+        const auto applied = ledger.applySample(std::move(measured), now);
+        const auto allocation = ui::cacheMemoryBudgetAllocationFromSettings(settings, ledger);
+        expect(allocation == configured && ledger.state().configuredBytes == 30 * gib &&
+                   ledger.state().processingEffectiveBytes == applied.processingEffectiveBytes,
+               "same saved settings allocation is read-only during every delivered sample");
+        policy.applyHostSample(applied, ledger.physicalByteBudget(), allocation, now);
+        const auto published = view->load();
+        expect(published && published->sampleSerial == applied.sampleSerial &&
+                   published->aggregateGpuBytes <= applied.processingEffectiveBytes &&
+                   published->previewRequestBytes <= applied.processingEffectiveBytes / 4 &&
+                   published->assignedOperationBytes + published->assignedPreviewBytes <=
+                       applied.processingEffectiveBytes,
+               "published request/aggregate shares use live processing cap, not raw weights");
+        return applied;
+    };
+    auto state = deliver(0, 20 * gib);
+    expect(state.processingEffectiveBytes == 16 * gib && state.retentionPercent == 25,
+           "pressure establishes initial processing cap");
+    state = deliver(1, 10 * gib);
+    expect(state.processingEffectiveBytes == 16 * gib && state.retentionPercent == 10,
+           "same settings sample preserves five-second shrink cooldown");
+    state = deliver(6, 10 * gib);
+    expect(state.processingEffectiveBytes == 8 * gib, "shrink applies after cooldown");
+    state = deliver(10, 40 * gib);
+    expect(state.processingEffectiveBytes == 8 * gib && state.retentionPercent == 10,
+           "healthy delivery starts recovery hold without immediate default growth");
+    state = deliver(19, 40 * gib);
+    expect(state.processingEffectiveBytes == 8 * gib && state.retentionPercent == 10,
+           "repeated unchanged settings cannot bypass ten-second recovery hold");
+    state = deliver(20, 40 * gib);
+    const auto published = view->load();
+    expect(state.processingEffectiveBytes == 10 * gib && state.retentionPercent == 25 &&
+               published && published->aggregateGpuBytes == 6 * gib &&
+               published->previewRequestBytes == gib,
+           "first recovery growth stays at 25 percent and publishes proportional defaults");
+}
 void coldForegroundAndSettings() {
     auto& ledger = runtime::processMemoryBudgetLedger();
     ledger.beginProcessSampling();
@@ -244,6 +301,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     heldSampling();
     teardown();
+    deliveredSettingsRecovery();
     coldForegroundAndSettings();
     return failures == 0 ? 0 : 1;
 }

@@ -98,7 +98,8 @@ gpuSceneFailureDiagnostic(const bloom::runtime::PreparedGpuSceneDiagnostic& diag
                                                   : diagnostic.message,
             .detail = {},
             .suggestedAction = "Review the request and preview memory settings.",
-            .admissionRetry = diagnostic.admissionRetry};
+            .admissionRetry = diagnostic.admissionRetry,
+            .defaultBudgetRetry = diagnostic.defaultBudgetRetry};
 }
 
 } // namespace

@@ -218,6 +218,121 @@ void run(Expectations& checks) {
               << " actualPreparations=" << heavy.load() << " heldGuiPulses=" << pulses << "\n";
 }
 
+// Administrative sample-expiry proof; real CPU pixels are control recovery evidence here.
+void deliveredDefaultRetry(Expectations& checks) {
+    auto project = makeTestProject("Delivered default retry", timeAt(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, project.initialCompositionId);
+    checks.expect(session.addSolidLayer("Solid", {0.25, 0.5, 0.75, 1}), "default solid authored");
+    PipelineFixture fixture;
+    auto view = std::make_shared<runtime::TaskBudgetView>();
+    auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(4, nullptr, view);
+    auto config = twoWorkerConfig();
+    config.gpuRequestOwnedByteCapacity.reset();
+    config.budgetView = view;
+    std::atomic_size_t submissions{0}, preparations{0};
+    runtime::TaskScheduler scheduler(config);
+    ui::TaskUiBridge bridge(scheduler);
+    const auto stage = ui::makeCompositionPreviewCpuStage(
+        fixture.compiler, fixture.evaluator, fixture.qualifiedProcessorProvider, fixture.planCache);
+    runtime::GpuPreviewDisplayServiceOptions options;
+    options.enabled = false;
+    options.processingPhasePolicy = policy;
+    runtime::GpuPreviewDisplayService service(
+        scheduler,
+        [&, stage](const document::Snapshot& snapshot,
+                   const runtime::PreviewRequestIdentity& identity, const std::size_t bytes,
+                   const std::vector<runtime::SnapshotParameterOverride>& overrides,
+                   runtime::TaskContext& context) {
+            ++preparations;
+            return stage(snapshot, identity, bytes, overrides, context);
+        },
+        ui::makeCompositionPreviewCpuDisplayFallback(fixture.displayPreparer), options);
+    auto cache = std::make_shared<ui::PreviewFrameCache>(64 * 1024 * 1024);
+    bool expireAtAdmission = false;
+    const ui::PreviewPreparationSubmitter submitter =
+        [&](runtime::TaskRequest request, const document::Snapshot& snapshot,
+            const runtime::PreviewRequestIdentity& identity, const std::size_t bytes,
+            const std::vector<runtime::SnapshotParameterOverride>& overrides) {
+            ++submissions;
+            if (expireAtAdmission) {
+                expireAtAdmission = false;
+                auto expired = *view->load();
+                ++expired.sampleSerial;
+                expired.sampledAt -= std::chrono::seconds(11);
+                checks.expect(view->publish(expired), "expiry delivered after numeric selection");
+            }
+            return service.submit(std::move(request), snapshot, identity, bytes, overrides);
+        };
+    ui::CompositionPreviewSettings settings;
+    settings.resolutionPolicy = runtime::PreviewResolutionPolicy::Full;
+    const auto pipeline = ui::makeCompositionPreviewPipeline(
+        fixture.compiler, fixture.evaluator, fixture.displayPreparer,
+        fixture.qualifiedProcessorProvider, fixture.planCache);
+    ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline, settings,
+                                                cache, nullptr, submitter, {}, policy);
+    const auto readyAt = [&](const core::RationalTime time) {
+        return controller.state().activity == ui::PreviewActivity::Ready &&
+               controller.state().frame && controller.state().frame->desiredIdentity().time == time;
+    };
+    const auto failed = [&] { return controller.state().activity == ui::PreviewActivity::Failed; };
+    checks.expect(waitUntil(failed) && submissions == 0 && preparations == 0,
+                  "omitted cold default waits before any pixel work");
+    for (int index = 0; index < 20; ++index)
+        controller.notifyProcessingCapacityChanged();
+    checks.expect(submissions == 0, "unknown default pulses cannot spin");
+    const auto deliver = [&](const std::uint64_t serial) {
+        auto sample = capacity(serial);
+        sample.configuredBytes = 30 * gib;
+        sample.processingEffectiveBytes = 30 * gib;
+        policy->applyHostSample(sample, 60 * gib,
+                                {.usableByteBudget = 36 * gib,
+                                 .operationCacheByteBudget = 18 * gib,
+                                 .previewFrameCacheByteBudget = 12 * gib},
+                                sample.process.sampledAt);
+        controller.notifyProcessingCapacityChanged();
+    };
+    deliver(1);
+    checks.expect(waitUntil([&] { return readyAt(timeAt(0)); }) && preparations == 1,
+                  "first actual delivered default retries initial intent exactly once");
+    const auto lastGood = controller.state().frame;
+    expireAtAdmission = true;
+    checks.expect(session.setCurrentTime(timeAt(1)) && waitUntil(failed),
+                  "selected numeric request can expire before service admission");
+    checks.expect(preparations == 1 && submissions == 2 && controller.state().frame == lastGood &&
+                      !controller.state().diagnostics.empty() &&
+                      controller.state().diagnostics.front().defaultBudgetRetry.has_value(),
+                  "synchronous expiry rejection preserves typed serial/last-good without CPU work");
+    for (int index = 0; index < 20; ++index)
+        controller.notifyProcessingCapacityChanged();
+    checks.expect(submissions == 2 && preparations == 1,
+                  "same stale serial synchronous refusal never self-retries");
+    checks.expect(session.setCurrentTime(timeAt(2)) && waitUntil(failed) && submissions == 2,
+                  "stale default retains newest intent without submission");
+    deliver(3);
+    checks.expect(waitUntil([&] { return readyAt(timeAt(2)); }) && submissions == 3 &&
+                      preparations == 2,
+                  "one newer fresh serial recovers newest intent through actual CPU pipeline");
+    auto stale = *view->load();
+    stale.sampleSerial = 4;
+    stale.sampledAt -= std::chrono::seconds(11);
+    checks.expect(view->publish(stale), "stale view delivered for retained-frame seek");
+    checks.expect(session.setCurrentTime(timeAt(0)) && readyAt(timeAt(0)) && submissions == 3 &&
+                      preparations == 2,
+                  "known cached frame remains available during administrative readiness loss");
+    controller.beginShutdown();
+    service.beginShutdown();
+    bridge.beginShutdown();
+    checks.expect(waitUntil([&] { return scheduler.isQuiescent(); }), "default retry tasks retire");
+    const auto final = policy->snapshot().reservations;
+    checks.expect(final.admittedPhases == 0 && final.totalHostClaimBytes == 0 &&
+                      final.deviceReservedBytes == 0 && final.unprovenPhases == 0,
+                  "default readiness control leaves no claims");
+    std::cout << "delivered default retry: submissions=" << submissions
+              << " actualCpuPreparations=" << preparations << '\n';
+}
+
 // This is a CPU/control fixture for the real controller and neutral admission state. Genuine
 // rooted GPU pixels/publication are independently exercised by the packed native service test.
 class PackedRetryRetirement final {
@@ -414,6 +529,8 @@ int main(int argc, char** argv) {
         QApplication application(argc, argv);
         Expectations checks;
         run(checks);
+        if (!checks.failures())
+            deliveredDefaultRetry(checks);
         if (!checks.failures())
             packedProvisionalRetry(checks);
         return checks.failures() == 0 ? 0 : 1;

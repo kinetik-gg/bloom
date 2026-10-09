@@ -294,6 +294,18 @@ class GpuSceneExecutor final {
     std::unique_ptr<Impl> impl_;
 };
 
+// Proves only the executor's terminal budget refusal. Callers must additionally prove their
+// downstream display/output/transfer submissions retired; the device's unproven latch remains
+// independently authoritative.
+[[nodiscard]] inline bool
+gpuSceneExecutorBudgetRefusalRetired(const GpuSceneExecutor& executor,
+                                     const GpuSceneExecutorPollResult poll) noexcept {
+    return poll == GpuSceneExecutorPollResult::Failure &&
+           executor.diagnostic().code == GpuSceneExecutorDiagnosticCode::OverBudget &&
+           !executor.deviceLost() && !executor.hasUnretiredSubmission() &&
+           !executor.ownerDrainRequired();
+}
+
 struct GpuSceneExecutorCreateResult final {
     std::unique_ptr<GpuSceneExecutor> executor;
     GpuSceneExecutorDiagnostic diagnostic;

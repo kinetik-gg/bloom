@@ -41,7 +41,9 @@ void applyGpuResidentBudgetPlan(runtime::GpuPreviewDisplayServiceOptions& option
     options.residentLeaseBudgets.maxEntries = plan.leaseEntries;
     options.residentSceneCacheBudgets.maxRetainedBytes = plan.sceneCacheBytes;
     // Share the request headroom with the same pool: only ever lower the configured allowance.
-    if (plan.requestBytes > 0 && plan.requestBytes < options.previewByteAllowance) {
+    if (plan.requestBytes > 0 &&
+        plan.requestBytes <
+            options.previewByteAllowance.value_or(runtime::gpuPreviewRequestByteAllowance())) {
         options.previewByteAllowance = static_cast<std::size_t>(plan.requestBytes);
     }
 }

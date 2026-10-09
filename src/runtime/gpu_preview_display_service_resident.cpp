@@ -60,8 +60,17 @@ bool createAndQualifyResidentRoute(
             return false;
         }
         core->residentSceneCache = std::move(cache.cache);
-        auto executor = GpuSceneExecutor::create(*core->device, *core->residentSceneCache,
-                                                 core->options.residentExecutorBudgets);
+        auto executorBudgets =
+            core->options.residentExecutorBudgets.value_or(GpuSceneExecutorBudgets{});
+        if (!core->options.residentExecutorBudgets && core->options.processingPhasePolicy) {
+            // Construction allocates no image. A reusable-cache startup snapshot is not a
+            // separate producer ceiling for an admitted rooted request. begin() still applies
+            // the actual phase allowance, live-pin charges and native resource limits.
+            executorBudgets.maxImageBytes = core->options.previewByteAllowance.value_or(
+                core->effectivePreviewByteAllowance.load(std::memory_order_relaxed));
+        }
+        auto executor =
+            GpuSceneExecutor::create(*core->device, *core->residentSceneCache, executorBudgets);
         if (!executor) {
             retireResidentRoute(core);
             publishResidentDetail(

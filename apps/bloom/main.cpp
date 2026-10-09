@@ -94,7 +94,10 @@ int main(int argc, char* argv[]) try {
     // (both need a TaskExecutor::BlockingIo-capable scheduler; TaskSchedulerConfig::defaults()
     // already provisions one BlockingIo worker, so a single scheduler instance serves both).
     bloom::runtime::processMemoryBudgetLedger().beginProcessSampling();
-    bloom::runtime::TaskScheduler taskScheduler;
+    const auto taskBudgetView = std::make_shared<bloom::runtime::TaskBudgetView>();
+    auto taskConfig = bloom::runtime::TaskSchedulerConfig::defaults();
+    taskConfig.budgetView = taskBudgetView;
+    bloom::runtime::TaskScheduler taskScheduler(taskConfig);
     bloom::ui::ProjectHost projectHost(taskScheduler);
 
     auto [initialDocument, initialCommandStack] = projectHost.liveDocumentAndStack();
@@ -180,16 +183,26 @@ int main(int argc, char* argv[]) try {
         return 1;
     }
     auto& taskUiBridge = *taskUiBridgeOwner;
-    const auto processingPhasePolicy =
-        std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(32, packedHostRetirement);
+    const auto processingPhasePolicy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(
+        32, packedHostRetirement, taskBudgetView);
     bloom::ui::MemoryBudgetController memoryBudgetController(
         taskScheduler, taskUiBridge, bloom::runtime::processMemoryBudgetLedger());
-    QObject::connect(&memoryBudgetController, &bloom::ui::MemoryBudgetController::sampleApplied,
-                     &application, [processingPhasePolicy] {
-                         auto& ledger = bloom::runtime::processMemoryBudgetLedger();
-                         processingPhasePolicy->applyHostSample(ledger.state(),
-                                                                ledger.physicalByteBudget());
-                     });
+    bool processingCapacityInitialized = false;
+    QObject::connect(
+        &memoryBudgetController, &bloom::ui::MemoryBudgetController::sampleApplied, &application,
+        [processingPhasePolicy, &playbackSettings, &processingCapacityInitialized] {
+            auto& ledger = bloom::runtime::processMemoryBudgetLedger();
+            const auto physicalBytes = ledger.physicalByteBudget();
+            const auto allocation =
+                bloom::ui::cacheMemoryBudgetAllocationFromSettings(playbackSettings, ledger);
+            if (!processingCapacityInitialized && physicalBytes != 0) {
+                processingCapacityInitialized = true;
+                ledger.setConfiguredTotal(allocation.operationCacheByteBudget +
+                                          allocation.previewFrameCacheByteBudget);
+            }
+            const auto delivered = ledger.state();
+            processingPhasePolicy->applyHostSample(delivered, physicalBytes, allocation);
+        });
     // Explicit opt-in, one bounded numeric-only buffer. The path is only an export destination;
     // it and media locators never enter trace records. No formatting or I/O runs in UI callbacks.
     const QString previewTraceDestination = qEnvironmentVariable("BLOOM_PREVIEW_TRACE");
@@ -227,8 +240,8 @@ int main(int argc, char* argv[]) try {
                              bloom::runtime::processMemoryBudgetLedger().physicalByteBudget() == 0)
                              return;
                          cacheCapacityInitialized = true;
-                         const auto requested =
-                             bloom::ui::cacheMemoryBudgetsFromSettings(playbackSettings);
+                         const auto requested = bloom::ui::cacheMemoryBudgetAllocationFromSettings(
+                             playbackSettings, bloom::runtime::processMemoryBudgetLedger());
                          const auto videoBytes = std::min(std::size_t{256} * 1024U * 1024U,
                                                           requested.operationCacheByteBudget / 4U);
                          cpuEvaluator.setVideoCacheByteBudget(videoBytes);
@@ -272,6 +285,9 @@ int main(int argc, char* argv[]) try {
     const auto gpuResidentBudgetPlan =
         bloom::ui::gpuResidentBudgetPlanFor(cacheBudgets.previewFrameCacheByteBudget);
     bloom::ui::applyGpuResidentBudgetPlan(gpuPreviewDisplayOptions, gpuResidentBudgetPlan);
+    // Omit the request override: the shared delivered root view, not this cold cache partition,
+    // selects each request. The native owner separately resolves its finite physical pool.
+    gpuPreviewDisplayOptions.previewByteAllowance.reset();
     // The shared frame cache gets the matching additive GPU-resident sublimits. Its overall CPU
     // cache budget is unchanged; only the bounded resident subset is capped, and it evicts LRU
     // resident entries (dropping the cache's reference only) before the registry can refuse a
@@ -306,7 +322,7 @@ int main(int argc, char* argv[]) try {
         {.policy = processingPhasePolicy,
          .envelope = {.metadataBytes = 16ULL * 1024 * 1024,
                       .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
-                      .requestedExecutorBytes = gpuPreviewDisplayOptions.previewByteAllowance,
+                      .requestedExecutorBytes = std::nullopt,
                       // The general OCIO arm's 512 MiB ceiling plus concurrent transfer storage.
                       .deviceWorkingBytes = 512ULL * 1024 * 1024 +
                                             gpuPreviewDisplayOptions.packedTransferByteAllowance}});

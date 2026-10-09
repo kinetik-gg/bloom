@@ -39,6 +39,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -235,8 +236,12 @@ struct GpuPreviewDisplayServiceOptions final {
     // Bounded resident content-cache budget (retained intermediate GpuImages, actual VMA bytes).
     // This is a separate ledger from the lease registry and the executor's per-request budget.
     GpuSceneCacheBudgets residentSceneCacheBudgets{};
-    // Bounded resident executor per-request budget (LIVE unique pinned bytes) and structural caps.
-    GpuSceneExecutorBudgets residentExecutorBudgets{};
+    // Explicit producer/structural ceilings are honored verbatim, including combined image and
+    // staging peaks. A rooted omitted producer limit follows the explicit preview ceiling, or
+    // the finite owner-resolved physical request ceiling when a live default view is injected.
+    // Each request still applies its delivered/default or explicit allowance, admitted phase,
+    // live pins and native resource limits. Unrooted omission retains legacy producer budgets.
+    std::optional<GpuSceneExecutorBudgets> residentExecutorBudgets = {};
     // Bounded resident display pipeline owned-bytes budget per job.
     render::GpuResidentDisplayBudgets residentDisplayBudgets{};
     // Concurrent packed transfer staging/host capacity, separate from the display's native owner.
@@ -246,7 +251,9 @@ struct GpuPreviewDisplayServiceOptions final {
     GpuResidentPreviewBudgets residentQualificationBudgets{};
     // Bounded presentation coordinator admission/overlay/drain options.
     GpuPresentationCoordinatorOptions presentationCoordinator{};
-    std::size_t previewByteAllowance = gpuPreviewRequestByteAllowance();
+    // Omitted limits use the explicit root numeric view when injected; no-view owners retain
+    // their legacy construction-time default. Explicit finite ceilings are never enlarged.
+    std::optional<std::size_t> previewByteAllowance = {};
     render::GpuNeutralDisplayBudgets nativeBudgets{};
     // Bounded per-native-dispatch deadline. Expiry drains/quarantines the native pipeline on
     // the owner thread, disables GPU, and takes the same-frame CPU fallback (or cancels).

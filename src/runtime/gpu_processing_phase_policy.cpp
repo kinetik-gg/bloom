@@ -1,3 +1,4 @@
+#include <bloom/runtime/gpu_memory_budget.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
 #include <algorithm>
@@ -53,15 +54,16 @@ processingPhaseRequest(const GpuProcessingPhaseEnvelope& envelope) noexcept {
                                              .minimumSourceBytes = envelope.minimumSourceBytes,
                                              .deviceWorkingBytes = envelope.deviceWorkingBytes,
                                              .requestedExecutorBytes =
-                                                 envelope.requestedExecutorBytes,
+                                                 envelope.requestedExecutorBytes.value_or(0),
                                              .minimumExecutorBytes = envelope.minimumExecutorBytes,
                                              .sourceFree = envelope.sourceFree,
                                              .native = envelope.native};
 }
 GpuProcessingPhasePolicy::GpuProcessingPhasePolicy(
     const std::size_t requestCapacity,
-    const std::shared_ptr<render::PackedHostRetirementOwner>& retirementOwner)
-    : budget_(requestCapacity, retirementOwner) {}
+    const std::shared_ptr<render::PackedHostRetirementOwner>& retirementOwner,
+    std::shared_ptr<TaskBudgetView> budgetView)
+    : budget_(requestCapacity, retirementOwner), budgetView_(std::move(budgetView)) {}
 void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
                                                const std::size_t physicalBytes,
                                                const Clock::time_point now) noexcept {
@@ -130,6 +132,47 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
         hostSampleAt_ = sample.process.sampledAt;
     }
     budget_.setHostCapacity(allowance, ready);
+}
+void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
+                                               const std::size_t physicalBytes,
+                                               const MemoryBudgetAllocation& allocation,
+                                               const Clock::time_point now) noexcept {
+    applyHostSample(sample, physicalBytes, now);
+    if (!budgetView_)
+        return;
+    const auto current = snapshot();
+    if (current.sampleSerial != sample.sampleSerial)
+        return;
+    const auto host = current.reservations.hostCapacityBytes.value_or(0);
+    const auto hostCeiling = static_cast<std::size_t>(
+        std::min<std::uint64_t>(host, std::numeric_limits<std::size_t>::max()));
+    // Configured shares are ceilings/weights, not permission to skip the ledger's timed host
+    // recovery. Scale from the delivered LIVE processing cap, independently of reusable credit.
+    const auto configured =
+        std::max(static_cast<long double>(sample.configuredBytes),
+                 static_cast<long double>(allocation.operationCacheByteBudget) +
+                     static_cast<long double>(allocation.previewFrameCacheByteBudget));
+    const auto live = std::min(sample.processingEffectiveBytes, allocation.usableByteBudget);
+    const auto assigned = [configured, live](const std::size_t ceiling) {
+        return configured == 0
+                   ? std::size_t{0}
+                   : static_cast<std::size_t>(static_cast<long double>(ceiling) *
+                                              std::min(configured, static_cast<long double>(live)) /
+                                              configured);
+    };
+    const auto operation = assigned(allocation.operationCacheByteBudget);
+    const auto preview = assigned(allocation.previewFrameCacheByteBudget);
+    const auto aggregate = std::min(hostCeiling, operation);
+    const auto request = std::min(aggregate, gpuPreviewRequestByteAllowanceFor(preview));
+    static_cast<void>(
+        budgetView_->publish({.sampleSerial = current.sampleSerial,
+                              .sampledAt = sample.process.sampledAt,
+                              .ready = current.reservations.hostReady &&
+                                       sample.processSampleFresh && !sample.awaitingProcessSample,
+                              .assignedPreviewBytes = preview,
+                              .assignedOperationBytes = operation,
+                              .previewRequestBytes = request,
+                              .aggregateGpuBytes = aggregate}));
 }
 bool GpuProcessingPhasePolicy::reportDevice(const std::uint64_t ownershipEpoch,
                                             const render::GpuAllocationBudget report) noexcept {

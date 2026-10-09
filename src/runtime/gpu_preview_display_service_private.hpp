@@ -334,11 +334,19 @@ struct PreviewDisplayServiceCore final {
         return qualification;
     }
 
-    // Effective per-request admission allowance. Never above the configured value; the owner lowers
-    // it exactly once after resolving the device capacity.
+    // Effective request allowance. Explicit ceilings are only lowered by physical ownership;
+    // omitted live defaults may grow/shrink within the finite owner-resolved physical ceiling.
     [[nodiscard]] std::size_t previewByteAllowance() const noexcept {
-        return static_cast<std::size_t>(
-            effectivePreviewByteAllowance.load(std::memory_order_relaxed));
+        const auto ownerCeiling =
+            static_cast<std::size_t>(effectivePreviewByteAllowance.load(std::memory_order_relaxed));
+        if (!options.previewByteAllowance && options.processingPhasePolicy &&
+            options.processingPhasePolicy->budgetView()) {
+            const auto delivered = options.processingPhasePolicy->budgetView()->load();
+            return delivered && delivered->fresh()
+                       ? std::min(ownerCeiling, delivered->previewRequestBytes)
+                       : 0;
+        }
+        return ownerCeiling;
     }
 
     void publishState(GpuPreviewDisplayServiceState next, bool available,

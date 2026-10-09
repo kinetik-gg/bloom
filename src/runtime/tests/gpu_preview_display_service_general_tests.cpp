@@ -388,7 +388,7 @@ int run(const int argc, char** argv) {
         defaultOptions.residentLeaseBudgets.maxBytes = defaultConfiguredPlan.leaseBytes;
         defaultOptions.residentSceneCacheBudgets.maxRetainedBytes =
             defaultConfiguredPlan.sceneCacheBytes;
-        defaultOptions.residentExecutorBudgets = bloom::runtime::GpuSceneExecutorBudgets{};
+        defaultOptions.residentExecutorBudgets.reset();
         defaultOptions.previewByteAllowance = defaultConfiguredPlan.requestBytes;
         GpuPreviewDisplayService defaultService(
             defaultScheduler, generalStageFunction(bigPlan, builder, programService, processor),
@@ -488,13 +488,13 @@ int run(const int argc, char** argv) {
             ledgerAllocation.previewFrameCacheByteBudget);
         // Capacity options exactly as gpu_preview_app derives them: the configured resident plan
         // from the ledger preview budget, and the PRODUCTION executor image ceiling (the test
-        // harness's ad hoc 256 MiB cap is deliberately replaced with the app's ledger-derived
-        // default).
+        // harness's explicit 256 MiB cap is omitted here to exercise the legacy unrooted
+        // ledger-derived default).
         productionOptions.residentLeaseBudgets.maxBytes = configuredPlan.leaseBytes;
         productionOptions.residentSceneCacheBudgets.maxRetainedBytes =
             configuredPlan.sceneCacheBytes;
         productionOptions.previewByteAllowance = configuredPlan.requestBytes;
-        productionOptions.residentExecutorBudgets = runtime::GpuSceneExecutorBudgets{};
+        productionOptions.residentExecutorBudgets.reset();
         GpuPreviewDisplayService productionService(
             productionScheduler,
             generalStageFunction(mediaPlan, mediaBuilder, programService, processor),

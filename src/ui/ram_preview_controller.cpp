@@ -330,12 +330,12 @@ void RamPreviewController::requestFrames() {
         runtime::TaskSubmission<PreviewPreparationResultHandle> submission;
         if (submitter_) {
             submission = submitter_(std::move(request), snapshot, desiredIdentity,
-                                    previewController_.settings().pixelStorageByteLimit, {});
+                                    previewController_.effectivePixelStorageByteLimit(), {});
         } else {
             submission = scheduler_.submit<PreviewPreparationResultHandle>(
                 std::move(request),
                 [snapshot, desiredIdentity,
-                 pixelStorageByteLimit = previewController_.settings().pixelStorageByteLimit,
+                 pixelStorageByteLimit = previewController_.effectivePixelStorageByteLimit(),
                  preparation = preparation_](runtime::TaskContext& context) mutable {
                     if (context.isCancellationRequested()) {
                         return runtime::TaskResult<PreviewPreparationResultHandle>::cancelled();
