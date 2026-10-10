@@ -76,6 +76,7 @@ class DynamicLibrary final {
 // fail closed rather than race a device.
 // Private one-shot owner-thread fault control; None is the production path.
 enum class NativeImageAllocationFault : std::uint8_t { None, Allocation, Reconcile, Bind, View };
+enum class NativeBufferAllocationFault : std::uint8_t { None, Allocation, Reconcile, Bind, Map };
 
 struct DeviceAllocatorState final {
     DeviceAllocatorState() = default;
@@ -101,6 +102,8 @@ struct DeviceAllocatorState final {
     // Owner-only backing-call witness, distinct from unbound-image/requirements queries.
     std::uint64_t nativeImageBackingAttempts = 0;
     std::uint64_t nativeImageBackingsDestroyed = 0;
+    std::uint64_t nativeBufferBackingAttempts = 0;
+    std::uint64_t nativeBufferBackingsDestroyed = 0;
     std::uint64_t presentationEpoch = 0;
     std::uint64_t borrowedInstanceBits = 0;
     std::uint64_t maxStorageBufferRange = 0;
@@ -111,6 +114,7 @@ struct DeviceAllocatorState final {
     // lease points only to a neutral ledger, never back to this generation (no reference cycle).
     std::shared_ptr<GpuProcessingPhaseLease> processingPhase;
     std::optional<NativeImageStorageRefusal> imageStorageRefusal;
+    std::optional<NativeBufferStorageRefusal> bufferStorageRefusal;
     // Native RAII declaration order is deliberate: queues/device/instance die before the loader.
     DynamicLibrary loader;
     vk::raii::Instance instance{nullptr};
@@ -124,6 +128,7 @@ struct DeviceAllocatorState final {
 
     // Nonzero private domain-control mask intersects real image requirements; 0 is unmodified.
     std::uint32_t nativeImageMemoryTypeMaskForTests = 0;
+    std::uint32_t nativeBufferMemoryTypeMaskForTests = 0;
     std::uint32_t computeQueueFamily = 0;
     std::uint32_t presentQueueFamily = 0;
     std::uint32_t generation = 0;
@@ -136,6 +141,7 @@ struct DeviceAllocatorState final {
     // Scoped private format-fallback control; production retains actual capability selection.
     bool processingPhaseUnproven = false;
     NativeImageAllocationFault nativeImageAllocationFault = NativeImageAllocationFault::None;
+    NativeBufferAllocationFault nativeBufferAllocationFault = NativeBufferAllocationFault::None;
     // Immutable presentation bootstrap facts, resolved only on the owner thread.
     bool presentationRequested = false;
     bool presentationReady = false;

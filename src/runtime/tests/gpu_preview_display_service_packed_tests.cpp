@@ -153,6 +153,8 @@ bool matrix(Expectations& checks, const TestOptions& options,
         full->displayOnlyFrame()->packedHostOwnership() ==
                 bloom::render::PackedRgba8Ownership::RootedPublished &&
             ownedFull.hostReservedBytes == 0 && ownedFull.admittedPhases == 0 &&
+            ownedFull.ownedNativeBuffers == 0 && ownedFull.ownedNativeBufferBytes == 0 &&
+            ownedFull.ownedNonlocalNativeBufferHostBytes == 0 &&
             ownedFull.ownedPackedHostAllocations == 1 &&
             ownedFull.ownedPackedHostBytes ==
                 full->provenance().gpuPreparedPacked->transfer.hostStorageBytes &&
@@ -179,11 +181,14 @@ bool matrix(Expectations& checks, const TestOptions& options,
                           warm->provenance().gpuPreparedPacked == proof,
                       "retained packed product reuse shares immutable bytes and sealed evidence");
     }
-    checks.expect(
-        service.status().counters == beforeWarm && preparationCount->load() == beforePreparation &&
-            policy->snapshot().reservations.ownedPackedHostAllocations == 1 &&
-            policy->snapshot().reservations.ownedPackedHostBytes == ownedFull.ownedPackedHostBytes,
-        "retained packed reuse adds no scene preparation/dispatch or repeated transfer");
+    checks.expect(service.status().counters == beforeWarm &&
+                      preparationCount->load() == beforePreparation &&
+                      policy->snapshot().reservations.ownedPackedHostAllocations == 1 &&
+                      policy->snapshot().reservations.ownedPackedHostBytes ==
+                          ownedFull.ownedPackedHostBytes &&
+                      policy->snapshot().reservations.ownedNativeBufferBytes == 0 &&
+                      policy->snapshot().reservations.ownedNativeBuffers == 0,
+                  "retained packed reuse adds no scene preparation/dispatch or repeated transfer");
     const auto halfExtent = bloom::render::ImageExtent::create(960, 540);
     identity.requestGeneration = 202;
     identity.resolution = bloom::runtime::ProxyResolution{*halfExtent.value()};
@@ -339,8 +344,9 @@ int run(int argc, char** argv) {
                       document.snapshot(), shutdownProof);
     if (checks.failures())
         return 1;
-    std::cout << (shutdownProof ? "PASS: bounded shutdown quarantine reservation/context\n"
-                                : "PASS: offscreen GPU packed parity/reuse/late-cancel/detach\n");
+    std::cout << (shutdownProof
+                      ? "PASS: packed unproven staging and actual owner/generation retirement\n"
+                      : "PASS: offscreen GPU packed parity/reuse/late-cancel/detach\n");
     return 0;
 }
 #else

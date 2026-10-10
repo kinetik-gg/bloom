@@ -294,6 +294,9 @@ struct PreviewDisplayServiceCore final {
     // Private test-only arm immediately before the real final shared payload allocation. Empty
     // in production; an allocator interceptor can inject an actual one-shot allocation fault.
     std::function<void()> testBeforePackedPayloadAllocation;
+    // Private owner observation after the real phase becomes unproven, before native teardown.
+    // Empty in production; never changes fence results, admission or release authority.
+    std::function<void()> testBeforePackedUnprovenTeardown;
     // Resident-route fault seam (test-only; never set in production). The overrides let a test
     // force a deterministic stalled/unknown-fence retirement and observe that the production
     // Retiring code retains the stage, completion and request-owned admission until the override

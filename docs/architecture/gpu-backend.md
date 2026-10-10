@@ -1289,6 +1289,56 @@ No buffer/WSI/external,
 whole-native, block/physical/UMA/OOM, sustained-performance or other-platform qualification is
 adopted by this incremental checkpoint.
 
+### Rooted display-transfer staging buffer ownership (bounded staging slice)
+
+The first buffer follow-on adopts only the transient staging backing of `GpuDisplayTransfer`.
+`NativeBufferStorageToken` moves with that backing into the existing native transfer slot and
+quarantine. `ownedNativeBufferBytes`, `ownedNativeBuffers` and the overlapping
+`ownedNonlocalNativeBufferHostBytes` distinguish these suballocations from owned images and packed
+host payloads. They do not measure committed VMA blocks, driver overhead or process physical memory.
+
+The rooted path creates one actual unbound buffer, queries its requirements and dedicated flags,
+and preserves the original compatible-type restrictions while VMA ranks a shrinking candidate mask.
+A pinned allocation retains the original random-access/mapped flags and explicitly requires
+HOST_VISIBLE. Actual allocation size, type, heap, allocator epoch and mapped pointer are checked
+before submission. HOST_VISIBLE on a DEVICE_LOCAL heap is not classified as nonlocal host backing;
+physical overlap on UMA remains unknown. Unrooted buffers retain their legacy unowned path.
+
+Native bytes and, for a nonlocal heap, already-planned host staging bytes transfer atomically from
+the exact retained phase. Both total claims remain unchanged. This is conversion of an admitted
+working grant, not the image token's additive nonlocal host claim or a new sample-dependent grant.
+The declared staging-plus-output transfer allowance remains independent of the source image grant.
+Insufficient paired debit refuses before a VMA backing attempt, although the unbound buffer may
+already exist. Actual backing destruction precedes token foldback; its final phase alias drops
+outside the ledger mutex. No cache promotion, extra queue or allocation/frame-count cap is added.
+
+Foreign final release of a Pending transfer hands its preowned resources, token and pixels to the same slot
+without allocation or driver work. A live Reserved slot is not reclaimable. Quarantined and Retiring
+states remain pending for the exact generation through actual fence polling and destruction outside
+the handoff lock; wrong-owner ticks do nothing. A closed owner's late handoff remains incomplete
+rather than being reported as reclaimed. Preview and final owner exit now check this pending
+transfer before acknowledging device/report retirement. Proven buffer refusal metadata uses the
+existing typed phase-release retry boundary; an error code alone is not retirement proof.
+
+Actual native identity, fault, nonlocal conversion, foreign handoff and same-generation recovery
+checks pass. The production submitted-sticky witness separately retains buffer, phase and unproven
+charges through an incomplete shutdown wait, then reaches covered zero through actual owner and
+generation retirement. These privately overridden observations are not driver hangs, and the
+independent unknown-report latch is not cleared. Neutral/General Full/Half/ROI CPU pixel parity,
+retained aliases and cancellation/detach checks also pass. The actual device helper, three UI
+preparation/control owners and genuine packed QWidget Viewer pass separately; UI controls alone
+are not native pixel proof. All six required production writers pass the fresh fourteen-check
+route gate. All 325 desktop owned-TU strict checks pass without diagnostics or repairs through
+five prefix units and 320 disjoint consumers. The fresh Linux CPU-stub application/CLI/media and
+eight selected fallback owners build and pass with explicit native-unavailable provenance. All
+sixteen distinct fallback strict checks pass without diagnostics. The first final-quality run
+passes all repository checks, and the source-aligned application/CLI/media identities pass readback
+with zero missing dependencies. Exact integrated review, selective commit and verified packaging
+follow the bounded qualification recorded in the
+[owning plan](../plans/gpu-reliability-and-preview.md). Other upload, process, final/readback and
+staging buffer creators remain unowned by this slice. No whole-buffer/native, physical/UMA/OOM,
+performance or other-platform execution qualification is adopted here.
+
 ### Rooted packed-host payload ownership (bounded ownership slice)
 
 This narrow G6B slice tracks allocator-requested RGBA8 pixel payloads for explicitly rooted

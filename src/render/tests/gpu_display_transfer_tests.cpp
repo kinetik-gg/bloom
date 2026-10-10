@@ -1,9 +1,11 @@
 #include "gpu_composite_native_support.hpp"
 #include "gpu_device_private.hpp"
 #include "gpu_display_transfer_fault.hpp"
+#include "gpu_native_buffer_allocation_private.hpp"
 #include "gpu_resident_display_private.hpp"
 
 #include <bloom/render/gpu_display_transfer.hpp>
+#include <bloom/render/packed_host_retirement.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -54,7 +56,8 @@ GpuDisplayTransferState complete(GpuDisplayTransfer& transfer) {
 
 void roundTrip(Expectations& checks, GpuDevice& device,
                const std::shared_ptr<const GpuDisplayImage>& source,
-               const GpuDeviceCreationOptions& options) {
+               const GpuDeviceCreationOptions& options,
+               const std::shared_ptr<GpuProcessingPhaseLease>& phase = {}) {
     const auto oracle = readbackResidentDisplayImage(*source, kBudget);
     checks.expect(oracle.hasValue(), "debug oracle exists only in test");
     const auto w = window(-3, 7, 8, 4);
@@ -72,7 +75,7 @@ void roundTrip(Expectations& checks, GpuDevice& device,
                 "CPU reference maps each row");
     }
     GpuDisplayTransfer transfer;
-    checks.expect(transfer.begin(device, source, kBudget), "final RGBA8 transfer admitted");
+    checks.expect(transfer.begin(device, source, kBudget, phase), "final RGBA8 transfer admitted");
     const auto retention = transfer.retention();
     const auto pendingBytes = retention->snapshot();
     checks.expect(pendingBytes.sourceBytes == source->allocationBytes() &&
@@ -87,7 +90,7 @@ void roundTrip(Expectations& checks, GpuDevice& device,
     checks.expect(gpuDisplayImageImpl(*source)->submissionUnretired.load(),
                   "source cannot admit a competing readback until retirement");
     GpuDisplayTransfer busy;
-    checks.expect(!busy.begin(device, source, kBudget),
+    checks.expect(!busy.begin(device, source, kBudget, phase),
                   "second submission cannot steal live source");
     checks.expect(complete(transfer) == GpuDisplayTransferState::Ready, "transfer completes");
     checks.expect(transfer.isOwnerThread() && !transfer.hasUnretiredSubmission() &&
@@ -125,11 +128,11 @@ void roundTrip(Expectations& checks, GpuDevice& device,
               << " staging=" << charge.stagingAllocationBytes << " host=" << charge.hostStorageBytes
               << " source=" << charge.sourceAllocationBytes << '\n';
     GpuDisplayTransfer refusal;
-    checks.expect(!refusal.begin(device, source, charge.peakTransferBytes - 1) &&
+    checks.expect(!refusal.begin(device, source, charge.peakTransferBytes - 1, phase) &&
                       refusal.diagnostic().code == GpuDisplayTransferCode::OverBudget &&
                       refusal.accounting().submissions == 0 && !refusal.hasUnretiredSubmission(),
                   "real concurrent allocation budget refusal submits nothing");
-    checks.expect(refusal.reset() && refusal.begin(device, source, charge.peakTransferBytes),
+    checks.expect(refusal.reset() && refusal.begin(device, source, charge.peakTransferBytes, phase),
                   "refused primitive can admit exact measured budget");
     checks.expect(complete(refusal) == GpuDisplayTransferState::Ready,
                   "exact measured budget completes");
@@ -137,14 +140,15 @@ void roundTrip(Expectations& checks, GpuDevice& device,
     checks.expect(!refusal.take() && refusal.diagnostic().code == GpuDisplayTransferCode::Cancelled,
                   "cancelled Ready discards packed host storage");
     GpuDisplayTransfer overflow;
-    checks.expect(!overflow.begin(device, source, UINT64_MAX) &&
+    checks.expect(!overflow.begin(device, source, UINT64_MAX, phase) &&
                       overflow.diagnostic().code == GpuDisplayTransferCode::OverBudget &&
                       !overflow.hasUnretiredSubmission(),
                   "maximum budget cannot wrap reservation to zero");
-    checks.expect(overflow.reset() &&
-                      !overflow.begin(device, source, UINT64_MAX - source->allocationBytes() + 1) &&
-                      overflow.diagnostic().code == GpuDisplayTransferCode::OverBudget,
-                  "exact-wrap budget cannot advertise an empty live reservation");
+    checks.expect(
+        overflow.reset() &&
+            !overflow.begin(device, source, UINT64_MAX - source->allocationBytes() + 1, phase) &&
+            overflow.diagnostic().code == GpuDisplayTransferCode::OverBudget,
+        "exact-wrap budget cannot advertise an empty live reservation");
     GpuDisplayTransfer wrongDevice;
     checks.expect(!wrongDevice.begin(*other.device, source, kBudget) &&
                       wrongDevice.diagnostic().code == GpuDisplayTransferCode::DeviceUnavailable,
@@ -250,6 +254,7 @@ void quarantine(Expectations& checks, GpuDevice& device,
                       destroyedReservation->snapshot().stagingBytes == 0,
                   "only genuine fence retirement releases orphaned reservation");
 }
+#include "gpu_display_transfer_storage_tests.ipp"
 } // namespace
 
 int main(int argc, char** argv) {
@@ -272,6 +277,8 @@ int main(int argc, char** argv) {
             ownerAndCancellation(checks, *device.device, source);
             quarantine(checks, *device.device, source);
         }
+        actualBufferStorage(*device.device);
+        rootedBufferTransfers(checks, *device.device, creation);
         if (checks.failures())
             return 1;
         std::cout

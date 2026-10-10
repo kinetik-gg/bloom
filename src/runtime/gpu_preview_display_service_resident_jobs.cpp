@@ -110,8 +110,22 @@ void finishResidentImmediately(const std::shared_ptr<PreviewDisplayServiceCore>&
     if (nativeFailure) {
         core->counterResidentFailures.fetch_add(1, std::memory_order_relaxed);
     }
-    const auto storageRefusal =
-        core->device ? core->device->nativeImageStorageRefusal() : std::nullopt;
+    struct StorageRefusal final {
+        render::GpuProcessingPhaseAdmission status;
+        std::uint64_t phaseId;
+        std::uint64_t revisionAfterOwnRelease;
+        bool buffer;
+    };
+    std::optional<StorageRefusal> storageRefusal;
+    if (core->device) {
+        if (const auto refusal = core->device->nativeBufferStorageRefusal()) {
+            storageRefusal = {refusal->status, refusal->phaseId, refusal->revisionAfterOwnRelease,
+                              true};
+        } else if (const auto imageRefusal = core->device->nativeImageStorageRefusal()) {
+            storageRefusal = {imageRefusal->status, imageRefusal->phaseId,
+                              imageRefusal->revisionAfterOwnRelease, false};
+        }
+    }
     if (storageRefusal && !residentDeviceLost(core) && !residentOwnerDrainRequired(core) &&
         !residentExecutorHasUnretiredSubmission(core) &&
         !residentDisplayHasUnretiredSubmission(core) &&
@@ -144,7 +158,9 @@ void finishResidentImmediately(const std::shared_ptr<PreviewDisplayServiceCore>&
             storageRefusal->status == render::GpuProcessingPhaseAdmission::AwaitingCapacity
                 ? "preview.processing-phase.awaiting-capacity"
                 : "preview.processing-phase.budget-refused",
-            "The native image allocation is awaiting processing capacity.");
+            storageRefusal->buffer
+                ? "The native staging buffer is awaiting processing capacity."
+                : "The native image allocation is awaiting processing capacity.");
         diagnostic.admissionRetry =
             TaskAdmissionRetry{storageRefusal->revisionAfterOwnRelease, true};
         completeFailed(stage, {std::move(diagnostic)});
@@ -832,6 +848,8 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             }
             stage->processingPhaseFailed = true;
             releaseProcessingPhase(core, stage, false);
+            if (transferQuarantined && core->testBeforePackedUnprovenTeardown)
+                core->testBeforePackedUnprovenTeardown();
             teardownTerminalResidentRoute(core);
             if (transferQuarantined) {
                 publishResidentJobDetail(core,

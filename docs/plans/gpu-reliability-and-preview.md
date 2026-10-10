@@ -45,6 +45,7 @@ and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 | Preview live-default propagation / mounted-footage B | Bounded companion qualified | Explicit versus omitted producer/request limits, neutral numeric delivery and proved OverBudget retirement; ordinary Full/Half, explicit-cap recovery and independent unknown ownership pass; configured B witnesses remain separate |
 | G6B rooted native image suballocations | Bounded two-family qualification gates pass | Exact VMA type/heap/size, pre-backing domain claims, unique cache/alias ownership, real submitted unknown retention, pixels/refusal/recovery/warm return, required routes and affected strict/Linux fallback/quality; not all-native/block/physical accounting |
 | G6B rooted OCIO sampled-LUT images | Bounded LUT qualification gates pass | Exact pre-begin phase/root/device affinity, move-only LUT tokens, native-owner retirement, actual dimensional/nonlocal/fault/parity/prefix and both textured-cache evidence; selected owners, six routes, 324 desktop strict, fifteen distinct Linux fallback strict, final quality and source-aligned artifact checks pass; buffers and broader memory qualification remain separate |
+| G6B rooted display-transfer staging buffer | Bounded staging qualification gates pass | Existing phase native/planned-host debit, exact VMA suballocation identity, same-slot foreign/fence retirement and exact-generation exit; native/Viewer/six-route, 325 desktop and sixteen distinct fallback strict, Linux CPU-stub, final quality and artifact readbacks pass; other buffer creators are excluded |
 | G4C prerequisite | Accepted only as the bounded cold-progress prerequisite | One active/newest intent, useful older Stale publication and guarded pause/shutdown pass source review and short real playing pixels; remaining G4 scheduling is pending |
 | G7A / G9 bounded display work | Packed immutable borrowing, off-UI CPU channel derivation and finished-display host choice accepted | Explicit provenance and measured bytes; remaining CPU storage/process/channel work and broader cache policy remain pending |
 | G8 optional two-frame throughput | Investigation complete; implementation and benchmark pending | Source confirms per-service frame serialization; no multi-frame speedup or GPU-utilization result is established |
@@ -412,6 +413,71 @@ unrooted allocation ownership, committed blocks/driver/process/UMA accounting, O
 performance and platform qualification remain open. After closure, the same owner proceeds to the
 bounded buffer ownership slice before later source reuse/presentation, within-frame batching,
 measured width-two experiments and sustained/fault/platform evidence.
+
+Rooted display-transfer staging follow-on (2026-10-10), qualified within this bounded staging scope:
+the [owning contract](../architecture/gpu-backend.md#rooted-display-transfer-staging-buffer-ownership-bounded-staging-slice)
+adopts only this transient buffer family. The separately accepted six-file neutral core checks
+paired native/planned-host conversion, refusal and foldback, with three owning tests, a four-unit
+strict closure (three initial passes and one guarded-fixture rerun), and actual sanitizer checks.
+It does not itself prove Vulkan backing. The current 23-path integration adds the actual same-buffer
+requirements/ranked allocation path, retained token, existing transfer slot and exact-generation
+preview/final exit guards. Nonlocal host bytes replace the admitted host debit; they do not add a
+second staging grant. The native and host subset counters overlap rather than form a physical sum.
+
+The actual whole transfer helper passes in 300 ms (26.1 MiB), separately from the earlier legacy
+243 ms and rooted 298 ms checkpoints. It checks actual size/type/heap/epoch, HOST_VISIBLE mapping,
+original mask restrictions, and one-byte-short native, transfer and planned-host refusals with zero
+VMA backing attempts. Compatible nonlocal 128-byte conversion under stale/shrunken delivered
+capacity preserves both total claims. Allocation rejection is a private pre-VMA control, not real
+OOM; reconcile/bind/map and command controls preserve destruction-before-foldback. Reserved ticks
+and wrong-owner reclamation are inert; foreign Pending release retains backing and pixels until
+actual native fence retirement, and the next same-generation transfer succeeds. Its overridden
+observed timeout after real submission is separate from the production sticky-phase witness.
+
+The production packed sticky helper passes in 2.426 s (313.9 MiB). Actual submitted staging retains
+8,294,400 native bytes, one buffer and the same 8,294,400-byte nonlocal host subset, alongside exactly
+one phase and one unproven phase. A 50 ms owner-gated shutdown wait remains incomplete. Removing
+only the private observation overrides and gate permits actual backing/generation retirement;
+covered image, buffer, packed and phase claims reach zero before Stopped. The independent unknown
+device-report latch remains untouched. This is controlled observation after genuine submit, not an
+actual GPU hang. The older rootless fixture's permanent post-Stopped retention expectations are
+preserved as superseded fixture history, not adopted behavior.
+
+The whole packed matrix passes in 6.852 s (579.3 MiB): Neutral and General Full 1920x1080, Half
+960x540 and ROI retain every-pixel CPU parity, sealed GPU provenance and one final copy. Two hundred
+retained aliases add no work, and transient staging is zero at frame publication and warm retention.
+Payload faults, long cancellation and detach retain resources until actual retirement, with newest
+coherent GPU output and explicit CPU-fallback/unavailable provenance. The first rooted fixture
+compile failed a missing aggregate token initializer; its guarded constructor repair and distinct
+initial/final logs remain preserved.
+
+The remaining owner/application build completes 139 actions. The actual require-device device
+helper passes separately from three UI stage/general/capacity-retry registrations in 0.68 s; those
+UI registrations are preparation/control evidence. The genuine packed QWidget Viewer whole helper
+passes in 13.831 s (325.3 MiB) with native/core/synchronization validation clean, not a performance
+certification. The fresh six-route gate passes 14/14 in 17.08 s: all six actual production writers
+share the same nonce, with 56 native coverage passes and zero failures or missing fixtures. No
+coverage opt-out substitutes for a writer. The five-unit representative strict prefix passes
+without diagnostics or repairs. Its full mapped desktop scope closes as those five prefix units
+plus 320 disjoint consumers, all clean: 325 actual owned TUs. Exactly one affected generated Qt
+aggregation is excluded. The freshly configured Vulkan-off/Python-on fallback database contains
+233 affected owned TUs and the new neutral buffer test; sixteen distinct fallback consumers
+(fifteen stubs and the OCIO-context test) pass their separate strict check. Shared desktop coverage
+is retained without repeating all 233 units. The fresh Linux CPU-stub application/CLI/media and
+eight-owner build completes 197 actions (the planned 199 changes through regeneration). Selected
+and observed CTest registrations are both eight Passed in 0.51 s, with no added fixture or CTest
+skip. These are neutral, control and explicit native-unavailable outcomes; the device's internal
+native probe reports its own skip, not a native GPU pass. All sixteen distinct fallback strict
+checks pass without diagnostics or repairs. The three fallback application/CLI/media hashes and
+BuildIDs pass readback with zero missing dependencies and no Vulkan link. The first final-quality
+run passes schema, architecture, dependency, hygiene and UI grammar checks and formatting of 1,472
+files. Source-aligned desktop application/CLI/media identities are unchanged from the candidate
+readback, with zero missing dependencies and no linked Vulkan library. The exact 23-source plus
+two-owning-doc review, selective commit and immutable package are the checkpoint handoff. This checkpoint does not adopt other upload/process/final/readback/staging buffer
+creators, allocation-owned WSI/external or legacy resources, committed blocks/driver/process/UMA
+accounting, OOM guarantees, sustained performance or other-platform qualification. The verified
+normal application remains untouched during qualification; later ownership families and remaining
+source reuse/presentation, batching, measured width-two and sustained/platform gates stay open.
 
 First G6B phase-reservation checkpoint (2026-10-09), accepted within bounded scope:
 independent reviews cover coordinator/policy/builder quotas, resident and final phase lifetimes,

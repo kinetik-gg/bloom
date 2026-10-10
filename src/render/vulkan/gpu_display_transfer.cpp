@@ -2,6 +2,8 @@
 
 #include "gpu_device_private.hpp"
 #include "gpu_display_transfer_fault.hpp"
+#include "gpu_display_transfer_retirement_private.hpp"
+#include "gpu_native_buffer_allocation_private.hpp"
 #include "gpu_resident_display_private.hpp"
 
 #include <algorithm>
@@ -56,6 +58,7 @@ struct StagingBuffer final {
             state = other.state;
             buffer = other.buffer;
             allocation = other.allocation;
+            storage = std::move(other.storage);
             armed = other.armed;
             other.state = nullptr;
             other.buffer = VK_NULL_HANDLE;
@@ -69,7 +72,10 @@ struct StagingBuffer final {
     void release() noexcept {
         if (armed && state != nullptr) {
             vmaDestroyBuffer(state->allocator, buffer, allocation);
+            if (state->nativeBufferBackingsDestroyed != UINT64_MAX)
+                ++state->nativeBufferBackingsDestroyed;
         }
+        storage = {};
         state = nullptr;
         buffer = VK_NULL_HANDLE;
         allocation = VK_NULL_HANDLE;
@@ -79,10 +85,14 @@ struct StagingBuffer final {
     DeviceAllocatorState* state = nullptr;
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
+    NativeBufferStorageToken storage;
     bool armed = false;
 };
 
-// The bounded global process display transfer slot. It has exactly three states:
+// The bounded global process display transfer slot. Resources stay in their live Impl while
+// Reserved. Quarantined ownership can be claimed by the exact native owner as Retiring; driver
+// polling and destruction happen outside the handoff mutex while the slot remains busy.
+// States:
 //   * Free        -- reusable by any owner thread.
 //   * Reserved    -- owner A claimed it and its live Impl still owns every native resource. A
 //                    Reservation is NOT pollable and NOT reclaimable by anyone (same or foreign):
@@ -98,6 +108,7 @@ enum class DisplayTransferSlotState : std::uint8_t {
     Free,
     Reserved,
     Quarantined,
+    Retiring,
 };
 
 struct DisplayTransferSlot final {
@@ -105,11 +116,15 @@ struct DisplayTransferSlot final {
     std::thread::id ownerThread{};
     std::uint64_t ownerLifetimeToken = 0;
     std::uint64_t token = 0;
+    std::uint64_t epoch = 0;
+    bool ownerClosed = false;
+    std::weak_ptr<DeviceAllocatorState> binding;
 
     std::shared_ptr<DeviceAllocatorState> state;
     std::shared_ptr<GpuDisplayTransferRetention::State> retention;
     std::shared_ptr<const GpuDisplayImage> source;
     StagingBuffer staging;
+    PackedRgba8Storage pixels;
     vk::raii::CommandPool pool{nullptr};
     vk::raii::CommandBuffer buffer{nullptr};
     vk::raii::Fence fence{nullptr};
@@ -130,49 +145,88 @@ std::atomic<bool>& displayTransferFuse() {
     return fuse;
 }
 
-// Frees a Quarantined slot's native resources. The caller must hold the mutex and must have
-// established that this thread is the slot owner (or the device is lost); a Reserved slot is owned
-// by a live Impl and is never freed here.
-void freeQuarantinedSlotLocked(DisplayTransferSlot& slot) noexcept {
-    slot.staging.release();
-    slot.fence = vk::raii::Fence{nullptr};
-    slot.buffer = vk::raii::CommandBuffer{nullptr};
-    slot.pool = vk::raii::CommandPool{nullptr};
-    if (slot.source)
-        gpuDisplayImageImpl(*slot.source)
-            ->submissionUnretired.store(false, std::memory_order_release);
-    slot.source.reset();
-    slot.state.reset();
-    if (slot.retention)
-        slot.retention->releaseNative();
-    slot.retention.reset();
-    slot.slotState = DisplayTransferSlotState::Free;
-    slot.ownerThread = std::thread::id{};
-    slot.ownerLifetimeToken = 0;
-}
-
 [[nodiscard]] bool isSlotOwnerLocked(const DisplayTransferSlot& slot) noexcept {
     return slot.slotState != DisplayTransferSlotState::Free &&
            slot.ownerThread == std::this_thread::get_id() && slot.ownerLifetimeToken != 0 &&
-           slot.ownerLifetimeToken == vulkan_detail::deviceOwnerLifetimeToken() &&
-           (!slot.state || slot.state->ownerLifetimeToken == slot.ownerLifetimeToken);
+           slot.ownerLifetimeToken == vulkan_detail::deviceOwnerLifetimeToken();
 }
 
-// Best-effort non-blocking retirement of a quarantined slot. Only the slot owner may call this (the
-// caller holds the mutex and has checked the owner thread). Returns true when the fence is proven
-// signalled or the device is lost, in which case the resources are freed.
-[[nodiscard]] bool retireQuarantinedSlotLocked(DisplayTransferSlot& slot) noexcept {
-    if (!isSlotOwnerLocked(slot) || slot.slotState != DisplayTransferSlotState::Quarantined ||
-        slot.state == nullptr || static_cast<VkFence>(*slot.fence) == VK_NULL_HANDLE) {
-        return false;
+[[nodiscard]] bool slotMatches(const DisplayTransferSlot& slot,
+                               const DeviceAllocatorState& state) noexcept {
+    const auto bound = slot.binding.lock();
+    return slot.slotState != DisplayTransferSlotState::Free && bound.get() == &state &&
+           slot.epoch == state.presentationEpoch &&
+           slot.ownerLifetimeToken == state.ownerLifetimeToken;
+}
+
+// Claim a quarantined fence without holding the handoff lock during any driver/free call.
+// Retiring stays pending until actual backing, token, pixels and all native aliases are gone.
+[[nodiscard]] bool retireQuarantinedSlot(DeviceAllocatorState& expected) noexcept {
+    DisplayTransferSlot retired;
+    std::shared_ptr<DeviceAllocatorState> state;
+    VkFence fence = VK_NULL_HANDLE;
+    std::uint64_t token = 0;
+    {
+        std::lock_guard lock(displayTransferSlotMutex());
+        auto& slot = displayTransferSlot();
+        if (!isSlotOwnerLocked(slot) || !slotMatches(slot, expected) ||
+            slot.slotState != DisplayTransferSlotState::Quarantined || !slot.state)
+            return false;
+        state = slot.state;
+        fence = static_cast<VkFence>(*slot.fence);
+        if (fence == VK_NULL_HANDLE)
+            return false;
+        token = slot.token;
+        slot.slotState = DisplayTransferSlotState::Retiring;
     }
-    const VkFence rawFence = static_cast<VkFence>(*slot.fence);
-    const VkResult status = slot.state->device.getDispatcher()->vkGetFenceStatus(
-        static_cast<VkDevice>(*slot.state->device), rawFence);
-    if (status != VK_SUCCESS && status != VK_ERROR_DEVICE_LOST) {
-        return false;
+    const VkResult status = state->device.getDispatcher()->vkGetFenceStatus(
+        static_cast<VkDevice>(*state->device), fence);
+    {
+        std::lock_guard lock(displayTransferSlotMutex());
+        auto& slot = displayTransferSlot();
+        if (slot.slotState != DisplayTransferSlotState::Retiring || slot.token != token ||
+            !slotMatches(slot, expected))
+            return false;
+        if (status != VK_SUCCESS && status != VK_ERROR_DEVICE_LOST) {
+            slot.slotState = DisplayTransferSlotState::Quarantined;
+            return false;
+        }
+        retired.state = std::move(slot.state);
+        retired.retention = std::move(slot.retention);
+        retired.source = std::move(slot.source);
+        retired.staging = std::move(slot.staging);
+        retired.pixels = std::move(slot.pixels);
+        retired.pool = std::move(slot.pool);
+        retired.buffer = std::move(slot.buffer);
+        retired.fence = std::move(slot.fence);
     }
-    freeQuarantinedSlotLocked(slot);
+    retired.staging.release(); // actual backing free precedes neutral credit
+    retired.fence = vk::raii::Fence{nullptr};
+    retired.buffer = vk::raii::CommandBuffer{nullptr};
+    retired.pool = vk::raii::CommandPool{nullptr};
+    retired.pixels.reset();
+    if (retired.source)
+        gpuDisplayImageImpl(*retired.source)
+            ->submissionUnretired.store(false, std::memory_order_release);
+    retired.source.reset();
+    if (retired.retention) {
+        retired.retention->releaseNative();
+        retired.retention->releaseHost();
+    }
+    retired.retention.reset();
+    retired.state.reset();
+    {
+        std::lock_guard lock(displayTransferSlotMutex());
+        auto& slot = displayTransferSlot();
+        if (slot.slotState == DisplayTransferSlotState::Retiring && slot.token == token &&
+            slotMatches(slot, expected)) {
+            slot.slotState = DisplayTransferSlotState::Free;
+            slot.ownerThread = {};
+            slot.ownerLifetimeToken = 0;
+            slot.epoch = 0;
+            slot.binding.reset();
+        }
+    }
     return true;
 }
 
@@ -288,37 +342,36 @@ struct GpuDisplayTransfer::Impl final {
             retentionState->releaseNative();
     }
 
-    // Transfers this submission's (possibly in-flight) resources into the global slot as
-    // Quarantined. Owner-thread only. This is the SOLE ownership transfer: the live Impl becomes
-    // empty. If the Reserved claim is no longer owned (impossible while held, but defended), the
-    // resources are retained in this Impl (`submitted` stays true) rather than destroyed.
-    bool quarantine() noexcept {
-        if (!onOwnerThread())
-            return false;
+    // Allocation-free handoff into the already reserved slot. No driver call or native free is
+    // performed on a foreign caller. Rejected late/closed-owner handoff keeps the whole Impl.
+    bool quarantine(const bool unknown = true) noexcept {
         if (!submitted) {
+            if (!onOwnerThread())
+                return false;
             releaseRetired();
             return true;
         }
-        displayTransferFuse().store(true);
+        // This host-only destination is not submitted to Vulkan. Existing owner cancellation
+        // may discard it; foreign final release must instead hand it off for owner disposal.
+        if (unknown && onOwnerThread())
+            discardHost();
         std::lock_guard lock(displayTransferSlotMutex());
-        DisplayTransferSlot& slot = displayTransferSlot();
-        if (!isSlotOwnerLocked(slot) || slot.token != slotToken) {
+        auto& slot = displayTransferSlot();
+        if (!deviceState || slot.ownerClosed ||
+            slot.slotState != DisplayTransferSlotState::Reserved || slot.token != slotToken ||
+            !slotMatches(slot, *deviceState))
             return false;
-        }
         slot.state = std::move(deviceState);
-        slot.retention = retentionState;
+        slot.retention = std::move(retentionState);
         slot.source = std::move(source);
         slot.staging = std::move(staging);
+        slot.pixels = std::move(pixels);
         slot.pool = std::move(pool);
         slot.buffer = std::move(buffer);
         slot.fence = std::move(fence);
         slot.slotState = DisplayTransferSlotState::Quarantined;
-        deviceState.reset();
-        source.reset();
-        staging = {};
-        pool = vk::raii::CommandPool{nullptr};
-        buffer = vk::raii::CommandBuffer{nullptr};
-        fence = vk::raii::Fence{nullptr};
+        if (unknown)
+            displayTransferFuse().store(true);
         quarantinedToken = slotToken;
         slotToken = 0;
         submitted = false;
@@ -350,7 +403,9 @@ GpuDisplayTransfer::~GpuDisplayTransfer() {
     if (!impl_ || !impl_->submitted)
         return;
     if (!impl_->onOwnerThread()) {
-        [[maybe_unused]] const auto* retained = impl_.release();
+        if (!impl_->quarantine(false)) {
+            [[maybe_unused]] const auto* retained = impl_.release();
+        }
         return;
     }
     cancel();
@@ -407,15 +462,16 @@ bool GpuDisplayTransfer::begin(GpuDevice& expectedDevice,
             impl_->setFailure(GpuDisplayTransferCode::DeviceLost, "the device was lost");
             return false;
         }
+        if (hostPhase != source->state->processingPhase || source->state->processingPhaseUnproven ||
+            (hostPhase && hostPhase->isUnproven())) {
+            impl_->setFailure(GpuDisplayTransferCode::DeviceUnavailable,
+                              "display staging requires the exact proven retained phase");
+            return false;
+        }
         // A prior Impl may already have been destroyed after quarantining this very source.
         // Offer its exact owner one real nonblocking fence observation before the image marker
         // refuses admission. Never poll a Reserved slot owned by a still-live Impl.
-        {
-            std::lock_guard lock(displayTransferSlotMutex());
-            auto& slot = displayTransferSlot();
-            if (slot.slotState == DisplayTransferSlotState::Quarantined && isSlotOwnerLocked(slot))
-                static_cast<void>(retireQuarantinedSlotLocked(slot));
-        }
+        static_cast<void>(retireQuarantinedSlot(*source->state));
         if (source->submissionUnretired) {
             impl_->setFailure(GpuDisplayTransferCode::DeviceUnavailable,
                               "a prior display transfer submission is not retired");
@@ -445,26 +501,17 @@ bool GpuDisplayTransfer::begin(GpuDevice& expectedDevice,
         {
             std::lock_guard lock(displayTransferSlotMutex());
             DisplayTransferSlot& slot = displayTransferSlot();
-            if (slot.slotState == DisplayTransferSlotState::Reserved) {
+            if (slot.slotState != DisplayTransferSlotState::Free) {
                 impl_->setFailure(GpuDisplayTransferCode::Busy,
-                                  "the display transfer slot is reserved by a live submission");
+                                  "the display transfer slot has a live or retiring owner");
                 return false;
-            }
-            if (slot.slotState == DisplayTransferSlotState::Quarantined) {
-                if (!isSlotOwnerLocked(slot)) {
-                    impl_->setFailure(GpuDisplayTransferCode::Busy,
-                                      "a foreign owner thread holds the display transfer slot");
-                    return false;
-                }
-                if (!retireQuarantinedSlotLocked(slot)) {
-                    impl_->setFailure(GpuDisplayTransferCode::Busy,
-                                      "a prior display transfer submission is not retired");
-                    return false;
-                }
             }
             slot.slotState = DisplayTransferSlotState::Reserved;
             slot.ownerThread = self;
             slot.ownerLifetimeToken = source->state->ownerLifetimeToken;
+            slot.ownerClosed = false;
+            slot.epoch = source->state->presentationEpoch;
+            slot.binding = source->state;
             impl_->ownerThread = self;
             impl_->ownerLifetimeToken = slot.ownerLifetimeToken;
             ++slot.token;
@@ -492,10 +539,17 @@ bool GpuDisplayTransfer::begin(GpuDevice& expectedDevice,
         stagingAllocation.flags =
             VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
         VmaAllocationInfo stagingInfo{};
-        if (vmaCreateBuffer(state->allocator, &bufferInfo, &stagingAllocation, &staging.buffer,
-                            &staging.allocation, &stagingInfo) != VK_SUCCESS) {
-            impl_->fail(GpuDisplayTransferCode::TransferFailed,
-                        "the display transfer staging buffer could not be created");
+        const auto allocated = vulkan_detail::allocateCoveredBuffer(
+            *state, bufferInfo, stagingAllocation, byteBudget - bytes, staging.buffer,
+            staging.allocation, stagingInfo, staging.storage);
+        if (allocated != vulkan_detail::NativeBufferAllocationOutcome::Allocated) {
+            const bool refused =
+                allocated == vulkan_detail::NativeBufferAllocationOutcome::TransferBudgetRefused ||
+                allocated == vulkan_detail::NativeBufferAllocationOutcome::PhaseRefused;
+            impl_->fail(refused ? GpuDisplayTransferCode::OverBudget
+                                : GpuDisplayTransferCode::TransferFailed,
+                        refused ? "display staging admission refused before backing allocation"
+                                : "the display transfer staging buffer could not be created");
             return false;
         }
         staging.armed = true;
@@ -548,6 +602,12 @@ bool GpuDisplayTransfer::begin(GpuDevice& expectedDevice,
         impl_->generation = source->generation;
         impl_->deviceBinding = source->state;
 
+        if (display_transfer_detail::transferFault().load() ==
+            static_cast<std::uint8_t>(display_transfer_detail::TransferFault::CommandSetup)) {
+            impl_->fail(GpuDisplayTransferCode::TransferFailed,
+                        "controlled command setup rejection after staging allocation");
+            return false;
+        }
         vk::raii::CommandPool pool{nullptr};
         {
             VkCommandPoolCreateInfo poolInfo{};
@@ -655,8 +715,13 @@ bool GpuDisplayTransfer::begin(GpuDevice& expectedDevice,
         submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submit.commandBufferCount = 1;
         submit.pCommandBuffers = &rawCommandBuffer;
-        const VkResult submitted = dispatcher->vkQueueSubmit(
-            static_cast<VkQueue>(*state->computeQueue), 1, &submit, rawFence);
+        const bool refuseSubmit =
+            display_transfer_detail::transferFault().load() ==
+            static_cast<std::uint8_t>(display_transfer_detail::TransferFault::Submit);
+        const VkResult submitted =
+            refuseSubmit ? VK_ERROR_UNKNOWN
+                         : dispatcher->vkQueueSubmit(static_cast<VkQueue>(*state->computeQueue), 1,
+                                                     &submit, rawFence);
         if (submitted == VK_ERROR_DEVICE_LOST) {
             impl_->fail(GpuDisplayTransferCode::DeviceLost,
                         "the device was lost during the display transfer submit");
@@ -704,10 +769,14 @@ bool GpuDisplayTransfer::begin(GpuDevice& expectedDevice,
 
 GpuDisplayTransferState GpuDisplayTransfer::poll() noexcept {
     if (impl_ && impl_->quarantinedToken != 0 && impl_->onOwnerThread()) {
-        std::lock_guard lock(displayTransferSlotMutex());
-        auto& slot = displayTransferSlot();
-        if (slot.slotState == DisplayTransferSlotState::Quarantined &&
-            slot.token == impl_->quarantinedToken && retireQuarantinedSlotLocked(slot))
+        std::shared_ptr<DeviceAllocatorState> state;
+        {
+            std::lock_guard lock(displayTransferSlotMutex());
+            const auto& slot = displayTransferSlot();
+            if (slot.token == impl_->quarantinedToken)
+                state = slot.binding.lock();
+        }
+        if (state && retireQuarantinedSlot(*state))
             impl_->quarantinedToken = 0;
     }
     if (impl_ == nullptr || impl_->state != GpuDisplayTransferState::Pending) {
@@ -770,7 +839,9 @@ GpuDisplayTransferState GpuDisplayTransfer::poll() noexcept {
 
     const bool cancelled = impl.cancelRequested;
     if (!cancelled) {
-        if (vmaInvalidateAllocation(impl.deviceState->allocator, impl.staging.allocation, 0,
+        if (display_transfer_detail::transferFault().load() ==
+                static_cast<std::uint8_t>(display_transfer_detail::TransferFault::Invalidate) ||
+            vmaInvalidateAllocation(impl.deviceState->allocator, impl.staging.allocation, 0,
                                     impl.bytes) != VK_SUCCESS) {
             impl.releaseRetired();
             impl.setFailure(GpuDisplayTransferCode::TransferFailed,
@@ -870,7 +941,7 @@ bool GpuDisplayTransfer::hasUnretiredSubmission() const noexcept {
         return false;
     std::lock_guard lock(displayTransferSlotMutex());
     const auto& slot = displayTransferSlot();
-    return slot.slotState == DisplayTransferSlotState::Quarantined &&
+    return slot.slotState != DisplayTransferSlotState::Free &&
            slot.token == impl_->quarantinedToken;
 }
 
@@ -881,6 +952,20 @@ bool GpuDisplayTransferResult::isBoundTo(GpuDevice& device) const noexcept {
 }
 
 namespace display_transfer_detail {
+void drainTransfers(vulkan_detail::DeviceAllocatorState& state) noexcept {
+    static_cast<void>(retireQuarantinedSlot(state));
+}
+void closeTransfers(vulkan_detail::DeviceAllocatorState& state) noexcept {
+    drainTransfers(state);
+    std::lock_guard lock(displayTransferSlotMutex());
+    auto& slot = displayTransferSlot();
+    if (slotMatches(slot, state))
+        slot.ownerClosed = true;
+}
+bool transferPendingFor(const vulkan_detail::DeviceAllocatorState& state) noexcept {
+    std::lock_guard lock(displayTransferSlotMutex());
+    return slotMatches(displayTransferSlot(), state);
+}
 std::atomic<std::uint8_t>& transferFault() noexcept {
     static std::atomic<std::uint8_t> fault{static_cast<std::uint8_t>(TransferFault::None)};
     return fault;

@@ -11,6 +11,7 @@
 // thread. This slice does not integrate with the runtime, UI, or task system.
 
 #include <bloom/render/gpu_presentation_types.hpp>
+#include <bloom/render/native_buffer_storage.hpp>
 #include <bloom/render/native_image_storage.hpp>
 
 #include <cstdint>
@@ -287,6 +288,10 @@ class GpuDevice final {
     // allocation/bind/view faults have no retry metadata. Cleared on the next phase/allocation.
     [[nodiscard]] std::optional<NativeImageStorageRefusal>
     nativeImageStorageRefusal() const noexcept;
+    [[nodiscard]] std::optional<NativeBufferStorageRefusal>
+    nativeBufferStorageRefusal() const noexcept;
+    // Exact-generation live reservation or handed-off staging; neither permits native owner exit.
+    [[nodiscard]] bool displayTransferPending() const noexcept;
 
     // Missing operation/precision entries are Unavailable, matching the architecture contract.
     [[nodiscard]] GpuQualification qualificationFor(GpuOperationId operation,

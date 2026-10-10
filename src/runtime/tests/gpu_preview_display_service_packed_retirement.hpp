@@ -174,25 +174,23 @@ void heldTransferProof(
     auto scheduler = std::make_unique<TaskScheduler>(schedulerConfig());
     auto configured = options;
     auto builder = std::make_shared<CpuGpuSceneBuilder>();
-    if (!shutdownProof) {
-        configured.processingPhasePolicy =
-            std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(4, retirement.owner);
-        auto sample = bloom::runtime::memoryBudgetSample();
-        bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
-                                                  sample.machine.availableBytes.value_or(0));
-        ledger.beginProcessSampling();
-        const auto at = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
-        const auto state = ledger.applySample(std::move(sample), at);
-        configured.processingPhasePolicy->applyHostSample(state, ledger.physicalByteBudget(), at);
-        builder = std::make_shared<CpuGpuSceneBuilder>(
-            nullptr, bloom::runtime::GpuSceneMediaContext{}, bloom::runtime::GpuSceneOcioContext{},
-            bloom::runtime::GpuScenePreparationPhase{
-                .policy = configured.processingPhasePolicy,
-                .envelope = {.metadataBytes = 1024ULL * 1024,
-                             .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
-                             .requestedExecutorBytes = kBudget,
-                             .deviceWorkingBytes = 832ULL * 1024 * 1024}});
-    }
+    configured.processingPhasePolicy =
+        std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(4, retirement.owner);
+    auto sample = bloom::runtime::memoryBudgetSample();
+    bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
+                                              sample.machine.availableBytes.value_or(0));
+    ledger.beginProcessSampling();
+    const auto at = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
+    const auto state = ledger.applySample(std::move(sample), at);
+    configured.processingPhasePolicy->applyHostSample(state, ledger.physicalByteBudget(), at);
+    builder = std::make_shared<CpuGpuSceneBuilder>(
+        nullptr, bloom::runtime::GpuSceneMediaContext{}, bloom::runtime::GpuSceneOcioContext{},
+        bloom::runtime::GpuScenePreparationPhase{
+            .policy = configured.processingPhasePolicy,
+            .envelope = {.metadataBytes = 1024ULL * 1024,
+                         .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                         .requestedExecutorBytes = kBudget,
+                         .deviceWorkingBytes = 832ULL * 1024 * 1024}});
     auto service = std::make_unique<GpuPreviewDisplayService>(
         *scheduler, packedStageFunction(plan, builder, programs, processor),
         generalCpuStageFunction(plan, processor, std::make_shared<CpuCompositionEvaluator>()),
@@ -208,6 +206,19 @@ void heldTransferProof(
     }
     auto core = bloom::runtime::detail::GpuPreviewDisplayServiceTestAccess::coreOf(*service);
     auto hold = std::make_shared<std::atomic_bool>(true);
+    auto teardownObserved = std::make_shared<std::atomic_bool>(false);
+    auto allowTeardown = std::make_shared<std::atomic_bool>(false);
+    struct TeardownGateRelease final {
+        std::shared_ptr<std::atomic_bool> gate;
+        ~TeardownGateRelease() { gate->store(true); }
+    } gateRelease{allowTeardown};
+    if (shutdownProof) {
+        core->testBeforePackedUnprovenTeardown = [teardownObserved, allowTeardown] {
+            teardownObserved->store(true);
+            while (!allowTeardown->load())
+                std::this_thread::sleep_for(1ms);
+        };
+    }
     auto polls = std::make_shared<std::atomic<std::uint64_t>>(0);
     struct ContextProbe {
         std::mutex mutex;
@@ -260,49 +271,77 @@ void heldTransferProof(
         initial.sourceBytes > 0 && initial.stagingBytes > 0 && initial.hostBytes > 0 &&
             initial.reservedBytes >= initial.sourceBytes + initial.stagingBytes + initial.hostBytes,
         "admitted reservation covers every actual source/staging/preallocated host allocation");
-    if (!shutdownProof) {
-        const auto root = configured.processingPhasePolicy->snapshot().reservations;
-        checks.expect(root.ownedPackedHostAllocations == 1 &&
-                          root.ownedPackedHostBytes == initial.hostBytes && root.admittedPhases > 0,
-                      "held native copy retains an actual provisional rooted packed allocation");
-    }
+    const auto initialRoot = configured.processingPhasePolicy->snapshot().reservations;
+    checks.expect(initialRoot.ownedPackedHostAllocations == 1 &&
+                      initialRoot.ownedPackedHostBytes == initial.hostBytes &&
+                      initialRoot.ownedNativeBuffers == 1 &&
+                      initialRoot.ownedNativeBufferBytes == initial.stagingBytes &&
+                      initialRoot.admittedPhases == 1 && initialRoot.unprovenPhases == 0,
+                  "real submitted copy retains exact rooted staging and provisional packed claims");
     if (shutdownProof) {
         using namespace bloom::render::display_transfer_detail;
-        // Make the destructor's nonblocking fence observation explicitly unproved too. This
-        // never proves retirement and is confined to this final, separate fixture process.
+        // Real submit happened above. The observation override cannot prove its native fence;
+        // the private owner gate observes the sticky phase before any pipeline/backing teardown.
         setTransferFaultForTest(TransferFault::ForceFenceTimeout);
         service->beginShutdown();
+        const bool observed = waitUntil([&] { return teardownObserved->load(); }, 30s);
+        checks.expect(observed, "actual unproven packed owner boundary is reached");
+        if (!observed) {
+            setTransferFaultForTest(TransferFault::None);
+            hold->store(false);
+            allowTeardown->store(true);
+            return;
+        }
+        const auto unproven = configured.processingPhasePolicy->snapshot().reservations;
+        checks.expect(
+            unproven.ownedNativeBuffers == 1 &&
+                unproven.ownedNativeBufferBytes == initial.stagingBytes &&
+                unproven.ownedNonlocalNativeBufferHostBytes ==
+                    initialRoot.ownedNonlocalNativeBufferHostBytes &&
+                unproven.admittedPhases == 1 && unproven.unprovenPhases == 1 &&
+                service->status().state != GpuPreviewDisplayServiceState::Stopped &&
+                !waitUntil(
+                    [&] {
+                        return service->status().state == GpuPreviewDisplayServiceState::Stopped;
+                    },
+                    50ms),
+            "real staging and sticky exact phase survive incomplete shutdown before native proof");
+        std::cout << "PACKED_UNPROVEN bufferBytes=" << unproven.ownedNativeBufferBytes
+                  << " buffers=" << unproven.ownedNativeBuffers
+                  << " nonlocalHost=" << unproven.ownedNonlocalNativeBufferHostBytes
+                  << " phases=" << unproven.admittedPhases
+                  << " unproven=" << unproven.unprovenPhases << '\n';
+        // No latch/fuse/quota mutation: remove only test observations and allow the exact owner
+        // to prove its real fence, free backing, and destroy the sticky allocator generation.
+        setTransferFaultForTest(TransferFault::None);
+        hold->store(false);
+        allowTeardown->store(true);
         checks.expect(
             waitUntil(
                 [&] { return service->status().state == GpuPreviewDisplayServiceState::Stopped; },
                 30s),
-            "shutdown reaches bounded terminal teardown without a GUI/queue wait");
-        const auto beforeDetach = retention->snapshot();
+            "Stopped follows actual native owner/generation teardown");
+        const auto retired = configured.processingPhasePolicy->snapshot().reservations;
         checks.expect(
-            beforeDetach.sourceBytes == initial.sourceBytes &&
-                beforeDetach.stagingBytes == initial.stagingBytes && beforeDetach.hostBytes == 0 &&
-                beforeDetach.reservedBytes > 0,
-            "unproved shutdown quarantine retains native charge and releases host capacity");
+            retired.ownedNativeBufferBytes == 0 && retired.ownedNativeBuffers == 0 &&
+                retired.ownedNonlocalNativeBufferHostBytes == 0 &&
+                retired.ownedNativeImageBytes == 0 && retired.ownedNativeImages == 0 &&
+                retired.ownedNonlocalNativeHostBytes == 0 && retired.ownedPackedHostBytes == 0 &&
+                retired.ownedPackedHostMetadataBytes == 0 &&
+                retired.ownedPackedHostAllocations == 0 && retired.admittedPhases == 0 &&
+                retired.unprovenPhases == 0 && retired.totalHostClaimBytes == 0 &&
+                retired.totalDeviceClaimBytes == 0 && retention->snapshot().reservedBytes == 0,
+            "covered staging/image/packed and phase claims release only after native destruction");
         service.reset();
         core.reset();
         scheduler.reset();
-        const auto afterDetach = retention->snapshot();
         {
             std::lock_guard lock(contextProbe->mutex);
-            checks.expect(
-                contextProbe->stage.expired(),
-                "quarantine does not retain stage/snapshot/media/parent completion context");
+            checks.expect(contextProbe->stage.expired(),
+                          "retired native ownership does not retain stage/snapshot/parent context");
         }
-        checks.expect(
-            afterDetach.reservedBytes == beforeDetach.reservedBytes &&
-                afterDetach.sourceBytes == beforeDetach.sourceBytes &&
-                afterDetach.stagingBytes == beforeDetach.stagingBytes && afterDetach.hostBytes == 0,
-            "resource reservation outlives service and scheduler forced bookkeeping release");
-        std::cout << "SHUTDOWN_QUARANTINE reserved=" << afterDetach.reservedBytes
-                  << " source=" << afterDetach.sourceBytes
-                  << " staging=" << afterDetach.stagingBytes << " host=" << afterDetach.hostBytes
-                  << " exact-owner-exited; no false recovery promise\n";
-        setTransferFaultForTest(TransferFault::None);
+        std::cout << "PASS: production submitted packed staging sticky phase then actual "
+                     "generation retirement\n";
         return;
     }
     submission.handle.cancel();

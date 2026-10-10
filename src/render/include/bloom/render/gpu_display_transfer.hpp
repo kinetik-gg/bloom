@@ -1,8 +1,10 @@
 #pragma once
 
 // Production final-display RGBA8 transfer. No scene evaluation or RGBA32F process readback.
-// All methods and destruction are device-owner-thread operations. begin/poll/cancel never wait;
-// unproved native submissions retain their source, staging and device in one bounded quarantine.
+// Native methods are device-owner-thread operations. begin/poll/cancel never wait. A foreign final
+// release of Pending hands its preowned resources to the existing slot without driver/free work;
+// only the exact native owner may drain it. Other states require owner-thread destruction. Closed
+// owner handoff remains explicitly incomplete. Unproved submissions retain backing until proof.
 
 #include <bloom/render/gpu_resident_display.hpp>
 #include <bloom/render/packed_rgba8_storage.hpp>

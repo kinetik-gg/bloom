@@ -72,6 +72,11 @@ std::optional<NativeImageStorageRefusal> GpuDevice::nativeImageStorageRefusal() 
     return {};
 }
 
+std::optional<NativeBufferStorageRefusal> GpuDevice::nativeBufferStorageRefusal() const noexcept {
+    return {};
+}
+bool GpuDevice::displayTransferPending() const noexcept { return false; }
+
 GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept { return {}; }
 
 GpuQualification GpuDevice::qualificationFor(const GpuOperationId operation,

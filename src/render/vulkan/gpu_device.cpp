@@ -1,6 +1,7 @@
 #include <bloom/render/gpu_device.hpp>
 
 #include "gpu_device_private.hpp"
+#include "gpu_display_transfer_retirement_private.hpp"
 #include "gpu_image_reclamation_private.hpp"
 #include "gpu_ocio_program_private.hpp"
 
@@ -51,6 +52,7 @@ GpuDevice& GpuDevice::operator=(GpuDevice&& other) noexcept {
     if (this != &other) {
         if (impl_ != nullptr && impl_->control != nullptr) {
             assert(impl_->owner == std::this_thread::get_id());
+            display_transfer_detail::closeTransfers(*impl_->control);
             ocio_program_detail::closeProgramOwner(*impl_->control);
             image_detail::closeImageOwner(*impl_->control);
         }
@@ -63,6 +65,7 @@ GpuDevice::~GpuDevice() {
     if (impl_ != nullptr) {
         assert(impl_->owner == std::this_thread::get_id());
         if (impl_->control != nullptr) {
+            display_transfer_detail::closeTransfers(*impl_->control);
             ocio_program_detail::closeProgramOwner(*impl_->control);
             image_detail::closeImageOwner(*impl_->control);
         }
@@ -71,6 +74,7 @@ GpuDevice::~GpuDevice() {
 
 void GpuDevice::reclaimReleasedImages() noexcept {
     if (isOwnerThread() && impl_->control != nullptr) {
+        display_transfer_detail::drainTransfers(*impl_->control);
         ocio_program_detail::retireUploadQuarantine();
         ocio_program_detail::drainPrograms(*impl_->control);
         image_detail::drainImages(*impl_->control);
@@ -119,6 +123,7 @@ bool GpuDevice::retainProcessingPhase(std::shared_ptr<GpuProcessingPhaseLease> l
         return false;
     }
     impl_->control->imageStorageRefusal.reset();
+    impl_->control->bufferStorageRefusal.reset();
     impl_->control->processingPhase = std::move(lease);
     return true;
 }
@@ -151,6 +156,19 @@ std::optional<NativeImageStorageRefusal> GpuDevice::nativeImageStorageRefusal() 
     if (!refusal || refusal->phaseId != impl_->control->processingPhase->id())
         return {};
     return refusal;
+}
+
+std::optional<NativeBufferStorageRefusal> GpuDevice::nativeBufferStorageRefusal() const noexcept {
+    if (!isOwnerThread() || !impl_->control || !impl_->control->processingPhase ||
+        impl_->control->processingPhaseUnproven || impl_->control->processingPhase->isUnproven())
+        return {};
+    const auto& refusal = impl_->control->bufferStorageRefusal;
+    if (!refusal || refusal->phaseId != impl_->control->processingPhase->id())
+        return {};
+    return refusal;
+}
+bool GpuDevice::displayTransferPending() const noexcept {
+    return impl_ && impl_->control && display_transfer_detail::transferPendingFor(*impl_->control);
 }
 
 GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept {

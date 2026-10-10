@@ -13,6 +13,7 @@ struct PackedHostRetirementState;
 } // namespace detail
 class PackedHostRetirementOwner;
 class NativeImageStorageToken;
+class NativeBufferStorageToken;
 
 // Lifecycle identity of the existing neutral budget state, never a pixel/cache content identity.
 // A handle retains no phase admission, native owner or device. The incomplete const state cannot
@@ -66,6 +67,11 @@ struct GpuProcessingPhaseSnapshot final {
     std::uint64_t ownedNonlocalNativeHostBytes = 0;
     std::uint64_t totalDeviceClaimBytes = 0;
     std::size_t ownedNativeImages = 0;
+    // Covered transient buffer suballocations. Their nonlocal host subset replaces an existing
+    // host phase debit, unlike the additive nonlocal image subset above.
+    std::uint64_t ownedNativeBufferBytes = 0;
+    std::uint64_t ownedNonlocalNativeBufferHostBytes = 0;
+    std::size_t ownedNativeBuffers = 0;
     std::uint64_t peakHostReservedBytes = 0;
     std::uint64_t peakDeviceReservedBytes = 0;
     std::size_t admittedPhases = 0;
@@ -99,6 +105,7 @@ class GpuProcessingPhaseLease final {
     friend class GpuProcessingPhaseBudget;
     friend class PackedHostStorageAuthority;
     friend class NativeImageStorageToken;
+    friend class NativeBufferStorageToken;
     explicit GpuProcessingPhaseLease(
         std::shared_ptr<detail::GpuProcessingPhaseBudgetState>) noexcept;
     std::shared_ptr<detail::GpuProcessingPhaseBudgetState> state_;

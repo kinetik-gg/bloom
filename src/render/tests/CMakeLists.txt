@@ -20,6 +20,12 @@ bloom_enable_warnings(bloom_render_native_image_storage_test)
 bloom_add_test(NAME bloom.render.native_image_storage
     COMMAND bloom_render_native_image_storage_test LABELS unit gpu memory)
 
+add_executable(bloom_render_native_buffer_storage_test native_buffer_storage_tests.cpp)
+target_link_libraries(bloom_render_native_buffer_storage_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_native_buffer_storage_test)
+bloom_add_test(NAME bloom.render.native_buffer_storage
+    COMMAND bloom_render_native_buffer_storage_test LABELS unit gpu memory)
+
 add_executable(bloom_render_image_test render_image_test.cpp)
 target_link_libraries(bloom_render_image_test PRIVATE bloom_render)
 bloom_enable_warnings(bloom_render_image_test)
