@@ -91,7 +91,7 @@ void testMultiLutPrefix(Expectations& expectations, const GpuDeviceCreationOptio
         expectations.expect(false, "the actual aggregate one-byte-short phase is retained");
         return;
     }
-    std::uint64_t actualPrefixImages = 0;
+    std::size_t actualPrefixImages = 0;
     auto denied = GpuOcioProgram::create(
         device, desc, *spirv, {},
         [&] {

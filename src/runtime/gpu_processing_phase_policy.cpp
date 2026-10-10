@@ -81,8 +81,9 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
         // constraints remain admissible even on this path.
         processConstraintHistory_.recordFinite(sample.process, false);
         if (finite) {
-            finiteProcessCeiling_ =
-                finiteProcessCeiling_ ? std::min(*finiteProcessCeiling_, *finite) : *finite;
+            finiteProcessCeiling_ = finiteProcessCeiling_
+                                        ? std::min<std::uint64_t>(*finiteProcessCeiling_, *finite)
+                                        : *finite;
             const auto current = budget_.snapshot();
             if (current.hostCapacityBytes && *finite < *current.hostCapacityBytes) {
                 budget_.setHostCapacity(finite, current.hostReady,
@@ -95,8 +96,9 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
     // Failed/incomplete sampling may only tighten the last known constraint. No reusable cache
     // credit is manufactured; process usage already includes retained/native allocations.
     if (finite) {
-        finiteProcessCeiling_ =
-            finiteProcessCeiling_ ? std::min(*finiteProcessCeiling_, *finite) : *finite;
+        finiteProcessCeiling_ = finiteProcessCeiling_
+                                    ? std::min<std::uint64_t>(*finiteProcessCeiling_, *finite)
+                                    : *finite;
     }
     const bool complete = isCompleteProcessMemorySample(sample.process) ||
                           sample.process.status == ProcessMemoryStatus::Unsupported;
