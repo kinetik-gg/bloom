@@ -325,9 +325,12 @@ makeGpuResidentDisplayPreview(render::GpuDevice& device, GpuResidentFrameLeaseRe
             return std::nullopt;
         }
 
-        return detail::buildResidentPreviewFrame(
+        auto frame = detail::buildResidentPreviewFrame(
             std::move(request.identity), std::move(request.processIdentity),
             std::move(published.lease), std::move(report), std::move(request.bounds));
+        if (!frame || !request.display->promoteStorageOwnership())
+            return std::nullopt;
+        return frame;
     } catch (...) {
         return std::nullopt;
     }
@@ -437,9 +440,12 @@ makeGpuGeneralDisplayPreview(render::GpuDevice& device, GpuResidentFrameLeaseReg
         // The general route has no Neutral qualification report. The frame is built with a null
         // Neutral report; its display provenance is GpuResident and the exact display command
         // identity is retained by the caller (the service stage/status). No report is fabricated.
-        return detail::buildResidentPreviewFrame(
+        auto frame = detail::buildResidentPreviewFrame(
             std::move(request.identity), std::move(request.processIdentity),
             std::move(published.lease), nullptr, std::move(request.bounds));
+        if (!frame || !request.display->promoteStorageOwnership())
+            return std::nullopt;
+        return frame;
     } catch (...) {
         return std::nullopt;
     }

@@ -15,6 +15,7 @@
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
+#include <bloom/render/gpu_processing_phase_budget.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
@@ -324,7 +325,8 @@ buildScene(const Fixture& fixture, std::shared_ptr<const PreparedGpuOcioCommand>
 
 void testScene(Expectations& expectations, GpuDevice& device,
                const bloom::color::ResolvedBloomNeutralConfig& aces,
-               const GpuOcioCompileOptions& options) {
+               const GpuOcioCompileOptions& options, bloom::render::GpuProcessingPhaseBudget& root,
+               const std::shared_ptr<bloom::render::GpuProcessingPhaseLease>& lease) {
     Fixture fixture{.data = window(0, 0, kWidth, kHeight),
                     .display = window(0, 0, kWidth, kHeight),
                     .aspect = PixelAspectRatio::square(),
@@ -372,6 +374,11 @@ void testScene(Expectations& expectations, GpuDevice& device,
         return;
     }
     const auto coldCounters = executor.counters();
+    const auto coldClaims = root.snapshot();
+    expectations.expect(coldClaims.ownedNativeImageBytes > 0 && coldClaims.ownedNativeImages >= 4 &&
+                            lease.use_count() == 2,
+                        "actual OCIO graph cache promotes each retained native image without "
+                        "pinning the phase lifetime");
     expectations.expect(coldCounters.ocioEffectDispatches == 1,
                         "the cold scene dispatches the OCIO effect exactly once");
     expectations.expect(coldCounters.ocioProgramCreations == 1,
@@ -399,6 +406,13 @@ void testScene(Expectations& expectations, GpuDevice& device,
     auto warmImage = executor.takeImage();
     expectations.expect(warmImage != nullptr, "the warm scene publishes the cached output");
     const auto warmCounters = executor.counters();
+    const auto warmClaims = root.snapshot();
+    expectations.expect(warmClaims.ownedNativeImageBytes == coldClaims.ownedNativeImageBytes &&
+                            warmClaims.ownedNativeImages == coldClaims.ownedNativeImages &&
+                            warmClaims.ownedNonlocalNativeHostBytes ==
+                                coldClaims.ownedNonlocalNativeHostBytes &&
+                            warmClaims.totalDeviceClaimBytes == coldClaims.totalDeviceClaimBytes,
+                        "warm actual OCIO graph/cache aliases create no repeated native ownership");
     expectations.expect(warmCounters.ocioEffectDispatches == coldCounters.ocioEffectDispatches,
                         "a warm unchanged scene dispatches zero OCIO effects");
     expectations.expect(warmCounters.dispatches == coldCounters.dispatches,
@@ -501,7 +515,25 @@ int main(int argc, char** argv) {
         return kSkipExit;
     }
     expectations.expect(device.device->state() == GpuDeviceState::Ready, "the device is Ready");
-    testScene(expectations, *device.device, *aces, compileOptions());
+    bloom::render::GpuProcessingPhaseBudget root;
+    root.setHostCapacity(kBudget * 2, true);
+    root.setDeviceCapacity(kBudget * 2, true);
+    auto admission = root.reserve({.fixedHostBytes = 1,
+                                   .requestedExecutorBytes = kBudget,
+                                   .minimumExecutorBytes = kBudget,
+                                   .sourceFree = true});
+    expectations.expect(admission.lease && device.device->retainProcessingPhase(admission.lease),
+                        "actual OCIO scene uses the admitted native-image root");
+    if (!admission.lease)
+        return 1;
+    testScene(expectations, *device.device, *aces, compileOptions(), root, admission.lease);
+    device.device->retireProcessingPhase(admission.lease->id(), true);
+    admission.lease.reset();
+    const auto retired = root.snapshot();
+    expectations.expect(retired.ownedNativeImageBytes == 0 && retired.ownedNativeImages == 0 &&
+                            retired.ownedNonlocalNativeHostBytes == 0 &&
+                            retired.totalDeviceClaimBytes == 0 && retired.totalHostClaimBytes == 0,
+                        "actual OCIO cache/executor/outputs free backing before complete credit");
     if (expectations.failures() != 0) {
         std::cerr << expectations.failures() << " OCIO scene executor expectation(s) failed\n";
         return 1;

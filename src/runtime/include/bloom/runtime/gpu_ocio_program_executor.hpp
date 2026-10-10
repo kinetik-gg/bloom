@@ -117,6 +117,8 @@ class GpuOcioProgramExecutor final {
     // proven. begin() returns OwnerDrainRequired meanwhile; destroying the executor performs the
     // bounded drain/quarantine of the retained programs.
     [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
+    // Clears only proven retired failed-program transients on the owning device thread.
+    void discardRetiredFailures() noexcept;
 
     // Returns None when the command was accepted and submitted. `uniformOverride` is an optional
     // same-size replacement for the command's immutable OCIO uniform snapshot (empty selects the

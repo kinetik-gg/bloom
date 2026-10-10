@@ -1,4 +1,5 @@
 #include "gpu_image_reclamation_private.hpp"
+#include "gpu_native_image_allocation_private.hpp"
 #include "gpu_resident_display_private.hpp"
 #include "gpu_resident_display_readback_private.hpp"
 
@@ -145,36 +146,34 @@ bool createDisplayImage(DeviceAllocatorState& state, const std::uint32_t width,
                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    VmaAllocationCreateInfo allocationInfo{};
-    allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-    VkImage image = VK_NULL_HANDLE;
-    VmaAllocation allocation = VK_NULL_HANDLE;
-    VmaAllocationInfo mapped{};
-    if (vmaCreateImage(state.allocator, &imageInfo, &allocationInfo, &image, &allocation,
-                       &mapped) != VK_SUCCESS) {
+    if (!vulkan_detail::allocateCoveredImage(state, imageInfo, out.image, out.allocation,
+                                             out.storageToken)) {
         image_detail::releaseImageSlot(out);
         return false;
     }
     VmaAllocationInfo nativeInfo{};
-    vmaGetAllocationInfo(state.allocator, allocation, &nativeInfo);
+    vmaGetAllocationInfo(state.allocator, out.allocation, &nativeInfo);
     image_detail::registerImageBytes(out, static_cast<std::uint64_t>(nativeInfo.size));
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = image;
+    viewInfo.image = out.image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = kDisplayFormat;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     VkImageView view = VK_NULL_HANDLE;
-    if (state.device.getDispatcher()->vkCreateImageView(static_cast<VkDevice>(*state.device),
+    const bool viewFault =
+        state.nativeImageAllocationFault == vulkan_detail::NativeImageAllocationFault::View;
+    if (viewFault)
+        state.nativeImageAllocationFault = vulkan_detail::NativeImageAllocationFault::None;
+    if (viewFault ||
+        state.device.getDispatcher()->vkCreateImageView(static_cast<VkDevice>(*state.device),
                                                         &viewInfo, nullptr, &view) != VK_SUCCESS) {
-        vmaDestroyImage(state.allocator, image, allocation);
+        out.destroy();
         image_detail::releaseImageSlot(out);
         return false;
     }
-    out.image = image;
-    out.allocation = allocation;
     out.view = view;
-    out.allocationBytes = mapped.size;
+    out.allocationBytes = nativeInfo.size;
     out.width = width;
     out.height = height;
     return true;
@@ -202,9 +201,19 @@ void GpuDisplayImageImpl::destroy() noexcept {
     }
     if (image != VK_NULL_HANDLE) {
         vmaDestroyImage(state->allocator, image, allocation);
+        if (state->nativeImageBackingsDestroyed != UINT64_MAX)
+            ++state->nativeImageBackingsDestroyed;
         image = VK_NULL_HANDLE;
         allocation = VK_NULL_HANDLE;
     }
+    storageToken = {};
+}
+
+bool GpuDisplayImage::promoteStorageOwnership() const noexcept {
+    return impl_ && impl_->onOwnerThread() &&
+           !impl_->submissionUnretired.load(std::memory_order_acquire) &&
+           !impl_->state->processingPhaseUnproven &&
+           (impl_->storageToken.bytes() == 0 || impl_->storageToken.promote());
 }
 
 GpuDisplayImage::GpuDisplayImage(std::unique_ptr<GpuDisplayImageImpl> impl) noexcept

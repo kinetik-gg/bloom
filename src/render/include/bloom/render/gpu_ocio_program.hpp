@@ -126,6 +126,8 @@ class GpuOcioProgram final {
     [[nodiscard]] GpuDisplayImage takeDisplayOutput() noexcept;
 
     [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
+    // Owner-only failed-job cleanup after actual retirement. Never consumes Ready or unknown work.
+    [[nodiscard]] bool discardRetiredFailure(GpuDevice& device) noexcept;
     // Actual VMA bytes of the persistent LUT textures + uniform buffer + status buffer owned by
     // this program (allocator rounding included), for a program-cache byte charge. Distinct from
     // lastJobAllocationBytes(), which is the current job's output charge. Owner-thread only.

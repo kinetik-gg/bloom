@@ -274,3 +274,232 @@ void retryNativeChecks(Expectations& checks, Fixture& fixture, ui::CompositionSe
     std::cout << "retry native proof: submissions=" << submissions
               << " preparations=" << preparations.load() << " warmGraphJobs=" << warmJobs << '\n';
 }
+
+// Actual retained native intermediates can exceed a peak phase envelope even though each
+// operation's live peak fits. This witnesses production typed allocation refusal and UI retry.
+void nativeImageCacheRetryChecks(Expectations& checks, Fixture& fixture, TaskScheduler& scheduler,
+                                 const std::filesystem::path& loader,
+                                 const runtime::CpuReferenceDisplayPreparer& referenceDisplay) {
+    constexpr std::uint64_t gib = 1ULL << 30;
+    auto project =
+        document::makeNewProject("Native image retry", "Main", core::RationalTime::fromInteger(4),
+                                 format1920x1080NonSquare());
+    document::Document document(std::move(project.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, project.initialCompositionId);
+    checks.expect(session.addSolidLayer("Last good", {0.125, 0.25, 0.5, 1.0}),
+                  "native image retry owns an actual authored baseline");
+    auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(2);
+    runtime::MemoryBudgetState sample;
+    sample.machine.availableBytes = 60 * gib;
+    sample.process.status = runtime::ProcessMemoryStatus::Finite;
+    sample.process.source = runtime::ProcessMemorySource::LinuxCgroupV2;
+    sample.process.domains.push_back({.path = "/native-image-retry",
+                                      .kind = runtime::ProcessMemoryLimitKind::Finite,
+                                      .limitBytes = 8 * gib,
+                                      .currentBytes = 0});
+    sample.processSampleFresh = true;
+    const auto fresh = [&] {
+        sample.process.sampledAt = runtime::GpuProcessingPhasePolicy::Clock::now();
+        ++sample.sampleSerial;
+        policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+    };
+    fresh();
+    runtime::GpuScenePreparationPhase phase{.policy = policy,
+                                            .envelope = {.metadataBytes = 1ULL << 20,
+                                                         .retainedCoverageByteLimit = 16ULL << 20,
+                                                         .requestedExecutorBytes = gib,
+                                                         .minimumExecutorBytes = gib}};
+    runtime::CpuGpuSceneBuilder highBuilder(
+        nullptr, runtime::GpuSceneMediaContext::fromEvaluator(fixture.evaluator), {}, phase);
+    phase.envelope.requestedExecutorBytes = 512ULL << 20;
+    phase.envelope.minimumExecutorBytes = 512ULL << 20;
+    runtime::CpuGpuSceneBuilder lowBuilder(
+        nullptr, runtime::GpuSceneMediaContext::fromEvaluator(fixture.evaluator), {}, phase);
+    const auto highStage =
+        ui::makeCompositionPreviewGpuSceneStage(fixture.compiler, highBuilder, fixture.provider);
+    const auto lowStage =
+        ui::makeCompositionPreviewGpuSceneStage(fixture.compiler, lowBuilder, fixture.provider);
+    std::atomic_bool low{false};
+    std::atomic_size_t preparations{0}, cpu{0};
+    auto options = serviceOptions(loader);
+    options.processingPhasePolicy = policy;
+    options.previewByteAllowance = gib;
+    options.residentSceneCacheBudgets.maxRetainedBytes = gib;
+    options.residentLeaseBudgets.maxBytes = 64ULL << 20;
+    const auto actualCpu = fixture.productionCpuStage();
+    GpuPreviewDisplayService service(
+        scheduler,
+        [highStage, lowStage, &low, &preparations](
+            const document::Snapshot& snapshot, const PreviewRequestIdentity& identity,
+            std::size_t bytes, const std::vector<runtime::SnapshotParameterOverride>& overrides,
+            TaskContext& context) {
+            ++preparations;
+            auto result =
+                (low.load() ? lowStage : highStage)(snapshot, identity, bytes, overrides, context);
+            for (const auto& diagnostic : result.diagnostics())
+                std::cout << "NATIVE_CACHE_STAGE code=" << diagnostic.code
+                          << " summary=" << diagnostic.summary << '\n';
+            if (result.value() && *result.value())
+                for (const auto& diagnostic : (*result.value())->diagnostics)
+                    std::cout << "NATIVE_CACHE_SUBSET code=" << diagnostic.code
+                              << " summary=" << diagnostic.summary << '\n';
+            return result;
+        },
+        [actualCpu, &cpu](const document::Snapshot& snapshot,
+                          const PreviewRequestIdentity& identity, std::size_t bytes,
+                          const std::vector<runtime::SnapshotParameterOverride>& overrides,
+                          TaskContext& context) {
+            ++cpu;
+            return actualCpu(snapshot, identity, bytes, overrides, context);
+        },
+        fixture.productionCpuFallback(referenceDisplay), options);
+    checks.expect(
+        waitUntil(
+            [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; },
+            90s) &&
+            service.status().state == GpuPreviewDisplayServiceState::Ready,
+        "native image retry service is genuinely ready");
+    if (checks.failures())
+        return;
+    auto core = runtime::detail::GpuPreviewDisplayServiceTestAccess::coreOf(service);
+    ui::TaskUiBridge bridge(scheduler);
+    std::size_t submissions = 0;
+    const ui::PreviewPreparationSubmitter submitter =
+        [&](TaskRequest request, const document::Snapshot& snapshot,
+            const PreviewRequestIdentity& identity, std::size_t bytes,
+            const std::vector<runtime::SnapshotParameterOverride>& overrides) {
+            ++submissions;
+            return service.submit(std::move(request), snapshot, identity, bytes, overrides);
+        };
+    auto pipeline = ui::makeCompositionPreviewPipeline(fixture.compiler, fixture.evaluator,
+                                                       referenceDisplay, fixture.provider);
+    ui::CompositionPreviewSettings settings;
+    settings.pixelStorageByteLimit = gib;
+    settings.resolutionPolicy = PreviewResolutionPolicy::Full;
+    auto cache = std::make_shared<ui::PreviewFrameCache>(64ULL << 20);
+    ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline, settings,
+                                                cache, nullptr, submitter, {}, policy);
+    const auto ready = [&] {
+        return controller.state().activity == ui::PreviewActivity::Ready &&
+               isResident(controller.state().frame);
+    };
+    checks.expect(waitUntil(ready, 15s), "native image retry has real last-good output");
+    if (checks.failures())
+        return;
+    auto good = controller.state().frame;
+    const auto baselineCounters = service.status().counters;
+    const auto baselineSubmissions = submissions;
+    checks.expect(policy->snapshot().reservations.admittedPhases == 0,
+                  "last-good baseline is retired before gated graph authoring");
+    controller.setCachePurgeGate(true);
+    low.store(true);
+    fresh();
+    for (int index = 0; index < 10; ++index)
+        checks.expect(session.addSolidLayer(QString("Retained %1").arg(index),
+                                            {0.02 * (index + 1), 0.01 * (index + 1), 0.1, 0.5}),
+                      "actual new full-frame solid graph is authored");
+    checks.expect(submissions == baselineSubmissions,
+                  "gated graph authoring submits no intermediate pixel work");
+    controller.setCachePurgeGate(false);
+    checks.expect(
+        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Failed; }, 15s),
+        "retained native graph reaches a terminal refusal");
+    const auto refused = policy->snapshot().reservations;
+    auto state = controller.state();
+    std::cout << "NATIVE_CACHE_RETRY submissions=" << submissions << " prep=" << preparations.load()
+              << " cpu=" << cpu.load() << " nativeOwned=" << refused.ownedNativeImageBytes
+              << " count=" << refused.ownedNativeImages << " phases=" << refused.admittedPhases
+              << " graphs="
+              << service.status().counters.residentGraphJobs - baselineCounters.residentGraphJobs
+              << " dispatches="
+              << service.status().counters.nativeDispatches - baselineCounters.nativeDispatches
+              << " revision=" << refused.admissionRevision
+              << " detail=" << service.status().residentDetail << '\n';
+    for (const auto& diagnostic : state.diagnostics) {
+        std::cout << "NATIVE_CACHE_DIAGNOSTIC code=" << diagnostic.code
+                  << " message=" << diagnostic.summary << " retry="
+                  << (diagnostic.admissionRetry ? diagnostic.admissionRetry->revision : 0) << '\n';
+    }
+    if (state.diagnostics.empty()) {
+        checks.expect(false, "native allocation refusal has a terminal diagnostic");
+        return;
+    }
+    const auto& diagnostic = state.diagnostics.front();
+    const auto& admissionRetry = diagnostic.admissionRetry;
+    if (!admissionRetry) {
+        checks.expect(false, "native allocation refusal has exact capacity retry metadata");
+        return;
+    }
+    checks.expect(
+        diagnostic.code == "preview.processing-phase.budget-refused" &&
+            diagnostic.summary == "The native image allocation is awaiting processing capacity." &&
+            service.status().counters.residentGraphJobs > baselineCounters.residentGraphJobs &&
+            service.status().counters.nativeDispatches > baselineCounters.nativeDispatches &&
+            admissionRetry->revision == refused.admissionRevision && refused.admittedPhases == 0 &&
+            refused.ownedNativeImages > 0 && cpu.load() == 0 && state.frame == good,
+        "actual image allocation refusal keeps cache backing/last-good and exact own "
+        "watermark without CPU substitution");
+    if (checks.failures())
+        return;
+    const auto failedSubmissions = submissions;
+    for (int index = 0; index < 20; ++index)
+        controller.notifyProcessingCapacityChanged();
+    QGuiApplication::processEvents();
+    checks.expect(submissions == failedSubmissions,
+                  "unchanged native revision pulses cannot self-retry");
+    low.store(false);
+    auto purge = scheduler.submitGpu<int>(
+        TaskRequest("native image cache release",
+                    {.kind = TaskOwnerKind::Application, .id = TaskOwnerId::fromRaw(1901)},
+                    runtime::TaskPriority::Interactive, runtime::TaskExecutor::Gpu),
+        core->generation, runtime::GpuTaskAdmission{0, 0},
+        [core](TaskContext&, runtime::GpuTaskCompletion<int> completion) {
+            core->residentSceneCache->clear();
+            static_cast<void>(std::move(completion).complete(TaskResult<int>::succeeded(1)));
+        });
+    auto purged = purge.accepted() ? awaitResult(purge.handle) : std::nullopt;
+    checks.expect(purged && purged->state() == TaskState::Succeeded &&
+                      policy->snapshot().reservations.admissionRevision > refused.admissionRevision,
+                  "actual native cache release is independently observable");
+    fresh();
+    controller.notifyProcessingCapacityChanged();
+    checks.expect(waitUntil(ready, 15s) && submissions == failedSubmissions + 1 &&
+                      cpu.load() == 0 && controller.state().desiredIdentity &&
+                      controller.state().frame->desiredIdentity() ==
+                          *controller.state().desiredIdentity,
+                  "one independent native release recovers newest authored intent on GPU");
+    if (checks.failures())
+        return;
+    checks.expect(session.setCurrentTime(core::RationalTime::fromInteger(1)) &&
+                      waitUntil(ready, 15s),
+                  "second actual native time prepares a retained output");
+    const auto warm = service.status().counters;
+    const auto warmClaims = policy->snapshot().reservations;
+    const auto warmPreparations = preparations.load();
+    checks.expect(
+        session.setCurrentTime(core::RationalTime::fromInteger(0)) && ready() &&
+            preparations.load() == warmPreparations &&
+            service.status().counters.residentGraphJobs == warm.residentGraphJobs &&
+            service.status().counters.nativeDispatches == warm.nativeDispatches &&
+            service.status().counters.packedTransfers == warm.packedTransfers &&
+            controller.state().desiredIdentity &&
+            controller.state().frame->desiredIdentity() == *controller.state().desiredIdentity &&
+            policy->snapshot().reservations.ownedNativeImageBytes ==
+                warmClaims.ownedNativeImageBytes &&
+            policy->snapshot().reservations.ownedNativeImages == warmClaims.ownedNativeImages,
+        "ordinary warm retained-frame return performs no preparation, graph, dispatch, "
+        "or new native allocation");
+    controller.beginShutdown();
+    controller.releasePublishedFramesForShutdown();
+    state.frame.reset();
+    good.reset();
+    service.beginShutdown();
+    bridge.stop();
+    checks.expect(
+        waitUntil([&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; },
+                  15s) &&
+            policy->snapshot().reservations.ownedNativeImageBytes == 0 &&
+            policy->snapshot().reservations.totalDeviceClaimBytes == 0,
+        "production native cache/controller service fully retires actual backing");
+}

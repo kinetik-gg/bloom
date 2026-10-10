@@ -5,9 +5,26 @@
 #include <atomic>
 #include <bloom/render/gpu_display_transfer.hpp>
 #include <bloom/runtime/gpu_prepared_packed_preview_product.hpp>
+#include <bloom/runtime/packed_host_retirement.hpp>
 #include <stdexcept>
 namespace {
 #if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
+// Headless fixture thread: close/join only after its service, task and product aliases die.
+struct PackedRetirementScope final {
+    std::shared_ptr<bloom::runtime::PackedHostRetirementOwner> owner =
+        bloom::runtime::PackedHostRetirementOwner::create();
+    PackedRetirementScope() {
+        if (!owner->prepare())
+            throw std::runtime_error("packed fixture retirement worker startup failed");
+    }
+    ~PackedRetirementScope() {
+        owner->beginShutdown();
+        if (!waitUntil([&] { return owner->exitAcknowledged(); }, 30s) || !owner->collect()) {
+            std::cerr << "packed fixture retirement did not actually exit/collect\n";
+            std::terminate();
+        }
+    }
+};
 [[nodiscard]] bloom::runtime::PreviewDisplayBufferView
 packedView(const bloom::runtime::PreparedPreviewFrame& frame) {
     const auto view = frame.displayBufferView();

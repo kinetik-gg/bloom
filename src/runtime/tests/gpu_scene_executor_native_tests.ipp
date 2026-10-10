@@ -152,12 +152,27 @@ void testNativeRetirementContracts(Expectations& expectations, GpuDevice& device
 
     // 2) Unknown fence: a Failure that does not prove retirement retains and poisons, then drains.
     {
+        bloom::render::GpuProcessingPhaseBudget root;
+        root.setHostCapacity(kSceneBudget * 2, true);
+        root.setDeviceCapacity(kSceneBudget * 2, true);
+        auto admission = root.reserve({.fixedHostBytes = 1,
+                                       .requestedExecutorBytes = kSceneBudget,
+                                       .minimumExecutorBytes = kSceneBudget,
+                                       .sourceFree = true});
+        expectations.expect(admission.lease && device.retainProcessingPhase(admission.lease),
+                            "unknown: actual graph uses an admitted native ownership root");
+        if (!admission.lease)
+            return;
         auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
         auto exec = GpuSceneExecutor::create(device, *cache.cache);
         expectations.expect(exec.hasValue(), "unknown: the executor is created");
         if (exec) {
             static_cast<void>(exec.executor->begin(prepared.scene, kSceneBudget));
             static_cast<void>(exec.executor->poll());
+            const auto beforeUnknown = root.snapshot();
+            expectations.expect(beforeUnknown.ownedNativeImageBytes > 0 &&
+                                    beforeUnknown.ownedNativeImages > 0,
+                                "unknown: genuine native dispatch owns actual image backing");
             fault::set(Fault::UnknownFence);
             const auto failed = exec.executor->poll();
             expectations.expect(failed == GpuSceneExecutorPollResult::Failure,
@@ -167,6 +182,15 @@ void testNativeRetirementContracts(Expectations& expectations, GpuDevice& device
                                 "unknown: the diagnostic is NativeUnproven");
             expectations.expect(exec.executor->ownerDrainRequired(),
                                 "unknown: the unproven submission requires owner drain");
+            const auto heldUnknown = root.snapshot();
+            expectations.expect(
+                heldUnknown.ownedNativeImageBytes == beforeUnknown.ownedNativeImageBytes &&
+                    heldUnknown.ownedNativeImages == beforeUnknown.ownedNativeImages &&
+                    heldUnknown.ownedNonlocalNativeHostBytes ==
+                        beforeUnknown.ownedNonlocalNativeHostBytes &&
+                    heldUnknown.totalDeviceClaimBytes == beforeUnknown.totalDeviceClaimBytes,
+                "unknown: post-submit injected unknown retains backing/token and "
+                "any overlapping nonlocal host claim until real fence proof");
             expectations.expect(exec.executor->takeImage() == nullptr,
                                 "unknown: no image is published");
             expectations.expect(exec.executor->begin(prepared.scene, kSceneBudget).code ==
@@ -180,6 +204,16 @@ void testNativeRetirementContracts(Expectations& expectations, GpuDevice& device
             expectations.expect(!exec.executor->ownerDrainRequired(),
                                 "unknown: the owner drained the submission");
         }
+        exec.executor.reset();
+        cache.cache.reset();
+        device.retireProcessingPhase(admission.lease->id(), true);
+        admission.lease.reset();
+        const auto retired = root.snapshot();
+        expectations.expect(retired.ownedNativeImages == 0 && retired.ownedNativeImageBytes == 0 &&
+                                retired.ownedNonlocalNativeHostBytes == 0 &&
+                                retired.totalDeviceClaimBytes == 0 &&
+                                retired.totalHostClaimBytes == 0,
+                            "unknown: actual owner fence drain/backing destruction precede credit");
     }
 
     // 3) Device loss is mapped distinctly and is terminal.

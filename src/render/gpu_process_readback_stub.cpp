@@ -28,7 +28,9 @@ const GpuProcessReadbackDiagnostic& GpuProcessReadback::diagnostic() const noexc
     return impl_ == nullptr ? empty : impl_->diagnostic;
 }
 
-bool GpuProcessReadback::begin(std::shared_ptr<const GpuImage>, const std::uint64_t) noexcept {
+bool GpuProcessReadback::begin(std::shared_ptr<const GpuImage> image,
+                               const std::uint64_t) noexcept {
+    image.reset();
     if (impl_ == nullptr) {
         return false;
     }

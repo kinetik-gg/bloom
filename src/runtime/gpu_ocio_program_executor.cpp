@@ -248,6 +248,20 @@ bool GpuOcioProgramExecutor::deviceLost() const noexcept {
 bool GpuOcioProgramExecutor::hasUnretiredSubmission() const noexcept {
     return impl_ != nullptr && impl_->anyUnretired();
 }
+void GpuOcioProgramExecutor::discardRetiredFailures() noexcept {
+    if (!impl_ || !impl_->onOwnerThread() || impl_->deviceLost || impl_->anyUnretired())
+        return;
+    for (auto& [key, entry] : impl_->programs) {
+        static_cast<void>(key);
+        if (entry.program)
+            static_cast<void>(entry.program->discardRetiredFailure(*impl_->device));
+    }
+    if (impl_->jobState == GpuOcioExecutorJobState::Failure) {
+        static_cast<void>(render::retireFailedAttemptGpuImage(impl_->activeInput, *impl_->device));
+        impl_->activeInput.reset();
+    }
+}
+
 bool GpuOcioProgramExecutor::teardownDrainIncomplete() noexcept {
     return render::GpuOcioProgram::teardownDrainIncomplete();
 }
@@ -306,6 +320,7 @@ GpuOcioProgramExecutor::begin(std::shared_ptr<const PreparedGpuOcioCommand> comm
     const auto nativeDiagnostic = display ? native->beginDisplay(input, uniformOverride, byteBudget)
                                           : native->beginEffect(input, uniformOverride, byteBudget);
     if (nativeDiagnostic.code != render::GpuOcioProgramDiagnosticCode::None) {
+        static_cast<void>(native->discardRetiredFailure(*impl.device));
         const auto code = mapProgramCode(nativeDiagnostic.code);
         if (code == GpuOcioExecutorDiagnosticCode::OverBudget) {
             ++impl.counters.budgetRefusals;

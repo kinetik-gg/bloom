@@ -26,6 +26,7 @@
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_presentation_types.hpp>
 #include <bloom/render/gpu_processing_phase_budget.hpp>
+#include <bloom/render/native_image_storage.hpp>
 
 #include <vulkan/vulkan_raii.hpp>
 
@@ -68,6 +69,9 @@ class DynamicLibrary final {
 // down in the body, then lets the RAII members release in reverse declaration order: queue, device,
 // physical device, instance, and finally the loader. The owner thread is recorded so misuse can
 // fail closed rather than race a device.
+// Private one-shot owner-thread fault control; None is the production path.
+enum class NativeImageAllocationFault : std::uint8_t { None, Allocation, Reconcile, Bind, View };
+
 struct DeviceAllocatorState final {
     DeviceAllocatorState() = default;
     DeviceAllocatorState(const DeviceAllocatorState&) = delete;
@@ -77,19 +81,25 @@ struct DeviceAllocatorState final {
     ~DeviceAllocatorState();
 
     std::thread::id owner;
-    // Owner-only lifecycle flag; surviving images retain this allocator and remain valid.
-    bool imageOwnerClosed = false;
     std::uint64_t ownerLifetimeToken = 0;
     // Final-image release publication is allocation-free, including after facade shutdown.
     std::atomic<std::uint64_t> pendingImageReclaims{0};
     std::atomic<std::uint64_t> pendingOracleReadbacks{0};
     std::atomic<std::uint64_t> imageReclamationScans{0};
+    // Owner-only backing-call witness, distinct from unbound-image/requirements queries.
+    std::uint64_t nativeImageBackingAttempts = 0;
+    std::uint64_t nativeImageBackingsDestroyed = 0;
+    std::uint64_t presentationEpoch = 0;
+    std::uint64_t borrowedInstanceBits = 0;
+    std::uint64_t maxStorageBufferRange = 0;
+    // Summed DEVICE_LOCAL heap size, not committed allocator bytes.
+    std::uint64_t deviceLocalBytes = 0;
 
     // Declared before native RAII fields: all native teardown precedes final quota release. The
     // lease points only to a neutral ledger, never back to this generation (no reference cycle).
     std::shared_ptr<GpuProcessingPhaseLease> processingPhase;
-    bool processingPhaseUnproven = false;
-
+    std::optional<NativeImageStorageRefusal> imageStorageRefusal;
+    // Native RAII declaration order is deliberate: queues/device/instance die before the loader.
     DynamicLibrary loader;
     vk::raii::Instance instance{nullptr};
     vk::raii::PhysicalDevice physicalDevice{nullptr};
@@ -99,11 +109,21 @@ struct DeviceAllocatorState final {
     // is only a distinct queue when the presentation family differs from the compute family.
     vk::raii::Queue presentQueue{nullptr};
     VmaAllocator allocator = VK_NULL_HANDLE;
+
+    // Nonzero private domain-control mask intersects real image requirements; 0 is unmodified.
+    std::uint32_t nativeImageMemoryTypeMaskForTests = 0;
     std::uint32_t computeQueueFamily = 0;
     std::uint32_t presentQueueFamily = 0;
+    std::uint32_t generation = 0;
+    std::uint32_t maxComputeWorkGroupCountX = 0;
+    std::uint32_t maxComputeWorkGroupInvocations = 0;
+    std::uint32_t maxComputeWorkGroupSizeX = 0;
 
-    // Presentation bootstrap facts. All are set once during create() on the owner thread and are
-    // immutable afterwards, so borrowedInstanceView() can read them from the UI thread.
+    // Owner-only lifecycle flag; surviving images retain this allocator and remain valid.
+    bool imageOwnerClosed = false;
+    bool processingPhaseUnproven = false;
+    NativeImageAllocationFault nativeImageAllocationFault = NativeImageAllocationFault::None;
+    // Immutable presentation bootstrap facts, resolved only on the owner thread.
     bool presentationRequested = false;
     bool presentationReady = false;
     bool surfaceExtensionEnabled = false;
@@ -111,24 +131,9 @@ struct DeviceAllocatorState final {
     bool swapchainExtensionEnabled = false;
     bool presentFencesEnabled = false;
     bool presentWaitEnabled = false;
-    std::uint64_t presentationEpoch = 0;
-    std::uint64_t borrowedInstanceBits = 0;
-
-    // Bounded bootstrap facts recorded once so a renderer can validate a request against real
-    // device limits before touching the allocator or queue.
-    std::uint32_t generation = 0;
-    // True only when the selected device advertised and Bloom enabled the core shaderFloat64
-    // feature, so a Float64 kernel may be created. Gated on real support; never inferred.
+    // Enabled only when advertised and requested for Float64 kernels.
     bool shaderFloat64 = false;
-    std::uint64_t maxStorageBufferRange = 0;
-    std::uint32_t maxComputeWorkGroupCountX = 0;
-    std::uint32_t maxComputeWorkGroupInvocations = 0;
-    std::uint32_t maxComputeWorkGroupSizeX = 0;
-
-    // Resolved device allocation budget inputs. `deviceLocalBytes` is the summed DEVICE_LOCAL heap
-    // size and `memoryBudgetEnabled` is true only when VK_EXT_memory_budget was actually enabled
-    // and the VMA allocator was created with the matching budget flag.
-    std::uint64_t deviceLocalBytes = 0;
+    // True only when VK_EXT_memory_budget and the matching VMA flag are both enabled.
     bool memoryBudgetEnabled = false;
 };
 

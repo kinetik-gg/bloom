@@ -275,8 +275,9 @@ class GpuSceneExecutor final {
     [[nodiscard]] const render::GpuImage* image() const noexcept;
 
     // Moves the output pin out and returns to Idle. The cache (if it accepted the output) may still
-    // retain the image.
-    [[nodiscard]] std::shared_ptr<const render::GpuImage> takeImage();
+    // retain the image. An internal producer handoff keeps uncached storage provisional; terminal
+    // retention checks per-image promotion. Cache-promoted images remain published in either mode.
+    [[nodiscard]] std::shared_ptr<const render::GpuImage> takeImage(bool publishStorage = true);
 
     // Requests cancellation. Resources/pins are retained until the in-flight native job retires;
     // no image is published after this call.

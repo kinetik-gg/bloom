@@ -48,6 +48,7 @@ struct GpuDisplayImageImpl final {
     VkImage image = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
+    NativeImageStorageToken storageToken;
     std::uint64_t allocationBytes = 0;
     std::uint32_t width = 0;
     std::uint32_t height = 0;

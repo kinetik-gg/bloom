@@ -370,7 +370,7 @@ const render::GpuImage* GpuSceneExecutor::image() const noexcept {
     return impl_->images[output].get();
 }
 
-std::shared_ptr<const render::GpuImage> GpuSceneExecutor::takeImage() {
+std::shared_ptr<const render::GpuImage> GpuSceneExecutor::takeImage(const bool publishStorage) {
     if (impl_ == nullptr || impl_->state != GpuSceneExecutorJobState::Ready ||
         impl_->scene == nullptr) {
         return nullptr;
@@ -381,6 +381,8 @@ std::shared_ptr<const render::GpuImage> GpuSceneExecutor::takeImage() {
         return nullptr;
     }
     auto result = impl_->images[output];
+    if (!result || (publishStorage && !result->promoteStorageOwnership()))
+        return nullptr;
     impl_->clearJob();
     impl_->state = GpuSceneExecutorJobState::Idle;
     impl_->diagnostic = {};

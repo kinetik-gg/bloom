@@ -1172,6 +1172,73 @@ residuals still need allocation-owned accounting. This slice establishes no aggr
 width-two execution, sustained throughput, or native macOS/Windows qualification. The
 [GPU reliability plan](../plans/gpu-reliability-and-preview.md) owns the remaining gates.
 
+### Rooted native image suballocation ownership (bounded two-family slice)
+
+The implemented native follow-on covers explicitly rooted backing created by `createResidentImage`
+and `createDisplayImage`: native RGBA32F process images and RGBA8 display images. Each opaque backing
+implementation contains one move-only `NativeImageStorageToken`; aliases share that token. Legacy
+unrooted creation remains unowned by this ledger. No new image/frame cap or reclamation queue is
+introduced; existing owner-slot and native resource bounds remain in force.
+
+Creation reserves its existing owner slot and creates an unbound image, then queries that image's
+requirements and dedicated-allocation flags. VMA ranks compatible types using the existing
+AUTO_PREFER_DEVICE preferences. Each admitted allocation uses UNKNOWN with one pinned type bit;
+failed candidate allocation clears that bit and retries the remaining ranking, stopping at mask
+zero or the physical memory-type count. Size/type/heap must reconcile downward to the actual
+allocation before bind/view; there is no allocate-first top-up. Bind/view/reconciliation failure
+destroys actual backing before claim undo rather than silently trying another type.
+Allocation errors alone prove neither device health nor retirement of other submitted work.
+
+Under one neutral root lock, the token transfers requirements bytes from the phase's remaining
+native debit. A heap without DEVICE_LOCAL additionally acquires a separately bounded host backing
+claim against delivered host capacity and the immutable native envelope, without borrowing the
+source/packed-host grant. Both domains admit before a VMA backing attempt. HOST_VISIBLE on a
+DEVICE_LOCAL BAR heap alone does not imply this host claim; UMA physical overlap remains unknown.
+The runtime supplies the original sample's validity deadline. Expired delivery closes new
+supplemental host admission without erasing held backing, and fresh same-size delivery can reopen
+readiness. A new timestamp cannot manufacture freshness for an old sample.
+
+`ownedNativeImageBytes`/`ownedNativeImages` count covered suballocations once;
+`ownedNonlocalNativeHostBytes` is an overlapping host subset. `totalDeviceClaimBytes` and
+`totalHostClaimBytes` include their respective phase remainders and covered owners. These are
+admission constraints, not additive physical totals. Actual `VmaAllocationInfo::size` describes a
+suballocation, not committed VMA blocks, driver/RSS, opaque metadata or allocator overhead. OCIO
+texture arrays, WSI images and other allocation families remain outside this ownership slice.
+
+Cache/output retention promotes only the retained image. Promotion drops its strong phase alias
+outside the lock and keeps a weak origin for turnover: actual backing destruction may replenish
+that still-live preadmitted envelope, while an expired origin releases credit normally. Aliases do
+not pin the request indefinitely. Failed-prefix foldback requires proof of destroyed backing,
+exact origin and the last internal alias with no external/cache holder. It cannot fabricate an
+independent release revision or hide a genuine independent release. Ordinary published disposal
+retains its release revision; this does not add an immediate UI wake channel. Typed refusals preserve
+exact phase/domain and current refusal watermark. The genuine general-controller witness preserves
+last-good output after an actual native allocation refusal, ignores unchanged-revision pulses and
+recovers the newest intent once after an independent native cache release. Its ordinary retained-frame
+return adds no preparation, graph, dispatch or native owned bytes/count. Final transfer/identity and
+rooted general-display/Viewer precision checks also pass: cached return preserves exact identity
+and adds no packed transfer, the general display matrix matches its CPU pixel oracle, and actual
+Viewer/cache ownership retires covered native backing to zero.
+
+Tokens survive existing foreign orphan and unknown quarantine paths with their exact allocator
+generation. Actual native destruction precedes release; owner close or enqueue is not destruction.
+The host reclaimer is not a native owner. The real UnknownFence witness retains covered token
+bytes/count through actual fence/owner retirement while holding its admitted phase lease.
+Independently, existing unproven phase protections stay sticky where engaged; this witness does not
+assert those latch counters. A private unproved-flag control is distinct from submitted-work evidence.
+
+Incremental neutral, genuine two-family allocation/nonlocal/fault/alias, submitted-fence and OCIO
+pixel/cache witnesses pass, as detailed in the
+[owning plan](../plans/gpu-reliability-and-preview.md). Corrected whole general-display and packed
+helpers also pass with explicit root/retirer/phase-lease prerequisites; their earlier fixture
+failures remain separate from production behavior. Required-route and all 323 owned desktop strict
+checks are covered with their split-run history. Linux CPU-stub fallback covers 16 distinct strict
+consumers and 17 passing owning checks plus one honest unavailable-tools skip; actual GPU routes
+are qualified separately. Final application/CLI/media identity and dependency checks and repository
+quality pass. Verified packaging and normal-app replacement follow this checkpoint. This does not
+qualify all native allocations, block commitment, whole-process/UMA/OOM accounting, sustained
+performance or native macOS/Windows execution.
+
 ### Rooted packed-host payload ownership (bounded ownership slice)
 
 This narrow G6B slice tracks allocator-requested RGBA8 pixel payloads for explicitly rooted

@@ -2,7 +2,7 @@
 
 Status: working — implementation resumed after G2E; architecture choices remain gated by evidence
 
-Updated: 2026-10-09
+Updated: 2026-10-10
 
 ## Execution checkpoint
 
@@ -43,6 +43,7 @@ and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 | G6B off-UI published-host retirement | Affected retirement qualification gates pass | Payload plus admitted intrusive header, allocation-free final-alias enqueue, charged worker free and explicit actual-exit collection; headless/Linux CPU-only gates and all 103 affected strict TUs pass |
 | Controlled mounted-footage A | Accepted only for bounded Full/Half preparation, pixels, ownership and warm reuse | 100 strongly verified members in a controlled 24 fps 1080 composition, independent still-member CPU parity, 200 zero-work warm observations, exact payload/header charges and final release; one affected strict TU and repository quality pass |
 | Preview live-default propagation / mounted-footage B | Bounded companion qualified | Explicit versus omitted producer/request limits, neutral numeric delivery and proved OverBudget retirement; ordinary Full/Half, explicit-cap recovery and independent unknown ownership pass; configured B witnesses remain separate |
+| G6B rooted native image suballocations | Bounded two-family qualification gates pass | Exact VMA type/heap/size, pre-backing domain claims, unique cache/alias ownership, real submitted unknown retention, pixels/refusal/recovery/warm return, required routes and affected strict/Linux fallback/quality; not all-native/block/physical accounting |
 | G4C prerequisite | Accepted only as the bounded cold-progress prerequisite | One active/newest intent, useful older Stale publication and guarded pause/shutdown pass source review and short real playing pixels; remaining G4 scheduling is pending |
 | G7A / G9 bounded display work | Packed immutable borrowing, off-UI CPU channel derivation and finished-display host choice accepted | Explicit provenance and measured bytes; remaining CPU storage/process/channel work and broader cache policy remain pending |
 | G8 optional two-frame throughput | Investigation complete; implementation and benchmark pending | Source confirms per-service frame serialization; no multi-frame speedup or GPU-utilization result is established |
@@ -267,6 +268,80 @@ bounded resident/display native-image
 ownership slice, before media reuse/presentation, batching, bounded concurrency and sustained/platform
 evidence. This companion does not qualify allocation-owned native backing or the remaining roadmap;
 the verified package and user-app replacement are separate deployment steps.
+
+Rooted native-image follow-on (2026-10-10), qualified within this bounded two-family scope:
+the [owning contract](../architecture/gpu-backend.md#rooted-native-image-suballocation-ownership-bounded-two-family-slice)
+covers only rooted resident RGBA32F and display RGBA8 backing. Neutral core tests and actual
+ASAN/UBSAN/LSAN pass; strict core closes three initial units and the guarded-fixture rerun, preserving
+its unsuccessful value()-only attempt. Turnover's weak-origin repair and current-refusal watermark
+checks separately prove failed internal-prefix own-release R+1 versus independent releases.
+
+Genuine native two-family witnesses verify actual VMA size/type/heap identity, zero backing attempts
+on admission refusal, pre-VMA allocation and actual-size reconciliation/bind/view fault controls,
+real nonlocal heap host-subset claims, 256 aliases sharing one charge and foreign-owner orphan retention. Their
+private unproved-flag control establishes retention only. Separate real post-submit UnknownFence
+assertions keep new owned bytes/count charged until actual fence drain; the whole executor helper
+passes in 0.234 s after correcting its independent 6000x4000 fixture's captured 256 MiB producer cap
+to an explicit admitted scene-budget ceiling. The preceding helper failure remains preserved;
+rooted unknown assertions had already passed and did not make that failed whole run a pass.
+
+The genuine OCIO scene witness passes in 0.297 s: cold output matches the CPU oracle, at least four
+unique images detach from phase ownership through cache publication, warm replay adds zero dispatch
+with unchanged owned bytes/count and host subset, and final destruction reaches zero. Native
+suballocation metrics do not measure committed VMA blocks, driver/process RSS or metadata. Nonlocal
+heap host claims are distinct from HOST_VISIBLE device-local BAR backing; UMA overlap is unknown.
+Other native families remain unowned by this slice, and no fixed frame cap or new queue is added.
+
+The final whole genuine native controller helper passes in 6.182 s (552.1 MiB): its actual allocation
+refusal follows one graph and 22 dispatches with zero CPU fallback. Nineteen retained native images
+hold 646,520,832 bytes while phase count is zero and the refusal watermark equals root revision 4.
+Unchanged pulses add no retry; actual native-owner cache purge and independent release permit one
+newest-intent GPU recovery. After preparing a second time, the ordinary cached return adds no
+preparation, graph, dispatch, packed transfer or native owned bytes/count while preserving exact
+identity, and final service retirement reaches zero. The preceding 6.217 s controller checkpoint
+remains historical. The rooted general-display CPU pixel matrix passes in 1.223 s (319.8 MiB),
+including both covered native image families and final zero charges. Actual Viewer/cache ownership
+and cached return pass in 1.301 s (325.5 MiB), with core and synchronization validation clean.
+The controller witness uses explicit 1 GiB request/controller/Tasks aggregate limits, a native
+limit raised from 512 MiB to 1 GiB, a 1 GiB scene cache and delivered finite 8 GiB fixture host
+capacity; its genuine device result does not establish ordinary-default behavior.
+Three preceding fixture failures remain separate: eleven setup submissions with CPU fallback, an
+inherited 256 MiB service/controller pixel-storage preflight allowance refusing before graph/native
+execution, and a forced refresh with an
+incorrect zero-allocation expectation.
+
+Affected owning evidence is split: 24 initial passes and one honest device skip, followed by the
+actual required-device controller pass above and two corrected whole native helper passes. The
+whole general helper passes in 6.059 s (822.7 MiB), preserving its greater-than-4K, ACES, cache,
+default 6K, media/text and refusal checks. The whole packed helper preserves actual GPU parity,
+three payload fault cases, late cancellation/detach and exact known live-payload sums while waiting
+for worker retirement. Their prerequisite repair history is retained: missing explicit retirer
+and matching sampler, obsolete immediate-free assertions, missing composition, then a missing
+`built.phaseLease` handoff correctly refused by production. These five fixture paths extend the
+unchanged 43-source checkpoint to 48; no production quota or global-cap lift was made to pass them.
+The fresh six-route gate passes 14/14 checks in 17.82 s, including all six production route writers
+and 56 native coverage observations with zero failures or skips; route, contract, mutation, registry,
+ASAN and route-I/O checks remain separately attributable. The final desktop strict map covers all
+323 owned header consumers: 320 completed-batch passes plus three exact repaired reruns, preserving
+the earlier interrupted batch and failed prefixes. Exactly one generated Qt aggregation is excluded;
+fresh fallback mapping identifies 16 distinct stub consumers (four changed and twelve header
+consumers), without repeating its full 235-TU map. Those 16 fallback strict units close as 12 initial
+passes and four exact repaired reruns. The owning by-value API is preserved: CPU stubs explicitly
+release rejected inputs before the same typed DeviceUnavailable result, without native work or
+callback execution. Three previously unchanged stub paths extend source scope to 51.
+The actual Linux Vulkan-off/Python-on app/CLI/media build passes; 18 fallback CTest registrations
+finish in 5.22 s with 17 Passed and one honest Skipped GPU coverage-contract check because GPU shader
+tools are unavailable in the CPU-stub build. CTest also adds its passing media-generation prerequisite,
+so the observed log total is 19 registrations: 18 Passed and one Skipped. Owning and mutation checks
+pass; this is not 18 native passes, and the genuine six-route evidence above is separate. The final
+desktop application/CLI/media and guard/header-consumer rebuild completes 56 actions, with exact
+binary identities and zero missing dependencies. Repository quality passes schema, architecture,
+dependency, hygiene and UI grammar checks and formatting of 1,464 files. Exact source-plus-doc
+review, selective commit, verified packaging and normal-app replacement are the checkpoint handoff.
+The accepted `277590d4` package and running app remain unchanged until that verified replacement.
+Next, the same owner proceeds to explicitly rooted OCIO sampled-LUT image backing; buffers,
+staging, WSI, legacy allocations, allocator-block/driver overhead and physical/UMA accounting remain
+outside this slice, with the broader roadmap still open.
 
 First G6B phase-reservation checkpoint (2026-10-09), accepted within bounded scope:
 independent reviews cover coordinator/policy/builder quotas, resident and final phase lifetimes,

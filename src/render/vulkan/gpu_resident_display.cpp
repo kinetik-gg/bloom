@@ -663,6 +663,20 @@ const GpuDisplayImage* GpuResidentDisplay::image() const noexcept {
     }
     return impl_->residentImage.get();
 }
+bool GpuResidentDisplay::discardRetiredFailure(GpuDevice& device) noexcept {
+    if (!impl_ || !impl_->onOwnerThread() || !isBoundTo(device) ||
+        impl_->jobState != GpuResidentDisplayJobState::Failure || impl_->queueSubmitted ||
+        impl_->deviceLost || impl_->control->processingPhaseUnproven)
+        return false;
+    impl_->residentImage.reset();
+    static_cast<void>(retireFailedAttemptGpuImage(impl_->input, device));
+    impl_->input.reset();
+    destroyResidentBuffer(*impl_->control, impl_->jobInput);
+    destroyResidentBuffer(*impl_->control, impl_->jobOutput);
+    destroyResidentBuffer(*impl_->control, impl_->jobStatus);
+    return true;
+}
+
 GpuDisplayImage GpuResidentDisplay::takeImage() noexcept {
     // Only a Ready job may be taken. While a job is Pending, its resident image and its input/
     // output/status buffers are still referenced by an unretired submission; refusing here leaves

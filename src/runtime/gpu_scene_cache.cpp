@@ -252,6 +252,13 @@ GpuSceneCache::insert(std::string semanticKey,
         ++impl.counters.refusals;
         return GpuSceneCacheInsertResult::RefusedBookkeeping;
     }
+    const auto stored = impl.entries.find(std::string_view{impl.order.front()});
+    if (!stored->second.image->promoteStorageOwnership()) {
+        impl.entries.erase(stored);
+        impl.order.pop_front();
+        ++impl.counters.refusals;
+        return GpuSceneCacheInsertResult::InvalidArgument;
+    }
     impl.retainedBytes += bytes;
     ++impl.counters.insertions;
     return GpuSceneCacheInsertResult::Inserted;

@@ -173,7 +173,20 @@ void testLargeImageNative(Expectations& expectations, GpuDevice& device) {
     if (!cache) {
         return;
     }
-    auto executor = GpuSceneExecutor::create(device, *cache.cache);
+    bloom::render::GpuProcessingPhaseBudget root;
+    root.setHostCapacity(kSceneBudget * 2, true);
+    root.setDeviceCapacity(kSceneBudget * 2, true);
+    auto admission = root.reserve({.fixedHostBytes = 1,
+                                   .requestedExecutorBytes = kSceneBudget,
+                                   .minimumExecutorBytes = kSceneBudget,
+                                   .sourceFree = true});
+    expectations.expect(admission.lease && device.retainProcessingPhase(admission.lease),
+                        "large: the declared capacity-sized native envelope is admitted");
+    if (!admission.lease)
+        return;
+    GpuSceneExecutorBudgets configured;
+    configured.maxImageBytes = kSceneBudget;
+    auto executor = GpuSceneExecutor::create(device, *cache.cache, configured);
     expectations.expect(executor.hasValue(), "large: executor created");
     if (!executor) {
         return;
@@ -184,7 +197,7 @@ void testLargeImageNative(Expectations& expectations, GpuDevice& device) {
     if (!prepared) {
         return;
     }
-    const auto run = runScene(*executor.executor, prepared.scene, kSceneBudget);
+    auto run = runScene(*executor.executor, prepared.scene, kSceneBudget);
     expectations.expect(run.ready, "large: the 6000x4000 solid dispatches natively");
     if (run.ready) {
         expectations.expect(
@@ -194,6 +207,14 @@ void testLargeImageNative(Expectations& expectations, GpuDevice& device) {
                 0,
             "large: at least one native operation ran for the 384 MB image");
     }
+    run.image.reset();
+    executor.executor.reset();
+    cache.cache.reset();
+    device.retireProcessingPhase(admission.lease->id(), true);
+    admission.lease.reset();
+    expectations.expect(root.snapshot().ownedNativeImageBytes == 0 &&
+                            root.snapshot().totalDeviceClaimBytes == 0,
+                        "large: actual backing and its admitted envelope fully retire");
 }
 
 void testStructureRefusal(Expectations& expectations, GpuDevice& device) {

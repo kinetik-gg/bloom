@@ -23,6 +23,7 @@
 namespace bloom::render {
 
 class GpuDevice;
+class GpuProcessingPhaseLease;
 struct GpuImageImpl;
 enum class GpuImageReadbackCode : std::uint8_t;
 struct GpuImageReadback;
@@ -52,8 +53,11 @@ class GpuImage final {
     // on that device's owner thread; false for a moved-from image, a different
     // device, a stub, or a foreign thread.
     [[nodiscard]] bool isBoundTo(GpuDevice& device) const noexcept;
+    // Successful cache/output retention detaches this image's neutral storage authority only.
+    [[nodiscard]] bool promoteStorageOwnership() const noexcept;
 
   private:
+    friend bool retireFailedAttemptGpuImage(std::shared_ptr<const GpuImage>&, GpuDevice&) noexcept;
     friend GpuImage makeGpuImage(std::unique_ptr<GpuImageImpl> impl) noexcept;
     friend GpuImageReadback readbackResidentImage(const GpuImage& image,
                                                   std::uint64_t byteBudget) noexcept;
@@ -67,6 +71,11 @@ class GpuImage final {
 
     std::unique_ptr<GpuImageImpl> impl_;
 };
+
+// Failed-attempt cleanup only: actual owner/device, retired submission and a unique shared alias
+// are checked before destruction. An unrelated/cache/external alias is never folded into this job.
+[[nodiscard]] bool retireFailedAttemptGpuImage(std::shared_ptr<const GpuImage>&,
+                                               GpuDevice&) noexcept;
 
 // The one internal construction path; not a public success-report factory.
 [[nodiscard]] GpuImage makeGpuImage(std::unique_ptr<GpuImageImpl> impl) noexcept;

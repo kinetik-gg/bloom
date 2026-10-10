@@ -30,8 +30,13 @@ const GpuOutputColorReadbackDiagnostic& GpuOutputColorReadback::diagnostic() con
 
 bool GpuOutputColorReadback::isOwnerThread() const noexcept { return false; }
 
-bool GpuOutputColorReadback::begin(std::shared_ptr<const GpuImage>, std::shared_ptr<const GpuImage>,
-                                   std::optional<GpuDisplayImage>, const std::uint64_t) noexcept {
+bool GpuOutputColorReadback::begin(std::shared_ptr<const GpuImage> process,
+                                   std::shared_ptr<const GpuImage> display,
+                                   std::optional<GpuDisplayImage> packed,
+                                   const std::uint64_t) noexcept {
+    process.reset();
+    display.reset();
+    packed.reset();
     if (impl_ == nullptr) {
         return false;
     }

@@ -30,6 +30,10 @@ core::PixelAspectRatio GpuImage::pixelAspect() const noexcept {
 }
 std::uint32_t GpuImage::generation() const noexcept { return 0; }
 bool GpuImage::isBoundTo(GpuDevice&) const noexcept { return false; }
+bool GpuImage::promoteStorageOwnership() const noexcept { return false; }
+bool retireFailedAttemptGpuImage(std::shared_ptr<const GpuImage>&, GpuDevice&) noexcept {
+    return false;
+}
 
 GpuImage makeGpuImage(std::unique_ptr<GpuImageImpl> impl) noexcept {
     return GpuImage(std::move(impl));

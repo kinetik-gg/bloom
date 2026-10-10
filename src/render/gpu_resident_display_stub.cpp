@@ -28,6 +28,7 @@ core::PixelAspectRatio GpuDisplayImage::pixelAspect() const noexcept {
 std::uint32_t GpuDisplayImage::generation() const noexcept { return 0; }
 std::uint64_t GpuDisplayImage::allocationBytes() const noexcept { return 0; }
 bool GpuDisplayImage::isBoundTo(GpuDevice&) const noexcept { return false; }
+bool GpuDisplayImage::promoteStorageOwnership() const noexcept { return false; }
 void GpuDisplayImage::releaseOwnedImpl() noexcept {}
 GpuDisplayImage makeGpuDisplayImage(std::unique_ptr<GpuDisplayImageImpl> impl) noexcept {
     return GpuDisplayImage(std::move(impl));
@@ -93,6 +94,7 @@ void GpuResidentDisplay::cancel() noexcept {}
 bool GpuResidentDisplay::teardownDrainIncomplete() noexcept { return false; }
 bool GpuResidentDisplay::deviceLost() const noexcept { return false; }
 
+bool GpuResidentDisplay::discardRetiredFailure(GpuDevice&) noexcept { return false; }
 bool GpuResidentDisplay::hasUnretiredSubmission() const noexcept { return false; }
 
 } // namespace bloom::render

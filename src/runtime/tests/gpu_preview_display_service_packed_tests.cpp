@@ -80,8 +80,9 @@ bool matrix(Expectations& checks, const TestOptions& options,
             const std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle>& processor,
             const std::shared_ptr<const GpuDisplayProgramService>& programs,
             const bloom::document::Snapshot& snapshot) {
+    PackedRetirementScope retirement;
     TaskScheduler scheduler(schedulerConfig());
-    auto policy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>();
+    auto policy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(32, retirement.owner);
     auto sample = bloom::runtime::memoryBudgetSample();
     bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
                                               sample.machine.availableBytes.value_or(0));
@@ -155,7 +156,9 @@ bool matrix(Expectations& checks, const TestOptions& options,
             ownedFull.ownedPackedHostAllocations == 1 &&
             ownedFull.ownedPackedHostBytes ==
                 full->provenance().gpuPreparedPacked->transfer.hostStorageBytes &&
-            ownedFull.totalHostClaimBytes == ownedFull.ownedPackedHostBytes,
+            ownedFull.totalHostClaimBytes == ownedFull.ownedPackedHostBytes +
+                                                 ownedFull.ownedPackedHostMetadataBytes +
+                                                 ownedFull.ownedNonlocalNativeHostBytes,
         "actual rooted native transfer publishes one independently charged host allocation");
     const auto proof = full->provenance().gpuPreparedPacked;
     checks.expect(proof && proof->serviceGeneration != 0 && proof->deviceGeneration != 0 &&
@@ -248,7 +251,15 @@ bool matrix(Expectations& checks, const TestOptions& options,
             counters.packedReservedBytes == 0 && counters.packedRetainedHostBytes == 0,
         "production GPU scene and one final transfer per cold product, no CPU scene fallback");
     auto externalPin = full->displayOnlyFrame();
-    const auto retainedBytes = policy->snapshot().reservations.ownedPackedHostBytes;
+    const auto retainedBytes =
+        proof->transfer.hostStorageBytes +
+        (half ? half->provenance().gpuPreparedPacked->transfer.hostStorageBytes : 0) +
+        (roi ? roi->provenance().gpuPreparedPacked->transfer.hostStorageBytes : 0);
+    checks.expect(
+        waitUntil(
+            [&] { return policy->snapshot().reservations.ownedPackedHostBytes == retainedBytes; },
+            2s),
+        "off-UI disposal completes before measuring only still-live external products");
     service.beginShutdown();
     serviceOwner.reset();
     const auto externalView = externalPin->displayBufferView();

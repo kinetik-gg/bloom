@@ -20,6 +20,7 @@
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/gpu_image_upload.hpp>
+#include <bloom/render/gpu_processing_phase_budget.hpp>
 #include <bloom/render/gpu_resident_display.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/render/image_types.hpp>
@@ -216,7 +217,8 @@ void testDisplayPair(Expectations& expectations, GpuDevice& device,
                      GpuOcioProgramPreparer& preparer,
                      const bloom::color::ResolvedBloomNeutralConfig& config,
                      const std::string& display, const std::string& view,
-                     const std::string_view label, const bool adjustMatrix) {
+                     const std::string_view label, const bool adjustMatrix,
+                     const bloom::render::GpuProcessingPhaseBudget& root) {
     GpuOcioTransformSpec spec;
     spec.kind = GpuOcioTransformKind::Display;
     spec.display = display;
@@ -283,6 +285,10 @@ void testDisplayPair(Expectations& expectations, GpuDevice& device,
         return;
     }
     const auto coldAfter = armResult.arm->counters();
+    const auto coldOwnership = root.snapshot();
+    expectations.expect(coldOwnership.ownedNativeImageBytes > 0 &&
+                            coldOwnership.ownedNativeImages >= 2,
+                        std::string(label) + ": actual float input and display output are charged");
     expectations.expect(coldAfter.displayDispatches == coldBefore.displayDispatches + 1,
                         std::string(label) + ": the cold frame dispatches exactly one display op");
     expectations.expect(coldAfter.programCreations == coldBefore.programCreations + 1,
@@ -578,13 +584,25 @@ int main(int argc, char** argv) {
             return kSkipExit;
         }
         expectations.expect(device.device->state() == GpuDeviceState::Ready, "the device is Ready");
+        bloom::render::GpuProcessingPhaseBudget root;
+        root.setHostCapacity(kBudget * 2, true);
+        root.setDeviceCapacity(kBudget * 2, true);
+        auto admission = root.reserve({.fixedHostBytes = 1,
+                                       .requestedExecutorBytes = kBudget,
+                                       .minimumExecutorBytes = kBudget,
+                                       .sourceFree = true});
+        expectations.expect(admission.lease &&
+                                device.device->retainProcessingPhase(admission.lease),
+                            "general display pixels use the actual native-image allocation root");
+        if (!admission.lease)
+            return 1;
         GpuOcioProgramPreparer preparer;
         // Default display/view of the Bloom Neutral config: the ordinary production default now
         // takes the SAME general display arm (with no pixel-interval/4K gate). The >4K case below
         // proves the retired ceiling specifically.
         testDisplayPair(expectations, *device.device, preparer, *neutral,
                         std::string(neutral->displayName()), std::string(neutral->viewName()),
-                        "default", false);
+                        "default", false, root);
         // The baseline root: two real ACES 1.3 CG display/view pairs, each across the full
         // six-adjustment matrix, against the unchanged CPU oracle.
         const auto acesRevision = bloom::color::ocioBuiltInContentRevision(
@@ -603,7 +621,7 @@ int main(int argc, char** argv) {
                         continue;
                     }
                     testDisplayPair(expectations, *device.device, preparer, *aces,
-                                    candidate.display, candidate.view, "aces-view", true);
+                                    candidate.display, candidate.view, "aces-view", true, root);
                     ++ranAcesViews;
                     if (ranAcesViews >= 2) {
                         break;
@@ -614,6 +632,14 @@ int main(int argc, char** argv) {
         expectations.expect(ranAcesViews >= 2,
                             "two ACES display/view pairs exercised the six-adjustment matrix");
         testLargeGeometry(expectations, *device.device, preparer, *neutral);
+        device.device->retireProcessingPhase(admission.lease->id(), true);
+        admission.lease.reset();
+        const auto retired = root.snapshot();
+        expectations.expect(
+            retired.ownedNativeImageBytes == 0 && retired.ownedNativeImages == 0 &&
+                retired.ownedNonlocalNativeHostBytes == 0 && retired.totalDeviceClaimBytes == 0 &&
+                retired.totalHostClaimBytes == 0,
+            "general display programs free actual native backing before full credit");
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " GPU display arm expectation(s) failed\n";
             return 1;

@@ -9,8 +9,9 @@ void payloadAllocationFailureProof(
     const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan,
     const std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle>& processor,
     const bloom::document::Snapshot& snapshot) {
+    PackedRetirementScope retirement;
     TaskScheduler scheduler(schedulerConfig());
-    auto policy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>();
+    auto policy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(32, retirement.owner);
     auto sample = bloom::runtime::memoryBudgetSample();
     bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
                                               sample.machine.availableBytes.value_or(0));
@@ -169,12 +170,13 @@ void heldTransferProof(
     const std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle>& processor,
     const std::shared_ptr<const GpuDisplayProgramService>& programs,
     const bloom::document::Snapshot& snapshot, const bool shutdownProof) {
+    PackedRetirementScope retirement;
     auto scheduler = std::make_unique<TaskScheduler>(schedulerConfig());
     auto configured = options;
     auto builder = std::make_shared<CpuGpuSceneBuilder>();
     if (!shutdownProof) {
         configured.processingPhasePolicy =
-            std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(4);
+            std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(4, retirement.owner);
         auto sample = bloom::runtime::memoryBudgetSample();
         bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
                                                   sample.machine.availableBytes.value_or(0));
@@ -389,9 +391,14 @@ void heldTransferProof(
             2s),
         "forced terminal retirement releases its provisional host allocation exactly once");
     replacement.reset();
-    checks.expect(configured.processingPhasePolicy->snapshot().reservations.ownedPackedHostBytes ==
-                      0,
-                  "last successful frame alias releases the remaining published host allocation");
+    checks.expect(waitUntil(
+                      [&] {
+                          return configured.processingPhasePolicy->snapshot()
+                                     .reservations.ownedPackedHostBytes == 0;
+                      },
+                      2s),
+                  "worker free after last successful frame alias releases the remaining published "
+                  "host allocation");
     service->beginShutdown();
 }
 #endif

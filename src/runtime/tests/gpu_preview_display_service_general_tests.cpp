@@ -17,10 +17,76 @@
 // command identity, or a qualification report.
 
 #include "gpu_preview_display_service_general_support.hpp"
+#include <bloom/document/new_project.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
 #include "gpu_preview_display_service_general_fixture.ipp"
 
 namespace {
+
+// One non-UI sampling owner, independent of Tasks admission. It outlives every service,
+// scheduler and borrowed stage; no process-global ledger or settings are changed.
+struct SampledServiceRoot final {
+    bloom::runtime::MemoryBudgetSample initial = bloom::runtime::memoryBudgetSample();
+    bloom::runtime::MemoryBudgetLedger ledger{initial.physicalBytes,
+                                              initial.machine.availableBytes.value_or(0)};
+    std::shared_ptr<bloom::runtime::TaskBudgetView> view =
+        std::make_shared<bloom::runtime::TaskBudgetView>();
+    std::shared_ptr<bloom::runtime::GpuProcessingPhasePolicy> policy =
+        std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(32, nullptr, view);
+    std::jthread sampler;
+    SampledServiceRoot() {
+        ledger.beginProcessSampling();
+        deliver(std::move(initial));
+        sampler = std::jthread([this](const std::stop_token& stop) {
+            while (!stop.stop_requested()) {
+                for (int index = 0; index < 100 && !stop.stop_requested(); ++index)
+                    std::this_thread::sleep_for(50ms);
+                if (!stop.stop_requested())
+                    deliver(bloom::runtime::memoryBudgetSample());
+            }
+        });
+    }
+    void deliver(bloom::runtime::MemoryBudgetSample sample) {
+        const auto at = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
+        const auto state = ledger.applySample(std::move(sample), at);
+        const auto allocation = ledger.allocate();
+        policy->applyHostSample(state, ledger.physicalByteBudget(), allocation, at);
+    }
+    bloom::runtime::GpuScenePreparationPhase phase() const {
+        return {.policy = policy,
+                .envelope = {.metadataBytes = 1ULL << 20,
+                             .retainedCoverageByteLimit = 16ULL << 20,
+                             .deviceWorkingBytes = 512ULL << 20}};
+    }
+    GpuPreviewDisplayServiceOptions configured(const std::filesystem::path& loader) {
+        auto options = serviceOptions(loader);
+        options.processingPhasePolicy = policy;
+        const auto pool = bloom::runtime::gpuResidentCapacityPlanConfigured(
+            ledger.allocate().previewFrameCacheByteBudget);
+        options.residentLeaseBudgets.maxBytes = pool.leaseBytes;
+        options.residentSceneCacheBudgets.maxRetainedBytes = pool.sceneCacheBytes;
+        return options;
+    }
+    TaskSchedulerConfig defaults() const {
+        auto config = TaskSchedulerConfig::defaults();
+        config.budgetView = view;
+        return config;
+    }
+};
+
+bloom::document::Snapshot snapshotFor(const bloom::runtime::CompiledCompositionPlan& plan) {
+    auto seed = bloom::document::makeNewProject("Fixture", "Main", RationalTime::fromInteger(4),
+                                                plan.format());
+    bloom::document::Project project(plan.projectId(), "general-service");
+    const auto* composition = seed.project.findComposition(seed.initialCompositionId);
+    if (!composition || !project.addComposition(bloom::document::Composition(
+                            plan.compositionId(), "Main", RationalTime::fromInteger(4),
+                            composition->graph(), plan.format())))
+        throw std::runtime_error("general fixture composition root could not be authored");
+    bloom::document::Document document(std::move(project));
+    return document.snapshot();
+}
 
 int run(const int argc, char** argv) {
     const TestOptions options = parseOptions(argc, argv);
@@ -115,13 +181,19 @@ int run(const int argc, char** argv) {
                   "the default Neutral case must exceed the retired 4K ceiling");
     auto neutralPlan = makePlan(kNeutralWidth, kNeutralHeight);
 
-    auto builder = std::make_shared<CpuGpuSceneBuilder>();
+    SampledServiceRoot root;
+    const auto initialBudget = root.view->load();
+    expectations.expect(initialBudget && initialBudget->fresh(),
+                        "actual local sample opens the shared default budget view");
+    auto builder =
+        std::make_shared<CpuGpuSceneBuilder>(nullptr, bloom::runtime::GpuSceneMediaContext{},
+                                             bloom::runtime::GpuSceneOcioContext{}, root.phase());
     auto evaluator = std::make_shared<CpuCompositionEvaluator>();
     TaskScheduler scheduler(schedulerConfig());
     GpuPreviewDisplayService service(
         scheduler, generalStageFunction(neutralPlan, builder, programService, processor),
         generalCpuStageFunction(neutralPlan, processor, evaluator), generalFallback(processor),
-        serviceOptions(options.loaderPath));
+        root.configured(options.loaderPath));
 
     const bool terminal = waitUntil(
         [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; }, 90s);
@@ -159,10 +231,7 @@ int run(const int argc, char** argv) {
     bloom::runtime::TaskOwner owner;
     owner.kind = bloom::runtime::TaskOwnerKind::Composition;
     owner.id = bloom::runtime::TaskOwnerId::fromRaw(7);
-    const auto snapshot = [&] {
-        bloom::document::Document document(bloom::document::Project(kProjectId, "general-service"));
-        return document.snapshot();
-    }();
+    const auto snapshot = snapshotFor(*neutralPlan);
 
     // --- Acceptance (1): ordinary DEFAULT Neutral above the retired 4K ceiling ---------------
     const auto neutralIdentity = makeIdentity(*neutralPlan, 1, {}, {}, ViewAdjust{});
@@ -176,6 +245,15 @@ int run(const int argc, char** argv) {
     if (!neutralResident) {
         std::cerr << "neutral >4K general request did not produce a resident frame: "
                   << service.status().residentDetail << '\n';
+        service.beginShutdown();
+        const bool stopped = waitUntil(
+            [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }, 60s);
+        scheduler.beginShutdown();
+        const bool quiescent = waitUntil([&] { return scheduler.isQuiescent(); }, 30s);
+        std::cerr << "GENERAL_PREREQUISITE accepted="
+                  << (neutralSubmission.status == TaskSubmissionStatus::Accepted)
+                  << " stopped=" << stopped << " quiescent=" << quiescent << '\n';
+        return 1;
     }
     expectations.expect(
         neutralResident,
@@ -316,7 +394,7 @@ int run(const int argc, char** argv) {
     // general display route still runs when its own requirements (the prepared binding) are valid.
     {
         TaskScheduler forcedScheduler(schedulerConfig());
-        GpuPreviewDisplayServiceOptions forcedOptions = serviceOptions(options.loaderPath);
+        GpuPreviewDisplayServiceOptions forcedOptions = root.configured(options.loaderPath);
         forcedOptions.residentQualificationBudgets.maxImageBytes = 1;
         GpuPreviewDisplayService forcedService(
             forcedScheduler, generalStageFunction(neutralPlan, builder, programService, processor),
@@ -374,22 +452,23 @@ int run(const int argc, char** argv) {
     {
         constexpr std::size_t kGib = std::size_t{1} << 30U;
         auto bigPlan = makePlan(6000U, 4000U);
+        const auto bigSnapshot = snapshotFor(*bigPlan);
 
-        TaskScheduler defaultScheduler(TaskSchedulerConfig::defaults());
-        GpuPreviewDisplayServiceOptions defaultOptions = serviceOptions(options.loaderPath);
+        TaskScheduler defaultScheduler(root.defaults());
+        GpuPreviewDisplayServiceOptions defaultOptions = root.configured(options.loaderPath);
         // Same configured resident plan the application derives from the artist's frame-cache
         // ceiling. The former ad-hoc 4/4/2 GiB triplet bypassed the configured split; under the
         // device clamp it proportionally shrank the request ledger below a full-resolution
         // transient and refused a request the approved 50/20/30 plan admits. This is the
         // production derivation, never a widened ceiling.
-        const auto defaultLedgerAllocation = bloom::runtime::processMemoryBudgetLedger().allocate();
+        const auto defaultLedgerAllocation = root.ledger.allocate();
         const auto defaultConfiguredPlan = bloom::runtime::gpuResidentCapacityPlanConfigured(
             defaultLedgerAllocation.previewFrameCacheByteBudget);
         defaultOptions.residentLeaseBudgets.maxBytes = defaultConfiguredPlan.leaseBytes;
         defaultOptions.residentSceneCacheBudgets.maxRetainedBytes =
             defaultConfiguredPlan.sceneCacheBytes;
         defaultOptions.residentExecutorBudgets.reset();
-        defaultOptions.previewByteAllowance = defaultConfiguredPlan.requestBytes;
+        defaultOptions.previewByteAllowance.reset();
         GpuPreviewDisplayService defaultService(
             defaultScheduler, generalStageFunction(bigPlan, builder, programService, processor),
             generalCpuStageFunction(bigPlan, processor, evaluator), generalFallback(processor),
@@ -421,7 +500,7 @@ int run(const int argc, char** argv) {
             const auto bigIdentity = makeIdentity(*bigPlan, 1, {}, {}, ViewAdjust{});
             const std::uint64_t hostLimit = 64ULL * kGib;
             auto bigSubmission = defaultService.submit(TaskRequest("default scheduler 6k", owner),
-                                                       snapshot, bigIdentity, hostLimit, {});
+                                                       bigSnapshot, bigIdentity, hostLimit, {});
             expectations.expect(bigSubmission.status == TaskSubmissionStatus::Accepted,
                                 "default-scheduler: the 6K request was admitted under defaults()");
             const auto bigResult = awaitResult(bigSubmission.handle, 120s);
@@ -444,7 +523,7 @@ int run(const int argc, char** argv) {
 
             const auto defaultWarmIdentity = makeIdentity(*bigPlan, 2, {}, {}, ViewAdjust{});
             auto defaultWarmSubmission =
-                defaultService.submit(TaskRequest("default scheduler 6k warm", owner), snapshot,
+                defaultService.submit(TaskRequest("default scheduler 6k warm", owner), bigSnapshot,
                                       defaultWarmIdentity, hostLimit, {});
             const auto defaultWarmResult = awaitResult(defaultWarmSubmission.handle, 120s);
             std::shared_ptr<const bloom::runtime::PreparedPreviewFrame> defaultWarmFrame;
@@ -478,22 +557,24 @@ int run(const int argc, char** argv) {
         mediaEvaluator->setAssetBaseDirectory(mediaDirectory);
         auto mediaContext = runtime::GpuSceneMediaContext::fromEvaluator(*mediaEvaluator);
         mediaContext.assetBaseDirectory = mediaDirectory;
-        auto mediaBuilder = std::make_shared<CpuGpuSceneBuilder>(nullptr, std::move(mediaContext));
+        auto mediaBuilder = std::make_shared<CpuGpuSceneBuilder>(
+            nullptr, std::move(mediaContext), runtime::GpuSceneOcioContext{}, root.phase());
         auto mediaPlan = makeProductionMediaTextPlan(format(6000U, 4000U), mediaAsset, 8000);
+        const auto mediaSnapshot = snapshotFor(*mediaPlan);
 
-        TaskScheduler productionScheduler(TaskSchedulerConfig::defaults());
-        GpuPreviewDisplayServiceOptions productionOptions = serviceOptions(options.loaderPath);
-        const auto ledgerAllocation = runtime::processMemoryBudgetLedger().allocate();
+        TaskScheduler productionScheduler(root.defaults());
+        GpuPreviewDisplayServiceOptions productionOptions = root.configured(options.loaderPath);
+        const auto ledgerAllocation = root.ledger.allocate();
         const auto configuredPlan = runtime::gpuResidentCapacityPlanConfigured(
             ledgerAllocation.previewFrameCacheByteBudget);
         // Capacity options exactly as gpu_preview_app derives them: the configured resident plan
         // from the ledger preview budget, and the PRODUCTION executor image ceiling (the test
-        // harness's explicit 256 MiB cap is omitted here to exercise the legacy unrooted
-        // ledger-derived default).
+        // harness's explicit 256 MiB cap is omitted here to exercise the sampled shared-root
+        // delivered default).
         productionOptions.residentLeaseBudgets.maxBytes = configuredPlan.leaseBytes;
         productionOptions.residentSceneCacheBudgets.maxRetainedBytes =
             configuredPlan.sceneCacheBytes;
-        productionOptions.previewByteAllowance = configuredPlan.requestBytes;
+        productionOptions.previewByteAllowance.reset();
         productionOptions.residentExecutorBudgets.reset();
         GpuPreviewDisplayService productionService(
             productionScheduler,
@@ -522,8 +603,8 @@ int run(const int argc, char** argv) {
             const auto productionIdentity = makeIdentity(*mediaPlan, 1, {}, {}, ViewAdjust{});
             const std::uint64_t hostLimit = 64ULL * (std::size_t{1} << 30U);
             auto productionSubmission =
-                productionService.submit(TaskRequest("production media text 6k", owner), snapshot,
-                                         productionIdentity, hostLimit, {});
+                productionService.submit(TaskRequest("production media text 6k", owner),
+                                         mediaSnapshot, productionIdentity, hostLimit, {});
             expectations.expect(productionSubmission.status == TaskSubmissionStatus::Accepted,
                                 "production: the media+text 6K request was admitted");
             const auto productionResult = awaitResult(productionSubmission.handle, 180s);
@@ -571,7 +652,7 @@ int run(const int argc, char** argv) {
             const auto productionWarmIdentity = makeIdentity(*mediaPlan, 2, {}, {}, ViewAdjust{});
             auto productionWarmSubmission =
                 productionService.submit(TaskRequest("production media text 6k warm", owner),
-                                         snapshot, productionWarmIdentity, hostLimit, {});
+                                         mediaSnapshot, productionWarmIdentity, hostLimit, {});
             const auto productionWarmResult = awaitResult(productionWarmSubmission.handle, 180s);
             std::shared_ptr<const bloom::runtime::PreparedPreviewFrame> productionWarmFrame;
             expectations.expect(isResidentPrepared(productionWarmResult, 2, productionWarmFrame),
@@ -616,7 +697,7 @@ int run(const int argc, char** argv) {
         GpuPreviewDisplayService refusalService(
             refusalScheduler, generalStageFunction(neutralPlan, builder, programService, processor),
             generalCpuStageFunction(neutralPlan, processor, evaluator), generalFallback(processor),
-            serviceOptions(options.loaderPath));
+            root.configured(options.loaderPath));
         const bool refusalTerminal = waitUntil(
             [&] {
                 return refusalService.status().state != GpuPreviewDisplayServiceState::Initializing;

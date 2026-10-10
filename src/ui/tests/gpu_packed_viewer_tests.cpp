@@ -440,7 +440,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                     [&] {
                         const auto root = processingPolicy->snapshot().reservations;
                         return root.admittedPhases == 0 && root.hostReservedBytes == 0 &&
-                               root.ownedPackedHostAllocations == 1 &&
+                               root.ownedPackedHostAllocations == 1 && root.ownedNativeImages > 0 &&
+                               root.ownedNativeImageBytes > 0 &&
                                root.ownedPackedHostBytes ==
                                    external->provenance()
                                        .gpuPreparedPacked->transfer.hostStorageBytes;
@@ -455,13 +456,18 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                 processingPolicy->snapshot().reservations.ownedPackedHostAllocations == 2,
             "second exact Viewer time cold-prepares a second actual owned allocation");
         const auto beforeWarm = service.status().counters;
+        const auto nativeBeforeWarm = processingPolicy->snapshot().reservations;
         checks.expect(
             session.setCurrentTime(core::RationalTime::fromInteger(0)) && current() &&
                 service.status().counters.nativeDispatches == beforeWarm.nativeDispatches &&
                 service.status().counters.residentGraphJobs == beforeWarm.residentGraphJobs &&
                 service.status().counters.packedTransfers == beforeWarm.packedTransfers &&
                 service.status().counters.fullFrameReadbacks == beforeWarm.fullFrameReadbacks &&
-                processingPolicy->snapshot().reservations.ownedPackedHostAllocations == 2,
+                processingPolicy->snapshot().reservations.ownedPackedHostAllocations == 2 &&
+                processingPolicy->snapshot().reservations.ownedNativeImageBytes ==
+                    nativeBeforeWarm.ownedNativeImageBytes &&
+                processingPolicy->snapshot().reservations.ownedNativeImages ==
+                    nativeBeforeWarm.ownedNativeImages,
             "ordinary warm cached Viewer return shares owned backing with no GPU work or new "
             "allocation");
         controller.purgePreviewCache();
@@ -515,6 +521,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                           },
                           30s),
                       "rooted QWidget proof retires asynchronously");
+        const auto nativeRetired = processingPolicy->snapshot().reservations;
+        checks.expect(nativeRetired.ownedNativeImageBytes == 0 &&
+                          nativeRetired.ownedNativeImages == 0 &&
+                          nativeRetired.ownedNonlocalNativeHostBytes == 0 &&
+                          nativeRetired.totalDeviceClaimBytes == 0,
+                      "actual packed Viewer native cache backing retires on the service owner");
         std::cout << "PACKED_HOST_VIEWER bytes=" << publishedBytes
                   << " coldTransfers=" << beforeWarm.packedTransfers
                   << " cacheAfterPurge=" << frameCache->residentBytes() << " finalOwned="

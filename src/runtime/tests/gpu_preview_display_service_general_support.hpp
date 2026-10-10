@@ -299,9 +299,9 @@ makeNeutralProcessor(const bloom::color::ResolvedBloomNeutralConfig& config) {
                 program = std::make_shared<const GpuDisplayProgram>(std::move(prepared.program));
             }
         }
-        auto stage = std::make_shared<const PreviewGpuSceneStage>(identity, built.scene, processor,
-                                                                  std::move(program), limit,
-                                                                  std::vector<TaskDiagnostic>{});
+        auto stage = std::make_shared<const PreviewGpuSceneStage>(
+            identity, built.scene, processor, std::move(program), limit,
+            std::vector<TaskDiagnostic>{}, std::move(built.phaseLease));
         return R::succeeded(
             std::make_shared<const PreviewGpuSceneStageOutcome>(PreviewGpuSceneStageOutcome{
                 PreviewGpuSceneStageStatus::Prepared, std::move(stage), {}}));
@@ -406,6 +406,12 @@ awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds tim
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
         if (auto result = handle.tryTakeResult()) {
+            if (result->state() != TaskState::Succeeded) {
+                std::cerr << "GENERAL_TERMINAL state=" << static_cast<int>(result->state()) << '\n';
+                for (const auto& diagnostic : result->diagnostics())
+                    std::cerr << "GENERAL_DIAGNOSTIC " << diagnostic.code << " / "
+                              << diagnostic.summary << " / " << diagnostic.detail << '\n';
+            }
             return result;
         }
         std::this_thread::sleep_for(500us);

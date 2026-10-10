@@ -999,6 +999,7 @@ target_sources(
             include/bloom/render/gpu_composite.hpp
             include/bloom/render/gpu_device.hpp
             include/bloom/render/gpu_processing_phase_budget.hpp
+            include/bloom/render/native_image_storage.hpp
             include/bloom/render/packed_rgba8_storage.hpp
             include/bloom/render/packed_host_retirement.hpp
             include/bloom/render/gpu_display_transfer.hpp
@@ -1053,6 +1054,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_image_reclamation.cpp
         vulkan/gpu_image.cpp
         vulkan/gpu_image_private.hpp
+        vulkan/gpu_native_image_allocation_private.hpp
         vulkan/gpu_image_upload.cpp
         vulkan/gpu_image_upload_fault.hpp
         vulkan/gpu_image_upload_private.hpp

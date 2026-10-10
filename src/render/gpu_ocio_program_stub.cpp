@@ -25,10 +25,12 @@ GpuOcioProgram& GpuOcioProgram::operator=(GpuOcioProgram&&) noexcept = default;
 GpuOcioProgram::~GpuOcioProgram() = default;
 void GpuOcioProgram::releaseImpl() noexcept {}
 
-GpuOcioProgramCreateResult GpuOcioProgram::create(GpuDevice&, OcioGpuProgramDesc,
+GpuOcioProgramCreateResult GpuOcioProgram::create(GpuDevice&, OcioGpuProgramDesc program,
                                                   std::span<const std::uint32_t>,
                                                   const GpuOcioProgramBudgets&,
-                                                  GpuOcioProgramCancellation) {
+                                                  GpuOcioProgramCancellation cancellation) {
+    program = {};
+    cancellation = {};
     return {nullptr, unavailable()};
 }
 GpuOcioProgramJobState GpuOcioProgram::state() const noexcept {
@@ -39,17 +41,20 @@ const GpuOcioProgramDiagnostic& GpuOcioProgram::diagnostic() const noexcept {
     return diagnostic;
 }
 bool GpuOcioProgram::isBoundTo(GpuDevice&) const noexcept { return false; }
-GpuOcioProgramDiagnostic GpuOcioProgram::beginEffect(std::shared_ptr<const GpuImage>,
+GpuOcioProgramDiagnostic GpuOcioProgram::beginEffect(std::shared_ptr<const GpuImage> image,
                                                      std::span<const std::byte>, std::uint64_t) {
+    image.reset();
     return unavailable();
 }
-GpuOcioProgramDiagnostic GpuOcioProgram::beginDisplay(std::shared_ptr<const GpuImage>,
+GpuOcioProgramDiagnostic GpuOcioProgram::beginDisplay(std::shared_ptr<const GpuImage> image,
                                                       std::span<const std::byte>, std::uint64_t) {
+    image.reset();
     return unavailable();
 }
 GpuOcioProgramPollResult GpuOcioProgram::poll() { return GpuOcioProgramPollResult::Failure; }
 std::shared_ptr<GpuImage> GpuOcioProgram::takeEffectOutput() noexcept { return {}; }
 GpuDisplayImage GpuOcioProgram::takeDisplayOutput() noexcept { return {}; }
+bool GpuOcioProgram::discardRetiredFailure(GpuDevice&) noexcept { return false; }
 bool GpuOcioProgram::hasUnretiredSubmission() const noexcept { return false; }
 std::uint64_t GpuOcioProgram::retainedAllocationBytes() const noexcept { return 0; }
 std::uint64_t GpuOcioProgram::lastJobAllocationBytes() const noexcept { return 0; }

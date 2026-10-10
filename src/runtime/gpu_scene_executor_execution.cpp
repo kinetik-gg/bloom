@@ -35,7 +35,11 @@ using gpu_scene_executor_detail::NativePoll;
 void GpuSceneExecutor::Impl::clearJob() noexcept {
     scene.reset();
     steps.clear();
+    const bool failedAndRetired = state == GpuSceneExecutorJobState::Failure && device &&
+                                  !deviceLost && !hasUnretiredNative() && !drainRequired;
     for (auto& pin : images) {
+        if (failedAndRetired)
+            static_cast<void>(render::retireFailedAttemptGpuImage(pin, *device));
         pin.reset();
     }
     images.clear();
@@ -144,7 +148,13 @@ void GpuSceneExecutor::Impl::consume(const GpuSceneCommandIndex index) noexcept 
 
 void GpuSceneExecutor::Impl::fail(const GpuSceneExecutorDiagnosticCode code, std::string message,
                                   const bool requireDrain) noexcept {
-    diagnostic = makeDiagnostic(code, std::move(message));
+    const auto capacityRefusal = device ? device->nativeImageStorageRefusal() : std::nullopt;
+    const bool nativeCapacityRefused = capacityRefusal && !requireDrain && !deviceLost &&
+                                       !hasUnretiredNative() &&
+                                       code == GpuSceneExecutorDiagnosticCode::DispatchRefused;
+    diagnostic =
+        makeDiagnostic(nativeCapacityRefused ? GpuSceneExecutorDiagnosticCode::OverBudget : code,
+                       std::move(message));
     state = GpuSceneExecutorJobState::Failure;
     if (code == GpuSceneExecutorDiagnosticCode::Cancelled) {
         ++counters.scenesCancelled;

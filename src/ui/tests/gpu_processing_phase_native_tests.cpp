@@ -208,6 +208,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(policy->snapshot().reservations.admittedPhases == 0,
                   "destroyed legacy allocator generation releases conservative unknown quota");
     retryNativeChecks(checks, fixture, session, scheduler, parsed.loader_path, referenceDisplay);
+    nativeImageCacheRetryChecks(checks, fixture, scheduler, parsed.loader_path, referenceDisplay);
     if (checks.failures() != 0)
         return 1;
     auto options = serviceOptions(parsed.loader_path);

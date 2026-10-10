@@ -446,7 +446,7 @@ bool residentDisplayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core
         reason = "the resident scene executor is unavailable";
         return false;
     }
-    auto input = core->residentExecutor->takeImage();
+    auto input = core->residentExecutor->takeImage(false);
     if (input == nullptr) {
         reason = "the resident scene executor produced no output image";
         return false;
@@ -478,6 +478,8 @@ bool residentDisplayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core
         request.byteBudget = budget;
         const auto diagnostic = core->residentGeneralDisplay->begin(request);
         if (diagnostic.code != GpuOcioDisplayArmDiagnosticCode::None) {
+            core->residentGeneralDisplay->executor().discardRetiredFailures();
+            static_cast<void>(render::retireFailedAttemptGpuImage(request.input, *core->device));
             reason = diagnostic.message.empty() ? std::string("the general display begin was "
                                                               "refused")
                                                 : diagnostic.message;
@@ -490,8 +492,10 @@ bool residentDisplayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core
         reason = "the resident display is unavailable";
         return false;
     }
-    const auto diagnostic = core->residentDisplay->begin(std::move(input), budget);
+    const auto diagnostic = core->residentDisplay->begin(input, budget);
     if (diagnostic.code != render::GpuResidentDisplayDiagnosticCode::None) {
+        static_cast<void>(core->residentDisplay->discardRetiredFailure(*core->device));
+        static_cast<void>(render::retireFailedAttemptGpuImage(input, *core->device));
         reason = diagnostic.message.empty() ? std::string("the resident display begin was refused")
                                             : diagnostic.message;
         return false;

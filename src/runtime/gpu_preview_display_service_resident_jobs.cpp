@@ -110,11 +110,44 @@ void finishResidentImmediately(const std::shared_ptr<PreviewDisplayServiceCore>&
     if (nativeFailure) {
         core->counterResidentFailures.fetch_add(1, std::memory_order_relaxed);
     }
+    const auto storageRefusal =
+        core->device ? core->device->nativeImageStorageRefusal() : std::nullopt;
+    if (storageRefusal && !residentDeviceLost(core) && !residentOwnerDrainRequired(core) &&
+        !residentExecutorHasUnretiredSubmission(core) &&
+        !residentDisplayHasUnretiredSubmission(core) &&
+        !residentDisplayHasUnretiredSubmissionGeneral(core) &&
+        (!core->residentDisplay || !core->residentDisplay->hasUnretiredSubmission()) &&
+        (!core->packedTransfer || !core->packedTransfer->hasUnretiredSubmission()))
+        stage->processingPhaseRetired = true;
+    if (stage->processingPhaseRetired && core->device) {
+        if (core->residentDisplay)
+            static_cast<void>(core->residentDisplay->discardRetiredFailure(*core->device));
+        if (core->residentGeneralDisplay)
+            core->residentGeneralDisplay->executor().discardRetiredFailures();
+    }
+    // A proven transfer failure can still own an unpublished native source and provisional host
+    // storage. Dispose these before phase release/terminal delivery, never while a queue is live.
+    if (core->packedTransfer && !core->packedTransfer->hasUnretiredSubmission())
+        static_cast<void>(core->packedTransfer->reset());
+    const bool retryableStorage = storageRefusal && stage->gpuStage &&
+                                  stage->gpuStage->phaseLease() && stage->processingPhaseRetired &&
+                                  storageRefusal->phaseId == stage->gpuStage->phaseLease()->id();
     releaseProcessingPhase(core, stage,
                            !stage->processingPhaseTouched || stage->processingPhaseRetired);
     if (stage->cancellationRequested || stage->nativeDiscard ||
         core->stopping.load(std::memory_order_acquire)) {
         completeCancelled(stage);
+        return;
+    }
+    if (retryableStorage) {
+        auto diagnostic = residentJobDiagnostic(
+            storageRefusal->status == render::GpuProcessingPhaseAdmission::AwaitingCapacity
+                ? "preview.processing-phase.awaiting-capacity"
+                : "preview.processing-phase.budget-refused",
+            "The native image allocation is awaiting processing capacity.");
+        diagnostic.admissionRetry =
+            TaskAdmissionRetry{storageRefusal->revisionAfterOwnRelease, true};
+        completeFailed(stage, {std::move(diagnostic)});
         return;
     }
     core->counterCpuFallbacks.fetch_add(1, std::memory_order_relaxed);
@@ -533,7 +566,8 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
                 !residentDeviceLost(core) && !residentExecutorHasUnretiredSubmission(core) &&
                 !residentDisplayHasUnretiredSubmission(core) &&
                 !residentDisplayHasUnretiredSubmissionGeneral(core) &&
-                (!core->residentDisplay || !core->residentDisplay->hasUnretiredSubmission())) {
+                (!core->residentDisplay || !core->residentDisplay->hasUnretiredSubmission()) &&
+                (!core->packedTransfer || !core->packedTransfer->hasUnretiredSubmission())) {
                 stage->processingPhaseRetired = true;
                 core->residentNativeInFlight = false;
                 core->residentNativeActive.reset();

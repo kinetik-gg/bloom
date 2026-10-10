@@ -1,4 +1,5 @@
 #include <bloom/render/gpu_processing_phase_budget.hpp>
+#include <bloom/render/native_image_storage.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
 
 #include <algorithm>
@@ -14,6 +15,8 @@ struct GpuProcessingPhaseBudgetState final {
     GpuProcessingPhaseSnapshot counters;
     std::uint64_t nextId = 1;
     std::shared_ptr<PackedHostRetirementState> retirement;
+    std::chrono::steady_clock::time_point hostValidUntil =
+        std::chrono::steady_clock::time_point::max();
 };
 } // namespace detail
 namespace {
@@ -40,7 +43,8 @@ GpuProcessingPhaseLease::~GpuProcessingPhaseLease() {
     auto& counters = state_->counters;
     counters.hostReservedBytes -= remainingHostBytes_;
     counters.totalHostClaimBytes -= remainingHostBytes_;
-    counters.deviceReservedBytes -= deviceBytes_;
+    counters.deviceReservedBytes -= remainingDeviceBytes_;
+    counters.totalDeviceClaimBytes -= remainingDeviceBytes_;
     --counters.admittedPhases;
     incrementSaturating(counters.admissionRevision);
     if (unproven_) {
@@ -59,6 +63,194 @@ void GpuProcessingPhaseLease::markUnproven() noexcept {
         unproven_ = true;
         ++state_->counters.unprovenPhases;
     }
+}
+
+NativeImageStorageToken::NativeImageStorageToken(std::shared_ptr<GpuProcessingPhaseLease> phase,
+                                                 const std::uint64_t bytes,
+                                                 const NativeImageStorageIdentity identity) noexcept
+    : state_(phase->state_), origin_(std::move(phase)), originId_(origin_->id_), bytes_(bytes),
+      identity_(identity) {}
+NativeImageStorageToken::NativeImageStorageToken(NativeImageStorageToken&& other) noexcept
+    : state_(std::move(other.state_)), origin_(std::move(other.origin_)),
+      publishedOrigin_(std::move(other.publishedOrigin_)),
+      originId_(std::exchange(other.originId_, 0)), bytes_(std::exchange(other.bytes_, 0)),
+      identity_(other.identity_), published_(std::exchange(other.published_, false)) {}
+NativeImageStorageToken&
+NativeImageStorageToken::operator=(NativeImageStorageToken&& other) noexcept {
+    if (this != &other) {
+        reset();
+        state_ = std::move(other.state_);
+        origin_ = std::move(other.origin_);
+        publishedOrigin_ = std::move(other.publishedOrigin_);
+        originId_ = std::exchange(other.originId_, 0);
+        bytes_ = std::exchange(other.bytes_, 0);
+        identity_ = other.identity_;
+        published_ = std::exchange(other.published_, false);
+    }
+    return *this;
+}
+NativeImageStorageToken::~NativeImageStorageToken() { reset(); }
+
+NativeImageStorageGrant
+NativeImageStorageToken::reserve(const std::shared_ptr<GpuProcessingPhaseLease>& phase,
+                                 const std::uint64_t bytes,
+                                 const NativeImageStorageIdentity identity,
+                                 const std::chrono::steady_clock::time_point now) noexcept {
+    if (!phase || bytes == 0 || identity.allocatorGeneration == 0)
+        return {};
+    const std::lock_guard lock(phase->state_->mutex);
+    auto& state = *phase->state_;
+    auto& counters = state.counters;
+    if (phase->id_ == 0 || phase->deviceBytes_ == 0 || phase->unproven_)
+        return {};
+    const auto refuse = [&](const GpuProcessingPhaseAdmission status,
+                            const GpuProcessingPhaseDomain domain) {
+        if (status == GpuProcessingPhaseAdmission::BudgetRefused)
+            incrementSaturating(counters.budgetRefusals);
+        return NativeImageStorageGrant{.status = status,
+                                       .domain = domain,
+                                       .token = {},
+                                       .revisionAfterOwnRelease =
+                                           counters.admissionRevision ==
+                                                   std::numeric_limits<std::uint64_t>::max()
+                                               ? counters.admissionRevision
+                                               : counters.admissionRevision + 1};
+    };
+    if (bytes > phase->remainingDeviceBytes_)
+        return refuse(GpuProcessingPhaseAdmission::BudgetRefused, GpuProcessingPhaseDomain::Device);
+    if (!identity.deviceLocal) {
+        if (counters.hostReady && now > state.hostValidUntil) {
+            counters.hostReady = false;
+            incrementSaturating(counters.admissionRevision);
+        }
+        if (!counters.hostReady || !counters.hostCapacityBytes || now > state.hostValidUntil)
+            return refuse(GpuProcessingPhaseAdmission::AwaitingCapacity,
+                          GpuProcessingPhaseDomain::Host);
+        if (bytes > remaining(*counters.hostCapacityBytes, counters.totalHostClaimBytes))
+            return refuse(GpuProcessingPhaseAdmission::BudgetRefused,
+                          GpuProcessingPhaseDomain::Host);
+    }
+    // Native ownership replaces admitted device debit; supplemental nonlocal host is NEW credit.
+    // Checked subtraction above bounds both additions; no cross-heap half-transaction can escape.
+    phase->remainingDeviceBytes_ -= bytes;
+    counters.deviceReservedBytes -= bytes;
+    counters.ownedNativeImageBytes += bytes;
+    ++counters.ownedNativeImages;
+    if (!identity.deviceLocal) {
+        counters.ownedNonlocalNativeHostBytes += bytes;
+        counters.totalHostClaimBytes += bytes;
+    }
+    return {.status = GpuProcessingPhaseAdmission::Accepted,
+            .domain = GpuProcessingPhaseDomain::None,
+            .token = NativeImageStorageToken(phase, bytes, identity)};
+}
+
+bool NativeImageStorageToken::reconcile(const std::uint64_t actual,
+                                        const NativeImageStorageIdentity identity) noexcept {
+    if (!state_ || actual == 0 || identity != identity_)
+        return false;
+    const std::lock_guard lock(state_->mutex);
+    if (published_ || !origin_ || actual > bytes_)
+        return false;
+    const auto returned = bytes_ - actual;
+    bytes_ = actual;
+    origin_->remainingDeviceBytes_ += returned;
+    auto& counters = state_->counters;
+    counters.deviceReservedBytes += returned;
+    counters.ownedNativeImageBytes -= returned;
+    if (!identity_.deviceLocal) {
+        counters.ownedNonlocalNativeHostBytes -= returned;
+        counters.totalHostClaimBytes -= returned;
+    }
+    return true;
+}
+
+bool NativeImageStorageToken::promote() noexcept {
+    if (!state_)
+        return false;
+    std::shared_ptr<GpuProcessingPhaseLease> releasedOrigin;
+    {
+        const std::lock_guard lock(state_->mutex);
+        if (published_)
+            return true;
+        if (!origin_ || origin_->unproven_)
+            return false;
+        published_ = true;
+        publishedOrigin_ = origin_;
+        releasedOrigin = std::move(origin_);
+    }
+    releasedOrigin.reset();
+    return true;
+}
+
+bool NativeImageStorageToken::releaseFailedAttemptAfterBackingDestroyed(
+    const std::shared_ptr<GpuProcessingPhaseLease>& phase) noexcept {
+    if (!state_ || !phase || phase->state_ != state_ || phase->id_ != originId_)
+        return false;
+    std::shared_ptr<GpuProcessingPhaseLease> releasedOrigin;
+    {
+        const std::lock_guard lock(state_->mutex);
+        if (phase->unproven_)
+            return false;
+        auto& counters = state_->counters;
+        counters.ownedNativeImageBytes -= bytes_;
+        --counters.ownedNativeImages;
+        counters.deviceReservedBytes += bytes_;
+        phase->remainingDeviceBytes_ += bytes_;
+        if (!identity_.deviceLocal) {
+            counters.ownedNonlocalNativeHostBytes -= bytes_;
+            counters.totalHostClaimBytes -= bytes_;
+        }
+        bytes_ = 0;
+        originId_ = 0;
+        published_ = false;
+        releasedOrigin = std::move(origin_);
+    }
+    releasedOrigin.reset();
+    publishedOrigin_.reset();
+    state_.reset();
+    return true;
+}
+
+void NativeImageStorageToken::reset() noexcept {
+    if (!state_)
+        return;
+    // Acquire the weak origin before the neutral mutex, and keep/drop that temporary alias outside
+    // it. The lease destructor takes this same mutex; published storage never holds it alive.
+    auto liveOrigin = published_ ? publishedOrigin_.lock() : nullptr;
+    std::shared_ptr<GpuProcessingPhaseLease> releasedOrigin;
+    {
+        const std::lock_guard lock(state_->mutex);
+        auto& counters = state_->counters;
+        counters.ownedNativeImageBytes -= bytes_;
+        --counters.ownedNativeImages;
+        if (published_) {
+            if (liveOrigin && liveOrigin->state_ == state_ && liveOrigin->id_ == originId_) {
+                liveOrigin->remainingDeviceBytes_ += bytes_;
+                counters.deviceReservedBytes += bytes_;
+            } else {
+                counters.totalDeviceClaimBytes -= bytes_;
+            }
+            // An independent real release remains observable even when its existing grant is
+            // replenished. Only explicit proved failed-attempt cleanup suppresses that event.
+            incrementSaturating(counters.admissionRevision);
+        } else {
+            origin_->remainingDeviceBytes_ += bytes_;
+            counters.deviceReservedBytes += bytes_;
+        }
+        if (!identity_.deviceLocal) {
+            counters.ownedNonlocalNativeHostBytes -= bytes_;
+            counters.totalHostClaimBytes -= bytes_;
+        }
+        releasedOrigin = std::move(origin_);
+        bytes_ = 0;
+        originId_ = 0;
+        published_ = false;
+    }
+    releasedOrigin.reset();
+    liveOrigin.reset();
+    publishedOrigin_.reset();
+    state_.reset();
 }
 
 PackedHostStorageToken::PackedHostStorageToken(
@@ -189,8 +381,9 @@ GpuProcessingPhaseBudget::GpuProcessingPhaseBudget(
     state_->retirement = retirementOwner ? retirementOwner->producerState() : nullptr;
 }
 
-void GpuProcessingPhaseBudget::setHostCapacity(const std::optional<std::uint64_t> bytes,
-                                               const bool ready) noexcept {
+void GpuProcessingPhaseBudget::setHostCapacity(
+    const std::optional<std::uint64_t> bytes, const bool ready,
+    const std::chrono::steady_clock::time_point validUntil) noexcept {
     const std::lock_guard lock(state_->mutex);
     const auto beforeBytes = state_->counters.hostCapacityBytes;
     const bool beforeReady = state_->counters.hostReady;
@@ -198,6 +391,7 @@ void GpuProcessingPhaseBudget::setHostCapacity(const std::optional<std::uint64_t
         state_->counters.hostCapacityBytes = bytes;
     }
     state_->counters.hostReady = ready && bytes.has_value();
+    state_->hostValidUntil = validUntil;
     if (beforeBytes != state_->counters.hostCapacityBytes ||
         beforeReady != state_->counters.hostReady)
         incrementSaturating(state_->counters.admissionRevision);
@@ -293,7 +487,7 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
     std::uint64_t executorBytes = 0;
     if (request.native) {
         const std::uint64_t deviceRemaining =
-            remaining(*counters.deviceCapacityBytes, counters.deviceReservedBytes);
+            remaining(*counters.deviceCapacityBytes, counters.totalDeviceClaimBytes);
         if (request.deviceWorkingBytes > deviceRemaining) {
             return refused(GpuProcessingPhaseDomain::Device);
         }
@@ -312,6 +506,7 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
     lease->hostBytes_ = request.fixedHostBytes + 3 * sourceBytes;
     lease->remainingHostBytes_ = lease->hostBytes_;
     lease->deviceBytes_ = request.native ? request.deviceWorkingBytes + executorBytes : 0;
+    lease->remainingDeviceBytes_ = lease->deviceBytes_;
     lease->sourceBytes_ = sourceBytes;
     lease->executorBytes_ = executorBytes;
     lease->id_ = state_->nextId;
@@ -321,6 +516,7 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
     counters.hostReservedBytes += lease->hostBytes_;
     counters.totalHostClaimBytes += lease->hostBytes_;
     counters.deviceReservedBytes += lease->deviceBytes_;
+    counters.totalDeviceClaimBytes += lease->deviceBytes_;
     ++counters.admittedPhases;
     counters.peakHostReservedBytes =
         std::max(counters.peakHostReservedBytes, counters.hostReservedBytes);

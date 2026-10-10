@@ -1,5 +1,6 @@
 #include "gpu_image_private.hpp"
 #include "gpu_image_reclamation_private.hpp"
+#include "gpu_native_image_allocation_private.hpp"
 #include "gpu_oracle_readback_private.hpp"
 
 #include <array>
@@ -106,6 +107,31 @@ bool GpuImage::isBoundTo(GpuDevice& device) const noexcept {
     return deviceState != nullptr && deviceState == impl_->state;
 }
 
+bool GpuImage::promoteStorageOwnership() const noexcept {
+    return impl_ && impl_->onOwnerThread() &&
+           !impl_->submissionUnretired.load(std::memory_order_acquire) &&
+           !impl_->state->processingPhaseUnproven &&
+           (impl_->storageToken.bytes() == 0 || impl_->storageToken.promote());
+}
+
+bool retireFailedAttemptGpuImage(std::shared_ptr<const GpuImage>& image,
+                                 GpuDevice& device) noexcept {
+    if (!image || image.use_count() != 1 || !image->isBoundTo(device))
+        return false;
+    auto& impl = *image->impl_;
+    if (impl.deviceLost || device.state() != GpuDeviceState::Ready ||
+        impl.submissionUnretired.load(std::memory_order_acquire) ||
+        impl.state->processingPhaseUnproven || !impl.state->processingPhase)
+        return false;
+    // The unique holder is this failed attempt. Cache or external aliases would have prevented
+    // entry above. Keep the token until actual native destruction, then fold only the exact origin.
+    auto token = std::move(impl.storageToken);
+    impl.destroy();
+    static_cast<void>(token.releaseFailedAttemptAfterBackingDestroyed(impl.state->processingPhase));
+    image.reset();
+    return true;
+}
+
 GpuImage makeGpuImage(std::unique_ptr<GpuImageImpl> impl) noexcept {
     return GpuImage(std::move(impl));
 }
@@ -129,9 +155,12 @@ void GpuImageImpl::destroy() noexcept {
     }
     if (image != VK_NULL_HANDLE) {
         vmaDestroyImage(state->allocator, image, allocation);
+        if (state->nativeImageBackingsDestroyed != UINT64_MAX)
+            ++state->nativeImageBackingsDestroyed;
         image = VK_NULL_HANDLE;
         allocation = VK_NULL_HANDLE;
     }
+    storageToken = {};
 }
 
 GpuImageImpl::~GpuImageImpl() {
@@ -213,36 +242,33 @@ bool createResidentImage(vulkan_detail::DeviceAllocatorState& state, const std::
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-    VmaAllocationCreateInfo allocationInfo{};
-    allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-
-    VkImage image = VK_NULL_HANDLE;
-    VmaAllocation allocation = VK_NULL_HANDLE;
-    if (vmaCreateImage(state.allocator, &imageInfo, &allocationInfo, &image, &allocation,
-                       nullptr) != VK_SUCCESS) {
+    if (!vulkan_detail::allocateCoveredImage(state, imageInfo, out.image, out.allocation,
+                                             out.storageToken)) {
         image_detail::releaseImageSlot(out);
         return false;
     }
-
     VmaAllocationInfo nativeInfo{};
-    vmaGetAllocationInfo(state.allocator, allocation, &nativeInfo);
+    vmaGetAllocationInfo(state.allocator, out.allocation, &nativeInfo);
     image_detail::registerImageBytes(out, static_cast<std::uint64_t>(nativeInfo.size));
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = image;
+    viewInfo.image = out.image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = kSolidFormat;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     VkImageView view = VK_NULL_HANDLE;
-    if (state.device.getDispatcher()->vkCreateImageView(static_cast<VkDevice>(*state.device),
+    const bool viewFault =
+        state.nativeImageAllocationFault == vulkan_detail::NativeImageAllocationFault::View;
+    if (viewFault)
+        state.nativeImageAllocationFault = vulkan_detail::NativeImageAllocationFault::None;
+    if (viewFault ||
+        state.device.getDispatcher()->vkCreateImageView(static_cast<VkDevice>(*state.device),
                                                         &viewInfo, nullptr, &view) != VK_SUCCESS) {
-        vmaDestroyImage(state.allocator, image, allocation);
+        out.destroy();
         image_detail::releaseImageSlot(out);
         return false;
     }
 
-    out.image = image;
-    out.allocation = allocation;
     out.view = view;
     out.width = width;
     out.height = height;

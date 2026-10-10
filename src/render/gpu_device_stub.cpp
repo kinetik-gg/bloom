@@ -64,6 +64,9 @@ bool GpuDevice::retainProcessingPhase(std::shared_ptr<GpuProcessingPhaseLease>) 
 }
 void GpuDevice::retireProcessingPhase(std::uint64_t, bool) noexcept {}
 bool GpuDevice::processingPhaseOccupied() const noexcept { return true; }
+std::optional<NativeImageStorageRefusal> GpuDevice::nativeImageStorageRefusal() const noexcept {
+    return {};
+}
 
 GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept { return {}; }
 

@@ -104,6 +104,7 @@ bool GpuDevice::retainProcessingPhase(std::shared_ptr<GpuProcessingPhaseLease> l
     if (!isOwnerThread() || !lease || !impl_->control || impl_->control->processingPhase) {
         return false;
     }
+    impl_->control->imageStorageRefusal.reset();
     impl_->control->processingPhase = std::move(lease);
     return true;
 }
@@ -123,6 +124,16 @@ void GpuDevice::retireProcessingPhase(const std::uint64_t leaseId,
 }
 bool GpuDevice::processingPhaseOccupied() const noexcept {
     return !isOwnerThread() || !impl_->control || impl_->control->processingPhase != nullptr;
+}
+
+std::optional<NativeImageStorageRefusal> GpuDevice::nativeImageStorageRefusal() const noexcept {
+    if (!isOwnerThread() || !impl_->control || !impl_->control->processingPhase ||
+        impl_->control->processingPhaseUnproven)
+        return {};
+    const auto& refusal = impl_->control->imageStorageRefusal;
+    if (!refusal || refusal->phaseId != impl_->control->processingPhase->id())
+        return {};
+    return refusal;
 }
 
 GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept {

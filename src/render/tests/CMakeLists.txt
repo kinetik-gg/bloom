@@ -14,6 +14,12 @@ bloom_enable_warnings(bloom_render_gpu_processing_phase_budget_test)
 bloom_add_test(NAME bloom.render.gpu_processing_phase_budget
     COMMAND bloom_render_gpu_processing_phase_budget_test LABELS unit gpu memory)
 
+add_executable(bloom_render_native_image_storage_test native_image_storage_tests.cpp)
+target_link_libraries(bloom_render_native_image_storage_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_native_image_storage_test)
+bloom_add_test(NAME bloom.render.native_image_storage
+    COMMAND bloom_render_native_image_storage_test LABELS unit gpu memory)
+
 add_executable(bloom_render_image_test render_image_test.cpp)
 target_link_libraries(bloom_render_image_test PRIVATE bloom_render)
 bloom_enable_warnings(bloom_render_image_test)
@@ -65,6 +71,14 @@ bloom_add_test(
 add_executable(bloom_render_gpu_device_test gpu_device_tests.cpp)
 target_link_libraries(bloom_render_gpu_device_test PRIVATE bloom_render)
 if(BLOOM_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_render_native_image_allocation_test native_image_allocation_tests.cpp)
+    target_link_libraries(bloom_render_native_image_allocation_test PRIVATE
+        bloom_render Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+    target_include_directories(bloom_render_native_image_allocation_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+    bloom_enable_warnings(bloom_render_native_image_allocation_test)
+    bloom_add_test(NAME bloom.render.native_image_allocation
+        COMMAND bloom_render_native_image_allocation_test LABELS unit gpu memory)
     target_compile_definitions(bloom_render_gpu_device_test
         PRIVATE BLOOM_RENDER_TEST_VULKAN_BACKEND=1)
 endif()

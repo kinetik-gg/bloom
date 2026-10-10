@@ -57,6 +57,9 @@ class GpuDisplayImage final {
     // a resident-frame lease budget must charge.
     [[nodiscard]] std::uint64_t allocationBytes() const noexcept;
     [[nodiscard]] bool isBoundTo(GpuDevice& device) const noexcept;
+    // Promote only after the complete retained product has been built; packed transfer sources
+    // remain provisional and fold back on their owning attempt worker.
+    [[nodiscard]] bool promoteStorageOwnership() const noexcept;
 
   private:
     friend GpuDisplayImage makeGpuDisplayImage(std::unique_ptr<GpuDisplayImageImpl> impl) noexcept;
@@ -208,6 +211,8 @@ class GpuResidentDisplay final {
     [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
     // Current native device-loss truth, independent of cancellation or logical job state.
     [[nodiscard]] bool deviceLost() const noexcept;
+    // Owner-only failed-job cleanup after actual retirement. Never consumes Ready or unknown work.
+    [[nodiscard]] bool discardRetiredFailure(GpuDevice& device) noexcept;
 
   private:
     struct Impl;

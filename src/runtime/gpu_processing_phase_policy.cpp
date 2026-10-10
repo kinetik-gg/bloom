@@ -85,7 +85,9 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
                 finiteProcessCeiling_ ? std::min(*finiteProcessCeiling_, *finite) : *finite;
             const auto current = budget_.snapshot();
             if (current.hostCapacityBytes && *finite < *current.hostCapacityBytes) {
-                budget_.setHostCapacity(finite, current.hostReady);
+                budget_.setHostCapacity(finite, current.hostReady,
+                                        hostSampleAt_.value_or(Clock::time_point::min()) +
+                                            std::chrono::seconds(10));
             }
         }
         return;
@@ -131,7 +133,9 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
     if (fresh) {
         hostSampleAt_ = sample.process.sampledAt;
     }
-    budget_.setHostCapacity(allowance, ready);
+    budget_.setHostCapacity(allowance, ready,
+                            hostSampleAt_.value_or(Clock::time_point::min()) +
+                                std::chrono::seconds(10));
 }
 void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
                                                const std::size_t physicalBytes,

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -11,6 +12,7 @@ struct GpuProcessingPhaseBudgetState;
 struct PackedHostRetirementState;
 } // namespace detail
 class PackedHostRetirementOwner;
+class NativeImageStorageToken;
 
 // A conservative quota for simultaneous processing phases, not physical allocation accounting.
 // Runtime owns process/device sampling and injects resolved capacity; this class performs no I/O.
@@ -53,6 +55,12 @@ struct GpuProcessingPhaseSnapshot final {
     std::uint64_t totalHostClaimBytes = 0;
     std::size_t ownedPackedHostAllocations = 0;
     std::uint64_t deviceReservedBytes = 0;
+    // Covered image suballocations, not VMA committed blocks/driver memory. The nonlocal-host
+    // subset overlaps this constraint; it is not an additive physical-memory total.
+    std::uint64_t ownedNativeImageBytes = 0;
+    std::uint64_t ownedNonlocalNativeHostBytes = 0;
+    std::uint64_t totalDeviceClaimBytes = 0;
+    std::size_t ownedNativeImages = 0;
     std::uint64_t peakHostReservedBytes = 0;
     std::uint64_t peakDeviceReservedBytes = 0;
     std::size_t admittedPhases = 0;
@@ -83,6 +91,7 @@ class GpuProcessingPhaseLease final {
   private:
     friend class GpuProcessingPhaseBudget;
     friend class PackedHostStorageAuthority;
+    friend class NativeImageStorageToken;
     explicit GpuProcessingPhaseLease(
         std::shared_ptr<detail::GpuProcessingPhaseBudgetState>) noexcept;
     std::shared_ptr<detail::GpuProcessingPhaseBudgetState> state_;
@@ -92,6 +101,7 @@ class GpuProcessingPhaseLease final {
     // Separate from immutable granted limits; accesses are guarded by state_->mutex.
     std::uint64_t remainingHostBytes_ = 0;
     std::uint64_t deviceBytes_ = 0;
+    std::uint64_t remainingDeviceBytes_ = 0;
     std::uint64_t sourceBytes_ = 0;
     std::uint64_t executorBytes_ = 0;
     bool unproven_ = false;
@@ -170,7 +180,11 @@ class GpuProcessingPhaseBudget final {
         const std::shared_ptr<PackedHostRetirementOwner>& retirementOwner = {});
     // Unknown/stale delivery closes new admission but does not erase the last resolved constraint
     // or free live leases. A reliable measured zero is a ready, zero capacity (BudgetRefused).
-    void setHostCapacity(std::optional<std::uint64_t> bytes, bool ready) noexcept;
+    // Runtime supplies the delivered sample deadline. Explicit legacy/manual quotas default to
+    // no expiry; new supplemental host allocation cannot use an expired delivered sample.
+    void setHostCapacity(std::optional<std::uint64_t> bytes, bool ready,
+                         std::chrono::steady_clock::time_point validUntil =
+                             std::chrono::steady_clock::time_point::max()) noexcept;
     void setDeviceCapacity(std::optional<std::uint64_t> bytes, bool ready) noexcept;
     [[nodiscard]] GpuProcessingPhaseSnapshot snapshot() const noexcept;
     [[nodiscard]] GpuProcessingPhaseGrant reserve(const GpuProcessingPhaseRequest&) noexcept;

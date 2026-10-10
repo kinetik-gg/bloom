@@ -17,8 +17,10 @@ struct GpuDisplayTransfer::Impl final {
 GpuDisplayTransfer::GpuDisplayTransfer() : impl_(std::make_unique<Impl>()) {}
 GpuDisplayTransfer::~GpuDisplayTransfer() = default;
 
-bool GpuDisplayTransfer::begin(GpuDevice&, std::shared_ptr<const GpuDisplayImage>, std::uint64_t,
+bool GpuDisplayTransfer::begin(GpuDevice&, std::shared_ptr<const GpuDisplayImage> image,
+                               std::uint64_t,
                                const std::shared_ptr<GpuProcessingPhaseLease>&) noexcept {
+    image.reset();
     impl_->state = GpuDisplayTransferState::Failure;
     impl_->diagnostic = {GpuDisplayTransferCode::DeviceUnavailable,
                          "GPU final-display transfer was built without Vulkan"};

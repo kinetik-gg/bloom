@@ -14,6 +14,7 @@
 #include <bloom/render/gpu_composite.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
+#include <bloom/render/gpu_processing_phase_budget.hpp>
 #include <bloom/render/gpu_solid.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>

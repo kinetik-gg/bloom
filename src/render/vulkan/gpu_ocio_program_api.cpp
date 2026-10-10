@@ -234,6 +234,18 @@ GpuDisplayImage GpuOcioProgram::takeDisplayOutput() noexcept {
     return output;
 }
 
+bool GpuOcioProgram::discardRetiredFailure(GpuDevice& device) noexcept {
+    if (!impl_ || !impl_->onOwnerThread() || !isBoundTo(device) ||
+        impl_->jobState != GpuOcioProgramJobState::Failure || impl_->queueSubmitted ||
+        impl_->deviceLost || impl_->control->processingPhaseUnproven)
+        return false;
+    impl_->effectOutput.reset();
+    impl_->displayOutput.reset();
+    static_cast<void>(retireFailedAttemptGpuImage(impl_->inputRetained, device));
+    impl_->releaseTransient();
+    return true;
+}
+
 bool GpuOcioProgram::hasUnretiredSubmission() const noexcept {
     return impl_ != nullptr && impl_->queueSubmitted;
 }

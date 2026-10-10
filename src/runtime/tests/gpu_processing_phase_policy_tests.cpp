@@ -1,3 +1,4 @@
+#include <bloom/render/native_image_storage.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
 #include <exception>
@@ -117,6 +118,49 @@ void policy() {
             "a retired unavailable generation cannot block live replacement forever");
     require(policy.reserve(hostOnly, activeNow).lease != nullptr,
             "CPU route remains host admitted independently of native availability");
+}
+void nativeSupplementDeadline() {
+    const auto now = GpuProcessingPhasePolicy::Clock::now();
+    GpuProcessingPhasePolicy policy;
+    policy.applyHostSample(sample(now), 60 * gib, now);
+    require(policy.reportDevice(11, {.source = GpuAllocationBudgetSource::MemoryBudget,
+                                     .device_local_bytes = 8 * gib,
+                                     .available_bytes = gib}),
+            "deadline native quota delivered");
+    auto phase = policy.reserve(preview(), now);
+    require(phase.lease != nullptr, "deadline existing phase admitted");
+    const NativeImageStorageIdentity identity{11, 1, 0, false};
+    auto before =
+        NativeImageStorageToken::reserve(phase.lease, 64, identity, now + std::chrono::seconds(9));
+    require(before.token.has_value(), "new host supplement uses accepted delivered deadline");
+    before.token.reset();
+    auto duplicate = sample(now);
+    duplicate.process.domains[0].currentBytes = 6 * gib + 1;
+    policy.applyHostSample(duplicate, 60 * gib, now + std::chrono::seconds(9));
+    const auto stale =
+        NativeImageStorageToken::reserve(phase.lease, 64, identity, now + std::chrono::seconds(11));
+    require(stale.status == GpuProcessingPhaseAdmission::AwaitingCapacity && !stale.token,
+            "duplicate tightening cannot extend deadline or install unlimited freshness");
+    const NativeImageStorageIdentity local{11, 0, 1, true};
+    auto grandfathered =
+        NativeImageStorageToken::reserve(phase.lease, 64, local, now + std::chrono::seconds(11));
+    require(grandfathered.token.has_value(), "existing device-only conversion remains granted");
+    grandfathered.token.reset();
+    const auto closed = policy.snapshot().reservations.admissionRevision;
+    auto fresh = sample(now + std::chrono::seconds(11));
+    fresh.sampleSerial = 2;
+    policy.applyHostSample(fresh, 60 * gib, fresh.process.sampledAt);
+    require(policy.snapshot().reservations.admissionRevision > closed,
+            "fresh production delivery reopens an expired supplemental host domain");
+    auto recovered =
+        NativeImageStorageToken::reserve(phase.lease, 64, identity, fresh.process.sampledAt);
+    require(recovered.token.has_value(), "fresh same root admits supplemental host again");
+    recovered.token.reset();
+    phase.lease.reset();
+    const auto final = policy.snapshot().reservations;
+    require(final.totalHostClaimBytes == 0 && final.totalDeviceClaimBytes == 0 &&
+                final.ownedNativeImages == 0 && final.admittedPhases == 0,
+            "deadline witness leaves all phase and image domains empty");
 }
 void monotonicRecoveryAndSlots() {
     const auto now = GpuProcessingPhasePolicy::Clock::now();
@@ -409,6 +453,7 @@ int main(int argc, char** argv) {
         if (argc == 2 && std::string_view(argv[1]) == "--live-unlimited-probe")
             return liveConstraintRemoval();
         policy();
+        nativeSupplementDeadline();
         monotonicRecoveryAndSlots();
         malformedFallbackCannotRecover();
         verifiedConstraintRemoval();

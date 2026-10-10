@@ -11,6 +11,7 @@
 // thread. This slice does not integrate with the runtime, UI, or task system.
 
 #include <bloom/render/gpu_presentation_types.hpp>
+#include <bloom/render/native_image_storage.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -269,6 +270,10 @@ class GpuDevice final {
     [[nodiscard]] bool retainProcessingPhase(std::shared_ptr<GpuProcessingPhaseLease>) noexcept;
     void retireProcessingPhase(std::uint64_t leaseId, bool retirementProven) noexcept;
     [[nodiscard]] bool processingPhaseOccupied() const noexcept;
+    // Owner-only actual native-image capacity refusal for the currently retained phase. Native
+    // allocation/bind/view faults have no retry metadata. Cleared on the next phase/allocation.
+    [[nodiscard]] std::optional<NativeImageStorageRefusal>
+    nativeImageStorageRefusal() const noexcept;
 
     // Missing operation/precision entries are Unavailable, matching the architecture contract.
     [[nodiscard]] GpuQualification qualificationFor(GpuOperationId operation,
