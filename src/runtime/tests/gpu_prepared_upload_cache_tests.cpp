@@ -1,14 +1,22 @@
+#include "packed_host_retirement_private.hpp"
+
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <memory>
+#include <mutex>
 #include <source_location>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -179,6 +187,370 @@ void testRepeatedReplacementAndFindStaysConsistent(Expectations& expectations) {
     }
 }
 
+struct RetirementScope final {
+    std::shared_ptr<bloom::render::PackedHostRetirementOwner> owner =
+        bloom::render::PackedHostRetirementOwner::create();
+    std::mutex mutex;
+    std::condition_variable wake;
+    bool blocked = false;
+    bool entered = false;
+    RetirementScope() {
+        auto state = owner->producerState();
+        state->testContext = this;
+        state->beforeFree = [](void* context) noexcept {
+            auto& self = *static_cast<RetirementScope*>(context);
+            std::unique_lock lock(self.mutex);
+            self.entered = true;
+            self.wake.notify_all();
+            self.wake.wait(lock, [&] { return !self.blocked; });
+        };
+    }
+    void release() {
+        {
+            const std::lock_guard lock(mutex);
+            blocked = false;
+        }
+        wake.notify_all();
+    }
+    ~RetirementScope() {
+        release();
+        owner->beginShutdown();
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!owner->exitAcknowledged() && std::chrono::steady_clock::now() < until)
+            std::this_thread::yield();
+        if (!owner->exitAcknowledged() || !owner->collect())
+            std::terminate();
+    }
+};
+
+template <class Predicate> bool until(Predicate predicate) {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!predicate() && std::chrono::steady_clock::now() < end)
+        std::this_thread::yield();
+    return predicate();
+}
+
+void testOrdinaryGraceIsPreserved(Expectations& checks) {
+    bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
+    bloom::runtime::OperationCache pool(1U << 20U, ledger);
+    const bloom::runtime::OperationCacheValue value{
+        .image = {}, .values = {bloom::runtime::CompiledValue{0.5}}, .bounds = {}};
+    pool.store("decoded", {}, value, bloom::runtime::OperationCacheEntryKind::DecodedMedia);
+    pool.setByteBudget(pool.retainedBytes());
+    pool.store("operation", {}, value);
+    checks.expect(pool.find("decoded", {}).has_value() && !pool.find("operation", {}),
+                  "ordinary-only incoming operation preserves an existing decoded grace entry");
+}
+
+void testSharedNamespaceAndPolicy(Expectations& checks) {
+    RetirementScope scope;
+    bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
+    auto pool = std::make_shared<bloom::runtime::OperationCache>(1U << 20U, ledger);
+    const auto assignment = pool->byteBudget();
+    GpuPreparedUploadCache prepared(pool, scope.owner, 4096, 2);
+    GpuPreparedUploadCache attached(pool);
+    checks.expect(!scope.owner->snapshot().started,
+                  "binding on the composition root starts no worker");
+    checks.expect(pool->byteBudget() == assignment && attached.maxBytes() == 4096 &&
+                      attached.maxEntries() == 2,
+                  "default attachment preserves subset and adds no ledger participant");
+    auto image = makeImage(4, 4);
+    pool->store("same", {}, {.image = image, .values = {}, .bounds = {}});
+    prepared.store("same", image);
+    checks.expect(pool->find("same", {}).has_value() && prepared.find("same") == image,
+                  "identical content is isolated by prepared namespace");
+    checks.expect(
+        pool->retainedBytes() ==
+                pool->retainedBytes(bloom::runtime::OperationCacheEntryKind::Operation) +
+                    pool->retainedBytes(bloom::runtime::OperationCacheEntryKind::PreparedUpload) &&
+            pool->retainedBytes(bloom::runtime::OperationCacheEntryKind::PreparedUpload) >
+                prepared.retainedBytes(),
+        "one combined pool charges prepared payload and key metadata exactly once");
+    bool rejected = false;
+    try {
+        GpuPreparedUploadCache incompatible(pool, scope.owner, 0);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    checks.expect(rejected && attached.maxBytes() == 4096,
+                  "incompatible explicit zero cannot mutate another facade");
+    rejected = false;
+    try {
+        GpuPreparedUploadCache incompatible(pool, {}, {}, 4096);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    checks.expect(rejected, "explicit legacy-valued count remains an explicit incompatible cap");
+    const auto foreign = bloom::render::PackedHostRetirementOwner::create();
+    rejected = false;
+    try {
+        GpuPreparedUploadCache incompatible(pool, foreign);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    checks.expect(rejected, "another owner cannot rebind one neutral pool");
+    pool->clearOperations();
+    checks.expect(!pool->find("same", {}) && prepared.find("same") == image,
+                  "operation purge preserves prepared media");
+    pool->clearDecodedMedia();
+    checks.expect(prepared.find("same") == nullptr &&
+                      until([&] { return prepared.retainedBytes() == 0; }),
+                  "media purge includes prepared entries and actual worker release");
+    GpuPreparedUploadCache zero(std::make_shared<bloom::runtime::OperationCache>(1U << 20U, ledger),
+                                scope.owner, 0);
+    zero.store("none", image);
+    checks.expect(zero.entryCount() == 0 && zero.retainedBytes() == 0,
+                  "explicit zero disables optional retention");
+}
+
+void testHeldRetirementConservation(Expectations& checks) {
+    RetirementScope scope;
+    scope.blocked = true;
+    bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
+    auto pool = std::make_shared<bloom::runtime::OperationCache>(1U << 20U, ledger);
+    GpuPreparedUploadCache prepared(pool, scope.owner, 256, 1);
+    prepared.store("old", makeImage(4, 4));
+    const auto charged = pool->retainedBytes();
+    const auto external = prepared.find("old");
+    prepared.clear();
+    checks.expect(until([&] {
+                      const std::lock_guard lock(scope.mutex);
+                      return scope.entered;
+                  }),
+                  "existing host worker reaches actual prepared-reference release gate");
+    checks.expect(prepared.entryCount() == 0 && prepared.retainedBytes() == 256 &&
+                      pool->retainedBytes() == charged && scope.owner->snapshot().allocations == 1,
+                  "detached pending payload metadata and registration remain charged");
+    for (int i = 0; i < 32; ++i)
+        prepared.store("new", makeImage(4, 4));
+    checks.expect(prepared.entryCount() == 0 && pool->retainedBytes() == charged,
+                  "pending subset occupancy prevents unbounded queued replacements");
+    scope.owner->beginShutdown();
+    checks.expect(!scope.owner->exitAcknowledged(),
+                  "common owner cannot exit while charged reference release is held");
+    scope.release();
+    checks.expect(until([&] { return pool->retainedBytes() == 0; }) &&
+                      external->pixels().size() == 16,
+                  "actual cache reference release returns charge; external legacy pin stays valid");
+    prepared.store("closed", makeImage(4, 4));
+    checks.expect(prepared.entryCount() == 0,
+                  "closed owner refuses optional stores without reviving a lane");
+}
+
+void testProjectedVictimsPreserveWarmEntries(Expectations& checks) {
+    RetirementScope scope;
+    scope.blocked = true;
+    bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
+    auto pool = std::make_shared<bloom::runtime::OperationCache>(1U << 20U, ledger);
+    GpuPreparedUploadCache prepared(pool, scope.owner, 3U * 256U, 3);
+    const auto image = makeImage(4, 4);
+    prepared.store("a", image);
+    prepared.store("b", image);
+    prepared.store("c", image);
+    pool->store("operation", {}, {.image = image, .values = {}, .bounds = {}});
+    const auto total = pool->retainedBytes();
+    const auto preparedCharge =
+        pool->retainedBytes(bloom::runtime::OperationCacheEntryKind::PreparedUpload);
+    prepared.store("d", image);
+    checks.expect(until([&] {
+                      const std::lock_guard lock(scope.mutex);
+                      return scope.entered;
+                  }),
+                  "subset replacement queues its one LRU victim on actual worker");
+    for (int i = 0; i < 16; ++i)
+        prepared.store("d", image);
+    checks.expect(prepared.find("a") == nullptr && prepared.find("b") == image &&
+                      prepared.find("c") == image && prepared.find("d") == nullptr &&
+                      pool->find("operation", {}).has_value() && pool->retainedBytes() == total,
+                  "pending subset credit selects no collateral prepared or ordinary victims");
+    pool->trimToBytes(total - preparedCharge / 3);
+    checks.expect(prepared.find("b") == image && prepared.find("c") == image &&
+                      pool->find("operation", {}).has_value(),
+                  "projected global trim recognizes sufficient already-pending victim");
+    scope.release();
+    checks.expect(until([&] { return prepared.retainedBytes() == 512; }),
+                  "only actual worker ref release returns the one victim payload charge");
+    prepared.store("d", image);
+    checks.expect(prepared.find("d") == image && prepared.find("b") == image &&
+                      prepared.find("c") == image,
+                  "released subset occupancy admits newest without further eviction");
+    prepared.clear();
+}
+
+void testSharedDefaultIsMemoryLimited(Expectations& checks) {
+    RetirementScope scope;
+    bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
+    auto pool = std::make_shared<bloom::runtime::OperationCache>(8U << 20U, ledger);
+    GpuPreparedUploadCache prepared(pool, scope.owner);
+    const auto image = makeImage(1, 1);
+    for (std::size_t i = 0; i < 4100; ++i)
+        prepared.store("source-" + std::to_string(i), image);
+    checks.expect(
+        prepared.entryCount() == 4100 && prepared.retainedBytes() == 4100ULL * 16ULL &&
+            pool->retainedBytes() > prepared.retainedBytes() &&
+            pool->retainedBytes() <= pool->byteBudget() &&
+            prepared.maxEntries() == std::numeric_limits<std::size_t>::max(),
+        "omitted shared count admits over4096 keys within payload-plus-metadata allowance");
+    const auto charge = pool->retainedBytes();
+    pool->setByteBudget(charge);
+    prepared.store("extra", image);
+    checks.expect(pool->retainedBytes() <= charge && prepared.entryCount() <= 4100,
+                  "real combined bytes bound further admission, including pending references");
+    prepared.clear();
+    checks.expect(until([&] { return pool->retainedBytes() == 0; }) &&
+                      prepared.retainedBytes() == 0 &&
+                      until([&] { return scope.owner->snapshot().allocations == 0; }),
+                  "all over4096 per-key charges and registrations actually retire");
+}
+
+void testAccountingOutlivesPool(Expectations& checks) {
+    RetirementScope scope;
+    scope.blocked = true;
+    bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
+    std::weak_ptr<bloom::runtime::OperationCache> weakPool;
+    std::weak_ptr<const Rgba32fImage> weakImage;
+    {
+        auto pool = std::make_shared<bloom::runtime::OperationCache>(1U << 20U, ledger);
+        weakPool = pool;
+        GpuPreparedUploadCache prepared(pool, scope.owner);
+        auto image = makeImage(4, 4);
+        weakImage = image;
+        prepared.store("sole", image);
+        image.reset();
+    } // Last pool destruction itself enqueues the still-active entry without waiting.
+    checks.expect(until([&] {
+                      const std::lock_guard lock(scope.mutex);
+                      return scope.entered;
+                  }),
+                  "last pool destruction enqueues reference release on the existing worker");
+    checks.expect(
+        weakPool.expired() && !weakImage.expired() && scope.owner->snapshot().allocations == 1,
+        "retiring node owns neutral accounting without pinning the cache or freeing backing");
+    scope.owner->beginShutdown();
+    checks.expect(!scope.owner->exitAcknowledged(),
+                  "cache destruction cannot falsely acknowledge the shared owner");
+    scope.release();
+    checks.expect(
+        until([&] { return scope.owner->exitAcknowledged(); }) && weakImage.expired() &&
+            scope.owner->snapshot().allocations == 0,
+        "callback safely frees refs and neutral charge after pool destruction, then exits");
+}
+
+void testIdenticalConcurrentStorePreservesWarmEntry(Expectations& checks) {
+    RetirementScope scope;
+    scope.blocked = true;
+    bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
+    auto pool = std::make_shared<bloom::runtime::OperationCache>(1U << 20U, ledger);
+    GpuPreparedUploadCache prepared(pool, scope.owner, 256, 1);
+    const auto image = makeImage(4, 4);
+    prepared.store("stable", image);
+    const auto charge = pool->retainedBytes();
+    std::vector<std::thread> writers;
+    writers.reserve(4);
+    for (int i = 0; i < 4; ++i)
+        writers.emplace_back([&] {
+            for (int j = 0; j < 16; ++j)
+                prepared.store("stable", image);
+        });
+    for (auto& writer : writers)
+        writer.join();
+    checks.expect(
+        prepared.find("stable") == image && prepared.entryCount() == 1 &&
+            prepared.retainedBytes() == 256 && pool->retainedBytes() == charge &&
+            scope.owner->snapshot().queuedAllocations == 0 &&
+            scope.owner->snapshot().allocations == 1,
+        "identical concurrent stores preserve warm allocation without queued replacements");
+    prepared.clear();
+    scope.release();
+}
+
+void testClosedPoolStaysRooted(Expectations& checks) {
+    RetirementScope scope;
+    bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
+    auto pool = std::make_shared<bloom::runtime::OperationCache>(1U << 20U, ledger);
+    GpuPreparedUploadCache prepared(pool, scope.owner);
+    const auto image = makeImage(4, 4);
+    prepared.store("held", image);
+    pool->closePreparedUploads();
+    prepared.store("held", image);
+    prepared.store("later", image);
+    GpuPreparedUploadCache attached(pool);
+    checks.expect(pool->preparedUploadsBound() && !attached.find("held") &&
+                      !attached.find("later") && until([&] { return pool->retainedBytes() == 0; }),
+                  "closed pool preserves root binding and rejects stores/default reopening");
+}
+
+void testDeadlineExpiresWithoutDelivery(Expectations& checks) {
+    RetirementScope scope;
+    bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
+    ledger.beginProcessSampling();
+    auto pool = std::make_shared<bloom::runtime::OperationCache>(1U << 20U, ledger);
+    GpuPreparedUploadCache prepared(pool, scope.owner);
+    bloom::runtime::MemoryBudgetSample sample;
+    sample.machine.availableBytes = 48ULL << 30U;
+    sample.physicalBytes = 64ULL << 30U;
+    sample.process.source = bloom::runtime::ProcessMemorySource::OtherHostOnly;
+    sample.process.status = bloom::runtime::ProcessMemoryStatus::Unsupported;
+    sample.process.sampledAt = std::chrono::steady_clock::now() - std::chrono::seconds(15) +
+                               std::chrono::milliseconds(100);
+    static_cast<void>(ledger.applySample(sample));
+    const auto image = makeImage(4, 4);
+    prepared.store("held", image);
+    checks.expect(prepared.find("held") == image,
+                  "delivered unexpired sample admits initial store");
+    std::this_thread::sleep_until(sample.process.sampledAt + std::chrono::seconds(15) +
+                                  std::chrono::milliseconds(1));
+    prepared.store("expired", image);
+    checks.expect(prepared.find("expired") == nullptr && prepared.find("held") == image,
+                  "new stores check delivered expiry even without another ledger callback");
+    prepared.clear();
+}
+
+void testSameLedgerFreshnessAndShrink(Expectations& checks) {
+    RetirementScope scope;
+    bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
+    ledger.beginProcessSampling();
+    auto pool = std::make_shared<bloom::runtime::OperationCache>(1U << 20U, ledger);
+    GpuPreparedUploadCache prepared(pool, scope.owner);
+    const auto image = makeImage(4, 4);
+    prepared.store("cold", image);
+    checks.expect(prepared.entryCount() == 0 && pool->byteBudget() == 0,
+                  "rooted cold delivery has no retention authority");
+    bloom::runtime::MemoryBudgetSample sample;
+    sample.machine.availableBytes = 48ULL << 30U;
+    sample.physicalBytes = 64ULL << 30U;
+    sample.process.source = bloom::runtime::ProcessMemorySource::OtherHostOnly;
+    sample.process.status = bloom::runtime::ProcessMemoryStatus::Unsupported;
+    sample.process.sampledAt = std::chrono::steady_clock::now();
+    static_cast<void>(ledger.applySample(sample));
+    const auto assigned = pool->byteBudget();
+    prepared.store("fresh", image);
+    checks.expect(assigned > 256 && prepared.find("fresh") == image,
+                  "actual same-ledger fresh retention admits prepared payload and metadata");
+    sample.process.sampledAt -= std::chrono::seconds(20);
+    static_cast<void>(ledger.applySample(sample));
+    prepared.store("stale", image);
+    checks.expect(prepared.find("stale") == nullptr && prepared.find("fresh") == image,
+                  "stale backward delivery denies new store while validated hits remain usable");
+    sample.process.sampledAt = std::chrono::steady_clock::now();
+    sample.process.status = bloom::runtime::ProcessMemoryStatus::Unavailable;
+    static_cast<void>(ledger.applySample(sample));
+    prepared.store("failed", image);
+    checks.expect(prepared.find("failed") == nullptr,
+                  "fresh timestamp on failed delivery does not grant new retention");
+    sample.process.status = bloom::runtime::ProcessMemoryStatus::Unsupported;
+    sample.process.sampledAt = std::chrono::steady_clock::now();
+    static_cast<void>(ledger.applySample(sample));
+    prepared.store("recovered", image);
+    checks.expect(prepared.find("recovered") == image,
+                  "genuine fresh same-root recovery authorizes a new optional store");
+    pool->setByteBudget(0);
+    prepared.store("tightened", image);
+    checks.expect(pool->byteBudget() == 0 && prepared.entryCount() == 0 &&
+                      until([&] { return pool->retainedBytes() == 0; }),
+                  "serialized zero shrink removes entries without waiting under ledger lock");
+}
+
 void testCoverageCacheEviction(Expectations& expectations) {
     // The coverage cache now retains immutable PathRasterCoverageGeometry (row ranges + spans), not
     // an R8 mask. Its accounting is the ACTUAL ranges + spans bytes.
@@ -224,6 +596,16 @@ int main() {
         testAliasedAllocationIsChargedPerEntry(expectations);
         testRepeatedReplacementAndFindStaysConsistent(expectations);
         testCoverageCacheEviction(expectations);
+        testSharedNamespaceAndPolicy(expectations);
+        testOrdinaryGraceIsPreserved(expectations);
+        testHeldRetirementConservation(expectations);
+        testSameLedgerFreshnessAndShrink(expectations);
+        testProjectedVictimsPreserveWarmEntries(expectations);
+        testIdenticalConcurrentStorePreservesWarmEntry(expectations);
+        testDeadlineExpiresWithoutDelivery(expectations);
+        testClosedPoolStaysRooted(expectations);
+        testAccountingOutlivesPool(expectations);
+        testSharedDefaultIsMemoryLimited(expectations);
         if (!expectations.ok()) {
             std::cerr << "FAIL: GPU prepared upload cache expectations failed\n";
             return 1;

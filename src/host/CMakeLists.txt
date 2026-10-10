@@ -235,6 +235,8 @@ if(BUILD_TESTING)
         add_executable(bloom_host_output_analysis_attempt_runner_test
                        tests/output_analysis_attempt_runner_tests.cpp)
         target_link_libraries(bloom_host_output_analysis_attempt_runner_test PRIVATE bloom_host)
+        target_include_directories(bloom_host_output_analysis_attempt_runner_test
+                                   PRIVATE ${PROJECT_SOURCE_DIR}/src/host)
         # The provider factory test qualifies the REAL packaged GPU shader tools through the same
         # GpuOcioContextResolver seam the desktop/CLI/MCP roots use; there is no manual compiler-path
         # injection. A build without qualified tools runs only the typed CPU-fallback vectors.
@@ -267,6 +269,30 @@ if(BUILD_TESTING)
             COMMAND bloom_host_gpu_process_frame_identity_test
             LABELS unit host output gpu render export
         )
+
+        # Read-only external footage proof; default CTest has no external input.
+        add_executable(bloom_host_gpu_prepared_source_reuse_test
+                       tests/gpu_prepared_source_reuse_tests.cpp)
+        bloom_find_dependency(OpenEXR)
+        target_include_directories(bloom_host_gpu_prepared_source_reuse_test PRIVATE
+            "${PROJECT_SOURCE_DIR}/src/host"
+            "${PROJECT_SOURCE_DIR}/src/runtime/tests"
+            "${PROJECT_SOURCE_DIR}/src/runtime"
+            "${PROJECT_SOURCE_DIR}/src/render/tests"
+            ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+        target_link_libraries(bloom_host_gpu_prepared_source_reuse_test PRIVATE
+            bloom_host bloom_runtime_evaluator bloom_render OpenEXR::OpenEXR)
+        bloom_package_gpu_shader_tools(bloom_host_gpu_prepared_source_reuse_test)
+        bloom_enable_warnings(bloom_host_gpu_prepared_source_reuse_test)
+        bloom_enable_strict_floating_point(bloom_host_gpu_prepared_source_reuse_test)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(bloom_host_gpu_prepared_source_reuse_test PRIVATE
+                                   -Wno-unused-function)
+        endif()
+        bloom_add_test(NAME bloom.host.gpu-prepared-source-reuse
+            COMMAND bloom_host_gpu_prepared_source_reuse_test
+            LABELS unit host gpu media cache)
+        set_tests_properties(bloom.host.gpu-prepared-source-reuse PROPERTIES SKIP_RETURN_CODE 77)
 
         # Task F2 (issue #101): drives approveFrameExportV1()/executeExportPublication() against
         # the same real platform::StagedArtifactCoordinator + PublicationCoordinator save/copy

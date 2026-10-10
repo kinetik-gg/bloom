@@ -1,9 +1,13 @@
 #include <bloom/host/gpu_export_provider.hpp>
 
+#include "gpu_export_provider_test_access.hpp"
+
 #include <bloom/runtime/gpu_ocio_context.hpp>
+#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/packed_host_retirement.hpp>
 
 #include <mutex>
+#include <stdexcept>
 #include <utility>
 
 namespace bloom::host {
@@ -26,7 +30,9 @@ struct GpuExportProvider::State final {
     const std::shared_ptr<std::timed_mutex> bootstrapGate;
     std::shared_ptr<runtime::PackedHostRetirementOwner> packedHostOwner;
     std::mutex samplingMutex;
-    std::unique_ptr<runtime::MemoryBudgetLedger> samplingLedger;
+    std::shared_ptr<runtime::MemoryBudgetLedger> samplingLedger;
+    // Same sampled root; escaped contexts keep its ledger alive through unregister.
+    std::shared_ptr<runtime::OperationCache> sourcePool;
     std::optional<std::chrono::steady_clock::time_point> sampledAt;
     mutable std::mutex mutex;
     std::shared_ptr<runtime::GpuProcessFrameEvaluator> evaluator;
@@ -67,9 +73,42 @@ struct GpuExportProvider::State final {
             return;
         }
         if (!samplingLedger) {
-            samplingLedger = std::make_unique<runtime::MemoryBudgetLedger>(
+            const auto ledger = std::make_shared<runtime::MemoryBudgetLedger>(
                 sample.physicalBytes, sample.machine.availableBytes.value_or(0));
-            samplingLedger->beginProcessSampling();
+            ledger->beginProcessSampling();
+            auto pool = std::shared_ptr<runtime::OperationCache>(
+                new runtime::OperationCache(ledger->allocate().operationCacheByteBudget, *ledger),
+                [ledger](runtime::OperationCache* cache) { delete cache; });
+            const auto originalProvider = options.mediaContextProvider;
+            const auto originalContext = options.mediaContext;
+            const auto initial = originalProvider ? originalProvider() : originalContext;
+            const auto policy = initial.preparedUploadCache
+                                    ? initial.preparedUploadCache->configuredPolicy()
+                                    : runtime::PreparedUploadRetentionPolicy{};
+            auto prepared = std::make_shared<runtime::GpuPreparedUploadCache>(
+                pool, packedHostOwner, policy.payloadBytes, policy.entries);
+            // Capture the retention bundle, never State: contexts may outlive this provider.
+            std::function<runtime::GpuSceneMediaContext()> wrapped = [pool, prepared,
+                                                                      originalProvider,
+                                                                      originalContext, policy] {
+                auto context = originalProvider ? originalProvider() : originalContext;
+                if (context.preparedUploadCache &&
+                    context.preparedUploadCache->configuredPolicy() != policy)
+                    throw std::invalid_argument("incompatible provider prepared retention policy");
+                context.operationCache = pool;
+                context.preparedUploadCache = prepared;
+                return context;
+            };
+            {
+                const std::lock_guard stateLock(mutex);
+                if (stopping) {
+                    pool->closePreparedUploads();
+                    return;
+                }
+                samplingLedger = ledger;
+                sourcePool = std::move(pool);
+                options.mediaContextProvider = std::move(wrapped);
+            }
         }
         const auto deliveredAt = std::chrono::steady_clock::now();
         const auto state = samplingLedger->applySample(std::move(sample), deliveredAt);
@@ -78,6 +117,20 @@ struct GpuExportProvider::State final {
         sampledAt = deliveredAt;
     }
 };
+
+runtime::GpuSceneMediaContext
+detail::GpuExportProviderTestAccess::mediaContext(const GpuExportProvider& provider) {
+    if (!provider.state_)
+        return {};
+    std::function<runtime::GpuSceneMediaContext()> source;
+    runtime::GpuSceneMediaContext context;
+    {
+        const std::lock_guard lock(provider.state_->mutex);
+        source = provider.state_->options.mediaContextProvider;
+        context = provider.state_->options.mediaContext;
+    }
+    return source ? source() : context;
+}
 
 GpuExportProvider::GpuExportProvider(runtime::GpuProcessFrameEvaluatorOptions options,
                                      std::shared_ptr<std::timed_mutex> gate)
@@ -254,14 +307,18 @@ void GpuExportProvider::beginShutdown() noexcept {
         return;
     }
     std::shared_ptr<runtime::GpuProcessFrameEvaluator> handle;
+    std::shared_ptr<runtime::OperationCache> sourcePool;
     {
         std::lock_guard lock(state_->mutex);
         state_->stopping = true;
+        sourcePool = state_->sourcePool;
         handle = state_->evaluator;
     }
     if (handle != nullptr) {
         handle->beginShutdown();
     }
+    if (sourcePool)
+        sourcePool->closePreparedUploads();
     if (state_->packedHostOwner)
         state_->packedHostOwner->beginShutdown();
 }

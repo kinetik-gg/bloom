@@ -494,7 +494,8 @@ class GpuPreparedUploadCache;
 
 // The evaluator-owned media context the builder needs to resolve and convert
 // ImageSource/VideoSource leaves. Construction from an evaluator shares its operation cache, video
-// decode context, asset base directory and disk cache; the prepared-upload cache is owned here. A
+// decode context, asset base directory and disk cache. Prepared retention attaches only to an
+// explicitly bound shared pool; an unbound evaluator has no optional prepared store. A
 // default context has no caches and an empty base directory, so a scene containing media fails
 // closed rather than decoding with different semantics.
 //

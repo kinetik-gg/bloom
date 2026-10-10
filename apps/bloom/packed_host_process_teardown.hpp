@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/render/packed_host_retirement.hpp>
+#include <bloom/runtime/operation_cache.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <chrono>
@@ -16,10 +17,12 @@ namespace bloom::app {
 class PackedHostProcessTeardown final {
   public:
     PackedHostProcessTeardown(bloom::runtime::TaskScheduler& scheduler,
-                              std::shared_ptr<bloom::render::PackedHostRetirementOwner> owner)
-        : scheduler_(scheduler), owner_(std::move(owner)) {}
+                              std::shared_ptr<bloom::render::PackedHostRetirementOwner> owner,
+                              std::shared_ptr<bloom::runtime::OperationCache> sourcePool)
+        : scheduler_(scheduler), owner_(std::move(owner)), sourcePool_(std::move(sourcePool)) {}
     ~PackedHostProcessTeardown() {
         scheduler_.beginShutdown();
+        sourcePool_->closePreparedUploads();
         owner_->beginShutdown();
         auto diagnosticAt = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         while (!scheduler_.isQuiescent() || !owner_->exitAcknowledged()) {
@@ -40,5 +43,6 @@ class PackedHostProcessTeardown final {
   private:
     bloom::runtime::TaskScheduler& scheduler_;
     std::shared_ptr<bloom::render::PackedHostRetirementOwner> owner_;
+    std::shared_ptr<bloom::runtime::OperationCache> sourcePool_;
 };
 } // namespace bloom::app

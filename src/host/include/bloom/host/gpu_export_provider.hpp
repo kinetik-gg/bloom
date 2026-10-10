@@ -53,6 +53,9 @@
 // The CPU reference evaluator remains the correctness oracle; this provider never flips an
 // operation's qualification or claims an unsupported scene as GPU.
 namespace bloom::host {
+namespace detail {
+struct GpuExportProviderTestAccess;
+}
 
 class GpuExportProvider final {
   public:
@@ -151,6 +154,7 @@ class GpuExportProvider final {
                              const runtime::GpuOcioCancellation& cancel = {});
 
   private:
+    friend struct detail::GpuExportProviderTestAccess;
     explicit GpuExportProvider(runtime::GpuProcessFrameEvaluatorOptions options,
                                std::shared_ptr<std::timed_mutex> bootstrapGate);
 

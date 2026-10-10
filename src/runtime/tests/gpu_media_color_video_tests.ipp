@@ -19,7 +19,7 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
     }
     evaluator.setAssetBaseDirectory(fixtures);
     evaluator.setVideoCacheByteBudget(std::size_t{64} << 20U);
-    const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    const auto context = legacyPreparedMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     const std::array<std::pair<std::string_view, std::string_view>, 2> cases{
         std::pair<std::string_view, std::string_view>{"numbered-prores.mov", "planar8"},
@@ -204,7 +204,7 @@ void testVideoCancellation(Expectations& expectations, const std::filesystem::pa
     }
     CpuCompositionEvaluator evaluator;
     evaluator.setAssetBaseDirectory(fixtures);
-    const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    const auto context = legacyPreparedMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     document::AssetRecord asset;
     try {
@@ -230,7 +230,7 @@ void testMissingAndCorruptMedia(Expectations& expectations, const Fixture& fixtu
                                 const GpuSceneOcioContext& ocioContext) {
     CpuCompositionEvaluator evaluator;
     evaluator.setAssetBaseDirectory(fixture.directory);
-    const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    const auto context = legacyPreparedMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
 
     // Missing file: a valid asset record whose locator points at a file that is not there.

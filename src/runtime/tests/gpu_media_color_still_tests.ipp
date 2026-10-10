@@ -12,7 +12,7 @@ void testColdBuilderToExecutor(Expectations& expectations, bloom::render::GpuDev
     if (!cache || !executor) {
         return;
     }
-    const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    const auto context = legacyPreparedMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     const auto plan = mediaPlan(format(8, 8), fixture.asset,
                                 LayerValues{.position = {4.3, 3.1}, .opacity = 0.9}, 4100);
@@ -48,7 +48,7 @@ void testProxiedStill(Expectations& expectations, bloom::render::GpuDevice& devi
     if (!cache || !executor) {
         return;
     }
-    const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    const auto context = legacyPreparedMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     const auto plan = mediaPlan(format(9, 6), fixture.asset,
                                 LayerValues{.position = {4.5, 3.0}, .opacity = 0.9}, 4600);
@@ -206,7 +206,7 @@ void testProxiedIdentityStill(Expectations& expectations, bloom::render::GpuDevi
     if (!cache || !executor) {
         return;
     }
-    const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    const auto context = legacyPreparedMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     document::AssetRecord asset = fixture.asset;
     // Explicit input == working space: the resolved transform is exact identity, so no OCIO command
@@ -295,7 +295,7 @@ void testProxiedIdentityStill(Expectations& expectations, bloom::render::GpuDevi
 
 void testProxyCancellation(Expectations& expectations, const CpuCompositionEvaluator& evaluator,
                            const Fixture& fixture, const GpuSceneOcioContext& ocioContext) {
-    const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    const auto context = legacyPreparedMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     const auto plan = mediaPlan(format(9, 6), fixture.asset,
                                 LayerValues{.position = {4.5, 3.0}, .opacity = 0.9}, 4700);
@@ -318,7 +318,7 @@ void testChangedWorkingSpaceReusesDecode(Expectations& expectations,
                                          const CpuCompositionEvaluator& evaluator,
                                          const Fixture& fixture,
                                          const GpuSceneOcioContext& ocioContext) {
-    const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    const auto context = legacyPreparedMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     // An explicit texture input keeps the transform non-identity for both working spaces, so the
     // comparison isolates the working space (the decoded bytes are identical).

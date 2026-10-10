@@ -701,6 +701,8 @@ endif()
 # Bounded prepared-upload cache: node lifetime under replacement/eviction, byte and entry ceilings,
 # zero-budget disable, and per-entry accounting. CPU-only; no loader and no device.
 add_executable(bloom_runtime_gpu_prepared_upload_cache_test gpu_prepared_upload_cache_tests.cpp)
+target_include_directories(bloom_runtime_gpu_prepared_upload_cache_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/render)
 target_link_libraries(bloom_runtime_gpu_prepared_upload_cache_test
     PRIVATE bloom_runtime_evaluator bloom_render)
 bloom_enable_warnings(bloom_runtime_gpu_prepared_upload_cache_test)

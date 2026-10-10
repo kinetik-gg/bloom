@@ -5,6 +5,7 @@
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
@@ -86,13 +87,24 @@ int main(int argc, char** argv) {
     };
     for (const bool throwing : {false, true}) {
         const auto owner = render::PackedHostRetirementOwner::create();
+        runtime::MemoryBudgetLedger sourceLedger(64ULL << 30U, 48ULL << 30U);
+        auto sourcePool = std::make_shared<runtime::OperationCache>(1ULL << 20U, sourceLedger);
+        auto prepared = std::make_shared<runtime::GpuPreparedUploadCache>(sourcePool, owner);
+        const auto window = render::ImageWindow::create(0, 0, 1, 1);
+        const auto descriptor = render::Rgba32fImageDescriptor::create(
+            *window.value(), *window.value(), core::PixelAspectRatio::square());
+        auto imageBuilder = render::Rgba32fImageBuilder::create(*descriptor.value(), 16);
+        auto frozen = std::move(*imageBuilder.value()).freeze();
+        const auto sourcePin =
+            std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
         runtime::TaskScheduler earlyScheduler;
         bool reached = false, dependencyAlive = true, deferredDestroyedSafely = false;
         try {
-            bloom::app::PackedHostProcessTeardown teardown(earlyScheduler, owner);
+            bloom::app::PackedHostProcessTeardown teardown(earlyScheduler, owner, sourcePool);
             BorrowedLifetime dependency{dependencyAlive};
             bloom::app::DeferredEditorTeardown deferredEditors;
             auto product = std::async(std::launch::async, [&] {
+                               prepared->store("shutdown-source", sourcePin);
                                render::GpuProcessingPhaseBudget budget(1, owner);
                                budget.setHostCapacity(4096, true);
                                auto grant = budget.reserve(
@@ -105,6 +117,8 @@ int main(int argc, char** argv) {
                                    throw std::runtime_error("fixture rooted storage");
                                return std::move(*storage.value());
                            }).get();
+            expect(prepared->entryCount() == 1,
+                   "common owner fixture actually retains prepared source before teardown");
             reached = product.ownership() == render::PackedRgba8Ownership::RootedPublished;
             auto* detached = new DeferredPackedWidget(std::move(product), dependencyAlive,
                                                       deferredDestroyedSafely);
@@ -119,6 +133,11 @@ int main(int argc, char** argv) {
                    owner->exitAcknowledged() && owner->snapshot().collected &&
                    owner->snapshot().allocations == 0,
                "normal early setup return/exception frees consumers before exit and collection");
+        expect(sourcePool->retainedBytes() == 0 && sourcePin->pixels().size() == 1,
+               "common teardown retires prepared charges while external source pin remains valid");
+        prepared->store("closed-source", sourcePin);
+        expect(prepared->entryCount() == 0,
+               "common teardown irreversibly closes escaped prepared facade stores");
     }
     auto project =
         document::makeNewProject("Host shutdown", "Main", core::RationalTime::fromInteger(2));

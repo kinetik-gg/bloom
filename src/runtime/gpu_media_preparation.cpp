@@ -29,7 +29,11 @@ GpuSceneMediaContext GpuSceneMediaContext::fromEvaluator(const CpuCompositionEva
     context.videoContext = evaluator.videoContext();
     context.assetBaseDirectory = evaluator.assetBaseDirectory();
     context.mediaDiskCache = evaluator.mediaDiskCache();
-    context.preparedUploadCache = std::make_shared<GpuPreparedUploadCache>();
+    // Only an explicitly bound pool supplies rooted retention. Unbound legacy evaluators
+    // render normally without optional preparation retention.
+    if (context.operationCache && context.operationCache->preparedUploadsBound())
+        context.preparedUploadCache =
+            std::make_shared<GpuPreparedUploadCache>(context.operationCache);
     return context;
 }
 

@@ -5,6 +5,7 @@
 // pipeline (media::probeImage -> detail::selectImageSource -> detail::evaluateImageSource), so the
 // tests exercise genuine decode/colour-conversion behaviour rather than a fake media handle.
 
+#include "gpu_media_cache_test_support.hpp"
 #include "gpu_scene_preparation_test_support.hpp"
 
 #include <ImathBox.h>

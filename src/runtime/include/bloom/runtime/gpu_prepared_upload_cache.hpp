@@ -1,51 +1,38 @@
 #pragma once
 
-// Small, bounded, thread-safe LRU of already converted and frozen ImageSource/VideoSource uploads.
-//
-// The CPU evaluator's media caches retain the DECODED native frame, not the converted/premultiplied
-// lin_rec709_scene image that the Layer Output stage consumes, so every evaluation of an unchanged
-// source still re-runs the conversion. This store keys ONLY on the source semantic key -- validated
-// asset/sequence/frame identity, interpretation and input/working colour space, configuration and
-// processor revision, and the proxy/composition descriptor -- so:
-//
-//   * an unchanged source behind a changed layer transform is a hit and reuses the same immutable
-//     allocation (the transform is not part of the key),
-//   * a changed source, frame, colour interpretation or proxy is a miss and reconverts,
-//   * an explicit `request.bypassOperationCache` never reads or writes it.
-//
-// It is charged by the actual pixel bytes of each frozen image AND by a hard entry-count ceiling,
-// so neither the byte bound nor the metadata bound can be exceeded -- including on replacement of
-// an existing key, which evicts other entries until the NEW size fits. The charge is PER ENTRY, not
-// a deduplicated physical-memory measure: two distinct keys that happen to alias the same image
-// allocation are charged twice, which over-states (never under-states) retained bytes and is the
-// honest accounting for a keyed store. A budget of zero disables
-// retention entirely (every store is refused and no entry is kept) rather than silently
-// substituting a one-byte budget. The byte default is 128 MiB, large enough for one 1920x1080
-// RGBA32F frame (33,177,600 B); the future service memory budget is expected to size it explicitly.
-// It owns no GPU resource and never touches a decoder.
+// Host source-preparation adapter. Rooted construction shares the OperationCache/source LRU,
+// its live same-ledger retention assignment, metadata accounting and explicit host retirement
+// owner. It has no second owning LRU or participant. Explicit byte/count caps are additional
+// immutable subset ceilings; omitted later attachments preserve the pool's existing policy.
+// Stores are worker-only; hits preserve source-semantic identity and bypass remains caller-owned.
+// The numeric constructor is the separate fixed standalone legacy arm, not live-root authority.
 
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/gpu_memory_budget.hpp>
+#include <bloom/runtime/operation_cache.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <list>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 
 namespace bloom::runtime {
 
-// The live default is capacity-aware (gpuPreparedUploadCacheByteBudget()): an ample-memory machine
-// retains a large converted source instead of re-decoding it every request, and an explicitly tiny
-// assigned budget stays tiny.
+// Fixed standalone legacy controls. Live rooted retention comes only from the bound shared pool.
 inline constexpr std::uint64_t kDefaultPreparedUploadCacheBytes = 128ULL * 1024ULL * 1024ULL;
 inline constexpr std::size_t kDefaultPreparedUploadCacheEntries = 4096;
 
 class GpuPreparedUploadCache final {
   public:
+    explicit GpuPreparedUploadCache(
+        std::shared_ptr<OperationCache> pool,
+        const std::shared_ptr<render::PackedHostRetirementOwner>& retirementOwner = {},
+        std::optional<std::uint64_t> maxBytes = {}, std::optional<std::size_t> maxEntries = {});
     explicit GpuPreparedUploadCache(std::uint64_t maxBytes = gpuPreparedUploadCacheByteBudget(),
                                     std::size_t maxEntries = kDefaultPreparedUploadCacheEntries);
 
@@ -58,6 +45,8 @@ class GpuPreparedUploadCache final {
 
     [[nodiscard]] std::uint64_t retainedBytes() const;
     [[nodiscard]] std::size_t entryCount() const;
+    // Immutable declared subset, separate from the live assigned maxBytes().
+    [[nodiscard]] PreparedUploadRetentionPolicy configuredPolicy() const;
     [[nodiscard]] std::uint64_t maxBytes() const;
     [[nodiscard]] std::size_t maxEntries() const;
     [[nodiscard]] std::uint64_t hits() const;
@@ -72,6 +61,7 @@ class GpuPreparedUploadCache final {
 
     void evictToFitLocked(std::uint64_t incomingBytes, std::size_t reservedEntries);
 
+    std::shared_ptr<OperationCache> pool_;
     mutable std::mutex mutex_;
     std::uint64_t maxBytes_;
     std::size_t maxEntries_;

@@ -2,7 +2,7 @@
 
 Status: canonical
 
-Updated: 2026-10-09
+Updated: 2026-10-10
 
 This directory is Bloom's current source of truth. Historical notes outside this repository may
 provide research or rationale, but they are not binding until adopted here.
@@ -41,6 +41,12 @@ provide research or rationale, but they are not binding until adopted here.
    contracts and extension boundaries.
 7. [`roadmap.md`](roadmap.md) — proof-oriented implementation sequence.
 8. [`decisions/`](decisions/) — accepted architecture decision records.
+
+The GPU/cache overhaul is at a bounded source-reuse shipping cut. Shared prepared HOST retention
+now has isolated native transform/text Full/Half parity, changed production final evaluation,
+23-source retention including metadata, and stale-digest/bypass/uncached controls. Source
+probe/hash still runs; broader memory, Viewer and throughput work is postponed. See the
+[execution checkpoint](plans/gpu-reliability-and-preview.md#execution-checkpoint) for exact limits.
 
 ## User Guides
 

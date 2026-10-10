@@ -172,7 +172,8 @@ int main(int argc, char* argv[]) try {
     // reference into it those objects hold (locals destruct in reverse declaration order).
     bloom::runtime::QualifiedDisplayProcessorProvider qualifiedDisplayProcessorProvider;
     const auto packedHostRetirement = bloom::render::PackedHostRetirementOwner::create();
-    bloom::app::PackedHostProcessTeardown packedHostTeardown(taskScheduler, packedHostRetirement);
+    bloom::app::PackedHostProcessTeardown packedHostTeardown(taskScheduler, packedHostRetirement,
+                                                             cpuEvaluator.operationCache());
     std::unique_ptr<bloom::ui::TaskUiBridge> taskUiBridgeOwner;
     try {
         taskUiBridgeOwner = std::make_unique<bloom::ui::TaskUiBridge>(taskScheduler);
@@ -298,7 +299,8 @@ int main(int argc, char* argv[]) try {
     // evaluator's current assetBaseDirectory per request, so a relative media path follows an
     // Open/SaveAs that changes the session base directory.
     auto gpuSceneCoverageCache = std::make_shared<bloom::runtime::GpuSceneCoverageCache>();
-    auto gpuPreparedUploadCache = std::make_shared<bloom::runtime::GpuPreparedUploadCache>();
+    auto gpuPreparedUploadCache = std::make_shared<bloom::runtime::GpuPreparedUploadCache>(
+        cpuEvaluator.operationCache(), packedHostRetirement);
     // The ONE shared runtime OCIO context resolver. It is INERT to construct (no hash/fs/OCIO/
     // process work); the packaged glslangValidator/spirv-val paths come from the application's OWN
     // packaging macros (never PATH, never a manual setup) and are qualified lazily on the GPU-scene
@@ -412,6 +414,7 @@ int main(int argc, char* argv[]) try {
         [&] {
             gpuPreviewDisplayService.beginShutdown();
             previewController.releasePublishedFramesForShutdown();
+            cpuEvaluator.operationCache()->closePreparedUploads();
             packedHostRetirement->beginShutdown();
         },
         [&] { return packedHostRetirement->exitAcknowledged(); });
@@ -609,6 +612,7 @@ int main(int argc, char* argv[]) try {
             gpuPreviewDisplayService.beginShutdown();
             window.workspaceHost()->releasePackedFramesForShutdown();
             previewController.releasePublishedFramesForShutdown();
+            cpuEvaluator.operationCache()->closePreparedUploads();
             packedHostRetirement->beginShutdown();
         },
         [&] { return packedHostRetirement->exitAcknowledged(); });

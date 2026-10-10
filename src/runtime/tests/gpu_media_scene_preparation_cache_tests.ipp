@@ -5,7 +5,7 @@
 void testWarmReuseAndChangedSource(Expectations& expectations,
                                    const CpuCompositionEvaluator& evaluator,
                                    const MediaFixture& fixture) {
-    auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    auto context = legacyPreparedMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto planA = mediaPlan(format(8, 8), fixture.asset,
                                  LayerValues{.position = {4.3, 3.1}, .opacity = 1.0}, 1500);
@@ -55,7 +55,7 @@ void testChangedFrameAndBypass(Expectations& expectations, const CpuCompositionE
     asset.manifest.members = {sequenceMember(fixture.path, 0, 0), sequenceMember(secondPath, 1, 1)};
     const auto plan = mediaPlan(format(8, 8), asset, LayerValues{.position = {4.3, 3.1}}, 1700);
 
-    auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    auto context = legacyPreparedMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto frameZero = builder.build(plan, requestFor(*plan, RationalTime::fromInteger(0)));
     const auto frameOne = builder.build(plan, requestFor(*plan, rationalTime(1, 24)));
@@ -94,7 +94,7 @@ void testChangedFrameAndBypass(Expectations& expectations, const CpuCompositionE
 void testSourceKeyExcludesIdsAndRevision(Expectations& expectations,
                                          const CpuCompositionEvaluator& evaluator,
                                          const MediaFixture& fixture) {
-    auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    auto context = legacyPreparedMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto a = mediaPlan(format(8, 8), fixture.asset,
                              LayerValues{.position = {4.3, 3.1}, .opacity = 0.8}, 2700);
@@ -159,7 +159,7 @@ void testSourceKeyExcludesIdsAndRevision(Expectations& expectations,
 void testPerRequestStatisticsAreLocal(Expectations& expectations,
                                       const CpuCompositionEvaluator& evaluator,
                                       const MediaFixture& fixture) {
-    auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    auto context = legacyPreparedMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto plan = mediaPlan(format(8, 8), fixture.asset,
                                 LayerValues{.position = {4.3, 3.1}, .opacity = 0.9}, 3000);
@@ -188,7 +188,7 @@ void testGestureCacheNeverTouchesDisk(Expectations& expectations,
         bloom::media::cache::MediaDiskCacheConfig{.rootDirectory = diskRoot,
                                                   .byteBudget = std::size_t{1} << 24U});
     evaluator.setMediaDiskCache(disk);
-    auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    auto context = legacyPreparedMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto plan = mediaPlan(format(8, 8), fixture.asset,
                                 LayerValues{.position = {4.3, 3.1}, .opacity = 0.9}, 3100);

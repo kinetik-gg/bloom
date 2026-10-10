@@ -1,3 +1,4 @@
+#include "gpu_media_cache_test_support.hpp"
 #include "gpu_media_video_scene_preparation_test_support.hpp"
 
 #include "video_source.hpp"
@@ -183,7 +184,7 @@ void testVideoWarmReuse(Expectations& expectations, const CpuCompositionEvaluato
         return;
     }
     const auto asset = videoAsset(path, 21000);
-    auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    auto context = legacyPreparedMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto planA = videoPlan(format(96, 64), asset,
                                  LayerValues{.position = {48.3, 32.1}, .opacity = 0.9}, 21000);
@@ -239,7 +240,7 @@ void testVideoBypassMatrix(Expectations& expectations, const CpuCompositionEvalu
         return;
     }
     const auto asset = videoAsset(path, 23000);
-    auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    auto context = legacyPreparedMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto plan = videoPlan(format(96, 64), asset,
                                 LayerValues{.position = {48.3, 32.1}, .opacity = 0.9}, 23000);

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
 #include <utility>
 
 namespace bloom::runtime::detail {
@@ -89,8 +90,17 @@ prepareExportScene(const GpuProcessFrameEvaluatorOptions& options,
                           .minimumExecutorBytes = pixels * 16,
                           .deviceWorkingBytes = result.readbackByteAllowance};
     }
-    const GpuSceneMediaContext mediaContext =
-        options.mediaContextProvider ? options.mediaContextProvider() : options.mediaContext;
+    GpuSceneMediaContext mediaContext;
+    try {
+        mediaContext =
+            options.mediaContextProvider ? options.mediaContextProvider() : options.mediaContext;
+    } catch (const std::invalid_argument& error) {
+        result.status = GpuProcessFrameStatus::Failed;
+        result.diagnosticCode = GpuProcessFrameDiagnosticCode::InternalInvariant;
+        result.diagnosticMessage =
+            "GPU media context configuration refused: " + std::string{error.what()};
+        return result;
+    }
     const CpuGpuSceneBuilder builder(nullptr, mediaContext,
                                      options.ocioContext != nullptr ? *options.ocioContext
                                                                     : GpuSceneOcioContext{},

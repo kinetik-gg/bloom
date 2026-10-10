@@ -1,9 +1,20 @@
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 
 #include <new>
+#include <stdexcept>
 #include <utility>
 
 namespace bloom::runtime {
+
+GpuPreparedUploadCache::GpuPreparedUploadCache(
+    std::shared_ptr<OperationCache> pool,
+    const std::shared_ptr<render::PackedHostRetirementOwner>& retirementOwner,
+    const std::optional<std::uint64_t> maxBytes, const std::optional<std::size_t> maxEntries)
+    : pool_(std::move(pool)), maxBytes_(0), maxEntries_(0) {
+    if (!pool_)
+        throw std::invalid_argument("prepared retention requires an explicit pool");
+    pool_->bindPreparedUploads(retirementOwner, maxBytes, maxEntries);
+}
 
 GpuPreparedUploadCache::GpuPreparedUploadCache(const std::uint64_t maxBytes,
                                                const std::size_t maxEntries)
@@ -39,6 +50,8 @@ void GpuPreparedUploadCache::evictToFitLocked(const std::uint64_t incomingBytes,
 
 std::shared_ptr<const render::Rgba32fImage>
 GpuPreparedUploadCache::find(const std::string& key) noexcept {
+    if (pool_)
+        return pool_->findPreparedUpload(key);
     std::lock_guard lock(mutex_);
     const auto found = entries_.find(key);
     if (found == entries_.end()) {
@@ -52,6 +65,10 @@ GpuPreparedUploadCache::find(const std::string& key) noexcept {
 
 void GpuPreparedUploadCache::store(std::string key,
                                    std::shared_ptr<const render::Rgba32fImage> image) {
+    if (pool_) {
+        pool_->storePreparedUpload(std::move(key), std::move(image));
+        return;
+    }
     if (image == nullptr || maxBytes_ == 0 || maxEntries_ == 0) {
         return;
     }
@@ -99,6 +116,10 @@ void GpuPreparedUploadCache::store(std::string key,
 }
 
 void GpuPreparedUploadCache::clear() {
+    if (pool_) {
+        pool_->clearPreparedUploads();
+        return;
+    }
     std::lock_guard lock(mutex_);
     // Map keys are string_views into the order nodes, so the map is cleared (which destroys its
     // elements without hashing) before the list that owns those strings.
@@ -108,31 +129,48 @@ void GpuPreparedUploadCache::clear() {
 }
 
 std::uint64_t GpuPreparedUploadCache::retainedBytes() const {
+    if (pool_)
+        return pool_->preparedPayloadBytes();
     std::lock_guard lock(mutex_);
     return retainedBytes_;
 }
 
 std::size_t GpuPreparedUploadCache::entryCount() const {
+    if (pool_)
+        return pool_->preparedEntryCount();
     std::lock_guard lock(mutex_);
     return entries_.size();
 }
 
+PreparedUploadRetentionPolicy GpuPreparedUploadCache::configuredPolicy() const {
+    if (pool_)
+        return pool_->preparedRetentionPolicy();
+    return {maxBytes_, maxEntries_};
+}
 std::uint64_t GpuPreparedUploadCache::maxBytes() const {
+    if (pool_)
+        return pool_->preparedPayloadCeiling();
     std::lock_guard lock(mutex_);
     return maxBytes_;
 }
 
 std::size_t GpuPreparedUploadCache::maxEntries() const {
+    if (pool_)
+        return pool_->preparedEntryCeiling();
     std::lock_guard lock(mutex_);
     return maxEntries_;
 }
 
 std::uint64_t GpuPreparedUploadCache::hits() const {
+    if (pool_)
+        return pool_->preparedStatistics().hits;
     std::lock_guard lock(mutex_);
     return hits_;
 }
 
 std::uint64_t GpuPreparedUploadCache::misses() const {
+    if (pool_)
+        return pool_->preparedStatistics().misses;
     std::lock_guard lock(mutex_);
     return misses_;
 }

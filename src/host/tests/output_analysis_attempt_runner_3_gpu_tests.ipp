@@ -21,8 +21,15 @@ void testGpuEvaluatorHostPath(Expectations& expectations, const bool requireDevi
         return;
     }
     runtime::TaskScheduler scheduler;
-    auto provider =
-        host::GpuExportProvider::create(gpuOptions(true, std::filesystem::path(loader)));
+    auto preparedPolicy = std::make_shared<std::shared_ptr<runtime::GpuPreparedUploadCache>>(
+        std::make_shared<runtime::GpuPreparedUploadCache>(0, 0));
+    auto options = gpuOptions(true, std::filesystem::path(loader));
+    options.mediaContextProvider = [preparedPolicy] {
+        runtime::GpuSceneMediaContext context;
+        context.preparedUploadCache = *preparedPolicy;
+        return context;
+    };
+    auto provider = host::GpuExportProvider::create(std::move(options));
     provider->prepare(scheduler);
     // Test convenience only: wait for the provider's off-thread bootstrap to terminal. Production
     // never polls; the attempt runner defers its evaluation stage instead.
@@ -52,6 +59,17 @@ void testGpuEvaluatorHostPath(Expectations& expectations, const bool requireDevi
     auto coordinator = std::move(artifacts).takeCoordinator();
     output::ExportResourceLedgerV1 ledger;
 
+    *preparedPolicy = std::make_shared<runtime::GpuPreparedUploadCache>(256, 1);
+    const auto mismatchRequest = requestFor(directory.path() / "policy-refusal.exr");
+    const auto refused =
+        provider->evaluator()->evaluate(mismatchRequest.plan, mismatchRequest.evaluation);
+    expectations.expect(
+        refused.status == runtime::GpuProcessFrameStatus::Failed && !refused.frame &&
+            refused.diagnostic.code == runtime::GpuProcessFrameDiagnosticCode::InternalInvariant &&
+            refused.diagnostic.message == "GPU media context configuration refused: incompatible "
+                                          "provider prepared retention policy",
+        "gpu host path: changed explicit subset receives recognizable configuration refusal");
+    *preparedPolicy = std::make_shared<runtime::GpuPreparedUploadCache>(0, 0);
     auto request = requestFor(directory.path() / "gpu-attempt.exr");
     request.gpuProvider = provider;
     auto begin =
@@ -97,5 +115,7 @@ void testGpuEvaluatorHostPath(Expectations& expectations, const bool requireDevi
                 "payload in one submission");
         }
     }
-    static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
+    outcome.reset();
+    expectations.expect(provider->shutdownAndWait(std::chrono::seconds(10)),
+                        "gpu host path: payload aliases drop before actual native+host shutdown");
 }

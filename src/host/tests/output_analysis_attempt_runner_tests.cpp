@@ -1,4 +1,8 @@
+#include "gpu_export_provider_test_access.hpp"
+
 #include <bloom/host/output_analysis_attempt_runner.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
@@ -24,6 +28,7 @@
 #include <memory>
 #include <optional>
 #include <source_location>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -72,6 +77,7 @@ int main(const int argc, char** argv) {
     testCancellationBeforeResolvingCompletes(expectations);
     testResourceExhaustionIsTypedWithZeroLeak(expectations);
     testGpuExportProviderDisabledFallback(expectations);
+    testOwnedPreparedRetentionSessions(expectations);
     testGpuExportProviderAsyncRetirement(expectations, requireDevice);
     testGpuExportProviderRetirementAfterAdmissionClosed(expectations);
     testGpuExportProviderShutdownDuringBootstrap(expectations);

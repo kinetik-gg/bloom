@@ -1,6 +1,6 @@
 # GPU reliability, media preparation, and preview execution plan
 
-Status: working — implementation resumed after G2E; architecture choices remain gated by evidence
+Status: shipping cut — bounded source reuse; remaining overhaul postponed
 
 Updated: 2026-10-10
 
@@ -15,7 +15,8 @@ G6A process-aware reusable headroom/off-UI sampling and terminal mailbox ownersh
 within the bounds below. The first conservative G6B phase-reservation slice is accepted after
 independent review and integrated closure. Allocation-owned aggregate accounting remains separate.
 
-Implementation proceeds sequentially from `e1086c13`. Each slice requires source review, focused
+The current round packages the qualified work since `e1086c13`; implementation pauses after this
+shipping cut at the owner’s request. Each future slice requires source review, focused
 regressions, and the applicable native/product evidence before its successor is accepted. A passing
 unit test does not complete an experience gate. A bounded final GPU-packed transfer into QWidget
 is now adopted for the G3B layout repair, after service and Viewer integration review. This adopts
@@ -39,6 +40,7 @@ and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 | G6A reusable process headroom | Accepted as a bounded retention/sampling slice | Paired visible Linux v2 limits, zero credit, requested/effective separation, pressure/recovery cycles, off-UI lifetime tests, private finite helper and Linux CPU-only gate pass; mailbox accepted separately, aggregate reservations remain pending |
 | G6A terminal result ownership | Accepted as a bounded lifetime slice | Handle-owned mailboxes, weak writers, unlocked payload disposal, expired-consumer outcomes and forced/late mock GPU tests pass; history/accounting/notification sites unchanged |
 | G6B first phase reservations | Accepted as a bounded admission/lifetime slice | Shared explicit roots, conservative host/device/count envelopes, native retirement/quarantine, observed-constraint release and bounded readiness/release retries; required native routes, affected strict, application and Linux CPU-only closure pass; no unique physical accounting or width two |
+| G5 shared prepared HOST retention | Bounded core, consumer and edited-source reuse qualified; broader G5 postponed | Combined LRU/live HOST retirement, first/middle/last 4608 × 3164 Full/Half transform/text parity and changed production final, 23-source HOST retention including metadata, generated invalidation/bypass/uncached controls. Source probe/hash remains; no zero-I/O or throughput claim. |
 | G6B rooted packed-host payloads | Accepted only for ownership, conservation and off-UI production allocation | Historical `6acad4d4` allocator-requested RGBA8 payload/fault/pin scope; its UI last-owner free required the follow-on below |
 | G6B off-UI published-host retirement | Affected retirement qualification gates pass | Payload plus admitted intrusive header, allocation-free final-alias enqueue, charged worker free and explicit actual-exit collection; headless/Linux CPU-only gates and all 103 affected strict TUs pass |
 | Controlled mounted-footage A | Accepted only for bounded Full/Half preparation, pixels, ownership and warm reuse | 100 strongly verified members in a controlled 24 fps 1080 composition, independent still-member CPU parity, 200 zero-work warm observations, exact payload/header charges and final release; one affected strict TU and repository quality pass |
@@ -1880,3 +1882,65 @@ Keep ordinary node expansion secondary until the initial reliability and playbac
 The completion criterion is an artist-visible, correctly identified frame delivered at a measured
 latency with a bounded working set. More GPU dispatches, more tests, a green coverage list, or a
 larger cache are insufficient substitutes.
+
+
+Shared prepared HOST retention shipping checkpoint (2026-10-10):
+the [owning contract](../architecture/gpu-backend.md#shared-prepared-host-retention-bounded-source-reuse)
+uses one existing OperationCache registration/LRU and namespace-safe prepared facade, not another
+participant or fixed one-sixteenth quota. Shared omitted entry count is memory-only; a 4,100-entry
+one-pixel test under 8 MiB admits metadata and retires through the existing host owner. Explicit
+finite/zero subset caps and standalone legacy counts remain exact. Cold/stale/failed/backward
+stores are refused; valid held hits survive. Live and pending charges remain until unlocked worker
+reference release, with projected victim selection avoiding needless extra eviction. External
+legacy pins are valid but not newly allocation-owned or proof of physical free.
+
+Independent core review accepts six paths, owning 2/2 in 0.17 s, final strict and actual
+ASAN/UBSAN/LSAN. Consumer review accepts eighteen paths with final whole native 477 ms / unit peak
+71.4 MiB and strict eight as six equivalent checks plus final fixture/provider reruns. GUI uses the
+common pool/owner; bound-only fromEvaluator leaves unbound contexts uncached. Owned headless
+providers keep their private ledger alive through pool deletion and close prepared producers before
+host close. Escaped contexts, borrowed pool preservation, exact explicit caps, recognizable config
+mismatch and transactional first-throw-to-retry are qualified within that fixture. Disabled sessions
+are HOST lifecycle evidence, separate from enabled GPU export. Earlier initializer, over-eviction and wrong-loader failures remain recorded rather than implied
+first-pass success. The deliberate first-context-throw followed by refresh/retry is a passing
+transactional control added after source review, not another failed run.
+
+The corrected real fixture distinguishes HOST prepared pointer/hit/conversion attempts,
+native-source pointer/uploads and finished-output hits. First/middle/last 4608 × 3164 members
+pass isolated transform/text edits, Full/Half changed outputs and every-pixel CPU parity, with
+actual dispatch work and warm zero source uploads/conversions. Changed production final outputs
+reuse the same HOST source; separate final native-cache uploads are not claimed as reused. The
+normal live reusable assignment is 19,448,985,600 bytes without a diagnostic memory cap. All 23
+weakly observed HOST sources retain 5,365,334,016 payload plus 15,456 metadata bytes and survive
+edited hits; native execution of all 23 is explicitly not run.
+
+Generated controls populate, purge and repopulate before actual final stale-digest refusal, then
+recover with a fresh digest and CPU parity. Explicit bypass/read-only and zero/128-byte subset
+caps preserve uncached parity. Real B footage was read-only. Its native parity/reuse receipt has no
+validation-layer claim; generated controls and required production routes have separate validation
+receipts. The source/binary freeze keeps historical fixture failures and exact successful proof
+attribution instead of implying first-pass success.
+
+Final union closure passes twelve owning suites, five refreshed formatted-body owners, the final
+guarded generated native fixture, all six required production route writers and a subsequent route
+I/O verifier. Fresh Linux Vulkan-disabled qualification passes eight selected suites; the native
+source fixture is explicitly Skipped (77). Strict closure covers 345 distinct contexts: 241 desktop
+and 104 fresh fallback, with 109 fallback contexts reused only after exact equivalence. Desktop
+attribution is 233 unchanged-dependency contexts plus eight repaired owners; both guarded-fixture
+contexts are rerun. Historical twenty-then-four optional diagnostics remain recorded. Repository
+formatting, hygiene, architecture, UI grammar, schemas and dependency-artifact checks pass. Product
+artifacts retain the accepted eighteen-path source snapshot; the additional nine paths are tests
+and helpers, with source/binary receipts preserved separately from historical B proof.
+
+The refreshed eleven-body sanitizer witness passes neutral core ASAN/UBSAN/LSAN. Native host
+functional, validation and ASAN access/UBSAN checks pass, but unsuppressed LSAN reports 2,468 bytes
+in six allocations, repeated without a session bus. Stacks show libdbus and unknown callers, no
+Bloom frame; external attribution remains unproven. This is an accepted scoped-cut limitation and
+handoff item, not clean native LSAN. Uninstrumented linked archives remain outside the witness.
+
+Probe/hash still precedes still-cache lookup and video selection may already decode. This cut does
+not satisfy G5’s zero-source-read/hash gate, diagnose similar Full/Half fill times, or establish FPS,
+sustained throughput, other-platform GPU execution or whole-memory/OOM accounting. The remaining
+combined processing-buffer milestone, Viewer/presentation ownership, batching/concurrency,
+aggregate memory and sustained/platform gates are postponed. No successor implementation is
+running as part of this shipping cut.

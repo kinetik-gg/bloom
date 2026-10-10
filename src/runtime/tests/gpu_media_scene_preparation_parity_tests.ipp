@@ -104,7 +104,7 @@ void testAffineAndBlendMedia(Expectations& expectations, const CpuCompositionEva
 void testChangedColourInterpretation(Expectations& expectations,
                                      const CpuCompositionEvaluator& evaluator,
                                      const MediaFixture& fixture) {
-    auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    auto context = legacyPreparedMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto base = mediaPlan(format(8, 8), fixture.asset,
                                 LayerValues{.position = {4.3, 3.1}, .opacity = 0.8}, 2100);

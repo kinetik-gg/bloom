@@ -178,8 +178,9 @@ proxy point-resample then run as GPU commands over that upload, so the decoded s
 colour-converted on the host. Without that context the leaf keeps the connected CPU conversion path
 as the fallback. The upload/source semantic key contains no node id, plan index, frame time, or
 layer transform; a reachable unsupported layer is screened before any decode. `GpuSceneCoverageCache` is a bounded transactional LRU keyed on raster
-geometry alone; `GpuPreparedUploadCache` (128 MiB / 4096 entries default, zero disables) reuses a
-converted source across a transform-only change. `GpuSceneExecutor` (`gpu_scene_executor.hpp`) drives
+geometry alone. Rooted `GpuPreparedUploadCache` now attaches to the existing bound operation/source
+retention pool; numeric standalone byte/count controls remain a legacy path. The bounded shared
+retention contract below has qualified bounded edited-source reuse; broader G5 work is postponed. `GpuSceneExecutor` (`gpu_scene_executor.hpp`) drives
 one immutable `PreparedGpuScene` as a bounded sequence of already-typed native operations on an
 existing `GpuDevice`; `begin` validates and flattens the reachable DAG consulting `GpuSceneCache`
 first, so a warm unchanged output performs zero native dispatches, `poll` is non-blocking and starts
@@ -1459,6 +1460,95 @@ commit and immutable packaging. Prepared-
 upload retention defaults are unchanged and need the next media/cache milestone. Other buffers,
 legacy storage, WSI, committed blocks/driver/process/UMA accounting, OOM, sustained performance
 and other-platform execution are outside this proof.
+
+### Shared prepared HOST retention (bounded source reuse)
+
+`GpuPreparedUploadCache` holds HOST `Rgba32fImage` references, not native GPU resources. Its rooted
+facade now uses the existing `OperationCache` registration and combined LRU with a distinct
+`PreparedUpload` key namespace. It owns no second image LRU or independent budget. Prepared pixel
+payload and per-key metadata are charged once per key in the combined retention total; distinct
+keys aliasing one image may conservatively charge it more than once. This is logical retention,
+not new allocator ownership or physical deduplication. Existing video-memory retention stays a
+separate participant; Tasks processing allowance is not persistent-cache capacity.
+
+Omitted shared limits follow the same ledger's delivered reusable assignment rather than a cold
+unrelated default or fixed one-sixteenth share. The shared entry count is memory-only, with
+metadata admitted; explicit finite/zero byte and count caps remain additional subset ceilings,
+and numeric standalone legacy controls retain their fixed behavior. First binding fixes the exact
+retirement owner and subset policy; compatible default facades attach without changing it.
+Cold, stale, failed or backward delivery refuses new optional stores, while existing validated
+hits remain usable. Stores enforce the accepted 15-second retention deadline without taking the
+ledger lock under the cache lock. Shrink/zero selects victims using projected retirement but keeps
+all live and pending bytes charged until callback reference release. Same-key/same-image stores
+preserve the retained allocation rather than replacing it.
+
+Each prepared entry registers a preowned generic callback with the existing explicitly injected
+host retirement owner. Eviction detaches and enqueues without large destruction or a new worker;
+that owner releases references outside cache/ledger/UI locks before returning the logical charge.
+External legacy image aliases remain valid, so releasing a cache reference is not proof of physical
+backing free. `closePreparedUploads()` irreversibly rejects future stores. GUI preview/final contexts
+share the common pool/owner and close prepared production before host shutdown. `fromEvaluator`
+attaches only an already bound pool; an unbound evaluator renders without optional prepared stores.
+Owned headless providers use a private sampled ledger and pool whose deleter retains that ledger
+through unregistration. Context callbacks retain the bundle without a provider-State cycle;
+borrowed policies keep the application-owned pool usable. Transactional provider initialization
+constructs throwing state before publication, so a failed first setup can retry safely.
+
+Independent focused review accepts the six-path core and eighteen-path consumer watermarks, not
+completion of G5. Core owning checks pass 2/2 in 0.17 s; final strict coverage and actual
+ASAN/UBSAN/LSAN pass, including a 4,100-entry memory-only default regression. The corrected projected
+victim test preserves unrelated warm entries while pending refs stay charged. Consumer whole
+native checks pass in 477 ms with a unit-reported 71.4 MiB peak, and final eight strict owners close
+through six equivalent checks plus final fixture/provider reruns. Disabled evaluator sessions
+prove HOST lifecycle only; enabled mismatch/recovery separately exercises GPU export. Initializer, over-eviction and wrong-loader failures remain distinct history. The intentional
+first-context-throw followed by refresh/retry is a passing transactional control, not a failed run.
+The source fixture qualifies the first, middle and last of 23 read-only 4608 × 3164 still members.
+Isolated transform, text and Full/Half edits change output pixels and dispatch work while weak
+HOST and native-source identities remain equal, prepared conversion attempts stay zero and native
+source uploads stay zero after cold preparation. Every edited output matches an independent CPU
+oracle. A changed production final evaluation uses the same HOST source and passes pixel parity;
+its separate native cache is not evidence of final native-upload reuse.
+
+The normal continuously sampled reusable assignment was 19,448,985,600 bytes, without a diagnostic
+memory cap. All 23 HOST sources retained 5,365,334,016 payload bytes plus 15,456 per-key metadata
+bytes, and survived edited weak-pointer hits. This is HOST retention evidence only; native execution
+of all 23 members was not run. Generated controls prove populated-cache purge/repopulation,
+bypass/read-only behavior, actual final stale-digest rejection and fresh-digest recovery, and
+uncached parity under zero and 128-byte subset caps. These explicit controls are separate from the
+normal assignment. Linux sampling reported no finite visible process limit, not a zero allowance.
+
+The current union retains independent source and binary receipts, including the historical B
+binary and its unused helper-header change. B has no validation-layer claim; generated native
+controls and required routes are checked separately with core/synchronization validation. Earlier
+missing-base-directory and hidden-text fixture failures remain recorded, alongside corrected runs.
+Final union closure passes twelve owning suites, five refreshed formatted-body owners, the final
+guarded generated native fixture, all six required production route writers and a subsequent route
+I/O verifier. Fresh Linux Vulkan-disabled qualification passes eight selected suites; the native
+source fixture is explicitly Skipped (77). Strict closure covers 345 distinct contexts: 241 desktop
+and 104 fresh fallback, with 109 fallback contexts reused only after exact equivalence. Desktop
+attribution is 233 unchanged-dependency contexts plus eight repaired owners; both guarded-fixture
+contexts are rerun. Historical twenty-then-four optional diagnostics remain recorded. Repository
+formatting, hygiene, architecture, UI grammar, schemas and dependency-artifact checks pass. Product
+artifacts retain the accepted eighteen-path source snapshot; the additional nine paths are tests
+and helpers, with source/binary receipts preserved separately from historical B proof.
+
+Refreshed sanitizer compilation instruments eleven actual core/consumer/test bodies; remaining
+linked archives are not claimed as instrumented. Core ASAN/UBSAN/LSAN passes. Native host functional
+assertions, core/synchronization validation and ASAN access/UBSAN checks pass, but unsuppressed
+LSAN exits nonzero with 2,468 bytes in six allocations, also reproduced without a session bus.
+Reported stacks contain libdbus and unknown unloaded callers, with no Bloom frame. External
+attribution is plausible but unproven; this unresolved leak result is explicitly accepted as a
+scoped shipping limitation, not clean native LSAN.
+
+The narrow source union is the shipping cut; broader G5 and memory/performance work is postponed.
+
+A prepared hit is separate from native-source and finished-output hits. Still source selection
+continues to probe/hash before lookup; a raw still hit bypasses the decode call but does not prove
+zero verification reads. Video selection may obtain a decoded frame before prepared lookup.
+Full/Half may retain the same full-resolution raw source while downstream work changes. Source
+identity, bypass/read-only behavior and actual final revalidation remain required; this slice
+claims no zero-I/O speedup, sustained throughput, other-platform execution or whole-memory/OOM
+accounting. Native image/buffer ownership and their retirement are unchanged separate domains.
 
 ### Rooted packed-host payload ownership (bounded ownership slice)
 
