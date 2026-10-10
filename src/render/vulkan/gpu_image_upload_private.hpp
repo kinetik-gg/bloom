@@ -16,6 +16,8 @@
 #include "gpu_device_private.hpp"
 #include "gpu_image_private.hpp"
 #include "gpu_image_upload_fault.hpp"
+#include "gpu_image_upload_retirement_private.hpp"
+#include "gpu_native_buffer_allocation_private.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -45,13 +47,14 @@ struct UploadStagingBuffer final {
     VmaAllocation allocation = VK_NULL_HANDLE;
     std::uint64_t bytes = 0;
     bool armed = false;
+    NativeBufferStorageToken token;
 };
 
 // Creates a host-visible, mapped, TRANSFER_SRC buffer sized `bytes`. Returns false and leaves `out`
-// untouched on failure; no allocation happens on the failure path.
-[[nodiscard]] bool createUploadStagingBuffer(vulkan_detail::DeviceAllocatorState& state,
-                                             std::uint64_t bytes,
-                                             UploadStagingBuffer& out) noexcept;
+// untouched on failure; backed failures destroy native storage before returning credit.
+[[nodiscard]] vulkan_detail::NativeBufferAllocationOutcome
+createUploadStagingBuffer(vulkan_detail::DeviceAllocatorState& state, std::uint64_t bytes,
+                          std::uint64_t maximumBackingBytes, UploadStagingBuffer& out) noexcept;
 
 // Actual VMA allocation size in bytes, or 0 when the allocation is invalid. This is the number the
 // peak budget is charged against, not the requested extent.
@@ -96,7 +99,8 @@ struct GpuImageUpload::Impl final {
     [[nodiscard]] bool acquireResidentSlot() noexcept;
     void releaseResidentSlot() noexcept;
     void orphanResidentSlot() noexcept;
-    static void drainResidentOrphansOnOwnerThread() noexcept;
+    static void drainResidentOrphansOnOwnerThread(
+        const vulkan_detail::DeviceAllocatorState* exactOwner = nullptr) noexcept;
     // Frees the command pool/buffer/fence. Called only on the owner thread after a failed
     // createResources() so an Impl that then holds no resident slot owns no Vulkan object and may
     // be destroyed from any thread.
@@ -108,7 +112,7 @@ struct GpuImageUpload::Impl final {
     std::thread::id owner;
     std::shared_ptr<vulkan_detail::DeviceAllocatorState> control;
     GpuImageUploadBudgets budgets;
-    std::uint32_t expectedGeneration = 0;
+    std::uint64_t expectedEpoch = 0;
     // Bounded resident-pool slot owned by this Impl from before its first native allocation until
     // owner-thread release. kUploadNoResidentSlot means this Impl owns no native resources.
     std::size_t residentSlot = kUploadNoResidentSlot;
@@ -128,6 +132,12 @@ struct GpuImageUpload::Impl final {
     std::atomic<bool> discardRequested{false};
     GpuImageUploadDiagnostic jobDiagnostic;
     GpuImageUploadDiagnostic createDiagnostic;
+};
+
+struct GpuImageUploadRetirementAccess final {
+    static void drain(vulkan_detail::DeviceAllocatorState& state) noexcept {
+        GpuImageUpload::Impl::drainResidentOrphansOnOwnerThread(&state);
+    }
 };
 
 } // namespace bloom::render

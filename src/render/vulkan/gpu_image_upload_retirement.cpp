@@ -50,6 +50,7 @@ bool GpuImageUpload::Impl::acquireResidentSlot() noexcept {
         return false;
     }
     residentSlot = index;
+    uploadSlots().setImageMetadata(this, index, control.get(), 0);
     return true;
 }
 
@@ -69,15 +70,19 @@ void GpuImageUpload::Impl::orphanResidentSlot() noexcept {
     uploadSlots().orphan(this, residentSlot);
 }
 
-void GpuImageUpload::Impl::drainResidentOrphansOnOwnerThread() noexcept {
-    uploadSlots().drainOrphans(
-        [](void* const raw) noexcept {
+void GpuImageUpload::Impl::drainResidentOrphansOnOwnerThread(
+    const vulkan_detail::DeviceAllocatorState* exactOwner) noexcept {
+    uploadSlots().drainRetainedOrphansOutsideLock(
+        [exactOwner](void* const raw) noexcept {
             // Exact ownership gate: only the device owner thread that created the Impl, and only
             // while it still belongs to its device generation, may touch its Vulkan state.
             const auto* const impl = static_cast<const GpuImageUpload::Impl*>(raw);
             return impl != nullptr && impl->owner != std::thread::id{} &&
                    impl->owner == std::this_thread::get_id() && impl->control != nullptr &&
-                   impl->control->generation == impl->expectedGeneration;
+                   (!exactOwner || impl->control.get() == exactOwner) &&
+                   !impl->control->imageOwnerClosed &&
+                   impl->control->presentationEpoch == impl->expectedEpoch &&
+                   impl->control->ownerLifetimeToken == vulkan_detail::deviceOwnerLifetimeToken();
         },
         [](void* const raw) noexcept {
             auto* const impl = static_cast<GpuImageUpload::Impl*>(raw);
@@ -103,14 +108,29 @@ void GpuImageUpload::Impl::drainResidentOrphansOnOwnerThread() noexcept {
         },
         [](void* const raw) noexcept {
             auto* const impl = static_cast<GpuImageUpload::Impl*>(raw);
-            // Clear the back-pointer before the Impl is destroyed so a stale destructor can never
-            // address a slot that may already have been re-admitted.
-            impl->residentSlot = kUploadNoResidentSlot;
             delete impl;
         });
 }
 
 namespace upload_detail {
+
+void drainUploads(vulkan_detail::DeviceAllocatorState& state) noexcept {
+    GpuImageUploadRetirementAccess::drain(state);
+}
+void closeUploads(vulkan_detail::DeviceAllocatorState& state) noexcept {
+    if (state.owner != std::this_thread::get_id() ||
+        state.ownerLifetimeToken != vulkan_detail::deviceOwnerLifetimeToken())
+        return;
+    drainUploads(state);
+    uploadSlots().closeImageOwner(&state);
+}
+bool uploadPendingFor(const vulkan_detail::DeviceAllocatorState& state) noexcept {
+    bool pending = false;
+    uploadSlots().inspectImageMetadata([&](const void* owner, std::uint64_t, bool, bool) {
+        pending = pending || owner == &state;
+    });
+    return pending;
+}
 
 std::size_t uploadResidentCapacity() noexcept { return kUploadResidentCapacity; }
 std::size_t uploadResidentInUse() noexcept { return uploadSlots().inUse(); }

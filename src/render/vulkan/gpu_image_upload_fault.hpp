@@ -15,8 +15,8 @@ namespace bloom::render::upload_detail {
 
 enum class UploadRetirementFault : std::uint8_t {
     None,
-    // The owner drain treats an orphaned submission's fence as unproven without querying the real
-    // fence, so retention and recovery can be proven deterministically.
+    // Poll and owner drain observe a submitted fence as unproven without querying/waiting the
+    // real fence. Removing the control permits actual retirement; it never simulates a GPU hang.
     ForceFenceTimeout,
 };
 

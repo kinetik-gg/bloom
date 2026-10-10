@@ -1417,6 +1417,49 @@ ownership only; upload, legacy CPU/decode/cache storage, other buffers/WSI, allo
 blocks/driver/process/UMA accounting, OOM,
 performance and other-platform execution qualification remain separate.
 
+### Rooted image-upload staging (bounded staging slice)
+
+The next buffer increment covers only `GpuImageUpload` transient mapped staging. The existing
+phase estimate stays `F + 3L`: fixed output overlap F, protected retained-source estimate L,
+scratch estimate L and separately occupied upload allowance U=L. Ordinary owned host output uses
+F only. `NativeBufferStorageToken::reserveUpload` consumes remaining U and native debit atomically
+on every heap, including device-local/BAR staging. Nonlocal backing converts the same already-
+planned host subset once; local backing leaves that conservative host estimate reserved. Actual
+requirements beyond U refuse before a VMA backing attempt. Reconciliation and actual destruction
+return the exact originating occupancy without adding a grant or manufacturing a release wake.
+The source/scratch terms remain estimates, not ownership of decoded/prepared legacy cache images.
+
+The token moves with `UploadStagingBuffer`, preserving sequential-write, mapped, HOST_VISIBLE
+requirements and actual allocation/type/heap identity. Native destruction precedes token credit.
+The existing native owner slot retains foreign or unproven work, rather than passing it to the
+host-pixel retirement worker or publishing transient staging into a cache. Native pending-generation
+exit wiring is part of this increment. The complete production evaluator submits a real upload,
+then a controlled status observation retains 96 staging bytes, one allocation, the same nonlocal
+subset and one phase/unproven charge through a 50 ms incomplete shutdown. Removing only that
+observation override permits actual owner fence/backing/generation retirement and covered zero.
+The independent unknown device-report latch is neither cleared nor required to reach zero.
+
+Focused neutral and primitive checks pass. Real mapped upload, flush, paired refusal, controlled
+faults, foreign owner drain and same-generation reuse are qualified independently from the whole
+executor's cache/phase-detachment and capacity-one recovery checks. A manually unproven submitted
+primitive control is not production evaluator shutdown evidence or a driver hang. The owning plan
+records exact attribution and earlier fixture failures. The held 28-source checkpoint adds only
+a Viewer readiness fixture correction to the accepted upload increment. Fresh required routes pass.
+The first private Viewer whole run failed gesture/mapping/document assertions while shutdown
+assertions passed; a corrected whole run preserves those assertions and passes after an actual
+mapping-ready setup wait. This qualifies post-readiness functionality, not rapid selection-to-drag
+latency. The 372 affected desktop strict checks close without diagnostics through eight representative
+checks, 363 unchanged consumers and the final exact Viewer check. Fresh Linux CPU-stub tests
+pass 10/10 with explicit unavailable provenance, and sixteen distinct fallback strict checks pass
+without diagnostics. Final repository quality passes on its first attempt, including 1,477 format
+checks and all unchanged owning checks. Source-aligned application, CLI and media-worker hashes/
+BuildIDs are held with no missing dependencies or linked Vulkan. The 28 source paths and two
+owning docs form this bounded checkpoint; exact independent freeze review precedes selective
+commit and immutable packaging. Prepared-
+upload retention defaults are unchanged and need the next media/cache milestone. Other buffers,
+legacy storage, WSI, committed blocks/driver/process/UMA accounting, OOM, sustained performance
+and other-platform execution are outside this proof.
+
 ### Rooted packed-host payload ownership (bounded ownership slice)
 
 This narrow G6B slice tracks allocator-requested RGBA8 pixel payloads for explicitly rooted

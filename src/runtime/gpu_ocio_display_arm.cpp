@@ -358,7 +358,8 @@ qualifyGpuOcioDisplay(std::shared_ptr<const PreparedGpuOcioCommand> command,
         if (!upload) {
             return fail(GpuOcioDisplayDiagnosticCode::DeviceUnavailable);
         }
-        const render::GpuImageUploadParameters uploadParameters{.source = source};
+        const render::GpuImageUploadParameters uploadParameters{
+            .source = source, .phase = device.retainedProcessingPhase()};
         const auto uploadDiagnostic = upload.upload->begin(uploadParameters, budgets.maxImageBytes);
         if (uploadDiagnostic.code != render::GpuImageUploadDiagnosticCode::None) {
             return fail(GpuOcioDisplayDiagnosticCode::NativeFailure);

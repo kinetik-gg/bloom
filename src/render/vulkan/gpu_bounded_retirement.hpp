@@ -177,6 +177,37 @@ template <std::size_t Capacity> class VoidResidentSlotStore final {
         }
     }
 
+    // Claim only orphaned ownership under the short handoff lock. Native polling and destruction
+    // run outside it; the exact slot stays occupied/pending until its destructor calls release.
+    template <typename OwnedFn, typename RetireFn, typename DestroyFn>
+    void drainRetainedOrphansOutsideLock(OwnedFn&& owned, RetireFn&& retire,
+                                         DestroyFn&& destroy) noexcept {
+        if (pending_.load(std::memory_order_acquire) == 0)
+            return;
+        for (std::size_t index = 0; index < Capacity; ++index) {
+            void* candidate = nullptr;
+            {
+                std::lock_guard lock(mutex_);
+                auto& slot = slots_[index];
+                if (slot.impl && slot.orphaned && !slot.draining && !slot.ownerClosed &&
+                    owned(slot.impl)) {
+                    slot.draining = true;
+                    candidate = slot.impl;
+                }
+            }
+            if (!candidate)
+                continue;
+            if (!retire(candidate)) {
+                std::lock_guard lock(mutex_);
+                if (slots_[index].impl == candidate)
+                    slots_[index].draining = false;
+                continue;
+            }
+            destroy(candidate);
+            retired_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
     // Image families attach immutable owner identity and cached native allocation bytes. Metadata
     // is updated and inspected under the same lock; diagnostics never inspect a live Vulkan Impl.
     void setImageMetadata(void* impl, std::size_t index, const void* owner,

@@ -8,6 +8,7 @@
 // closed.
 
 #include "gpu_image_upload_fault.hpp"
+#include "gpu_image_upload_private.hpp"
 #include "gpu_initialization_observation.hpp"
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
@@ -21,11 +22,13 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <source_location>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -502,6 +505,8 @@ void testCancelHonest(Expectations& expectations, GpuDevice& device) {
     expectations.expect(runUpload(upload, parameters), "the upload is reusable after cancellation");
 }
 
+#include "gpu_image_upload_storage_tests.ipp"
+
 } // namespace
 
 int main(const int argc, char** argv) {
@@ -526,11 +531,16 @@ int main(const int argc, char** argv) {
             return expectations.ok() ? 0 : 1;
         }
 
+        std::cout << "UPLOAD_DEVICE " << device.device->capabilityReport().identity.device_name
+                  << '\n';
         testInitializationCleanup(expectations, *device.device);
         testBoundedPool(expectations, *device.device);
         testUnprovenRetention(expectations, *device.device);
         testOwnerIsolation(expectations, options.loader_path);
         testCancelHonest(expectations, *device.device);
+        testUploadStorage(*device.device);
+        testRootedUploadRetirement(*device.device);
+        testRootedUploadUnknown(createOptions);
 
         if (!expectations.ok()) {
             std::cerr << "FAIL: upload retirement expectations failed\n";

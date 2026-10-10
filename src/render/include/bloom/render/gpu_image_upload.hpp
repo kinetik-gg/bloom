@@ -33,6 +33,7 @@
 namespace bloom::render {
 
 class Rgba32fImage;
+struct GpuImageUploadRetirementAccess;
 
 enum class GpuImageUploadJobState : std::uint8_t { Idle, Pending, Ready, Failure };
 enum class GpuImageUploadPollResult : std::uint8_t { Pending, Ready, Failure, WrongThread };
@@ -64,6 +65,8 @@ struct GpuImageUploadDiagnostic final {
 // pointer survives the call and the caller may release its reference immediately afterwards.
 struct GpuImageUploadParameters final {
     std::shared_ptr<const Rgba32fImage> source;
+    // Exact already-retained request authority; null only for an explicitly rootless device.
+    std::shared_ptr<GpuProcessingPhaseLease> phase = {};
 };
 
 // Separately bounded image and staging ceilings. The per-call byteBudget is the peak allowance and
@@ -130,6 +133,7 @@ class GpuImageUpload final {
     [[nodiscard]] static bool teardownDrainIncomplete() noexcept;
 
   private:
+    friend struct GpuImageUploadRetirementAccess;
     struct Impl;
     explicit GpuImageUpload(std::unique_ptr<Impl> impl) noexcept;
     void releaseImpl() noexcept;

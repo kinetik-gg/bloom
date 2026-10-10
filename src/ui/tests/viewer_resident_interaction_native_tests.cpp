@@ -513,6 +513,25 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         OutlineCancellationEvents outlineEvents;
         if (options.outlineProof)
             outlineEvents.observe(*viewer, *host, *nativeWindow);
+        // Selection changes the overlay revision. A new drag needs its actually applied mapping;
+        // this setup prerequisite is not rapid selection-to-drag input or latency qualification.
+        const bool mappingBeforeSecondDrag = viewer->mappingForTest().has_value();
+        const auto mappingWaitStarted = std::chrono::steady_clock::now();
+        const bool secondDragMappingReady =
+            waitUntil([&] { return viewer->mappingForTest().has_value(); }, 20s);
+        const auto mappingWaitMicroseconds =
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() -
+                                                                  mappingWaitStarted)
+                .count();
+        std::cout << "VIEWER_SECOND_DRAG mappingBefore=" << mappingBeforeSecondDrag
+                  << " selected=" << hasSelectedLayer
+                  << " selectedBounds=" << controller.selectedLayerBounds().size()
+                  << " mappingReady=" << secondDragMappingReady
+                  << " waitUs=" << mappingWaitMicroseconds << '\n';
+        checks.expect(secondDragMappingReady,
+                      "the selected outline mapping is actually applied before the second drag");
+        if (!secondDragMappingReady)
+            return 1;
         // Native drag: press, move, release. Exactly one undoable commit.
         const auto revisionBeforeDrag = session.snapshot().revision();
         const QPointF release = centre + QPointF(60.0, -40.0);

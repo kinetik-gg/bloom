@@ -71,13 +71,15 @@ void GpuProcessingPhaseLease::markUnproven() noexcept {
     }
 }
 
-NativeBufferStorageToken::NativeBufferStorageToken(
-    std::shared_ptr<GpuProcessingPhaseLease> phase, const std::uint64_t bytes,
-    const NativeBufferStorageIdentity identity) noexcept
-    : state_(phase->state_), origin_(std::move(phase)), bytes_(bytes), identity_(identity) {}
+NativeBufferStorageToken::NativeBufferStorageToken(std::shared_ptr<GpuProcessingPhaseLease> phase,
+                                                   const std::uint64_t bytes,
+                                                   const NativeBufferStorageIdentity identity,
+                                                   const bool upload) noexcept
+    : state_(phase->state_), origin_(std::move(phase)), bytes_(bytes), identity_(identity),
+      upload_(upload) {}
 NativeBufferStorageToken::NativeBufferStorageToken(NativeBufferStorageToken&& other) noexcept
     : state_(std::move(other.state_)), origin_(std::move(other.origin_)),
-      bytes_(std::exchange(other.bytes_, 0)), identity_(other.identity_) {}
+      bytes_(std::exchange(other.bytes_, 0)), identity_(other.identity_), upload_(other.upload_) {}
 NativeBufferStorageToken&
 NativeBufferStorageToken::operator=(NativeBufferStorageToken&& other) noexcept {
     if (this != &other) {
@@ -86,6 +88,7 @@ NativeBufferStorageToken::operator=(NativeBufferStorageToken&& other) noexcept {
         origin_ = std::move(other.origin_);
         bytes_ = std::exchange(other.bytes_, 0);
         identity_ = other.identity_;
+        upload_ = other.upload_;
     }
     return *this;
 }
@@ -95,6 +98,17 @@ NativeBufferStorageGrant
 NativeBufferStorageToken::reserve(const std::shared_ptr<GpuProcessingPhaseLease>& phase,
                                   const std::uint64_t bytes,
                                   const NativeBufferStorageIdentity identity) noexcept {
+    return reserveInPartition(phase, bytes, identity, false);
+}
+NativeBufferStorageGrant
+NativeBufferStorageToken::reserveUpload(const std::shared_ptr<GpuProcessingPhaseLease>& phase,
+                                        const std::uint64_t bytes,
+                                        const NativeBufferStorageIdentity identity) noexcept {
+    return reserveInPartition(phase, bytes, identity, true);
+}
+NativeBufferStorageGrant NativeBufferStorageToken::reserveInPartition(
+    const std::shared_ptr<GpuProcessingPhaseLease>& phase, const std::uint64_t bytes,
+    const NativeBufferStorageIdentity identity, const bool upload) noexcept {
     if (!phase || bytes == 0 || identity.allocatorGeneration == 0)
         return {};
     const std::lock_guard lock(phase->state_->mutex);
@@ -114,22 +128,27 @@ NativeBufferStorageToken::reserve(const std::shared_ptr<GpuProcessingPhaseLease>
     };
     if (bytes > phase->remainingDeviceBytes_)
         return refuse(GpuProcessingPhaseDomain::Device);
-    if (!identity.deviceLocal && bytes > phase->remainingHostBytes_)
+    if ((upload && bytes > phase->remainingUploadBytes_) ||
+        (!upload && !identity.deviceLocal && bytes > phase->remainingOutputHostBytes_))
         return refuse(GpuProcessingPhaseDomain::Host);
     // All additions transfer existing bounded debits atomically; no new capacity/readiness check
     // can revoke an admitted grant, and no half-transaction can escape on refusal.
+    if (upload)
+        phase->remainingUploadBytes_ -= bytes;
     phase->remainingDeviceBytes_ -= bytes;
     counters.deviceReservedBytes -= bytes;
     counters.ownedNativeBufferBytes += bytes;
     ++counters.ownedNativeBuffers;
     if (!identity.deviceLocal) {
+        if (!upload)
+            phase->remainingOutputHostBytes_ -= bytes;
         phase->remainingHostBytes_ -= bytes;
         counters.hostReservedBytes -= bytes;
         counters.ownedNonlocalNativeBufferHostBytes += bytes;
     }
     return {.status = GpuProcessingPhaseAdmission::Accepted,
             .domain = GpuProcessingPhaseDomain::None,
-            .token = NativeBufferStorageToken(phase, bytes, identity)};
+            .token = NativeBufferStorageToken(phase, bytes, identity, upload)};
 }
 
 bool NativeBufferStorageToken::reconcile(const std::uint64_t actual,
@@ -142,10 +161,14 @@ bool NativeBufferStorageToken::reconcile(const std::uint64_t actual,
     const auto returned = bytes_ - actual;
     bytes_ = actual;
     auto& counters = state_->counters;
+    if (upload_)
+        origin_->remainingUploadBytes_ += returned;
     origin_->remainingDeviceBytes_ += returned;
     counters.deviceReservedBytes += returned;
     counters.ownedNativeBufferBytes -= returned;
     if (!identity_.deviceLocal) {
+        if (!upload_)
+            origin_->remainingOutputHostBytes_ += returned;
         origin_->remainingHostBytes_ += returned;
         counters.hostReservedBytes += returned;
         counters.ownedNonlocalNativeBufferHostBytes -= returned;
@@ -162,9 +185,13 @@ void NativeBufferStorageToken::reset() noexcept {
         auto& counters = state_->counters;
         counters.ownedNativeBufferBytes -= bytes_;
         --counters.ownedNativeBuffers;
+        if (upload_)
+            origin_->remainingUploadBytes_ += bytes_;
         origin_->remainingDeviceBytes_ += bytes_;
         counters.deviceReservedBytes += bytes_;
         if (!identity_.deviceLocal) {
+            if (!upload_)
+                origin_->remainingOutputHostBytes_ += bytes_;
             origin_->remainingHostBytes_ += bytes_;
             counters.hostReservedBytes += bytes_;
             counters.ownedNonlocalNativeBufferHostBytes -= bytes_;
@@ -419,11 +446,12 @@ PackedHostStorageAuthority::reserve(const std::uint64_t bytes,
     }
     const std::lock_guard lock(state_->mutex);
     if (published_ || (domain_ != HostPixelStorageDomain::PackedPreview && origin->unproven_) ||
-        bytes_ > limit_ || bytes > limit_ - bytes_ || bytes > origin->remainingHostBytes_ ||
-        metadataBytes > origin->remainingHostBytes_ - bytes) {
+        bytes_ > limit_ || bytes > limit_ - bytes_ || bytes > origin->remainingOutputHostBytes_ ||
+        metadataBytes > origin->remainingOutputHostBytes_ - bytes) {
         return {};
     }
     // Both counters change under one lock; the total never changes during an ownership handoff.
+    origin->remainingOutputHostBytes_ -= bytes + metadataBytes;
     origin->remainingHostBytes_ -= bytes + metadataBytes;
     state_->counters.hostReservedBytes -= bytes + metadataBytes;
     if (domain_ == HostPixelStorageDomain::PackedPreview) {
@@ -470,6 +498,7 @@ void PackedHostStorageAuthority::release(const std::uint64_t bytes,
             state_->counters.totalHostClaimBytes -= bytes + metadataBytes;
             incrementSaturating(state_->counters.admissionRevision);
         } else {
+            retainedOrigin_->remainingOutputHostBytes_ += bytes + metadataBytes;
             retainedOrigin_->remainingHostBytes_ += bytes + metadataBytes;
             state_->counters.hostReservedBytes += bytes + metadataBytes;
             if (bytes_ == 0) {
@@ -666,6 +695,8 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
     // Division/subtraction bounds above prove these additions cannot overflow capacity.
     lease->hostBytes_ = request.fixedHostBytes + 3 * sourceBytes;
     lease->remainingHostBytes_ = lease->hostBytes_;
+    lease->remainingOutputHostBytes_ = request.fixedHostBytes;
+    lease->remainingUploadBytes_ = sourceBytes;
     lease->deviceBytes_ = request.native ? request.deviceWorkingBytes + executorBytes : 0;
     lease->remainingDeviceBytes_ = lease->deviceBytes_;
     lease->sourceBytes_ = sourceBytes;

@@ -9,7 +9,11 @@
 
 #include "gpu_media_executor_test_support.hpp"
 
+#include "final_host_test_support.hpp"
+#include "gpu_image_upload_fault.hpp"
 #include <bloom/render/gpu_device.hpp>
+#include <bloom/runtime/gpu_process_frame.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 
@@ -241,6 +245,97 @@ void testUploadRetirement(Expectations& expectations, GpuDevice& device,
 }
 #endif
 
+// Complete production evaluator: a real submitted upload is observed as unproven until the
+// override is removed. This tests native exit ordering, not a real driver timeout or GPU hang.
+void testProductionUploadUnknown(Expectations& expectations, const Options& options,
+                                 const CpuCompositionEvaluator& cpu, const MediaFixture& fixture) {
+    namespace faults = bloom::render::upload_detail;
+    using bloom::runtime::GpuProcessFrameEvaluator;
+    using bloom::runtime::GpuProcessFrameEvaluatorOptions;
+    using bloom::runtime::GpuProcessFrameStatus;
+    bloom::render::test::FinalHostRetirementScope host;
+    auto policy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(1, host.owner);
+    auto sample = bloom::runtime::memoryBudgetSample();
+    bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
+                                              sample.machine.availableBytes.value_or(0));
+    ledger.beginProcessSampling();
+    const auto now = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
+    const auto delivered = ledger.applySample(std::move(sample), now);
+    policy->applyHostSample(delivered, ledger.physicalByteBudget(), now);
+    if (!policy->snapshot().reservations.hostReady) {
+        expectations.expect(false, "upload-owner: actual host/process sample ready");
+        return;
+    }
+    GpuProcessFrameEvaluatorOptions configured;
+    configured.loaderPath = options.loader_path;
+    configured.processingPhasePolicy = policy;
+    configured.mediaContext = GpuSceneMediaContext::fromEvaluator(cpu);
+    configured.requestByteBudget = 64ULL << 20;
+    configured.readbackByteBudget = 64ULL << 20;
+    configured.nativeDeadline = std::chrono::seconds(2);
+    configured.maxQueuedRequests = 1;
+    auto evaluator = GpuProcessFrameEvaluator::create(configured);
+    if (!evaluator || !evaluator->gpuAvailable()) {
+        expectations.expect(false, "upload-owner: actual native evaluator available");
+        return;
+    }
+    struct RestoreObservation final {
+        ~RestoreObservation() {
+            faults::setUploadRetirementFaultForTest(faults::UploadRetirementFault::None);
+        }
+    } restore;
+    const auto plan =
+        mediaPlan(format(8, 8), fixture.asset, LayerValues{.position = {4.3, 3.1}}, 2500);
+    auto request = requestFor(*plan);
+    request.pixelStorageByteLimit = 64ULL << 20;
+    faults::setUploadRetirementFaultForTest(faults::UploadRetirementFault::ForceFenceTimeout);
+    const auto failed = evaluator->evaluate(plan, request);
+    const auto held = policy->snapshot().reservations;
+    expectations.expect(
+        failed.status == GpuProcessFrameStatus::Failed && !failed.frame &&
+            failed.deviceOwnershipEpoch != 0 &&
+            failed.diagnostic.code ==
+                bloom::runtime::GpuProcessFrameDiagnosticCode::InternalInvariant &&
+            failed.diagnostic.message ==
+                "a native failure did not prove fence retirement; owner drain is required" &&
+            held.ownedNativeBufferBytes > 0 && held.ownedNativeBuffers == 1 &&
+            held.admittedPhases == 1 && held.unprovenPhases == 1,
+        "upload-owner: actual submitted upload retains staging and sticky phase");
+    std::cout << "UPLOAD_OWNER_UNKNOWN diagnostic=" << static_cast<int>(failed.diagnostic.code)
+              << " message=" << failed.diagnostic.message
+              << " bufferBytes=" << held.ownedNativeBufferBytes
+              << " nonlocalHost=" << held.ownedNonlocalNativeBufferHostBytes
+              << " buffers=" << held.ownedNativeBuffers << " phases=" << held.admittedPhases
+              << " unproven=" << held.unprovenPhases << '\n';
+    evaluator->beginShutdown();
+    const auto shortWait = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
+    while (std::chrono::steady_clock::now() < shortWait && !evaluator->retirementComplete())
+        std::this_thread::yield();
+    const auto stillHeld = policy->snapshot().reservations;
+    expectations.expect(!evaluator->retirementComplete() &&
+                            stillHeld.ownedNativeBufferBytes == held.ownedNativeBufferBytes &&
+                            stillHeld.ownedNativeBuffers == 1 && stillHeld.admittedPhases == 1 &&
+                            stillHeld.unprovenPhases == 1,
+                        "upload-owner: shutdown stays incomplete while submission is unproven");
+    faults::setUploadRetirementFaultForTest(faults::UploadRetirementFault::None);
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!evaluator->retirementComplete() && std::chrono::steady_clock::now() < until)
+        std::this_thread::yield();
+    expectations.expect(evaluator->retirementComplete(),
+                        "upload-owner: actual owner fence/backing/generation drain completes");
+    evaluator.reset();
+    const auto final = policy->snapshot().reservations;
+    expectations.expect(final.ownedNativeBufferBytes == 0 && final.ownedNativeBuffers == 0 &&
+                            final.ownedNonlocalNativeBufferHostBytes == 0 &&
+                            final.ownedNativeImageBytes == 0 && final.ownedNativeImages == 0 &&
+                            final.ownedNonlocalNativeHostBytes == 0 && final.admittedPhases == 0 &&
+                            final.unprovenPhases == 0 && final.totalHostClaimBytes == 0 &&
+                            final.totalDeviceClaimBytes == 0,
+                        "upload-owner: actual destruction releases all covered storage claims");
+    // Independent device-report unknown state is neither cleared nor required to disappear.
+    std::cout << "UPLOAD_OWNER_UNKNOWN incomplete50ms=1 nativeRetired=1 coveredClaims=0\n";
+}
+
 } // namespace
 
 int main(const int argc, char** argv) {
@@ -272,6 +367,8 @@ int main(const int argc, char** argv) {
 #ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
         testUploadRetirement(expectations, *device.device, evaluator, fixture);
 #endif
+
+        testProductionUploadUnknown(expectations, options, evaluator, fixture);
 
         if (!expectations.ok()) {
             std::cerr << "FAIL: GPU media executor retirement expectations failed\n";

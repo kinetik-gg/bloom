@@ -54,10 +54,11 @@ GpuImageUpload::Impl::~Impl() {
     // under a slot, and a failed creation is reset before the slot is released), so it may be
     // destroyed from any thread. A slot-holding Impl is only ever destroyed on its owner thread: a
     // foreign destruction orphans the slot instead.
-    assert(residentSlot == kUploadNoResidentSlot);
+    assert(residentSlot == kUploadNoResidentSlot || onOwnerThread());
     releaseResident();
     staging.release();
     resetResources();
+    releaseResidentSlot();
 }
 
 void GpuImageUpload::Impl::resetResources() noexcept {
@@ -120,7 +121,6 @@ void GpuImageUpload::releaseImpl() noexcept {
                 return;
             }
         }
-        impl_->releaseResidentSlot();
     }
     impl_.reset();
 }
@@ -251,7 +251,7 @@ GpuImageUploadCreateResult GpuImageUpload::create(GpuDevice& device,
     impl->owner = std::this_thread::get_id();
     impl->control = std::move(control);
     impl->budgets = budgets;
-    impl->expectedGeneration = impl->control->generation;
+    impl->expectedEpoch = impl->control->presentationEpoch;
     return {std::unique_ptr<GpuImageUpload>(new GpuImageUpload(std::move(impl))),
             GpuImageUploadDiagnostic{}};
 }
@@ -276,6 +276,16 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
     if (impl.queueSubmitted || impl.jobState == GpuImageUploadJobState::Pending) {
         return uploadDiagnostic(GpuImageUploadDiagnosticCode::Busy, "one job is already in flight");
     }
+    if (impl.control->imageOwnerClosed ||
+        impl.control->ownerLifetimeToken != vulkan_detail::deviceOwnerLifetimeToken() ||
+        impl.control->processingPhase != parameters.phase ||
+        impl.control->processingPhaseUnproven ||
+        (parameters.phase && parameters.phase->isUnproven())) {
+        return uploadDiagnostic(GpuImageUploadDiagnosticCode::DeviceUnavailable,
+                                "upload requires the exact retained, proven request phase");
+    }
+    impl.control->imageStorageRefusal.reset();
+    impl.control->bufferStorageRefusal.reset();
     if (parameters.source == nullptr) {
         return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
                                 "the upload source is null");
@@ -310,7 +320,7 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
         return uploadDiagnostic(GpuImageUploadDiagnosticCode::OverBudget,
                                 "the image plus its staging peak exceed the requested byte budget");
     }
-    if (impl.control->generation != impl.expectedGeneration) {
+    if (impl.control->presentationEpoch != impl.expectedEpoch) {
         impl.deviceLost = true;
         return uploadDiagnostic(GpuImageUploadDiagnosticCode::DeviceLost,
                                 "the device generation changed; this pipeline must not be reused");
@@ -343,8 +353,15 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
 
     impl.clearJob();
     try {
-        if (!createUploadStagingBuffer(*impl.control, imageBytes, impl.staging)) {
-            impl.fail(GpuImageUploadDiagnosticCode::AllocationFailed,
+        const auto stagingOutcome = createUploadStagingBuffer(
+            *impl.control, imageBytes, impl.budgets.maxStagingBytes, impl.staging);
+        if (stagingOutcome != vulkan_detail::NativeBufferAllocationOutcome::Allocated) {
+            const bool refused =
+                stagingOutcome == vulkan_detail::NativeBufferAllocationOutcome::PhaseRefused ||
+                stagingOutcome ==
+                    vulkan_detail::NativeBufferAllocationOutcome::TransferBudgetRefused;
+            impl.fail(refused ? GpuImageUploadDiagnosticCode::OverBudget
+                              : GpuImageUploadDiagnosticCode::AllocationFailed,
                       "the upload staging buffer could not be allocated");
             return impl.jobDiagnostic;
         }
@@ -374,7 +391,9 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
         resident->generation = impl.control->generation;
         if (!createResidentImage(*impl.control, width, height, *resident)) {
             impl.staging.release();
-            impl.fail(GpuImageUploadDiagnosticCode::AllocationFailed,
+            impl.fail(impl.control->imageStorageRefusal
+                          ? GpuImageUploadDiagnosticCode::OverBudget
+                          : GpuImageUploadDiagnosticCode::AllocationFailed,
                       "the resident image could not be allocated");
             return impl.jobDiagnostic;
         }
@@ -513,6 +532,10 @@ bool GpuImageUpload::Impl::drainAndRetire() noexcept {
         queueSubmitted = false;
         return true;
     }
+    if (upload_detail::uploadRetirementFault().load() ==
+        static_cast<std::uint8_t>(upload_detail::UploadRetirementFault::ForceFenceTimeout)) {
+        return false; // Observed-status control only; the real submission stays retained.
+    }
     const VkFence rawFence = static_cast<VkFence>(*fence);
     const VkResult waited = control->device.getDispatcher()->vkWaitForFences(
         static_cast<VkDevice>(*control->device), 1, &rawFence, VK_TRUE, kDrainTimeoutNanoseconds);
@@ -531,6 +554,13 @@ GpuImageUploadPollResult GpuImageUpload::poll() {
     Impl& impl = *impl_;
     if (!impl.onOwnerThread()) {
         return GpuImageUploadPollResult::WrongThread;
+    }
+    if (impl.queueSubmitted &&
+        upload_detail::uploadRetirementFault().load() ==
+            static_cast<std::uint8_t>(upload_detail::UploadRetirementFault::ForceFenceTimeout)) {
+        impl.fail(GpuImageUploadDiagnosticCode::NativeTimeout,
+                  "controlled observed upload fence timeout; submission retained");
+        return GpuImageUploadPollResult::Failure;
     }
 #ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
     // TEST-ONLY fault hook, inert in every production build. It lets the executor retirement tests

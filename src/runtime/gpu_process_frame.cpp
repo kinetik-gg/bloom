@@ -525,7 +525,8 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
             device->reclaimReleasedImages();
             const auto programs = device->ocioProgramRetirementStats();
             if (programs.registeredPrograms == 0 && programs.pendingUploads == 0 &&
-                !device->displayTransferPending() && !device->outputColorReadbackPending()) {
+                !device->displayTransferPending() && !device->outputColorReadbackPending() &&
+                !device->imageUploadPending()) {
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));

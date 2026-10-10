@@ -100,6 +100,8 @@ class GpuProcessingPhaseLease final {
     [[nodiscard]] std::uint64_t hostBytes() const noexcept { return hostBytes_; }
     [[nodiscard]] std::uint64_t deviceBytes() const noexcept { return deviceBytes_; }
     [[nodiscard]] std::uint64_t sourceByteLimit() const noexcept { return sourceBytes_; }
+    // Existing source estimate separately protects S, C and occupied upload U, each sourceBytes.
+    [[nodiscard]] std::uint64_t uploadByteLimit() const noexcept { return sourceBytes_; }
     [[nodiscard]] std::uint64_t executorByteLimit() const noexcept { return executorBytes_; }
     // Expected watermark after this lease alone releases. Independent changes remain visible.
     [[nodiscard]] std::uint64_t revisionAfterOwnRelease() const noexcept;
@@ -119,6 +121,10 @@ class GpuProcessingPhaseLease final {
     std::uint64_t hostBytes_ = 0;
     // Separate from immutable granted limits; accesses are guarded by state_->mutex.
     std::uint64_t remainingHostBytes_ = 0;
+    // Ordinary owned output uses fixed F only; S/C estimates never become spare output credit.
+    std::uint64_t remainingOutputHostBytes_ = 0;
+    // Logical occupancy applies even to device-local/BAR upload staging.
+    std::uint64_t remainingUploadBytes_ = 0;
     std::uint64_t deviceBytes_ = 0;
     std::uint64_t remainingDeviceBytes_ = 0;
     std::uint64_t sourceBytes_ = 0;

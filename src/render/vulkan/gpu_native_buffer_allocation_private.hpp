@@ -6,6 +6,8 @@
 
 namespace bloom::render::vulkan_detail {
 
+enum class NativeBufferPurpose { Output, Upload };
+
 enum class NativeBufferAllocationOutcome { Allocated, TransferBudgetRefused, PhaseRefused, Failed };
 
 // One actual unbound buffer, original AUTO access/mapping preferences, then bounded compatible
@@ -15,7 +17,8 @@ allocateCoveredBuffer(DeviceAllocatorState& state, const VkBufferCreateInfo& buf
                       const VmaAllocationCreateInfo& original,
                       const std::uint64_t maximumBackingBytes, VkBuffer& buffer,
                       VmaAllocation& allocation, VmaAllocationInfo& allocationInfo,
-                      NativeBufferStorageToken& token) noexcept {
+                      NativeBufferStorageToken& token,
+                      NativeBufferPurpose purpose = NativeBufferPurpose::Output) noexcept {
     state.bufferStorageRefusal.reset();
     if (!state.processingPhase) {
         // Explicit rootless compatibility preserves the original allocator route.
@@ -75,8 +78,12 @@ allocateCoveredBuffer(DeviceAllocatorState& state, const VkBufferCreateInfo& buf
         const NativeBufferStorageIdentity identity{
             state.presentationEpoch, selected, heap,
             (memory->memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0};
-        auto grant = NativeBufferStorageToken::reserve(
-            state.processingPhase, requirements.memoryRequirements.size, identity);
+        auto grant =
+            purpose == NativeBufferPurpose::Upload
+                ? NativeBufferStorageToken::reserveUpload(
+                      state.processingPhase, requirements.memoryRequirements.size, identity)
+                : NativeBufferStorageToken::reserve(state.processingPhase,
+                                                    requirements.memoryRequirements.size, identity);
         if (!grant.token) {
             if (grant.status == GpuProcessingPhaseAdmission::BudgetRefused)
                 state.bufferStorageRefusal = {grant.status, grant.domain,

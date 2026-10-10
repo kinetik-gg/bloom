@@ -76,6 +76,7 @@ std::optional<NativeBufferStorageRefusal> GpuDevice::nativeBufferStorageRefusal(
     return {};
 }
 bool GpuDevice::displayTransferPending() const noexcept { return false; }
+bool GpuDevice::imageUploadPending() const noexcept { return false; }
 bool GpuDevice::outputColorReadbackPending() const noexcept { return false; }
 
 GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept { return {}; }

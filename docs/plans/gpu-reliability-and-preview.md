@@ -47,6 +47,7 @@ and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 | G6B rooted OCIO sampled-LUT images | Bounded LUT qualification gates pass | Exact pre-begin phase/root/device affinity, move-only LUT tokens, native-owner retirement, actual dimensional/nonlocal/fault/parity/prefix and both textured-cache evidence; selected owners, six routes, 324 desktop strict, fifteen distinct Linux fallback strict, final quality and source-aligned artifact checks pass; buffers and broader memory qualification remain separate |
 | G6B rooted display-transfer staging buffer | Bounded staging qualification gates pass | Existing phase native/planned-host debit, exact VMA suballocation identity, same-slot foreign/fence retirement and exact-generation exit; native/Viewer/six-route, 325 desktop and sixteen distinct fallback strict, Linux CPU-stub, final quality and artifact readbacks pass; other buffer creators are excluded |
 | G6B combined final-output storage | Bounded final-output qualification gates pass | Exact phase, paired staging debit, same-slot native retirement, capacity-one recovery and rooted process/encoded/header publication with actual worker free; focused/owning/routes, strict/Linux fallback, quality and source-aligned artifacts pass; upload is separate |
+| G6B rooted image-upload staging | Implemented; bounded focused and integration checks pass | Protected unchanged F+3L estimate and all-heap upload occupancy, actual mapped backing/foreign owner lifetime and cache/phase recovery; 28-source checkpoint and final affected gates pass; prepared-upload retention defaults are unchanged |
 | G4C prerequisite | Accepted only as the bounded cold-progress prerequisite | One active/newest intent, useful older Stale publication and guarded pause/shutdown pass source review and short real playing pixels; remaining G4 scheduling is pending |
 | G7A / G9 bounded display work | Packed immutable borrowing, off-UI CPU channel derivation and finished-display host choice accepted | Explicit provenance and measured bytes; remaining CPU storage/process/channel work and broader cache policy remain pending |
 | G8 optional two-frame throughput | Investigation complete; implementation and benchmark pending | Source confirms per-service frame serialization; no multi-frame speedup or GPU-utilization result is established |
@@ -563,6 +564,89 @@ with no missing dependencies or linked Vulkan. The 39 source paths and two ownin
 bounded checkpoint; exact independent freeze review precedes selective commit and immutable
 packaging. Upload has not been expanded into this milestone. Other storage families, physical
 accounting, OOM guarantees, sustained performance and other-platform qualification remain open.
+
+Rooted upload-staging checkpoint (2026-10-10), bounded staging ownership:
+the [owning contract](../architecture/gpu-backend.md#rooted-image-upload-staging-bounded-staging-slice)
+enforces the existing F+3L estimate as protected fixed output F, source L, scratch L and occupied
+upload U=L. Every outstanding upload consumes logical U even on a local/BAR heap. Nonlocal host
+conversion is paired with native debit under the same root; source/output credit cannot be spent
+again. The accepted neutral four-path checkpoint covers tags, moves, overflow and protected
+partitions, with owning, strict and actual sanitizer evidence; it did not allocate Vulkan backing.
+
+The final actual primitive whole helper passes in 396 ms (unit-reported memory peak 32.9 MiB):
+mapped allocation/type/heap/epoch and flush, 240-byte nonlocal backing, zero backing attempts on U/native denial, backed fault
+cleanup, foreign owner drain and same-generation parity/reuse. Its manually unproven submitted
+observation control is separate from production evaluator shutdown and is not a driver hang.
+The whole media executor passes in 1.877 s (unit-reported memory peak 966.2 MiB), including video
+fixtures, genuine upload-U refusal with exact current-revision recovery, 3,584 retained native image bytes across four images,
+zero staging/phase after publication, immediate capacity-one re-admission, warm zero additional
+native dispatches/uploads or staging/native claim growth and final covered zero. These counters
+do not prove zero source probe/hash/decode/preparation; unit peaks are separate from payload
+counters or physical GPU memory. The earlier whole-cache failure and explicitly configured rootless
+4 GiB producer/prepared-cache repair remain separate history; those allowances are not ordinary
+defaults. The immutable prepared-upload default still captures a cold unrelated allowance and
+may render an oversized source uncached. Its same-root live retention repair is the next media/cache
+milestone, distinct from this staging ownership change.
+
+The complete production evaluator whole target passes in 366 ms (unit-reported memory peak
+49.7 MiB). After real submission, an observed-status override produces the asserted public/internal
+diagnostic and retains 96 staging bytes, 96 nonlocal bytes, one buffer, one phase and one unproven
+phase through a 50 ms incomplete shutdown. Removing only the observation override permits actual
+owner fence/backing/generation destruction and covered zero. This is not a real GPU hang; the
+independent device-report unknown latch is neither cleared nor required to vanish. The earlier
+385 ms primitive result remains historical, distinct from the final 396 ms whole helper. Initial
+phase-default initializer and missing private fixture include build failures are preserved.
+
+The held 28-source checkpoint preserves the accepted 27-source upload increment and adds only
+the Viewer fixture readiness correction. Eight representative strict checks pass without
+diagnostics. The fresh required-route chain passes 14/14 in 17.16 s. The offscreen remaining-owner
+run has nine passes and one honest skip in 8.46 s. Its separate private Wayland Viewer whole run
+first failed in 1.423 s at four gesture/mapping/document assertions (522/533/538/543); the
+shutdown assertions did not fail. That failed log remains separate from the corrected whole
+result: 1.445 s with a unit-reported memory peak of 326.3 MiB, mappingReady=1 after a recorded
+23,721 µs wait and nine native dispatches. All four drag assertions, one transaction and exact
+displacement remain enforced; a failed readiness prerequisite returns failure. The existing
+currentMapping overlay-revision guard applies to both native and CPU-painted routes: a
+selection-only refresh can reuse the frame, while another press before overlay publication can
+be ignored. The corrected setup wait uses actual mapping readiness; its failure ceiling is not
+a measured latency. The passing whole run qualifies gesture/shutdown functionality after readiness,
+not rapid selection-to-drag response. The affected desktop strict sweep covers 372 distinct owned
+translation units without diagnostics: eight representative checks, 363 unchanged consumers and
+one final exact Viewer fixture check. The earlier clean 364-consumer run remains recorded as
+history, and only the affected generated Qt aggregation is excluded. Fresh Linux CPU-stub application/CLI/media and ten selected owners build successfully; selected
+and observed tests are both 10/10 passes in 0.16 s, without added fixtures or CTest skips. Native
+unavailable controls are not GPU execution. The metadata-only first identity check expected the
+wrong OCIO stub basename; the repaired check identifies the actual gpu_ocio_program_stub without
+source changes. All sixteen distinct fallback strict checks pass without diagnostics under the
+unchanged policy/filter. Final repository quality passes on its first attempt, including 1,477
+format checks and all unchanged schema, architecture, dependency, hygiene and UI-grammar checks.
+Source-aligned application, CLI and media-worker SHA/BuildIDs are held with no missing dependencies
+or linked Vulkan. The 28 source paths and two owning docs form one bounded checkpoint; exact
+independent freeze review precedes selective commit and immutable packaging.
+
+Rapid selection followed immediately by drag remains an explicit Viewer input/latency acceptance
+gate on both display routes, including pending overlay publication and document/undo correctness.
+This preserves the user's remaining visible outline/bounds refresh complaint as open experience
+work; neither the readiness wait nor this upload-ownership checkpoint resolves it. Do not conflate
+the observed input guard with a proved cause of every outline blink. No repeated footage fill or
+performance/platform/whole-memory claim
+follows these focused results. Remaining legacy/source caches, other buffers and WSI stay open.
+
+After immediate prepared-host live retention and measured source reuse, close the remaining
+ordinary processing buffers as **one coherent ownership increment before batching**: resident
+display job input/output/status (`gpu_resident_display.cpp`); OCIO packed pixels, UBO/status and
+LUT upload/scratch (`gpu_ocio_program_dispatch.cpp`, `gpu_ocio_program.cpp` and resources);
+solid/path coverage and composite/axis/map buffers. Reuse existing neutral tokens, actual backing
+helpers and admitted envelopes where valid, with one combined qualification/closure rather than
+a full package per small family. Their local RAII/bounds currently do not establish token-owned
+backing. Do not lift caps, expand coverage exceptions or add another accounting broker.
+
+Bloom-owned presentation overlay image/staging/uniform allocations belong with the remaining
+Viewer work; they are not external swapchain/WSI allocations. Legacy direct/process-only/oracle
+readbacks, the generic host-buffer API, decoded/CPU/cache/raster backing and true external WSI
+remain separate ownership gaps. VMA blocks, driver/process totals and UMA physical overlap are
+not qualified by covered suballocation counters. The current upload package cannot establish
+whole-memory accounting or end the overhaul.
 
 First G6B phase-reservation checkpoint (2026-10-09), accepted within bounded scope:
 independent reviews cover coordinator/policy/builder quotas, resident and final phase lifetimes,

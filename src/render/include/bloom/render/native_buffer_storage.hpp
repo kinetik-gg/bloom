@@ -43,6 +43,11 @@ class NativeBufferStorageToken final {
     [[nodiscard]] static NativeBufferStorageGrant
     reserve(const std::shared_ptr<GpuProcessingPhaseLease>&, std::uint64_t upperBytes,
             NativeBufferStorageIdentity) noexcept;
+    // Occupy the already-admitted U partition on every heap, plus its existing native debit.
+    // Nonlocal staging converts the same protected U host estimate, never output/source credit.
+    [[nodiscard]] static NativeBufferStorageGrant
+    reserveUpload(const std::shared_ptr<GpuProcessingPhaseLease>&, std::uint64_t upperBytes,
+                  NativeBufferStorageIdentity) noexcept;
     [[nodiscard]] std::uint64_t bytes() const noexcept { return bytes_; }
     [[nodiscard]] NativeBufferStorageIdentity identity() const noexcept { return identity_; }
     // Actual allocator size/type/heap/generation must match before bind/map; only shrink is valid.
@@ -50,13 +55,17 @@ class NativeBufferStorageToken final {
                                  NativeBufferStorageIdentity actualIdentity) noexcept;
 
   private:
+    [[nodiscard]] static NativeBufferStorageGrant
+    reserveInPartition(const std::shared_ptr<GpuProcessingPhaseLease>&, std::uint64_t,
+                       NativeBufferStorageIdentity, bool upload) noexcept;
     NativeBufferStorageToken(std::shared_ptr<GpuProcessingPhaseLease>, std::uint64_t,
-                             NativeBufferStorageIdentity) noexcept;
+                             NativeBufferStorageIdentity, bool upload) noexcept;
     void reset() noexcept;
     std::shared_ptr<detail::GpuProcessingPhaseBudgetState> state_;
     std::shared_ptr<GpuProcessingPhaseLease> origin_;
     std::uint64_t bytes_ = 0;
     NativeBufferStorageIdentity identity_;
+    bool upload_ = false;
 };
 
 struct NativeBufferStorageGrant final {

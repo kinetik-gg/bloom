@@ -1062,6 +1062,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_image_upload_private.hpp
         vulkan/gpu_image_upload_resources.cpp
         vulkan/gpu_image_upload_retirement.cpp
+        vulkan/gpu_image_upload_retirement_private.hpp
         vulkan/gpu_neutral_display.cpp
         vulkan/gpu_neutral_display_private.hpp
         vulkan/gpu_neutral_display_resources.cpp

@@ -200,8 +200,9 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     )
 
     add_executable(bloom_render_gpu_image_upload_retirement_test
-        gpu_image_upload_retirement_tests.cpp)
-    target_link_libraries(bloom_render_gpu_image_upload_retirement_test PRIVATE bloom_render)
+        gpu_image_upload_retirement_tests.cpp gpu_image_upload_storage_tests.ipp)
+    target_link_libraries(bloom_render_gpu_image_upload_retirement_test PRIVATE
+        bloom_render Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
     target_include_directories(bloom_render_gpu_image_upload_retirement_test
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
     bloom_enable_warnings(bloom_render_gpu_image_upload_retirement_test)

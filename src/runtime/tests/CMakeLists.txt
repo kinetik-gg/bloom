@@ -925,7 +925,7 @@ if(TARGET bloom_render_gpu_scene_executor_fault)
     target_compile_definitions(bloom_runtime_gpu_media_executor_retirement_test
         PRIVATE BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION)
     target_include_directories(bloom_runtime_gpu_media_executor_retirement_test
-        PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" ${OpenEXR_INCLUDE_DIRS}
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" "${PROJECT_SOURCE_DIR}/src/render/vulkan" ${OpenEXR_INCLUDE_DIRS}
                 ${Imath_INCLUDE_DIRS} "${PROJECT_SOURCE_DIR}/src/runtime")
     target_link_libraries(bloom_runtime_gpu_media_executor_retirement_test
         PRIVATE bloom_render_gpu_scene_executor_fault bloom_runtime_evaluator bloom_render
