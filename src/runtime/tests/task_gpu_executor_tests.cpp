@@ -354,6 +354,54 @@ void testWrongThreadMoveOverwriteAndThrow(Expectations& expectations) {
                         "a throwing starter terminalizes with a stable diagnostic");
 }
 
+void testConcurrentBudgetSnapshots(Expectations& expectations) {
+    using bloom::runtime::TaskBudgetSnapshot;
+    bloom::runtime::TaskBudgetView view;
+    const auto makeSnapshot = [](const std::uint64_t serial) {
+        return TaskBudgetSnapshot{.sampleSerial = serial,
+                                  .sampledAt = TaskBudgetSnapshot::Clock::now(),
+                                  .ready = true,
+                                  .assignedPreviewBytes = static_cast<std::size_t>(serial * 3),
+                                  .aggregateGpuBytes = static_cast<std::size_t>(serial * 7)};
+    };
+    expectations.expect(view.publish(makeSnapshot(1)), "initial immutable snapshot publication");
+    const auto held = view.load();
+    std::atomic_int writersRemaining{2};
+    std::atomic_bool coherent{true};
+    const auto write = [&](const std::uint64_t offset) {
+        for (std::uint64_t i = 1; i <= 1000; ++i)
+            static_cast<void>(view.publish(makeSnapshot(i * 2 + offset)));
+        writersRemaining.fetch_sub(1);
+    };
+    const auto read = [&] {
+        std::uint64_t previous = 0;
+        do {
+            const auto snapshot = view.load();
+            if (!snapshot || snapshot->sampleSerial < previous ||
+                snapshot->assignedPreviewBytes != snapshot->sampleSerial * 3 ||
+                snapshot->aggregateGpuBytes != snapshot->sampleSerial * 7)
+                coherent.store(false);
+            if (snapshot)
+                previous = snapshot->sampleSerial;
+        } while (writersRemaining.load() != 0);
+    };
+    std::jthread readerOne(read);
+    std::jthread readerTwo(read);
+    std::jthread writerOne(write, 0);
+    std::jthread writerTwo(write, 1);
+    writerOne.join();
+    writerTwo.join();
+    readerOne.join();
+    readerTwo.join();
+    const auto latest = view.load();
+    expectations.expect(coherent.load() && latest && latest->sampleSerial == 2001,
+                        "concurrent publication preserves coherent monotonic serials");
+    expectations.expect(held && held->sampleSerial == 1 && held->assignedPreviewBytes == 3,
+                        "held snapshot survives concurrent replacement unchanged");
+    expectations.expect(!view.publish(makeSnapshot(1)) && view.load() == latest,
+                        "stale publication cannot replace the newest snapshot");
+}
+
 void testDeliveredDefaultBudgets(Expectations& expectations) {
     using bloom::runtime::TaskBudgetSnapshot;
     using bloom::runtime::TaskBudgetView;
@@ -732,6 +780,7 @@ int main() {
     testRunningPersistenceCancellationAndDrop(expectations);
     testQueuedScopeCancellation(expectations);
     testWrongThreadMoveOverwriteAndThrow(expectations);
+    testConcurrentBudgetSnapshots(expectations);
     testDeliveredDefaultBudgets(expectations);
     testBoundsCoalescingAndAccounting(expectations);
     testDeviceLossRecoveryAndShutdown(expectations);

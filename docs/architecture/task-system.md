@@ -241,6 +241,10 @@ Tasks owns `TaskBudgetView`, an explicitly injected immutable numeric delivery b
 per-preview/aggregate GPU request ceilings. It contains no renderer, ledger, settings, UI callback,
 device identity or reservation credit. The composition root publishes after its quota locks are
 released; Tasks loads the snapshot without calling another owner or acquiring its locks.
+Publication uses a portable view-owned mutex only for shared-pointer copy, serial comparison and
+swap. Snapshot allocation and displaced-snapshot destruction occur outside that short critical
+section; root and ledger locks remain outside it. Concurrent readers retain immutable snapshots,
+and an older sample serial cannot replace a newer publication.
 Structural request validation checks the request's shape rather than consulting an unrelated
 global memory ledger; the scheduler's explicit or delivered quota owns actual byte admission.
 

@@ -2,11 +2,11 @@
 
 // Numeric admission defaults delivered by an explicit composition root. Tasks owns this neutral
 // view: no renderer, ledger, settings, UI callback or admission credit crosses this boundary.
-#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <utility>
 
 namespace bloom::runtime {
@@ -28,7 +28,8 @@ struct TaskBudgetSnapshot final {
 class TaskBudgetView final {
   public:
     [[nodiscard]] std::shared_ptr<const TaskBudgetSnapshot> load() const noexcept {
-        return snapshot_.load(std::memory_order_acquire);
+        const std::lock_guard lock(mutex_);
+        return snapshot_;
     }
     // The composition root publishes only after its quota locks are released. Failed publication
     // removes default readiness rather than retaining a stale growth allowance. Actual phase
@@ -36,20 +37,28 @@ class TaskBudgetView final {
     [[nodiscard]] bool publish(TaskBudgetSnapshot snapshot) noexcept {
         try {
             auto next = std::make_shared<const TaskBudgetSnapshot>(snapshot);
-            auto previous = load();
-            do {
-                if (previous && previous->sampleSerial > next->sampleSerial)
+            {
+                const std::lock_guard lock(mutex_);
+                if (snapshot_ && snapshot_->sampleSerial > next->sampleSerial)
                     return false;
-            } while (!snapshot_.compare_exchange_weak(previous, next, std::memory_order_acq_rel,
-                                                      std::memory_order_acquire));
+                snapshot_.swap(next);
+            }
+            // The displaced snapshot is released after unlocking; allocation also precedes locking.
             return true;
         } catch (...) {
-            snapshot_.store(nullptr, std::memory_order_release);
+            std::shared_ptr<const TaskBudgetSnapshot> previous;
+            {
+                const std::lock_guard lock(mutex_);
+                snapshot_.swap(previous);
+            }
             return false;
         }
     }
 
   private:
-    std::atomic<std::shared_ptr<const TaskBudgetSnapshot>> snapshot_;
+    // A short shared_ptr copy/swap avoids depending on the C++20 atomic specialization,
+    // which is unavailable in supported Apple libc++ versions. Immutable values stay coherent.
+    mutable std::mutex mutex_;
+    std::shared_ptr<const TaskBudgetSnapshot> snapshot_;
 };
 } // namespace bloom::runtime
