@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/render/final_pixel_storage.hpp>
+
 // Qt-free, Vulkan-free GPU final-render/export bridge.
 //
 // This is the first bounded vertical slice of GPU final output. It owns one dedicated owner worker
@@ -135,8 +137,8 @@ struct GpuProcessFrameOutcome final {
     // `encodedEffectRgba32f`; a DisplayRgba8 command fills `encodedDisplayRgba8`. The process
     // payload is always the unchanged process bits used for semantic identity.
     GpuOutputColorArm encodedArm = GpuOutputColorArm::None;
-    std::vector<render::Rgba32f> encodedEffectRgba32f;
-    std::vector<render::Rgba8> encodedDisplayRgba8;
+    render::FinalRgba32fStorage encodedEffectRgba32f;
+    render::FinalRgba8Storage encodedDisplayRgba8;
     core::Sha256Digest outputCommandIdentity{};
     GpuOutputColorCounters outputColorCounters;
 

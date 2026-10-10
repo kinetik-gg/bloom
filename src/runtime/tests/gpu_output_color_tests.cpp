@@ -12,10 +12,17 @@
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/gpu_image_upload.hpp>
+#include <bloom/render/gpu_processing_phase_budget.hpp>
+
+#include "final_host_test_support.hpp"
+#include "gpu_output_color_readback_fault.hpp"
+#include "gpu_process_frame_readback_private.hpp"
+#include "gpu_scene_executor_test_support.hpp"
 #include <bloom/render/image.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
 #include <bloom/runtime/gpu_output_color.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
 #include <algorithm>
 #include <array>
@@ -27,6 +34,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -582,6 +590,9 @@ void testWrongThread(Expectations& expectations, GpuDevice& device) {
     expectations.expect(stage->take().has_value(), "wrong-thread: the owner still takes the frame");
 }
 
+#include "gpu_output_color_evaluator_tests.ipp"
+#include "gpu_output_color_phase_tests.ipp"
+
 #endif // BLOOM_GPUSHADER_TOOLS_DIR
 
 } // namespace
@@ -595,52 +606,60 @@ int main(int argc, char** argv) {
     std::cout << "SKIP: BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
     return kSkipExit;
 #else
-    const bool requireDevice = parseRequireDevice(argc, argv);
-    Expectations expectations;
-    Fixtures fixtures;
-    fixtures.options = compileOptions();
-    auto neutralResolution = bloom::color::resolveBloomNeutralV1BuiltIn(
-        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kBloomNeutralV1ConfigUri,
-        bloom::color::kBloomNeutralV1ConfigDigest);
-    fixtures.neutral = std::move(neutralResolution).takeResolved();
-    const auto revision = bloom::color::ocioBuiltInContentRevision(
-        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
-    if (!revision.has_value()) {
-        std::cout << "SKIP: the ACES built-in is unavailable\n";
-        return kSkipExit;
-    }
-    auto acesResolution =
-        bloom::color::resolveOcioBuiltIn(bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
-                                         bloom::color::kAcesCgV1ConfigUri, *revision, "ACEScg");
-    fixtures.aces = std::move(acesResolution).takeResolved();
-    if (!fixtures.neutral.has_value() || !fixtures.aces.has_value()) {
-        std::cerr << "FAILED: the built-in configs do not resolve\n";
-        return 1;
-    }
-
-    GpuDeviceCreationOptions options;
-    auto device = GpuDevice::create(options);
-    if (!device) {
-        if (requireDevice) {
-            std::cerr << "FAIL: required device unavailable: " << device.diagnostic.message << '\n';
+    try {
+        const bool requireDevice = parseRequireDevice(argc, argv);
+        Expectations expectations;
+        Fixtures fixtures;
+        fixtures.options = compileOptions();
+        auto neutralResolution = bloom::color::resolveBloomNeutralV1BuiltIn(
+            bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
+            bloom::color::kBloomNeutralV1ConfigUri, bloom::color::kBloomNeutralV1ConfigDigest);
+        fixtures.neutral = std::move(neutralResolution).takeResolved();
+        const auto revision = bloom::color::ocioBuiltInContentRevision(
+            bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
+        if (!revision.has_value()) {
+            std::cout << "SKIP: the ACES built-in is unavailable\n";
+            return kSkipExit;
+        }
+        auto acesResolution =
+            bloom::color::resolveOcioBuiltIn(bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
+                                             bloom::color::kAcesCgV1ConfigUri, *revision, "ACEScg");
+        fixtures.aces = std::move(acesResolution).takeResolved();
+        if (!fixtures.neutral.has_value() || !fixtures.aces.has_value()) {
+            std::cerr << "FAILED: the built-in configs do not resolve\n";
             return 1;
         }
-        std::cout << "SKIP: no compatible Vulkan device available: " << device.diagnostic.message
-                  << '\n';
-        return kSkipExit;
-    }
-    expectations.expect(device.device->state() == GpuDeviceState::Ready, "the device is Ready");
-    GpuOcioProgramPreparer preparer;
-    testEffectStage(expectations, *device.device, preparer, fixtures);
-    testDisplayStage(expectations, *device.device, preparer, fixtures);
-    testIdentityAndCeilings(expectations, *device.device);
-    testCancel(expectations, *device.device);
-    testWrongThread(expectations, *device.device);
-    if (expectations.failures() != 0) {
-        std::cerr << expectations.failures() << " output-colour expectation(s) failed\n";
+
+        GpuDeviceCreationOptions options;
+        auto device = GpuDevice::create(options);
+        if (!device) {
+            if (requireDevice) {
+                std::cerr << "FAIL: required device unavailable: " << device.diagnostic.message
+                          << '\n';
+                return 1;
+            }
+            std::cout << "SKIP: no compatible Vulkan device available: "
+                      << device.diagnostic.message << '\n';
+            return kSkipExit;
+        }
+        expectations.expect(device.device->state() == GpuDeviceState::Ready, "the device is Ready");
+        GpuOcioProgramPreparer preparer;
+        testEffectStage(expectations, *device.device, preparer, fixtures);
+        testDisplayStage(expectations, *device.device, preparer, fixtures);
+        testIdentityAndCeilings(expectations, *device.device);
+        testCancel(expectations, *device.device);
+        testWrongThread(expectations, *device.device);
+        testSinglePhaseReadbackRecovery(expectations, *device.device, preparer, fixtures);
+        testFinalEvaluatorTerminalAndUnknown(expectations);
+        if (expectations.failures() != 0) {
+            std::cerr << expectations.failures() << " output-colour expectation(s) failed\n";
+            return 1;
+        }
+        std::cout << "PASS: runtime GPU output-colour stage\n";
+        return 0;
+    } catch (const std::exception& exception) {
+        std::cerr << "FAILED: output-colour fixture exception: " << exception.what() << '\n';
         return 1;
     }
-    std::cout << "PASS: runtime GPU output-colour stage\n";
-    return 0;
 #endif
 }

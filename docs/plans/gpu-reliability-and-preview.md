@@ -46,6 +46,7 @@ and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 | G6B rooted native image suballocations | Bounded two-family qualification gates pass | Exact VMA type/heap/size, pre-backing domain claims, unique cache/alias ownership, real submitted unknown retention, pixels/refusal/recovery/warm return, required routes and affected strict/Linux fallback/quality; not all-native/block/physical accounting |
 | G6B rooted OCIO sampled-LUT images | Bounded LUT qualification gates pass | Exact pre-begin phase/root/device affinity, move-only LUT tokens, native-owner retirement, actual dimensional/nonlocal/fault/parity/prefix and both textured-cache evidence; selected owners, six routes, 324 desktop strict, fifteen distinct Linux fallback strict, final quality and source-aligned artifact checks pass; buffers and broader memory qualification remain separate |
 | G6B rooted display-transfer staging buffer | Bounded staging qualification gates pass | Existing phase native/planned-host debit, exact VMA suballocation identity, same-slot foreign/fence retirement and exact-generation exit; native/Viewer/six-route, 325 desktop and sixteen distinct fallback strict, Linux CPU-stub, final quality and artifact readbacks pass; other buffer creators are excluded |
+| G6B combined final-output storage | Bounded final-output qualification gates pass | Exact phase, paired staging debit, same-slot native retirement, capacity-one recovery and rooted process/encoded/header publication with actual worker free; focused/owning/routes, strict/Linux fallback, quality and source-aligned artifacts pass; upload is separate |
 | G4C prerequisite | Accepted only as the bounded cold-progress prerequisite | One active/newest intent, useful older Stale publication and guarded pause/shutdown pass source review and short real playing pixels; remaining G4 scheduling is pending |
 | G7A / G9 bounded display work | Packed immutable borrowing, off-UI CPU channel derivation and finished-display host choice accepted | Explicit provenance and measured bytes; remaining CPU storage/process/channel work and broader cache policy remain pending |
 | G8 optional two-frame throughput | Investigation complete; implementation and benchmark pending | Source confirms per-service frame serialization; no multi-frame speedup or GPU-utilization result is established |
@@ -478,6 +479,90 @@ creators, allocation-owned WSI/external or legacy resources, committed blocks/dr
 accounting, OOM guarantees, sustained performance or other-platform qualification. The verified
 normal application remains untouched during qualification; later ownership families and remaining
 source reuse/presentation, batching, measured width-two and sustained/platform gates stay open.
+
+Combined final-readback staging increment (2026-10-10), joined in the bounded final-output closure:
+the [owning contract](../architecture/gpu-backend.md#rooted-combined-final-readback-staging-bounded-final-output-slice)
+threads the existing admitted `FinalProcessingPhase` through the output-colour stage and the single
+combined readback. The same native buffer token converts already-planned staging/native debit,
+while CPU vectors, final builder and source images remain separately reserved. Its 19-path focused
+checkpoint adds exact retained authority, actual staging backing, existing-slot foreign Pending
+handoff, native owner fence retirement outside the lock, and preview/final pending-generation exit.
+It does not yet own CPU process/encoded output allocations or upload buffers.
+
+Legacy direct native checks preserve the existing pixel oracles; new rooted fault controls separately
+exercise cleanup and foreign owner lifetime. The complete output-colour evaluator whole target
+passes in 537 ms (72 MiB), including two immediate successful evaluated requests at phase capacity
+one, proving normal completion alias release. Separate helper/stage cases in that same target check
+identity and effect budget refusal followed by immediate re-admission: attempt-owned aliases release
+before phase retirement, rather than waiting for a later call or bypassing the request cap. The whole target
+genuinely submits readback, then privately overrides its observed fence status: 1,024 native buffer
+bytes, one buffer, a matching 1,024-byte nonlocal host subset, one phase and one unproven phase stay
+charged through a 50 ms incomplete shutdown wait. Actual owner/generation drain subsequently
+reaches covered zero. The independent unknown device-report latch is neither cleared nor required
+to reach zero; the observation override is not a driver hang. Focused strict closes as five initial clean units plus one exact fixture
+exception-reporting repair; original cases and assertions are preserved.
+
+The readback increment and rooted final-host follow-on below share one union integration/
+quality/commit/package closure. Upload staging remains pending its separately proved decoded-source-
+plus-staging host overlap, not a second use of live decoded-source bytes. No readback-only package
+or app replacement follows focused acceptance. Other legacy CPU/decode/cache storage, readback/
+upload/OCIO buffers, WSI/external, committed blocks/driver/process/UMA totals, OOM guarantees,
+performance and other-platform execution qualification remain outside this proof. The verified
+e8fc48fe normal app remains untouched while the union milestone is being implemented.
+
+Rooted final CPU output follow-on (2026-10-10), bounded qualification gates pass:
+the [owning contract](../architecture/gpu-backend.md#rooted-final-cpu-output-ownership-bounded-final-output-slice)
+uses separate process, encoded and header domains under the unchanged final phase overlap. The
+neutral eight-path checkpoint passes three owning tests and four strict units (three initial plus
+one corrected rerun), with actual ASAN/UBSAN evidence; no separate explicit LSAN result is inferred.
+Its compile, queued-count assumption and noexcept variant-emplace failures remain preserved.
+
+Production readback payloads, the distinct rooted process builder and freeze, final process frame
+and encoded outcome now carry the typed backing. Internal moves/takes remain provisional until
+checked direct publication or atomic complete-product promotion. Allocator-requested capacity and
+header bytes transfer once from the admitted phase; process/encoded moves cannot change root or
+domain. Legacy CPU paths remain unowned, never an automatic recovery for a rooted refusal.
+
+The real encoded evaluator whole helper passes in 1.028 s with no validation errors and unchanged
+every-pixel process/encoded oracles. Its first complete DisplayRgba8 product retains 1,024 process
+bytes, 256 encoded bytes and 128 header bytes across two allocations, with phase count zero. After
+an additional identity result and actual native generation retirement, the held products retain
+2,048 process bytes, 256 encoded bytes and 192 header bytes across three allocations. Host shutdown
+remains incomplete until foreign last-owner release and actual host-worker free reach covered zero.
+The separate whole runtime witness retains two process allocations (2,048 bytes plus 128 header
+bytes) through native retirement. Negative-origin ROI builder tests preserve a distinct process
+copy while encoded pixels remain live; freeze moves the same backing and publication drops phase.
+
+Earlier consumer builds failed borrowed-view access, vector-to-span oracle conversion, deleted
+rvalue test access and a missing support include; corrected owners preserve the original pixel and
+retirement assertions. The representative nine-unit strict prefix closes through eight clean units
+and one exact const-pointee fixture repair. Subsequent owning fixtures add the explicit host
+retirement owner and safe result-pin/provider cleanup, while target-private include roots replace
+five prohibited parent-relative includes. The final 39-path source inventory keeps those fixture
+and CMake repairs distinct from the accepted production behavior.
+
+Twenty remaining owning tests pass in 9.02 s, without skips or added fixtures. The first required
+route chain passes eleven tests but aborts during still/video post-proof shutdown; its dependent
+aggregate is NotRun. Corrected fixture cleanup preserves the original GPU assertions. A fresh
+fourteen-test chain passes in 17.25 s with matching six-route nonce and 56 native fixtures, zero
+failures and zero missing fixtures. These are corrected owning runs, not a clean original chain.
+The final desktop consumer map closes 385 owned units: eight unchanged representative checks,
+two clean route-fixture checks, 374 clean disjoint checks and one exact rerun after a fixture's
+literal-width arithmetic repair. The original diagnostic is preserved. The OCIO fixture whose
+include spelling and compile context changed rejoins the disjoint checks. Exactly one affected
+generated Qt aggregation is excluded. Fresh Linux fallback maps 292 owned units and the new
+neutral final pixel test. Its application/CLI/media and affected-owner build passes; all sixteen
+selected and observed tests pass in 0.21 s, without skips or extra fixtures. These are CPU/neutral
+and explicit native-unavailable checks, not native GPU passes. The actual compile database selects
+stubs rather than native bodies, with no linked Vulkan or missing app dependencies. All sixteen
+distinct fallback branch strict checks pass without diagnostics or repairs; the shared desktop
+coverage is not repeated as a full fallback sweep. Final repository quality passes on its first
+attempt, including 1,476 format checks and the unchanged schema, architecture, dependency, hygiene
+and UI-grammar checks. Source-aligned application, CLI and media-worker hashes/BuildIDs are held,
+with no missing dependencies or linked Vulkan. The 39 source paths and two owning docs form one
+bounded checkpoint; exact independent freeze review precedes selective commit and immutable
+packaging. Upload has not been expanded into this milestone. Other storage families, physical
+accounting, OOM guarantees, sustained performance and other-platform qualification remain open.
 
 First G6B phase-reservation checkpoint (2026-10-09), accepted within bounded scope:
 independent reviews cover coordinator/policy/builder quotas, resident and final phase lifetimes,

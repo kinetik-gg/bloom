@@ -22,6 +22,11 @@ class PackedHostMissingRetirementError final : public std::bad_alloc {};
 [[nodiscard]] Rgba8* allocatePackedRgba8(const std::shared_ptr<PackedHostStorageAuthority>&,
                                          std::size_t count);
 void deallocatePackedRgba8(Rgba8*) noexcept;
+// Same preowned header/worker for final typed pixel payloads; exact payload and header admitted
+// together. Rebound standard-library metadata remains explicitly outside the payload claim.
+[[nodiscard]] void* allocateHostPixels(const std::shared_ptr<PackedHostStorageAuthority>&,
+                                       std::size_t count, std::size_t elementBytes);
+void deallocateHostPixels(void*) noexcept;
 [[nodiscard]] std::size_t packedHostAllocationMetadataBytes() noexcept;
 
 template <class T> class PackedStorageAllocator {

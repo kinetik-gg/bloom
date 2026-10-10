@@ -60,6 +60,11 @@ struct GpuProcessingPhaseSnapshot final {
     std::uint64_t ownedPackedHostMetadataBytes = 0;
     std::uint64_t totalHostClaimBytes = 0;
     std::size_t ownedPackedHostAllocations = 0;
+    // Final process vectors/builders and encoded products use distinct allocation domains.
+    std::uint64_t ownedFinalProcessHostBytes = 0;
+    std::uint64_t ownedFinalEncodedHostBytes = 0;
+    std::uint64_t ownedFinalHostMetadataBytes = 0;
+    std::size_t ownedFinalHostAllocations = 0;
     std::uint64_t deviceReservedBytes = 0;
     // Covered image suballocations, not VMA committed blocks/driver memory. The nonlocal-host
     // subset overlaps this constraint; it is not an additive physical-memory total.
@@ -121,8 +126,10 @@ class GpuProcessingPhaseLease final {
     bool unproven_ = false;
 };
 
+enum class HostPixelStorageDomain { PackedPreview, FinalProcess, FinalEncoded };
+
 class PackedHostStorageAuthority;
-// One actual packed-vector allocation. Its allocator destroys the backing block before this
+// One actual typed host-vector allocation. Its allocator destroys the backing block before this
 // token returns provisional bytes to the originating phase or releases published bytes.
 class PackedHostStorageToken final {
   public:
@@ -158,22 +165,30 @@ class PackedHostStorageAuthority final
     : public std::enable_shared_from_this<PackedHostStorageAuthority> {
   public:
     [[nodiscard]] static std::shared_ptr<PackedHostStorageAuthority>
-    create(const std::shared_ptr<GpuProcessingPhaseLease>&, std::uint64_t simultaneousByteLimit);
+    create(const std::shared_ptr<GpuProcessingPhaseLease>&, std::uint64_t simultaneousByteLimit,
+           HostPixelStorageDomain domain = HostPixelStorageDomain::PackedPreview);
     [[nodiscard]] std::optional<PackedHostStorageToken>
     reserve(std::uint64_t bytes, std::uint64_t metadataBytes = 0) noexcept;
     [[nodiscard]] std::shared_ptr<detail::PackedHostRetirementState>
     retirementState() const noexcept;
     [[nodiscard]] bool promote() noexcept;
+    // Complete final product has exactly a process allocation and an optional encoded allocation.
+    // Validate both before changing either; detach origins outside the common neutral lock.
+    [[nodiscard]] static bool
+    promoteFinalProduct(const std::shared_ptr<PackedHostStorageAuthority>& process,
+                        const std::shared_ptr<PackedHostStorageAuthority>& encoded = {}) noexcept;
     [[nodiscard]] PackedHostStorageSnapshot snapshot() const noexcept;
 
   private:
     friend class PackedHostStorageToken;
-    PackedHostStorageAuthority(const std::shared_ptr<GpuProcessingPhaseLease>&,
-                               std::uint64_t) noexcept;
+    PackedHostStorageAuthority(const std::shared_ptr<GpuProcessingPhaseLease>&, std::uint64_t,
+                               HostPixelStorageDomain) noexcept;
     void release(std::uint64_t bytes, std::uint64_t metadataBytes) noexcept;
     std::shared_ptr<detail::GpuProcessingPhaseBudgetState> state_;
     std::weak_ptr<GpuProcessingPhaseLease> origin_;
     std::shared_ptr<GpuProcessingPhaseLease> retainedOrigin_;
+    HostPixelStorageDomain domain_ = HostPixelStorageDomain::PackedPreview;
+    std::uint64_t originId_ = 0;
     std::uint64_t limit_ = 0;
     std::uint64_t bytes_ = 0;
     std::uint64_t metadataBytes_ = 0;

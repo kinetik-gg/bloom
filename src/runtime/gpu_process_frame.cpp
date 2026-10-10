@@ -333,7 +333,7 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
     phase.retired = false; // output-colour begin may synchronously submit another LUT upload
     auto transfer = detail::runFinalCombinedReadback(
         *outputColor, descriptor, std::move(outputCommand), std::move(image), readbackByteAllowance,
-        options.nativeDeadline, cancellation, stopRequested, phase.retired);
+        options.nativeDeadline, cancellation, stopRequested, phase.retired, phase.lease);
     if (transfer.status != GpuProcessFrameStatus::Evaluated || transfer.processImage == nullptr) {
         outcome.counters.readbacks = transfer.readbacks;
         outcome.status = transfer.status;
@@ -366,6 +366,17 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
         std::move(identity), std::move(processImage), std::move(bounds),
         std::string("gpu:") + outputSemanticKey(*scene));
 
+    const auto processAuthority = frame->processImage().storageAuthority();
+    const auto encodedAuthority = transfer.encodedArm == GpuOutputColorArm::DisplayRgba8
+                                      ? transfer.encodedDisplayRgba8.authority()
+                                      : transfer.encodedEffectRgba32f.authority();
+    if (processAuthority && !render::PackedHostStorageAuthority::promoteFinalProduct(
+                                processAuthority, encodedAuthority)) {
+        outcome.status = GpuProcessFrameStatus::Failed;
+        outcome.diagnostic = {GpuProcessFrameDiagnosticCode::DeviceUnavailable,
+                              "the complete final host product could not be published"};
+        return outcome;
+    }
     outcome.status = GpuProcessFrameStatus::Evaluated;
     outcome.frame = std::move(frame);
     // The encoded output transferred by the SAME single submission, kept distinct from the process
@@ -492,6 +503,10 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
                                   active->progress, std::move(active->outputCommand),
                                   active->phaseLease, active->readbackByteAllowance);
 
+        // Completed preparation and phase aliases must end on the owner before completion is
+        // visible. Unknown work remains retained independently by the device/native slots.
+        active->scene.reset();
+        active->phaseLease.reset();
         std::lock_guard lock(mutex);
         active->outcome = std::move(outcome);
         active->done = true;
@@ -510,7 +525,7 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
             device->reclaimReleasedImages();
             const auto programs = device->ocioProgramRetirementStats();
             if (programs.registeredPrograms == 0 && programs.pendingUploads == 0 &&
-                !device->displayTransferPending()) {
+                !device->displayTransferPending() && !device->outputColorReadbackPending()) {
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));

@@ -39,6 +39,7 @@ struct StagingBuffer final {
             state = other.state;
             buffer = other.buffer;
             allocation = other.allocation;
+            storage = std::move(other.storage);
             armed = other.armed;
             other.state = nullptr;
             other.buffer = VK_NULL_HANDLE;
@@ -52,7 +53,10 @@ struct StagingBuffer final {
     void release() noexcept {
         if (armed && state != nullptr) {
             vmaDestroyBuffer(state->allocator, buffer, allocation);
+            if (state->nativeBufferBackingsDestroyed != UINT64_MAX)
+                ++state->nativeBufferBackingsDestroyed;
         }
+        storage = {};
         state = nullptr;
         buffer = VK_NULL_HANDLE;
         allocation = VK_NULL_HANDLE;
@@ -62,6 +66,7 @@ struct StagingBuffer final {
     DeviceAllocatorState* state = nullptr;
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
+    NativeBufferStorageToken storage;
     bool armed = false;
 };
 
@@ -74,12 +79,17 @@ enum class ReservationState : std::uint8_t {
     // A possibly in-flight submission was transferred here; only the owner thread whose fence is
     // proven retired (or the device is lost) may free/reclaim it.
     Quarantined,
+    Retiring,
 };
 
 struct Reservation final {
     ReservationState state = ReservationState::Free;
     std::thread::id ownerThread{};
     std::uint64_t token = 0;
+    std::uint64_t ownerLifetimeToken = 0;
+    std::uint64_t epoch = 0;
+    bool ownerClosed = false;
+    std::weak_ptr<DeviceAllocatorState> binding;
 
     std::shared_ptr<DeviceAllocatorState> deviceState;
     std::shared_ptr<const GpuImage> process;
@@ -108,62 +118,101 @@ inline std::atomic<bool>& outputColorReadbackFuse() {
     return fuse;
 }
 
-inline void freeQuarantinedLocked(Reservation& slot) noexcept {
-    slot.staging.release();
-    slot.fence = vk::raii::Fence{nullptr};
-    slot.buffer = vk::raii::CommandBuffer{nullptr};
-    slot.pool = vk::raii::CommandPool{nullptr};
-    slot.encodedDisplay.reset();
-    slot.encodedProcess.reset();
-    slot.process.reset();
-    slot.deviceState.reset();
-    slot.state = ReservationState::Free;
-    slot.ownerThread = std::thread::id{};
+[[nodiscard]] inline bool isReservationOwnerLocked(const Reservation& slot) noexcept {
+    return slot.state != ReservationState::Free && slot.ownerThread == std::this_thread::get_id() &&
+           slot.ownerLifetimeToken != 0 &&
+           slot.ownerLifetimeToken == vulkan_detail::deviceOwnerLifetimeToken();
 }
 
-inline bool isReservationOwnerLocked(const Reservation& slot) noexcept {
-    return slot.state != ReservationState::Free && slot.ownerThread == std::this_thread::get_id();
+[[nodiscard]] inline bool slotMatches(const Reservation& slot,
+                                      const DeviceAllocatorState& state) noexcept {
+    const auto binding = slot.binding.lock();
+    return slot.state != ReservationState::Free && binding.get() == &state &&
+           slot.epoch == state.presentationEpoch &&
+           slot.ownerLifetimeToken == state.ownerLifetimeToken;
 }
 
-// Owner-only, non-blocking.
-inline bool retireQuarantinedLocked(Reservation& slot) noexcept {
-    if (slot.state != ReservationState::Quarantined || slot.deviceState == nullptr ||
-        slot.fence == vk::raii::Fence{nullptr}) {
-        return false;
+// The foreign handoff mutex never encloses a Vulkan poll/free or neutral token disposal.
+// Retiring remains visible to exact-generation exit checks until all backing is actually gone.
+[[nodiscard]] inline bool retireQuarantine(DeviceAllocatorState& expected) noexcept {
+    Reservation retired;
+    std::shared_ptr<DeviceAllocatorState> state;
+    VkFence fence = VK_NULL_HANDLE;
+    std::uint64_t token = 0;
+    {
+        std::lock_guard lock(reservationMutex());
+        auto& slot = reservation();
+        if (!isReservationOwnerLocked(slot) || !slotMatches(slot, expected) ||
+            slot.state != ReservationState::Quarantined || !slot.deviceState ||
+            static_cast<ReadbackFault>(readbackFault().load()) == ReadbackFault::ForceFenceTimeout)
+            return false;
+        state = slot.deviceState;
+        fence = static_cast<VkFence>(*slot.fence);
+        if (fence == VK_NULL_HANDLE)
+            return false;
+        token = slot.token;
+        slot.state = ReservationState::Retiring;
     }
-    // Test seam: ForceFenceTimeout keeps a quarantined submission un-retirable so admission refusal
-    // and recovery can be proven deterministically.
-    if (static_cast<ReadbackFault>(readbackFault().load()) == ReadbackFault::ForceFenceTimeout) {
-        return false;
+    const auto status = state->device.getDispatcher()->vkGetFenceStatus(
+        static_cast<VkDevice>(*state->device), fence);
+    {
+        std::lock_guard lock(reservationMutex());
+        auto& slot = reservation();
+        if (slot.state != ReservationState::Retiring || slot.token != token ||
+            !slotMatches(slot, expected))
+            return false;
+        if (status != VK_SUCCESS && status != VK_ERROR_DEVICE_LOST) {
+            slot.state = ReservationState::Quarantined;
+            return false;
+        }
+        retired.deviceState = std::move(slot.deviceState);
+        retired.process = std::move(slot.process);
+        retired.encodedProcess = std::move(slot.encodedProcess);
+        retired.encodedDisplay = std::move(slot.encodedDisplay);
+        retired.staging = std::move(slot.staging);
+        retired.pool = std::move(slot.pool);
+        retired.buffer = std::move(slot.buffer);
+        retired.fence = std::move(slot.fence);
     }
-    const VkFence rawFence = static_cast<VkFence>(*slot.fence);
-    const VkResult status = slot.deviceState->device.getDispatcher()->vkGetFenceStatus(
-        static_cast<VkDevice>(*slot.deviceState->device), rawFence);
-    if (status != VK_SUCCESS && status != VK_ERROR_DEVICE_LOST) {
-        return false;
+    retired.staging.release();
+    retired.fence = vk::raii::Fence{nullptr};
+    retired.buffer = vk::raii::CommandBuffer{nullptr};
+    retired.pool = vk::raii::CommandPool{nullptr};
+    retired.encodedDisplay.reset();
+    retired.encodedProcess.reset();
+    retired.process.reset();
+    retired.deviceState.reset();
+    {
+        std::lock_guard lock(reservationMutex());
+        auto& slot = reservation();
+        if (slot.state == ReservationState::Retiring && slot.token == token &&
+            slotMatches(slot, expected)) {
+            slot.state = ReservationState::Free;
+            slot.ownerThread = {};
+            slot.ownerLifetimeToken = 0;
+            slot.epoch = 0;
+            slot.binding.reset();
+        }
     }
-    freeQuarantinedLocked(slot);
     return true;
 }
 
-// True while the quarantine holds a possibly in-flight submission. Test/observability seam.
 [[nodiscard]] inline bool quarantineOccupied() noexcept {
     std::lock_guard lock(reservationMutex());
-    return reservation().state == ReservationState::Quarantined;
+    return reservation().state == ReservationState::Quarantined ||
+           reservation().state == ReservationState::Retiring;
 }
 
-// Owner-thread retirement of an occupied quarantine. Returns true when the fence is proven retired
-// (or the device was lost) and the native resources are freed. Test/observability seam.
 [[nodiscard]] inline bool retireQuarantineForOwner() noexcept {
-    std::lock_guard lock(reservationMutex());
-    Reservation& slot = reservation();
-    if (slot.state != ReservationState::Quarantined) {
-        return false;
+    std::shared_ptr<DeviceAllocatorState> expected;
+    {
+        std::lock_guard lock(reservationMutex());
+        const auto& slot = reservation();
+        if (!isReservationOwnerLocked(slot) || slot.state != ReservationState::Quarantined)
+            return false;
+        expected = slot.deviceState;
     }
-    if (slot.ownerThread != std::this_thread::get_id()) {
-        return false;
-    }
-    return retireQuarantinedLocked(slot);
+    return expected && retireQuarantine(*expected);
 }
 
 // Checked width * height * bytesPerPixel with explicit zero and overflow rejection.

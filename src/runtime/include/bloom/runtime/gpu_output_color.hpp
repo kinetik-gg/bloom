@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/render/final_pixel_storage.hpp>
+
 // Runtime GPU output-colour stage for the export boundary.
 //
 // One owner-thread stage consumes a retained, immutable prepared OCIO command supplied off the UI
@@ -97,11 +99,11 @@ struct GpuOutputColorCounters final {
 
 struct GpuOutputColorFrame final {
     // Exact process RGBA32F bits, unchanged. Always present.
-    std::vector<render::Rgba32f> process;
+    render::FinalRgba32fStorage process;
     // Output-space RGBA32F effect result (ProcessEffect arm).
-    std::vector<render::Rgba32f> effectRgba32f;
+    render::FinalRgba32fStorage effectRgba32f;
     // Straight RGBA8 display result (DisplayRgba8 arm).
-    std::vector<render::Rgba8> displayRgba8;
+    render::FinalRgba8Storage displayRgba8;
 
     std::uint32_t width = 0;
     std::uint32_t height = 0;
@@ -140,13 +142,19 @@ class GpuOutputColorStage final {
     // executor transient and the combined readback staging + host vectors.
     [[nodiscard]] GpuOutputColorDiagnostic
     begin(std::shared_ptr<const PreparedGpuOcioCommand> command,
-          std::shared_ptr<const render::GpuImage> processImage, std::uint64_t byteBudget) noexcept;
+          std::shared_ptr<const render::GpuImage> processImage, std::uint64_t byteBudget,
+          const std::shared_ptr<render::GpuProcessingPhaseLease>& phase = {}) noexcept;
+
+    // Exact positively retired budget failure, including disposal of proven failed transients.
+    // Unknown native work and independent upload/device/phase latches cannot pass this proof.
+    [[nodiscard]] bool
+    retiredBudgetRefusal(const std::shared_ptr<render::GpuProcessingPhaseLease>& phase) noexcept;
 
     // Non-blocking owner-thread advance across the dispatch and readback phases.
     [[nodiscard]] GpuOutputColorPollResult poll();
 
     // Valid only in Ready; moves the frame out and returns to Idle.
-    [[nodiscard]] std::optional<GpuOutputColorFrame> take() noexcept;
+    [[nodiscard]] std::optional<GpuOutputColorFrame> take(bool publishStorage = true) noexcept;
 
     // Requests cancellation of the in-flight phase; no payload is published after this call.
     void cancel() noexcept;
@@ -154,8 +162,15 @@ class GpuOutputColorStage final {
   private:
     enum class Phase : std::uint8_t { Idle, Dispatching, ReadingBack, Ready, Failure };
 
-    GpuOutputColorStage(std::unique_ptr<GpuOcioProgramExecutor> executor) noexcept;
+    GpuOutputColorStage(render::GpuDevice& device,
+                        std::unique_ptr<GpuOcioProgramExecutor> executor) noexcept;
 
+    [[nodiscard]] bool
+    retirementSafe(const std::shared_ptr<render::GpuProcessingPhaseLease>& phase) const noexcept;
+    void discardProvenFailure() noexcept;
+
+    render::GpuDevice* device_ = nullptr;
+    std::uint64_t ownershipEpoch_ = 0;
     std::unique_ptr<GpuOcioProgramExecutor> executor_;
     render::GpuOutputColorReadback readback_;
     std::thread::id ownerThread_{};
@@ -165,6 +180,9 @@ class GpuOutputColorStage final {
     GpuOutputColorArm arm_ = GpuOutputColorArm::None;
     std::shared_ptr<const PreparedGpuOcioCommand> command_;
     std::shared_ptr<const render::GpuImage> process_;
+    std::shared_ptr<render::GpuProcessingPhaseLease> phaseLease_;
+    std::weak_ptr<render::GpuProcessingPhaseLease> lastPhase_;
+    bool lastBudgetRefusal_ = false;
     std::uint64_t byteBudget_ = 0;
     GpuOcioExecutorCounters executorBefore_{};
     std::optional<GpuOutputColorFrame> frame_;

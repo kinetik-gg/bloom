@@ -32,8 +32,8 @@ bool GpuOutputColorReadback::isOwnerThread() const noexcept { return false; }
 
 bool GpuOutputColorReadback::begin(std::shared_ptr<const GpuImage> process,
                                    std::shared_ptr<const GpuImage> display,
-                                   std::optional<GpuDisplayImage> packed,
-                                   const std::uint64_t) noexcept {
+                                   std::optional<GpuDisplayImage> packed, const std::uint64_t,
+                                   const std::shared_ptr<GpuProcessingPhaseLease>&) noexcept {
     process.reset();
     display.reset();
     packed.reset();
@@ -50,7 +50,7 @@ GpuOutputColorReadbackState GpuOutputColorReadback::poll() noexcept {
     return impl_ == nullptr ? GpuOutputColorReadbackState::Idle : impl_->state;
 }
 
-GpuOutputColorReadbackPayloads GpuOutputColorReadback::take() noexcept { return {}; }
+GpuOutputColorReadbackPayloads GpuOutputColorReadback::take(bool) noexcept { return {}; }
 
 void GpuOutputColorReadback::cancel() noexcept {}
 

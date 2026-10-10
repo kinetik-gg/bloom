@@ -221,7 +221,8 @@ void retireNativeOnOwner(const std::shared_ptr<PreviewDisplayServiceCore>& core)
             core->device->reclaimReleasedImages();
             const auto programs = core->device->ocioProgramRetirementStats();
             if (programs.registeredPrograms == 0 && programs.pendingUploads == 0 &&
-                !core->device->displayTransferPending()) {
+                !core->device->displayTransferPending() &&
+                !core->device->outputColorReadbackPending()) {
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));

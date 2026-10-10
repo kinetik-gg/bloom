@@ -1,5 +1,7 @@
 #include <bloom/runtime/gpu_output_color.hpp>
 
+#include <bloom/render/gpu_processing_phase_budget.hpp>
+
 #include <utility>
 
 namespace bloom::runtime {
@@ -62,8 +64,10 @@ mapReadbackCode(const render::GpuOutputColorReadbackCode code) noexcept {
 
 } // namespace
 
-GpuOutputColorStage::GpuOutputColorStage(std::unique_ptr<GpuOcioProgramExecutor> executor) noexcept
-    : executor_(std::move(executor)), ownerThread_(std::this_thread::get_id()) {}
+GpuOutputColorStage::GpuOutputColorStage(render::GpuDevice& device,
+                                         std::unique_ptr<GpuOcioProgramExecutor> executor) noexcept
+    : device_(&device), ownershipEpoch_(device.ownershipEpoch()), executor_(std::move(executor)),
+      ownerThread_(std::this_thread::get_id()) {}
 
 GpuOutputColorStage::~GpuOutputColorStage() = default;
 
@@ -78,8 +82,8 @@ GpuOutputColorCreateResult GpuOutputColorStage::create(render::GpuDevice& device
     if (!executor.hasValue()) {
         return {nullptr, {mapExecutorBegin(executor.diagnostic.code), executor.diagnostic.message}};
     }
-    auto stage =
-        std::unique_ptr<GpuOutputColorStage>(new GpuOutputColorStage(std::move(executor.executor)));
+    auto stage = std::unique_ptr<GpuOutputColorStage>(
+        new GpuOutputColorStage(device, std::move(executor.executor)));
     return {std::move(stage), {}};
 }
 
@@ -113,10 +117,43 @@ bool GpuOutputColorStage::hasUnretiredSubmission() const noexcept {
            readback_.hasUnretiredSubmission();
 }
 
+bool GpuOutputColorStage::retirementSafe(
+    const std::shared_ptr<render::GpuProcessingPhaseLease>& phase) const noexcept {
+    if (!device_ || ownerThread_ != std::this_thread::get_id() || !device_->isOwnerThread() ||
+        ownershipEpoch_ != device_->ownershipEpoch() || !executor_->isBoundTo(*device_) ||
+        executor_->deviceLost() || hasUnretiredSubmission() ||
+        phase != device_->retainedProcessingPhase() || phase != lastPhase_.lock() ||
+        (phase && phase->isUnproven()) || device_->outputColorReadbackPending() ||
+        device_->displayTransferPending())
+        return false;
+    const auto programs = device_->ocioProgramRetirementStats();
+    return programs.pendingPrograms == 0 && programs.pendingUploads == 0;
+}
+void GpuOutputColorStage::discardProvenFailure() noexcept {
+    executor_->discardRetiredFailures();
+    frame_.reset();
+    command_.reset();
+    process_.reset();
+    phaseLease_.reset();
+}
+bool GpuOutputColorStage::retiredBudgetRefusal(
+    const std::shared_ptr<render::GpuProcessingPhaseLease>& phase) noexcept {
+    if (!(lastBudgetRefusal_ || (phase_ == Phase::Failure &&
+                                 diagnostic_.code == GpuOutputColorDiagnosticCode::OverBudget)) ||
+        !retirementSafe(phase))
+        return false;
+    // Both begin refusal and asynchronous refusal have already unwound the actual staging guard.
+    // No Ready product is consumed; only proven failed executor/transient aliases are detached.
+    discardProvenFailure();
+    lastBudgetRefusal_ = false;
+    return true;
+}
+
 GpuOutputColorDiagnostic
 GpuOutputColorStage::begin(std::shared_ptr<const PreparedGpuOcioCommand> command,
                            std::shared_ptr<const render::GpuImage> processImage,
-                           const std::uint64_t byteBudget) noexcept {
+                           const std::uint64_t byteBudget,
+                           const std::shared_ptr<render::GpuProcessingPhaseLease>& phase) noexcept {
     try {
         // Owner identity is consulted FIRST: a foreign-thread call must not read or mutate any
         // owner state (phase, retained command/process/frame, diagnostic, counters).
@@ -124,11 +161,18 @@ GpuOutputColorStage::begin(std::shared_ptr<const PreparedGpuOcioCommand> command
             return {GpuOutputColorDiagnosticCode::WrongThread,
                     "begin must run on the device owner thread"};
         }
+        if (!device_ || !device_->isOwnerThread() || ownershipEpoch_ != device_->ownershipEpoch() ||
+            !executor_->isBoundTo(*device_) || executor_->deviceLost() ||
+            phase != device_->retainedProcessingPhase() || (phase && phase->isUnproven())) {
+            return {GpuOutputColorDiagnosticCode::DeviceUnavailable,
+                    "output colour requires the exact proven retained processing phase"};
+        }
         if (phase_ != Phase::Idle) {
             // A genuinely retired failure is reusable; a live or unretired submission is refused.
             if (phase_ == Phase::Failure && !hasUnretiredSubmission()) {
                 command_.reset();
                 process_.reset();
+                phaseLease_.reset();
                 frame_.reset();
                 diagnostic_ = {};
                 phase_ = Phase::Idle;
@@ -149,9 +193,12 @@ GpuOutputColorStage::begin(std::shared_ptr<const PreparedGpuOcioCommand> command
             }
         }
 
+        lastPhase_ = phase;
+        lastBudgetRefusal_ = false;
         command_ = std::move(command);
         process_ = std::move(processImage);
         byteBudget_ = byteBudget;
+        phaseLease_ = phase;
         frame_.reset();
         diagnostic_ = {};
         // Captured for EVERY begin, including the identity arm, so a subsequent identity-only job
@@ -160,10 +207,13 @@ GpuOutputColorStage::begin(std::shared_ptr<const PreparedGpuOcioCommand> command
 
         if (command_ == nullptr) {
             arm_ = GpuOutputColorArm::None;
-            if (!readback_.begin(process_, nullptr, std::nullopt, byteBudget_)) {
+            if (!readback_.begin(process_, nullptr, std::nullopt, byteBudget_, phaseLease_)) {
                 const auto& readbackDiagnostic = readback_.diagnostic();
+                lastBudgetRefusal_ =
+                    readbackDiagnostic.code == render::GpuOutputColorReadbackCode::OverBudget;
                 command_.reset();
                 process_.reset();
+                phaseLease_.reset();
                 return {mapReadbackCode(readbackDiagnostic.code), readbackDiagnostic.message};
             }
             phase_ = Phase::ReadingBack;
@@ -175,9 +225,11 @@ GpuOutputColorStage::begin(std::shared_ptr<const PreparedGpuOcioCommand> command
                    : GpuOutputColorArm::ProcessEffect;
         const auto accepted = executor_->begin(command_, process_, {}, byteBudget_);
         if (accepted.code != GpuOcioExecutorDiagnosticCode::None) {
+            lastBudgetRefusal_ = accepted.code == GpuOcioExecutorDiagnosticCode::OverBudget;
             // A refused begin admitted no submission; leave the stage Idle and reusable.
             command_.reset();
             process_.reset();
+            phaseLease_.reset();
             return {mapExecutorBegin(accepted.code), accepted.message};
         }
         phase_ = Phase::Dispatching;
@@ -185,11 +237,13 @@ GpuOutputColorStage::begin(std::shared_ptr<const PreparedGpuOcioCommand> command
     } catch (const std::bad_alloc&) {
         command_.reset();
         process_.reset();
+        phaseLease_.reset();
         return {GpuOutputColorDiagnosticCode::InternalInvariant,
                 "the output-colour begin could not be allocated"};
     } catch (...) {
         command_.reset();
         process_.reset();
+        phaseLease_.reset();
         return {GpuOutputColorDiagnosticCode::InternalInvariant,
                 "the output-colour begin failed unexpectedly"};
     }
@@ -213,6 +267,8 @@ GpuOutputColorPollResult GpuOutputColorStage::poll() {
         diagnostic_.code = code;
         diagnostic_.message = std::move(message);
         phase_ = Phase::Failure;
+        if (code == GpuOutputColorDiagnosticCode::Cancelled && retirementSafe(phaseLease_))
+            discardProvenFailure();
         return GpuOutputColorPollResult::Failure;
     };
 
@@ -234,7 +290,8 @@ GpuOutputColorPollResult GpuOutputColorStage::poll() {
                 return failPoll(GpuOutputColorDiagnosticCode::InternalInvariant,
                                 "the effect dispatch published no resident output");
             }
-            if (!readback_.begin(process_, std::move(effect), std::nullopt, byteBudget_)) {
+            if (!readback_.begin(process_, std::move(effect), std::nullopt, byteBudget_,
+                                 phaseLease_)) {
                 const auto& readbackDiagnostic = readback_.diagnostic();
                 return failPoll(mapReadbackCode(readbackDiagnostic.code),
                                 readbackDiagnostic.message);
@@ -245,7 +302,7 @@ GpuOutputColorPollResult GpuOutputColorStage::poll() {
                 return failPoll(GpuOutputColorDiagnosticCode::InternalInvariant,
                                 "the display dispatch published no resident output");
             }
-            if (!readback_.begin(process_, nullptr, std::move(display), byteBudget_)) {
+            if (!readback_.begin(process_, nullptr, std::move(display), byteBudget_, phaseLease_)) {
                 const auto& readbackDiagnostic = readback_.diagnostic();
                 return failPoll(mapReadbackCode(readbackDiagnostic.code),
                                 readbackDiagnostic.message);
@@ -265,7 +322,7 @@ GpuOutputColorPollResult GpuOutputColorStage::poll() {
         return failPoll(mapReadbackCode(readbackDiagnostic.code), readbackDiagnostic.message);
     }
 
-    auto payloads = readback_.take();
+    auto payloads = readback_.take(false);
     GpuOutputColorFrame frame;
     frame.process = std::move(payloads.process);
     frame.effectRgba32f = std::move(payloads.encodedRgba32f);
@@ -295,7 +352,7 @@ GpuOutputColorPollResult GpuOutputColorStage::poll() {
     return GpuOutputColorPollResult::Ready;
 }
 
-std::optional<GpuOutputColorFrame> GpuOutputColorStage::take() noexcept {
+std::optional<GpuOutputColorFrame> GpuOutputColorStage::take(const bool publishStorage) noexcept {
     // Owner identity first: a foreign-thread take must never move/destroy the owner's frame.
     if (ownerThread_ != std::this_thread::get_id()) {
         return std::nullopt;
@@ -303,10 +360,25 @@ std::optional<GpuOutputColorFrame> GpuOutputColorStage::take() noexcept {
     if (phase_ != Phase::Ready || !frame_.has_value()) {
         return std::nullopt;
     }
+    if (publishStorage && frame_->process.authority() &&
+        !render::PackedHostStorageAuthority::promoteFinalProduct(
+            frame_->process.authority(), frame_->arm == GpuOutputColorArm::DisplayRgba8
+                                             ? frame_->displayRgba8.authority()
+                                             : frame_->effectRgba32f.authority())) {
+        frame_.reset();
+        phaseLease_.reset();
+        process_.reset();
+        command_.reset();
+        phase_ = Phase::Failure;
+        diagnostic_ = {GpuOutputColorDiagnosticCode::DeviceUnavailable,
+                       "the complete final host product could not be published"};
+        return std::nullopt;
+    }
     std::optional<GpuOutputColorFrame> frame = std::move(frame_);
     frame_.reset();
     command_.reset();
     process_.reset();
+    phaseLease_.reset();
     diagnostic_ = {};
     phase_ = Phase::Idle;
     return frame;

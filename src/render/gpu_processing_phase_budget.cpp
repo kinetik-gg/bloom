@@ -393,16 +393,18 @@ bool PackedHostStorageToken::published() const noexcept {
     return authority_ && authority_->snapshot().published;
 }
 PackedHostStorageAuthority::PackedHostStorageAuthority(
-    const std::shared_ptr<GpuProcessingPhaseLease>& phase, const std::uint64_t limit) noexcept
-    : state_(phase->state_), origin_(phase), limit_(limit) {}
+    const std::shared_ptr<GpuProcessingPhaseLease>& phase, const std::uint64_t limit,
+    const HostPixelStorageDomain domain) noexcept
+    : state_(phase->state_), origin_(phase), domain_(domain), originId_(phase->id()),
+      limit_(limit) {}
 std::shared_ptr<PackedHostStorageAuthority>
 PackedHostStorageAuthority::create(const std::shared_ptr<GpuProcessingPhaseLease>& phase,
-                                   const std::uint64_t limit) {
+                                   const std::uint64_t limit, const HostPixelStorageDomain domain) {
     if (!phase) {
         return {};
     }
     return std::shared_ptr<PackedHostStorageAuthority>(
-        new PackedHostStorageAuthority(phase, limit));
+        new PackedHostStorageAuthority(phase, limit, domain));
 }
 std::optional<PackedHostStorageToken>
 PackedHostStorageAuthority::reserve(const std::uint64_t bytes,
@@ -416,17 +418,26 @@ PackedHostStorageAuthority::reserve(const std::uint64_t bytes,
         return {};
     }
     const std::lock_guard lock(state_->mutex);
-    if (published_ || bytes_ > limit_ || bytes > limit_ - bytes_ ||
-        bytes > origin->remainingHostBytes_ ||
+    if (published_ || (domain_ != HostPixelStorageDomain::PackedPreview && origin->unproven_) ||
+        bytes_ > limit_ || bytes > limit_ - bytes_ || bytes > origin->remainingHostBytes_ ||
         metadataBytes > origin->remainingHostBytes_ - bytes) {
         return {};
     }
     // Both counters change under one lock; the total never changes during an ownership handoff.
     origin->remainingHostBytes_ -= bytes + metadataBytes;
     state_->counters.hostReservedBytes -= bytes + metadataBytes;
-    state_->counters.ownedPackedHostBytes += bytes;
-    state_->counters.ownedPackedHostMetadataBytes += metadataBytes;
-    ++state_->counters.ownedPackedHostAllocations;
+    if (domain_ == HostPixelStorageDomain::PackedPreview) {
+        state_->counters.ownedPackedHostBytes += bytes;
+        state_->counters.ownedPackedHostMetadataBytes += metadataBytes;
+        ++state_->counters.ownedPackedHostAllocations;
+    } else {
+        if (domain_ == HostPixelStorageDomain::FinalProcess)
+            state_->counters.ownedFinalProcessHostBytes += bytes;
+        else
+            state_->counters.ownedFinalEncodedHostBytes += bytes;
+        state_->counters.ownedFinalHostMetadataBytes += metadataBytes;
+        ++state_->counters.ownedFinalHostAllocations;
+    }
     bytes_ += bytes;
     metadataBytes_ += metadataBytes;
     retainedOrigin_ = std::move(origin);
@@ -443,9 +454,18 @@ void PackedHostStorageAuthority::release(const std::uint64_t bytes,
         const std::lock_guard lock(state_->mutex);
         bytes_ -= bytes;
         metadataBytes_ -= metadataBytes;
-        state_->counters.ownedPackedHostBytes -= bytes;
-        state_->counters.ownedPackedHostMetadataBytes -= metadataBytes;
-        --state_->counters.ownedPackedHostAllocations;
+        if (domain_ == HostPixelStorageDomain::PackedPreview) {
+            state_->counters.ownedPackedHostBytes -= bytes;
+            state_->counters.ownedPackedHostMetadataBytes -= metadataBytes;
+            --state_->counters.ownedPackedHostAllocations;
+        } else {
+            if (domain_ == HostPixelStorageDomain::FinalProcess)
+                state_->counters.ownedFinalProcessHostBytes -= bytes;
+            else
+                state_->counters.ownedFinalEncodedHostBytes -= bytes;
+            state_->counters.ownedFinalHostMetadataBytes -= metadataBytes;
+            --state_->counters.ownedFinalHostAllocations;
+        }
         if (published_) {
             state_->counters.totalHostClaimBytes -= bytes + metadataBytes;
             incrementSaturating(state_->counters.admissionRevision);
@@ -474,6 +494,36 @@ bool PackedHostStorageAuthority::promote() noexcept {
         releasedOrigin = std::move(retainedOrigin_);
     }
     releasedOrigin.reset();
+    return true;
+}
+bool PackedHostStorageAuthority::promoteFinalProduct(
+    const std::shared_ptr<PackedHostStorageAuthority>& process,
+    const std::shared_ptr<PackedHostStorageAuthority>& encoded) noexcept {
+    if (!process || process->domain_ != HostPixelStorageDomain::FinalProcess ||
+        (encoded &&
+         (encoded->domain_ != HostPixelStorageDomain::FinalEncoded ||
+          encoded->state_ != process->state_ || encoded->originId_ != process->originId_)))
+        return false;
+    std::shared_ptr<GpuProcessingPhaseLease> releasedProcess;
+    std::shared_ptr<GpuProcessingPhaseLease> releasedEncoded;
+    {
+        const std::lock_guard lock(process->state_->mutex);
+        if (process->bytes_ == 0 ||
+            (encoded &&
+             (encoded->bytes_ == 0 || process->published_ != encoded->published_ ||
+              (!process->published_ && process->retainedOrigin_ != encoded->retainedOrigin_))) ||
+            (process->retainedOrigin_ && process->retainedOrigin_->unproven_) ||
+            (encoded && encoded->retainedOrigin_ && encoded->retainedOrigin_->unproven_))
+            return false;
+        process->published_ = true;
+        releasedProcess = std::move(process->retainedOrigin_);
+        if (encoded) {
+            encoded->published_ = true;
+            releasedEncoded = std::move(encoded->retainedOrigin_);
+        }
+    }
+    releasedProcess.reset();
+    releasedEncoded.reset();
     return true;
 }
 PackedHostStorageSnapshot PackedHostStorageAuthority::snapshot() const noexcept {

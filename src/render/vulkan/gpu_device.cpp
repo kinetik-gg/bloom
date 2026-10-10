@@ -4,6 +4,7 @@
 #include "gpu_display_transfer_retirement_private.hpp"
 #include "gpu_image_reclamation_private.hpp"
 #include "gpu_ocio_program_private.hpp"
+#include "gpu_output_color_readback_retirement_private.hpp"
 
 #include <array>
 #include <atomic>
@@ -53,6 +54,7 @@ GpuDevice& GpuDevice::operator=(GpuDevice&& other) noexcept {
         if (impl_ != nullptr && impl_->control != nullptr) {
             assert(impl_->owner == std::this_thread::get_id());
             display_transfer_detail::closeTransfers(*impl_->control);
+            output_color_readback_detail::closeReadbacks(*impl_->control);
             ocio_program_detail::closeProgramOwner(*impl_->control);
             image_detail::closeImageOwner(*impl_->control);
         }
@@ -66,6 +68,7 @@ GpuDevice::~GpuDevice() {
         assert(impl_->owner == std::this_thread::get_id());
         if (impl_->control != nullptr) {
             display_transfer_detail::closeTransfers(*impl_->control);
+            output_color_readback_detail::closeReadbacks(*impl_->control);
             ocio_program_detail::closeProgramOwner(*impl_->control);
             image_detail::closeImageOwner(*impl_->control);
         }
@@ -75,6 +78,7 @@ GpuDevice::~GpuDevice() {
 void GpuDevice::reclaimReleasedImages() noexcept {
     if (isOwnerThread() && impl_->control != nullptr) {
         display_transfer_detail::drainTransfers(*impl_->control);
+        output_color_readback_detail::drainReadbacks(*impl_->control);
         ocio_program_detail::retireUploadQuarantine();
         ocio_program_detail::drainPrograms(*impl_->control);
         image_detail::drainImages(*impl_->control);
@@ -169,6 +173,11 @@ std::optional<NativeBufferStorageRefusal> GpuDevice::nativeBufferStorageRefusal(
 }
 bool GpuDevice::displayTransferPending() const noexcept {
     return impl_ && impl_->control && display_transfer_detail::transferPendingFor(*impl_->control);
+}
+
+bool GpuDevice::outputColorReadbackPending() const noexcept {
+    return impl_ && impl_->control &&
+           output_color_readback_detail::readbackPendingFor(*impl_->control);
 }
 
 GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept {

@@ -292,6 +292,7 @@ class GpuDevice final {
     nativeBufferStorageRefusal() const noexcept;
     // Exact-generation live reservation or handed-off staging; neither permits native owner exit.
     [[nodiscard]] bool displayTransferPending() const noexcept;
+    [[nodiscard]] bool outputColorReadbackPending() const noexcept;
 
     // Missing operation/precision entries are Unavailable, matching the architecture contract.
     [[nodiscard]] GpuQualification qualificationFor(GpuOperationId operation,

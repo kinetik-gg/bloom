@@ -2,8 +2,10 @@
 
 #include "gpu_device_private.hpp"
 #include "gpu_image_private.hpp"
+#include "gpu_native_buffer_allocation_private.hpp"
 #include "gpu_output_color_readback_fault.hpp"
 #include "gpu_output_color_readback_private.hpp"
+#include "gpu_output_color_readback_retirement_private.hpp"
 #include "gpu_resident_display_private.hpp"
 
 #include <atomic>
@@ -29,6 +31,23 @@ std::atomic<std::uint8_t>& readbackFault() noexcept {
 bool outputColorQuarantineOccupied() noexcept { return quarantineOccupied(); }
 
 bool outputColorRetireQuarantineForOwner() noexcept { return retireQuarantineForOwner(); }
+
+void drainReadbacks(DeviceAllocatorState& state) noexcept {
+    if (state.owner == std::this_thread::get_id() &&
+        state.ownerLifetimeToken == vulkan_detail::deviceOwnerLifetimeToken())
+        static_cast<void>(retireQuarantine(state));
+}
+void closeReadbacks(DeviceAllocatorState& state) noexcept {
+    drainReadbacks(state);
+    std::lock_guard lock(reservationMutex());
+    auto& slot = reservation();
+    if (slotMatches(slot, state))
+        slot.ownerClosed = true;
+}
+bool readbackPendingFor(const DeviceAllocatorState& state) noexcept {
+    std::lock_guard lock(reservationMutex());
+    return slotMatches(reservation(), state);
+}
 
 } // namespace output_color_readback_detail
 
@@ -72,16 +91,27 @@ struct GpuOutputColorReadback::Impl final {
     std::uint64_t payloadCount = 0;
     bool encodedIsDisplay = false;
 
-    std::vector<Rgba32f> processPixels;
-    std::vector<Rgba32f> encodedRgba32fPixels;
-    std::vector<Rgba8> encodedRgba8Pixels;
+    FinalRgba32fStorage processPixels;
+    FinalRgba32fStorage encodedRgba32fPixels;
+    FinalRgba8Storage encodedRgba8Pixels;
+
+    std::shared_ptr<GpuProcessingPhaseLease> phaseLease;
+    std::uint64_t hostByteLimit = 0;
 
     bool cancelRequested = false;
     bool submitted = false;
     std::uint64_t slotToken = 0;
+    std::uint64_t quarantinedToken = 0;
+    std::uint64_t ownerLifetimeToken = 0;
     std::thread::id ownerThread{};
     std::chrono::steady_clock::time_point submittedAt{};
     GpuOutputColorReadbackCounters counters;
+
+    [[nodiscard]] bool onOwnerThread() const noexcept {
+        return ownerThread == std::this_thread::get_id() && ownerLifetimeToken != 0 &&
+               ownerLifetimeToken == vulkan_detail::deviceOwnerLifetimeToken() &&
+               (!deviceState || deviceState->ownerLifetimeToken == ownerLifetimeToken);
+    }
 
     // Frees local native resources and returns a proven-retired claim to Free. Owner-thread only.
     void releaseRetired() noexcept {
@@ -103,6 +133,7 @@ struct GpuOutputColorReadback::Impl final {
             slotToken = 0;
         }
         deviceState.reset();
+        phaseLease.reset();
         submitted = false;
     }
 
@@ -124,16 +155,16 @@ struct GpuOutputColorReadback::Impl final {
 
     // Transfers a possibly in-flight submission into the reservation as Quarantined. Owner-thread
     // only. On success the Impl becomes empty; the reservation retains the exact pins.
-    bool quarantine() noexcept {
+    bool quarantine(const bool unknown = true) noexcept {
         if (!submitted) {
             releaseRetired();
             return true;
         }
-        output_color_readback_detail::outputColorReadbackFuse().store(true);
         std::lock_guard lock(output_color_readback_detail::reservationMutex());
         Reservation& slot = output_color_readback_detail::reservation();
-        if (!output_color_readback_detail::isReservationOwnerLocked(slot) ||
-            slot.token != slotToken) {
+        if (!deviceState || slot.ownerClosed || slot.state != ReservationState::Reserved ||
+            slot.token != slotToken ||
+            !output_color_readback_detail::slotMatches(slot, *deviceState)) {
             return false;
         }
         slot.deviceState = std::move(deviceState);
@@ -145,6 +176,9 @@ struct GpuOutputColorReadback::Impl final {
         slot.buffer = std::move(buffer);
         slot.fence = std::move(fence);
         slot.state = ReservationState::Quarantined;
+        if (unknown)
+            output_color_readback_detail::outputColorReadbackFuse().store(true);
+        quarantinedToken = slotToken;
         deviceState.reset();
         process.reset();
         encodedProcess.reset();
@@ -183,33 +217,18 @@ GpuOutputColorReadback::~GpuOutputColorReadback() {
     if (impl_ == nullptr) {
         return;
     }
-    // Only the owner thread may touch native resources. A destructor on a foreign thread while a
-    // submission is live retains the whole Impl (bounded by the one occupied reservation) rather
-    // than destroying a possibly in-flight submission from the wrong thread.
-    if (impl_->submitted && impl_->ownerThread != std::this_thread::get_id()) {
-        [[maybe_unused]] const auto* const retained = impl_.release();
+    if (!impl_->submitted)
+        return;
+    if (!impl_->onOwnerThread()) {
+        if (!impl_->quarantine(false)) {
+            [[maybe_unused]] const auto* const retained = impl_.release();
+        }
         return;
     }
-    if (impl_->submitted) {
-        cancel();
-        const auto deadline =
-            impl_->submittedAt + std::chrono::nanoseconds(kReadbackDeadlineNanoseconds);
-        while (impl_->submitted && impl_->state == GpuOutputColorReadbackState::Pending &&
-               std::chrono::steady_clock::now() < deadline) {
-            static_cast<void>(poll());
-            if (impl_->submitted && impl_->state == GpuOutputColorReadbackState::Pending) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
-        }
-        if (impl_->submitted) {
-            // Could not prove retirement: quarantine the exact submission; never an unbounded leak.
-            if (!impl_->quarantine()) {
-                [[maybe_unused]] const auto* const retained = impl_.release();
-            } else {
-                impl_->setFailure(GpuOutputColorReadbackCode::ReadbackFailed,
-                                  "the readback did not retire before destruction; retained");
-            }
-        }
+    cancel();
+    static_cast<void>(poll());
+    if (impl_->submitted && !impl_->quarantine()) {
+        [[maybe_unused]] const auto* const retained = impl_.release();
     }
 }
 
@@ -223,14 +242,14 @@ const GpuOutputColorReadbackDiagnostic& GpuOutputColorReadback::diagnostic() con
 }
 
 bool GpuOutputColorReadback::isOwnerThread() const noexcept {
-    return impl_ != nullptr && impl_->ownerThread == std::this_thread::get_id() &&
-           impl_->deviceState != nullptr;
+    return impl_ != nullptr && impl_->onOwnerThread() && impl_->deviceState != nullptr;
 }
 
 bool GpuOutputColorReadback::begin(std::shared_ptr<const GpuImage> processImage,
                                    std::shared_ptr<const GpuImage> encodedProcessImage,
                                    std::optional<GpuDisplayImage> encodedDisplayImage,
-                                   const std::uint64_t byteBudget) noexcept {
+                                   const std::uint64_t byteBudget,
+                                   const std::shared_ptr<GpuProcessingPhaseLease>& phase) noexcept {
     try {
         if (impl_ == nullptr) {
             return false;
@@ -272,6 +291,12 @@ bool GpuOutputColorReadback::begin(std::shared_ptr<const GpuImage> processImage,
         if (processImpl->submissionUnretired) {
             impl_->setFailure(GpuOutputColorReadbackCode::DeviceUnavailable,
                               "a prior readback of the process image is not retired");
+            return false;
+        }
+        if (phase != processImpl->state->processingPhase ||
+            processImpl->state->processingPhaseUnproven || (phase && phase->isUnproven())) {
+            impl_->setFailure(GpuOutputColorReadbackCode::DeviceUnavailable,
+                              "readback requires the exact proven retained processing phase");
             return false;
         }
         std::uint64_t processBytes = 0;
@@ -330,12 +355,20 @@ bool GpuOutputColorReadback::begin(std::shared_ptr<const GpuImage> processImage,
 
         const std::uint64_t totalBytes =
             processBytes > UINT64_MAX - encodedBytes ? UINT64_MAX : processBytes + encodedBytes;
-        if (totalBytes > byteBudget) {
+        if (totalBytes > byteBudget / 2) {
             impl_->setFailure(GpuOutputColorReadbackCode::OverBudget,
                               "the combined readback exceeds the requested byte budget");
             return false;
         }
 
+        const std::uint64_t hostMetadata =
+            phase ? detail::packedHostAllocationMetadataBytes() * (encodedBytes > 0 ? 2U : 1U) : 0;
+        if (hostMetadata > byteBudget - totalBytes ||
+            totalBytes > byteBudget - totalBytes - hostMetadata) {
+            impl_->setFailure(GpuOutputColorReadbackCode::OverBudget,
+                              "the actual host payload headers exceed the readback budget");
+            return false;
+        }
         auto state = processImpl->state;
         if (hasEncodedProcess && encodedProcessImpl->state.get() != state.get()) {
             impl_->setFailure(GpuOutputColorReadbackCode::InvalidArgument,
@@ -348,34 +381,25 @@ bool GpuOutputColorReadback::begin(std::shared_ptr<const GpuImage> processImage,
             return false;
         }
 
-        // Claim the bounded reservation BEFORE any native allocation or submit, so a failure never
-        // accumulates more than one occupied submission process-wide.
+        static_cast<void>(output_color_readback_detail::retireQuarantine(*state));
+        // One preowned slot, exact generation and owner lifetime; Reserved is never pollable.
         {
             std::lock_guard lock(output_color_readback_detail::reservationMutex());
             Reservation& slot = output_color_readback_detail::reservation();
-            if (slot.state == ReservationState::Reserved) {
+            if (slot.state != ReservationState::Free) {
                 impl_->setFailure(GpuOutputColorReadbackCode::DeviceUnavailable,
-                                  "the readback reservation is held by a live submission");
+                                  "the combined readback slot is still owned");
                 return false;
-            }
-            if (slot.state == ReservationState::Quarantined) {
-                if (slot.ownerThread != self) {
-                    impl_->setFailure(GpuOutputColorReadbackCode::DeviceUnavailable,
-                                      "a foreign owner thread holds the readback quarantine");
-                    return false;
-                }
-                if (!output_color_readback_detail::retireQuarantinedLocked(slot)) {
-                    impl_->setFailure(GpuOutputColorReadbackCode::DeviceUnavailable,
-                                      "a prior readback submission is not retired");
-                    return false;
-                }
             }
             slot.state = ReservationState::Reserved;
             slot.ownerThread = self;
+            slot.ownerLifetimeToken = state->ownerLifetimeToken;
+            slot.epoch = state->presentationEpoch;
+            slot.binding = state;
+            slot.ownerClosed = false;
             ++slot.token;
-            if (slot.token == 0) {
+            if (slot.token == 0)
                 ++slot.token;
-            }
             impl_->slotToken = slot.token;
         }
 
@@ -399,10 +423,19 @@ bool GpuOutputColorReadback::begin(std::shared_ptr<const GpuImage> processImage,
         stagingAllocation.flags =
             VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
         VmaAllocationInfo stagingInfo{};
-        if (vmaCreateBuffer(state->allocator, &bufferInfo, &stagingAllocation, &staging.buffer,
-                            &staging.allocation, &stagingInfo) != VK_SUCCESS) {
-            impl_->fail(GpuOutputColorReadbackCode::ReadbackFailed,
-                        "the combined readback staging buffer could not be created");
+        const auto allocationOutcome = vulkan_detail::allocateCoveredBuffer(
+            *state, bufferInfo, stagingAllocation, byteBudget - totalBytes - hostMetadata,
+            staging.buffer, staging.allocation, stagingInfo, staging.storage);
+        if (allocationOutcome != vulkan_detail::NativeBufferAllocationOutcome::Allocated) {
+            const bool budget =
+                allocationOutcome == vulkan_detail::NativeBufferAllocationOutcome::PhaseRefused ||
+                allocationOutcome ==
+                    vulkan_detail::NativeBufferAllocationOutcome::TransferBudgetRefused;
+            impl_->fail(budget ? GpuOutputColorReadbackCode::OverBudget
+                               : GpuOutputColorReadbackCode::ReadbackFailed,
+                        budget
+                            ? "the admitted native/planned-host staging or readback limit refused"
+                            : "the combined readback staging buffer could not be created");
             return false;
         }
         staging.armed = true;
@@ -527,6 +560,8 @@ bool GpuOutputColorReadback::begin(std::shared_ptr<const GpuImage> processImage,
         impl_->pool = std::move(pool);
         impl_->buffer = std::move(commandBuffer);
         impl_->fence = std::move(fence);
+        impl_->phaseLease = phase;
+        impl_->hostByteLimit = byteBudget;
         impl_->processBytes = processBytes;
         impl_->encodedBytes = encodedBytes;
         impl_->totalBytes = totalBytes;
@@ -534,6 +569,7 @@ bool GpuOutputColorReadback::begin(std::shared_ptr<const GpuImage> processImage,
         impl_->encodedIsDisplay = encodedDisplayImpl != nullptr;
         impl_->cancelRequested = false;
         impl_->ownerThread = self;
+        impl_->ownerLifetimeToken = impl_->deviceState->ownerLifetimeToken;
         impl_->submitted = true;
         impl_->submittedAt = std::chrono::steady_clock::now();
         impl_->state = GpuOutputColorReadbackState::Pending;
@@ -554,7 +590,7 @@ GpuOutputColorReadbackState GpuOutputColorReadback::poll() noexcept {
         return impl_ == nullptr ? GpuOutputColorReadbackState::Idle : impl_->state;
     }
     Impl& impl = *impl_;
-    if (impl.ownerThread != std::this_thread::get_id()) {
+    if (!impl.onOwnerThread()) {
         impl.diagnostic = {GpuOutputColorReadbackCode::WrongThread,
                            "readback poll must run on the device owner thread"};
         return GpuOutputColorReadbackState::Pending;
@@ -626,27 +662,63 @@ GpuOutputColorReadbackState GpuOutputColorReadback::poll() noexcept {
         }
         try {
             const auto* const base = static_cast<const std::byte*>(info.pMappedData);
-            impl.processPixels.resize(static_cast<std::size_t>(impl.processBytes / sizeof(Rgba32f)),
-                                      Rgba32f::transparent());
+            const auto makeFloat = [&](const std::uint64_t bytes,
+                                       const HostPixelStorageDomain domain) {
+                const auto count = static_cast<std::size_t>(bytes / sizeof(Rgba32f));
+                if (!impl.phaseLease)
+                    return FinalRgba32fStorage::legacy(
+                        std::vector<Rgba32f>(count, Rgba32f::transparent()));
+                auto result = FinalRgba32fStorage::create(
+                    count, impl.phaseLease, static_cast<std::size_t>(impl.hostByteLimit), domain);
+                if (!result) {
+                    if (result.error()->code == ImageErrorCode::PixelStorageBudgetExceeded)
+                        throw detail::PackedHostCapacityError{};
+                    throw std::bad_alloc{};
+                }
+                return std::move(*result.value());
+            };
+            impl.processPixels = makeFloat(impl.processBytes, HostPixelStorageDomain::FinalProcess);
             std::memcpy(impl.processPixels.data(), base,
                         static_cast<std::size_t>(impl.processBytes));
             if (impl.encodedBytes > 0) {
                 const auto* const encodedBase = base + impl.processBytes;
                 if (impl.encodedIsDisplay) {
-                    impl.encodedRgba8Pixels.resize(
-                        static_cast<std::size_t>(impl.encodedBytes / sizeof(Rgba8)),
-                        Rgba8{0, 0, 0, 0});
+                    const auto count = static_cast<std::size_t>(impl.encodedBytes / sizeof(Rgba8));
+                    if (impl.phaseLease) {
+                        auto result = FinalRgba8Storage::create(
+                            count, impl.phaseLease, static_cast<std::size_t>(impl.hostByteLimit),
+                            HostPixelStorageDomain::FinalEncoded);
+                        if (!result) {
+                            if (result.error()->code == ImageErrorCode::PixelStorageBudgetExceeded)
+                                throw detail::PackedHostCapacityError{};
+                            throw std::bad_alloc{};
+                        }
+                        impl.encodedRgba8Pixels = std::move(*result.value());
+                    } else {
+                        impl.encodedRgba8Pixels =
+                            FinalRgba8Storage::legacy(std::vector<Rgba8>(count));
+                    }
                     std::memcpy(impl.encodedRgba8Pixels.data(), encodedBase,
                                 static_cast<std::size_t>(impl.encodedBytes));
                 } else {
-                    impl.encodedRgba32fPixels.resize(
-                        static_cast<std::size_t>(impl.encodedBytes / sizeof(Rgba32f)),
-                        Rgba32f::transparent());
+                    impl.encodedRgba32fPixels =
+                        makeFloat(impl.encodedBytes, HostPixelStorageDomain::FinalEncoded);
                     std::memcpy(impl.encodedRgba32fPixels.data(), encodedBase,
                                 static_cast<std::size_t>(impl.encodedBytes));
                 }
             }
+        } catch (const detail::PackedHostCapacityError&) {
+            impl.processPixels.reset();
+            impl.encodedRgba32fPixels.reset();
+            impl.encodedRgba8Pixels.reset();
+            impl.releaseRetired();
+            impl.setFailure(GpuOutputColorReadbackCode::OverBudget,
+                            "the actual final host payload capacity was refused");
+            return impl.state;
         } catch (const std::bad_alloc&) {
+            impl.processPixels.reset();
+            impl.encodedRgba32fPixels.reset();
+            impl.encodedRgba8Pixels.reset();
             impl.releaseRetired();
             impl.setFailure(GpuOutputColorReadbackCode::ReadbackFailed,
                             "the readback host buffers could not be allocated");
@@ -665,18 +737,31 @@ GpuOutputColorReadbackState GpuOutputColorReadback::poll() noexcept {
     return impl.state;
 }
 
-GpuOutputColorReadbackPayloads GpuOutputColorReadback::take() noexcept {
+GpuOutputColorReadbackPayloads GpuOutputColorReadback::take(const bool publishStorage) noexcept {
     GpuOutputColorReadbackPayloads payloads;
-    if (impl_ == nullptr || impl_->state != GpuOutputColorReadbackState::Ready) {
+    if (impl_ == nullptr || !impl_->onOwnerThread() ||
+        impl_->state != GpuOutputColorReadbackState::Ready) {
+        return payloads;
+    }
+    if (publishStorage && impl_->processPixels.authority() &&
+        !PackedHostStorageAuthority::promoteFinalProduct(
+            impl_->processPixels.authority(), impl_->encodedIsDisplay
+                                                  ? impl_->encodedRgba8Pixels.authority()
+                                                  : impl_->encodedRgba32fPixels.authority())) {
+        impl_->processPixels.reset();
+        impl_->encodedRgba32fPixels.reset();
+        impl_->encodedRgba8Pixels.reset();
+        impl_->setFailure(GpuOutputColorReadbackCode::DeviceUnavailable,
+                          "the complete final host product could not be published");
         return payloads;
     }
     payloads.process = std::move(impl_->processPixels);
     payloads.encodedRgba32f = std::move(impl_->encodedRgba32fPixels);
     payloads.encodedRgba8 = std::move(impl_->encodedRgba8Pixels);
     payloads.counters = impl_->counters;
-    impl_->processPixels.clear();
-    impl_->encodedRgba32fPixels.clear();
-    impl_->encodedRgba8Pixels.clear();
+    impl_->processPixels.reset();
+    impl_->encodedRgba32fPixels.reset();
+    impl_->encodedRgba8Pixels.reset();
     impl_->counters = {};
     impl_->state = GpuOutputColorReadbackState::Idle;
     impl_->diagnostic = {};
@@ -690,7 +775,15 @@ void GpuOutputColorReadback::cancel() noexcept {
 }
 
 bool GpuOutputColorReadback::hasUnretiredSubmission() const noexcept {
-    return impl_ != nullptr && impl_->submitted;
+    if (!impl_)
+        return false;
+    if (impl_->submitted)
+        return true;
+    if (impl_->quarantinedToken == 0)
+        return false;
+    std::lock_guard lock(output_color_readback_detail::reservationMutex());
+    const auto& slot = output_color_readback_detail::reservation();
+    return slot.state != ReservationState::Free && slot.token == impl_->quarantinedToken;
 }
 
 } // namespace bloom::render

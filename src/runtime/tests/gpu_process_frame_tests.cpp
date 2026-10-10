@@ -8,6 +8,7 @@
 // (which needs bloom::output) is proven separately in bloom.host. Without a loader/device it prints
 // an explicit SKIP unless --require-device is passed.
 
+#include "final_host_test_support.hpp"
 #include "gpu_media_executor_test_support.hpp"
 #include "gpu_scene_executor_test_support.hpp"
 
@@ -419,7 +420,8 @@ void runLifecycleTests(Expectations& expectations, const Options& options) {
 void runProcessingPhaseTest(Expectations& expectations, const Options& options) {
     using namespace bloom::runtime;
     constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
-    const auto policy = std::make_shared<GpuProcessingPhasePolicy>(1);
+    bloom::render::test::FinalHostRetirementScope host;
+    const auto policy = std::make_shared<GpuProcessingPhasePolicy>(1, host.owner);
     auto configured = gpuEvaluatorOptions(options.loader_path);
     configured.processingPhasePolicy = policy;
     const auto evaluator = GpuProcessFrameEvaluator::create(configured);

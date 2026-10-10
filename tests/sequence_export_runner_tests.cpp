@@ -34,6 +34,32 @@ void check(bool value, const std::string& message) {
     if (!value)
         throw std::runtime_error(message);
 }
+// Declared before attempt aliases so every return drops payloads before collecting their owner.
+class GpuProviderRetirement final {
+  public:
+    explicit GpuProviderRetirement(std::shared_ptr<host::GpuExportProvider> provider)
+        : provider_(std::move(provider)) {}
+    ~GpuProviderRetirement() {
+        if (!finish()) {
+            std::cerr << "FAIL: GPU video provider retirement remained incomplete\n";
+            std::terminate();
+        }
+    }
+    [[nodiscard]] bool finish() {
+        if (!provider_) {
+            return true;
+        }
+        if (!provider_->shutdownAndWait(std::chrono::seconds(10))) {
+            return false;
+        }
+        provider_.reset();
+        return true;
+    }
+
+  private:
+    std::shared_ptr<host::GpuExportProvider> provider_;
+};
+
 template <typename T> T need(std::optional<T> value) {
     if (!value)
         throw std::runtime_error("Missing fixture value");
@@ -380,6 +406,7 @@ GpuProofOutcome testGpuVideoProvenance(Fixture& f, const std::filesystem::path& 
         options.loaderPath = std::filesystem::path(loader);
         return options;
     }());
+    GpuProviderRetirement retirement(provider);
     provider->prepare(f.scheduler);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     while (!provider->prepared() && std::chrono::steady_clock::now() < deadline)
@@ -410,6 +437,7 @@ GpuProofOutcome testGpuVideoProvenance(Fixture& f, const std::filesystem::path& 
           "GPU video: the identity arm reports real process bytes and no encoded bytes");
     check(result.gpuDeviceOwnershipEpoch > 0,
           "GPU video: a genuine device ownership epoch is reported");
+    check(retirement.finish(), "GPU video: native and host owners retire before proof publication");
     std::cout << "GPU video frames=" << result.gpuEvaluatedFrames
               << " dispatches=" << result.gpuNativeDispatches
               << " readbacks=" << result.gpuReadbacks << " epoch=" << result.gpuDeviceOwnershipEpoch

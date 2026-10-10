@@ -72,7 +72,7 @@ ImageResult<Rgba32f> Rgba32fImageView::read(const std::int64_t x,
 }
 
 Rgba32fImage::Rgba32fImage(const Rgba32fImageDescriptor descriptor,
-                           std::vector<Rgba32f> pixels) noexcept
+                           FinalRgba32fStorage pixels) noexcept
     : descriptor_(descriptor), pixels_(std::move(pixels)) {}
 
 Rgba32fImage::Rgba32fImage(Rgba32fImage&& other) noexcept
@@ -102,7 +102,8 @@ ImageResult<Rgba32fImageView> Rgba32fImage::view() const& noexcept {
     if (imageDescriptor == nullptr || pixels_.size() != imageDescriptor->layout().pixelCount) {
         return ImageResult<Rgba32fImageView>::failure(invalidStateError());
     }
-    return ImageResult<Rgba32fImageView>::success(Rgba32fImageView(*imageDescriptor, pixels_));
+    return ImageResult<Rgba32fImageView>::success(
+        Rgba32fImageView(*imageDescriptor, pixels_.pixels()));
 }
 
 ImageResult<Rgba32f> Rgba32fImage::read(const std::int64_t x, const std::int64_t y) const noexcept {
@@ -115,11 +116,11 @@ ImageResult<Rgba32f> Rgba32fImage::read(const std::int64_t x, const std::int64_t
 
 void Rgba32fImage::reset() noexcept {
     descriptor_.reset();
-    pixels_.clear();
+    pixels_.reset();
 }
 
 Rgba32fImageBuilder::Rgba32fImageBuilder(const Rgba32fImageDescriptor descriptor,
-                                         std::vector<Rgba32f> pixels) noexcept
+                                         FinalRgba32fStorage pixels) noexcept
     : descriptor_(descriptor), pixels_(std::move(pixels)) {}
 
 Rgba32fImageBuilder::Rgba32fImageBuilder(Rgba32fImageBuilder&& other) noexcept
@@ -149,7 +150,7 @@ Rgba32fImageBuilder::create(const Rgba32fImageDescriptor descriptor,
     try {
         std::vector<Rgba32f> pixels(descriptor.layout().pixelCount, clearValue);
         return ImageResult<Rgba32fImageBuilder>::success(
-            Rgba32fImageBuilder(descriptor, std::move(pixels)));
+            Rgba32fImageBuilder(descriptor, FinalRgba32fStorage::legacy(std::move(pixels))));
     } catch (const std::bad_alloc&) {
         return ImageResult<Rgba32fImageBuilder>::failure(
             ImageError::allocationFailure(requiredBytes));
@@ -157,6 +158,18 @@ Rgba32fImageBuilder::create(const Rgba32fImageDescriptor descriptor,
         return ImageResult<Rgba32fImageBuilder>::failure(
             ImageError::allocationFailure(requiredBytes));
     }
+}
+
+ImageResult<Rgba32fImageBuilder> Rgba32fImageBuilder::create(
+    const Rgba32fImageDescriptor descriptor, const std::size_t pixelStorageByteLimit,
+    const std::shared_ptr<GpuProcessingPhaseLease>& phase, const Rgba32f clearValue) noexcept {
+    auto pixels =
+        FinalRgba32fStorage::create(descriptor.layout().pixelCount, phase, pixelStorageByteLimit,
+                                    HostPixelStorageDomain::FinalProcess, clearValue);
+    if (!pixels)
+        return ImageResult<Rgba32fImageBuilder>::failure(*pixels.error());
+    return ImageResult<Rgba32fImageBuilder>::success(
+        Rgba32fImageBuilder(descriptor, std::move(*pixels.value())));
 }
 
 bool Rgba32fImageBuilder::isValid() const noexcept {
@@ -172,7 +185,8 @@ ImageResult<Rgba32fImageView> Rgba32fImageBuilder::view() const& noexcept {
     if (imageDescriptor == nullptr || pixels_.size() != imageDescriptor->layout().pixelCount) {
         return ImageResult<Rgba32fImageView>::failure(invalidStateError());
     }
-    return ImageResult<Rgba32fImageView>::success(Rgba32fImageView(*imageDescriptor, pixels_));
+    return ImageResult<Rgba32fImageView>::success(
+        Rgba32fImageView(*imageDescriptor, pixels_.pixels()));
 }
 
 ImageResult<std::span<Rgba32f>> Rgba32fImageBuilder::row(const std::int64_t y) & noexcept {
@@ -186,7 +200,7 @@ ImageResult<std::span<Rgba32f>> Rgba32fImageBuilder::row(const std::int64_t y) &
     }
     const auto offset = rowOffset(dataWindow, y);
     return ImageResult<std::span<Rgba32f>>::success(
-        std::span<Rgba32f>(pixels_).subspan(offset, dataWindow.extent().width()));
+        pixels_.mutablePixels().subspan(offset, dataWindow.extent().width()));
 }
 
 ImageResult<Rgba32f> Rgba32fImageBuilder::read(const std::int64_t x,
@@ -233,7 +247,7 @@ ImageResult<Rgba32fImage> Rgba32fImageBuilder::freeze() && noexcept {
 
 void Rgba32fImageBuilder::reset() noexcept {
     descriptor_.reset();
-    pixels_.clear();
+    pixels_.reset();
 }
 
 } // namespace bloom::render

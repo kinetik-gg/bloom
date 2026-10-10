@@ -11,6 +11,7 @@
 // unchanged CpuCompositionEvaluator frame at the strict 2e-6 absolute-or-relative gate with exact
 // alpha. Requires the Vulkan backend and the pinned tools; skips cleanly otherwise.
 
+#include "final_host_test_support.hpp"
 #include "gpu_media_executor_test_support.hpp"
 #include "gpu_scene_executor_test_support.hpp"
 
@@ -359,7 +360,8 @@ int run(int argc, char** argv) {
     cpuEvaluator.setAssetBaseDirectory(fixture.directory);
 
     GpuProcessFrameEvaluatorOptions evaluatorOptions;
-    auto phasePolicy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>();
+    bloom::render::test::FinalHostRetirementScope host;
+    auto phasePolicy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(32, host.owner);
     std::optional<bloom::runtime::MemoryBudgetLedger> liveLedger;
     const auto refreshLivePolicy = [&] {
         auto sample = bloom::runtime::memoryBudgetSample();
@@ -501,7 +503,7 @@ int run(int argc, char** argv) {
     }
 
     // Display arm: the ONE combined readback transfers the process payload plus the encoded output.
-    const auto display = evaluator->evaluate(plan, request, {}, {}, prepared.command);
+    auto display = evaluator->evaluate(plan, request, {}, {}, prepared.command);
     if (display.status != GpuProcessFrameStatus::Evaluated) {
         std::cerr << "display-arm status=" << static_cast<int>(display.status)
                   << " code=" << static_cast<int>(display.diagnostic.code)
@@ -521,6 +523,17 @@ int run(int argc, char** argv) {
                             display.outputColorCounters.encodedPayloadBytes == kEncodedBytes,
                         "the display arm makes one submission carrying two exactly-accounted "
                         "payloads");
+    const auto ownedDisplay = phasePolicy->snapshot().reservations;
+    expectations.expect(
+        ownedDisplay.ownedFinalProcessHostBytes == kProcessBytes &&
+            ownedDisplay.ownedFinalEncodedHostBytes == kEncodedBytes &&
+            ownedDisplay.ownedFinalHostAllocations == 2 &&
+            ownedDisplay.ownedFinalHostMetadataBytes ==
+                2 * bloom::render::detail::packedHostAllocationMetadataBytes() &&
+            ownedDisplay.admittedPhases == 0 && display.frame &&
+            display.frame->processImage().storageAuthority() &&
+            display.encodedDisplayRgba8.authority(),
+        "the actual encoded/process product owns both payloads and headers without a phase pin");
     expectations.expect(display.counters.nativeDispatches > 0 && display.counters.uploads > 0,
                         "the media upload and OCIO/CST work dispatch natively");
     if (display.frame != nullptr) {
@@ -593,7 +606,7 @@ int run(int argc, char** argv) {
     }
 
     // Identity arm: exactly one process payload, no colour work.
-    const auto identity = evaluator->evaluate(plan, request);
+    auto identity = evaluator->evaluate(plan, request);
     expectations.expect(identity.status == GpuProcessFrameStatus::Evaluated &&
                             identity.frame != nullptr,
                         "the identity arm still evaluates the mixed scene");
@@ -708,6 +721,51 @@ int run(int argc, char** argv) {
     }
 
     evaluator->beginShutdown();
+    const auto nativeUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!evaluator->retirementComplete() && std::chrono::steady_clock::now() < nativeUntil)
+        std::this_thread::yield();
+    expectations.expect(evaluator->retirementComplete(),
+                        "actual final native owner retires with external output payloads");
+    evaluator.reset();
+    const auto stableUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (phasePolicy->snapshot().reservations.ownedFinalHostAllocations != 3 &&
+           std::chrono::steady_clock::now() < stableUntil)
+        std::this_thread::yield();
+    const auto retainedFinal = phasePolicy->snapshot().reservations;
+    expectations.expect(
+        retainedFinal.ownedFinalProcessHostBytes == 2 * kProcessBytes &&
+            retainedFinal.ownedFinalEncodedHostBytes == kEncodedBytes &&
+            retainedFinal.ownedFinalHostAllocations == 3 &&
+            retainedFinal.ownedFinalHostMetadataBytes ==
+                3 * bloom::render::detail::packedHostAllocationMetadataBytes() &&
+            retainedFinal.admittedPhases == 0 && retainedFinal.totalDeviceClaimBytes == 0,
+        "published encoded and process payloads survive actual native generation destruction");
+    host.owner->beginShutdown();
+    expectations.expect(!host.owner->exitAcknowledged(),
+                        "external encoded/process results block host worker exit");
+    std::thread releaseOutputs([displayFrame = std::move(display.frame),
+                                encoded = std::move(display.encodedDisplayRgba8),
+                                identityFrame = std::move(identity.frame)]() mutable {
+        displayFrame.reset();
+        encoded.reset();
+        identityFrame.reset();
+    });
+    releaseOutputs.join();
+    const auto hostUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!host.owner->exitAcknowledged() && std::chrono::steady_clock::now() < hostUntil)
+        std::this_thread::yield();
+    const auto finalClaims = phasePolicy->snapshot().reservations;
+    expectations.expect(
+        host.owner->exitAcknowledged() && finalClaims.totalHostClaimBytes == 0 &&
+            finalClaims.ownedFinalProcessHostBytes == 0 &&
+            finalClaims.ownedFinalEncodedHostBytes == 0 &&
+            finalClaims.ownedFinalHostMetadataBytes == 0 &&
+            finalClaims.ownedFinalHostAllocations == 0,
+        "actual host backing free ends final encoded/process claims after foreign last drop");
+    std::cout << "FINAL_HOST_PRODUCT process=" << retainedFinal.ownedFinalProcessHostBytes
+              << " encoded=" << retainedFinal.ownedFinalEncodedHostBytes
+              << " headers=" << retainedFinal.ownedFinalHostMetadataBytes
+              << " phaseDetached=1 nativeRetired=1 hostWorkerFree=1 final0=1\n";
     if (expectations.failures() != 0) {
         std::cerr << "process-frame OCIO expectation(s) failed\n";
         return 1;

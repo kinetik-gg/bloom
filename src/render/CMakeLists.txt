@@ -1002,6 +1002,7 @@ target_sources(
             include/bloom/render/native_image_storage.hpp
             include/bloom/render/native_buffer_storage.hpp
             include/bloom/render/packed_rgba8_storage.hpp
+        include/bloom/render/final_pixel_storage.hpp
             include/bloom/render/packed_host_retirement.hpp
             include/bloom/render/gpu_display_transfer.hpp
             include/bloom/render/gpu_image.hpp

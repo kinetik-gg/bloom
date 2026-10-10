@@ -188,7 +188,7 @@ struct Options final {
     return absolute <= kTolerance || absolute <= kTolerance * magnitude;
 }
 
-[[nodiscard]] inline bool pixelsMatch(const std::vector<Rgba32f>& gpu,
+[[nodiscard]] inline bool pixelsMatch(const std::span<const Rgba32f> gpu,
                                       const std::span<const Rgba32f> cpu,
                                       Expectations& expectations, const std::string& label) {
     if (gpu.size() != cpu.size()) {

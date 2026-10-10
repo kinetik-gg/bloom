@@ -13,6 +13,7 @@ struct AllocationHeader final : detail::PackedHostRetirementNode {
     std::shared_ptr<detail::PackedHostRetirementState> retirement;
 };
 static_assert(alignof(Rgba8) <= alignof(AllocationHeader));
+static_assert(alignof(Rgba32f) <= alignof(AllocationHeader));
 static_assert(alignof(AllocationHeader) <= alignof(std::max_align_t));
 void destroyAllocation(detail::PackedHostRetirementNode* const node) noexcept {
     auto* header = static_cast<AllocationHeader*>(node);
@@ -27,13 +28,14 @@ std::size_t detail::packedHostAllocationMetadataBytes() noexcept {
     return sizeof(AllocationHeader);
 }
 
-Rgba8* detail::allocatePackedRgba8(const std::shared_ptr<PackedHostStorageAuthority>& authority,
-                                   const std::size_t count) {
+void* detail::allocateHostPixels(const std::shared_ptr<PackedHostStorageAuthority>& authority,
+                                 const std::size_t count, const std::size_t elementBytes) {
     constexpr auto max = std::numeric_limits<std::size_t>::max();
-    if (!authority || count == 0 || count > (max - sizeof(AllocationHeader)) / sizeof(Rgba8)) {
+    if (!authority || count == 0 || elementBytes == 0 ||
+        count > (max - sizeof(AllocationHeader)) / elementBytes) {
         throw PackedHostCapacityError{};
     }
-    const auto bytes = count * sizeof(Rgba8);
+    const auto bytes = count * elementBytes;
     const auto retirement = authority->retirementState();
     if (!packedHostRetirementAvailable(retirement)) {
         throw PackedHostMissingRetirementError{};
@@ -59,13 +61,13 @@ Rgba8* detail::allocatePackedRgba8(const std::shared_ptr<PackedHostStorageAuthor
         header->destroy = &destroyAllocation;
         header->token = std::move(*token);
         header->retirement = retirement;
-        return reinterpret_cast<Rgba8*>(header + 1);
+        return header + 1;
     } catch (...) {
         releasePackedHostRegistration(retirement);
         throw; // The provisional token atomically folds both debits back.
     }
 }
-void detail::deallocatePackedRgba8(Rgba8* const pixels) noexcept {
+void detail::deallocateHostPixels(void* const pixels) noexcept {
     if (!pixels) {
         return;
     }
@@ -80,6 +82,12 @@ void detail::deallocatePackedRgba8(Rgba8* const pixels) noexcept {
         releasePackedHostRegistration(retirement);
     }
 }
+
+Rgba8* detail::allocatePackedRgba8(const std::shared_ptr<PackedHostStorageAuthority>& authority,
+                                   const std::size_t count) {
+    return static_cast<Rgba8*>(allocateHostPixels(authority, count, sizeof(Rgba8)));
+}
+void detail::deallocatePackedRgba8(Rgba8* const pixels) noexcept { deallocateHostPixels(pixels); }
 
 PackedRgba8Storage::PackedRgba8Storage(OwnedVector&& pixels) noexcept
     : storage_(std::in_place_type<OwnedVector>, std::move(pixels)) {}

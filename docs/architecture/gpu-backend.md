@@ -1339,6 +1339,84 @@ follow the bounded qualification recorded in the
 staging buffer creators remain unowned by this slice. No whole-buffer/native, physical/UMA/OOM,
 performance or other-platform execution qualification is adopted here.
 
+### Rooted combined final-readback staging (bounded final-output slice)
+
+The final-output increment adopts the transient staging buffer used by
+`GpuOutputColorReadback` for the process payload and, optionally, one encoded RGBA32F or RGBA8
+payload. One submission still transfers the composited output at the final host boundary. The
+existing `FinalProcessingPhase` lease now travels explicitly through the output-colour stage and
+readback begin; it must match the exact proven phase retained by the device, root and generation.
+An omitted lease is not authority to allocate against an unrelated rooted device phase.
+
+The same buffer helper and `NativeBufferStorageToken` convert remaining admitted native and
+already-planned nonlocal host staging debit once. Source images, CPU vectors and builder overlap
+remain separately reserved. Actual requirements, mapped type/heap/size and the staging-plus-host
+transfer ceiling still constrain allocation; insufficient paired debit refuses before a VMA backing
+attempt, without adding a grant. The token follows staging through the existing readback slot;
+actual backing destruction precedes foldback. These bytes use the existing buffer counters, not
+CPU output ownership or a second native-image count.
+
+Foreign final release of a Pending readback hands its existing resources to the native owner without
+allocating or calling the driver. Reserved remains live; exact-generation Retiring remains pending
+through fence proof and destruction outside the handoff mutex. Preview/final exit includes this
+readback pending state. Proven budget refusal drops attempt-owned aliases before phase retirement,
+allowing a second request at capacity one; loss or unknown work is not that proof. No timeout or
+closed-owner state is reported as reclaimed success.
+
+Focused native helper and complete evaluator evidence qualifies this behavior independently.
+The evaluator's real submitted work with a privately overridden unknown observation retains buffer,
+phase and unproven charges through an incomplete shutdown wait; actual native/generation teardown
+reaches covered zero while the independent unknown device-report latch remains untouched. This is
+not an actual GPU hang. The six-unit focused strict closure includes one fixture-reporting repair.
+The [owning plan](../plans/gpu-reliability-and-preview.md) records exact attribution. The focused
+readback checkpoint did not own CPU output allocations; the final-host follow-on below adopts them
+separately. Upload staging remains excluded. These increments share one final-output union
+qualification, commit and package; neither is a separately deployed milestone.
+Other buffers, legacy/unrooted storage, committed blocks/driver/process/UMA accounting, OOM,
+performance and other-platform qualification remain outside this scope.
+
+### Rooted final CPU output ownership (bounded final-output slice)
+
+`FinalPixelStorage<Rgba32f>` and `FinalPixelStorage<Rgba8>` distinguish explicitly rooted final
+payloads from legacy vector storage. Process readback, the distinct process-image builder copy,
+immutable image freeze and encoded output moves preserve their exact allocation authority.
+`ownedFinalProcessHostBytes`, `ownedFinalEncodedHostBytes`, `ownedFinalHostMetadataBytes` and
+`ownedFinalHostAllocations` record allocator-requested capacity and the admitted intrusive header,
+not malloc/driver overhead. Old CPU builders and decoded/cache storage remain explicitly unowned;
+a rooted allocation refusal never switches silently to legacy storage.
+
+The existing final phase's conservative `48 * pixels + 2 * encodedBytes` overlap and metadata
+reservation fund these allocations without a second allowance. Readback staging, CPU vectors and
+builder copies have separate live charges while they overlap. Staging admission also leaves room
+for the host headers. Freezing moves the same builder backing; internal takes remain provisional.
+Checked direct publication or the complete evaluator's process-plus-encoded terminal-success
+handoff validates both authorities before promoting either. Promotion precedes mailbox acceptance;
+later cancellation or abandoned delivery may still discard the complete published product.
+Changing a domain/root during moves or publishing only one half of a failed product is refused.
+
+Published process and encoded storage detach from the originating phase and outlive native device
+teardown. Their final release uses the existing explicit per-root host worker: allocation-free
+handoff retains the payload/header charges until actual worker free, without a new queue, frame cap
+or detached cleanup tail. Provisional cleanup remains synchronous on the supported worker/owner
+path; foreign Pending native handoff is separate from provisional Ready disposal. Host shutdown
+remains incomplete while final output pins survive and requires actual worker exit then collection.
+
+Neutral allocation and actual production consumers pass their focused checks. A real encoded GPU
+output witness preserves every-pixel process/encoded oracles, retains the published host products
+with phase count zero through native generation teardown, then reaches covered zero after foreign
+last-owner release and actual host-worker free. Exact gates and earlier failed consumer builds are
+recorded in the [owning plan](../plans/gpu-reliability-and-preview.md). Twenty remaining owning tests
+and a fresh fourteen-test required-route chain pass; the earlier still/video fixture shutdown
+failures remain separately recorded. The 385 affected desktop strict checks close through reusable
+prefixes, clean disjoint checks and one exact fixture arithmetic repair; original failures are
+preserved. Fresh Linux CPU-stub tests and sixteen distinct fallback strict checks pass. Final
+repository quality and source-aligned application/CLI/media artifact checks pass. Exact independent
+source/doc freeze review precedes selective commit and immutable packaging.
+This covers rooted final process/encoded payload and header
+ownership only; upload, legacy CPU/decode/cache storage, other buffers/WSI, allocator
+blocks/driver/process/UMA accounting, OOM,
+performance and other-platform execution qualification remain separate.
+
 ### Rooted packed-host payload ownership (bounded ownership slice)
 
 This narrow G6B slice tracks allocator-requested RGBA8 pixel payloads for explicitly rooted

@@ -43,7 +43,8 @@ FinalReadbackOutcome runFinalCombinedReadback(
     std::shared_ptr<const PreparedGpuOcioCommand> outputCommand,
     std::shared_ptr<const render::GpuImage> image, const std::uint64_t readbackByteBudget,
     const std::chrono::milliseconds nativeDeadline, const CancellationToken& cancellation,
-    const std::atomic_bool& stopRequested, bool& nativeRetirementProven) {
+    const std::atomic_bool& stopRequested, bool& nativeRetirementProven,
+    const std::shared_ptr<render::GpuProcessingPhaseLease>& phase) {
     // No output submission before begin: the caller's already-Ready scene remains proven.
     nativeRetirementProven = true;
     FinalReadbackOutcome outcome;
@@ -60,7 +61,7 @@ FinalReadbackOutcome runFinalCombinedReadback(
 
     nativeRetirementProven = false; // begin can synchronously upload/quarantine an OCIO LUT
     const auto accepted =
-        stage.begin(std::move(outputCommand), std::move(image), readbackByteBudget);
+        stage.begin(std::move(outputCommand), std::move(image), readbackByteBudget, phase);
     if (accepted.code != GpuOutputColorDiagnosticCode::None) {
         const auto code = mapOutputColorCode(accepted.code);
         outcome.status = code == GpuProcessFrameDiagnosticCode::Cancelled
@@ -69,6 +70,8 @@ FinalReadbackOutcome runFinalCombinedReadback(
         nativeRetirementProven =
             accepted.code == GpuOutputColorDiagnosticCode::GeometryMismatch ||
             accepted.code == GpuOutputColorDiagnosticCode::InvalidArgument ||
+            (accepted.code == GpuOutputColorDiagnosticCode::OverBudget &&
+             stage.retiredBudgetRefusal(phase)) ||
             (code == GpuProcessFrameDiagnosticCode::Cancelled && !stage.hasUnretiredSubmission());
         outcome.diagnosticCode = code;
         outcome.diagnosticMessage = accepted.message;
@@ -104,7 +107,9 @@ FinalReadbackOutcome runFinalCombinedReadback(
                              ? GpuProcessFrameStatus::Cancelled
                              : GpuProcessFrameStatus::Failed;
         nativeRetirementProven =
-            code == GpuProcessFrameDiagnosticCode::Cancelled && !stage.hasUnretiredSubmission();
+            (stage.diagnostic().code == GpuOutputColorDiagnosticCode::OverBudget &&
+             stage.retiredBudgetRefusal(phase)) ||
+            (code == GpuProcessFrameDiagnosticCode::Cancelled && !stage.hasUnretiredSubmission());
         outcome.diagnosticCode = code;
         outcome.diagnosticMessage = stage.diagnostic().message;
         return outcome;
@@ -112,7 +117,7 @@ FinalReadbackOutcome runFinalCombinedReadback(
     // Positive fence completion precedes all host adoption/publication, including throwing work.
     // Any exact-generation independent upload witness still overrides nominal release at caller.
     nativeRetirementProven = true;
-    auto colorFrame = stage.take();
+    auto colorFrame = stage.take(false);
     if (!colorFrame.has_value()) {
         outcome.status = GpuProcessFrameStatus::Failed;
         outcome.diagnosticCode = GpuProcessFrameDiagnosticCode::InternalInvariant;
@@ -120,8 +125,10 @@ FinalReadbackOutcome runFinalCombinedReadback(
         return outcome;
     }
 
-    auto imageBuilder = render::Rgba32fImageBuilder::create(
-        descriptor, static_cast<std::size_t>(readbackByteBudget));
+    auto imageBuilder = phase ? render::Rgba32fImageBuilder::create(
+                                    descriptor, static_cast<std::size_t>(readbackByteBudget), phase)
+                              : render::Rgba32fImageBuilder::create(
+                                    descriptor, static_cast<std::size_t>(readbackByteBudget));
     if (!imageBuilder) {
         outcome.status = GpuProcessFrameStatus::Failed;
         outcome.diagnosticCode = GpuProcessFrameDiagnosticCode::BadAllocation;
@@ -144,8 +151,7 @@ FinalReadbackOutcome runFinalCombinedReadback(
         std::memcpy(destination.value()->data(), pixels.data() + sourceOffset,
                     static_cast<std::size_t>(width) * sizeof(render::Rgba32f));
     }
-    pixels.clear();
-    pixels.shrink_to_fit();
+    pixels.reset();
     auto frozen = std::move(*imageBuilderPtr).freeze();
     if (!frozen) {
         outcome.status = GpuProcessFrameStatus::Failed;

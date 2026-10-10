@@ -662,3 +662,10 @@ bloom_add_test(
     COMMAND bloom_render_packed_host_storage_test
     LABELS unit render memory
 )
+
+add_executable(bloom_render_final_pixel_storage_test final_pixel_storage_tests.cpp)
+target_link_libraries(bloom_render_final_pixel_storage_test PRIVATE bloom_render)
+target_include_directories(bloom_render_final_pixel_storage_test PRIVATE "${PROJECT_SOURCE_DIR}/src/render")
+bloom_enable_warnings(bloom_render_final_pixel_storage_test)
+bloom_enable_strict_floating_point(bloom_render_final_pixel_storage_test)
+bloom_add_test(NAME bloom.render.final_pixel_storage COMMAND bloom_render_final_pixel_storage_test LABELS unit render memory)

@@ -10,6 +10,33 @@
 // exact alpha, then publishes the GPU attempt as EXR and both attempts as PNG, independently
 // reopen-verifying the EXR and independently decoding both PNGs to compare the RGBA8 bytes (RGB
 // within one code, alpha exact) against the unchanged CPU reference.
+// Declared before attempt aliases so every return drops payloads before collecting their owner.
+class GpuProviderRetirement final {
+  public:
+    explicit GpuProviderRetirement(std::shared_ptr<host::GpuExportProvider> provider)
+        : provider_(std::move(provider)) {}
+    ~GpuProviderRetirement() {
+        if (!finish()) {
+            std::cerr << "FAIL: GPU publication provider retirement remained incomplete\n";
+            std::terminate();
+        }
+    }
+    [[nodiscard]] bool finish() {
+        if (!provider_) {
+            return true;
+        }
+        if (!provider_->shutdownAndWait(std::chrono::seconds(10))) {
+            return false;
+        }
+        provider_.reset();
+        return true;
+    }
+    void transferToCaller() { provider_.reset(); }
+
+  private:
+    std::shared_ptr<host::GpuExportProvider> provider_;
+};
+
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR
 // Real provider with a qualified device and packaged shader tools, ready to prepare display
 // commands. Returns null (with a NOTE) when the loader/device is unavailable, exactly like the
@@ -25,6 +52,7 @@ makeGpuDisplayTestProvider(ExportFixture& fixture, const std::string_view contex
     options.enabled = true;
     options.loaderPath = std::filesystem::path(loader);
     auto provider = host::GpuExportProvider::create(options);
+    GpuProviderRetirement retirement(provider);
     provider->prepare(fixture.scheduler());
     const auto bootstrapDeadline = std::chrono::steady_clock::now() + 30s;
     while (!provider->prepared() && std::chrono::steady_clock::now() < bootstrapDeadline) {
@@ -39,6 +67,7 @@ makeGpuDisplayTestProvider(ExportFixture& fixture, const std::string_view contex
         std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
     displayCompile.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
     provider->setGpuDisplayCompileOptions(std::move(displayCompile));
+    retirement.transferToCaller();
     return provider;
 }
 
@@ -115,6 +144,7 @@ void testGpuSameGeometryWrongTransformRefused(Expectations& expectations) {
         return;
     }
     auto provider = makeGpuDisplayTestProvider(fixture, "wrong transform refusal");
+    GpuProviderRetirement retirement(provider);
     if (provider == nullptr) {
         return;
     }
@@ -124,13 +154,11 @@ void testGpuSameGeometryWrongTransformRefused(Expectations& expectations) {
     expectations.expect(resolution.ready(),
                         "wrong transform: the built-in neutral config resolves");
     if (!resolution.ready()) {
-        static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
         return;
     }
     auto config = std::move(resolution).takeResolved();
     expectations.expect(config.has_value(), "wrong transform: the resolved config is taken");
     if (!config.has_value()) {
-        static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
         return;
     }
     runtime::GpuOcioCompileOptions compile;
@@ -152,7 +180,6 @@ void testGpuSameGeometryWrongTransformRefused(Expectations& expectations) {
         expectGpuDisplayCommandRefused(expectations, fixture, provider, prepared.command,
                                        "wrong transform");
     }
-    static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
 #else
     static_cast<void>(expectations);
 #endif
@@ -168,6 +195,7 @@ void testGpuCrossRevisionCommandRefused(Expectations& expectations) {
         return;
     }
     auto provider = makeGpuDisplayTestProvider(fixture, "cross revision refusal");
+    GpuProviderRetirement retirement(provider);
     if (provider == nullptr) {
         return;
     }
@@ -175,7 +203,6 @@ void testGpuCrossRevisionCommandRefused(Expectations& expectations) {
         bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
     expectations.expect(acesRevision.has_value(), "cross revision: the ACES revision resolves");
     if (!acesRevision.has_value()) {
-        static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
         return;
     }
     auto resolution =
@@ -183,13 +210,11 @@ void testGpuCrossRevisionCommandRefused(Expectations& expectations) {
                                          bloom::color::kAcesCgV1ConfigUri, *acesRevision, "ACEScg");
     expectations.expect(resolution.ready(), "cross revision: the ACES config resolves");
     if (!resolution.ready()) {
-        static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
         return;
     }
     auto aces = std::move(resolution).takeResolved();
     expectations.expect(aces.has_value(), "cross revision: the ACES config is taken");
     if (!aces.has_value()) {
-        static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
         return;
     }
     auto prepared = provider->prepareGpuDisplayCommand(*aces, aces->displayName(), aces->viewName(),
@@ -201,7 +226,6 @@ void testGpuCrossRevisionCommandRefused(Expectations& expectations) {
         expectGpuDisplayCommandRefused(expectations, fixture, provider, prepared.command,
                                        "cross revision");
     }
-    static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
 #else
     static_cast<void>(expectations);
 #endif
@@ -226,6 +250,7 @@ void testGpuStaleDisplayBindingRefused(Expectations& expectations) {
     options.enabled = true;
     options.loaderPath = std::filesystem::path(loader);
     auto provider = host::GpuExportProvider::create(options);
+    GpuProviderRetirement retirement(provider);
     provider->prepare(fixture.scheduler());
     const auto bootstrapDeadline = std::chrono::steady_clock::now() + 30s;
     while (!provider->prepared() && std::chrono::steady_clock::now() < bootstrapDeadline) {
@@ -282,7 +307,6 @@ void testGpuStaleDisplayBindingRefused(Expectations& expectations) {
                         "stale binding: the mismatched command is refused and the attempt falls "
                         "back to the honest CPU display path");
     if (!outcome.has_value() || !*outcome) {
-        static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
         return;
     }
     expectations.expect(!(*outcome).attempt()->gpuDisplay().isPresent(),
@@ -303,7 +327,6 @@ void testGpuStaleDisplayBindingRefused(Expectations& expectations) {
                                 "stale binding: the CPU fallback publishes the PNG");
         }
     }
-    static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
 #else
     static_cast<void>(expectations);
 #endif
@@ -341,6 +364,7 @@ GpuProofOutcome testGpuCompositedExportParity(Expectations& expectations, const 
     options.enabled = true;
     options.loaderPath = std::filesystem::path(loader);
     auto provider = host::GpuExportProvider::create(options);
+    GpuProviderRetirement retirement(provider);
     provider->prepare(fixture.scheduler());
     const auto bootstrapDeadline = std::chrono::steady_clock::now() + 30s;
     while (!provider->prepared() && std::chrono::steady_clock::now() < bootstrapDeadline) {
@@ -626,6 +650,14 @@ GpuProofOutcome testGpuCompositedExportParity(Expectations& expectations, const 
                 expectations.expect(
                     false, "gpu parity: a fresh run nonce is required for the still proof");
             } else {
+                gpuExrAttempt.reset();
+                gpuPngAttempt.reset();
+                const bool retired = retirement.finish();
+                expectations.expect(
+                    retired, "gpu parity: native and host owners retire before proof publication");
+                if (!retired) {
+                    return GpuProofOutcome::Ran;
+                }
                 const auto written = routeproof::publishExportProof(
                     proofDirectory, nonce, "route.export.still_frame",
                     bloom::runtime::GpuRouteHarnessKind::StillFrameExport, counters, processDigest,
@@ -644,6 +676,9 @@ GpuProofOutcome testGpuCompositedExportParity(Expectations& expectations, const 
             }
         }
     }
-    static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
+    gpuExrAttempt.reset();
+    gpuPngAttempt.reset();
+    expectations.expect(retirement.finish(),
+                        "gpu parity: native and host owners retire after aliases drop");
     return GpuProofOutcome::Ran;
 }

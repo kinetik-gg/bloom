@@ -776,6 +776,8 @@ bloom_add_test(
 # because the runtime module must not depend on bloom::output, even in tests. Uses the same loader/
 # --require-device contract and skips explicitly without a device.
 add_executable(bloom_runtime_gpu_process_frame_test gpu_process_frame_tests.cpp)
+target_include_directories(bloom_runtime_gpu_process_frame_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests")
 target_link_libraries(bloom_runtime_gpu_process_frame_test
     PRIVATE bloom_runtime_evaluator bloom_render)
 bloom_enable_warnings(bloom_runtime_gpu_process_frame_test)
@@ -1467,7 +1469,7 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
     add_executable(bloom_runtime_gpu_process_frame_ocio_native_test
         gpu_process_frame_ocio_native_tests.cpp)
     target_include_directories(bloom_runtime_gpu_process_frame_ocio_native_test
-        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime" "${PROJECT_SOURCE_DIR}/src/render/tests")
     target_link_libraries(bloom_runtime_gpu_process_frame_ocio_native_test
         PRIVATE bloom_runtime_evaluator bloom_render bloom_color_gpu_shader OpenEXR::OpenEXR)
     target_include_directories(bloom_runtime_gpu_process_frame_ocio_native_test
@@ -1651,9 +1653,14 @@ set_tests_properties(bloom.runtime.gpu_roi_media_color_native PROPERTIES SKIP_RE
 # the unchanged CPU OCIO oracle (2e-6 / one RGBA8 code, exact alpha and process bits). The identity
 # arm proves a single process-only payload; cancel and budget ceilings prove the retirement model.
 if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
-    add_executable(bloom_runtime_gpu_output_color_test gpu_output_color_tests.cpp)
+    add_executable(bloom_runtime_gpu_output_color_test
+        gpu_output_color_tests.cpp gpu_output_color_phase_tests.ipp
+        gpu_output_color_evaluator_tests.ipp)
+    target_include_directories(bloom_runtime_gpu_output_color_test PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/runtime" "${PROJECT_SOURCE_DIR}/src/render/tests"
+        "${PROJECT_SOURCE_DIR}/src/render/vulkan")
     target_link_libraries(bloom_runtime_gpu_output_color_test
-        PRIVATE bloom_runtime_evaluator bloom_render)
+        PRIVATE bloom_runtime_evaluator bloom_render bloom_render_output_color_readback_test_faults)
     if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
         target_compile_definitions(bloom_runtime_gpu_output_color_test PRIVATE
             "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")

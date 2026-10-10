@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/render/final_pixel_storage.hpp>
+
 #include <bloom/color/display_processor_identity.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/core/artifact_target_key.hpp>
@@ -78,7 +80,7 @@ struct OutputAnalysisAttemptDisplayProductsV1 final {
 // display-processor identity the attempt already retains (never an independent copy): the build
 // function validates that binding against the retained frame/display products before retaining it.
 struct OutputAnalysisAttemptGpuDisplayV1 final {
-    std::vector<render::Rgba8> pixels;
+    render::FinalRgba8Storage pixels;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     // The immutable prepared GPU command identity that produced this payload.

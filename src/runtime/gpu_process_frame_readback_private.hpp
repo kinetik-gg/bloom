@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/render/final_pixel_storage.hpp>
+
 // Private owner-thread helper for GpuProcessFrameEvaluator's ONE final combined readback and the
 // immutable process-image publication that follows it. This is internal to the evaluator: it
 // borrows the already-created output-colour stage and the already-taken resident process image and
@@ -28,8 +30,8 @@ mapOutputColorCode(GpuOutputColorDiagnosticCode code) noexcept;
 struct FinalReadbackOutcome final {
     std::shared_ptr<const render::Rgba32fImage> processImage;
     GpuOutputColorArm encodedArm = GpuOutputColorArm::None;
-    std::vector<render::Rgba32f> encodedEffectRgba32f;
-    std::vector<render::Rgba8> encodedDisplayRgba8;
+    render::FinalRgba32fStorage encodedEffectRgba32f;
+    render::FinalRgba8Storage encodedDisplayRgba8;
     core::Sha256Digest outputCommandIdentity{};
     GpuOutputColorCounters outputColorCounters;
     std::uint64_t readbacks = 0;
@@ -46,6 +48,7 @@ struct FinalReadbackOutcome final {
     std::shared_ptr<const PreparedGpuOcioCommand> outputCommand,
     std::shared_ptr<const render::GpuImage> image, std::uint64_t readbackByteBudget,
     std::chrono::milliseconds nativeDeadline, const CancellationToken& cancellation,
-    const std::atomic_bool& stopRequested, bool& nativeRetirementProven);
+    const std::atomic_bool& stopRequested, bool& nativeRetirementProven,
+    const std::shared_ptr<render::GpuProcessingPhaseLease>& phase = {});
 
 } // namespace bloom::runtime::detail

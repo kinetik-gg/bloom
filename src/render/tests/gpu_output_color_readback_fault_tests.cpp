@@ -8,11 +8,13 @@
 //
 // Links the test-only fault library; production targets never link it.
 
+#include "final_host_test_support.hpp"
 #include "gpu_composite_native_support.hpp"
 
 #include "gpu_output_color_readback_fault.hpp"
 
 #include <bloom/render/gpu_output_color_readback.hpp>
+#include <bloom/render/gpu_processing_phase_budget.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -153,31 +155,80 @@ void testFenceTimeoutQuarantine(Expectations& expectations, GpuDevice& device) {
     static_cast<void>(second.take());
 }
 
-// Run last: a foreign-thread destruction retains the single occupied reservation (fail closed), so
-// no further admission succeeds for the rest of this process.
+// Recoverable foreign release hands the preowned slot to the exact native owner. No unknown
+// observation is delivered to poll(), so owner drain must permit reuse without clearing a latch.
 void testForeignThreadDestructionRetains(Expectations& expectations, GpuDevice& device) {
+    bloom::render::test::FinalHostRetirementScope host;
+    bloom::render::GpuProcessingPhaseBudget budget(1, host.owner);
+    budget.setHostCapacity(1ULL << 30, true);
+    budget.setDeviceCapacity(1ULL << 30, true);
+    auto grant = budget.reserve({.fixedHostBytes = 1ULL << 20,
+                                 .requestedExecutorBytes = 1ULL << 20,
+                                 .minimumExecutorBytes = 1ULL << 20,
+                                 .sourceFree = true});
+    if (!grant.lease || !device.retainProcessingPhase(grant.lease)) {
+        expectations.expect(false, "foreign-dtor: the exact one-slot phase is retained");
+        return;
+    }
+    auto phase = std::move(grant.lease);
     auto solidOp = GpuSolid::create(device);
-    if (!solidOp) {
-        expectations.expect(false, "foreign-dtor: solid op created");
+    auto source = solidOp ? makeSolid(*solidOp.solid, 4, 4) : nullptr;
+    if (!source) {
+        expectations.expect(false, "foreign-dtor: rooted source exists");
         return;
     }
-    const auto source = makeSolid(*solidOp.solid, 4, 4);
-    if (source == nullptr) {
-        expectations.expect(false, "foreign-dtor: image built");
+    auto readback = std::make_unique<GpuOutputColorReadback>();
+    if (!readback->begin(source, nullptr, std::nullopt, kBudget, phase)) {
+        expectations.expect(false, "foreign-dtor: real submission is accepted");
         return;
     }
-    auto* readback = new GpuOutputColorReadback();
-    expectations.expect(readback->begin(source, nullptr, std::nullopt, kBudget),
-                        "foreign-dtor: begin accepted on the owner thread");
-    std::thread foreign([readback] { delete readback; });
+    const auto held = budget.snapshot();
+    expectations.expect(held.ownedNativeBufferBytes > 0 && held.ownedNativeBuffers == 1,
+                        "foreign-dtor: real staging backing is charged before handoff");
+    // Hold only the observed fence status during handoff; no owner poll sees an unknown failure.
+    setReadbackFaultForTest(ReadbackFault::ForceFenceTimeout);
+    std::thread foreign([owned = std::move(readback), &device]() mutable {
+        owned.reset();
+        static_cast<void>(device.reclaimReleasedImages());
+    });
     foreign.join();
-    expectations.expect(!outputColorQuarantineOccupiedForTest(),
-                        "foreign-dtor: the retained submission is reserved, not quarantined");
-    GpuOutputColorReadback refused;
-    const bool began = refused.begin(source, nullptr, std::nullopt, kBudget);
-    expectations.expect(!began && refused.diagnostic().code ==
-                                      GpuOutputColorReadbackCode::DeviceUnavailable,
-                        "foreign-dtor: admission fails closed while the reservation is held");
+    const auto pending = budget.snapshot();
+    expectations.expect(outputColorQuarantineOccupiedForTest() &&
+                            device.outputColorReadbackPending() &&
+                            pending.ownedNativeBufferBytes == held.ownedNativeBufferBytes &&
+                            pending.ownedNativeBuffers == 1 && pending.unprovenPhases == 0,
+                        "foreign-dtor: wrong-owner tick keeps exact backing and phase charged");
+    GpuOutputColorReadback recovered;
+    expectations.expect(!recovered.begin(source, nullptr, std::nullopt, kBudget, phase) &&
+                            recovered.diagnostic().code ==
+                                GpuOutputColorReadbackCode::DeviceUnavailable,
+                        "foreign-dtor: occupied submission refuses a second admission");
+    setReadbackFaultForTest(ReadbackFault::None);
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (device.outputColorReadbackPending() && std::chrono::steady_clock::now() < until) {
+        static_cast<void>(device.reclaimReleasedImages());
+        std::this_thread::yield();
+    }
+    expectations.expect(!device.outputColorReadbackPending() &&
+                            budget.snapshot().ownedNativeBuffers == 0,
+                        "foreign-dtor: actual owner fence/backing drain precedes credit");
+    expectations.expect(recovered.begin(source, nullptr, std::nullopt, kBudget, phase) &&
+                            drain(recovered) == GpuOutputColorReadbackState::Ready,
+                        "foreign-dtor: same-generation transfer recovers without latch clearing");
+    static_cast<void>(recovered.take());
+    source.reset();
+    solidOp.solid.reset();
+    device.retireProcessingPhase(phase->id(), true);
+    phase.reset();
+    const auto hostUntil = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (budget.snapshot().ownedFinalHostAllocations != 0 &&
+           std::chrono::steady_clock::now() < hostUntil)
+        std::this_thread::yield();
+    const auto final = budget.snapshot();
+    expectations.expect(final.ownedNativeBuffers == 0 && final.ownedNativeImages == 0 &&
+                            final.totalHostClaimBytes == 0 && final.totalDeviceClaimBytes == 0 &&
+                            final.admittedPhases == 0 && final.unprovenPhases == 0,
+                        "foreign-dtor: backing destruction and one-slot phase end conserve claims");
 }
 
 } // namespace

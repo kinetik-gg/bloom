@@ -129,7 +129,7 @@ PngExportWriteResultV1 PngExportWriterV1::run(
         const auto& gpuDisplay = attempt.gpuDisplay();
         preparedHolder.emplace(PngRgba8SrgbPreparedStreamV1{
             .dimensions = attempt.frame()->processImage().descriptor()->dataWindow().extent(),
-            .pixels = gpuDisplay.pixels});
+            .pixels = gpuDisplay.pixels.pixels()});
         const auto preparedPixelCount = static_cast<std::uint64_t>(gpuDisplay.width) *
                                         static_cast<std::uint64_t>(gpuDisplay.height);
         detail::reportExportProgress(progress, {.stage = OutputExportStageV1::PreparingOutput,

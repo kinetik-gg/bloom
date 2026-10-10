@@ -89,9 +89,9 @@ void testCombinedProcessAndEffect(Expectations& expectations, GpuDevice& device)
                             payloads.counters.processBytes + payloads.counters.encodedBytes,
                         "combined: total bytes are the two payloads, not a folded single transfer");
     static_cast<void>(
-        pixelsMatch(payloads.process, processOracle, expectations, "combined process"));
-    static_cast<void>(
-        pixelsMatch(payloads.encodedRgba32f, effectOracle, expectations, "combined effect"));
+        pixelsMatch(payloads.process.pixels(), processOracle, expectations, "combined process"));
+    static_cast<void>(pixelsMatch(payloads.encodedRgba32f.pixels(), effectOracle, expectations,
+                                  "combined effect"));
     expectations.expect(payloads.encodedRgba8.empty(), "combined: no RGBA8 arm was staged");
     expectations.expect(readback.state() == GpuOutputColorReadbackState::Idle,
                         "combined: take resets to Idle");
@@ -122,7 +122,8 @@ void testProcessOnlyIdentity(Expectations& expectations, GpuDevice& device) {
     expectations.expect(payloads.counters.payloads == 1,
                         "identity: one payload only (no extra encoded work)");
     expectations.expect(payloads.counters.encodedBytes == 0, "identity: no encoded bytes");
-    static_cast<void>(pixelsMatch(payloads.process, oracle, expectations, "identity process"));
+    static_cast<void>(
+        pixelsMatch(payloads.process.pixels(), oracle, expectations, "identity process"));
 }
 
 void testEncodedDisplay(Expectations& expectations, GpuDevice& device) {

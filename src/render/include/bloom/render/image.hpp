@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/render/final_pixel_storage.hpp>
 #include <bloom/render/image_types.hpp>
 
 #include <cstddef>
@@ -87,10 +88,13 @@ class Rgba32fImage final {
     [[nodiscard]] bool isValid() const noexcept;
     [[nodiscard]] const Rgba32fImageDescriptor* descriptor() const& noexcept;
     [[nodiscard]] const Rgba32fImageDescriptor* descriptor() const&& = delete;
-    [[nodiscard]] std::span<const Rgba32f> pixels() const& noexcept { return pixels_; }
+    [[nodiscard]] std::span<const Rgba32f> pixels() const& noexcept { return pixels_.pixels(); }
     [[nodiscard]] std::span<const Rgba32f> pixels() const&& = delete;
     [[nodiscard]] std::size_t pixelStorageByteCost() const noexcept {
         return pixels_.capacity() * sizeof(Rgba32f);
+    }
+    [[nodiscard]] std::shared_ptr<PackedHostStorageAuthority> storageAuthority() const noexcept {
+        return pixels_.authority();
     }
     [[nodiscard]] ImageResult<Rgba32fImageView> view() const& noexcept;
     [[nodiscard]] ImageResult<Rgba32fImageView> view() const&& = delete;
@@ -99,11 +103,11 @@ class Rgba32fImage final {
   private:
     friend class Rgba32fImageBuilder;
 
-    Rgba32fImage(Rgba32fImageDescriptor descriptor, std::vector<Rgba32f> pixels) noexcept;
+    Rgba32fImage(Rgba32fImageDescriptor descriptor, FinalRgba32fStorage pixels) noexcept;
     void reset() noexcept;
 
     std::optional<Rgba32fImageDescriptor> descriptor_;
-    std::vector<Rgba32f> pixels_;
+    FinalRgba32fStorage pixels_;
 };
 
 // Mutation is deliberately confined to construction. Freeze consumes the builder and publishes an
@@ -120,10 +124,16 @@ class Rgba32fImageBuilder final {
     create(Rgba32fImageDescriptor descriptor, std::size_t pixelStorageByteLimit,
            Rgba32f clearValue = Rgba32f::transparent()) noexcept;
 
+    // Rooted final process construction; allocation refusal never selects legacy storage.
+    [[nodiscard]] static ImageResult<Rgba32fImageBuilder>
+    create(Rgba32fImageDescriptor descriptor, std::size_t pixelStorageByteLimit,
+           const std::shared_ptr<GpuProcessingPhaseLease>& phase,
+           Rgba32f clearValue = Rgba32f::transparent()) noexcept;
+
     [[nodiscard]] bool isValid() const noexcept;
     [[nodiscard]] const Rgba32fImageDescriptor* descriptor() const& noexcept;
     [[nodiscard]] const Rgba32fImageDescriptor* descriptor() const&& = delete;
-    [[nodiscard]] std::span<const Rgba32f> pixels() const& noexcept { return pixels_; }
+    [[nodiscard]] std::span<const Rgba32f> pixels() const& noexcept { return pixels_.pixels(); }
     [[nodiscard]] std::span<const Rgba32f> pixels() const&& = delete;
     [[nodiscard]] ImageResult<Rgba32fImageView> view() const& noexcept;
     [[nodiscard]] ImageResult<Rgba32fImageView> view() const&& = delete;
@@ -135,11 +145,11 @@ class Rgba32fImageBuilder final {
     [[nodiscard]] ImageResult<Rgba32fImage> freeze() && noexcept;
 
   private:
-    Rgba32fImageBuilder(Rgba32fImageDescriptor descriptor, std::vector<Rgba32f> pixels) noexcept;
+    Rgba32fImageBuilder(Rgba32fImageDescriptor descriptor, FinalRgba32fStorage pixels) noexcept;
     void reset() noexcept;
 
     std::optional<Rgba32fImageDescriptor> descriptor_;
-    std::vector<Rgba32f> pixels_;
+    FinalRgba32fStorage pixels_;
 };
 
 } // namespace bloom::render
