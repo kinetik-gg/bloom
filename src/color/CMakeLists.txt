@@ -399,10 +399,11 @@ if(BUILD_TESTING)
         add_executable(bloom_color_ocio_gpu_program_resources_native_test
             tests/ocio_gpu_program_resources_native_tests.cpp
             tests/ocio_gpu_program_dispatch_plan_tests.cpp
-            tests/ocio_gpu_program_reflection_tests.cpp)
+            tests/ocio_gpu_program_reflection_tests.cpp
+            tests/ocio_gpu_program_storage_native_tests.cpp)
         target_link_libraries(bloom_color_ocio_gpu_program_resources_native_test PRIVATE bloom_color_ocio OpenColorIO::OpenColorIO)
         target_include_directories(bloom_color_ocio_gpu_program_resources_native_test
-            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../render")
+            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../render")
         target_link_libraries(bloom_color_ocio_gpu_program_resources_native_test
             PRIVATE bloom_render_ocio_test_faults)
         if(bloom_ocio_gpu_glslang_validator AND bloom_ocio_gpu_spirv_val)
@@ -422,7 +423,7 @@ if(BUILD_TESTING)
         tests/ocio_gpu_program_lifecycle_native_tests.cpp)
     target_link_libraries(bloom_color_ocio_gpu_program_lifecycle_native_test PRIVATE bloom_color_ocio OpenColorIO::OpenColorIO)
     target_include_directories(bloom_color_ocio_gpu_program_lifecycle_native_test
-        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../render")
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../render")
     target_link_libraries(bloom_color_ocio_gpu_program_lifecycle_native_test
         PRIVATE bloom_render_ocio_test_faults)
     if(bloom_ocio_gpu_glslang_validator AND bloom_ocio_gpu_spirv_val)

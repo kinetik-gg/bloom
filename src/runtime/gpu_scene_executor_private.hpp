@@ -403,6 +403,7 @@ struct GpuSceneExecutor::Impl final {
     ~Impl();
 
     render::GpuDevice* device = nullptr;
+    std::uint64_t deviceEpoch = 0;
     GpuSceneCache* cache = nullptr;
     GpuSceneExecutorBudgets budgets;
 
@@ -525,6 +526,8 @@ struct GpuSceneExecutor::Impl final {
 
     struct OcioProgramEntry final {
         std::unique_ptr<render::GpuOcioProgram> program;
+        render::GpuProcessingRootIdentity root;
+        std::uint64_t epoch = 0;
         std::uint64_t retainedBytes = 0;
         std::uint64_t serial = 0;
     };

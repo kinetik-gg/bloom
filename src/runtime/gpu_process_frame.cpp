@@ -502,6 +502,19 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
     outputColor.reset();
     executor.reset();
     cache.reset();
+    if (device) {
+        // Actual native retirement includes programs released from foreign threads and upload
+        // quarantine left by a failed factory. Until this exact generation drains, keep the
+        // owner/report alive and do not publish retirement to shutdown/unload callers.
+        for (;;) {
+            device->reclaimReleasedImages();
+            const auto programs = device->ocioProgramRetirementStats();
+            if (programs.registeredPrograms == 0 && programs.pendingUploads == 0) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
     if (device && options.processingPhasePolicy) {
         static_cast<void>(options.processingPhasePolicy->retireDeviceReport(
             device->ownershipEpoch(), !device->processingPhaseOccupied()));

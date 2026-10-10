@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace bloom::runtime::detail {
@@ -213,7 +214,17 @@ void retireNativeOnOwner(const std::shared_ptr<PreviewDisplayServiceCore>& core)
     retireResidentRoute(core);
     core->display.reset();
     if (core->device != nullptr) {
-        core->device->reclaimReleasedImages();
+        // Keep this exact native owner and its report alive through live program aliases and
+        // independent failed-create uploads. A caller's shutdown timeout remains incomplete;
+        // it cannot turn pending native ownership into Stopped or drop the device underneath it.
+        for (;;) {
+            core->device->reclaimReleasedImages();
+            const auto programs = core->device->ocioProgramRetirementStats();
+            if (programs.registeredPrograms == 0 && programs.pendingUploads == 0) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
     }
     if (core->device && core->options.processingPhasePolicy) {
         // Removing a normal retired owner report does not release any surviving phase token.

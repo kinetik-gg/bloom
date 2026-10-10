@@ -57,6 +57,11 @@ std::uint64_t GpuProcessingPhaseLease::revisionAfterOwnRelease() const noexcept 
                                                                            : admissionRevision_ + 1;
 }
 
+bool GpuProcessingPhaseLease::isUnproven() const noexcept {
+    const std::lock_guard lock(state_->mutex);
+    return unproven_;
+}
+
 void GpuProcessingPhaseLease::markUnproven() noexcept {
     const std::lock_guard lock(state_->mutex);
     if (id_ != 0 && !unproven_) {

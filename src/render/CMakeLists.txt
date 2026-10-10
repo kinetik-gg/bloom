@@ -1068,6 +1068,8 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_ocio_program_dispatch.cpp
         vulkan/gpu_ocio_program_private.hpp
         vulkan/gpu_ocio_program_resources.cpp
+        vulkan/gpu_ocio_program_reclamation.cpp
+        vulkan/gpu_ocio_program_reclamation_private.hpp
         vulkan/gpu_output_color_readback.cpp
         vulkan/gpu_point_resample.cpp
         vulkan/gpu_point_resample_private.hpp

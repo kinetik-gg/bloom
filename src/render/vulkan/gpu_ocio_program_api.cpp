@@ -2,11 +2,16 @@
 #include "ocio_gpu_program_fault.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
 
 namespace bloom::render::ocio_program_detail {
+std::atomic<std::uint32_t>& ocioFaultPublicationAfter() noexcept {
+    static std::atomic<std::uint32_t> after{std::numeric_limits<std::uint32_t>::max()};
+    return after;
+}
 std::atomic<bool>& ocioFaultJobFenceUnknown() noexcept {
     static std::atomic<bool> unknown{false};
     return unknown;
@@ -56,19 +61,58 @@ void GpuOcioProgram::releaseImpl() noexcept {
     if (impl_ == nullptr) {
         return;
     }
-    if (impl_->control == nullptr || !impl_->onOwnerThread()) {
-        // A foreign-thread teardown can never safely touch Vulkan; count it and latch the process
-        // fuse (typed, bounded) rather than silently leaking uncounted.
-        ocio_program_detail::noteQuarantine();
-        [[maybe_unused]] const auto* const retained = impl_.release();
-        return;
-    }
-    if (impl_->queueSubmitted && !impl_->drainAndRetire()) {
-        ocio_program_detail::noteQuarantine();
+    if (!impl_->onOwnerThread() || !impl_->retirementReady(*impl_->control)) {
+        impl_->enqueueRetirement();
         [[maybe_unused]] const auto* const retained = impl_.release();
         return;
     }
     impl_.reset();
+}
+
+bool GpuOcioProgram::Impl::registerRetirement() noexcept {
+    return registration.attach(
+        control, this,
+        [](void* program, vulkan_detail::DeviceAllocatorState& state) noexcept {
+            return static_cast<Impl*>(program)->retirementReady(state);
+        },
+        [](void* program) noexcept { delete static_cast<Impl*>(program); });
+}
+
+void GpuOcioProgram::Impl::enqueueRetirement() noexcept {
+    // The final owner has exclusive access to Impl. No foreign-thread access to the native
+    // generation's owner-only phase pointer or latch is required.
+    if (queueSubmitted) {
+        if (auto phase = submittedPhase.lock()) {
+            phase->markUnproven();
+        }
+    }
+    registration.enqueue();
+}
+
+bool GpuOcioProgram::Impl::retirementReady(vulkan_detail::DeviceAllocatorState& state) noexcept {
+    if (control.get() != &state || !onOwnerThread() ||
+        state.ownerLifetimeToken != vulkan_detail::deviceOwnerLifetimeToken() ||
+        state.presentationEpoch != registration.node.epoch) {
+        return false;
+    }
+    if (!queueSubmitted) {
+        return true;
+    }
+    if (auto phase = submittedPhase.lock();
+        phase && phase->isUnproven() && phase == state.processingPhase) {
+        state.processingPhaseUnproven = true;
+    }
+    if (!*fence) {
+        return false;
+    }
+    const VkResult fenceStatus = state.device.getDispatcher()->vkGetFenceStatus(
+        static_cast<VkDevice>(*state.device), static_cast<VkFence>(*fence));
+    if (fenceStatus != VK_SUCCESS && fenceStatus != VK_ERROR_DEVICE_LOST) {
+        return false;
+    }
+    deviceLost = fenceStatus == VK_ERROR_DEVICE_LOST;
+    queueSubmitted = false;
+    return true;
 }
 
 GpuOcioProgramJobState GpuOcioProgram::state() const noexcept {
@@ -82,12 +126,54 @@ const GpuOcioProgramDiagnostic& GpuOcioProgram::diagnostic() const noexcept {
     }
     return impl_->jobDiagnostic;
 }
+GpuProcessingRootIdentity GpuOcioProgram::creationRootIdentity() const noexcept {
+    return impl_ != nullptr && impl_->onOwnerThread() ? impl_->creationRoot
+                                                      : GpuProcessingRootIdentity{};
+}
+bool GpuOcioProgram::publishSampledStorage() noexcept {
+    if (!impl_ || !impl_->onOwnerThread() || impl_->control->processingPhaseUnproven) {
+        return false;
+    }
+    const auto& current = impl_->control->processingPhase;
+    if ((current && current->isUnproven()) ||
+        (current ? current->rootIdentity() : GpuProcessingRootIdentity{}) != impl_->creationRoot) {
+        return false;
+    }
+    std::uint32_t promoted = 0;
+    for (auto& texture : impl_->textures) {
+        if (promoted >=
+            ocio_program_detail::ocioFaultPublicationAfter().load(std::memory_order_acquire)) {
+            return false;
+        }
+        if (texture.storage.bytes() != 0 && !texture.storage.promote()) {
+            return false;
+        }
+        ++promoted;
+    }
+    impl_->sampledPublished = true;
+    return true;
+}
+
 bool GpuOcioProgram::isBoundTo(GpuDevice& device) const noexcept {
     if (impl_ == nullptr || !impl_->onOwnerThread()) {
         return false;
     }
     const auto state = GpuRendererAccess::state(device);
     return state != nullptr && state == impl_->control;
+}
+
+GpuOcioProgramDiagnostic GpuOcioProgram::Impl::authorityDiagnostic() const {
+    const auto& phase = control->processingPhase;
+    if (control->processingPhaseUnproven || (phase && phase->isUnproven())) {
+        return makeDiagnostic(GpuOcioProgramDiagnosticCode::DeviceUnavailable,
+                              "the retained processing authority is unproven");
+    }
+    const auto currentRoot = phase ? phase->rootIdentity() : GpuProcessingRootIdentity{};
+    if (currentRoot != creationRoot) {
+        return makeDiagnostic(GpuOcioProgramDiagnosticCode::InvalidArgument,
+                              "the OCIO program belongs to another processing root");
+    }
+    return {};
 }
 
 GpuOcioProgramDiagnostic GpuOcioProgram::beginEffect(std::shared_ptr<const GpuImage> input,
@@ -101,6 +187,10 @@ GpuOcioProgramDiagnostic GpuOcioProgram::beginEffect(std::shared_ptr<const GpuIm
     if (!impl.onOwnerThread()) {
         return makeDiagnostic(GpuOcioProgramDiagnosticCode::WrongThread,
                               "begin must run on the device owner thread");
+    }
+    auto authority = impl.authorityDiagnostic();
+    if (authority.code != GpuOcioProgramDiagnosticCode::None) {
+        return authority;
     }
     if (impl.displayArm) {
         return makeDiagnostic(GpuOcioProgramDiagnosticCode::InvalidArgument,
@@ -134,6 +224,10 @@ GpuOcioProgramDiagnostic GpuOcioProgram::beginDisplay(std::shared_ptr<const GpuI
     if (!impl.onOwnerThread()) {
         return makeDiagnostic(GpuOcioProgramDiagnosticCode::WrongThread,
                               "begin must run on the device owner thread");
+    }
+    auto authority = impl.authorityDiagnostic();
+    if (authority.code != GpuOcioProgramDiagnosticCode::None) {
+        return authority;
     }
     if (!impl.displayArm) {
         return makeDiagnostic(GpuOcioProgramDiagnosticCode::InvalidArgument,

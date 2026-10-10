@@ -64,6 +64,8 @@ mapProgramCode(const render::GpuOcioProgramDiagnosticCode code) noexcept {
 
 struct ProgramEntry final {
     std::unique_ptr<render::GpuOcioProgram> program;
+    render::GpuProcessingRootIdentity root;
+    std::uint64_t epoch = 0;
     std::uint64_t bytes = 0;
     std::uint64_t serial = 0;
 };
@@ -105,9 +107,31 @@ struct GpuOcioProgramExecutor::Impl final {
 
     [[nodiscard]] render::GpuOcioProgram*
     getOrCreateProgram(const PreparedGpuOcioCommand& command) {
+        if (epoch != device->ownershipEpoch()) {
+            ++counters.programRefusals;
+            fail(GpuOcioExecutorDiagnosticCode::InvalidArgument,
+                 "the OCIO executor belongs to another device generation");
+            return nullptr;
+        }
+        const auto phase = device->retainedProcessingPhase();
+        if (phase && phase->isUnproven()) {
+            ++counters.programRefusals;
+            fail(GpuOcioExecutorDiagnosticCode::OwnerDrainRequired,
+                 "the retained processing authority is unproven");
+            return nullptr;
+        }
+        const auto root = phase ? phase->rootIdentity() : render::GpuProcessingRootIdentity{};
         const auto& identity = command.identity();
         const auto found = programs.find(identity);
         if (found != programs.end()) {
+            if (found->second.root != root || found->second.epoch != device->ownershipEpoch() ||
+                !found->second.program->isBoundTo(*device) ||
+                found->second.program->creationRootIdentity() != root) {
+                ++counters.programRefusals;
+                fail(GpuOcioExecutorDiagnosticCode::InvalidArgument,
+                     "the cached OCIO program belongs to another processing root or generation");
+                return nullptr;
+            }
             found->second.serial = ++serial;
             ++counters.programReuses;
             return found->second.program.get();
@@ -123,9 +147,9 @@ struct GpuOcioProgramExecutor::Impl final {
             .maxOwnedBytes = budgets.maxOwnedBytesPerProgram,
             .maxLutBytes = budgets.maxLutBytesPerProgram,
         };
-        auto created =
-            render::GpuOcioProgram::create(*device, command.program(), words, programBudgets,
-                                           [this]() { return discardRequested.load(); });
+        auto created = render::GpuOcioProgram::create(
+            *device, command.program(), words, programBudgets,
+            [this]() { return discardRequested.load(); }, phase);
         if (!created) {
             ++counters.programRefusals;
             fail(mapProgramCode(created.diagnostic.code), created.diagnostic.message);
@@ -155,9 +179,23 @@ struct GpuOcioProgramExecutor::Impl final {
             programs.erase(victim);
             ++counters.programEvictions;
         }
+        auto inserted = programs.emplace(identity, ProgramEntry{std::move(created.program), root,
+                                                                epoch, retainedBytes, ++serial});
+        if (!inserted.second) {
+            ++counters.programRefusals;
+            fail(GpuOcioExecutorDiagnosticCode::InternalInvariant,
+                 "the OCIO program cache insertion did not succeed");
+            return nullptr;
+        }
         totalBytes += retainedBytes;
-        auto inserted = programs.emplace(
-            identity, ProgramEntry{std::move(created.program), retainedBytes, ++serial});
+        if (!inserted.first->second.program->publishSampledStorage()) {
+            totalBytes -= retainedBytes;
+            programs.erase(inserted.first);
+            ++counters.programRefusals;
+            fail(GpuOcioExecutorDiagnosticCode::DeviceUnavailable,
+                 "the retained LUT storage could not be published");
+            return nullptr;
+        }
         ++counters.programCreations;
         return inserted.first->second.program.get();
     }

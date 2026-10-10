@@ -298,7 +298,8 @@ void testShaderInterfaceReflection(Expectations& expectations, GpuDevice& device
         "the real extracted artifact reflects the declared interface");
 
     const auto refusedByCreate = [&](const std::vector<std::uint32_t>& spirv) {
-        auto created = GpuOcioProgram::create(device, *desc.program(), spirv, {});
+        auto created = GpuOcioProgram::create(device, *desc.program(), spirv, {}, {},
+                                              device.retainedProcessingPhase());
         return !created && created.diagnostic.code == GpuOcioProgramDiagnosticCode::ShaderRejected;
     };
 

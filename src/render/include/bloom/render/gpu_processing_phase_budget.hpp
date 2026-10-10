@@ -14,6 +14,11 @@ struct PackedHostRetirementState;
 class PackedHostRetirementOwner;
 class NativeImageStorageToken;
 
+// Lifecycle identity of the existing neutral budget state, never a pixel/cache content identity.
+// A handle retains no phase admission, native owner or device. The incomplete const state cannot
+// be mutated through this public surface and cannot be confused after root-address reuse.
+using GpuProcessingRootIdentity = std::shared_ptr<const detail::GpuProcessingPhaseBudgetState>;
+
 // A conservative quota for simultaneous processing phases, not physical allocation accounting.
 // Runtime owns process/device sampling and injects resolved capacity; this class performs no I/O.
 struct GpuProcessingPhaseRequest final {
@@ -80,6 +85,7 @@ class GpuProcessingPhaseLease final {
     ~GpuProcessingPhaseLease();
 
     [[nodiscard]] std::uint64_t id() const noexcept { return id_; }
+    [[nodiscard]] GpuProcessingRootIdentity rootIdentity() const noexcept { return state_; }
     [[nodiscard]] std::uint64_t hostBytes() const noexcept { return hostBytes_; }
     [[nodiscard]] std::uint64_t deviceBytes() const noexcept { return deviceBytes_; }
     [[nodiscard]] std::uint64_t sourceByteLimit() const noexcept { return sourceBytes_; }
@@ -87,6 +93,7 @@ class GpuProcessingPhaseLease final {
     // Expected watermark after this lease alone releases. Independent changes remain visible.
     [[nodiscard]] std::uint64_t revisionAfterOwnRelease() const noexcept;
     void markUnproven() noexcept;
+    [[nodiscard]] bool isUnproven() const noexcept;
 
   private:
     friend class GpuProcessingPhaseBudget;

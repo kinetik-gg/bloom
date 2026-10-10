@@ -1301,8 +1301,10 @@ endif()
 if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
     add_executable(bloom_runtime_gpu_ocio_scene_executor_test
         gpu_ocio_scene_executor_native_tests.cpp)
+    target_include_directories(bloom_runtime_gpu_ocio_scene_executor_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/render")
     target_link_libraries(bloom_runtime_gpu_ocio_scene_executor_test
-        PRIVATE bloom_runtime_evaluator bloom_render)
+        PRIVATE bloom_runtime_evaluator bloom_render bloom_render_ocio_test_faults)
     if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
         target_compile_definitions(bloom_runtime_gpu_ocio_scene_executor_test PRIVATE
             "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")

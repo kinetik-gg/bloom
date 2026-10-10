@@ -172,6 +172,15 @@ struct GpuImageReclamationStats final {
     std::uint64_t ownerReclaims = 0;
 };
 
+// Exact-generation program ownership, including live aliases that have not requested retirement.
+// Counts are lifetime diagnostics, not owned allocation bytes.
+struct GpuOcioProgramRetirementStats final {
+    std::uint64_t registeredPrograms = 0;
+    std::uint64_t pendingPrograms = 0;
+    std::uint64_t closedOwnerPendingPrograms = 0;
+    std::uint64_t pendingUploads = 0;
+};
+
 class GpuDevice;
 class GpuRendererAccess;
 
@@ -245,6 +254,7 @@ class GpuDevice final {
     // Submission-unproved images stay charged. Compute retirement is never a WSI retirement proof.
     void reclaimReleasedImages() noexcept;
     [[nodiscard]] GpuImageReclamationStats imageReclamationStats() const noexcept;
+    [[nodiscard]] GpuOcioProgramRetirementStats ocioProgramRetirementStats() const noexcept;
     // Includes closed generations after their GpuDevice facade has been destroyed.
     [[nodiscard]] static GpuImageReclamationStats processImageReclamationStats() noexcept;
     [[nodiscard]] const GpuCapabilityReport& capabilityReport() const noexcept;
@@ -270,6 +280,9 @@ class GpuDevice final {
     [[nodiscard]] bool retainProcessingPhase(std::shared_ptr<GpuProcessingPhaseLease>) noexcept;
     void retireProcessingPhase(std::uint64_t leaseId, bool retirementProven) noexcept;
     [[nodiscard]] bool processingPhaseOccupied() const noexcept;
+    // Owner-only authority read for synchronous native resource preparation. Returns the exact
+    // already-retained lease; callers must not arm a second phase. Null for non-owner/stub devices.
+    [[nodiscard]] std::shared_ptr<GpuProcessingPhaseLease> retainedProcessingPhase() const noexcept;
     // Owner-only actual native-image capacity refusal for the currently retained phase. Native
     // allocation/bind/view faults have no retry metadata. Cleared on the next phase/allocation.
     [[nodiscard]] std::optional<NativeImageStorageRefusal>

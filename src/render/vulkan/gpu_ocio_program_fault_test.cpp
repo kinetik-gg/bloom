@@ -13,6 +13,14 @@ void setJobFenceUnknownForTest(const bool unknown) noexcept {
     ocioFaultJobFenceUnknown().store(unknown, std::memory_order_release);
 }
 
+void setLutRgbaFormatForTest(const bool forced) noexcept {
+    ocioFaultLutRgbaFormat().store(forced, std::memory_order_release);
+}
+
+void setPublicationFailureAfterForTest(const std::uint32_t promoted) noexcept {
+    ocioFaultPublicationAfter().store(promoted, std::memory_order_release);
+}
+
 bool uploadQuarantineOccupiedForTest() noexcept { return uploadQuarantineOccupied(); }
 void retireUploadQuarantineForTest() noexcept { retireUploadQuarantine(); }
 

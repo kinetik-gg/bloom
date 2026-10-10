@@ -35,9 +35,14 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
+
+namespace bloom::render::ocio_program_detail {
+struct ProgramRetirementNode;
+}
 
 namespace bloom::render::vulkan_detail {
 
@@ -80,6 +85,13 @@ struct DeviceAllocatorState final {
     DeviceAllocatorState& operator=(DeviceAllocatorState&&) = delete;
     ~DeviceAllocatorState();
 
+    std::mutex programRetirementMutex;
+    ocio_program_detail::ProgramRetirementNode* programRetirementHead = nullptr;
+    std::uint64_t registeredPrograms = 0;
+    std::uint64_t pendingPrograms = 0;
+    bool programDrainActive = false;
+    bool programOwnerClosed = false;
+
     std::thread::id owner;
     std::uint64_t ownerLifetimeToken = 0;
     // Final-image release publication is allocation-free, including after facade shutdown.
@@ -121,6 +133,7 @@ struct DeviceAllocatorState final {
 
     // Owner-only lifecycle flag; surviving images retain this allocator and remain valid.
     bool imageOwnerClosed = false;
+    // Scoped private format-fallback control; production retains actual capability selection.
     bool processingPhaseUnproven = false;
     NativeImageAllocationFault nativeImageAllocationFault = NativeImageAllocationFault::None;
     // Immutable presentation bootstrap facts, resolved only on the owner thread.

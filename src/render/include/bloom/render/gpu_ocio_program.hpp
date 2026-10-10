@@ -96,13 +96,22 @@ class GpuOcioProgram final {
     GpuOcioProgram& operator=(GpuOcioProgram&& other) noexcept;
     ~GpuOcioProgram();
 
+    // Rooted creation requires the exact already-retained lease. Omission is supported only for
+    // an explicitly rootless device; it never creates untracked resources on a rooted device.
     [[nodiscard]] static GpuOcioProgramCreateResult
     create(GpuDevice& device, OcioGpuProgramDesc program, std::span<const std::uint32_t> spirv,
-           const GpuOcioProgramBudgets& budgets = {}, GpuOcioProgramCancellation cancellation = {});
+           const GpuOcioProgramBudgets& budgets = {}, GpuOcioProgramCancellation cancellation = {},
+           const std::shared_ptr<GpuProcessingPhaseLease>& phase = {});
 
     [[nodiscard]] GpuOcioProgramJobState state() const noexcept;
     [[nodiscard]] const GpuOcioProgramDiagnostic& diagnostic() const noexcept;
     [[nodiscard]] bool isBoundTo(GpuDevice& device) const noexcept;
+    // Immutable creation affinity, even for programs with zero sampled textures. Retains only
+    // neutral root state, not the creating phase; empty means explicitly legacy/unrooted.
+    [[nodiscard]] GpuProcessingRootIdentity creationRootIdentity() const noexcept;
+    // Call only after successful owning-cache retention. Rooted LUTs keep their provisional
+    // origin until this checked publication; legacy rootless programs remain explicitly untracked.
+    [[nodiscard]] bool publishSampledStorage() noexcept;
 
     // Ownership of `input` is retained for the whole job. `uniformBytes` is the complete UBO
     // snapshot; an empty span selects the descriptor's immutable snapshot and must match

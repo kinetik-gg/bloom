@@ -2,6 +2,7 @@
 
 #include "gpu_device_private.hpp"
 #include "gpu_image_reclamation_private.hpp"
+#include "gpu_ocio_program_private.hpp"
 
 #include <array>
 #include <atomic>
@@ -50,6 +51,7 @@ GpuDevice& GpuDevice::operator=(GpuDevice&& other) noexcept {
     if (this != &other) {
         if (impl_ != nullptr && impl_->control != nullptr) {
             assert(impl_->owner == std::this_thread::get_id());
+            ocio_program_detail::closeProgramOwner(*impl_->control);
             image_detail::closeImageOwner(*impl_->control);
         }
         impl_ = std::move(other.impl_);
@@ -61,6 +63,7 @@ GpuDevice::~GpuDevice() {
     if (impl_ != nullptr) {
         assert(impl_->owner == std::this_thread::get_id());
         if (impl_->control != nullptr) {
+            ocio_program_detail::closeProgramOwner(*impl_->control);
             image_detail::closeImageOwner(*impl_->control);
         }
     }
@@ -68,9 +71,20 @@ GpuDevice::~GpuDevice() {
 
 void GpuDevice::reclaimReleasedImages() noexcept {
     if (isOwnerThread() && impl_->control != nullptr) {
+        ocio_program_detail::retireUploadQuarantine();
+        ocio_program_detail::drainPrograms(*impl_->control);
         image_detail::drainImages(*impl_->control);
     }
 }
+GpuOcioProgramRetirementStats GpuDevice::ocioProgramRetirementStats() const noexcept {
+    if (!impl_ || !impl_->control) {
+        return {};
+    }
+    auto stats = ocio_program_detail::programRetirementStats(*impl_->control);
+    stats.pendingUploads = ocio_program_detail::uploadQuarantinePendingFor(*impl_->control) ? 1 : 0;
+    return stats;
+}
+
 GpuImageReclamationStats GpuDevice::imageReclamationStats() const noexcept {
     return impl_ != nullptr && impl_->control != nullptr
                ? image_detail::imageStats(impl_->control.get())
@@ -121,6 +135,9 @@ void GpuDevice::retireProcessingPhase(const std::uint64_t leaseId,
         return;
     }
     control.processingPhase.reset();
+}
+std::shared_ptr<GpuProcessingPhaseLease> GpuDevice::retainedProcessingPhase() const noexcept {
+    return isOwnerThread() && impl_->control ? impl_->control->processingPhase : nullptr;
 }
 bool GpuDevice::processingPhaseOccupied() const noexcept {
     return !isOwnerThread() || !impl_->control || impl_->control->processingPhase != nullptr;

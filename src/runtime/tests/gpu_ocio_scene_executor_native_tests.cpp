@@ -23,6 +23,8 @@
 #include <bloom/runtime/gpu_scene_executor.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
+#include "ocio_gpu_program_fault.hpp"
+
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -274,8 +276,10 @@ buildScene(const Fixture& fixture, std::shared_ptr<const PreparedGpuOcioCommand>
 }
 
 [[nodiscard]] std::vector<Rgba32f> cpuOracle(const Fixture& fixture,
-                                             const bloom::color::ResolvedBloomNeutralConfig& aces) {
-    const auto cpu = bloom::color::CpuColorSpaceProcessor::prepare(aces, "ACES2065-1", "ACEScg");
+                                             const bloom::color::ResolvedBloomNeutralConfig& aces,
+                                             const std::string_view from = "ACES2065-1",
+                                             const std::string_view to = "ACEScg") {
+    const auto cpu = bloom::color::CpuColorSpaceProcessor::prepare(aces, from, to);
     std::vector<Rgba32f> expected(fixture.uploadPixels.size(), Rgba32f::transparent());
     for (std::size_t index = 0; index < fixture.uploadPixels.size(); ++index) {
         const auto& source = fixture.uploadPixels[index];
@@ -326,7 +330,8 @@ buildScene(const Fixture& fixture, std::shared_ptr<const PreparedGpuOcioCommand>
 void testScene(Expectations& expectations, GpuDevice& device,
                const bloom::color::ResolvedBloomNeutralConfig& aces,
                const GpuOcioCompileOptions& options, bloom::render::GpuProcessingPhaseBudget& root,
-               const std::shared_ptr<bloom::render::GpuProcessingPhaseLease>& lease) {
+               std::shared_ptr<bloom::render::GpuProcessingPhaseLease>& lease,
+               const bool textured = false) {
     Fixture fixture{.data = window(0, 0, kWidth, kHeight),
                     .display = window(0, 0, kWidth, kHeight),
                     .aspect = PixelAspectRatio::square(),
@@ -341,8 +346,8 @@ void testScene(Expectations& expectations, GpuDevice& device,
     GpuOcioProgramPreparer preparer;
     GpuOcioTransformSpec spec;
     spec.kind = GpuOcioTransformKind::Cst;
-    spec.fromId = "ACES2065-1";
-    spec.toId = "ACEScg";
+    spec.fromId = textured ? "ACEScg" : "ACES2065-1";
+    spec.toId = textured ? "Rec.2100-PQ - Display" : "ACEScg";
     const auto prepared =
         preparer.prepare(aces, spec, GpuOcioCommandGeometry{kWidth, kHeight}, options);
     expectations.expect(prepared.hasValue(), "the OCIO CST command prepares off-device");
@@ -351,8 +356,12 @@ void testScene(Expectations& expectations, GpuDevice& device,
     }
     expectations.expect(prepared.command->encoding() == GpuOcioOutputEncoding::FinalRgba32f,
                         "the scene OCIO command is ProcessEffect");
+    if (textured && prepared.command->program().textures.empty()) {
+        expectations.expect(false, "the actual scene-cache command requires sampled LUTs");
+        return;
+    }
     const auto scene = buildScene(fixture, prepared.command);
-    const auto expected = cpuOracle(fixture, aces);
+    const auto expected = cpuOracle(fixture, aces, spec.fromId, spec.toId);
 
     auto cacheResult = GpuSceneCache::create(device);
     expectations.expect(cacheResult.hasValue(), "the scene content cache hosts");
@@ -367,6 +376,38 @@ void testScene(Expectations& expectations, GpuDevice& device,
     }
     GpuSceneExecutor& executor = *executorResult.executor;
 
+    if (textured) {
+        struct PublicationReset final {
+            ~PublicationReset() {
+                bloom::render::ocio_program_detail::setPublicationFailureAfterForTest(UINT32_MAX);
+            }
+        };
+        {
+            PublicationReset restore;
+            bloom::render::ocio_program_detail::setPublicationFailureAfterForTest(0);
+            const auto begin = executor.begin(scene, kBudget);
+            expectations.expect(begin.code == GpuSceneExecutorDiagnosticCode::None,
+                                "the controlled post-emplace scene begins actual execution");
+            auto poll = executor.poll();
+            while (poll == GpuSceneExecutorPollResult::Pending)
+                poll = executor.poll();
+            const auto rolledBack = executor.counters();
+            expectations.expect(
+                poll == GpuSceneExecutorPollResult::Failure &&
+                    executor.diagnostic().code ==
+                        GpuSceneExecutorDiagnosticCode::DeviceUnavailable &&
+                    rolledBack.ocioRetainedProgramBytes == 0 &&
+                    rolledBack.ocioProgramCreations == 0 &&
+                    device.ocioProgramRetirementStats().registeredPrograms == 0,
+                "scene post-emplace rejection rolls back bytes, program and creation count");
+        }
+        cacheResult.cache->clear();
+        expectations.expect(
+            root.snapshot().ownedNativeImageBytes == 0,
+            "rejected scene and actual intermediate cache cleanup leave no native backing");
+    }
+
+    const auto beforeColdCounters = executor.counters();
     expectations.expect(runScene(expectations, executor, scene, "cold"), "the cold scene runs");
     auto image = executor.takeImage();
     expectations.expect(image != nullptr, "the resident scene output is published");
@@ -375,15 +416,20 @@ void testScene(Expectations& expectations, GpuDevice& device,
     }
     const auto coldCounters = executor.counters();
     const auto coldClaims = root.snapshot();
-    expectations.expect(coldClaims.ownedNativeImageBytes > 0 && coldClaims.ownedNativeImages >= 4 &&
+    expectations.expect(coldClaims.ownedNativeImageBytes > 0 &&
+                            coldClaims.ownedNativeImages >=
+                                4 + prepared.command->program().textures.size() &&
                             lease.use_count() == 2,
                         "actual OCIO graph cache promotes each retained native image without "
                         "pinning the phase lifetime");
-    expectations.expect(coldCounters.ocioEffectDispatches == 1,
+    expectations.expect(coldCounters.ocioEffectDispatches ==
+                            beforeColdCounters.ocioEffectDispatches + 1,
                         "the cold scene dispatches the OCIO effect exactly once");
-    expectations.expect(coldCounters.ocioProgramCreations == 1,
+    expectations.expect(coldCounters.ocioProgramCreations ==
+                            beforeColdCounters.ocioProgramCreations + 1,
                         "the cold scene creates the native OCIO program once");
-    expectations.expect(coldCounters.uploads == 1 && coldCounters.solidDispatches == 2,
+    expectations.expect(coldCounters.uploads == beforeColdCounters.uploads + 1 &&
+                            coldCounters.solidDispatches == beforeColdCounters.solidDispatches + 2,
                         "the cold scene runs its upstream upload and both solid steps");
     expectations.expect(coldCounters.readbacks == 0, "the executor never reads back a full frame");
     const auto readback = bloom::render::readbackResidentImage(*image, kBudget);
@@ -402,6 +448,26 @@ void testScene(Expectations& expectations, GpuDevice& device,
                             "every scene pixel matches the CPU OCIO + source-over oracle");
     }
 
+    if (textured) {
+        const std::weak_ptr<bloom::render::GpuProcessingPhaseLease> origin = lease;
+        device.retireProcessingPhase(lease->id(), true);
+        lease.reset();
+        expectations.expect(origin.expired() && root.snapshot().admittedPhases == 0 &&
+                                root.snapshot().ownedNativeImageBytes ==
+                                    coldClaims.ownedNativeImageBytes,
+                            "actual scene program and image cache detach the originating phase");
+        auto next = root.reserve({.fixedHostBytes = 1,
+                                  .requestedExecutorBytes = kBudget,
+                                  .minimumExecutorBytes = kBudget,
+                                  .sourceFree = true});
+        lease = std::move(next.lease);
+        if (!lease || !device.retainProcessingPhase(lease)) {
+            expectations.expect(false, "same-root new phase admits textured scene cache reuse");
+            return;
+        }
+    }
+
+    const auto beforeWarmTotal = root.snapshot().totalDeviceClaimBytes;
     expectations.expect(runScene(expectations, executor, scene, "warm"), "the warm scene runs");
     auto warmImage = executor.takeImage();
     expectations.expect(warmImage != nullptr, "the warm scene publishes the cached output");
@@ -411,7 +477,7 @@ void testScene(Expectations& expectations, GpuDevice& device,
                             warmClaims.ownedNativeImages == coldClaims.ownedNativeImages &&
                             warmClaims.ownedNonlocalNativeHostBytes ==
                                 coldClaims.ownedNonlocalNativeHostBytes &&
-                            warmClaims.totalDeviceClaimBytes == coldClaims.totalDeviceClaimBytes,
+                            warmClaims.totalDeviceClaimBytes == beforeWarmTotal,
                         "warm actual OCIO graph/cache aliases create no repeated native ownership");
     expectations.expect(warmCounters.ocioEffectDispatches == coldCounters.ocioEffectDispatches,
                         "a warm unchanged scene dispatches zero OCIO effects");
@@ -419,6 +485,31 @@ void testScene(Expectations& expectations, GpuDevice& device,
                         "a warm unchanged scene dispatches zero native operations");
     expectations.expect(warmCounters.outputCacheHits == coldCounters.outputCacheHits + 1,
                         "a warm unchanged scene is an output cache hit");
+
+    if (textured) {
+        image.reset();
+        warmImage.reset();
+        cacheResult.cache->clear();
+        const auto retainedLuts = root.snapshot();
+        expectations.expect(retainedLuts.ownedNativeImages ==
+                                    prepared.command->program().textures.size() &&
+                                retainedLuts.ownedNativeImageBytes > 0,
+                            "scene image purge leaves only the actual promoted program LUTs");
+        expectations.expect(runScene(expectations, executor, scene, "textured-program-warm"),
+                            "actual warm scene program dispatch succeeds after image-cache purge");
+        auto replayImage = executor.takeImage();
+        const auto reused = executor.counters();
+        expectations.expect(
+            replayImage && reused.ocioProgramCreations == coldCounters.ocioProgramCreations &&
+                reused.ocioProgramReuses == warmCounters.ocioProgramReuses + 1 &&
+                root.snapshot().ownedNativeImageBytes == coldClaims.ownedNativeImageBytes &&
+                root.snapshot().ownedNativeImages == coldClaims.ownedNativeImages,
+            "scene program cache reuses LUT backing without new program or retained claim");
+        std::cout << "LUT_SCENE_CACHE textures=" << retainedLuts.ownedNativeImages
+                  << " bytes=" << retainedLuts.ownedNativeImageBytes
+                  << " warmNewPrograms=0 warmNewClaims=0 rollback=executed\n";
+        return;
+    }
 
     // Dirty effect only: a different OCIO program invalidates the effect (and downstream merge/
     // output) while the upstream solid/upload stay cache hits.
@@ -504,6 +595,10 @@ int main(int argc, char** argv) {
         return 1;
     }
     GpuDeviceCreationOptions options;
+    for (int index = 1; index + 1 < argc; ++index) {
+        if (std::string_view(argv[index]) == "--loader")
+            options.loader_path = argv[++index];
+    }
     auto device = GpuDevice::create(options);
     if (!device) {
         if (requireDevice) {
@@ -527,6 +622,7 @@ int main(int argc, char** argv) {
     if (!admission.lease)
         return 1;
     testScene(expectations, *device.device, *aces, compileOptions(), root, admission.lease);
+    testScene(expectations, *device.device, *aces, compileOptions(), root, admission.lease, true);
     device.device->retireProcessingPhase(admission.lease->id(), true);
     admission.lease.reset();
     const auto retired = root.snapshot();

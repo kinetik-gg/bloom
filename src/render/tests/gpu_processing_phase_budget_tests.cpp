@@ -192,6 +192,31 @@ void retryWatermarks() {
     require(budget.snapshot().admissionRevision > capacityWatermark,
             "capacity change is not erased by failed attempt disposal");
 }
+void rootIdentity() {
+    GpuProcessingPhaseBudget first;
+    GpuProcessingPhaseBudget second;
+    for (auto* budget : {&first, &second}) {
+        budget->setHostCapacity(70, true);
+        budget->setDeviceCapacity(30, true);
+    }
+    auto a = first.reserve(request());
+    auto b = second.reserve(request());
+    require(a.lease && b.lease && a.lease->id() == b.lease->id(),
+            "distinct roots can have the same numeric phase id");
+    const auto identity = a.lease->rootIdentity();
+    require(identity && identity != b.lease->rootIdentity(),
+            "root identity must distinguish equal phase ids from different roots");
+    const std::weak_ptr<GpuProcessingPhaseLease> weak = a.lease;
+    a.lease.reset();
+    require(weak.expired() && first.snapshot().admittedPhases == 0,
+            "retaining neutral root identity must not retain a phase or its claims");
+    require(!b.lease->isUnproven(), "new authority begins proven");
+    b.lease->markUnproven();
+    require(b.lease->isUnproven(), "authority exposes the sticky unproven latch");
+    auto next = first.reserve(request());
+    require(next.lease && next.lease->rootIdentity() == identity,
+            "later phases preserve the exact neutral root identity");
+}
 void contention() {
     constexpr std::size_t contenders = 32;
     GpuProcessingPhaseBudget budget(2);
@@ -246,6 +271,7 @@ int main() {
         readinessAndRollback();
         emptyAndZeroGrant();
         sizingAndLifetime();
+        rootIdentity();
         contention();
         retryWatermarks();
         std::cout << "paired phase readiness/sizing/lifetime/32-way contention PASS\n";

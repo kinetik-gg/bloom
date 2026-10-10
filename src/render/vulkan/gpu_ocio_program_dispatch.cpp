@@ -321,6 +321,7 @@ void GpuOcioProgram::Impl::beginImpl(const bool display, std::shared_ptr<const G
         fail(GpuOcioProgramDiagnosticCode::DeviceLost, "the dispatch submission failed");
         return;
     }
+    submittedPhase = control->processingPhase;
     queueSubmitted = true;
     jobState = GpuOcioProgramJobState::Pending;
     jobPixelCount = static_cast<std::uint32_t>(pixelCount);
@@ -378,8 +379,12 @@ GpuOcioProgram::Impl::~Impl() {
         return;
     }
     releaseTransient();
+    // A failed insertion/publication owns this unique program internally. Only its proven
+    // destroyed prefix may fold into its exact origin quietly; published retained programs use
+    // ordinary independent release. Unproven origins refuse quiet cleanup and stay sticky.
+    const auto failedOrigin = sampledPublished ? nullptr : creationPhase.lock();
     for (auto& texture : textures) {
-        ocio_program_detail::destroySampledResource(*control, texture);
+        ocio_program_detail::destroySampledResource(*control, texture, failedOrigin);
     }
     if (uniformBuffer.buffer != VK_NULL_HANDLE) {
         destroyResidentBuffer(*control, uniformBuffer);

@@ -15,6 +15,7 @@
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/gpu_image_upload.hpp>
+#include <bloom/render/gpu_ocio_program.hpp>
 #include <bloom/render/gpu_processing_phase_budget.hpp>
 #include <bloom/render/gpu_resident_display.hpp>
 #include <bloom/render/image.hpp>
@@ -32,6 +33,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -189,6 +191,10 @@ struct Fixtures final {
     std::optional<bloom::color::ResolvedBloomNeutralConfig> aces;
     GpuOcioCompileOptions options;
 };
+
+#include "gpu_ocio_program_executor_authority_tests.ipp"
+#include "gpu_ocio_program_executor_orphan_tests.ipp"
+#include "gpu_ocio_program_executor_storage_tests.ipp"
 
 void testCst(Expectations& expectations, GpuDevice& device, GpuOcioProgramPreparer& preparer,
              const Fixtures& fixtures) {
@@ -512,79 +518,6 @@ void testViewAdjustInvalidation(Expectations& expectations, GpuOcioProgramPrepar
                         "a changed geometry invalidates the command identity");
 }
 
-void testUploadFaultRetirement(Expectations& expectations, GpuDevice& device,
-                               GpuOcioProgramPreparer& preparer, const Fixtures& fixtures) {
-    if (!fixtures.aces.has_value() || !fixtures.neutral.has_value()) {
-        expectations.expect(false, "the fixture configs resolve for the fault arm");
-        return;
-    }
-    GpuOcioTransformSpec spec;
-    spec.kind = GpuOcioTransformKind::Display;
-    spec.display = "Rec.2100-PQ - Display";
-    spec.view = "ACES 1.1 - HDR Video (1000 nits & Rec.2020 lim)";
-    constexpr GpuOcioCommandGeometry geometry{4, 3};
-    const auto prepared = preparer.prepare(*fixtures.aces, spec, geometry, fixtures.options);
-    expectations.expect(prepared.hasValue(), "the LUT display command prepares");
-    if (!prepared) {
-        return;
-    }
-    auto executor = GpuOcioProgramExecutor::create(device);
-    auto uploader = GpuImageUpload::create(device);
-    if (!executor || !uploader) {
-        expectations.expect(false, "the fault executor and uploader host");
-        return;
-    }
-    const auto pixels = fixturePixels(geometry.width, geometry.height);
-    const auto input = uploadImage(*uploader.upload, geometry.width, geometry.height, pixels);
-    if (input == nullptr) {
-        expectations.expect(false, "the fault input uploads");
-        return;
-    }
-    bloom::render::GpuProcessingPhaseBudget phases;
-    phases.setHostCapacity(kBudget, true);
-    phases.setDeviceCapacity(kBudget, true);
-    auto phase = phases.reserve({.fixedHostBytes = 4096,
-                                 .deviceWorkingBytes = 4096,
-                                 .requestedExecutorBytes = 4096,
-                                 .sourceFree = true});
-    expectations.expect(phase.lease && device.retainProcessingPhase(phase.lease),
-                        "the production native generation arms the LUT fault phase");
-    if (!phase.lease) {
-        return;
-    }
-    bloom::render::ocio_program_detail::setUploadFenceOverrideForTest(
-        bloom::render::ocio_program_detail::UploadFenceOverride::CancelAfterSubmit);
-    const auto faulted = executor.executor->begin(prepared.command, input, {}, kBudget);
-    expectations.expect(faulted.code == GpuOcioExecutorDiagnosticCode::Cancelled,
-                        "a cancelled post-submit LUT upload is a typed failure");
-    expectations.expect(bloom::render::ocio_program_detail::uploadQuarantineOccupiedForTest(),
-                        "the unproven upload retains its resources in the quarantine");
-    device.retireProcessingPhase(phase.lease->id(), true);
-    expectations.expect(device.processingPhaseOccupied() && phases.snapshot().unprovenPhases == 1,
-                        "cancelled independent LUT quarantine overrides claimed executor proof");
-    phase.lease.reset();
-    expectations.expect(phases.snapshot().admittedPhases == 1,
-                        "generation ownership retains the phase after consumer terminal disposal");
-    bloom::render::ocio_program_detail::setUploadFenceOverrideForTest(
-        bloom::render::ocio_program_detail::UploadFenceOverride::None);
-    for (int attempt = 0;
-         attempt < 200 && bloom::render::ocio_program_detail::uploadQuarantineOccupiedForTest();
-         ++attempt) {
-        bloom::render::ocio_program_detail::retireUploadQuarantineForTest();
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    expectations.expect(!bloom::render::ocio_program_detail::uploadQuarantineOccupiedForTest(),
-                        "the quarantined upload retires after fence proof");
-    const auto recovered = executor.executor->begin(prepared.command, input, {}, kBudget);
-    expectations.expect(recovered.code == GpuOcioExecutorDiagnosticCode::None,
-                        "the executor stays usable after the fault retires");
-    executor.executor->cancel();
-    auto poll = executor.executor->poll();
-    while (poll == GpuOcioExecutorPollResult::Pending) {
-        poll = executor.executor->poll();
-    }
-}
-
 #endif // BLOOM_GPUSHADER_TOOLS_DIR
 
 } // namespace
@@ -659,10 +592,14 @@ int main(int argc, char** argv) {
     }
     expectations.expect(device.device->state() == GpuDeviceState::Ready, "the device is Ready");
     GpuOcioProgramPreparer preparer;
+    testRootAuthority(expectations, *device.device, preparer, fixtures);
+    testColdGeneration(expectations, options, preparer, fixtures);
+    testProgramOwnerDrain(expectations, *device.device, preparer, fixtures);
+    testRootedLutLifetime(expectations, options, preparer, fixtures);
     testCst(expectations, *device.device, preparer, fixtures);
     testDisplay(expectations, *device.device, preparer, fixtures);
     testViewAdjustInvalidation(expectations, preparer, fixtures);
-    testUploadFaultRetirement(expectations, *device.device, preparer, fixtures);
+    testUploadFaultRetirement(expectations, *device.device, preparer, fixtures, options);
     if (expectations.failures() != 0) {
         std::cerr << expectations.failures() << " runtime OCIO executor expectation(s) failed\n";
         return 1;

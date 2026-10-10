@@ -92,6 +92,7 @@ GpuSceneExecutorCreateResult GpuSceneExecutor::create(render::GpuDevice& device,
     }
     auto impl = std::make_unique<Impl>();
     impl->device = &device;
+    impl->deviceEpoch = device.ownershipEpoch();
     impl->cache = &cache;
     impl->budgets = budgets;
     impl->solid = std::move(solid.solid);

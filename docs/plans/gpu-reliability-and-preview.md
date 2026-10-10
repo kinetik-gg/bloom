@@ -44,6 +44,7 @@ and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 | Controlled mounted-footage A | Accepted only for bounded Full/Half preparation, pixels, ownership and warm reuse | 100 strongly verified members in a controlled 24 fps 1080 composition, independent still-member CPU parity, 200 zero-work warm observations, exact payload/header charges and final release; one affected strict TU and repository quality pass |
 | Preview live-default propagation / mounted-footage B | Bounded companion qualified | Explicit versus omitted producer/request limits, neutral numeric delivery and proved OverBudget retirement; ordinary Full/Half, explicit-cap recovery and independent unknown ownership pass; configured B witnesses remain separate |
 | G6B rooted native image suballocations | Bounded two-family qualification gates pass | Exact VMA type/heap/size, pre-backing domain claims, unique cache/alias ownership, real submitted unknown retention, pixels/refusal/recovery/warm return, required routes and affected strict/Linux fallback/quality; not all-native/block/physical accounting |
+| G6B rooted OCIO sampled-LUT images | Bounded LUT qualification gates pass | Exact pre-begin phase/root/device affinity, move-only LUT tokens, native-owner retirement, actual dimensional/nonlocal/fault/parity/prefix and both textured-cache evidence; selected owners, six routes, 324 desktop strict, fifteen distinct Linux fallback strict, final quality and source-aligned artifact checks pass; buffers and broader memory qualification remain separate |
 | G4C prerequisite | Accepted only as the bounded cold-progress prerequisite | One active/newest intent, useful older Stale publication and guarded pause/shutdown pass source review and short real playing pixels; remaining G4 scheduling is pending |
 | G7A / G9 bounded display work | Packed immutable borrowing, off-UI CPU channel derivation and finished-display host choice accepted | Explicit provenance and measured bytes; remaining CPU storage/process/channel work and broader cache policy remain pending |
 | G8 optional two-frame throughput | Investigation complete; implementation and benchmark pending | Source confirms per-service frame serialization; no multi-frame speedup or GPU-utilization result is established |
@@ -342,6 +343,75 @@ The accepted `277590d4` package and running app remain unchanged until that veri
 Next, the same owner proceeds to explicitly rooted OCIO sampled-LUT image backing; buffers,
 staging, WSI, legacy allocations, allocator-block/driver overhead and physical/UMA accounting remain
 outside this slice, with the broader roadmap still open.
+
+Rooted OCIO sampled-LUT follow-on (2026-10-10), qualified within this bounded LUT image scope:
+the [owning contract](../architecture/gpu-backend.md#rooted-ocio-sampled-lut-image-ownership-bounded-lut-slice)
+extends the native image token to rooted sampled LUT backing. Authority-only evidence first checks
+exact retained phase pointers, zero-LUT root identity, both caches and stale/unproven generation
+refusal; its eight strict units close through six initial passes and two corrected reruns. An
+independent registry increment then proves foreign zero-LUT disposal and exact native owner drain,
+with nine incremental strict units passing. Neither checkpoint by itself claims LUT owned bytes.
+
+The earlier actual native resources checkpoint passes in 923 ms (101.7 MiB), including forced compatible RGBA formatting
+with the existing HDR and 3D every-pixel CPU oracles. The required two-LUT extraction uploads one
+prefix image from a complete 10,240-byte native aggregate. A one-byte-short budget refuses and
+cleans that prefix with refusal revision and final revision both 4; the older conditional
+single-texture HDR fixture is not credited as two-texture evidence. The dimensional/nonlocal helper
+passes in 182 ms (20.1 MiB), covering actual compatible heap identity, freshness and allocation/
+reconciliation/bind/view controls rather than VMA block commitment or driver OOM.
+
+The earlier whole lifetime checkpoint passes in 792 ms (82.6 MiB): one actual HDR LUT owns 524,288 bytes,
+256 aliases share its charge, and foreign disposal waits for native owner drain. Display work is
+genuinely submitted, but its observed fence result is privately overridden to unknown. Removing
+only that override permits actual vkGetFenceStatus retirement/free; sticky phase protection remains
+until allocator generation destruction. This is not a GPU hang or an actual driver-unknown event.
+Actual LUT-upload CancelAfterSubmit is a separate submitted quarantine witness.
+
+Both runtime textured caches are now covered, rather than inferred from a zero-LUT CST program:
+the OCIO executor helper passes in 826 ms (82.9 MiB), and the final scene helper in 452 ms
+(75.6 MiB). Each retains one 524,288-byte LUT, exercises post-insertion publication rollback, drops
+the original phase and reuses the published program under a new same-root phase without added
+retained image charge or program count; final release reaches zero. The separate two-LUT partial
+publication helper passes in 781 ms (81.7 MiB): a private rejection after one promotion destroys
+and folds back the prefix, leaving only the attempt's normal phase-release revision (final 5).
+Publication rejection is a control, not capacity or OOM evidence.
+
+Earlier failures remain separate: the rooted resources fixture lacked the exact phase and failed
+four reflection assertions; authority recovery incorrectly expected reuse of a generation it had
+marked unproven; registry setup had local-name and assertion-placement build errors; the first
+scene-cache run made two incorrect cumulative-counter/cross-phase-total comparisons. Corrected
+owning runs preserve the CPU oracles and sticky/fresh-generation boundary. Nine remaining selected
+owners pass without skips in 17.68 s, separately from the direct native/cache proofs above. Their
+first service launch used a relative CTest build path that resolved from the service home and
+failed before tests; an absolute --test-dir corrected the launcher. The nine-unit
+strict prefix closes through eight initial passes and one repaired fixture rerun; the explicit
+VkImageCreateInfo initialization repair's intermediate missing-pNext diagnostic is preserved.
+The fresh six-route gate passes 14/14 in 17.61 s, including actual Viewer, RAM preview, still,
+sequence, video and headless writers plus 56 native coverage observations with zero failures or
+missing fixtures. Structural NotRun entries do not substitute for these writers. All 324 actual
+owned desktop strict TUs close as the nine-unit prefix above plus a disjoint 315-unit remainder
+without diagnostics. Exactly one affected generated Qt aggregation is excluded. The freshly
+configured Linux CPU-stub database identifies 231 affected owned TUs and fifteen distinct fallback
+stub consumers; the shared desktop coverage is retained without a repeated full fallback sweep.
+The actual Vulkan-off/Python-on app/CLI/media and selected-owner build completes 198 actions. Its
+eight selected fallback registrations finish in 0.89 s as six Passed and two honest Skipped
+checks: native program execution and the GPU coverage contract are unavailable. CTest also adds
+the passing media fixture, so the observed nine registrations are seven Passed and two Skipped.
+These are CPU-stub outcomes, not native GPU passes. All fifteen distinct fallback strict units pass
+without diagnostics or repairs. The reviewed 38-path source checkpoint covers these increments;
+source-aligned application/CLI/media refresh completes nine actions; all three binary identities
+and all 38 source hashes pass readback with zero missing dependencies. The first final-quality run passed its
+preceding checks but failed formatting of six changed files. The corrected run passes schema,
+architecture, dependency, hygiene and UI grammar checks and formatting of 1,468 files. The exact
+six-file formatting repair preserves code/literal tokens, with two benign include sorts; it adds
+no path or behavior and remains separate from functional evidence.
+Exact source-plus-doc review, selective commit, immutable verified packaging and a normal-app
+replacement are the checkpoint handoff; the existing verified app remains untouched until that
+replacement. Buffers/staging, remaining host storage, WSI/external and
+unrooted allocation ownership, committed blocks/driver/process/UMA accounting, OOM guarantees,
+performance and platform qualification remain open. After closure, the same owner proceeds to the
+bounded buffer ownership slice before later source reuse/presentation, within-frame batching,
+measured width-two experiments and sustained/fault/platform evidence.
 
 First G6B phase-reservation checkpoint (2026-10-09), accepted within bounded scope:
 independent reviews cover coordinator/policy/builder quotas, resident and final phase lifetimes,

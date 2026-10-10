@@ -55,6 +55,7 @@ const GpuCapabilityReport& GpuDevice::capabilityReport() const noexcept {
 
 void GpuDevice::reclaimReleasedImages() noexcept {}
 GpuImageReclamationStats GpuDevice::imageReclamationStats() const noexcept { return {}; }
+GpuOcioProgramRetirementStats GpuDevice::ocioProgramRetirementStats() const noexcept { return {}; }
 GpuImageReclamationStats GpuDevice::processImageReclamationStats() noexcept { return {}; }
 
 // Inert portable implementation preserves the owning native API without retaining a lease.
@@ -64,6 +65,9 @@ bool GpuDevice::retainProcessingPhase(std::shared_ptr<GpuProcessingPhaseLease>) 
 }
 void GpuDevice::retireProcessingPhase(std::uint64_t, bool) noexcept {}
 bool GpuDevice::processingPhaseOccupied() const noexcept { return true; }
+std::shared_ptr<GpuProcessingPhaseLease> GpuDevice::retainedProcessingPhase() const noexcept {
+    return {};
+}
 std::optional<NativeImageStorageRefusal> GpuDevice::nativeImageStorageRefusal() const noexcept {
     return {};
 }

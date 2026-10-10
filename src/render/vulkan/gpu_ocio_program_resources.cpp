@@ -1,5 +1,6 @@
 #include "gpu_ocio_program_private.hpp"
 
+#include "gpu_native_image_allocation_private.hpp"
 #include "ocio_gpu_program_fault.hpp"
 
 #include <bloom/render/gpu_processing_phase_budget.hpp>
@@ -39,6 +40,7 @@ std::atomic<std::uint32_t> g_quarantineCount{0};
 std::atomic<bool> g_teardownIncomplete{false};
 std::atomic<bool> g_faultNotReady{false};
 std::atomic<bool> g_faultCancelAfterSubmit{false};
+std::atomic<bool> g_faultLutRgbaFormat{false};
 
 // Explicit single-slot ownership. `Reserved` is held from before the first allocation until either
 // the upload retires (released) or the resources move into the slot (`Quarantined`). A foreign
@@ -46,6 +48,7 @@ std::atomic<bool> g_faultCancelAfterSubmit{false};
 enum class SlotState : std::uint8_t { Free, Reserved, Quarantined };
 
 struct UploadQuarantine final {
+    NativeImageStorageToken storage;
     std::shared_ptr<vulkan_detail::DeviceAllocatorState> state;
     VkImage image = VK_NULL_HANDLE;
     VmaAllocation imageAllocation = VK_NULL_HANDLE;
@@ -132,6 +135,7 @@ void setReasonNoThrow(std::string& reason, const char* text) noexcept {
 }
 
 struct ImageOwner final {
+    NativeImageStorageToken storage;
     vulkan_detail::DeviceAllocatorState* state = nullptr;
     VkImage image = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
@@ -142,6 +146,9 @@ struct ImageOwner final {
     ~ImageOwner() {
         if (image != VK_NULL_HANDLE && state != nullptr) {
             vmaDestroyImage(state->allocator, image, allocation);
+            if (storage.bytes() != 0 && state->nativeImageBackingsDestroyed != UINT64_MAX) {
+                ++state->nativeImageBackingsDestroyed;
+            }
         }
     }
     void release() noexcept {
@@ -175,8 +182,12 @@ void releaseQuarantineResources(UploadQuarantine& slot) noexcept {
     slot.staging = VK_NULL_HANDLE;
     if (slot.image != VK_NULL_HANDLE) {
         vmaDestroyImage(slot.state->allocator, slot.image, slot.imageAllocation);
+        if (slot.storage.bytes() != 0 && slot.state->nativeImageBackingsDestroyed != UINT64_MAX) {
+            ++slot.state->nativeImageBackingsDestroyed;
+        }
     }
     slot.image = VK_NULL_HANDLE;
+    slot.storage = {}; // Actual native backing is gone before ledger credit.
     slot.fence = vk::raii::Fence{nullptr};
     slot.command = vk::raii::CommandBuffer{nullptr};
     slot.pool = vk::raii::CommandPool{nullptr};
@@ -186,7 +197,9 @@ void releaseQuarantineResources(UploadQuarantine& slot) noexcept {
 // Caller holds g_slotMutex. Only the slot owner may query the driver.
 [[nodiscard]] bool tryRetireQuarantinedLocked() noexcept {
     if (g_slotState != SlotState::Quarantined || g_slotOwner != std::this_thread::get_id() ||
-        quarantineStorage()->state == nullptr) {
+        quarantineStorage()->state == nullptr ||
+        quarantineStorage()->state->ownerLifetimeToken !=
+            vulkan_detail::deviceOwnerLifetimeToken()) {
         return g_slotState == SlotState::Free;
     }
     const VkFence rawFence = static_cast<VkFence>(*quarantineStorage()->fence);
@@ -217,6 +230,7 @@ void quarantineUpload(ImageOwner& image, Staging& staging, vk::raii::CommandPool
     quarantineStorage()->state = std::move(state);
     quarantineStorage()->image = image.image;
     quarantineStorage()->imageAllocation = image.allocation;
+    quarantineStorage()->storage = std::move(image.storage);
     image.release();
     quarantineStorage()->staging = staging.buffer;
     quarantineStorage()->stagingAllocation = staging.allocation;
@@ -510,7 +524,8 @@ createSampledResource(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>
         const std::uint32_t nativeComponents = channelComponents(texture.channel);
         std::uint32_t components = nativeComponents;
         VkFormat format = channelFormat(texture.channel, nativeComponents);
-        if (!formatSupports(state, format, linear)) {
+        if (ocioFaultLutRgbaFormat().load(std::memory_order_acquire) ||
+            !formatSupports(state, format, linear)) {
             format = VK_FORMAT_R32G32B32A32_SFLOAT;
             components = 4;
             if (!formatSupports(state, format, linear)) {
@@ -535,15 +550,14 @@ createSampledResource(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>
             .pQueueFamilyIndices = nullptr,
             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
         };
-        VmaAllocationCreateInfo allocationInfo{};
-        allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         ImageOwner image;
         image.state = &state;
         VmaAllocationInfo mapped{};
-        if (vmaCreateImage(state.allocator, &imageInfo, &allocationInfo, &image.image,
-                           &image.allocation, &mapped) != VK_SUCCESS) {
-            return UploadOutcome::Failed;
+        if (!vulkan_detail::allocateCoveredImage(state, imageInfo, image.image, image.allocation,
+                                                 image.storage)) {
+            return state.imageStorageRefusal ? UploadOutcome::OverBudget : UploadOutcome::Failed;
         }
+        vmaGetAllocationInfo(state.allocator, image.allocation, &mapped);
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image = image.image;
@@ -551,7 +565,13 @@ createSampledResource(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>
         viewInfo.format = format;
         viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         VkImageView rawView = VK_NULL_HANDLE;
-        if (dispatcher->vkCreateImageView(device, &viewInfo, nullptr, &rawView) != VK_SUCCESS) {
+        const bool viewFault =
+            state.nativeImageAllocationFault == vulkan_detail::NativeImageAllocationFault::View;
+        if (viewFault) {
+            state.nativeImageAllocationFault = vulkan_detail::NativeImageAllocationFault::None;
+        }
+        if (viewFault ||
+            dispatcher->vkCreateImageView(device, &viewInfo, nullptr, &rawView) != VK_SUCCESS) {
             return UploadOutcome::Failed;
         }
         vk::raii::ImageView view(state.device, rawView);
@@ -601,7 +621,9 @@ createSampledResource(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>
         out.view = *view;
         out.sampler = *sampler;
         out.allocation = image.allocation;
+        out.storage = std::move(image.storage);
         out.allocationBytes = mapped.size;
+        out.format = format;
         out.binding = texture.binding;
         out.sampleBytes = texture.samples.size() * sizeof(float);
         view.release();
@@ -613,8 +635,8 @@ createSampledResource(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>
     }
 }
 
-void destroySampledResource(vulkan_detail::DeviceAllocatorState& state,
-                            SampledResource& resource) noexcept {
+void destroySampledResource(vulkan_detail::DeviceAllocatorState& state, SampledResource& resource,
+                            const std::shared_ptr<GpuProcessingPhaseLease>& failedOrigin) noexcept {
     if (resource.image == VK_NULL_HANDLE) {
         return;
     }
@@ -627,7 +649,23 @@ void destroySampledResource(vulkan_detail::DeviceAllocatorState& state,
         dispatcher->vkDestroyImageView(device, resource.view, nullptr);
     }
     vmaDestroyImage(state.allocator, resource.image, resource.allocation);
-    resource = SampledResource{};
+    if (resource.storage.bytes() != 0) {
+        if (state.nativeImageBackingsDestroyed != UINT64_MAX) {
+            ++state.nativeImageBackingsDestroyed;
+        }
+        if (failedOrigin) {
+            static_cast<void>(
+                resource.storage.releaseFailedAttemptAfterBackingDestroyed(failedOrigin));
+        }
+    }
+    resource.storage = {}; // Free-before-credit on every retained/provisional path.
+    resource.image = VK_NULL_HANDLE;
+    resource.view = VK_NULL_HANDLE;
+    resource.sampler = VK_NULL_HANDLE;
+    resource.allocation = VK_NULL_HANDLE;
+    resource.allocationBytes = 0;
+    resource.sampleBytes = 0;
+    resource.format = VK_FORMAT_UNDEFINED;
 }
 
 bool quarantineAllowed() noexcept { return !g_teardownIncomplete.load(); }
@@ -646,6 +684,11 @@ bool uploadQuarantineOccupied() noexcept {
     }
 }
 
+bool uploadQuarantinePendingFor(const vulkan_detail::DeviceAllocatorState& state) noexcept {
+    const std::lock_guard<std::mutex> lock(g_slotMutex);
+    return g_slotState == SlotState::Quarantined && quarantineStorage()->state.get() == &state;
+}
+
 void retireUploadQuarantine() noexcept {
     try {
         const std::lock_guard<std::mutex> lock(g_slotMutex);
@@ -659,6 +702,7 @@ void retireUploadQuarantine() noexcept {
     }
 }
 
+std::atomic<bool>& ocioFaultLutRgbaFormat() noexcept { return g_faultLutRgbaFormat; }
 std::atomic<bool>& ocioFaultNotReady() noexcept { return g_faultNotReady; }
 std::atomic<bool>& ocioFaultCancelAfterSubmit() noexcept { return g_faultCancelAfterSubmit; }
 

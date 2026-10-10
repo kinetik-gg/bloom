@@ -132,6 +132,11 @@ bool GpuOcioProgram::Impl::createOcioResources() {
                                             ? 0U
                                             : budgets.maxOwnedBytes - retainedResourceBytes;
         ocio_program_detail::SampledResource resource;
+        struct ResourceGuard final {
+            DeviceAllocatorState& state;
+            ocio_program_detail::SampledResource& resource;
+            ~ResourceGuard() { ocio_program_detail::destroySampledResource(state, resource); }
+        } resourceGuard{*control, resource};
         const auto outcome = ocio_program_detail::createSampledResource(control, texture, remaining,
                                                                         cancellation, resource);
         if (outcome == ocio_program_detail::UploadOutcome::OverBudget) {
@@ -155,7 +160,6 @@ bool GpuOcioProgram::Impl::createOcioResources() {
                                "the LUT texture format is unsupported on this device");
             return false;
         }
-        textures.push_back(resource);
         std::uint64_t updated = 0;
         if (!addChecked(retainedResourceBytes, resource.allocationBytes, updated) ||
             updated > budgets.maxOwnedBytes) {
@@ -163,6 +167,7 @@ bool GpuOcioProgram::Impl::createOcioResources() {
                                               "the retained OCIO resources exceed the budget");
             return false;
         }
+        textures.push_back(std::move(resource));
         retainedResourceBytes = updated;
     }
     if (desc.uniformBufferSize > 0) {
@@ -426,10 +431,11 @@ void GpuOcioProgram::Impl::writeStaticDescriptors() {
     }
 }
 
-GpuOcioProgramCreateResult GpuOcioProgram::create(GpuDevice& device, OcioGpuProgramDesc program,
-                                                  std::span<const std::uint32_t> spirv,
-                                                  const GpuOcioProgramBudgets& budgets,
-                                                  GpuOcioProgramCancellation cancellation) {
+GpuOcioProgramCreateResult
+GpuOcioProgram::create(GpuDevice& device, OcioGpuProgramDesc program,
+                       std::span<const std::uint32_t> spirv, const GpuOcioProgramBudgets& budgets,
+                       GpuOcioProgramCancellation cancellation,
+                       const std::shared_ptr<GpuProcessingPhaseLease>& phase) {
     if (device.state() != GpuDeviceState::Ready) {
         return {nullptr, makeDiagnostic(GpuOcioProgramDiagnosticCode::DeviceUnavailable,
                                         "the GPU device is not Ready")};
@@ -443,6 +449,14 @@ GpuOcioProgramCreateResult GpuOcioProgram::create(GpuDevice& device, OcioGpuProg
     if (state == nullptr) {
         return {nullptr, makeDiagnostic(GpuOcioProgramDiagnosticCode::DeviceUnavailable,
                                         "the device exposes no renderer state")};
+    }
+    if (state->processingPhase != phase) {
+        return {nullptr, makeDiagnostic(GpuOcioProgramDiagnosticCode::InvalidArgument,
+                                        "OCIO creation requires the exact already-retained phase")};
+    }
+    if (state->processingPhaseUnproven || (phase && phase->isUnproven())) {
+        return {nullptr, makeDiagnostic(GpuOcioProgramDiagnosticCode::DeviceUnavailable,
+                                        "the retained processing authority is unproven")};
     }
     if (!ocio_program_detail::quarantineAllowed()) {
         return {nullptr, makeDiagnostic(GpuOcioProgramDiagnosticCode::DeviceUnavailable,
@@ -480,8 +494,14 @@ GpuOcioProgramCreateResult GpuOcioProgram::create(GpuDevice& device, OcioGpuProg
     state->physicalDevice.getDispatcher()->vkGetPhysicalDeviceProperties(
         static_cast<VkPhysicalDevice>(*state->physicalDevice), &deviceLimits);
     auto impl = std::make_unique<Impl>();
+    impl->creationRoot = phase ? phase->rootIdentity() : GpuProcessingRootIdentity{};
+    impl->creationPhase = phase;
     impl->control = state;
     impl->owner = state->owner;
+    if (!impl->registerRetirement()) {
+        return {nullptr, makeDiagnostic(GpuOcioProgramDiagnosticCode::DeviceUnavailable,
+                                        "the native program owner is closed")};
+    }
     impl->budgets = budgets;
     // A caller-supplied cap may only lower the real device limit; it can never authorize a
     // vkCmdDispatch above maxComputeWorkGroupCount. Zero selects the physical limit.

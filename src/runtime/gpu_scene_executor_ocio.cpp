@@ -36,9 +36,33 @@ using gpu_scene_executor_detail::makeDiagnostic;
 
 render::GpuOcioProgram*
 GpuSceneExecutor::Impl::acquireOcioProgram(const PreparedGpuOcioCommand& command) {
+    if (deviceEpoch != device->ownershipEpoch()) {
+        ++counters.ocioProgramRefusals;
+        ocioAcquireDiagnostic =
+            makeDiagnostic(GpuSceneExecutorDiagnosticCode::InvalidArgument,
+                           "the OCIO executor belongs to another device generation");
+        return nullptr;
+    }
+    const auto phase = device->retainedProcessingPhase();
+    if (phase && phase->isUnproven()) {
+        ++counters.ocioProgramRefusals;
+        ocioAcquireDiagnostic = makeDiagnostic(GpuSceneExecutorDiagnosticCode::OwnerDrainRequired,
+                                               "the retained processing authority is unproven");
+        return nullptr;
+    }
+    const auto root = phase ? phase->rootIdentity() : render::GpuProcessingRootIdentity{};
     const auto& identity = command.identity();
     const auto found = ocioPrograms.find(identity);
     if (found != ocioPrograms.end()) {
+        if (found->second.root != root || found->second.epoch != device->ownershipEpoch() ||
+            !found->second.program->isBoundTo(*device) ||
+            found->second.program->creationRootIdentity() != root) {
+            ++counters.ocioProgramRefusals;
+            ocioAcquireDiagnostic = makeDiagnostic(
+                GpuSceneExecutorDiagnosticCode::InvalidArgument,
+                "the cached OCIO program belongs to another processing root or generation");
+            return nullptr;
+        }
         found->second.serial = ++ocioProgramSerial;
         ++counters.ocioProgramReuses;
         return found->second.program.get();
@@ -54,8 +78,9 @@ GpuSceneExecutor::Impl::acquireOcioProgram(const PreparedGpuOcioCommand& command
         .maxOwnedBytes = budgets.maxOcioOwnedBytesPerProgram,
         .maxLutBytes = budgets.maxOcioLutBytesPerProgram,
     };
-    auto created = render::GpuOcioProgram::create(*device, command.program(), words, programBudgets,
-                                                  [this]() { return cancelRequested; });
+    auto created = render::GpuOcioProgram::create(
+        *device, command.program(), words, programBudgets, [this]() { return cancelRequested; },
+        phase);
     if (!created) {
         ++counters.ocioProgramRefusals;
         ocioAcquireDiagnostic = diagnosticFromOcio(created.diagnostic);
@@ -84,9 +109,25 @@ GpuSceneExecutor::Impl::acquireOcioProgram(const PreparedGpuOcioCommand& command
         ocioPrograms.erase(victim);
         ++counters.ocioProgramEvictions;
     }
-    ocioProgramBytes += retainedBytes;
     auto inserted = ocioPrograms.emplace(
-        identity, OcioProgramEntry{std::move(created.program), retainedBytes, ++ocioProgramSerial});
+        identity, OcioProgramEntry{std::move(created.program), root, device->ownershipEpoch(),
+                                   retainedBytes, ++ocioProgramSerial});
+    if (!inserted.second) {
+        ++counters.ocioProgramRefusals;
+        ocioAcquireDiagnostic = makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                               "the OCIO program cache insertion did not succeed");
+        return nullptr;
+    }
+    ocioProgramBytes += retainedBytes;
+    if (!inserted.first->second.program->publishSampledStorage()) {
+        ocioProgramBytes -= retainedBytes;
+        ocioPrograms.erase(inserted.first);
+        counters.ocioRetainedProgramBytes = ocioProgramBytes;
+        ++counters.ocioProgramRefusals;
+        ocioAcquireDiagnostic = makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
+                                               "the retained LUT storage could not be published");
+        return nullptr;
+    }
     ++counters.ocioProgramCreations;
     counters.ocioRetainedProgramBytes = ocioProgramBytes;
     return inserted.first->second.program.get();

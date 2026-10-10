@@ -11,6 +11,7 @@
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/gpu_image_upload.hpp>
 #include <bloom/render/gpu_ocio_program.hpp>
+#include <bloom/render/gpu_processing_phase_budget.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/render/image_types.hpp>
 
@@ -262,12 +263,17 @@ makeProgram(GpuDevice& device, OcioGpuProgramDesc desc,
     if (!spirv.has_value()) {
         return nullptr;
     }
-    auto created = GpuOcioProgram::create(device, std::move(desc), *spirv, budgets);
+    auto created = GpuOcioProgram::create(device, std::move(desc), *spirv, budgets, {},
+                                          device.retainedProcessingPhase());
     if (!created) {
         std::cerr << "GpuOcioProgram::create failed: " << created.diagnostic.message << '\n';
         return nullptr;
     }
-    return std::shared_ptr<GpuOcioProgram>(std::move(created.program));
+    auto retained = std::shared_ptr<GpuOcioProgram>(std::move(created.program));
+    if (!retained->publishSampledStorage()) {
+        return nullptr;
+    }
+    return retained;
 }
 
 [[nodiscard]] inline std::shared_ptr<GpuOcioProgram> makeProgram(GpuDevice& device,
@@ -382,11 +388,14 @@ std::size_t compareEffect(Expectations& expectations, const std::vector<Rgba32f>
 
 // Test entry points defined across the resource, dispatch-plan, and reflection TUs.
 void testAcesHdrDisplayLut(Expectations& expectations, bloom::render::GpuDevice& device,
-                           const bloom::color::ResolvedBloomNeutralConfig& aces);
+                           const bloom::color::ResolvedBloomNeutralConfig& aces,
+                           const bloom::render::GpuProcessingPhaseBudget& budget);
 void testExposureContrastUniforms(Expectations& expectations, bloom::render::GpuDevice& device,
                                   const bloom::color::ResolvedBloomNeutralConfig& aces);
 void testLut3d(Expectations& expectations, bloom::render::GpuDevice& device,
                const bloom::color::ResolvedBloomNeutralConfig& aces);
+void testMultiLutPrefix(Expectations& expectations,
+                        const bloom::render::GpuDeviceCreationOptions& options);
 void testDispatchPlan(Expectations& expectations);
 void testShaderInterfaceMalformed(Expectations& expectations);
 void testForcedDispatchPlanning(Expectations& expectations, bloom::render::GpuDevice& device,

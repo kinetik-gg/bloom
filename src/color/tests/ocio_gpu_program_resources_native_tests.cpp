@@ -1,3 +1,4 @@
+#include "ocio_gpu_program_fault.hpp"
 #include "ocio_gpu_program_resources_test_support.hpp"
 
 using namespace bloom::color::ocio_resources_test;
@@ -5,7 +6,8 @@ using namespace bloom::color::ocio_resources_test;
 namespace bloom::color::ocio_resources_test {
 
 void testAcesHdrDisplayLut(Expectations& expectations, GpuDevice& device,
-                           const bloom::color::ResolvedBloomNeutralConfig& aces) {
+                           const bloom::color::ResolvedBloomNeutralConfig& aces,
+                           const bloom::render::GpuProcessingPhaseBudget& budget) {
     const std::string_view display = "Rec.2100-PQ - Display";
     const std::string_view view = "ACES 1.1 - HDR Video (1000 nits & Rec.2020 lim)";
     auto desc = bloom::color::buildOcioGpuProgramForDisplay(aces, display, view);
@@ -25,6 +27,10 @@ void testAcesHdrDisplayLut(Expectations& expectations, GpuDevice& device,
         return;
     }
     const std::uint64_t retained = program->retainedAllocationBytes();
+    const auto sampledClaims = budget.snapshot();
+    expectations.expect(sampledClaims.ownedNativeImages == desc.program()->textures.size() &&
+                            sampledClaims.ownedNativeImageBytes > 0,
+                        "the actual extracted LUT textures each carry rooted native ownership");
     const std::uint64_t declaredLutBytes =
         desc.program()->textures.front().samples.size() * sizeof(float);
     expectations.expect(retained >= declaredLutBytes,
@@ -93,6 +99,7 @@ void testAcesHdrDisplayLut(Expectations& expectations, GpuDevice& device,
     expectations.expect(alphaMismatches == 0, "the LUT display alpha is byte-exact");
 
     // Warm reuse: the retained texture/UBO/pipeline is reused with no re-upload.
+    const auto beforeWarm = budget.snapshot();
     const auto warm = program->beginDisplay(input, {}, kBudget);
     expectations.expect(warm.code == bloom::render::GpuOcioProgramDiagnosticCode::None,
                         "the warm LUT display begin is accepted");
@@ -105,6 +112,12 @@ void testAcesHdrDisplayLut(Expectations& expectations, GpuDevice& device,
                         "the warm LUT display reuses the retained resources");
     expectations.expect(program->retainedAllocationBytes() == retained,
                         "retainedAllocationBytes is stable across warm jobs");
+    const auto afterWarm = budget.snapshot();
+    expectations.expect(
+        afterWarm.ownedNativeImages == beforeWarm.ownedNativeImages &&
+            afterWarm.ownedNativeImageBytes == beforeWarm.ownedNativeImageBytes &&
+            afterWarm.ownedNonlocalNativeHostBytes == beforeWarm.ownedNonlocalNativeHostBytes,
+        "warm LUT reuse keeps the same native ownership after its transient output frees");
 }
 
 void testExposureContrastUniforms(Expectations& expectations, GpuDevice& device,
@@ -289,7 +302,20 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    bloom::render::GpuProcessingPhaseBudget budget;
+    budget.setHostCapacity(kBudget, true);
+    budget.setDeviceCapacity(kBudget, true);
+    auto phase = budget.reserve(
+        {.requestedExecutorBytes = kBudget, .minimumExecutorBytes = kBudget, .sourceFree = true});
+    if (!phase.lease) {
+        std::cerr << "FAILED: the declared resource fixture envelope is not admitted\n";
+        return 1;
+    }
     GpuDeviceCreationOptions options;
+    for (int index = 1; index + 1 < argc; ++index) {
+        if (std::string_view(argv[index]) == "--loader")
+            options.loader_path = argv[++index];
+    }
     auto device = GpuDevice::create(options);
     if (!device) {
         if (requireDevice) {
@@ -301,13 +327,34 @@ int main(int argc, char** argv) {
         return kSkipExit;
     }
     expectations.expect(device.device->state() == GpuDeviceState::Ready, "the device is Ready");
-    testAcesHdrDisplayLut(expectations, *device.device, *aces);
+    if (!device.device->retainProcessingPhase(phase.lease)) {
+        expectations.expect(false, "the actual sampled-image root is retained by the device");
+        return 1;
+    }
+    testAcesHdrDisplayLut(expectations, *device.device, *aces, budget);
     testExposureContrastUniforms(expectations, *device.device, *aces);
     testLut3d(expectations, *device.device, *aces);
+    bloom::render::ocio_program_detail::setLutRgbaFormatForTest(true);
+    testAcesHdrDisplayLut(expectations, *device.device, *aces, budget);
+    testLut3d(expectations, *device.device, *aces);
+    bloom::render::ocio_program_detail::setLutRgbaFormatForTest(false);
+    std::cout << "LUT_PIXEL_ORACLE forcedRGBA=1 HDR=executed 3D=executed\n";
+    testMultiLutPrefix(expectations, options);
     testForcedDispatchPlanning(expectations, *device.device, *aces);
     testDispatchRefusal(expectations, *device.device, *aces);
     testShaderInterfaceReflection(expectations, *device.device, *aces);
 
+    device.device->reclaimReleasedImages();
+    device.device->retireProcessingPhase(phase.lease->id(), true);
+    phase.lease.reset();
+    const auto finalClaims = budget.snapshot();
+    expectations.expect(
+        finalClaims.ownedNativeImageBytes == 0 && finalClaims.ownedNativeImages == 0 &&
+            finalClaims.ownedNonlocalNativeHostBytes == 0 && finalClaims.totalHostClaimBytes == 0 &&
+            finalClaims.totalDeviceClaimBytes == 0 && finalClaims.admittedPhases == 0 &&
+            finalClaims.unprovenPhases == 0 &&
+            device.device->ocioProgramRetirementStats().registeredPrograms == 0,
+        "actual LUT/native backing destruction conserves the shared resource root");
     if (expectations.failures() != 0) {
         std::cerr << expectations.failures() << " resource native expectation(s) failed\n";
         return 1;

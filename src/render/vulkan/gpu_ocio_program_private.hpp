@@ -10,6 +10,7 @@
 #include "gpu_device_private.hpp"
 #include "gpu_image_private.hpp"
 #include "gpu_ocio_program_dispatch_plan.hpp"
+#include "gpu_ocio_program_reclamation_private.hpp"
 #include "gpu_resident_display_private.hpp"
 
 #include <atomic>
@@ -17,6 +18,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace bloom::render::ocio_program_detail {
@@ -32,6 +34,19 @@ inline constexpr std::uint32_t kMaxQuarantines = 4;
 enum class UploadOutcome : std::uint8_t { Retired, Quarantined, Failed, OverBudget, Cancelled };
 
 struct SampledResource final {
+    SampledResource() = default;
+    SampledResource(const SampledResource&) = delete;
+    SampledResource& operator=(const SampledResource&) = delete;
+    SampledResource& operator=(SampledResource&&) = delete;
+    SampledResource(SampledResource&& other) noexcept
+        : storage(std::move(other.storage)), image(std::exchange(other.image, VK_NULL_HANDLE)),
+          view(std::exchange(other.view, VK_NULL_HANDLE)),
+          sampler(std::exchange(other.sampler, VK_NULL_HANDLE)),
+          allocation(std::exchange(other.allocation, VK_NULL_HANDLE)),
+          allocationBytes(std::exchange(other.allocationBytes, 0)), binding(other.binding),
+          sampleBytes(other.sampleBytes), format(other.format) {}
+
+    NativeImageStorageToken storage;
     VkImage image = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
     VkSampler sampler = VK_NULL_HANDLE;
@@ -39,6 +54,7 @@ struct SampledResource final {
     std::uint64_t allocationBytes = 0;
     std::uint32_t binding = 0;
     std::uint64_t sampleBytes = 0;
+    VkFormat format = VK_FORMAT_UNDEFINED;
 };
 
 [[nodiscard]] UploadOutcome
@@ -46,14 +62,17 @@ createSampledResource(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>
                       const OcioGpuTextureDesc& texture, std::uint64_t remainingOwnedBytes,
                       const GpuOcioProgramCancellation& cancellation,
                       SampledResource& out) noexcept;
-void destroySampledResource(vulkan_detail::DeviceAllocatorState& state,
-                            SampledResource& resource) noexcept;
+void destroySampledResource(
+    vulkan_detail::DeviceAllocatorState& state, SampledResource& resource,
+    const std::shared_ptr<GpuProcessingPhaseLease>& failedOrigin = {}) noexcept;
 
 [[nodiscard]] bool quarantineAllowed() noexcept;
 void noteQuarantine() noexcept;
 [[nodiscard]] bool teardownIncomplete() noexcept;
 [[nodiscard]] bool uploadQuarantineOccupied() noexcept;
 void retireUploadQuarantine() noexcept;
+[[nodiscard]] bool
+uploadQuarantinePendingFor(const vulkan_detail::DeviceAllocatorState& state) noexcept;
 
 inline void writeImageDescriptor(const vk::raii::DescriptorSet& set,
                                  vulkan_detail::DeviceAllocatorState& state,
@@ -132,6 +151,7 @@ struct GpuOcioProgram::Impl final {
         return control != nullptr && control->owner == std::this_thread::get_id();
     }
     void fail(GpuOcioProgramDiagnosticCode code, std::string message);
+    [[nodiscard]] GpuOcioProgramDiagnostic authorityDiagnostic() const;
     void beginImpl(bool display, std::shared_ptr<const GpuImage> input,
                    std::span<const std::byte> uniformBytes, std::uint64_t byteBudget);
     void releaseTransient();
@@ -139,13 +159,22 @@ struct GpuOcioProgram::Impl final {
     [[nodiscard]] bool createPipeline();
     [[nodiscard]] bool createOcioResources();
     [[nodiscard]] bool drainAndRetire() noexcept;
+    [[nodiscard]] bool retirementReady(vulkan_detail::DeviceAllocatorState& state) noexcept;
+    [[nodiscard]] bool registerRetirement() noexcept;
+    void enqueueRetirement() noexcept;
     [[nodiscard]] bool checkStatus();
     void writeStaticDescriptors();
     void writeInputDescriptor(const GpuImageImpl& image);
     void writeEffectOutputDescriptor(const GpuImageImpl& image);
     void writePackedDescriptor();
 
+    // First member: unregister only after every native RAII member has actually been destroyed.
+    ocio_program_detail::ProgramRegistration registration;
+    std::weak_ptr<GpuProcessingPhaseLease> submittedPhase;
     std::thread::id owner;
+    GpuProcessingRootIdentity creationRoot;
+    std::weak_ptr<GpuProcessingPhaseLease> creationPhase;
+    bool sampledPublished = false;
     std::shared_ptr<vulkan_detail::DeviceAllocatorState> control;
     GpuOcioProgramBudgets budgets;
     std::uint32_t expectedGeneration = 0;

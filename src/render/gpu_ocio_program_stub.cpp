@@ -28,7 +28,8 @@ void GpuOcioProgram::releaseImpl() noexcept {}
 GpuOcioProgramCreateResult GpuOcioProgram::create(GpuDevice&, OcioGpuProgramDesc program,
                                                   std::span<const std::uint32_t>,
                                                   const GpuOcioProgramBudgets&,
-                                                  GpuOcioProgramCancellation cancellation) {
+                                                  GpuOcioProgramCancellation cancellation,
+                                                  const std::shared_ptr<GpuProcessingPhaseLease>&) {
     program = {};
     cancellation = {};
     return {nullptr, unavailable()};
@@ -40,6 +41,8 @@ const GpuOcioProgramDiagnostic& GpuOcioProgram::diagnostic() const noexcept {
     static const GpuOcioProgramDiagnostic diagnostic = unavailable();
     return diagnostic;
 }
+GpuProcessingRootIdentity GpuOcioProgram::creationRootIdentity() const noexcept { return {}; }
+bool GpuOcioProgram::publishSampledStorage() noexcept { return false; }
 bool GpuOcioProgram::isBoundTo(GpuDevice&) const noexcept { return false; }
 GpuOcioProgramDiagnostic GpuOcioProgram::beginEffect(std::shared_ptr<const GpuImage> image,
                                                      std::span<const std::byte>, std::uint64_t) {

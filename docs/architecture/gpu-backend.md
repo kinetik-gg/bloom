@@ -1239,6 +1239,56 @@ quality pass. Verified packaging and normal-app replacement follow this checkpoi
 qualify all native allocations, block commitment, whole-process/UMA/OOM accounting, sustained
 performance or native macOS/Windows execution.
 
+### Rooted OCIO sampled-LUT image ownership (bounded LUT slice)
+
+The OCIO follow-on extends the existing native image token to explicitly rooted sampled 1D, 2D and
+3D LUT images. Program creation receives the exact phase lease already retained by the device,
+before job begin; an equal numeric phase id from another root is insufficient. Immutable neutral
+root identity is recorded even for zero-LUT programs without pinning a phase or native owner.
+Both runtime program caches check that root, device epoch and native allocator affinity before
+cold creation or warm reuse. Unproven authority is refused, with no second phase or quota grant.
+
+Each move-only sampled resource carries the same token from temporary image ownership through
+program retention or upload quarantine. Actual same-image requirements and dedicated flags feed
+the existing ranked, pinned VMA allocation path. Native bytes transfer from the admitted phase;
+actual nonlocal heap backing also claims the bounded, fresh same-root host subset before allocation.
+HOST_VISIBLE device-local BAR memory is not classified as nonlocal. Actual VMA size/type/heap
+reconcile before bind/view, and destruction precedes credit. These LUT images contribute to the
+existing native-image counters; staging, uniform/status/packed buffers, sample vectors, samplers,
+views and driver/allocator-block overhead remain outside allocation-owned image bytes.
+
+Both runtime caches promote sampled storage only after successful cache insertion and bookkeeping.
+Failed insertion or controlled partial promotion destroys the exact backing and folds the attempt's
+own prefix back without fabricating an independent release revision. Warm reuse under a new phase
+retains the same published image charge, rather than pinning the original phase. Rootless legacy
+programs remain outside this accounting.
+
+An intrusive program registration precedes native resources. Foreign final release marks its
+preowned node without allocating or calling the driver. The exact allocator generation and native
+owner drain after actual fence proof, outside the registry lock; native destruction precedes
+unregistration. Live aliases and exact-generation upload quarantine keep preview/final exit
+incomplete. Closing or timing out an owner is not retirement. The packed-host worker is not this
+native owner, and no autonomous cleanup tail is introduced.
+
+The authority and registry checkpoints pass separately from actual LUT backing evidence. Genuine
+native fixtures now cover dimensional/heap identity, pre-backing refusal and faults, compatible
+nonlocal freshness, forced RGBA format compatibility with unchanged HDR/3D CPU pixel oracles,
+required two-texture prefix cleanup, aliases/foreign drain and both textured runtime caches.
+Submitted display work with a fault-overridden unknown fence observation retains charges until
+actual owner fence retirement; this does not demonstrate an actual GPU hang. Submitted upload
+cancellation is a separate quarantine witness. Their exact attribution is recorded in the
+[owning plan](../plans/gpu-reliability-and-preview.md). Nine remaining selected owners pass
+separately from those direct native/cache proofs. All six required production writers and their
+fourteen-check route gate pass; all 324 desktop owned-TU strict checks close through a split prefix
+and disjoint remainder. The fresh Linux CPU-stub build and selected fallback tests pass with two
+explicit unavailable checks skipped. All fifteen distinct fallback strict consumers pass without
+diagnostics. Final repository quality passes after the six-file formatting-only repair, and the
+source-aligned application/CLI/media identity readback has zero missing dependencies. Exact
+integrated review, selective commit and verified packaging follow this bounded checkpoint.
+No buffer/WSI/external,
+whole-native, block/physical/UMA/OOM, sustained-performance or other-platform qualification is
+adopted by this incremental checkpoint.
+
 ### Rooted packed-host payload ownership (bounded ownership slice)
 
 This narrow G6B slice tracks allocator-requested RGBA8 pixel payloads for explicitly rooted
