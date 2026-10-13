@@ -51,6 +51,7 @@ void GpuSceneExecutor::Impl::clearJob() noexcept {
     cursor = 0;
     requestBudget = 0;
     coverageBytes = 0;
+    batchAttempted = false;
     nativeKind = NativeKind::None;
     nativeInFlight = false;
     cancelRequested = false;
@@ -70,7 +71,8 @@ bool GpuSceneExecutor::Impl::hasUnretiredNative() const noexcept {
     const bool coverageUnretired =
         pathCoverage != nullptr && pathCoverage->hasUnretiredSubmission();
     return solidUnretired || compositeUnretired || uploadUnretired || affineUnretired ||
-           blendUnretired || pointResampleUnretired || coverageUnretired || ocioProgramsUnretired();
+           blendUnretired || pointResampleUnretired || coverageUnretired ||
+           ocioProgramsUnretired() || (operationBatch && operationBatch->hasUnretiredSubmission());
 }
 
 std::uint64_t GpuSceneExecutor::Impl::remainingBudget() const noexcept {
@@ -195,7 +197,9 @@ void GpuSceneExecutor::Impl::finishReady() noexcept {
 }
 
 void GpuSceneExecutor::Impl::advanceDrain() noexcept {
-    if (nativeKind == NativeKind::Solid && solid != nullptr) {
+    if (nativeKind == NativeKind::Batch && operationBatch) {
+        static_cast<void>(operationBatch->poll());
+    } else if (nativeKind == NativeKind::Solid && solid != nullptr) {
         static_cast<void>(solid->poll());
     } else if (nativeKind == NativeKind::Composite && composite != nullptr) {
         static_cast<void>(composite->poll());
@@ -376,6 +380,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
     }
     }
     ++counters.dispatches;
+    ++counters.nativeSubmissions;
     if (step.kind == GpuSceneExecutorStepKind::Solid) {
         nativeKind = NativeKind::Solid;
     } else if (step.kind == GpuSceneExecutorStepKind::CoveredSolid) {
@@ -417,6 +422,7 @@ GpuSceneExecutor::Impl::~Impl() {
     // does ordinary member destruction release the executor's own metadata and pins. No separate
     // global registry, leak list, or allocation from this noexcept destructor is used.
     ocioPrograms.clear();
+    operationBatch.reset();
     upload.reset();
     affine.reset();
     blend.reset();

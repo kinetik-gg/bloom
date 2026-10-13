@@ -1,10 +1,10 @@
 # GPU reliability, media preparation, and preview execution plan
 
-Status: resumed — remaining overhaul tracked in issue #304
+Status: Linux implementation locally qualified; cross-platform gates remain
 
-Updated: 2026-10-13
+Updated: 2026-10-14
 
-The current issue #304 Linux implementation, measurement and remaining integration gates are
+The current issue #304 Linux implementation, measurements and integration requirements are
 consolidated in [the Linux qualification record](gpu-304-linux-qualification.md). Historical bounded
 checkpoints below retain their original scope.
 

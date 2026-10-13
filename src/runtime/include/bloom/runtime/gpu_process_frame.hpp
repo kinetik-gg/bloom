@@ -200,8 +200,9 @@ struct GpuProcessFrameEvaluatorOptions final {
     std::shared_ptr<const GpuSceneOcioContext> ocioContext;
     // Per-request media context. Preferred form is `mediaContextProvider`, which the evaluator
     // calls on the CALLING CPU worker during scene preparation (never on the GPU owner thread) so
-    // the asset base directory follows a session Open/SaveAs exactly like the preview path;
-    // `mediaContext` is the static fallback when no provider is set.
+    // callers without a captured source-base override observe current session context.
+    // `mediaContext` is the static fallback when no provider is set. Final output callers pass
+    // their snapshot's captured base to evaluate(), retaining it across Open/SaveAs.
     GpuSceneMediaContext mediaContext;
     std::function<GpuSceneMediaContext()> mediaContextProvider;
     // Inert shared resolver the owning GpuExportProvider runs once on its CPU-worker bootstrap to
@@ -246,10 +247,14 @@ class GpuProcessFrameEvaluator final {
     // before dispatch. It may be null (identity arm): only the exact process payload is read back.
     // When non-null the one combined submission also transfers the encoded output (process-effect
     // RGBA32F or straight display RGBA8) alongside the unchanged process payload.
+    // An engaged source-base override belongs to the captured plan/request, including an empty
+    // directory. It replaces only the provider's live base; owned caches and sessions remain
+    // shared.
     [[nodiscard]] GpuProcessFrameOutcome
     evaluate(std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
              const CancellationToken& cancellation = {}, EvaluationProgressCallback progress = {},
-             std::shared_ptr<const PreparedGpuOcioCommand> outputCommand = nullptr);
+             std::shared_ptr<const PreparedGpuOcioCommand> outputCommand = nullptr,
+             const std::optional<std::filesystem::path>& assetBaseDirectory = std::nullopt);
 
     // Non-blocking. The destructor joins the owner worker.
     void beginShutdown() noexcept;

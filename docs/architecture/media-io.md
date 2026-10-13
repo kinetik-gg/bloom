@@ -562,7 +562,11 @@ It never retains the
 whole encoded movie in RAM. The original source pathname never authorizes hash elision. Before a
 revision is published, the write descriptor is closed, the temporary filename and private directory
 are removed, and only an owning read-only file descriptor remains. The SHA-256 and captured length
-are tied to that host-created type. A malicious process controlling the same user/debugger is outside
+are tied to that host-created type. Publication also verifies that the no-follow read-only open has
+the writer's exact device/inode identity and length, and that its link count is zero after unlink and
+writer close. A replaced temporary pathname, symlink or surviving hard link fails with typed I/O
+diagnostics and releases the capture quota; it cannot publish a mismatched digest/decoder source.
+A malicious process controlling the same user/debugger is outside
 this ownership contract; filesystem timestamps and mutable artist paths cannot change admitted bytes.
 
 The worker-pool host accepts that owning capability separately from serialized request fields.

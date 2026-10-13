@@ -163,6 +163,64 @@ void testNativeRetirementContracts(Expectations& expectations, GpuDevice& device
         return;
     }
 
+    // An uncertain result AFTER actual queue acceptance must not become an untaken Ready batch
+    // when a later real fence retires. Its failed logical job publishes no cache entries and
+    // releases the exact old phase so capacity-one admission can recover without a later job.
+    {
+        bloom::render::GpuProcessingPhaseBudget root(1);
+        root.setHostCapacity(kSceneBudget * 2, true);
+        root.setDeviceCapacity(kSceneBudget * 2, true);
+        auto phase = root.reserve({.fixedHostBytes = 1,
+                                   .requestedExecutorBytes = kSceneBudget,
+                                   .minimumExecutorBytes = 1,
+                                   .sourceFree = true});
+        expectations.expect(phase.lease && device.retainProcessingPhase(phase.lease),
+                            "uncertain submit: actual capacity-one phase admits");
+        if (!phase.lease)
+            return;
+        auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+        auto exec = GpuSceneExecutor::create(device, *cache.cache);
+        if (!exec) {
+            expectations.expect(false, "uncertain submit: production batch executor creates");
+            return;
+        }
+        expectations.expect(
+            exec.executor->begin(prepared.scene, phase.lease->executorByteLimit()).code ==
+                GpuSceneExecutorDiagnosticCode::None,
+            "uncertain submit: real graph begins");
+        fault::set(Fault::UnknownSubmitAfterAcceptance);
+        expectations.expect(exec.executor->poll() == GpuSceneExecutorPollResult::Failure &&
+                                exec.executor->counters().nativeBatches == 1 &&
+                                exec.executor->counters().nativeSubmissions == 1 &&
+                                exec.executor->ownerDrainRequired() &&
+                                exec.executor->hasUnretiredSubmission() &&
+                                cache.cache->entryCount() == 0,
+                            "uncertain submit: actual accepted batch fails logically with every "
+                            "backing retained and no cache publication");
+        for (std::uint64_t i = 0; i < kMaxPollIterations && exec.executor->ownerDrainRequired();
+             ++i) {
+            static_cast<void>(exec.executor->poll());
+            std::this_thread::yield();
+        }
+        expectations.expect(!exec.executor->ownerDrainRequired() &&
+                                !exec.executor->hasUnretiredSubmission() &&
+                                !exec.executor->takeImage() && cache.cache->entryCount() == 0 &&
+                                root.snapshot().ownedNativeImageBytes == 0 &&
+                                root.snapshot().ownedNativeBufferBytes == 0,
+                            "uncertain submit: genuine fence proof discards all outputs instead of "
+                            "retaining Ready pins");
+        device.retireProcessingPhase(phase.lease->id(), true);
+        phase.lease.reset();
+        auto recovered = root.reserve({.fixedHostBytes = 1,
+                                       .requestedExecutorBytes = 1,
+                                       .minimumExecutorBytes = 1,
+                                       .sourceFree = true});
+        expectations.expect(
+            recovered.lease != nullptr,
+            "uncertain submit: exact capacity-one phase admission recovers without a second job");
+        fault::clear();
+    }
+
     // 1) Deadline while a real submitted job's poll is stalled: fail the logical request promptly,
     //    retain the unproven submission, refuse reuse, then drain and reuse.
     {
@@ -178,6 +236,8 @@ void testNativeRetirementContracts(Expectations& expectations, GpuDevice& device
                                 "drain: begin accepts");
             expectations.expect(exec.executor->poll() == GpuSceneExecutorPollResult::Pending,
                                 "drain: the first poll submits and stays pending");
+            expectations.expect(exec.executor->counters().nativeBatches > 0,
+                                "drain: deadline fault hits an actual submitted native batch");
             fault::set(Fault::StallPending);
             const auto timedOut = exec.executor->poll();
             expectations.expect(timedOut == GpuSceneExecutorPollResult::Failure,

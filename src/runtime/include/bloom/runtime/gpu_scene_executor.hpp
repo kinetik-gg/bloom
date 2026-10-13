@@ -150,6 +150,11 @@ struct GpuSceneExecutorCounters final {
     // Actual VMA retained bytes currently charged to the OCIO program cache.
     std::uint64_t ocioRetainedProgramBytes = 0;
     std::uint64_t dispatches = 0;
+    // Accepted production work submissions. Multiple dispatches may share one bounded batch;
+    // optional diagnostic timestamp markers and the final readback are separate.
+    std::uint64_t nativeSubmissions = 0;
+    std::uint64_t nativeBatches = 0;
+    std::uint64_t nativeBatchFallbacks = 0;
     std::uint64_t uploads = 0;
     std::uint64_t readbacks = 0;
     // CPU steady-clock wall stages. Submit includes host allocation/map/command recording;
@@ -227,6 +232,9 @@ struct GpuSceneExecutorBudgets final {
     // Bounded dependent-step continuation. False preserves one step per owner turn for
     // controlled baseline comparisons using this same production executor.
     bool continueCompletedStepImmediately = true;
+    // Bounded two-to-eight kernel native command batches; serial native fallback preserves
+    // coverage and live-memory bounds for ineligible or pre-submit-refused plans.
+    bool enableNativeBatches = true;
 };
 
 struct GpuSceneExecutorCreateResult;

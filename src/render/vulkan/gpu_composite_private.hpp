@@ -44,6 +44,7 @@ struct CompositeBuffer final {
     ~CompositeBuffer();
     void release() noexcept;
     void releaseStaging() noexcept;
+    void releaseFailedAttempt() noexcept;
     void recordInitialization(VkCommandBuffer commandBuffer) const noexcept;
 
     std::shared_ptr<vulkan_detail::DeviceAllocatorState> state;
@@ -64,7 +65,7 @@ struct CompositeBuffer final {
 [[nodiscard]] bool
 createCompositeBuffer(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>& owner,
                       std::uint64_t bytes, bool hostVisible, const void* initialData,
-                      CompositeBuffer& out) noexcept;
+                      CompositeBuffer& out, bool restoreFailedPrefix = false) noexcept;
 
 // Builds one compute pipeline from the given SPIR-V with `bindingCount` storage bindings (the first
 // N are storage images, the rest storage buffers) and a push-constant range of `pushBytes`.

@@ -150,6 +150,11 @@ class GpuOutputColorStage final {
     [[nodiscard]] bool
     retiredBudgetRefusal(const std::shared_ptr<render::GpuProcessingPhaseLease>& phase) noexcept;
 
+    // A failed host handoff after a positively completed readback may release its exact phase.
+    // Unknown native/LUT work, another phase, or another owner cannot satisfy this proof.
+    [[nodiscard]] bool
+    retiredReadbackFailure(const std::shared_ptr<render::GpuProcessingPhaseLease>& phase) noexcept;
+
     // Non-blocking owner-thread advance across the dispatch and readback phases.
     [[nodiscard]] GpuOutputColorPollResult poll();
 

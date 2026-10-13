@@ -37,6 +37,18 @@ void testFinalEvaluatorTerminalAndUnknown(Expectations& expectations) {
     } restore;
     const auto plan = test::twoLayerPlan(test::format(8, 8), {}, {}, 8, 8, 92000);
     const auto request = test::requestFor(*plan, test::RationalTime::fromInteger(0), 64ULL << 20);
+    faults::setReadbackFaultForTest(faults::ReadbackFault::FailHostAllocationAfterFence);
+    const auto failedHandoff = evaluator->evaluate(plan, request);
+    faults::setReadbackFaultForTest(faults::ReadbackFault::None);
+    const auto afterFailure = policy->snapshot().reservations;
+    expectations.expect(
+        failedHandoff.status == GpuProcessFrameStatus::Failed && !failedHandoff.frame &&
+            failedHandoff.diagnostic.code == GpuProcessFrameDiagnosticCode::ReadbackFailed &&
+            failedHandoff.diagnostic.message ==
+                "the readback host buffers could not be allocated" &&
+            failedHandoff.counters.nativeDispatches > 0 && afterFailure.admittedPhases == 0 &&
+            afterFailure.unprovenPhases == 0 && afterFailure.ownedNativeBuffers == 0,
+        "final-evaluator: failed host handoff after real fence proof releases exact max1 phase");
     auto first = evaluator->evaluate(plan, request);
     expectations.expect(first.status == GpuProcessFrameStatus::Evaluated && first.frame &&
                             first.deviceOwnershipEpoch != 0 &&

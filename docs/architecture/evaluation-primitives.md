@@ -462,6 +462,16 @@ alpha remains finite in `[0, 1]`, and alpha zero canonicalizes RGB to exact zero
 config must resolve that exact id as a non-data scene-linear colour space before any operation that
 needs an OCIO transform; a matching alias, role, or display name is insufficient.
 
+An escaping colour intent retains immutable ownership of its working-space and configuration-URI
+strings. `captureEvaluationColorIntent` preserves the aggregate request API, reuses an exact existing
+owner, and reports allocation failure explicitly; ownership does not participate in semantic
+equality. CPU/GPU evaluation, prepared-scene construction and asynchronous preview submission
+capture raw caller views before publication. Preview settings, queued work, RAM/background keys,
+thumbnails and retained frame identities keep that owner across colour changes and New/Open.
+Failed capture rejects the request; it never substitutes the Neutral configuration. Immediate UI
+reads may remain borrowed while the session is live; cancelled workers still retain their captured
+strings until they actually finish.
+
 The compatibility spelling `EvaluationColorIntent::LinearRec709Scene` still denotes the zero-revision
 `lin_rec709_scene` intent, preserving existing process-frame and reference-display bytes. Generalized
 intents add their working-space id and config revision to cache/output identity. CPU image primitive

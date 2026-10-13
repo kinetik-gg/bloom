@@ -16,7 +16,13 @@
 
 namespace bloom::render::gpu_scene_executor_fault {
 
-enum class PollFault : std::uint8_t { None, StallPending, DeviceLost, UnknownFence };
+enum class PollFault : std::uint8_t {
+    None,
+    StallPending,
+    DeviceLost,
+    UnknownFence,
+    UnknownSubmitAfterAcceptance
+};
 
 inline std::atomic<std::uint8_t>& cell() noexcept {
     static std::atomic<std::uint8_t> value{0};

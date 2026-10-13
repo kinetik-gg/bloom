@@ -12,13 +12,19 @@ enum class NativeBufferAllocationOutcome { Allocated, TransferBudgetRefused, Pha
 
 // One actual unbound buffer, original AUTO access/mapping preferences, then bounded compatible
 // one-type attempts. The caller owns the token from the first backing call and must free first.
-[[nodiscard]] inline NativeBufferAllocationOutcome
-allocateCoveredBuffer(DeviceAllocatorState& state, const VkBufferCreateInfo& bufferInfo,
-                      const VmaAllocationCreateInfo& original,
-                      const std::uint64_t maximumBackingBytes, VkBuffer& buffer,
-                      VmaAllocation& allocation, VmaAllocationInfo& allocationInfo,
-                      NativeBufferStorageToken& token,
-                      NativeBufferPurpose purpose = NativeBufferPurpose::Output) noexcept {
+[[nodiscard]] inline NativeBufferAllocationOutcome allocateCoveredBuffer(
+    DeviceAllocatorState& state, const VkBufferCreateInfo& bufferInfo,
+    const VmaAllocationCreateInfo& original, const std::uint64_t maximumBackingBytes,
+    VkBuffer& buffer, VmaAllocation& allocation, VmaAllocationInfo& allocationInfo,
+    NativeBufferStorageToken& token, NativeBufferPurpose purpose = NativeBufferPurpose::Output,
+    const bool restoreFailedPrefix = false) noexcept {
+    const auto release = [&] {
+        if (restoreFailedPrefix && purpose == NativeBufferPurpose::Processing)
+            static_cast<void>(
+                token.releaseFailedAttemptAfterBackingDestroyed(state.processingPhase));
+        else
+            token = {};
+    };
     state.bufferStorageRefusal.reset();
     const bool presentation = purpose == NativeBufferPurpose::Presentation;
     if (presentation)
@@ -121,7 +127,7 @@ allocateCoveredBuffer(DeviceAllocatorState& state, const VkBufferCreateInfo& buf
         if (state.nativeBufferAllocationFault == NativeBufferAllocationFault::Allocation) {
             state.nativeBufferAllocationFault = NativeBufferAllocationFault::None;
             destroyUnbound();
-            token = {};
+            release();
             state.bufferStorageRefusal.reset();
             if (presentation)
                 state.presentationStorageRefusal.reset();
@@ -132,7 +138,7 @@ allocateCoveredBuffer(DeviceAllocatorState& state, const VkBufferCreateInfo& buf
             ++state.nativeBufferBackingAttempts;
         if (vmaAllocateMemoryForBuffer(state.allocator, buffer, &pinned, &allocation,
                                        &allocationInfo) != VK_SUCCESS) {
-            token = {};
+            release();
             continue;
         }
         const auto fault =
@@ -150,7 +156,7 @@ allocateCoveredBuffer(DeviceAllocatorState& state, const VkBufferCreateInfo& buf
             if (state.nativeBufferBackingsDestroyed != UINT64_MAX)
                 ++state.nativeBufferBackingsDestroyed;
             allocation = VK_NULL_HANDLE;
-            token = {};
+            release();
             state.bufferStorageRefusal.reset();
             if (presentation)
                 state.presentationStorageRefusal.reset();

@@ -42,7 +42,8 @@ struct BenchmarkPhase final {
 [[nodiscard]] BenchmarkRun
 runBenchmarkScene(GpuDevice& device, bloom::render::GpuProcessingPhaseBudget& root,
                   GpuSceneExecutor& executor, const std::shared_ptr<const PreparedGpuScene>& scene,
-                  const std::chrono::milliseconds cadence, const bool observeMemory = false) {
+                  const std::chrono::milliseconds cadence, const bool observeMemory = false,
+                  const std::uint64_t requestLimit = UINT64_MAX) {
     BenchmarkRun run;
     const auto grant =
         root.reserve({.fixedHostBytes = 1,
@@ -70,7 +71,8 @@ runBenchmarkScene(GpuDevice& device, bloom::render::GpuProcessingPhaseBudget& ro
     run.before = executor.counters();
     const auto started = std::chrono::steady_clock::now();
     const auto deadline = started + std::chrono::seconds(30);
-    run.scene.begin = executor.begin(scene, grant.lease->executorByteLimit());
+    run.scene.begin =
+        executor.begin(scene, std::min(grant.lease->executorByteLimit(), requestLimit));
     run.beginPlanMilliseconds =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started)
             .count();
@@ -213,6 +215,7 @@ void runBenchmark(Expectations& expectations, GpuDevice& device) {
         for (std::size_t mode = 0; mode < executors.size(); ++mode) {
             GpuSceneExecutorBudgets budgets;
             budgets.collectQueueTimestamps = true;
+            budgets.enableNativeBatches = false;
             budgets.continueCompletedStepImmediately = mode != 0;
             auto created = GpuSceneExecutor::create(device, *cache.cache, budgets);
             if (!created) {

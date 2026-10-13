@@ -49,7 +49,7 @@ NATIVE_TESTS = (
     "bloom.render.gpu_display_transfer", "bloom.render.gpu_resident_display",
     "bloom.render.native_operation_buffer", "bloom.render.native_presentation_allocation",
     "bloom.render.native_ocio_image_storage", "bloom.render.gpu_queue_timing",
-    "bloom.render.gpu_allocator_memory",
+    "bloom.render.gpu_allocator_memory", "bloom.render.gpu_operation_batch",
 )
 NATIVE_TARGETS = (
     "bloom_render_gpu_device_test", "bloom_render_native_processing_buffer_test",
@@ -57,6 +57,7 @@ NATIVE_TARGETS = (
     "bloom_render_gpu_resident_display_test", "bloom_render_native_operation_buffer_test",
     "bloom_render_native_presentation_allocation_test", "bloom_render_native_ocio_image_storage_test",
     "bloom_render_gpu_queue_timing_test", "bloom_render_gpu_allocator_memory_test",
+    "bloom_render_gpu_operation_batch_test",
 )
 
 
@@ -169,13 +170,13 @@ def run(args):
             if code and "required device unavailable:" in text:
                 report["native"] = {"status": "NotRun", "reason": "Compatible device unavailable",
                                      "requireDeviceRejected": True}
-                failure = args.require_device
+                failure = True
             elif code:
                 raise RuntimeError("Native device probe failed an invariant")
             elif device_type not in ("discrete-gpu", "integrated-gpu", "virtual-gpu"):
                 report["native"] = {"status": "NotRun", "reason": "Hardware GPU not proven",
                                      "deviceType": device_type}
-                failure = args.require_device
+                failure = True
             else:
                 for name in NATIVE_TESTS:
                     code, text = execute(name, ("--require-device",))
@@ -211,7 +212,8 @@ def main():
     parser.add_argument("--config", default="Release")
     parser.add_argument("--build", action="store_true")
     parser.add_argument("--jobs", type=int, default=2)
-    parser.add_argument("--require-device", action="store_true")
+    parser.add_argument("--require-device", action="store_true",
+                        help="Explicit requirement marker; native mode always requires hardware")
     return run(parser.parse_args())
 
 

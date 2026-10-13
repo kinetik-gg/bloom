@@ -149,6 +149,14 @@ bool Session::isValid() const noexcept {
     return binding_ ? binding_->valid() : session_ != nullptr && session_->isValid();
 }
 
+SessionRenderSourceSnapshot Session::renderSourceSnapshot() const {
+    if (binding_) {
+        return binding_->renderSourceSnapshot ? binding_->renderSourceSnapshot()
+                                              : SessionRenderSourceSnapshot{snapshot(), {}};
+    }
+    return {snapshot(), displayPath_.parent_path()};
+}
+
 host::ProjectSessionStateSnapshot Session::state() const {
     return session_ == nullptr ? host::ProjectSessionStateSnapshot{} : session_->stateSnapshot();
 }

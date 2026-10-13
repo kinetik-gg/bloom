@@ -140,6 +140,7 @@ target_sources(
         gpu_scene_executor.cpp
         gpu_scene_executor_planner.cpp
         gpu_scene_executor_execution.cpp
+        gpu_scene_executor_batch.cpp
         gpu_scene_executor_poll.cpp
         gpu_scene_executor_coverage.cpp
         gpu_scene_executor_ocio.cpp

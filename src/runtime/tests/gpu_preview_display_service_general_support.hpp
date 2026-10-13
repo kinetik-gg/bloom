@@ -208,7 +208,7 @@ makePlan(const std::uint32_t w, const std::uint32_t h) {
 [[nodiscard]] PreviewRequestIdentity
 makeIdentity(const bloom::runtime::CompiledCompositionPlan& plan, const std::uint64_t generation,
              std::string display, std::string view, const ViewAdjust adjust,
-             const EvaluationColorIntent intent = EvaluationColorIntent::LinearRec709Scene) {
+             const EvaluationColorIntent& intent = EvaluationColorIntent::LinearRec709Scene) {
     return PreviewRequestIdentity{.projectId = plan.projectId(),
                                   .compositionId = plan.compositionId(),
                                   .sourceRevision = plan.sourceRevision(),

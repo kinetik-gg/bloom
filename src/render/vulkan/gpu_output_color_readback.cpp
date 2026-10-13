@@ -661,6 +661,8 @@ GpuOutputColorReadbackState GpuOutputColorReadback::poll() noexcept {
             return impl.state;
         }
         try {
+            if (activeFault() == ReadbackFault::FailHostAllocationAfterFence)
+                throw std::bad_alloc{};
             const auto* const base = static_cast<const std::byte*>(info.pMappedData);
             const auto makeFloat = [&](const std::uint64_t bytes,
                                        const HostPixelStorageDomain domain) {

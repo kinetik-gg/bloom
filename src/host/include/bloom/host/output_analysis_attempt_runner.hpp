@@ -91,6 +91,9 @@ struct OutputAnalysisAttemptGpuProvenanceV1 final {
 struct OutputAnalysisAttemptRequestV1 final {
     std::shared_ptr<const runtime::CompiledCompositionPlan> plan;
     runtime::EvaluationRequest evaluation;
+    // Captured source context for final evaluation. The caller supplies the project/source
+    // directory; the export destination never establishes media-locator authority.
+    std::filesystem::path assetBaseDirectory{};
     std::filesystem::path targetPath;
     platform::ArtifactOverwritePolicy overwritePolicy =
         platform::ArtifactOverwritePolicy::CreateOrReplace;

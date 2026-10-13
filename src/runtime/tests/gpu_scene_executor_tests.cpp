@@ -14,6 +14,7 @@
 #include <bloom/render/gpu_composite.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
+#include <bloom/render/gpu_operation_batch.hpp>
 #include <bloom/render/gpu_processing_phase_budget.hpp>
 #include <bloom/render/gpu_solid.hpp>
 #include <bloom/render/image_types.hpp>
@@ -499,6 +500,9 @@ void testVectorLeaves(Expectations& expectations, GpuSceneExecutor& executor,
 
 #include "gpu_scene_executor_benchmark_tests.ipp"
 
+// Depends on the shared phase/caller measurement helpers above.
+#include "gpu_scene_executor_batch_tests.ipp"
+
 } // namespace
 
 int main(const int argc, char** argv) {
@@ -527,6 +531,11 @@ int main(const int argc, char** argv) {
 
         if (options.benchmark) {
             runBenchmark(expectations, *device.device);
+            auto batchDevice = GpuDevice::create(createOptions);
+            if (batchDevice)
+                runNativeBatchComparison(expectations, *batchDevice.device, true);
+            else
+                expectations.expect(false, "batch benchmark: required actual device creates");
             if (!expectations.ok()) {
                 std::cerr << "FAIL: GPU scene executor benchmark expectations failed\n";
                 return 1;
@@ -569,7 +578,11 @@ int main(const int argc, char** argv) {
         testAliasedInputChargedOnce(expectations, *device.device);
         testNativeOwnershipDuringTeardown(expectations, *device.device);
         testOptionalQueueTiming(expectations, *device.device);
+        executor.executor.reset();
+        cache.cache->clear();
+        device.device->reclaimReleasedImages();
         testNativeRetirementContracts(expectations, *device.device);
+        runNativeBatchComparison(expectations, *device.device, false);
 
         if (!expectations.ok()) {
             std::cerr << "FAIL: GPU scene executor expectations failed\n";

@@ -210,8 +210,9 @@ void testChangedTransformReusesUpload(Expectations& expectations, GpuDevice& dev
 
     const auto planA = mediaPlan(format(8, 8), fixture.asset,
                                  LayerValues{.position = {4.3, 3.1}, .opacity = 1.0}, 1500);
-    const auto planB = mediaPlan(format(8, 8), fixture.asset,
-                                 LayerValues{.position = {2.7, 2.4}, .opacity = 1.0}, 1600);
+    const auto planB =
+        mediaPlan(format(8, 8), fixture.asset,
+                  LayerValues{.position = {2.7, 2.4}, .rotation = 7.25, .opacity = 1.0}, 1600);
     const auto a = builder.build(planA, requestFor(*planA));
     const auto b = builder.build(planB, requestFor(*planB));
     expectations.expect(a.hasValue() && b.hasValue(), "reuse: both scenes prepare");
@@ -234,6 +235,9 @@ void testChangedTransformReusesUpload(Expectations& expectations, GpuDevice& dev
     }
     const auto afterFirst = executor.executor->counters();
     expectations.expect(afterFirst.uploads == 1, "reuse: the first run uploads once");
+    expectations.expect(afterFirst.nativeBatches > 0 &&
+                            afterFirst.nativeSubmissions < afterFirst.dispatches,
+                        "reuse: cold uploaded media downstream kernels share real submissions");
     const auto cachedSource = cache.cache->find(uploadA->semanticKey);
     expectations.expect(cachedSource != nullptr, "reuse: the uploaded source is cached");
     if (cachedSource == nullptr) {
@@ -252,6 +256,12 @@ void testChangedTransformReusesUpload(Expectations& expectations, GpuDevice& dev
                         "reuse: the changed transform serves the source from the content cache");
     expectations.expect(afterSecond.dispatches > afterFirst.dispatches,
                         "reuse: the changed transform still dispatches the transform/output");
+    expectations.expect(
+        afterSecond.affineDispatches > afterFirst.affineDispatches &&
+            afterSecond.nativeBatches > afterFirst.nativeBatches &&
+            afterSecond.nativeSubmissions - afterFirst.nativeSubmissions <
+                afterSecond.dispatches - afterFirst.dispatches,
+        "reuse: edited affine/source-over batch pins the cached media source and reduces submits");
 
     const auto cachedSourceAgain = cache.cache->find(uploadB->semanticKey);
     expectations.expect(cachedSourceAgain.get() == cachedSource.get(),
@@ -269,6 +279,13 @@ void testChangedTransformReusesUpload(Expectations& expectations, GpuDevice& dev
                 pixelsClose(readback.pixels, frame.frame()->processImage().pixels()),
             "reuse: the reused source still yields every-pixel parity");
     }
+    const auto unchanged = runScene(*executor.executor, b.scene, kSceneBudget);
+    const auto afterUnchanged = executor.executor->counters();
+    expectations.expect(unchanged.ready &&
+                            afterUnchanged.nativeSubmissions == afterSecond.nativeSubmissions &&
+                            afterUnchanged.dispatches == afterSecond.dispatches &&
+                            afterUnchanged.uploads == afterSecond.uploads,
+                        "reuse: unchanged edited media uses cached output with zero submissions");
 }
 
 // A changed source image, sequence frame or input colour interpretation is a new source key and a
@@ -729,6 +746,9 @@ int main(const int argc, char** argv) {
             return expectations.ok() ? 0 : 1;
         }
 
+        // Run the explicit batching proof before a long-lived parity facade occupies the one
+        // bounded per-device batch slot; other simultaneous executors retain their serial fallback.
+        testChangedTransformReusesUpload(expectations, *device.device, evaluator, fixture);
         auto parityCache =
             GpuSceneCache::create(*device.device, GpuSceneCacheBudgets{kCacheBudget});
         expectations.expect(parityCache.hasValue(), "the parity cache is created");
@@ -744,7 +764,6 @@ int main(const int argc, char** argv) {
         }
 
         testStillImageParity(expectations, *parityExecutor.executor, evaluator, fixture);
-        testChangedTransformReusesUpload(expectations, *device.device, evaluator, fixture);
         testChangedSourceInvalidates(expectations, *device.device, evaluator, fixture);
         testWarmOutputZeroDispatch(expectations, *device.device, evaluator, fixture);
         testCachedInputBudget(expectations, *device.device, evaluator, fixture);

@@ -18,6 +18,8 @@ enum class ReadbackFault : std::uint8_t {
     FailSubmit,
     // poll() observes the deadline as exceeded without waiting on the real fence.
     ForceFenceTimeout,
+    // Host adoption fails only after the real fence proved the readback submission complete.
+    FailHostAllocationAfterFence,
 };
 
 // Production-owned atomic read by the readback implementation.

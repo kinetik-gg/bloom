@@ -495,7 +495,12 @@ void AssetController::refresh() {
     const auto snapshot = session_.snapshot();
     const auto directory = baseDirectory();
     const auto time = session_.currentTime();
-    const auto colorIntent = session_.colorIntent();
+    const auto capturedColor = runtime::captureEvaluationColorIntent(session_.colorIntent());
+    if (!capturedColor) {
+        emit diagnostic(tr("Media thumbnail colour intent could not be captured"));
+        return;
+    }
+    const auto& colorIntent = *capturedColor;
     const auto* composition = session_.composition();
     const auto rate =
         composition ? composition->format().frameRate() : document::FrameRate::framesPerSecond24();

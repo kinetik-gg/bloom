@@ -149,6 +149,16 @@ bool GpuOutputColorStage::retiredBudgetRefusal(
     return true;
 }
 
+bool GpuOutputColorStage::retiredReadbackFailure(
+    const std::shared_ptr<render::GpuProcessingPhaseLease>& phase) noexcept {
+    // The exact owner/epoch/phase and all independent witnesses are checked before mutable state.
+    if (!retirementSafe(phase) || phase_ != Phase::Failure ||
+        diagnostic_.code != GpuOutputColorDiagnosticCode::ReadbackFailed)
+        return false;
+    discardProvenFailure();
+    return true;
+}
+
 GpuOutputColorDiagnostic
 GpuOutputColorStage::begin(std::shared_ptr<const PreparedGpuOcioCommand> command,
                            std::shared_ptr<const render::GpuImage> processImage,

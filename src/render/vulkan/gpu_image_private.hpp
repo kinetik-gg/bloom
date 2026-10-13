@@ -74,8 +74,8 @@ struct SolidImageSupport final {
 // TRANSFER_SRC for the test-only readback path. Returns false and leaves `out`
 // untouched on failure.
 [[nodiscard]] bool createResidentImage(vulkan_detail::DeviceAllocatorState& state,
-                                       std::uint32_t width, std::uint32_t height,
-                                       GpuImageImpl& out);
+                                       std::uint32_t width, std::uint32_t height, GpuImageImpl& out,
+                                       bool restoreFailedPrefix = false);
 
 } // namespace bloom::render
 

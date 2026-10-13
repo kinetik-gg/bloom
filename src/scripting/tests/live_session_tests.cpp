@@ -19,6 +19,7 @@ void exercise() {
     const auto observer = owner->commandStack()->addObserver(
         [stream](const commands::CommandEvent& event) { stream->publish(event); });
     std::atomic_bool valid = true;
+    std::filesystem::path sourceBase = "/captured-project";
     scripting::SessionBinding binding{
         .valid = [&] { return valid.load(); },
         .snapshot = [owner] { return owner->snapshot(); },
@@ -29,7 +30,13 @@ void exercise() {
         .history = [owner](bool redo) { return redo ? owner->redo() : owner->undo(); },
         .events = stream,
         .publication = owner->publicationCoordinator(),
-        .artifacts = owner->artifactCoordinator()};
+        .artifacts = owner->artifactCoordinator(),
+        .renderSourceSnapshot =
+            [&] {
+                if (!valid)
+                    throw std::runtime_error("The live project was replaced");
+                return scripting::SessionRenderSourceSnapshot{owner->snapshot(), sourceBase};
+            }};
     auto attached = scripting::Session::attach(std::move(binding));
     require(static_cast<bool>(attached), "Attach live session");
     auto client = std::move(attached).takeSession();
@@ -48,6 +55,16 @@ void exercise() {
             "Live transaction reaches original host and event seam");
     require(client->undo().succeeded() && revisions == 2, "Live undo reaches original stack");
     require(client->redo().succeeded() && revisions == 3, "Live redo reaches original stack");
+    const auto capturedSource = client->renderSourceSnapshot();
+    sourceBase = "/saved-as-project";
+    require(client->undo().succeeded(), "Source-context capture permits a later authoring change");
+    const auto savedAsSource = client->renderSourceSnapshot();
+    require(capturedSource.snapshot.project().name() == "Attached" &&
+                capturedSource.assetBaseDirectory == "/captured-project" &&
+                savedAsSource.snapshot.project().name() != "Attached" &&
+                savedAsSource.assetBaseDirectory == sourceBase,
+            "Live render captures immutable snapshot and source base together across Save As");
+    require(client->redo().succeeded(), "Restore source-context authoring fixture");
     require(!client->saveAs("must-not-exist.bloom").succeeded(),
             "Live save requires the owning host");
     require(!client
@@ -73,6 +90,13 @@ void exercise() {
         snapshotRefused = true;
     }
     require(snapshotRefused, "Revoked live snapshot is unavailable");
+    bool sourceRefused = false;
+    try {
+        (void)client->renderSourceSnapshot();
+    } catch (const std::runtime_error&) {
+        sourceRefused = true;
+    }
+    require(sourceRefused, "Revoked live render source context is unavailable");
     owner->commandStack()->removeObserver(observer);
     client.reset();
     stream.reset();

@@ -5,6 +5,7 @@
 #include "gpu_image_reclamation_private.hpp"
 #include "gpu_image_upload_retirement_private.hpp"
 #include "gpu_ocio_program_private.hpp"
+#include "gpu_operation_batch_private.hpp"
 #include "gpu_output_color_readback_retirement_private.hpp"
 #include "gpu_queue_timing_private.hpp"
 
@@ -61,6 +62,7 @@ GpuDevice& GpuDevice::operator=(GpuDevice&& other) noexcept {
             ocio_program_detail::closeProgramOwner(*impl_->control);
             image_detail::closeImageOwner(*impl_->control);
             queue_timing_detail::drainRetired(*impl_->control);
+            operation_batch_detail::drainRetired(*impl_->control);
         }
         impl_ = std::move(other.impl_);
     }
@@ -77,12 +79,14 @@ GpuDevice::~GpuDevice() {
             ocio_program_detail::closeProgramOwner(*impl_->control);
             image_detail::closeImageOwner(*impl_->control);
             queue_timing_detail::drainRetired(*impl_->control);
+            operation_batch_detail::drainRetired(*impl_->control);
         }
     }
 }
 
 void GpuDevice::reclaimReleasedImages() noexcept {
     if (isOwnerThread() && impl_->control != nullptr) {
+        operation_batch_detail::drainRetired(*impl_->control);
         upload_detail::drainUploads(*impl_->control);
         display_transfer_detail::drainTransfers(*impl_->control);
         output_color_readback_detail::drainReadbacks(*impl_->control);

@@ -341,7 +341,9 @@ GpuSceneExecutorPollResult GpuSceneExecutor::pollOnce() {
     }
     if (impl.nativeInFlight) {
         if (impl.cancelRequested && !impl.cancelIssued) {
-            if (impl.nativeKind == Impl::NativeKind::Solid) {
+            if (impl.nativeKind == Impl::NativeKind::Batch) {
+                impl.operationBatch->cancel();
+            } else if (impl.nativeKind == Impl::NativeKind::Solid) {
                 impl.solid->cancel();
             } else if (impl.nativeKind == Impl::NativeKind::Upload) {
                 impl.upload->cancel();
@@ -375,6 +377,13 @@ GpuSceneExecutorPollResult GpuSceneExecutor::pollOnce() {
         impl.finishReady();
         return impl.state == GpuSceneExecutorJobState::Ready ? GpuSceneExecutorPollResult::Ready
                                                              : GpuSceneExecutorPollResult::Failure;
+    }
+    if (const auto batch = impl.tryStartBatch(); batch.has_value()) {
+        if (batch->code != GpuSceneExecutorDiagnosticCode::None) {
+            impl.fail(batch->code, batch->message, impl.hasUnretiredNative());
+            return GpuSceneExecutorPollResult::Failure;
+        }
+        return GpuSceneExecutorPollResult::Pending;
     }
     const auto started = impl.startStep(impl.steps[impl.cursor]);
     if (started.code != GpuSceneExecutorDiagnosticCode::None) {
@@ -428,7 +437,9 @@ void GpuSceneExecutor::cancel() noexcept {
     }
     impl_->cancelRequested = true;
     if (impl_->nativeInFlight && !impl_->cancelIssued) {
-        if (impl_->nativeKind == Impl::NativeKind::Solid) {
+        if (impl_->nativeKind == Impl::NativeKind::Batch) {
+            impl_->operationBatch->cancel();
+        } else if (impl_->nativeKind == Impl::NativeKind::Solid) {
             impl_->solid->cancel();
         } else if (impl_->nativeKind == Impl::NativeKind::Upload) {
             impl_->upload->cancel();
@@ -465,6 +476,7 @@ bool GpuSceneExecutor::teardownDrainIncomplete() noexcept {
            render::GpuBlend::teardownDrainIncomplete() ||
            render::GpuPointResample::teardownDrainIncomplete() ||
            render::GpuPathCoverage::teardownDrainIncomplete() ||
+           render::GpuOperationBatch::teardownDrainIncomplete() ||
            render::GpuOcioProgram::teardownDrainIncomplete();
 }
 

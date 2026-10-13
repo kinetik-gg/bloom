@@ -325,7 +325,7 @@ void testSourceRevisionWorkerRetirement(Expectations& checks) {
     }
     auto captured = bloom::media::captureImageSourceRevision(path, 1U << 20U);
     std::filesystem::remove(path);
-    if (!captured)
+    if (!captured.value.has_value())
         throw std::runtime_error("source revision retirement fixture capture");
     const std::weak_ptr<const bloom::media::ImageSourceRevision> backing = *captured.value;
     bool wrongKindRejected = false;

@@ -1,3 +1,4 @@
+#include "gpu_translation_axis_private.hpp"
 #include <bloom/render/gpu_composite.hpp>
 
 #include <cmath>
@@ -29,16 +30,7 @@ std::vector<GpuAxisSample> prepareTranslationAxis(const std::uint32_t outputExte
                                                   const std::uint32_t sourceExtent,
                                                   const double translation) {
     std::vector<GpuAxisSample> axis(outputExtent);
-    for (std::uint32_t local = 0; local < outputExtent; ++local) {
-        const auto sample = static_cast<double>(local) - translation;
-        if (sample <= -1.0 || sample >= static_cast<double>(sourceExtent)) {
-            axis[local] = GpuAxisSample{kGpuAxisOutOfRange, 0.0F};
-            continue;
-        }
-        const auto base = static_cast<std::int64_t>(std::floor(sample));
-        axis[local] = GpuAxisSample{static_cast<std::int32_t>(base),
-                                    static_cast<float>(sample - static_cast<double>(base))};
-    }
+    composite_detail::fillTranslationAxis(axis, sourceExtent, translation);
     return axis;
 }
 

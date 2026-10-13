@@ -13,6 +13,11 @@
 
 namespace {
 using namespace bloom::render;
+bool createResidentImageForTest(vulkan_detail::DeviceAllocatorState& owner,
+                                const std::uint32_t width, const std::uint32_t height,
+                                GpuImageImpl& image) {
+    return createResidentImage(owner, width, height, image);
+}
 void require(bool condition, const char* message) {
     if (!condition)
         throw std::runtime_error(message);
@@ -252,7 +257,7 @@ void nonlocalDomains(GpuDevice& device) {
         std::cout << "NotRun: nonlocal types incompatible with actual image requirements\n";
         return;
     }
-    foreignAliases<GpuImageImpl, GpuImage>(device, createResidentImage, makeGpuImage);
+    foreignAliases<GpuImageImpl, GpuImage>(device, createResidentImageForTest, makeGpuImage);
     foreignAliases<GpuDisplayImageImpl, GpuDisplayImage>(device, createDisplayImage,
                                                          makeGpuDisplayImage);
     state->nativeImageMemoryTypeMaskForTests = 0;
@@ -360,7 +365,8 @@ int main(int argc, char** argv) {
         downstreamRefusal(*device.device);
         backingFaults(*device.device);
         nonlocalDomains(*device.device);
-        foreignAliases<GpuImageImpl, GpuImage>(*device.device, createResidentImage, makeGpuImage);
+        foreignAliases<GpuImageImpl, GpuImage>(*device.device, createResidentImageForTest,
+                                               makeGpuImage);
         foreignAliases<GpuDisplayImageImpl, GpuDisplayImage>(*device.device, createDisplayImage,
                                                              makeGpuDisplayImage);
         std::cout << "PASS: actual two-family native image backing/accounting/turnover\n";

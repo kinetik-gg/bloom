@@ -10,7 +10,15 @@ namespace bloom::render::vulkan_detail {
                                                const VkImageCreateInfo& imageInfo, VkImage& image,
                                                VmaAllocation& allocation,
                                                NativeImageStorageToken& token,
-                                               const bool presentation = false) noexcept {
+                                               const bool presentation = false,
+                                               const bool restoreFailedPrefix = false) noexcept {
+    const auto release = [&] {
+        if (restoreFailedPrefix && !presentation)
+            static_cast<void>(
+                token.releaseFailedAttemptAfterBackingDestroyed(state.processingPhase));
+        else
+            token = {};
+    };
     state.imageStorageRefusal.reset();
     if (presentation)
         state.presentationStorageRefusal.reset();
@@ -83,7 +91,7 @@ namespace bloom::render::vulkan_detail {
             state.nativeImageAllocationFault = NativeImageAllocationFault::None;
             dispatch->vkDestroyImage(device, image, nullptr);
             image = VK_NULL_HANDLE;
-            token = {};
+            release();
             state.imageStorageRefusal.reset();
             if (presentation)
                 state.presentationStorageRefusal.reset();
@@ -95,7 +103,7 @@ namespace bloom::render::vulkan_detail {
             ++state.nativeImageBackingAttempts;
         if (vmaAllocateMemoryForImage(state.allocator, image, &pinned, &allocation, &actual) !=
             VK_SUCCESS) {
-            token = {};
+            release();
             continue;
         }
         // The same actual image remains unbound until its selected allocation is reconciled.
@@ -113,7 +121,7 @@ namespace bloom::render::vulkan_detail {
             if (state.nativeImageBackingsDestroyed != UINT64_MAX)
                 ++state.nativeImageBackingsDestroyed;
             allocation = VK_NULL_HANDLE;
-            token = {};
+            release();
             state.imageStorageRefusal.reset();
             if (presentation)
                 state.presentationStorageRefusal.reset();

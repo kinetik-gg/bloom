@@ -43,7 +43,8 @@ ExportScenePreparation
 prepareExportScene(const GpuProcessFrameEvaluatorOptions& options,
                    const std::shared_ptr<const CompiledCompositionPlan>& plan,
                    const EvaluationRequest& request, const CancellationToken& cancellation,
-                   const bool encodedOutput) {
+                   const bool encodedOutput,
+                   const std::optional<std::filesystem::path>& assetBaseDirectory) {
     ExportScenePreparation result;
     if (cancellation.isCancellationRequested()) {
         result.status = GpuProcessFrameStatus::Cancelled;
@@ -100,6 +101,9 @@ prepareExportScene(const GpuProcessFrameEvaluatorOptions& options,
         result.diagnosticMessage =
             "GPU media context configuration refused: " + std::string{error.what()};
         return result;
+    }
+    if (assetBaseDirectory) {
+        mediaContext.assetBaseDirectory = *assetBaseDirectory;
     }
     const CpuGpuSceneBuilder builder(nullptr, mediaContext,
                                      options.ocioContext != nullptr ? *options.ocioContext

@@ -1,4 +1,5 @@
 #include "gpu_export_provider_test_access.hpp"
+#include "output_analysis_attempt_jpeg_fixture.hpp"
 
 #include <bloom/host/output_analysis_attempt_runner.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -24,10 +25,12 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <source_location>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -61,6 +64,7 @@ using namespace std::chrono_literals;
 #include "output_analysis_attempt_runner_1_attempt_tests.ipp"
 #include "output_analysis_attempt_runner_2_provider_tests.ipp"
 #include "output_analysis_attempt_runner_3_gpu_tests.ipp"
+#include "output_analysis_attempt_runner_4_media_tests.ipp"
 
 } // namespace
 
@@ -73,6 +77,8 @@ int main(const int argc, char** argv) {
         }
     }
     testFullGraphProducesStableDigestAcrossTwoRuns(expectations);
+    testFinalRelativeMediaSourceContext(expectations, requireDevice);
+    testCapturedFinalColorIntentLifetime(expectations);
     testProcessingAdmissionBeforeCpuFallback(expectations);
     testCancellationBeforeResolvingCompletes(expectations);
     testResourceExhaustionIsTypedWithZeroLeak(expectations);

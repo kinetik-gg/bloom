@@ -1004,6 +1004,7 @@ target_sources(
             include/bloom/render/gpu_processing_phase_budget.hpp
             include/bloom/render/gpu_allocator_memory.hpp
             include/bloom/render/gpu_queue_timing.hpp
+            include/bloom/render/gpu_operation_batch.hpp
             include/bloom/render/native_image_storage.hpp
             include/bloom/render/native_buffer_storage.hpp
             include/bloom/render/packed_rgba8_storage.hpp
@@ -1031,6 +1032,8 @@ target_sources(
             include/bloom/render/path_raster.hpp
 )
 
+target_sources(bloom_render PRIVATE gpu_translation_axis_private.hpp)
+
 # Exactly one of the two implementations defines the shared API symbols. The Vulkan translation
 # unit keeps its include requirements PRIVATE so no Vulkan header reaches bloom_render consumers or
 # the desktop application.
@@ -1051,10 +1054,15 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_composite_fault.hpp
         vulkan/gpu_composite_private.hpp
         vulkan/gpu_composite_resources.cpp
+        vulkan/gpu_composite_buffer.cpp
         vulkan/gpu_composite_retirement.cpp
         vulkan/gpu_allocator_memory.cpp
         vulkan/gpu_queue_timing.cpp
         vulkan/gpu_queue_timing_private.hpp
+        vulkan/gpu_operation_batch.cpp
+        vulkan/gpu_operation_batch_resources.cpp
+        vulkan/gpu_operation_batch_record.cpp
+        vulkan/gpu_operation_batch_private.hpp
         vulkan/gpu_device.cpp
         vulkan/gpu_device_bootstrap.cpp
         vulkan/gpu_device_private.hpp
@@ -1150,6 +1158,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
 else()
     target_sources(bloom_render PRIVATE gpu_affine_stub.cpp gpu_blend_stub.cpp
                                      gpu_composite_stub.cpp gpu_device_stub.cpp gpu_queue_timing_stub.cpp
+                                     gpu_operation_batch_stub.cpp
                                      gpu_display_transfer_stub.cpp
                                      gpu_image_upload_stub.cpp gpu_neutral_display_stub.cpp
                                      gpu_point_resample_stub.cpp

@@ -25,6 +25,7 @@ struct ExportScenePreparation final {
 prepareExportScene(const GpuProcessFrameEvaluatorOptions& options,
                    const std::shared_ptr<const CompiledCompositionPlan>& plan,
                    const EvaluationRequest& request, const CancellationToken& cancellation,
-                   bool encodedOutput = false);
+                   bool encodedOutput = false,
+                   const std::optional<std::filesystem::path>& assetBaseDirectory = std::nullopt);
 
 } // namespace bloom::runtime::detail

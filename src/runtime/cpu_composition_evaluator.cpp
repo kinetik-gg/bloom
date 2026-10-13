@@ -1457,12 +1457,19 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
 #include "vector_geometry.ipp"
 
 EvaluationResult CpuCompositionEvaluator::evaluate(
-    std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
+    std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& borrowedRequest,
     const CancellationToken& cancellation, EvaluationProgressCallback progress,
     CpuRowBandExecutor* const rowBands, OperationCacheStatistics* statistics) const {
     OperationCacheStatistics frameStatistics;
     if (statistics)
         *statistics = {};
+    auto request = borrowedRequest;
+    const auto capturedColor = captureEvaluationColorIntent(request.colorIntent);
+    if (!capturedColor)
+        return EvaluationResult::failed(
+            diagnostic(EvaluationDiagnosticCode::AllocationFailure,
+                       "Evaluation colour intent could not be captured"));
+    request.colorIntent = *capturedColor;
     // CACHE-1 separates two bypasses that used to share one pointer. `request.bypassOperationCache`
     // is the explicit evaluation bypass: it disables DERIVED operation memoization and the
     // still-image source memory and disk entries (an uncached re-decode). It is not the preview
@@ -2173,6 +2180,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                          operationSubject,
                                                          image.diagnostic,
                                                          {}});
+                                // A preview placeholder must not share downstream identity with
+                                // a later successful decode of these same verified source bytes.
+                                contentHashes[index] += ":image-decode-failed";
                                 return;
                             }
                             bounds[index].local = detail::boundsForWindow(
@@ -3034,7 +3044,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     slots[index] =
                         std::make_shared<const render::Rgba32fImage>(std::move(*produced));
                 }
-                if (cache && !effectApplicationFailed && (!selectedVideo || slots[index]))
+                if (cache && !effectApplicationFailed && (!selectedVideo || slots[index]) &&
+                    (!selectedImage || slots[index]))
                     cache->store(
                         key.bytes(), plan->sourceRevision(),
                         {.image = index == request.output.value() ? processImage : slots[index],

@@ -193,17 +193,36 @@ ProcessResult<std::unique_ptr<ReadOnlyFileSnapshot>> ReadOnlyFileSnapshot::captu
         return ProcessFailure{ProcessError::Cancelled, 0};
     if (::fchmod(output.get(), 0400) != 0)
         return ProcessFailure{ProcessError::Io, errno};
-    Descriptor readonly(::open(temporary.file.c_str(), O_RDONLY | O_CLOEXEC));
-    struct stat frozen{};
-    if (readonly.get() < 0 || ::fstat(readonly.get(), &frozen) != 0 ||
-        static_cast<std::uint64_t>(frozen.st_size) != size)
+    // The private pathname is not authority: a same-size replacement must never associate the
+    // writer's captured digest with different bytes reopened for the decoder.
+    struct stat writerStatus{};
+    if (::fstat(output.get(), &writerStatus) != 0)
         return ProcessFailure{ProcessError::Io, errno};
+    if (!S_ISREG(writerStatus.st_mode) || writerStatus.st_size < 0 ||
+        static_cast<std::uint64_t>(writerStatus.st_size) != size)
+        return ProcessFailure{ProcessError::Io, ESTALE};
+    Descriptor readonly(::open(temporary.file.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
+    if (readonly.get() < 0)
+        return ProcessFailure{ProcessError::Io, errno};
+    struct stat frozen{};
+    if (::fstat(readonly.get(), &frozen) != 0)
+        return ProcessFailure{ProcessError::Io, errno};
+    if (!S_ISREG(frozen.st_mode) || frozen.st_size < 0 ||
+        static_cast<std::uint64_t>(frozen.st_size) != size ||
+        frozen.st_dev != writerStatus.st_dev || frozen.st_ino != writerStatus.st_ino)
+        return ProcessFailure{ProcessError::Io, ESTALE};
     // Publish only after both names have disappeared and the sole write descriptor has closed.
     if (::unlink(temporary.file.c_str()) != 0 || ::rmdir(temporary.directory.c_str()) != 0)
         return ProcessFailure{ProcessError::Io, errno};
     const auto writer = output.take();
     if (::close(writer) != 0)
         return ProcessFailure{ProcessError::Io, errno};
+    if (::fstat(readonly.get(), &frozen) != 0)
+        return ProcessFailure{ProcessError::Io, errno};
+    if (!S_ISREG(frozen.st_mode) || frozen.st_nlink != 0 || frozen.st_size < 0 ||
+        static_cast<std::uint64_t>(frozen.st_size) != size ||
+        frozen.st_dev != writerStatus.st_dev || frozen.st_ino != writerStatus.st_ino)
+        return ProcessFailure{ProcessError::Io, ESTALE};
     // Keep source descriptors above the bootstrap/control descriptor pair for spawn file actions.
     state->fd = ::fcntl(readonly.get(), F_DUPFD_CLOEXEC, 5);
     if (state->fd < 0)

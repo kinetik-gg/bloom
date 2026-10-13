@@ -1,8 +1,8 @@
 # Issue 304: Linux implementation and qualification
 
-Status: integration in progress
+Status: Linux implementation and local qualification complete
 
-Updated: 2026-10-13
+Updated: 2026-10-14
 
 This record owns the current Linux evidence for
 [issue #304](https://github.com/kinetik-gg/bloom/issues/304). The owner narrowed this execution to
@@ -30,6 +30,11 @@ with a required hardware device. Their directed controls cover low budgets, fail
 same-root/device affinity, cancellation, device loss, unknown fences, owner retirement and reuse.
 See [the native ownership contracts](../architecture/gpu-backend.md).
 
+SourceOver also checks the supported signed shader-coordinate domain before pixel allocation or
+submission: unrepresentable origin differences and local-coordinate additions are refused, while
+small exact differences near the signed 64-bit origin limit remain supported. The serial and batch
+paths share this check.
+
 ## Viewer and retained playback
 
 The opt-in packed Viewer fixture uses the actual preview service, controller, widget paint path and
@@ -51,9 +56,22 @@ Scalar probe identity now holds a weak frame reference; the packed path releases
 request correlation frame after retiring the native target. These fixes remove a second hidden
 packed-picture owner found by repeated purge testing.
 
+The final source-aligned width-one run with native batching enabled passes all ten cycles and the
+60-second playback check. Median fill is 5,211.405 ms. Each purge returns the same exact host/device
+claims above and 2,073,616 bytes of VMA payload; retained VMA blocks are 201,326,592 bytes. Independent
+driver heap usage is 304,349,184 bytes, explicitly unattributed. Observed RSS ranges from 1,071,324
+to 1,170,748 KiB across the ten cycles; neither RSS nor driver usage is a rooted allocation total.
+
+Directed final-run observations are 68.2304 ms for scrub-to-widget-paint, 108.811 µs for selection
+feedback, 24.0927 ms for held drag, 10.5983 ms for committed drag and 11.2621 ms for project
+replacement during fill. All identity/geometry checks pass. These are individual observations,
+not a latency distribution or a controlled before/after comparison with the earlier width study.
+
 ## Width selection
 
-The same binary, generated source set and diagnostic configuration ran width one and width two.
+The same pre-batching binary, generated source set and diagnostic configuration ran width one and
+width two. This comparison selects the admission width; the final batched implementation receives
+its own source-aligned width-one stress run below.
 The filesystem was warm; this is neither cold network throughput nor an application-wide latency
 distribution. Fill is the median of ten 100-frame fills. Each interaction value below is one
 directed observation, with input-to-widget-paint as the pixel endpoint.
@@ -93,28 +111,52 @@ Unsupported without allocating query resources. Results publish only after posit
 Busy, cancelled and uncertain results never become a valid duration. Driver/VMA diagnostics are
 opt-in, sampled on the native owner at no more than one hertz and published as neutral snapshots.
 
+The competing real EXR export in the final stress run records the following first-evaluation
+intervals. This is one observed frame, with no claim about a cold operating-system page cache.
+
+| Stage | Observed time |
+| --- | ---: |
+| Source capture I/O | 0.015560 ms |
+| Source SHA-256 | 0.202263 ms |
+| Metadata probe | 0.052850 ms |
+| Image decode | 32.279333 ms |
+| Upload host submission | 9.543840 ms |
+| Upload fence observation | 2.110815 ms |
+| Processing host submission | 4.048807 ms |
+| Processing fence observation | 1.057102 ms |
+| Final transfer | 8.280845 ms |
+| Final host publication | 7.367256 ms |
+| Calibrated outer graph queue span | 16.916608 ms |
+
+The GPU-clock span includes idle/submission gaps and overlaps host intervals; these values must not
+be summed into a shader duration. Two completed exports perform two final readbacks in total.
+Their aggregate evaluation is 125.547 ms; the separate encoding-and-file-I/O boundary is 84.071 ms.
+That last measurement includes file writing and is not a codec-only timing.
+
 ### Completed-step continuation baseline
 
 The production executor has a default-enabled bounded same-turn continuation. Setting
 `continueCompletedStepImmediately=false` reproduces the prior one-step-per-owner-turn schedule
-using the same implementation. The fixed source-free two-solid/fractional-translation/source-over
-scene runs at 720p and 1080p with capacity-one rooted admission, five warmups and ten measured paired
+using the same implementation. This comparison explicitly sets `enableNativeBatches=false` in both
+modes, keeping command recording/submission unchanged. The fixed source-free authored
+two-solid/fractional-translation/source-over scene runs at 720p and 1080p with capacity-one rooted admission, five warmups and ten measured paired
 samples per mode, alternating order. Every content-cache-cold output matches the CPU reference and
 the paired GPU output is byte-identical. Retained pipelines are warm; content caches are cleared.
 
 | Extent | Controlled pending-poll delay | One-step cold median | Same-turn cold median | Genuine queue span, before → after |
 | --- | --- | --- | --- | --- |
-| 1280×720 | yield | 1.620 ms | 1.747 ms | 1.570 → 1.656 ms |
-| 1920×1080 | yield | 4.632 ms | 4.525 ms | 4.553 → 4.443 ms |
-| 1280×720 | 2 ms | 30.937 ms | 18.462 ms | 30.876 → 18.405 ms |
-| 1920×1080 | 2 ms | 33.837 ms | 21.305 ms | 33.798 → 21.226 ms |
+| 1280×720 | yield | 1.504 ms | 1.504 ms | 1.437 → 1.438 ms |
+| 1920×1080 | yield | 4.639 ms | 4.552 ms | 4.589 → 4.443 ms |
+| 1280×720 | 2 ms | 30.433 ms | 18.178 ms | 30.386 → 18.150 ms |
+| 1920×1080 | 2 ms | 33.136 ms | 20.985 ms | 33.054 → 20.900 ms |
 
 The controlled 2 ms delay matches the service's pending interval; live notifications may wake it
 sooner. Six same-turn continuations remove about 12.32 ms of directly observed completed-step
-owner-turn gaps. Tight-yield results show no consistent speedup. Both schedules still execute seven
-native dispatches: this qualifies removal of polling gaps, **not multi-operation command batching**.
+owner-turn gaps. Tight-yield results show no consistent speedup. Both schedules still execute eight
+actual kernels (the covered-solid producer and fill count separately): this qualifies removal of
+polling gaps, **not multi-operation command batching**.
 GPU clock spans include queue idle and host submission/polling gaps; fence observation is host wall
-time. CPU preparation medians were 0.131/0.185 ms and uncached CPU evaluation 11.824/27.370 ms for
+time. CPU preparation medians were 0.114/0.176 ms and uncached CPU evaluation 10.624/24.975 ms for
 720p/1080p. No application FPS claim follows from these executor boundaries.
 
 A separate observation pass keeps VMA traversal and driver sampling outside the timing medians.
@@ -125,6 +167,53 @@ blocks, payload and overlapping quota reservations are distinct. The terminal pa
 query-result retrieval also occur outside timed pixel publication. The normal and fault executor
 suites pass after the switch. Reproduce with `bloom_runtime_gpu_scene_executor_test --require-device
 --benchmark` and an explicit loader when needed; tests use the isolated display environment.
+
+### Bounded native command batches
+
+`enableNativeBatches=true` is the production default. Two to eight consecutive eligible solid,
+translation, affine and source-over kernels record into one command buffer, with write/read
+barriers and one completion fence. Other required kernels delimit runs and retain their native
+paths. Every actual image, status/metadata/staging buffer and translation-axis host allocation is
+covered before use. Axis scratch has fresh additive host admission through the same tracked
+allocator in both batch and serial native paths; batch refusal cannot bypass that admission.
+
+The comparison uses one compiled integer-grid raster merge, a fractional rotated affine placement,
+and its composited output through the same production executor. Both modes retain same-turn
+continuation and use a controlled 2 ms pending-poll interval. Five warmups precede ten measured
+paired samples, alternating order, with content caches cleared and pipelines retained. Every output
+matches the uncached CPU oracle to the existing 2e-6 gate and serial/batch GPU pixels are byte-exact.
+
+| Extent | Actual kernels, both modes | Work submissions, serial → batch | Cold wall median | Genuine queue span |
+| --- | --- | --- | --- | --- |
+| 1280×720 | 11 | 11 → 2 | 23.497 → 4.832 ms | 23.431 → 4.797 ms |
+| 1920×1080 | 11 | 11 → 2 | 23.036 → 4.458 ms | 22.987 → 4.348 ms |
+
+Optional timestamp-marker submissions are separate from these work-submission counts. Queue spans
+include host submission and polling gaps, and have ten valid calibrated GPU-clock samples per mode.
+Executor planning medians are 0.008/0.009 ms at 720p and 0.009/0.009 ms at 1080p. Host submit medians
+are 0.856/0.676 ms and 0.383/0.262 ms; fence-observation medians are 22.582/4.113 ms and
+22.584/4.111 ms. Final parity readback, timestamp retrieval and memory traversal remain outside timed
+pixel publication. These measurements establish fewer production work submissions and reduced
+controlled scheduling gaps; they do not establish application FPS.
+
+Batches retain their intermediate images until the shared fence. Observed actual VMA payload peaks
+increase from 46,767,376 to 52,403,488 bytes at 720p and from 109,976,464 to 122,608,544 bytes at
+1080p, matching root-owned native bytes. VMA block peaks are unchanged between modes at 134,217,728
+and 203,161,600 bytes respectively. Settled payload and root host/device claims return to zero;
+retained blocks are 67,108,864/167,772,160 bytes. A measured serial-memory limit refuses oversized
+batch construction before submit and completes through the serial native path under the original
+phase. Unchanged warm graphs submit neither work nor timing markers. Edited cached-media fixtures
+also prove downstream batching with exact Ready external image references and retained source reuse.
+
+Native entry gates validate topological references, device generation, finite parameters and checked
+offsets. Proofs cover status rejection before any output publication, image and buffer construction
+failures with backing-first same-origin prefix restoration, Busy-owner release/retry,
+completion/cancellation cycles, owner-only getters, foreign release, unknown fence ownership and
+genuine-proof device-loss retirement. A test-only uncertain
+result after actual queue acceptance retains the exact owner, then discards every output after real
+fence proof and recovers capacity-one admission without another job. The direct, normal and fault
+executor proofs pass with batches enabled. The same `--benchmark --require-device` command above
+reproduces both comparisons; the portable stub reports Unsupported.
 
 ## Source revision and refresh
 
@@ -170,10 +259,21 @@ suppression or application shutdown workaround. It does not claim a clean whole-
 exit. The [symbolized attribution record](../architecture/gpu-backend.md#native-loader-leaksanitizer-attribution)
 and `tools/quality/native_loader_lsan_probe.cpp` preserve reproduction and limits.
 
-## Integration still to complete
+## Integration and platform limits
 
-Final source-aligned production preview/still/range/video/headless route reruns, immutable-video
-closure, final strict/quality checks, and hosted Linux CI
-remain integration gates. Focused CPU fallback requires an explicit Vulkan-OFF build. A missing
-native device produces NotRun/Unsupported, and a required-device run fails rather than labelling a
-CPU frame as GPU. Hosted CPU checks do not qualify native hardware.
+Local Linux qualification passes the ten required-device ownership/compute suites, all six genuine
+production route writers and the native coverage acceptance gate. Final packed/general service,
+source-context, final-output, cancellation, unknown-completion and capacity-one recovery checks
+pass. Full-resolution 100-frame reuse also passes; sustained playback above is the Half-resolution
+fixture. The explicit Vulkan-OFF fallback gate passes all sixteen tests, with additional final
+source/bridge regressions and targeted repair reruns. Native mode against that stub reports NotRun
+and fails, including without an explicit requirement flag.
+
+Strict analysis covers 384 changed-source/header translation units: 380 pass the initial final
+sweep, and four test-only optional/type repairs pass exact reruns. Repository quality, formatting,
+architecture boundaries, workflow validation and independent ownership review pass.
+
+Hosted Linux Clang and Qt checks are required before integration; the commit-linked workflow
+results identify the qualified revision. Hosted CPU checks do not qualify native hardware. Native
+Windows/macOS execution and their platform qualification remain outside this owner-directed Linux
+run, with explicit supported CPU fallback and no cross-platform GPU claim.

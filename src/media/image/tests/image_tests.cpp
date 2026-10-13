@@ -287,7 +287,7 @@ int main() {
                      "pre-cancelled capture publishes no source revision");
         {
             std::ofstream append(path, std::ios::binary | std::ios::app);
-            const std::string tail(3 * 1024 * 1024, 'x');
+            const std::string tail(std::size_t{3} * 1024 * 1024, 'x');
             append.write(tail.data(), static_cast<std::streamsize>(tail.size()));
         }
         unsigned polls = 0;

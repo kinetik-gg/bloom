@@ -123,9 +123,9 @@ struct GpuPreviewDisplayServiceCounters final {
     // operations. This is deliberately distinct from `nativeDispatches` so "graph jobs" are never
     // confused with "actual native operations".
     std::uint64_t residentGraphJobs = 0;
-    // ACTUAL native operation begin() count executed by the GpuSceneExecutor
-    // (solid + covered-solid + translation + source-over + uploads). A warm content-cache hit that
-    // cuts the whole subtree leaves this unchanged (zero for an identical warm request).
+    // Actual native work operations (dispatches and uploads) executed by GpuSceneExecutor,
+    // including every family. Several operations may share one work submission. A warm cache hit
+    // that cuts the whole subtree leaves this unchanged (zero for an identical warm request).
     std::uint64_t nativeDispatches = 0;
     // CPU wall stages, including host submission and fence observation/polling delay.
     std::uint64_t uploadSubmitNanoseconds = 0;

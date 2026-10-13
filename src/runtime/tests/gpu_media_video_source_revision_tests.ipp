@@ -90,8 +90,13 @@ void testVideoSourceRevisionBoundary(Expectations& expectations,
     expectations.expect(!builder.build(relinkPlan, relinkRequest),
                         "a changed video locator cannot adopt old authority");
     auto changedDigest = asset;
-    changedDigest.contentDigest =
-        *bloom::core::Sha256Hasher::hash(std::as_bytes(std::span("different", std::size_t{9})));
+    const auto replacementDigest =
+        bloom::core::Sha256Hasher::hash(std::as_bytes(std::span("different", std::size_t{9})));
+    if (!replacementDigest.has_value()) {
+        expectations.expect(false, "changed video digest fixture hashes successfully");
+        return;
+    }
+    changedDigest.contentDigest = *replacementDigest;
     const auto changedDigestPlan = videoPlan(format(96, 64), changedDigest, LayerValues{}, 33000);
     auto changedDigestRequest = requestFor(*changedDigestPlan);
     changedDigestRequest.mediaSourceRevisionPolicy =
@@ -127,7 +132,7 @@ void testRootedVideoSourceClosure(Expectations& expectations,
     const auto owner = bloom::render::PackedHostRetirementOwner::create();
     const CpuCompositionEvaluator evaluator;
     evaluator.setAssetBaseDirectory(fixtures);
-    const auto pool = evaluator.operationCache();
+    const auto& pool = evaluator.operationCache();
     bloom::runtime::GpuPreparedUploadCache rooted(pool, owner);
     const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
     const auto asset = videoAsset(fixtures / "numbered-h264.mp4", 34000);

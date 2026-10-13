@@ -3,6 +3,7 @@
 #include <bloom/media/video/session.hpp>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -96,6 +97,50 @@ void captureLimits(const std::filesystem::path& source, const std::filesystem::p
               bloom::platform::ProcessError::ResourceLimit,
           "encoded source admission uses byte quota before copy");
 }
+void capturePathReplacement(const std::filesystem::path& source,
+                            const std::filesystem::path& spool) {
+    const auto size = std::filesystem::file_size(source);
+    const auto alias = spool.parent_path() / "capture-alias";
+    auto quota = std::make_shared<Quota>(size, 1);
+    for (int mode = 0; mode < 3; ++mode) {
+        bool replaced = false;
+        const auto captured = Snapshot::capture(
+            source, spool, quota, provider::Limits::sourceBytes, {},
+            [&](const auto bytes, const auto total) {
+                if (bytes != total)
+                    return;
+                auto iterator = std::filesystem::directory_iterator(spool);
+                check(iterator != std::filesystem::directory_iterator{},
+                      "capture private directory exists at completion progress");
+                const auto temporary = iterator->path() / "source";
+                if (mode == 2) {
+                    std::filesystem::create_hard_link(temporary, alias);
+                } else {
+                    std::filesystem::remove(temporary);
+                    if (mode == 1) {
+                        std::filesystem::create_symlink(source, temporary);
+                    } else {
+                        std::filesystem::copy_file(source, temporary);
+                        std::fstream replacement(temporary,
+                                                 std::ios::binary | std::ios::in | std::ios::out);
+                        replacement.put('x');
+                    }
+                }
+                replaced = true;
+            });
+        const auto* failure = std::get_if<bloom::platform::ProcessFailure>(&captured);
+        check(replaced && failure != nullptr &&
+                  failure->code == bloom::platform::ProcessError::Io &&
+                  quota->residentBytes() == 0 && quota->residentFiles() == 0 &&
+                  std::filesystem::is_empty(spool),
+              "same-size pathname replacement, symlink and retained hard link cannot publish "
+              "hashed authority");
+        std::filesystem::remove(alias);
+        auto retry = Snapshot::capture(source, spool, quota, provider::Limits::sourceBytes);
+        check(std::holds_alternative<std::unique_ptr<Snapshot>>(retry),
+              "capture recovers after replacement refusal with the same exact quota");
+    }
+}
 void sessionRevisions(const std::filesystem::path& source, const std::filesystem::path& scratch) {
     const auto copy = scratch / "mutable.mp4";
     std::filesystem::copy_file(source, copy, std::filesystem::copy_options::overwrite_existing);
@@ -105,7 +150,7 @@ void sessionRevisions(const std::filesystem::path& source, const std::filesystem
     video::VideoDecodeSession session(copy, video::VideoDecodeSession::defaultWorker(), quota,
                                       scratch / "spool");
     const auto probe = product(session.probe());
-    video::DecodedVideoCache cache(4608 * 2);
+    video::DecodedVideoCache cache(std::size_t{4608} * 2);
     bloom::platform::FileSnapshotStatistics work;
     bool retained = false;
     const video::SourceRevisionAccess interactive{
@@ -237,6 +282,7 @@ int main(int argc, char** argv) {
         Scratch scratch(fixtures);
         const auto source = fixtures / "numbered-h264.mp4";
         captureLimits(source, scratch.path / "limits-spool");
+        capturePathReplacement(source, scratch.path / "replacement-spool");
         sessionRevisions(source, scratch.path);
         retirement(source, scratch.path / "retirement-spool");
         std::cout << "PASS: immutable disk-backed video source revisions\n";

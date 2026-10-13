@@ -43,6 +43,9 @@
 namespace bloom::render::queue_timing_detail {
 struct State;
 }
+namespace bloom::render::operation_batch_detail {
+struct State;
+}
 
 namespace bloom::render::ocio_program_detail {
 struct ProgramRetirementNode;
@@ -95,6 +98,10 @@ struct DeviceAllocatorState final {
     std::atomic<bool> queueTimingOccupied{false};
     std::weak_ptr<queue_timing_detail::State> queueTiming;
     std::atomic<queue_timing_detail::State*> retiredQueueTiming{nullptr};
+    // One bounded multi-kernel command owner. Unproven/foreign final release preserves this exact
+    // owner, including all intermediate backing, until an owner-thread fence proof drains it.
+    std::atomic<bool> operationBatchOccupied{false};
+    std::atomic<operation_batch_detail::State*> retiredOperationBatch{nullptr};
 
     std::mutex programRetirementMutex;
     ocio_program_detail::ProgramRetirementNode* programRetirementHead = nullptr;

@@ -386,8 +386,8 @@ int main(int argc, char* argv[]) try {
     // definitions: the provider's CPU-worker bootstrap qualifies the tools once and publishes the
     // same shared context for the export evaluator's media/effect transforms and output display, so
     // preview and export share one tool qualification and one program cache. The media context is
-    // refreshed per request on the calling CPU worker so a session Open/SaveAs that moves the asset
-    // base directory is observed exactly as the preview path observes it.
+    // refreshed per request on the calling CPU worker. Final requests override the live base with
+    // the source directory captured beside their own immutable snapshot, including across Save As.
     gpuExportOptions.ocioResolver = gpuOcioContextResolver;
     gpuExportOptions.mediaContextProvider = [&cpuEvaluator, gpuPreparedUploadCache] {
         auto context = bloom::runtime::GpuSceneMediaContext::fromEvaluator(cpuEvaluator);
@@ -441,6 +441,8 @@ int main(int argc, char* argv[]) try {
         compositionSession, taskScheduler, taskUiBridge, snapshotCompiler,
         projectHost.publicationCoordinator(), projectHost.artifactCoordinator(), {},
         &qualifiedDisplayProcessorProvider, gpuExportProvider);
+    frameExportController.setProjectPathProvider(
+        [&projectHost] { return projectHost.displayPath(); });
 
     // The typed viewer GPU dependency context. Its presentation-client getter reads the cached
     // service capability, so an editor created before the async startup qualification finishes is

@@ -110,6 +110,8 @@ FinalReadbackOutcome runFinalCombinedReadback(
         nativeRetirementProven =
             (stage.diagnostic().code == GpuOutputColorDiagnosticCode::OverBudget &&
              stage.retiredBudgetRefusal(phase)) ||
+            (stage.diagnostic().code == GpuOutputColorDiagnosticCode::ReadbackFailed &&
+             stage.retiredReadbackFailure(phase)) ||
             (code == GpuProcessFrameDiagnosticCode::Cancelled && !stage.hasUnretiredSubmission());
         outcome.diagnosticCode = code;
         outcome.diagnosticMessage = stage.diagnostic().message;

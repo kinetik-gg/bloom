@@ -7,6 +7,16 @@ bloom_add_test(NAME bloom.render.gpu_queue_timing
     COMMAND bloom_render_gpu_queue_timing_test LABELS unit gpu render)
 set_tests_properties(bloom.render.gpu_queue_timing PROPERTIES SKIP_RETURN_CODE 77)
 if(BLOOM_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_render_gpu_operation_batch_test gpu_operation_batch_tests.cpp)
+    target_link_libraries(bloom_render_gpu_operation_batch_test PRIVATE
+        bloom_render Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+    target_include_directories(bloom_render_gpu_operation_batch_test PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/render/vulkan")
+    bloom_enable_warnings(bloom_render_gpu_operation_batch_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_operation_batch_test)
+    bloom_add_test(NAME bloom.render.gpu_operation_batch
+        COMMAND bloom_render_gpu_operation_batch_test LABELS unit gpu render)
+    set_tests_properties(bloom.render.gpu_operation_batch PROPERTIES SKIP_RETURN_CODE 77)
     target_compile_definitions(bloom_render_gpu_queue_timing_test PRIVATE BLOOM_QUEUE_TIMING_NATIVE)
     target_include_directories(bloom_render_gpu_queue_timing_test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
@@ -679,6 +689,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     add_library(bloom_render_gpu_scene_executor_fault OBJECT
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/vma.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_device.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_operation_batch.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_device_bootstrap.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_reclamation.cpp"
@@ -690,6 +701,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_path_coverage_resources.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite_resources.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite_buffer.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite_retirement.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_upload.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_upload_resources.cpp"
@@ -702,6 +714,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_blend_retirement.cpp"
     )
     target_include_directories(bloom_render_gpu_scene_executor_fault PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/.."
         "${CMAKE_CURRENT_SOURCE_DIR}/../include"
         "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan"

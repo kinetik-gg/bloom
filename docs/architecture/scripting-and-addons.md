@@ -215,7 +215,9 @@ thread. A revocable live `SessionBinding` supplies immutable snapshots and plain
 transactions and history calls queue to the UI thread. New/Open revokes the old generation before
 pending authoring work can execute. Native command events cross a lifetime-safe queue and Python
 callbacks run only at the subscriber's pump. Render compilation and publication use one captured
-snapshot and the live host's publication/artifact coordinators. Cancellation reaches foreground
+snapshot, its media base directory captured under the same lock, and the live host's
+publication/artifact coordinators. Every range frame retains that source context across Save As.
+Cancellation reaches foreground
 Python tracing, Python task tickets and native render tasks. The GUI console bounds each foreground
 Python CPU slice; long work belongs in `bloom.tasks`. Integration tests exercise a Python-keyed
 parameter through UI Undo and compare frame-12 bytes from Python, CLI and UI exports.

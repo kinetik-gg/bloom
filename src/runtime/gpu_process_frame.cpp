@@ -619,9 +619,10 @@ GpuProcessFrameDiagnostic GpuProcessFrameEvaluator::availabilityDiagnostic() con
 }
 
 GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
-    std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
+    std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& borrowedRequest,
     const CancellationToken& cancellation, EvaluationProgressCallback progress,
-    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand) {
+    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand,
+    const std::optional<std::filesystem::path>& assetBaseDirectory) {
     if (impl_ == nullptr) {
         return failure(GpuProcessFrameStatus::Failed,
                        GpuProcessFrameDiagnosticCode::InternalInvariant, "no evaluator");
@@ -630,6 +631,12 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
         return failure(GpuProcessFrameStatus::Disabled, GpuProcessFrameDiagnosticCode::Disabled,
                        "GPU process-frame evaluation is disabled");
     }
+    auto request = borrowedRequest;
+    const auto capturedColor = captureEvaluationColorIntent(request.colorIntent);
+    if (!capturedColor)
+        return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::BadAllocation,
+                       "GPU evaluation colour intent could not be captured");
+    request.colorIntent = *capturedColor;
     // Reentrancy: a progress callback runs on the CALLING CPU worker (scene preparation) or, for
     // the native-phase event, on the owner. Reject a nested evaluate() from either the same calling
     // thread or the owner thread before any wait, so it cannot deadlock on its own completion.
@@ -703,8 +710,9 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
         // Prepare the immutable scene HERE, on the calling CPU worker, never on the GPU owner
         // thread. Media decode, OCIO configuration, and shader compilation all run on this thread;
         // the owner only performs native work on the finished scene.
-        auto preparation = detail::prepareExportScene(impl_->options, plan, request, cancellation,
-                                                      static_cast<bool>(outputCommand));
+        auto preparation =
+            detail::prepareExportScene(impl_->options, plan, request, cancellation,
+                                       static_cast<bool>(outputCommand), assetBaseDirectory);
         if (preparation.scene == nullptr) {
             return failure(preparation.status, preparation.diagnosticCode,
                            std::move(preparation.diagnosticMessage));

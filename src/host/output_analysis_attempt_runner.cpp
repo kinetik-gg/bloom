@@ -255,15 +255,17 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                 : (requestedCommand != nullptr ? requestedCommand : canonicalCommand);
         auto plan = state_->request.plan;
         auto evaluation = state_->request.evaluation;
+        auto assetBaseDirectory = state_->request.assetBaseDirectory;
 
         runtime::TaskRequest cpuRequest(
             "Analyze a frame export attempt", attemptOwner(state_->request.owner),
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::Cpu);
         auto submission = state_->scheduler->submit<BuildOutcomeV1>(
             std::move(cpuRequest),
-            [plan = std::move(plan), evaluation, resolved, preset, ledger,
-             gpuProvider = std::move(gpuProvider), processingPolicy = std::move(processingPolicy),
-             forceCpuFallback, outputColorCommand = std::move(outputColorCommand)](
+            [plan = std::move(plan), evaluation, assetBaseDirectory = std::move(assetBaseDirectory),
+             resolved, preset, ledger, gpuProvider = std::move(gpuProvider),
+             processingPolicy = std::move(processingPolicy), forceCpuFallback,
+             outputColorCommand = std::move(outputColorCommand)](
                 runtime::TaskContext& context) -> runtime::TaskResult<BuildOutcomeV1> {
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
@@ -302,8 +304,9 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                 if (gpuProvider != nullptr && !forceCpuFallback) {
                     auto evaluator = gpuProvider->evaluator();
                     if (evaluator != nullptr) {
-                        auto gpuOutcome = evaluator->evaluate(
-                            plan, evaluation, context.cancellation(), {}, outputColorCommand);
+                        auto gpuOutcome =
+                            evaluator->evaluate(plan, evaluation, context.cancellation(), {},
+                                                outputColorCommand, assetBaseDirectory);
                         if (context.isCancellationRequested() ||
                             gpuOutcome.status == runtime::GpuProcessFrameStatus::Cancelled) {
                             return runtime::TaskResult<BuildOutcomeV1>::cancelled();
@@ -391,6 +394,7 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                     cpuEvaluation.pixelStorageByteLimit =
                         static_cast<std::size_t>(hostPhase->sourceByteLimit());
                     const runtime::CpuCompositionEvaluator evaluator;
+                    evaluator.setAssetBaseDirectory(assetBaseDirectory);
                     auto evalResult =
                         evaluator.evaluate(plan, cpuEvaluation, context.cancellation());
                     if (evalResult.status() == runtime::EvaluationStatus::Cancelled) {
@@ -555,6 +559,12 @@ OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
     output::ExportResourceLedgerV1& ledger, OutputAnalysisAttemptRequestV1 request) {
     const auto targetPath = request.targetPath;
     const auto overwritePolicy = request.overwritePolicy;
+    const auto capturedColor =
+        runtime::captureEvaluationColorIntent(request.evaluation.colorIntent);
+    if (!capturedColor) {
+        return OutputAnalysisAttemptRunnerResultV1(runtime::TaskSubmissionStatus::InvalidRequest);
+    }
+    request.evaluation.colorIntent = *capturedColor;
     // Direct aggregate-brace construction (never T's own implicit default constructor, which
     // std::make_unique<T>() would call with zero arguments): OutputAnalysisAttemptRequestV1 has no
     // default constructor of its own (runtime::EvaluationRequest's OperationIndex member has none
@@ -577,7 +587,7 @@ OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
     const auto preset = state->request.preset;
     auto* const displayProvider = state->request.displayProcessorProvider;
     auto* const gpuProvider = state->request.gpuProvider.get();
-    const auto colorIntent = state->request.evaluation.colorIntent;
+    const auto capturedColorIntent = state->request.evaluation.colorIntent;
     const runtime::GpuOcioCommandGeometry colorGeometry{
         .width = state->request.plan != nullptr ? state->request.plan->format().width() : 0,
         .height = state->request.plan != nullptr ? state->request.plan->format().height() : 0};
@@ -587,7 +597,8 @@ OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
         runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo);
     auto submission = scheduler.submit<ResolvingOutcomeV1>(
         std::move(resolvingRequest),
-        [&artifacts, targetPath, overwritePolicy, preset, displayProvider, gpuProvider, colorIntent,
+        [&artifacts, targetPath, overwritePolicy, preset, displayProvider, gpuProvider,
+         capturedColorIntent,
          colorGeometry](runtime::TaskContext& context) -> runtime::TaskResult<ResolvingOutcomeV1> {
             if (context.isCancellationRequested()) {
                 return runtime::TaskResult<ResolvingOutcomeV1>::cancelled();
@@ -623,7 +634,7 @@ OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
                                         .completed = 0,
                                         .total = std::nullopt});
                 auto color = detail::resolvePngDisplayProducts(
-                    displayProvider, gpuProvider, colorIntent, colorGeometry,
+                    displayProvider, gpuProvider, capturedColorIntent, colorGeometry,
                     [&context] { return context.isCancellationRequested(); });
                 if (!color.has_value()) {
                     return runtime::TaskResult<ResolvingOutcomeV1>::succeeded(

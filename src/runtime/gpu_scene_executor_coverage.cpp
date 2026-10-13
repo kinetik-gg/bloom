@@ -239,6 +239,8 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollPathCoverage() {
         return GpuSceneExecutorPollResult::Failure;
     }
     ++counters.coveredSolidDispatches;
+    ++counters.nativeSubmissions;
+    ++counters.dispatches;
     nativeKind = NativeKind::Solid;
     nativeStart = std::chrono::steady_clock::now();
     const auto submitElapsed =

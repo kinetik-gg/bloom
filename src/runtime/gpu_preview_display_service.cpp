@@ -576,9 +576,20 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
 
 TaskSubmission<PreviewPreparationResultHandle>
 GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& snapshot,
-                                 const PreviewRequestIdentity& identity,
+                                 const PreviewRequestIdentity& borrowedIdentity,
                                  const std::size_t pixelStorageByteLimit,
                                  const std::vector<SnapshotParameterOverride>& overrides) {
+    auto identity = borrowedIdentity;
+    const auto color = captureEvaluationColorIntent(identity.colorIntent);
+    if (!color) {
+        TaskSubmission<PreviewPreparationResultHandle> refused;
+        refused.status = TaskSubmissionStatus::InvalidRequest;
+        refused.diagnostic =
+            previewDiagnostic("bloom.runtime.gpu-preview-color-intent-capture-failed",
+                              "Preview colour intent could not be captured.");
+        return refused;
+    }
+    identity.colorIntent = *color;
     auto core = impl_->core;
     // Admission is synchronized with beginShutdown(): a submission that races shutdown is rejected
     // here, never converted into new work.

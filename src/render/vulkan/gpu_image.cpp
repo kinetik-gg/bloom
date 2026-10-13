@@ -222,7 +222,8 @@ SolidImageSupport querySolidImageSupport(vulkan_detail::DeviceAllocatorState& st
 }
 
 bool createResidentImage(vulkan_detail::DeviceAllocatorState& state, const std::uint32_t width,
-                         const std::uint32_t height, GpuImageImpl& out) {
+                         const std::uint32_t height, GpuImageImpl& out,
+                         const bool restoreFailedPrefix) {
     if (!image_detail::reserveImage(out)) {
         image_detail::releaseImageSlot(out);
         return false;
@@ -243,7 +244,7 @@ bool createResidentImage(vulkan_detail::DeviceAllocatorState& state, const std::
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     if (!vulkan_detail::allocateCoveredImage(state, imageInfo, out.image, out.allocation,
-                                             out.storageToken)) {
+                                             out.storageToken, false, restoreFailedPrefix)) {
         image_detail::releaseImageSlot(out);
         return false;
     }
@@ -264,7 +265,11 @@ bool createResidentImage(vulkan_detail::DeviceAllocatorState& state, const std::
     if (viewFault ||
         state.device.getDispatcher()->vkCreateImageView(static_cast<VkDevice>(*state.device),
                                                         &viewInfo, nullptr, &view) != VK_SUCCESS) {
+        auto token = restoreFailedPrefix ? std::move(out.storageToken) : NativeImageStorageToken{};
         out.destroy();
+        if (restoreFailedPrefix)
+            static_cast<void>(
+                token.releaseFailedAttemptAfterBackingDestroyed(state.processingPhase));
         image_detail::releaseImageSlot(out);
         return false;
     }

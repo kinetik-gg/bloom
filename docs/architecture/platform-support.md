@@ -233,10 +233,15 @@ python3 tools/ci/gpu_qualification.py --build-dir build/gpu-cpu-fallback \
 ```
 
 The workflow's optional native job takes explicit JSON runner labels, builds the locked Vulkan
-bootstrap closure, and runs the bounded processing-buffer, image-allocation, display-transfer and
-resident-display parity gates with `--require-device`. Device diagnostic `device_type` must identify
+bootstrap closure, and runs ten bounded native suites: processing-buffer, image-allocation,
+display-transfer, resident-display, operation-buffer, presentation-allocation, OCIO-image storage,
+queue timing, allocator memory and operation batches. Every suite receives `--require-device`.
+The batch suite requires actual multi-kernel submissions, status rejection and bounded retirement;
+its optional unavailable-device result cannot count as native qualification.
+Device diagnostic `device_type` must identify
 an integrated, discrete or virtual GPU. Missing capability and CPU/software Vulkan produce
-**NotRun**; an explicitly requested native job fails in that state. An invariant failure remains a
+**NotRun** and a failing exit status in native mode, including without the explicit requirement
+marker. An invariant failure remains a
 failure and is never relabelled device unavailability. The native gate does not qualify GUI
 presentation, all production render routes, sustained playback, platform packaging or full prefix
 manifests; those remain independent gates.

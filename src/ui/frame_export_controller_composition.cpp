@@ -51,6 +51,7 @@ void FrameExportController::beginCompositionExport(CompositionExportRequest requ
     const auto* composition = session_.composition();
     if (!composition)
         return;
+    const auto projectPath = projectPathProvider_ ? projectPathProvider_() : std::nullopt;
     host::SequenceExportRequestV1 captured{
         .composition = {session_.snapshot(), session_.compositionId()},
         .range = {.destination = request.range.destination,
@@ -67,7 +68,7 @@ void FrameExportController::beginCompositionExport(CompositionExportRequest requ
         .pcmCodec =
             request.preset == output::OutputPresetV1::PcmWavV1 ? request.profile : "pcm_s16le",
         .bwfDescription = {},
-        .assetBaseDirectory = {},
+        .assetBaseDirectory = projectPath ? projectPath->parent_path() : std::filesystem::path{},
         .worker = {},
         .startFrame = request.range.naming.startFrame,
         .framePadding = request.range.naming.framePadding,

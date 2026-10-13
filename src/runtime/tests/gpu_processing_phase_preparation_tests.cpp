@@ -279,7 +279,8 @@ void mixedAndNestedQuotas() {
     sample.process.source = ProcessMemorySource::LinuxCgroupV2;
     sample.process.sampledAt = now;
     const auto captured = bloom::media::captureImageSourceRevision(path, gib);
-    require(captured.value.has_value(), "mixed fixture captures actual encoded revision bytes");
+    if (!captured.value.has_value())
+        throw std::runtime_error("mixed fixture captures actual encoded revision bytes");
     const std::uint64_t sourceAllowance = (*captured.value)->retainedBytes() + 1024;
     // The decoded upload is still96B. Immutable encoded backing/header metadata must now also
     // fit the source working envelope; none may borrow the independent coverage partition.
@@ -309,7 +310,7 @@ void mixedAndNestedQuotas() {
         auto lowPlan = bloom::gpu_coverage_fixtures::publish(std::move(lowDefinition));
         auto lowRequest = bloom::gpu_coverage_fixtures::requestFor(*lowPlan);
         lowRequest.pixelStorageByteLimit = gib;
-        sample.process.domains[0].limitBytes = 16ULL * 1024 * 1024 + fixedHeadroom + 3 * 96;
+        sample.process.domains[0].limitBytes = 16ULL * 1024 * 1024 + fixedHeadroom + 3ULL * 96;
         sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
         ++sample.sampleSerial;
         policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);

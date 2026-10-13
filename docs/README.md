@@ -42,10 +42,10 @@ provide research or rationale, but they are not binding until adopted here.
 7. [`roadmap.md`](roadmap.md) — proof-oriented implementation sequence.
 8. [`decisions/`](decisions/) — accepted architecture decision records.
 
-The GPU/cache overhaul has resumed for Linux under issue #304. Processing/presentation allocation
-ownership, immutable source revisions, repeated fill/purge and sustained packed Viewer evidence are
-in integration. The measured width-two candidate failed the interaction/headroom gate, so production
-service-backed RAM fill defaults to width one. See the
+The issue #304 Linux implementation and local qualification cover processing/presentation allocation
+ownership, immutable source revisions, bounded native command batches, repeated fill/purge and
+sustained packed Viewer playback. The measured width-two candidate failed the interaction/headroom
+gate, so production service-backed RAM fill defaults to width one. See the
 [current Linux qualification record](plans/gpu-304-linux-qualification.md) and the historical
 [execution checkpoints](plans/gpu-reliability-and-preview.md#execution-checkpoint) for exact limits.
 
@@ -97,14 +97,16 @@ service-backed RAM fill defaults to width one. See the
   private Linux checks qualify clipping, ROI, coherent outlines, host-only Full/Half 100-frame reuse,
   real animated text manipulation and short useful cold progress. Channel remapping is a bounded
   CPU worker with explicit provenance. Native preview/final GPU coverage remains required. These
-  checks do not establish sustained playback or cross-platform GPU qualification; broader scheduling,
-  clock, media, aggregate memory and batching work remains in the
-  [GPU reliability plan](plans/gpu-reliability-and-preview.md).
+  Linux qualification now includes ten Half100 fill/purge cycles, 60 seconds of retained painted
+  playback and bounded command batching in the [current record](plans/gpu-304-linux-qualification.md).
+  Cross-platform native execution, physical scanout and whole-process memory guarantees remain
+  unqualified.
 - Shared preview completion now uses callback-free neutral runtime subscriptions and one coalesced
   queued UI drain. RAM/background refill and typed Viewer/asset/bootstrap/export/purge consumers
   receive completed results independently of Jobs progress snapshots. Bounded private tests qualify
   burst coalescing, held-worker UI activity and GPU Half100 refill; native acknowledgements,
-  separate text-layout/ProjectHost I/O polling and sustained/platform gates remain separate.
+  separate text-layout/ProjectHost I/O polling and platform gates remain separate. The Linux
+  sustained packed playback result is recorded above.
 - Playback now derives cache-independent targets from elapsed rational wall/audio time, using checked
   valid-grid origins, live reanchoring and absolute intent-time deadlines. Five competing 60-second
   CPU-reference sessions show zero exact desired-grid mismatches; private GPU animation pixels

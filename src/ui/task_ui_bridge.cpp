@@ -47,15 +47,7 @@ struct TaskUiBridge::CompletionDelivery final {
             if (!stop.stop_requested()) {
                 const auto exhausted = subscription.state() ==
                                        runtime::TaskCompletionSubscriptionState::SerialExhausted;
-                QMetaObject::invokeMethod(
-                    &bridge,
-                    [&owner = bridge, exhausted] {
-                        owner.completionError_ =
-                            exhausted ? tr("Task completion notification serial is exhausted")
-                                      : tr("Task completion notifications closed unexpectedly");
-                        owner.setMonitorError(owner.completionError_);
-                    },
-                    Qt::QueuedConnection);
+                emit bridge.completionDeliveryFailed(exhausted);
             }
         });
     }
@@ -118,6 +110,8 @@ TaskUiBridge::TaskUiBridge(runtime::TaskScheduler& scheduler, QObject* parent,
     pollTimer_.setSingleShot(true);
     pollTimer_.setTimerType(Qt::PreciseTimer);
     connect(&pollTimer_, &QTimer::timeout, this, &TaskUiBridge::poll);
+    connect(this, &TaskUiBridge::completionDeliveryFailed, this,
+            &TaskUiBridge::reportCompletionDeliveryFailure, Qt::QueuedConnection);
     completion_ = std::make_unique<CompletionDelivery>(*this, scheduler_);
 }
 
@@ -126,6 +120,13 @@ TaskUiBridge::~TaskUiBridge() { completion_.reset(); }
 std::uint64_t TaskUiBridge::completionWakeCount() const noexcept {
     assertUiThread();
     return completionWakes_;
+}
+
+void TaskUiBridge::reportCompletionDeliveryFailure(const bool serialExhausted) {
+    assertUiThread();
+    completionError_ = serialExhausted ? tr("Task completion notification serial is exhausted")
+                                       : tr("Task completion notifications closed unexpectedly");
+    setMonitorError(completionError_);
 }
 
 void TaskUiBridge::drainResults() {

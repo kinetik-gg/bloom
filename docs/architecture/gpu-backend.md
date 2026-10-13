@@ -708,6 +708,23 @@ locally exercised on Linux. The Vulkan device service, fence integration, and re
 are implemented; the cross-platform Linux/macOS/Windows qualification spike remains pending, and a
 synchronous fence wait hidden inside a task function is not a valid interim implementation.
 
+### Bounded Native Command Batches
+
+The production scene executor records two to eight consecutive eligible Solid, translation,
+affine and source-over kernels into one command buffer with explicit dependencies and one fence.
+Other kernels delimit those runs and retain their existing native paths. Inputs may reference
+earlier batch outputs or Ready images from the exact device generation; every GPU status word is
+validated before outputs leave the native batch owner.
+
+All image and buffer backings reserve and reconcile against the existing phase. Translation-axis
+scratch uses fresh additive host admission in both serial and batched native paths. Oversized or
+failed pre-submit preparation may fall back to serial native execution only after actual backing
+destruction and same-origin prefix restoration. An uncertain attempted submission retains the exact
+cancelled owner and all inputs until real fence/loss proof; later proof discards its outputs.
+Foreign release queues that bounded owner for its native thread. The default remains one admitted
+frame; measurements and width-two limits are in the
+[Linux qualification record](../plans/gpu-304-linux-qualification.md).
+
 ### CPU Composition Seam
 
 The composition preview's CPU half is now split from the display product applied to it, so a later
@@ -1443,6 +1460,12 @@ through fence proof and destruction outside the handoff mutex. Preview/final exi
 readback pending state. Proven budget refusal drops attempt-owned aliases before phase retirement,
 allowing a second request at capacity one; loss or unknown work is not that proof. No timeout or
 closed-owner state is reported as reclaimed success.
+
+A host handoff may fail after the actual readback fence has completed. That failure releases its
+attempt aliases only after checking the owner thread, device epoch, exact retained phase and every
+independent readback, transfer and OCIO retirement witness. It remains a failed render, but does not
+poison the next capacity-one admission. Unknown completion and device loss cannot satisfy this
+proof; cached OCIO buffers remain independently charged until their actual destruction.
 
 Focused native helper and complete evaluator evidence qualifies this behavior independently.
 The evaluator's real submitted work with a privately overridden unknown observation retains buffer,
