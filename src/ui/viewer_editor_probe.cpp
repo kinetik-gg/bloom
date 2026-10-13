@@ -116,7 +116,7 @@ void ViewerEditor::refreshProbe(QPointF position) {
         return;
     }
     std::optional<render::Rgba8> display = displayPixel(*shown, pixel);
-    if (!display.has_value() && probeCacheFrame_ == shown && probeCachePixel_ == pixel) {
+    if (!display.has_value() && probeCacheFrame_.lock() == shown && probeCachePixel_ == pixel) {
         display = probeCacheDisplay_;
     }
     ProbeReadout readout{.valid = true,
@@ -133,7 +133,7 @@ void ViewerEditor::refreshProbe(QPointF position) {
     readout.displayName = base->desiredIdentity().displayName.empty()
                               ? tr("default display")
                               : QString::fromStdString(base->desiredIdentity().displayName);
-    if (probeCacheFrame_ == base && probeCachePixel_ == pixel) {
+    if (probeCacheFrame_.lock() == base && probeCachePixel_ == pixel) {
         readout.reference = probeCacheReference_;
         readout.displayLinear = probeCacheDisplayLinear_;
     }

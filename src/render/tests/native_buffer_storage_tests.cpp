@@ -458,6 +458,61 @@ void processingFreshnessAndOverflow() {
     phase.lease.reset();
     empty(budget);
 }
+void retainedProcessingOwnership() {
+    GpuProcessingPhaseBudget budget(1);
+    budget.setHostCapacity(1000, true);
+    budget.setDeviceCapacity(150, true);
+    auto phase = budget.reserve(request());
+    require(phase.lease != nullptr, "retained processing origin admitted");
+    auto first = NativeBufferStorageToken::reserveProcessing(phase.lease, 40, local());
+    auto second = NativeBufferStorageToken::reserveProcessing(phase.lease, 30, nonlocal());
+    require(first.token && second.token && token(first).canPromote() && token(first).promote() &&
+                token(second).promote(),
+            "retained buffers publish from their exact proven origin");
+    require(!token(first).reconcile(30, local()), "published backing cannot be reconciled later");
+    const auto weak = std::weak_ptr<GpuProcessingPhaseLease>(phase.lease);
+    phase.lease.reset();
+    require(weak.expired() && budget.snapshot().admittedPhases == 0 &&
+                budget.snapshot().totalDeviceClaimBytes == 70 &&
+                budget.snapshot().totalHostClaimBytes == 30,
+            "cached charges survive independently without pinning the whole origin phase");
+    const auto denied = budget.reserve(request());
+    require(!denied.lease && denied.domain == GpuProcessingPhaseDomain::Device,
+            "later phase cannot double-spend retained buffer backing");
+    const auto revision = budget.snapshot().admissionRevision;
+    auto moved = NativeBufferStorageToken(std::move(token(first)));
+    first.token.reset();
+    moved = {};
+    second.token.reset();
+    require(budget.snapshot().admissionRevision == revision + 2,
+            "actual independent retained releases emit one capacity pulse each");
+    empty(budget);
+    phase = budget.reserve(request());
+    require(phase.lease != nullptr, "retained destruction restores capacity-one admission");
+    auto prefix = NativeBufferStorageToken::reserveProcessing(phase.lease, 40, nonlocal());
+    require(prefix.token && token(prefix).promote(), "partly published failed prefix exists");
+    const auto before = budget.snapshot();
+    GpuProcessingPhaseBudget foreign;
+    foreign.setHostCapacity(1000, true);
+    foreign.setDeviceCapacity(1000, true);
+    auto wrong = foreign.reserve(request());
+    require(wrong.lease && !token(prefix).releaseFailedAttemptAfterBackingDestroyed(wrong.lease) &&
+                token(prefix).releaseFailedAttemptAfterBackingDestroyed(phase.lease),
+            "only exact root/phase may quietly fold destroyed failed-prefix backing");
+    require(budget.snapshot().admissionRevision == before.admissionRevision &&
+                budget.snapshot().deviceReservedBytes == 100 &&
+                budget.snapshot().totalHostClaimBytes == 80,
+            "failed publication foldback conserves origin debit without self-retry pulse");
+    prefix.token.reset();
+    auto transient = NativeBufferStorageToken::reserve(phase.lease, 20, local());
+    require(transient.token && !token(transient).canPromote() && !token(transient).promote(),
+            "ordinary output partition cannot become retained processing storage");
+    transient.token.reset();
+    phase.lease.reset();
+    wrong.lease.reset();
+    empty(budget);
+    empty(foreign);
+}
 } // namespace
 
 int main() {
@@ -472,6 +527,7 @@ int main() {
         maximumMediaPartition();
         processingHeadroomAndPartitions();
         processingFreshnessAndOverflow();
+        retainedProcessingOwnership();
         std::cout << "PASS: neutral transient native buffer storage\n";
         return 0;
     } catch (const std::exception& error) {

@@ -82,6 +82,11 @@ struct ProxyResolution final {
 
 using EvaluationResolution = std::variant<CompositionFormatResolution, ProxyResolution>;
 
+// Source availability is a caller policy, not pixel identity. Final/headless callers always keep
+// the default Revalidate. Interactive callers may use a retained, immutable last verified source
+// until explicit Refresh/reconnect/relink/purge drops the session's decoded-media entries.
+enum class MediaSourceRevisionPolicy : std::uint8_t { Revalidate, Retained };
+
 struct EvaluationRequest final {
     core::RationalTime time;
     OperationIndex output;
@@ -92,6 +97,10 @@ struct EvaluationRequest final {
     bool bypassOperationCache = false;
     std::optional<render::ImageWindow> roi = std::nullopt;
     bool bypassLookNodes = false;
+    MediaSourceRevisionPolicy mediaSourceRevisionPolicy = MediaSourceRevisionPolicy::Revalidate;
+    // Final CPU boundaries reject unavailable/changed media instead of preview placeholders.
+    // Also forces fresh source revalidation when handed an explicitly Retained preview request.
+    bool requireVerifiedMediaSources = false;
 };
 
 // This deliberately retains the complete immutable plan. Exact deep equality is the conservative

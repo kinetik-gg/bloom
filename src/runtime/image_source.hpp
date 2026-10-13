@@ -36,11 +36,16 @@ struct ImageSourceSelection {
     std::string warning;
     bool available = false;
     bool cancelled = false;
+    std::shared_ptr<const media::ImageSourceRevision> sourceRevision;
+    bool retainedRevision = false;
 };
 [[nodiscard]] ImageSourceSelection selectImageSource(
     const CompiledImageSource& source, core::RationalTime time, document::FrameRate rate,
     const std::filesystem::path& base, const CancellationToken& cancel,
-    const EvaluationColorIntent& colorIntent = EvaluationColorIntent::LinearRec709Scene);
+    const EvaluationColorIntent& colorIntent = EvaluationColorIntent::LinearRec709Scene,
+    OperationCache* revisionCache = nullptr,
+    MediaSourceRevisionPolicy revisionPolicy = MediaSourceRevisionPolicy::Revalidate,
+    std::size_t hostByteBudget = media::kMaxImageStorageBytes, bool allowRevisionInsertion = true);
 // CACHE-1: how evaluateImageSource() may use the evaluator's shared memory cache for an
 // already-verified, immutable native decoded still-image. This governs only the source decode
 // entry; derived operation memoization is gated separately by the evaluator's own `cache` pointer.
@@ -70,7 +75,8 @@ evaluateImageSource(const ImageSourceSelection& selection,
                     render::Rgba32fImageDescriptor composition, double horizontalScale,
                     double verticalScale, std::size_t budget, OperationCache* memoryCache,
                     ImageSourceMemoryCacheAccess memoryAccess, const CancellationToken& cancel,
-                    media::cache::MediaDiskCache* diskCache = nullptr);
+                    media::cache::MediaDiskCache* diskCache = nullptr,
+                    media::ImageDecodeStatistics* decodeStatistics = nullptr);
 
 // Decode-only factoring for the GPU media colour split. The connected evaluateImageSource() path
 // is unchanged; these two functions expose its halves so the GPU path can decode RAW (no OCIO
@@ -83,7 +89,8 @@ evaluateImageSource(const ImageSourceSelection& selection,
 // processor-free decode so no OCIO pass runs.
 [[nodiscard]] media::ImageResult<std::shared_ptr<const render::Rgba32fImage>>
 decodeRawImageSource(const ImageSourceSelection& selection, std::size_t budget,
-                     const CancellationToken& cancel);
+                     const CancellationToken& cancel,
+                     media::ImageDecodeStatistics* decodeStatistics = nullptr);
 
 // Rebase a decoded image into the evaluator's composition descriptor: a (0,0)-origin data window
 // sized ceil(sourceExtent * scale), the composition display window and pixel aspect. At unit scale

@@ -42,6 +42,43 @@ GpuSceneMediaContext GpuSceneMediaContext::fromEvaluator(const CpuCompositionEva
 namespace bloom::runtime::detail {
 namespace {
 
+void addMediaWork(std::uint64_t& total, const std::uint64_t value) noexcept {
+    total += std::min(value, std::numeric_limits<std::uint64_t>::max() - total);
+}
+
+void recordSourceRevisionWork(const ImageSourceSelection& selection,
+                              GpuSceneMediaStatistics& statistics) noexcept {
+    if (selection.retainedRevision) {
+        addMediaWork(statistics.sourceRevisionCacheHits, 1);
+    } else if (selection.sourceRevision) {
+        addMediaWork(statistics.sourceRevisionCaptures, 1);
+        const auto& work = selection.sourceRevision->captureStatistics();
+        addMediaWork(statistics.sourceRevisionBytesHashed, work.bytesHashed);
+        addMediaWork(statistics.sourceBytesRead, work.bytesRead);
+        addMediaWork(statistics.sourceIoNanoseconds, work.ioNanoseconds);
+        addMediaWork(statistics.sourceHashNanoseconds, work.hashNanoseconds);
+        addMediaWork(statistics.sourceProbeNanoseconds, work.probeNanoseconds);
+    }
+}
+
+void recordSourceRevisionWork(const VideoSourceSelection& selection,
+                              GpuSceneMediaStatistics& statistics) noexcept {
+    if (selection.retainedRevision)
+        addMediaWork(statistics.sourceRevisionCacheHits, 1);
+    else if (selection.sourceWork.bytesRead != 0)
+        addMediaWork(statistics.sourceRevisionCaptures, 1);
+    addMediaWork(statistics.sourceRevisionBytesHashed, selection.sourceWork.bytesHashed);
+    addMediaWork(statistics.sourceBytesRead, selection.sourceWork.bytesRead);
+    addMediaWork(statistics.sourceIoNanoseconds, selection.sourceWork.ioNanoseconds);
+    addMediaWork(statistics.sourceHashNanoseconds, selection.sourceWork.hashNanoseconds);
+}
+void bindVideoSourceOwnership(const GpuSceneMediaContext& context) {
+    if (context.operationCache && context.videoContext) {
+        context.videoContext->bindRetirement(context.operationCache->sourceRetirementState());
+        context.operationCache->bindVideoSources(context.videoContext);
+    }
+}
+
 void addWindow(OperationKey& key, const render::ImageWindow window) {
     key.add(window.originX());
     key.add(window.originY());
@@ -173,9 +210,11 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
                                   : (planBypass ? ImageSourceMemoryCacheAccess::ReadOnly
                                                 : ImageSourceMemoryCacheAccess::ReadWrite);
     auto* const diskCache = (explicitBypass || planBypass) ? nullptr : context.mediaDiskCache.get();
+    media::ImageDecodeStatistics decodeStatistics;
     auto image = evaluateImageSource(selection, resolved.imageDescriptor, resolved.horizontalScale,
                                      resolved.verticalScale, byteBudget(pixelBudget), memoryCache,
-                                     memoryAccess, cancellation, diskCache);
+                                     memoryAccess, cancellation, diskCache, &decodeStatistics);
+    addMediaWork(statistics.imageDecodeNanoseconds, decodeStatistics.decodeNanoseconds);
     ++statistics.imageConversions;
     if (image.cancelled) {
         outcome.cancelled = true;
@@ -298,9 +337,14 @@ prepareImageUpload(const CompiledImageSource& source, const EvaluationRequest& r
                    const bool explicitBypass, const bool planBypass,
                    const CancellationToken& cancellation, GpuSceneMediaStatistics& statistics) {
     ++statistics.imageSources;
-    const auto selection =
-        selectImageSource(source, request.time, plan.format().frameRate(),
-                          context.assetBaseDirectory, cancellation, request.colorIntent);
+    const auto selection = selectImageSource(
+        source, request.time, plan.format().frameRate(), context.assetBaseDirectory, cancellation,
+        request.colorIntent, explicitBypass ? nullptr : context.operationCache.get(),
+        (explicitBypass || request.requireVerifiedMediaSources)
+            ? MediaSourceRevisionPolicy::Revalidate
+            : request.mediaSourceRevisionPolicy,
+        byteBudget(pixelBudget), !planBypass);
+    recordSourceRevisionWork(selection, statistics);
     if (selection.cancelled) {
         MediaUploadOutcome outcome;
         outcome.cancelled = true;
@@ -328,9 +372,15 @@ prepareVideoUpload(const CompiledVideoSource& source, const EvaluationRequest& r
         outcome.failure = "Video decode context is unavailable";
         return outcome;
     }
-    const auto selection = selectVideoSource(source, request.time, plan.format().frameRate(),
-                                             context.assetBaseDirectory, *context.videoContext,
-                                             true, cancellation, request.colorIntent);
+    bindVideoSourceOwnership(context);
+    const auto selection = selectVideoSource(
+        source, request.time, plan.format().frameRate(), context.assetBaseDirectory,
+        *context.videoContext, !explicitBypass, cancellation, request.colorIntent,
+        (explicitBypass || request.requireVerifiedMediaSources)
+            ? MediaSourceRevisionPolicy::Revalidate
+            : request.mediaSourceRevisionPolicy,
+        !planBypass && !explicitBypass, byteBudget(pixelBudget));
+    recordSourceRevisionWork(selection, statistics);
     if (selection.cancelled) {
         outcome.cancelled = true;
         return outcome;
@@ -351,9 +401,14 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
                       const std::uint64_t pixelBudget, const bool explicitBypass,
                       const bool planBypass, const CancellationToken& cancellation,
                       GpuSceneMediaStatistics& statistics) {
-    const auto selection =
-        selectImageSource(source, request.time, plan.format().frameRate(),
-                          context.assetBaseDirectory, cancellation, request.colorIntent);
+    const auto selection = selectImageSource(
+        source, request.time, plan.format().frameRate(), context.assetBaseDirectory, cancellation,
+        request.colorIntent, explicitBypass ? nullptr : context.operationCache.get(),
+        (explicitBypass || request.requireVerifiedMediaSources)
+            ? MediaSourceRevisionPolicy::Revalidate
+            : request.mediaSourceRevisionPolicy,
+        byteBudget(pixelBudget), !planBypass);
+    recordSourceRevisionWork(selection, statistics);
     if (selection.cancelled) {
         ++statistics.imageSources;
         MediaUploadOutcome outcome;
@@ -414,7 +469,10 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
     if (outcome.image == nullptr) {
         // RAW decode: no processor, no implicit conversion, no resample. File decode stays host
         // preparation; the OCIO colour pass is the GPU command prepared below.
-        auto decoded = decodeRawImageSource(selection, byteBudget(pixelBudget), cancellation);
+        media::ImageDecodeStatistics decodeStatistics;
+        auto decoded = decodeRawImageSource(selection, byteBudget(pixelBudget), cancellation,
+                                            &decodeStatistics);
+        addMediaWork(statistics.imageDecodeNanoseconds, decodeStatistics.decodeNanoseconds);
         ++statistics.imageConversions;
         if (decoded.cancelled) {
             outcome.cancelled = true;
@@ -500,9 +558,15 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
         outcome.failure = "Video decode context is unavailable";
         return outcome;
     }
-    const auto selection = selectVideoSource(source, request.time, plan.format().frameRate(),
-                                             context.assetBaseDirectory, *context.videoContext,
-                                             true, cancellation, request.colorIntent);
+    bindVideoSourceOwnership(context);
+    const auto selection = selectVideoSource(
+        source, request.time, plan.format().frameRate(), context.assetBaseDirectory,
+        *context.videoContext, !explicitBypass, cancellation, request.colorIntent,
+        (explicitBypass || request.requireVerifiedMediaSources)
+            ? MediaSourceRevisionPolicy::Revalidate
+            : request.mediaSourceRevisionPolicy,
+        !planBypass && !explicitBypass, byteBudget(pixelBudget));
+    recordSourceRevisionWork(selection, statistics);
     if (selection.cancelled) {
         outcome.cancelled = true;
         return outcome;

@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <vector>
 
 namespace bloom::media::detail {
@@ -32,6 +33,7 @@ class ImageAllocationBudgetScope final {
 // whole encoded file. Returns false for a non-image, an unreadable file, or a codec-rejected
 // header.
 [[nodiscard]] bool imageInfo(const std::filesystem::path& path, ImageInfo& info);
+[[nodiscard]] bool imageInfo(std::span<const std::byte> bytes, ImageInfo& info);
 
 // Streams the PNG/JPEG decode into a caller-bounded parser temporary (the thread-local allocation
 // scope) staging the RGBA16 samples. `pixelBudget` is the explicit peak-admission budget: the
@@ -39,4 +41,6 @@ class ImageAllocationBudgetScope final {
 // would exceed it, so the parser never makes an unbounded allocation.
 [[nodiscard]] std::vector<std::uint16_t>
 imageSamples(const std::filesystem::path& path, const ImageInfo& info, std::size_t pixelBudget);
+[[nodiscard]] std::vector<std::uint16_t>
+imageSamples(std::span<const std::byte> bytes, const ImageInfo& info, std::size_t pixelBudget);
 } // namespace bloom::media::detail

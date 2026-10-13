@@ -47,6 +47,8 @@ struct CompositeBuffer final {
     void recordInitialization(VkCommandBuffer commandBuffer) const noexcept;
 
     std::shared_ptr<vulkan_detail::DeviceAllocatorState> state;
+    NativeBufferStorageToken storageToken;
+    NativeBufferStorageToken stagingStorageToken;
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
     VkBuffer stagingBuffer = VK_NULL_HANDLE;

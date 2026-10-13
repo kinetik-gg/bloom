@@ -89,6 +89,63 @@ void testNativeOwnershipDuringTeardown(Expectations& expectations, GpuDevice& de
                         "ownership: the native drain released the input before executor pins");
 }
 
+void testOptionalQueueTiming(Expectations& expectations, GpuDevice& device) {
+    using Status = bloom::render::GpuQueueTimingStatus;
+    auto probe = bloom::render::GpuQueueTiming::create(device);
+    if (!probe || probe->sample().status == Status::Unsupported) {
+        std::cout << "Unsupported: optional graph queue timestamps\n";
+        return;
+    }
+    const auto plan = basicPlan();
+    const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+    if (!prepared || !cache) {
+        expectations.expect(false, "queue timing: real scene/cache prepares");
+        return;
+    }
+    GpuSceneExecutorBudgets budgets;
+    budgets.collectQueueTimestamps = true;
+    auto exec = GpuSceneExecutor::create(device, *cache.cache, budgets);
+    if (!exec) {
+        expectations.expect(false, "queue timing: production executor creates");
+        return;
+    }
+    const auto cold = runScene(*exec.executor, prepared.scene, kSceneBudget);
+    expectations.expect(cold.ready, "queue timing: pixels publish independently");
+    auto sample = exec.executor->pollQueueTiming();
+    for (std::uint64_t i = 0; i < kMaxPollIterations && sample.status == Status::Pending; ++i) {
+        std::this_thread::yield();
+        sample = exec.executor->pollQueueTiming();
+    }
+    expectations.expect(sample.status == Status::Available && sample.nanoseconds > 0,
+                        "queue timing: actual production graph yields a device-clock span");
+    std::cout << "Queue graph span (idle/poll/submission gaps included): " << sample.nanoseconds
+              << "ns validbits=" << sample.timestampValidBits
+              << " period=" << sample.timestampPeriodNanoseconds << "ns\n";
+    const auto warm = runScene(*exec.executor, prepared.scene, kSceneBudget);
+    expectations.expect(warm.ready &&
+                            exec.executor->pollQueueTiming().status == Status::NotRequested,
+                        "queue timing: fully cached graph submits no timestamp markers");
+    cache.cache->clear();
+    static_cast<void>(exec.executor->begin(prepared.scene, kSceneBudget));
+    static_cast<void>(exec.executor->poll());
+    exec.executor->cancel();
+    for (std::uint64_t i = 0;
+         i < kMaxPollIterations &&
+         exec.executor->state() == bloom::runtime::GpuSceneExecutorJobState::Pending;
+         ++i) {
+        static_cast<void>(exec.executor->poll());
+        std::this_thread::yield();
+    }
+    sample = exec.executor->pollQueueTiming();
+    for (std::uint64_t i = 0; i < kMaxPollIterations && sample.status == Status::Pending; ++i) {
+        std::this_thread::yield();
+        sample = exec.executor->pollQueueTiming();
+    }
+    expectations.expect(sample.status == Status::Cancelled && sample.nanoseconds == 0,
+                        "queue timing: cancelled production work never publishes a duration");
+}
+
 // ---- native retirement / drain contracts ------------------------------------------------------
 
 void testNativeRetirementContracts(Expectations& expectations, GpuDevice& device) {
@@ -111,6 +168,7 @@ void testNativeRetirementContracts(Expectations& expectations, GpuDevice& device
     {
         GpuSceneExecutorBudgets budgets;
         budgets.jobDeadlineMilliseconds = 0;
+        budgets.collectQueueTimestamps = true;
         auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
         auto exec = GpuSceneExecutor::create(device, *cache.cache, budgets);
         expectations.expect(exec.hasValue(), "drain: the deadline executor is created");
@@ -164,7 +222,8 @@ void testNativeRetirementContracts(Expectations& expectations, GpuDevice& device
         if (!admission.lease)
             return;
         auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
-        auto exec = GpuSceneExecutor::create(device, *cache.cache);
+        auto exec = GpuSceneExecutor::create(
+            device, *cache.cache, GpuSceneExecutorBudgets{.collectQueueTimestamps = true});
         expectations.expect(exec.hasValue(), "unknown: the executor is created");
         if (exec) {
             static_cast<void>(exec.executor->begin(prepared.scene, kSceneBudget));
@@ -219,7 +278,8 @@ void testNativeRetirementContracts(Expectations& expectations, GpuDevice& device
     // 3) Device loss is mapped distinctly and is terminal.
     {
         auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
-        auto exec = GpuSceneExecutor::create(device, *cache.cache);
+        auto exec = GpuSceneExecutor::create(
+            device, *cache.cache, GpuSceneExecutorBudgets{.collectQueueTimestamps = true});
         expectations.expect(exec.hasValue(), "lost: the executor is created");
         if (exec) {
             static_cast<void>(exec.executor->begin(prepared.scene, kSceneBudget));
@@ -248,7 +308,8 @@ void testNativeRetirementContracts(Expectations& expectations, GpuDevice& device
     // 4) A real submitted job cancelled and proven retired is immediately reusable.
     {
         auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
-        auto exec = GpuSceneExecutor::create(device, *cache.cache);
+        auto exec = GpuSceneExecutor::create(
+            device, *cache.cache, GpuSceneExecutorBudgets{.collectQueueTimestamps = true});
         expectations.expect(exec.hasValue(), "reuse: the executor is created");
         if (exec) {
             static_cast<void>(exec.executor->begin(prepared.scene, kSceneBudget));
@@ -281,7 +342,8 @@ void testNativeRetirementContracts(Expectations& expectations, GpuDevice& device
         fault::clear();
         auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
         {
-            auto exec = GpuSceneExecutor::create(device, *cache.cache);
+            auto exec = GpuSceneExecutor::create(
+                device, *cache.cache, GpuSceneExecutorBudgets{.collectQueueTimestamps = true});
             if (exec) {
                 static_cast<void>(exec.executor->begin(prepared.scene, kSceneBudget));
                 static_cast<void>(exec.executor->poll());
@@ -299,7 +361,8 @@ void testNativeRetirementContracts(Expectations& expectations, GpuDevice& device
     {
         namespace coverage = bloom::render::path_coverage_detail;
         auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
-        auto exec = GpuSceneExecutor::create(device, *cache.cache);
+        auto exec = GpuSceneExecutor::create(
+            device, *cache.cache, GpuSceneExecutorBudgets{.collectQueueTimestamps = true});
         const auto vectorPlan = fractionalPlan();
         const auto vectorScene = CpuGpuSceneBuilder{}.build(vectorPlan, requestFor(*vectorPlan));
         expectations.expect(exec.hasValue() && vectorScene.hasValue(),

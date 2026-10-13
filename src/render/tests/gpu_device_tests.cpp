@@ -162,6 +162,7 @@ void testRealDeviceIfAvailable(ExpectationContext& expectations, const TestOptio
     std::cout << "GPU: backend=" << report.identity.backend << " device=\""
               << report.identity.device_name << "\""
               << " driver_version=" << report.identity.driver_version
+              << " device_type=" << report.identity.device_type
               << " api=" << report.identity.api_version_major << '.'
               << report.identity.api_version_minor << " compute_queue=" << report.compute_queue
               << " timeline=" << report.timeline_semaphore

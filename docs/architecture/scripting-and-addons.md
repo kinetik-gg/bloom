@@ -256,11 +256,18 @@ subscribing thread's event pump. Neither the evaluator nor render kernels execut
 `bloom-mcp` uses the qualified yyjson implementation for bounded JSON-RPC stdio, mapping query,
 transaction, render, composition-export and event tools to their owned host boundaries.
 
-Checked-in Python is product scripting code, not repository infrastructure. `.py` and `.pyi` files
-are limited to `src/scripting/python/` for the facade and bootstrap, `tests/fixtures/scripting/` for
-client conformance and inert fixtures, and `examples/scripting/` for artist examples. The repository
-hygiene gate enforces those roots. Runtime and dependency code generation are not added to the
-application build.
+Product Python remains limited to `src/scripting/python/` for the facade and bootstrap,
+`tests/fixtures/scripting/` for client conformance and inert fixtures, and `examples/scripting/` for
+artist examples. Runtime and dependency code generation are not added to the application build.
+
+Linux issue #304 additionally uses three named, standalone qualification drivers:
+`tools/ci/configure_gpu_qualification.py`, `tools/ci/gpu_qualification.py`, and
+`tools/quality/qualify_private_share_outage.py`. They orchestrate existing CMake/native test commands,
+write structured evidence and supervise an isolated disposable share. They are not imported by
+product code or executed by the application build. Python's standard process/JSON APIs keep these
+manual/CI harnesses bounded and auditable without introducing shell parsing of evidence or a new
+product dependency. The hygiene gate admits exactly these files and rejects other infrastructure
+Python sources and misplaced type stubs; this is not a general Python tools root.
 
 See [Scripting Bloom with Python](../user-guide/python.md) and
 [Using Bloom from an agent](../user-guide/mcp.md) for executable API examples and limits.

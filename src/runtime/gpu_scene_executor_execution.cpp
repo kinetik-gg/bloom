@@ -148,7 +148,12 @@ void GpuSceneExecutor::Impl::consume(const GpuSceneCommandIndex index) noexcept 
 
 void GpuSceneExecutor::Impl::fail(const GpuSceneExecutorDiagnosticCode code, std::string message,
                                   const bool requireDrain) noexcept {
-    const auto capacityRefusal = device ? device->nativeImageStorageRefusal() : std::nullopt;
+    if (queueTimingStarted && queueTiming) {
+        queueTiming->cancel();
+        queueTimingSample = queueTiming->poll();
+    }
+    const bool capacityRefusal = device && (device->nativeImageStorageRefusal().has_value() ||
+                                            device->nativeBufferStorageRefusal().has_value());
     const bool nativeCapacityRefused = capacityRefusal && !requireDrain && !deviceLost &&
                                        !hasUnretiredNative() &&
                                        code == GpuSceneExecutorDiagnosticCode::DispatchRefused;
@@ -174,6 +179,10 @@ void GpuSceneExecutor::Impl::finishReady() noexcept {
         fail(GpuSceneExecutorDiagnosticCode::InternalInvariant, "the output image is missing",
              false);
         return;
+    }
+    if (queueTimingStarted && queueTiming) {
+        queueTiming->end();
+        queueTimingSample = queueTiming->poll();
     }
     state = GpuSceneExecutorJobState::Ready;
     diagnostic = {};
@@ -213,6 +222,13 @@ void GpuSceneExecutor::Impl::advanceDrain() noexcept {
 }
 
 GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecutorStep& step) {
+    if (budgets.collectQueueTimestamps && !queueTimingAttempted) {
+        queueTimingAttempted = true;
+        queueTimingSample.status =
+            queueTiming ? queueTiming->begin() : render::GpuQueueTimingStatus::Failed;
+        queueTimingStarted = queueTimingSample.status == render::GpuQueueTimingStatus::Active;
+    }
+    const auto submitStarted = std::chrono::steady_clock::now();
     const std::uint64_t remaining = remainingBudget();
     liveBytesAtDispatch = liveBytes;
     const auto solidParameters = [&step]() -> std::optional<render::GpuSolidParameters> {
@@ -381,6 +397,14 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
     cancelIssued = false;
     timeoutRequested = false;
     nativeStart = std::chrono::steady_clock::now();
+    const auto elapsed =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(nativeStart - submitStarted).count();
+    auto& submitTime = step.kind == GpuSceneExecutorStepKind::Upload
+                           ? counters.uploadSubmitNanoseconds
+                           : counters.processingSubmitNanoseconds;
+    if (elapsed > 0)
+        submitTime += std::min(static_cast<std::uint64_t>(elapsed),
+                               std::numeric_limits<std::uint64_t>::max() - submitTime);
     return {};
 }
 
@@ -402,6 +426,9 @@ GpuSceneExecutor::Impl::~Impl() {
     // The producer is destroyed last: a consuming fill's release above has already drained or
     // quarantined its submission, so the co-owned resident mask is safe to release here.
     pathCoverage.reset();
+    if (queueTimingStarted && queueTiming)
+        queueTiming->cancel();
+    queueTiming.reset();
 }
 
 } // namespace bloom::runtime

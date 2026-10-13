@@ -81,6 +81,8 @@ void call(Writer& w, const CallRequest& c) {
     require(c.samples > 0 && c.samples <= Limits::audioSamples);
     w.number(c.samples);
     w.hash(c.sourceDigest);
+    require(c.snapshotBytes <= Limits::sourceBytes);
+    w.number(c.snapshotBytes);
 }
 CallRequest call(Reader& r) {
     CallRequest c;
@@ -92,6 +94,7 @@ CallRequest call(Reader& r) {
     c.stream = r.number<std::uint32_t>();
     c.samples = r.number<std::uint32_t>();
     c.sourceDigest = r.hash();
+    c.snapshotBytes = r.number<std::uint64_t>();
     Writer validation;
     call(validation, c);
     return c;

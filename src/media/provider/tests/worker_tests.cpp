@@ -151,6 +151,12 @@ void run() {
     options.capacity = 1;
     options.launched = [&](auto value) { pid.store(value); };
     MediaWorkerPool pool(options);
+    auto forged = fixture.request();
+    forged.snapshotBytes = 128;
+    auto forgedTicket = pool.submit(scheduler, owner(), fixture.attempt(), 0, forged);
+    test::check(!forgedTicket.submission.accepted() && forgedTicket.result() &&
+                    std::get<Unavailable>(*forgedTicket.result()).reason == Error::IdentityMismatch,
+                "serialized metadata cannot manufacture immutable source authority");
     auto probe = pool.submit(scheduler, owner(), fixture.attempt(), 0, fixture.request());
     waitDone(probe);
     const auto probed = probe.result();

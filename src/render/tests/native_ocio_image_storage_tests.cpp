@@ -3,11 +3,13 @@
 
 #include <bloom/render/gpu_processing_phase_budget.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <iostream>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 
 namespace {
 using namespace bloom::render;
@@ -52,10 +54,162 @@ void finish(GpuDevice& device, std::shared_ptr<GpuProcessingPhaseLease>& phase,
     phase.reset();
     const auto counters = budget.snapshot();
     require(counters.ownedNativeImages == 0 && counters.ownedNativeImageBytes == 0 &&
+                counters.ownedNativeBuffers == 0 && counters.ownedNativeBufferBytes == 0 &&
+                counters.ownedNonlocalNativeBufferHostBytes == 0 &&
+                counters.ownedProcessingHostBytes == 0 &&
+                counters.ownedProcessingHostMetadataBytes == 0 &&
+                counters.ownedProcessingHostAllocations == 0 &&
                 counters.ownedNonlocalNativeHostBytes == 0 && counters.totalDeviceClaimBytes == 0 &&
                 counters.totalHostClaimBytes == 0 && counters.admittedPhases == 0 &&
                 counters.unprovenPhases == 0,
             "actual LUT backing retirement conserves all claims");
+}
+void stagingOwnership(GpuDevice& device) {
+    auto state = GpuRendererAccess::state(device);
+    GpuProcessingPhaseBudget budget;
+    budget.setHostCapacity(kCapacity, true);
+    budget.setDeviceCapacity(kCapacity, true);
+    auto phase = retain(device, budget, kEnvelope);
+    ocioFaultLutRgbaFormat().store(true);
+    SampledResource resource;
+    const SampledGuard resourceGuard{*state, resource};
+    std::uint64_t stagingBytes = 0;
+    std::uint64_t scratchBytes = 0;
+    std::uint64_t scratchMetadata = 0;
+    require(createSampledResource(
+                state, texture(OcioGpuTextureDimensions::ThreeD), kEnvelope,
+                [&] {
+                    const auto sample = budget.snapshot();
+                    stagingBytes = std::max(stagingBytes, sample.ownedNativeBufferBytes);
+                    scratchBytes = std::max(scratchBytes, sample.ownedProcessingHostBytes);
+                    scratchMetadata =
+                        std::max(scratchMetadata, sample.ownedProcessingHostMetadataBytes);
+                    require(sample.ownedNativeBuffers <= 1,
+                            "LUT upload owns exactly its single live staging backing");
+                    return false;
+                },
+                resource) == UploadOutcome::Retired &&
+                stagingBytes > 0 && budget.snapshot().ownedNativeBuffers == 0,
+            "real LUT transfer carries staging ownership until its proven fence");
+    require(scratchBytes == 64ULL * 4 * sizeof(float) && scratchMetadata > 0 &&
+                budget.snapshot().ownedProcessingHostBytes == 0 &&
+                budget.snapshot().ownedProcessingHostMetadataBytes == 0,
+            "RGBA padding owns exact requested CPU payload/header until actual scratch free");
+    const bool localImage = resource.storage.identity().deviceLocal;
+    const auto imageBytes = resource.storage.bytes();
+    destroySampledResource(*state, resource);
+    finish(device, phase, budget);
+    phase = retain(device, budget, imageBytes + stagingBytes - 1);
+    const auto attempts = state->nativeBufferBackingAttempts;
+    require(createSampledResource(state, texture(OcioGpuTextureDimensions::ThreeD), kEnvelope, {},
+                                  resource) == UploadOutcome::OverBudget &&
+                state->nativeBufferBackingAttempts == attempts &&
+                budget.snapshot().ownedNativeImages == 0 &&
+                budget.snapshot().ownedNativeBuffers == 0,
+            "one-byte-short LUT staging refuses before backing and destroys its image prefix");
+    const auto refusal = device.nativeBufferStorageRefusal();
+    if (!refusal)
+        throw std::runtime_error("LUT staging denial requires typed phase provenance");
+    require(refusal->domain == GpuProcessingPhaseDomain::Device &&
+                refusal->status == GpuProcessingPhaseAdmission::BudgetRefused &&
+                refusal->phaseId == phase->id(),
+            "LUT staging denial retains exact typed phase provenance");
+    const auto revision = refusal->revisionAfterOwnRelease;
+    state->nativeImageAllocationFault = vulkan_detail::NativeImageAllocationFault::View;
+    require(createSampledResource(state, texture(OcioGpuTextureDimensions::ThreeD), kEnvelope, {},
+                                  resource) == UploadOutcome::Failed &&
+                !device.nativeBufferStorageRefusal(),
+            "a new pre-staging driver failure cannot reuse a previous typed buffer refusal");
+    finish(device, phase, budget);
+    require(budget.snapshot().admissionRevision == revision,
+            "destroyed staging/image prefix contributes only the original phase release");
+    using Fault = vulkan_detail::NativeBufferAllocationFault;
+    for (auto fault : {Fault::Allocation, Fault::Reconcile, Fault::Bind, Fault::Map}) {
+        phase = retain(device, budget, kEnvelope);
+        state->nativeBufferAllocationFault = fault;
+        const auto destroyed = state->nativeBufferBackingsDestroyed;
+        require(createSampledResource(state, texture(OcioGpuTextureDimensions::ThreeD), kEnvelope,
+                                      {}, resource) == UploadOutcome::Failed &&
+                    state->nativeBufferAllocationFault == Fault::None &&
+                    state->nativeBufferBackingsDestroyed ==
+                        destroyed + (fault == Fault::Allocation ? 0 : 1) &&
+                    budget.snapshot().ownedNativeImages == 0 &&
+                    budget.snapshot().ownedNativeBuffers == 0,
+                "each actual staging allocation/reconcile/bind/map fault frees before credit");
+        finish(device, phase, budget);
+    }
+    if (localImage) {
+        budget.setHostCapacity(scratchBytes + scratchMetadata - 1, true);
+        phase = retain(device, budget, kEnvelope);
+        const auto beforeScratch = state->nativeBufferBackingAttempts;
+        require(createSampledResource(state, texture(OcioGpuTextureDimensions::ThreeD), kEnvelope,
+                                      {}, resource) == UploadOutcome::OverBudget &&
+                    state->nativeBufferBackingAttempts == beforeScratch &&
+                    budget.snapshot().ownedNativeImages == 0 &&
+                    budget.snapshot().ownedProcessingHostAllocations == 0,
+                "padded host scratch refuses before CPU/staging allocation and frees image prefix");
+        const auto hostRefusal = device.nativeBufferStorageRefusal();
+        require(hostRefusal && hostRefusal->domain == GpuProcessingPhaseDomain::Host &&
+                    hostRefusal->status == GpuProcessingPhaseAdmission::BudgetRefused,
+                "scratch refusal preserves exact host capacity provenance");
+        finish(device, phase, budget);
+        budget.setHostCapacity(kCapacity, true);
+        phase = retain(device, budget, kEnvelope);
+        budget.setHostCapacity(kCapacity, true,
+                               std::chrono::steady_clock::now() - std::chrono::seconds(1));
+        require(createSampledResource(state, texture(OcioGpuTextureDimensions::ThreeD), kEnvelope,
+                                      {}, resource) == UploadOutcome::OverBudget,
+                "stale additive CPU scratch delivery fails closed");
+        const auto stale = device.nativeBufferStorageRefusal();
+        require(stale && stale->status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
+                    stale->domain == GpuProcessingPhaseDomain::Host && !budget.snapshot().hostReady,
+                "scratch freshness expiry carries typed AwaitingCapacity metadata");
+        finish(device, phase, budget);
+    } else {
+        std::cout << "NOTRUN: scratch-only host refusal requires local LUT image backing\n";
+    }
+    budget.setHostCapacity(kCapacity, true);
+    ocioFaultLutRgbaFormat().store(false);
+    std::cout << "PASS: exact LUT staging charge, pre-backing denial and native faults\n";
+}
+
+void stagingQuarantine(const GpuDeviceCreationOptions& options) {
+    GpuProcessingPhaseBudget budget;
+    budget.setHostCapacity(kCapacity, true);
+    budget.setDeviceCapacity(kCapacity, true);
+    auto made = GpuDevice::create(options);
+    require(bool(made), "the isolated LUT quarantine owner is ready");
+    auto state = GpuRendererAccess::state(*made.device);
+    auto phase = retain(*made.device, budget, kEnvelope);
+    SampledResource resource;
+    ocioFaultCancelAfterSubmit().store(true);
+    const auto outcome = createSampledResource(state, texture(OcioGpuTextureDimensions::ThreeD),
+                                               kEnvelope, {}, resource);
+    ocioFaultCancelAfterSubmit().store(false);
+    require(outcome == UploadOutcome::Cancelled && resource.image == VK_NULL_HANDLE &&
+                uploadQuarantineOccupied() && budget.snapshot().ownedNativeImages == 1 &&
+                budget.snapshot().ownedNativeBuffers == 1 &&
+                budget.snapshot().ownedProcessingHostAllocations == 0 &&
+                budget.snapshot().unprovenPhases == 1,
+            "cancel after genuine submit retains image, staging and exact unproven phase");
+    made.device->retireProcessingPhase(phase->id(), true);
+    require(made.device->processingPhaseOccupied(),
+            "a caller retirement claim cannot clear the unknown native generation");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (uploadQuarantineOccupied() && std::chrono::steady_clock::now() < deadline) {
+        retireUploadQuarantine();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    require(!uploadQuarantineOccupied() && budget.snapshot().ownedNativeImages == 0 &&
+                budget.snapshot().ownedNativeBuffers == 0 && budget.snapshot().unprovenPhases == 1,
+            "real fence proof frees staging/image but leaves generation quarantine sticky");
+    phase.reset();
+    state.reset();
+    made.device.reset();
+    require(budget.snapshot().totalDeviceClaimBytes == 0 &&
+                budget.snapshot().totalHostClaimBytes == 0 && budget.snapshot().admittedPhases == 0,
+            "exact native owner teardown releases the retained quarantine phase");
+    std::cout << "PASS: LUT staging quarantine owns charges through real native retirement\n";
 }
 void dimensionalAndFaults(GpuDevice& device) {
     auto state = GpuRendererAccess::state(device);
@@ -231,7 +385,9 @@ int main(int argc, char** argv) {
     }
     try {
         dimensionalAndFaults(*made.device);
+        stagingOwnership(*made.device);
         nonlocalFreshness(*made.device);
+        stagingQuarantine(options);
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

@@ -976,6 +976,8 @@ target_sources(
     PRIVATE
         cpu_image_primitives.cpp
         native_buffer_storage.cpp
+        native_image_storage.cpp
+        processing_host_storage.cpp
         gpu_processing_phase_budget.cpp
         packed_rgba8_storage.cpp
         packed_host_retirement.cpp
@@ -1000,6 +1002,8 @@ target_sources(
             include/bloom/render/gpu_composite.hpp
             include/bloom/render/gpu_device.hpp
             include/bloom/render/gpu_processing_phase_budget.hpp
+            include/bloom/render/gpu_allocator_memory.hpp
+            include/bloom/render/gpu_queue_timing.hpp
             include/bloom/render/native_image_storage.hpp
             include/bloom/render/native_buffer_storage.hpp
             include/bloom/render/packed_rgba8_storage.hpp
@@ -1048,6 +1052,9 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_composite_private.hpp
         vulkan/gpu_composite_resources.cpp
         vulkan/gpu_composite_retirement.cpp
+        vulkan/gpu_allocator_memory.cpp
+        vulkan/gpu_queue_timing.cpp
+        vulkan/gpu_queue_timing_private.hpp
         vulkan/gpu_device.cpp
         vulkan/gpu_device_bootstrap.cpp
         vulkan/gpu_device_private.hpp
@@ -1072,6 +1079,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_ocio_program_dispatch.cpp
         vulkan/gpu_ocio_program_private.hpp
         vulkan/gpu_ocio_program_resources.cpp
+        vulkan/gpu_ocio_program_upload_layout.hpp
         vulkan/gpu_ocio_program_reclamation.cpp
         vulkan/gpu_ocio_program_reclamation_private.hpp
         vulkan/gpu_output_color_readback.cpp
@@ -1141,7 +1149,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     )
 else()
     target_sources(bloom_render PRIVATE gpu_affine_stub.cpp gpu_blend_stub.cpp
-                                     gpu_composite_stub.cpp gpu_device_stub.cpp
+                                     gpu_composite_stub.cpp gpu_device_stub.cpp gpu_queue_timing_stub.cpp
                                      gpu_display_transfer_stub.cpp
                                      gpu_image_upload_stub.cpp gpu_neutral_display_stub.cpp
                                      gpu_point_resample_stub.cpp

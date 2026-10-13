@@ -1,5 +1,7 @@
 #pragma once
 #include <bloom/media/provider/worker_pool.hpp>
+#include <bloom/platform/file_snapshot.hpp>
+#include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <filesystem>
 #include <list>
@@ -8,6 +10,15 @@
 namespace bloom::media::video {
 [[nodiscard]] bool isVideoExtension(const std::filesystem::path& path);
 using Cancel = std::function<bool()>;
+enum class SourceRevisionPolicy : std::uint8_t { Revalidate, Retained };
+struct SourceRevisionAccess final {
+    SourceRevisionPolicy policy = SourceRevisionPolicy::Revalidate;
+    bool allowRetention = true;
+    platform::FileSnapshotStatistics* work = nullptr;
+    bool* retained = nullptr;
+    platform::ReadOnlyFileSnapshot::Progress progress{};
+    std::size_t hostByteBudget = std::numeric_limits<std::size_t>::max();
+};
 struct FrameKey {
     provider::Digest content;
     std::uint32_t stream = 0;
@@ -49,7 +60,11 @@ class DecodedVideoCache final {
 // The private scheduler prevents deadlock when import/evaluation itself runs on BlockingIo.
 class VideoDecodeSession final {
   public:
-    explicit VideoDecodeSession(std::filesystem::path source, std::string worker = defaultWorker());
+    explicit VideoDecodeSession(
+        std::filesystem::path source, std::string worker = defaultWorker(),
+        std::shared_ptr<platform::FileSnapshotQuota> quota = {},
+        std::filesystem::path spoolDirectory = {},
+        std::shared_ptr<render::detail::PackedHostRetirementState> retirement = {});
     ~VideoDecodeSession();
     VideoDecodeSession(const VideoDecodeSession&) = delete;
     VideoDecodeSession& operator=(const VideoDecodeSession&) = delete;
@@ -63,7 +78,8 @@ class VideoDecodeSession final {
     frame(const provider::ProbeResult& source, std::uint32_t stream, std::uint64_t index,
           std::uint32_t interpretation, DecodedVideoCache* cache,
           std::string_view inputColorSpaceId, std::string_view workingColorSpaceId,
-          const provider::Digest& configRevision, const Cancel& cancel = {});
+          const provider::Digest& configRevision, const Cancel& cancel = {},
+          const SourceRevisionAccess& revision = {});
     [[nodiscard]] provider::Result<provider::AudioBlock>
     audio(const provider::ProbeResult& source, std::uint32_t stream, std::uint64_t sample,
           std::uint32_t count, const Cancel& cancel = {});
@@ -74,7 +90,11 @@ class VideoDecodeSession final {
   private:
     provider::WorkerReply call(provider::Role role, const provider::ProbeResult* source,
                                std::uint32_t stream, std::uint64_t position, std::uint32_t count,
-                               const Cancel& cancel);
+                               const Cancel& cancel,
+                               std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot = {});
+    [[nodiscard]] provider::Result<std::shared_ptr<const platform::ReadOnlyFileSnapshot>>
+    sourceRevision(std::optional<provider::Digest> expected, const Cancel& cancel,
+                   const SourceRevisionAccess& access) const;
     struct State;
     std::unique_ptr<State> state_;
 };

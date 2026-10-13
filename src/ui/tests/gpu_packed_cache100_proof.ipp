@@ -31,7 +31,8 @@ ui::PreparedPreviewFrameHandle footageCpuReference(
                  : nullptr;
 }
 int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, const bool half,
-                      const bool partial, const std::string& manifestPath) {
+                      const bool partial, const std::string& manifestPath, const bool sustained,
+                      const std::size_t preparationWidth) {
     Expectations checks;
     QSettings().setValue("viewer/resolution", half ? "Half" : "Full");
     Fixture fixture(temporary.path().toStdString());
@@ -214,10 +215,11 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                      .requestedExecutorBytes =
                          deliveredDefaults ? std::optional<std::uint64_t>{} : processingBudget,
                      .deviceWorkingBytes = (512ULL << 20) + transferBudget}};
+    const auto coverageCache = std::make_shared<runtime::GpuSceneCoverageCache>();
+    const auto preparedCache = std::make_shared<runtime::GpuPreparedUploadCache>();
     auto stage = ui::makeSessionRefreshingGpuSceneStage(
-        fixture.compiler, fixture.evaluator, fixture.provider,
-        std::make_shared<runtime::GpuSceneCoverageCache>(),
-        std::make_shared<runtime::GpuPreparedUploadCache>(), nullptr, resolver, processingPhase);
+        fixture.compiler, fixture.evaluator, fixture.provider, coverageCache, preparedCache,
+        nullptr, resolver, processingPhase);
     runtime::MemoryBudgetLedger ledger(0, 0);
     ledger.beginProcessSampling();
     ui::TaskUiBridge bridge(scheduler);
@@ -278,6 +280,7 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
     }
     if (explicitExecutorBudget)
         configured.residentExecutorBudgets.emplace().maxImageBytes = *explicitExecutorBudget;
+    configured.collectQueueTimestamps = sustained;
     configured.packedTransferByteAllowance = transferBudget;
     configured.processingPhasePolicy = processingPolicy;
     configured.product = runtime::GpuPreviewDisplayProductMode::GpuPreparedPacked;
@@ -337,7 +340,7 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                                                 cache, nullptr, submitter, nullptr,
                                                 processingPolicy);
     ui::RamPreviewController ram(session, controller, scheduler, bridge, pipeline, nullptr,
-                                 submitter);
+                                 submitter, preparationWidth);
     if (deliveredDefaults) {
         const auto delivered = taskBudgetView->load();
         checks.expect(
@@ -552,8 +555,9 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
         fromCompletion == ram.preparedFrameCount() && outsideCompletion == 0,
         "every actual RAM result/refill is driven by completion, not Jobs snapshot polling");
     std::ranges::sort(terminalDeliveryMicros);
-    std::cout << "PACKED_COMPLETION_REFILL prepared=" << ram.preparedFrameCount()
-              << " insideCompletion=" << fromCompletion
+    std::cout << "PACKED_COMPLETION_REFILL width=" << preparationWidth
+              << " peakInFlight=" << ram.peakInFlightFrames()
+              << " prepared=" << ram.preparedFrameCount() << " insideCompletion=" << fromCompletion
               << " outsideCompletion=" << outsideCompletion
               << " completionSignals=" << completionSignals
               << " bridgeWakes=" << bridge.completionWakeCount() << " jobsPolls=" << jobsPolls
@@ -793,6 +797,11 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
               << " transferSource=" << afterWarm.packedRetainedSourceBytes
               << " transferStaging=" << afterWarm.packedRetainedStagingBytes
               << " transferHost=" << afterWarm.packedRetainedHostBytes << '\n';
+    if (sustained && !partial)
+        exercisePackedStress(checks, fixture, options, temporary, viewer, session, controller, ram,
+                             scheduler, service, processingPolicy, coverageCache, preparedCache,
+                             retainedTimes, controlledRate, processingBudget, preparationWidth,
+                             document, commands);
     ram.beginShutdown();
     controller.beginShutdown();
     memoryController.beginShutdown();

@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <bloom/media/provider/worker_pool.hpp>
+#include <bloom/platform/file_snapshot.hpp>
 #include <new>
 #include <random>
 
@@ -76,11 +77,14 @@ class Connection final {
     platform::ProcessCancellation cancel_;
 };
 WorkerReply execute(const WorkerPoolOptions& options, const CallRequest& request,
+                    const std::shared_ptr<const platform::ReadOnlyFileSnapshot>& snapshot,
                     const platform::ProcessCancellation& cancel) {
     if (cancel())
         return Unavailable{Error::Cancelled, "Worker call cancelled before launch"};
     const auto deadline = Clock::now() + options.timeout;
-    auto launched = platform::ProcessSupervisor::launch(options.process);
+    auto processOptions = options.process;
+    processOptions.inputSnapshot = snapshot;
+    auto launched = platform::ProcessSupervisor::launch(processOptions);
     auto* process = std::get_if<std::unique_ptr<platform::ProcessSupervisor>>(&launched);
     if (!process)
         return failure(std::get<platform::ProcessFailure>(launched));
@@ -161,6 +165,7 @@ WorkerReply execute(const WorkerPoolOptions& options, const CallRequest& request
 struct WorkerTicket::State {
     std::mutex mutex;
     std::shared_ptr<const WorkerReply> reply;
+    std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot;
 };
 std::shared_ptr<const WorkerReply> WorkerTicket::result() const {
     if (!state_)
@@ -178,15 +183,29 @@ MediaWorkerPool::MediaWorkerPool(WorkerPoolOptions options)
     : state_(std::make_shared<State>(std::move(options))) {}
 MediaWorkerPool::~MediaWorkerPool() { shutdown(); }
 void MediaWorkerPool::shutdown() { state_->stopping.store(true); }
-WorkerTicket MediaWorkerPool::submit(runtime::TaskScheduler& scheduler, runtime::TaskOwner owner,
-                                     const MediaAttempt& attempt, std::size_t step,
-                                     CallRequest request) {
+WorkerTicket
+MediaWorkerPool::submit(runtime::TaskScheduler& scheduler, runtime::TaskOwner owner,
+                        const MediaAttempt& attempt, std::size_t step, CallRequest request,
+                        std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot) {
     WorkerTicket ticket;
     ticket.state_ = std::make_shared<WorkerTicket::State>();
     auto reject = [&](Unavailable error) {
         ticket.state_->reply = std::make_shared<const WorkerReply>(std::move(error));
         ticket.submission.status = runtime::TaskSubmissionStatus::InvalidRequest;
     };
+    if (request.snapshotBytes != 0 || state_->options.process.inputSnapshot) {
+        reject({Error::IdentityMismatch,
+                "Snapshot authority must be supplied by its owning host capability"});
+        return ticket;
+    }
+    if (snapshot) {
+        if (request.capability.role != Role::Probe && request.sourceDigest != snapshot->digest()) {
+            reject({Error::SourceChanged, "Snapshot does not match the requested source revision"});
+            return ticket;
+        }
+        request.sourceDigest = snapshot->digest();
+        request.snapshotBytes = snapshot->size();
+    }
     if (state_->stopping.load()) {
         reject({Error::Shutdown, "Worker pool is shutting down"});
         return ticket;
@@ -221,6 +240,7 @@ WorkerTicket MediaWorkerPool::submit(runtime::TaskScheduler& scheduler, runtime:
         reject({Error::Busy, "Worker pool capacity reached"});
         return ticket;
     }
+    ticket.state_->snapshot = std::move(snapshot);
     // The scheduler bounds queued requests. Reserve process slots only while work runs:
     // terminal task history retains closures, and queued cancellation never invokes the body.
     runtime::TaskRequest task("Media worker", owner, runtime::TaskPriority::Foreground,
@@ -236,6 +256,12 @@ WorkerTicket MediaWorkerPool::submit(runtime::TaskScheduler& scheduler, runtime:
             const auto cancel = [&] {
                 return context.isCancellationRequested() || state->stopping.load();
             };
+            std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot;
+            if (auto mailbox = result.lock()) {
+                std::lock_guard lock(mailbox->mutex);
+                snapshot = mailbox->snapshot;
+            } else
+                return runtime::TaskResult<void>::cancelled();
             WorkerReply reply;
             {
                 const auto active = state->active.fetch_add(1);
@@ -250,18 +276,20 @@ WorkerTicket MediaWorkerPool::submit(runtime::TaskScheduler& scheduler, runtime:
                         reply =
                             Unavailable{Error::Unavailable, "Attempt terminated before execution"};
                     else
-                        reply = execute(state->options, request, cancel);
+                        reply = execute(state->options, request, snapshot, cancel);
                 } catch (const std::bad_alloc&) {
                     reply = Unavailable{Error::Oversized, "Worker allocation budget exhausted"};
                 } catch (const std::exception&) {
                     reply = Unavailable{Error::Io, "Worker call failed unexpectedly"};
                 }
             }
+            snapshot.reset();
             const auto* error = std::get_if<Unavailable>(&reply);
             const auto outcome = error ? *error : Unavailable{};
             if (auto mailbox = result.lock()) {
                 std::lock_guard lock(mailbox->mutex);
                 mailbox->reply = std::make_shared<const WorkerReply>(std::move(reply));
+                mailbox->snapshot.reset();
             }
             if (error) {
                 attempt.terminate();

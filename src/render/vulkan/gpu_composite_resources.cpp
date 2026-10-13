@@ -1,18 +1,16 @@
 #include "gpu_composite_private.hpp"
 
 #include "gpu_composite_fault.hpp"
+#include "gpu_native_buffer_allocation_private.hpp"
 
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <utility>
 
 namespace bloom::render {
-namespace {
-
 using vulkan_detail::DeviceAllocatorState;
-
-} // namespace
 
 std::uint64_t compositeBufferAllocationBytes(const CompositeBuffer& buffer) noexcept {
     if (!buffer.armed || buffer.state == nullptr || buffer.allocation == VK_NULL_HANDLE) {
@@ -38,6 +36,8 @@ CompositeBuffer& CompositeBuffer::operator=(CompositeBuffer&& other) noexcept {
     if (this != &other) {
         release();
         state = std::move(other.state);
+        storageToken = std::move(other.storageToken);
+        stagingStorageToken = std::move(other.stagingStorageToken);
         buffer = other.buffer;
         allocation = other.allocation;
         stagingBuffer = std::exchange(other.stagingBuffer, VK_NULL_HANDLE);
@@ -59,12 +59,15 @@ CompositeBuffer& CompositeBuffer::operator=(CompositeBuffer&& other) noexcept {
 void CompositeBuffer::releaseStaging() noexcept {
     if (stagingBuffer != VK_NULL_HANDLE && state != nullptr) {
         vmaDestroyBuffer(state->allocator, stagingBuffer, stagingAllocation);
+        if (stagingStorageToken.bytes() != 0 && state->nativeBufferBackingsDestroyed != UINT64_MAX)
+            ++state->nativeBufferBackingsDestroyed;
         composite_detail::metadataStagingLiveBytes.fetch_sub(stagingBytes);
         composite_detail::metadataStagingReclaims.fetch_add(1);
     }
     stagingBuffer = VK_NULL_HANDLE;
     stagingAllocation = VK_NULL_HANDLE;
     stagingBytes = 0;
+    stagingStorageToken = {};
 }
 
 void CompositeBuffer::recordInitialization(const VkCommandBuffer commandBuffer) const noexcept {
@@ -92,7 +95,10 @@ void CompositeBuffer::release() noexcept {
     releaseStaging();
     if (armed && state != nullptr) {
         vmaDestroyBuffer(state->allocator, buffer, allocation);
+        if (storageToken.bytes() != 0 && state->nativeBufferBackingsDestroyed != UINT64_MAX)
+            ++state->nativeBufferBackingsDestroyed;
     }
+    storageToken = {};
     state = nullptr;
     buffer = VK_NULL_HANDLE;
     allocation = VK_NULL_HANDLE;
@@ -135,8 +141,11 @@ bool createCompositeBuffer(const std::shared_ptr<DeviceAllocatorState>& owner,
     created.bytes = bytes;
     created.hostVisible = hostVisible;
     VmaAllocationInfo allocationInfo{};
-    if (vmaCreateBuffer(state.allocator, &bufferInfo, &allocationCreate, &created.buffer,
-                        &created.allocation, &allocationInfo) != VK_SUCCESS) {
+    if (vulkan_detail::allocateCoveredBuffer(
+            state, bufferInfo, allocationCreate, std::numeric_limits<std::uint64_t>::max(),
+            created.buffer, created.allocation, allocationInfo, created.storageToken,
+            vulkan_detail::NativeBufferPurpose::Processing) !=
+        vulkan_detail::NativeBufferAllocationOutcome::Allocated) {
         return false;
     }
     created.armed = true;
@@ -167,27 +176,28 @@ bool createCompositeBuffer(const std::shared_ptr<DeviceAllocatorState>& owner,
         VkBuffer stagingBuffer = VK_NULL_HANDLE;
         VmaAllocation stagingHandle = VK_NULL_HANDLE;
         VmaAllocationInfo stagingMapped{};
-        if (vmaCreateBuffer(state.allocator, &stagingInfo, &stagingAllocation, &stagingBuffer,
-                            &stagingHandle, &stagingMapped) != VK_SUCCESS) {
+        NativeBufferStorageToken stagingToken;
+        if (vulkan_detail::allocateCoveredBuffer(
+                state, stagingInfo, stagingAllocation, std::numeric_limits<std::uint64_t>::max(),
+                stagingBuffer, stagingHandle, stagingMapped, stagingToken,
+                vulkan_detail::NativeBufferPurpose::Processing) !=
+            vulkan_detail::NativeBufferAllocationOutcome::Allocated) {
             created.release();
             return false;
         }
+        created.stagingBuffer = stagingBuffer;
+        created.stagingAllocation = stagingHandle;
+        created.stagingBytes = stagingMapped.size;
+        created.stagingStorageToken = std::move(stagingToken);
+        composite_detail::metadataStagingLiveBytes.fetch_add(created.stagingBytes);
         if (stagingMapped.pMappedData == nullptr) {
-            vmaDestroyBuffer(state.allocator, stagingBuffer, stagingHandle);
-            created.release();
             return false;
         }
         std::memcpy(stagingMapped.pMappedData, initialData, static_cast<std::size_t>(bytes));
         if (composite_detail::mappedMemoryVisibility(false, state.allocator, stagingHandle,
                                                      bytes) != VK_SUCCESS) {
-            vmaDestroyBuffer(state.allocator, stagingBuffer, stagingHandle);
             return false;
         }
-
-        created.stagingBuffer = stagingBuffer;
-        created.stagingAllocation = stagingHandle;
-        created.stagingBytes = stagingMapped.size;
-        composite_detail::metadataStagingLiveBytes.fetch_add(created.stagingBytes);
     }
 
     out = std::move(created);

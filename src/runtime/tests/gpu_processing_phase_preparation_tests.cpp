@@ -278,8 +278,13 @@ void mixedAndNestedQuotas() {
     sample.process.status = ProcessMemoryStatus::Finite;
     sample.process.source = ProcessMemorySource::LinuxCgroupV2;
     sample.process.sampledAt = now;
-    // Fixed120px output/metadata/two coverage buffers plus exactly3*96B source allowance.
-    const std::size_t headroom = 120ULL * 8 + 1024 + 2ULL * 65536 + 3ULL * 96;
+    const auto captured = bloom::media::captureImageSourceRevision(path, gib);
+    require(captured.value.has_value(), "mixed fixture captures actual encoded revision bytes");
+    const std::uint64_t sourceAllowance = (*captured.value)->retainedBytes() + 1024;
+    // The decoded upload is still96B. Immutable encoded backing/header metadata must now also
+    // fit the source working envelope; none may borrow the independent coverage partition.
+    const std::size_t fixedHeadroom = 120ULL * 8 + 1024 + 2ULL * 65536;
+    const std::size_t headroom = fixedHeadroom + 3 * sourceAllowance;
     sample.process.domains.push_back({.path = "/own",
                                       .kind = ProcessMemoryLimitKind::Finite,
                                       .limitBytes = 16ULL * 1024 * 1024 + headroom,
@@ -297,6 +302,35 @@ void mixedAndNestedQuotas() {
         bloom::gpu_coverage_fixtures::format(12, 10), {}, {}, 6.0, 4.0, 893000);
     const CompiledOperation source = CompiledImageSource{
         bloom::document::NodeId::fromRaw(894000), asset, 0, 0, 0, std::string{}, false};
+    {
+        auto lowDefinition = base->copyDefinition();
+        lowDefinition.operations[0] = source;
+        lowDefinition.operations[2] = bloom::gpu_coverage_plans::text(895000);
+        auto lowPlan = bloom::gpu_coverage_fixtures::publish(std::move(lowDefinition));
+        auto lowRequest = bloom::gpu_coverage_fixtures::requestFor(*lowPlan);
+        lowRequest.pixelStorageByteLimit = gib;
+        sample.process.domains[0].limitBytes = 16ULL * 1024 * 1024 + fixedHeadroom + 3 * 96;
+        sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
+        ++sample.sampleSerial;
+        policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+        const auto low = builder.build(lowPlan, lowRequest);
+        require(
+            !low.scene && low.diagnostic.code == PreparedGpuSceneDiagnosticCode::MediaUnavailable &&
+                low.diagnostic.message.find("source capture exceeds") != std::string::npos &&
+                policy->snapshot().reservations.admittedPhases == 0,
+            "former decoded-only96B envelope refuses encoded capture without borrowing coverage");
+        sample.process.domains[0].limitBytes = 16ULL * 1024 * 1024 + headroom;
+        sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
+        ++sample.sampleSerial;
+        policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+    }
+    const auto decodedUploadBytes = [](const PreparedGpuScene& scene) {
+        std::uint64_t bytes = 0;
+        for (const auto& command : scene.commands())
+            if (const auto* upload = std::get_if<GpuSceneUploadCommand>(&command))
+                bytes += upload->image->pixels().size_bytes();
+        return bytes;
+    };
     std::shared_ptr<const CompiledCompositionPlan> mixed;
     for (const bool textFirst : {true, false}) {
         auto definition = base->copyDefinition();
@@ -315,8 +349,10 @@ void mixedAndNestedQuotas() {
             std::cerr << "mixed S=" << prepared.phaseLease->sourceByteLimit() << '\n';
         }
         require(prepared.scene && prepared.phaseLease &&
-                    prepared.phaseLease->sourceByteLimit() == 96,
-                "text-before-media and media-before-text both admit exact96B source independently "
+                    prepared.phaseLease->sourceByteLimit() == sourceAllowance &&
+                    decodedUploadBytes(*prepared.scene) == 96,
+                "text-before-media and media-before-text admit96B upload plus encoded revision "
+                "independently "
                 "of coverage");
         mixed = std::move(plan);
     }
@@ -327,7 +363,8 @@ void mixedAndNestedQuotas() {
     request.pixelStorageByteLimit = gib;
     {
         auto nested = builder.build(parent, request);
-        require(nested.scene && nested.phaseLease && nested.phaseLease->sourceByteLimit() == 96 &&
+        require(nested.scene && nested.phaseLease &&
+                    nested.phaseLease->sourceByteLimit() == sourceAllowance &&
                     policy->snapshot().reservations.admittedPhases == 1,
                 "nested mixed media/text borrows one parent phase and disjoint quotas");
     }
@@ -341,22 +378,24 @@ void mixedAndNestedQuotas() {
     const CpuGpuSceneBuilder sourceBuilder(nullptr, GpuSceneMediaContext::fromEvaluator(evaluator),
                                            {}, zeroCoverage);
     sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
-    sample.sampleSerial = 2;
-    sample.process.domains[0].limitBytes = 16ULL * 1024 * 1024 + 120ULL * 8 + 1024 + 3ULL * 96;
+    sample.sampleSerial = 4;
+    sample.process.domains[0].limitBytes =
+        16ULL * 1024 * 1024 + 120ULL * 8 + 1024 + 3 * sourceAllowance;
     policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
     {
         auto sourceRequest = bloom::gpu_coverage_fixtures::requestFor(*sourceParent);
         sourceRequest.pixelStorageByteLimit = gib;
         auto nested = sourceBuilder.build(sourceParent, sourceRequest);
-        require(nested.scene && nested.phaseLease && nested.phaseLease->sourceByteLimit() == 96,
-                "nested source-onlyC0 preserves foreground decode ceiling with retainedS96");
+        require(nested.scene && nested.phaseLease &&
+                    nested.phaseLease->sourceByteLimit() == sourceAllowance,
+                "nested source-onlyC0 preserves foreground decode/capture allowance independently");
     }
     auto solidDefinition = base->copyDefinition();
     solidDefinition.duration = bloom::core::RationalTime::fromInteger(100);
     auto solidOnly = bloom::gpu_coverage_fixtures::publish(std::move(solidDefinition));
     auto solidParent = bloom::gpu_coverage_plans::nestedParentPlan(solidOnly, 898000, 779);
     sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
-    sample.sampleSerial = 3;
+    sample.sampleSerial = 5;
     sample.process.domains[0].limitBytes = 16ULL * 1024 * 1024 + 120ULL * 8 + 1024 + 3;
     policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
     {
@@ -368,7 +407,7 @@ void mixedAndNestedQuotas() {
                 "retainedS1/C0");
     }
     sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
-    sample.sampleSerial = 4;
+    sample.sampleSerial = 6;
     sample.process.domains[0].limitBytes = 16ULL * 1024 * 1024 + headroom;
     policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
     std::uint64_t oneTextCoverage = 0;

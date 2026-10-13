@@ -290,6 +290,42 @@ void testForeignDeviceAndThread(Expectations& expectations, GpuDevice& device, G
     expectations.expect(static_cast<GpuSceneExecutorDiagnosticCode>(observed.load()) ==
                             GpuSceneExecutorDiagnosticCode::WrongThread,
                         "foreign: a foreign-thread begin is WrongThread");
+
+    cache.clear();
+    const auto begun = created.executor->begin(prepared.scene, kSceneBudget);
+    expectations.expect(begun.code == GpuSceneExecutorDiagnosticCode::None,
+                        "foreign: concurrent owner scene begins");
+    if (begun.code != GpuSceneExecutorDiagnosticCode::None)
+        return;
+    static_cast<void>(created.executor->poll());
+    std::atomic<bool> stop{false};
+    std::atomic<bool> started{false};
+    bool allRejected = true;
+    std::thread poller([&] {
+        started.store(true);
+        std::uint32_t calls = 0;
+        while (!stop.load() || calls < 4096) {
+            allRejected = allRejected &&
+                          created.executor->poll() == GpuSceneExecutorPollResult::WrongThread &&
+                          created.executor->pollQueueTiming().status ==
+                              bloom::render::GpuQueueTimingStatus::WrongThread;
+            ++calls;
+        }
+    });
+    while (!started.load())
+        std::this_thread::yield();
+    auto result = GpuSceneExecutorPollResult::Pending;
+    for (std::uint64_t i = 0;
+         i < kMaxPollIterations && result == GpuSceneExecutorPollResult::Pending; ++i) {
+        result = created.executor->poll();
+        std::this_thread::yield();
+    }
+    stop.store(true);
+    poller.join();
+    expectations.expect(allRejected && result == GpuSceneExecutorPollResult::Ready,
+                        "foreign: concurrent diagnostic/pixel polling rejects before mutable "
+                        "owner counters while the native graph completes");
+    static_cast<void>(created.executor->takeImage());
 }
 
 // ---- live-budget accounting -------------------------------------------------------------------

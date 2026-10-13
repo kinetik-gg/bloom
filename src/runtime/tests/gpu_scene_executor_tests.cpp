@@ -29,6 +29,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -567,6 +568,7 @@ int main(const int argc, char** argv) {
         testTightBudgetWithCachedInputs(expectations, *device.device);
         testAliasedInputChargedOnce(expectations, *device.device);
         testNativeOwnershipDuringTeardown(expectations, *device.device);
+        testOptionalQueueTiming(expectations, *device.device);
         testNativeRetirementContracts(expectations, *device.device);
 
         if (!expectations.ok()) {

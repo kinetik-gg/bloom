@@ -75,6 +75,9 @@ class GpuProcessingPhasePolicy final {
     [[nodiscard]] render::GpuProcessingPhaseGrant
     reserve(const GpuProcessingPhaseEnvelope&, Clock::time_point now = Clock::now()) noexcept;
     [[nodiscard]] GpuProcessingPhasePolicySnapshot snapshot() const noexcept;
+    [[nodiscard]] render::GpuProcessingRootIdentity rootIdentity() const noexcept {
+        return budget_.rootIdentity();
+    }
 
   private:
     struct DeviceReport final {

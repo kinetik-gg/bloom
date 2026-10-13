@@ -39,6 +39,7 @@
 #include <bloom/render/gpu_composite.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
+#include <bloom/render/gpu_queue_timing.hpp>
 #include <bloom/render/gpu_solid.hpp>
 #include <bloom/runtime/gpu_memory_budget.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
@@ -151,6 +152,14 @@ struct GpuSceneExecutorCounters final {
     std::uint64_t dispatches = 0;
     std::uint64_t uploads = 0;
     std::uint64_t readbacks = 0;
+    // CPU steady-clock wall stages. Submit includes host allocation/map/command recording;
+    // fence observation includes device/queue execution and owner polling delay. These are not
+    // device timestamps and never describe shader execution time alone.
+    std::uint64_t uploadSubmitNanoseconds = 0;
+    std::uint64_t uploadFenceObservationNanoseconds = 0;
+    std::uint64_t processingSubmitNanoseconds = 0;
+    std::uint64_t processingFenceObservationNanoseconds = 0;
+    std::uint64_t completedStepContinuations = 0;
 
     std::uint64_t cacheInsertions = 0;
     std::uint64_t cacheRefusals = 0;
@@ -213,6 +222,11 @@ struct GpuSceneExecutorBudgets final {
     std::uint64_t maxOcioLutBytesPerProgram = 256ULL * 1024ULL * 1024ULL;
     // A native job that has not retired by this deadline is cancelled and failed closed.
     std::uint64_t jobDeadlineMilliseconds = 5000;
+    // Optional genuine queue-clock span, including host polling and submission gaps.
+    bool collectQueueTimestamps = false;
+    // Bounded dependent-step continuation. False preserves one step per owner turn for
+    // controlled baseline comparisons using this same production executor.
+    bool continueCompletedStepImmediately = true;
 };
 
 struct GpuSceneExecutorCreateResult;
@@ -238,6 +252,9 @@ class GpuSceneExecutor final {
     [[nodiscard]] bool isBoundTo(const render::GpuDevice& device) const noexcept;
     [[nodiscard]] GpuSceneExecutorCounters counters() const noexcept;
     [[nodiscard]] GpuSceneExecutorProgress progress() const noexcept;
+    // Nonblocking optional graph diagnostic. Available may follow image publication; callers
+    // never wait for it. A fully cached graph submits no markers and reports NotRequested.
+    [[nodiscard]] render::GpuQueueTimingSample pollQueueTiming() noexcept;
 
     // True while a previous native failure/deadline left a submission whose fence retirement is NOT
     // proven. The logical request has already failed and no image will be published; the caller
@@ -268,6 +285,8 @@ class GpuSceneExecutor final {
                                                    std::uint64_t requestByteBudget);
 
     // Non-blocking. Starts at most one native dispatch and completes at most one step per call.
+    // A completed step starts its next dependent dispatch in this same owner turn, removing an
+    // artificial polling interval between serial operations without increasing native concurrency.
     // While ownerDrainRequired() is true this only advances owner-thread retirement.
     [[nodiscard]] GpuSceneExecutorPollResult poll();
 
@@ -291,6 +310,7 @@ class GpuSceneExecutor final {
     struct Impl;
     explicit GpuSceneExecutor(std::unique_ptr<Impl> impl) noexcept;
     void releaseImpl() noexcept;
+    [[nodiscard]] GpuSceneExecutorPollResult pollOnce();
 
     std::unique_ptr<Impl> impl_;
 };

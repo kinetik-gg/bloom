@@ -10,6 +10,7 @@
 // device records that thread and fails closed when an exposed operation is called from another
 // thread. This slice does not integrate with the runtime, UI, or task system.
 
+#include <bloom/render/gpu_allocator_memory.hpp>
 #include <bloom/render/gpu_presentation_types.hpp>
 #include <bloom/render/native_buffer_storage.hpp>
 #include <bloom/render/native_image_storage.hpp>
@@ -143,6 +144,8 @@ struct GpuCapabilityReport final {
     bool compute_queue = false;
     bool timeline_semaphore = false;
     bool memory_budget_supported = false;
+    // An actually enabled calibrated-timestamp extension guarantees cross-submit monotonicity.
+    bool cross_submission_timestamps = false;
     // Sum of DEVICE_LOCAL memory heap sizes. A bounded diagnostic fact, not a VRAM capacity or a
     // usable allocation budget: integrated GPUs share host memory and drivers may migrate blocks.
     std::uint64_t device_memory_bytes = 0;
@@ -278,6 +281,10 @@ class GpuDevice final {
     // Owner-only, one-slot conservative phase retention. Arm before any native work, including
     // synchronous preparation uploads. Only an explicit whole-phase retirement proof releases it;
     // unknown retirement closes this generation and keeps the quota through native quarantines.
+    // Explicit persistent allocation root for presentation and other phase-independent native
+    // ownership. A bound generation cannot switch roots or retain a phase from a different root.
+    [[nodiscard]] bool bindProcessingRoot(GpuProcessingRootIdentity) noexcept;
+    [[nodiscard]] GpuProcessingRootIdentity processingRootIdentity() const noexcept;
     [[nodiscard]] bool retainProcessingPhase(std::shared_ptr<GpuProcessingPhaseLease>) noexcept;
     void retireProcessingPhase(std::uint64_t leaseId, bool retirementProven) noexcept;
     [[nodiscard]] bool processingPhaseOccupied() const noexcept;
@@ -290,10 +297,15 @@ class GpuDevice final {
     nativeImageStorageRefusal() const noexcept;
     [[nodiscard]] std::optional<NativeBufferStorageRefusal>
     nativeBufferStorageRefusal() const noexcept;
+    [[nodiscard]] std::optional<NativePresentationStorageRefusal>
+    nativePresentationStorageRefusal() const noexcept;
     // Exact-generation live reservation or handed-off staging; neither permits native owner exit.
     [[nodiscard]] bool displayTransferPending() const noexcept;
     [[nodiscard]] bool outputColorReadbackPending() const noexcept;
     [[nodiscard]] bool imageUploadPending() const noexcept;
+    // Fresh owner-only VMA/driver diagnostics. Foreign/stub calls return unavailable without
+    // driver work; services publish cached copies to UI consumers at a bounded sampling rate.
+    [[nodiscard]] GpuAllocatorMemorySnapshot allocatorMemorySnapshot() const noexcept;
 
     // Missing operation/precision entries are Unavailable, matching the architecture contract.
     [[nodiscard]] GpuQualification qualificationFor(GpuOperationId operation,

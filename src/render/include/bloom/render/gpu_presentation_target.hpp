@@ -78,6 +78,14 @@ struct GpuClearColor final {
     double alpha = 1.0;
 };
 
+enum class GpuPresentationImageStorage {
+    Unknown,
+    // Presentation engine owns the swapchain images; no exact physical allocation size is
+    // provided by Vulkan WSI and Bloom must not label these bytes as allocator-owned/accounted.
+    PresentationEngineUnowned,
+    CallerOwnedOffscreen,
+};
+
 struct GpuPresentationTargetInfo final {
     GpuPresentationFormat format = GpuPresentationFormat::Unknown;
     // True when the chosen color space is SRGB_NONLINEAR (the no-double-gamma pairing).
@@ -86,6 +94,7 @@ struct GpuPresentationTargetInfo final {
     std::uint32_t height = 0;
     std::uint32_t image_count = 0;
     GpuPresentationRetirement retirement = GpuPresentationRetirement::None;
+    GpuPresentationImageStorage image_storage = GpuPresentationImageStorage::Unknown;
 };
 
 // A borrowed surface plus the requested client extent. The owner clamps the extent to the surface

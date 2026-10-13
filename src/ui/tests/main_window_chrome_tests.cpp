@@ -12,6 +12,7 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/application_preferences.hpp>
+#include <bloom/ui/cache_purge_controller.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -785,6 +786,63 @@ void testPurgePreviewCacheActionHasRealEffect(Expectations& expectations) {
                         "purge preview: the status bar reports the completed purge");
 }
 
+void testMediaPurgeDropsCompletedSourceFrames(Expectations& expectations) {
+    bloom::ui::test::WindowFixture fixture;
+    const auto revision = fixture.session.snapshot().revision();
+    const auto undo = fixture.session.undoLabel();
+    const auto displayed = fixture.preview->state().frame;
+    expectations.expect(fixture.preview->frameCache().size() > 0 && displayed,
+                        "media refresh starts with a completed cached frame");
+    auto* action = fixture.window->findChild<QAction*>(QStringLiteral("purgeMediaCacheAction"));
+    expectations.expect(action != nullptr, "media refresh action exists");
+    if (!action)
+        return;
+    action->trigger();
+    expectations.expect(fixture.preview->frameCache().size() == 0 &&
+                            fixture.preview->state().frame == displayed,
+                        "memory-only media refresh drops cached frames while preserving display");
+
+    fixture.preview->requestRefresh();
+    QElapsedTimer timer;
+    timer.start();
+    while (fixture.preview->frameCache().size() == 0 && timer.elapsed() < 15000)
+        QTest::qWait(5);
+    expectations.expect(fixture.preview->frameCache().size() > 0,
+                        "a fresh request repopulates the completed-frame cache");
+    fixture.window.reset();
+    CachePurgeController purge(
+        fixture.scheduler, fixture.bridge, nullptr, fixture.evaluator.operationCache().get(),
+        nullptr, nullptr, {},
+        [&fixture](const bool gated) { fixture.preview->setCachePurgeGate(gated); });
+    fixture.window = std::make_unique<MainWindow>(
+        fixture.registry, fixture.session, fixture.projectHost, *fixture.exporter, nullptr,
+        fixture.preview.get(), nullptr, nullptr, fixture.evaluator.operationCache().get(), nullptr,
+        nullptr, &purge);
+    action = fixture.window->findChild<QAction*>(QStringLiteral("purgeMediaCacheAction"));
+    expectations.expect(action != nullptr, "asynchronous media refresh action exists");
+    if (!action) {
+        fixture.window.reset();
+        return;
+    }
+    const auto insertions = fixture.preview->frameCache().statistics().insertions;
+    action->trigger();
+    expectations.expect(fixture.preview->cachePurgeGateActive() &&
+                            fixture.preview->frameCache().size() == 0,
+                        "asynchronous media refresh clears completed frames under producer gate");
+    timer.restart();
+    while ((purge.isPurging() ||
+            fixture.preview->frameCache().statistics().insertions == insertions) &&
+           timer.elapsed() < 15000)
+        QTest::qWait(5);
+    expectations.expect(!purge.isPurging() && !fixture.preview->cachePurgeGateActive() &&
+                            fixture.preview->frameCache().statistics().insertions > insertions,
+                        "gate release computes a new frame instead of reusing a pre-refresh hit");
+    expectations.expect(fixture.session.snapshot().revision() == revision &&
+                            fixture.session.undoLabel() == undo,
+                        "media refresh leaves project revision and undo unchanged");
+    fixture.window.reset();
+}
+
 void testDisplayedViewerStatusPolicy(Expectations& expectations) {
     bloom::ui::test::WindowFixture fixture;
     auto* workspace = fixture.window->workspaceHost();
@@ -987,6 +1045,7 @@ int main(int argc, char** argv) {
     testWindowStatusBarMessagesClearThemselves(expectations);
     try {
         testDisplayedViewerStatusPolicy(expectations);
+        testMediaPurgeDropsCompletedSourceFrames(expectations);
     } catch (const std::exception& error) {
         expectations.expect(false, std::string("displayed viewer fixture: ") + error.what());
     } catch (...) {

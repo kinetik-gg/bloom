@@ -14,6 +14,7 @@ struct PackedHostRetirementState;
 class PackedHostRetirementOwner;
 class NativeImageStorageToken;
 class NativeBufferStorageToken;
+class ProcessingHostStorageToken;
 
 // Lifecycle identity of the existing neutral budget state, never a pixel/cache content identity.
 // A handle retains no phase admission, native owner or device. The incomplete const state cannot
@@ -46,6 +47,13 @@ enum class GpuProcessingPhaseAdmission {
 };
 enum class GpuProcessingPhaseDomain { None, Host, Device, RequestCount };
 
+struct NativePresentationStorageRefusal final {
+    GpuProcessingPhaseAdmission status = GpuProcessingPhaseAdmission::InvalidRequest;
+    GpuProcessingPhaseDomain domain = GpuProcessingPhaseDomain::None;
+    std::uint64_t admissionRevision = 0;
+    bool image = false;
+};
+
 struct GpuProcessingPhaseSnapshot final {
     std::optional<std::uint64_t> hostCapacityBytes;
     std::optional<std::uint64_t> deviceCapacityBytes;
@@ -65,6 +73,10 @@ struct GpuProcessingPhaseSnapshot final {
     std::uint64_t ownedFinalEncodedHostBytes = 0;
     std::uint64_t ownedFinalHostMetadataBytes = 0;
     std::size_t ownedFinalHostAllocations = 0;
+    // Exact allocator-requested transient processing scratch and its allocation headers.
+    std::uint64_t ownedProcessingHostBytes = 0;
+    std::uint64_t ownedProcessingHostMetadataBytes = 0;
+    std::size_t ownedProcessingHostAllocations = 0;
     std::uint64_t deviceReservedBytes = 0;
     // Covered image suballocations, not VMA committed blocks/driver memory. The nonlocal-host
     // subset overlaps this constraint; it is not an additive physical-memory total.
@@ -78,6 +90,13 @@ struct GpuProcessingPhaseSnapshot final {
     std::uint64_t ownedNativeBufferBytes = 0;
     std::uint64_t ownedNonlocalNativeBufferHostBytes = 0;
     std::size_t ownedNativeBuffers = 0;
+    // Subsets of the native image/buffer counters above. Presentation has explicit independent
+    // root admission and never consumes or pins a frame's processing phase. WSI-owned swapchain
+    // images have unknown physical allocation size and are excluded from these owned subsets.
+    std::uint64_t ownedPresentationImageBytes = 0;
+    std::uint64_t ownedPresentationBufferBytes = 0;
+    std::size_t ownedPresentationImages = 0;
+    std::size_t ownedPresentationBuffers = 0;
     std::uint64_t peakHostReservedBytes = 0;
     std::uint64_t peakDeviceReservedBytes = 0;
     std::size_t admittedPhases = 0;
@@ -114,6 +133,7 @@ class GpuProcessingPhaseLease final {
     friend class PackedHostStorageAuthority;
     friend class NativeImageStorageToken;
     friend class NativeBufferStorageToken;
+    friend class ProcessingHostStorageToken;
     explicit GpuProcessingPhaseLease(
         std::shared_ptr<detail::GpuProcessingPhaseBudgetState>) noexcept;
     std::shared_ptr<detail::GpuProcessingPhaseBudgetState> state_;
@@ -223,6 +243,7 @@ class GpuProcessingPhaseBudget final {
                              std::chrono::steady_clock::time_point::max()) noexcept;
     void setDeviceCapacity(std::optional<std::uint64_t> bytes, bool ready) noexcept;
     [[nodiscard]] GpuProcessingPhaseSnapshot snapshot() const noexcept;
+    [[nodiscard]] GpuProcessingRootIdentity rootIdentity() const noexcept { return state_; }
     [[nodiscard]] GpuProcessingPhaseGrant reserve(const GpuProcessingPhaseRequest&) noexcept;
 
   private:

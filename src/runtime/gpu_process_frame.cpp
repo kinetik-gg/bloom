@@ -225,6 +225,7 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
                        "cancelled before GPU dispatch");
     }
 
+    const auto beforeStages = executor->counters();
     // 2. Admit the scene through the real executor.
     const auto begun = executor->begin(scene, phase.lease ? phase.lease->executorByteLimit()
                                                           : options.requestByteBudget);
@@ -283,6 +284,19 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
                      !executor->hasUnretiredSubmission() && !executor->ownerDrainRequired());
     GpuProcessFrameOutcome outcome;
     outcome.counters = snapshotCounters(*executor);
+    const auto afterStages = executor->counters();
+    outcome.stageTimes.media = scene->mediaStatistics();
+    outcome.stageTimes.uploadSubmitNanoseconds =
+        afterStages.uploadSubmitNanoseconds - beforeStages.uploadSubmitNanoseconds;
+    outcome.stageTimes.uploadFenceObservationNanoseconds =
+        afterStages.uploadFenceObservationNanoseconds -
+        beforeStages.uploadFenceObservationNanoseconds;
+    outcome.stageTimes.processingSubmitNanoseconds =
+        afterStages.processingSubmitNanoseconds - beforeStages.processingSubmitNanoseconds;
+    outcome.stageTimes.processingFenceObservationNanoseconds =
+        afterStages.processingFenceObservationNanoseconds -
+        beforeStages.processingFenceObservationNanoseconds;
+
     // Genuine device identity for diagnostics: read directly from the actual native device on this
     // owner thread. Never fabricated; stays zero for outcomes that never reached a device.
     outcome.deviceOwnershipEpoch = device->ownershipEpoch();
@@ -334,6 +348,9 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
     auto transfer = detail::runFinalCombinedReadback(
         *outputColor, descriptor, std::move(outputCommand), std::move(image), readbackByteAllowance,
         options.nativeDeadline, cancellation, stopRequested, phase.retired, phase.lease);
+    outcome.stageTimes.graphQueueTiming = executor->pollQueueTiming();
+    outcome.stageTimes.finalTransferNanoseconds = transfer.transferNanoseconds;
+    outcome.stageTimes.finalHostPublicationNanoseconds = transfer.hostPublicationNanoseconds;
     if (transfer.status != GpuProcessFrameStatus::Evaluated || transfer.processImage == nullptr) {
         outcome.counters.readbacks = transfer.readbacks;
         outcome.status = transfer.status;
@@ -427,6 +444,8 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
                     // reusable-cache split must not impose an unrelated per-image ceiling.
                     executorBudgets.maxImageBytes = options.requestByteBudget;
                 }
+                executorBudgets.collectQueueTimestamps =
+                    executorBudgets.collectQueueTimestamps || options.collectQueueTimestamps;
                 auto createdExecutor = GpuSceneExecutor::create(*device, *cache, executorBudgets);
                 if (!createdExecutor) {
                     availability = {GpuProcessFrameDiagnosticCode::ExecutorUnavailable,

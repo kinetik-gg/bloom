@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-09-17
+Updated: 2026-10-13
 
 ## Purpose And Scope
 
@@ -832,7 +832,10 @@ not invalidate readers. Shared image storage is conservatively charged for every
 Concurrent misses may independently evaluate the same operation; cache access is synchronized, but
 row kernels never execute under its mutex.
 
-Decoded media is stored in the same evaluator-session cache with a revision-independent address.
+Decoded media and immutable encoded still-source revisions are stored in the same evaluator-session
+cache with revision-independent content addresses. Source revisions own the bytes used for SHA-256,
+probe and decode, include encoded bytes and metadata in retention charges, and obey the explicit
+interactive reuse/final revalidation contract in [Media I/O](media-io.md#disk-cache).
 Because a burst of new revision-qualified operation entries otherwise makes cold media the oldest
 entry, a decoded entry receives an eight-cache-access grace period. Unprotected operation entries
 are evicted first during that grace; if every entry is protected, the byte budget still wins.

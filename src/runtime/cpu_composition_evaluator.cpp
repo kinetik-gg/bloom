@@ -1650,11 +1650,21 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             }
             std::optional<detail::ImageSourceSelection> selectedImage;
             if (const auto* source = std::get_if<CompiledImageSource>(&plan->operations()[index])) {
-                selectedImage =
-                    detail::selectImageSource(*source, request.time, plan->format().frameRate(),
-                                              mediaBase, cancellation, request.colorIntent);
+                selectedImage = detail::selectImageSource(
+                    *source, request.time, plan->format().frameRate(), mediaBase, cancellation,
+                    request.colorIntent, imageMemoryCache,
+                    (explicitBypass || request.requireVerifiedMediaSources)
+                        ? MediaSourceRevisionPolicy::Revalidate
+                        : request.mediaSourceRevisionPolicy,
+                    remainingPixelBudget(), !planBypass);
                 if (selectedImage->cancelled)
                     return EvaluationResult::cancelled();
+                if (request.requireVerifiedMediaSources && !selectedImage->available)
+                    return EvaluationResult::failed(diagnostic(
+                        EvaluationDiagnosticCode::InvalidParameter,
+                        selectedImage->warning.empty() ? "Final image source is unavailable"
+                                                       : selectedImage->warning,
+                        {}, operationSubject));
                 if (!selectedImage->warning.empty())
                     imageWarnings.push_back({EvaluationDiagnosticCode::InvalidParameter,
                                              DiagnosticSeverity::Warning,
@@ -1666,9 +1676,19 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             if (const auto* source = std::get_if<CompiledVideoSource>(&plan->operations()[index])) {
                 selectedVideo = detail::selectVideoSource(
                     *source, request.time, plan->format().frameRate(), mediaBase, *videoContext(),
-                    true, cancellation, request.colorIntent);
+                    !explicitBypass, cancellation, request.colorIntent,
+                    (explicitBypass || request.requireVerifiedMediaSources)
+                        ? MediaSourceRevisionPolicy::Revalidate
+                        : request.mediaSourceRevisionPolicy,
+                    !planBypass && !explicitBypass, remainingPixelBudget());
                 if (selectedVideo->cancelled)
                     return EvaluationResult::cancelled();
+                if (request.requireVerifiedMediaSources && !selectedVideo->frame)
+                    return EvaluationResult::failed(diagnostic(
+                        EvaluationDiagnosticCode::InvalidParameter,
+                        selectedVideo->warning.empty() ? "Final video source is unavailable"
+                                                       : selectedVideo->warning,
+                        {}, operationSubject));
                 if (!selectedVideo->warning.empty())
                     imageWarnings.push_back({EvaluationDiagnosticCode::InvalidParameter,
                                              DiagnosticSeverity::Warning,
@@ -1701,7 +1721,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 std::holds_alternative<CompiledText>(operation))
                 vectors[index] = VectorChain{index, {}, 1};
             if (const auto* effect = std::get_if<CompiledImageEffect>(&operation);
-                effect && preparedEffect->identity())
+                effect && preparedEffect.has_value() && preparedEffect->identity())
                 vectors[index] = vectors[effect->input.value()];
             if (const auto* layer = std::get_if<CompiledLayerOutput>(&operation)) {
                 const auto& inputVector = vectors[layer->input.value()];
@@ -2082,6 +2102,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     std::get_if<media::provider::Unavailable>(&image)) {
                                 operationCancelled =
                                     error->reason == media::provider::Error::Cancelled;
+                                if (!operationCancelled && request.requireVerifiedMediaSources) {
+                                    operationFailure =
+                                        diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                                   error->detail, {}, operationSubject);
+                                    return;
+                                }
                                 if (!operationCancelled)
                                     imageWarnings.push_back(
                                         {EvaluationDiagnosticCode::InvalidParameter,
@@ -2136,6 +2162,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 return;
                             }
                             if (!image.value.has_value()) {
+                                if (request.requireVerifiedMediaSources) {
+                                    operationFailure =
+                                        diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                                   image.diagnostic, {}, operationSubject);
+                                    return;
+                                }
                                 imageWarnings.push_back({EvaluationDiagnosticCode::InvalidParameter,
                                                          DiagnosticSeverity::Warning,
                                                          operationSubject,

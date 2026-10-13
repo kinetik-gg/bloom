@@ -1386,6 +1386,40 @@ remain outside this increment. No operation or render-route GPU coverage exempti
 Committed VMA blocks, allocator/driver/RSS residuals, physical/UMA/OOM guarantees and macOS/Windows
 native qualification remain open.
 
+### Independently rooted presentation backing
+
+Bloom-owned presentation uniform and overlay-staging buffers and overlay images use the device's
+explicit processing root. Preview startup binds that stable root before native qualification;
+the bound device rejects a different root and cannot retain another root's processing phase.
+Presentation admission never borrows an arbitrary active frame, consumes a phase count slot or
+pins the whole phase. New backing requires fresh host readiness, device readiness and sufficient
+remaining device capacity, plus additional host capacity for an actual nonlocal heap. The paired
+claims are committed before the VMA backing call, with exact generation/type/heap/size reconciliation
+before binding. Original AUTO memory preferences and mapping requirements are preserved.
+
+Presentation bytes remain included in the general owned native-image/buffer counters and are also
+reported as separate presentation subsets. Downward provisional reconciliation and actual native
+destruction return only their own claims. Native release exposes an independent admission revision;
+there is no originating phase-release watermark to suppress. A failed allocator/bind/map path
+destroys backing before releasing credit and reports no fabricated capacity-refusal provenance.
+
+The existing presenter and target own these tokens through their render and presentation retirement
+proofs. Overlay replacement and resize destroy old backing only after the previous render retires;
+target quarantine retains the whole native owner and its charges. Vulkan WSI swapchain images are
+explicitly reported as `PresentationEngineUnowned`: their physical allocation size is unknown and
+Bloom does not count them as VMA-owned backing. Offscreen oracle attachments retain separate
+caller-owned provenance. Driver allocations, committed VMA blocks, WSI memory and a physical/UMA
+or whole-process OOM guarantee remain outside these requested-suballocation counters.
+
+Focused neutral checks qualify phase isolation, provisional reconciliation, independent release
+revisions, staleness and integer limits. Actual Linux native tests qualify uniform/image/staging
+identity, pre-backing refusal, allocator/bind/map cleanup, ten overlay resize cycles and exact VMA
+allocation-count/bytes return. Rooted offscreen production draws still pass the independent
+QPainter oracle, including nonuniform 1280×720 images, with zero presentation claims after owner
+retirement. The private Wayland lifecycle passes using the production coordinator's bounded
+acquire mode through clear/resident presents, resize and acquired-unpresented close. Zero-timeout
+poll-only acquire does not progress in that private fixture and is not qualified by these results.
+
 ### Rooted combined final-readback staging (bounded final-output slice)
 
 The final-output increment adopts the transient staging buffer used by
@@ -1582,9 +1616,10 @@ Refreshed sanitizer compilation instruments eleven actual core/consumer/test bod
 linked archives are not claimed as instrumented. Core ASAN/UBSAN/LSAN passes. Native host functional
 assertions, core/synchronization validation and ASAN access/UBSAN checks pass, but unsuppressed
 LSAN exits nonzero with 2,468 bytes in six allocations, also reproduced without a session bus.
-Reported stacks contain libdbus and unknown unloaded callers, with no Bloom frame. External
-attribution is plausible but unproven; this unresolved leak result is explicitly accepted as a
-scoped shipping limitation, not clean native LSAN.
+At that checkpoint, stacks contained libdbus and unknown unloaded callers, with no Bloom frame;
+dependency attribution remained unproven. The later
+[native-loader attribution](#native-loader-leaksanitizer-attribution) resolves that stack-family
+ownership question without changing the historical nonzero result or claiming clean native LSAN.
 
 The narrow source union is the shipping cut; broader G5 and memory/performance work is postponed.
 
@@ -1595,6 +1630,57 @@ Full/Half may retain the same full-resolution raw source while downstream work c
 identity, bypass/read-only behavior and actual final revalidation remain required; this slice
 claims no zero-I/O speedup, sustained throughput, other-platform execution or whole-memory/OOM
 accounting. Native image/buffer ownership and their retirement are unchanged separate domains.
+
+### Native loader LeakSanitizer attribution
+
+The 2026-10-13 attribution follow-on uses the standalone Linux
+[`native_loader_lsan_probe.cpp`](../../tools/quality/native_loader_lsan_probe.cpp). It links no Bloom,
+Qt, media or project libraries. Loader-only admission is a clean unsuppressed control; creating a
+Vulkan instance already reproduces dependency leaks, before any Bloom device, image or buffer
+allocation. Required enumeration/device modes fail if the native API is unavailable. Each cycle
+destroys its actual Vulkan device and instance before closing the loader, and records loaded-module
+ranges before unloading so subsequent LeakSanitizer addresses retain module provenance.
+
+With Vulkan and EGL vendor discovery both pinned to the qualified NVIDIA vendor, the two-cycle
+zero-Bloom baseline and the refreshed scoped native-host witness both report 3,308 bytes in six
+allocations. The original 2,468-byte/six-allocation receipt remains historical evidence; the current
+received-message buffers differ in size. Matching DBus debug information names
+`dbus_message_new_signal`, `_dbus_message_loader_queue_messages`, `internal_bus_get`,
+`dbus_bus_register` and `dbus_connection_send_with_reply_and_block`. Same-process loader/module
+records place their previously unnamed native callers in `libnvidia-eglcore.so`. Its stripped
+internal functions are recorded by module-relative offsets rather than assigned invented names.
+The same six allocation shapes and DBus paths occur with no Bloom code linked. This resolves the
+previously unattributed DBus stack family to the native dependency path.
+
+Default EGL discovery is a separate unsuppressed control. It also initializes `libEGL_mesa.so`
+through `libEGL.so` and `libGLX_nvidia.so`; additional retained allocations reach `libdrm.so` through
+`drmGetDevices2`, `drmProcessPciDevice` and `drmDeviceAlloc`.
+That refreshed two-cycle baseline reports 4,300 bytes in fourteen allocations. Vendor selection
+isolates dependencies; it is not a leak suppression or proof that default discovery is clean.
+Neither result changes application ownership, performs global DBus shutdown, keeps a loader handle
+alive to hide leaked reachability, or claims whole-native-host LeakSanitizer cleanliness. The
+historical eleven-body instrumentation scope still excludes uninstrumented linked archives.
+
+The probe is compiled separately from production. Set `icd_manifest` and `egl_manifest` to the
+qualified vendor manifests; keep resulting addresses, local paths and raw loader logs private.
+
+```sh
+mkdir -p .cache
+clang++ -std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined \
+  -I build/dependency-prefix/include tools/quality/native_loader_lsan_probe.cpp \
+  -ldl -o .cache/native-loader-lsan-probe
+env -u DISPLAY -u WAYLAND_DISPLAY -u LSAN_OPTIONS \
+  ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+  UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+  .cache/native-loader-lsan-probe --loader build/dependency-prefix/lib/libvulkan.so.1 \
+  --mode loader
+env -u DISPLAY -u WAYLAND_DISPLAY -u LSAN_OPTIONS \
+  ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+  UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+  VK_DRIVER_FILES="$icd_manifest" __EGL_VENDOR_LIBRARY_FILENAMES="$egl_manifest" \
+  .cache/native-loader-lsan-probe --loader build/dependency-prefix/lib/libvulkan.so.1 \
+  --mode device --cycles 2 --snapshot
+```
 
 ### Rooted packed-host payload ownership (bounded ownership slice)
 

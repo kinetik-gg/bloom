@@ -42,11 +42,12 @@ provide research or rationale, but they are not binding until adopted here.
 7. [`roadmap.md`](roadmap.md) — proof-oriented implementation sequence.
 8. [`decisions/`](decisions/) — accepted architecture decision records.
 
-The GPU/cache overhaul is at a bounded source-reuse shipping cut. Shared prepared HOST retention
-now has isolated native transform/text Full/Half parity, changed production final evaluation,
-23-source retention including metadata, and stale-digest/bypass/uncached controls. Source
-probe/hash still runs; broader memory, Viewer and throughput work is postponed. See the
-[execution checkpoint](plans/gpu-reliability-and-preview.md#execution-checkpoint) for exact limits.
+The GPU/cache overhaul has resumed for Linux under issue #304. Processing/presentation allocation
+ownership, immutable source revisions, repeated fill/purge and sustained packed Viewer evidence are
+in integration. The measured width-two candidate failed the interaction/headroom gate, so production
+service-backed RAM fill defaults to width one. See the
+[current Linux qualification record](plans/gpu-304-linux-qualification.md) and the historical
+[execution checkpoints](plans/gpu-reliability-and-preview.md#execution-checkpoint) for exact limits.
 
 ## User Guides
 

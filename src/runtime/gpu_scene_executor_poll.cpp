@@ -240,6 +240,15 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
         return GpuSceneExecutorPollResult::Pending;
     }
     if (status == NativePoll::Ready) {
+        auto& fenceTime = nativeKind == NativeKind::Upload
+                              ? counters.uploadFenceObservationNanoseconds
+                              : counters.processingFenceObservationNanoseconds;
+        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                 std::chrono::steady_clock::now() - nativeStart)
+                                 .count();
+        if (elapsed > 0)
+            fenceTime += std::min(static_cast<std::uint64_t>(elapsed),
+                                  std::numeric_limits<std::uint64_t>::max() - fenceTime);
         if (cancelRequested) {
             if (nativeKind == NativeKind::Solid) {
                 static_cast<void>(solid->takeImage());

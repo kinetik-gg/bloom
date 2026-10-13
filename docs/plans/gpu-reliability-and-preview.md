@@ -4,6 +4,10 @@ Status: resumed — remaining overhaul tracked in issue #304
 
 Updated: 2026-10-13
 
+The current issue #304 Linux implementation, measurement and remaining integration gates are
+consolidated in [the Linux qualification record](gpu-304-linux-qualification.md). Historical bounded
+checkpoints below retain their original scope.
+
 ## Execution checkpoint
 
 The owner resumed execution after the G2E checkpoint. G3B outline publication and displayed-intent
@@ -67,8 +71,10 @@ processing root required by CPU fallback, carry the same root through native pre
 delivery fresh off-UI during held retirement, and wait for Wayland configuration before presenting.
 GUI validation uses a private headless compositor, with the desktop display removed from its test
 environment. Historical setup/theme/fixture failures remain distinct from corrected owning reruns.
-The earlier native LeakSanitizer ownership question remains open; clean neutral storage sanitizers
-do not resolve it.
+The earlier DBus LeakSanitizer attribution question is now resolved by the separate
+[zero-Bloom native-loader dependency control](../architecture/gpu-backend.md#native-loader-leaksanitizer-attribution).
+Native dependency leaks remain unsuppressed and nonzero; clean neutral storage sanitizers do not
+establish whole-native-host LeakSanitizer cleanliness.
 
 Rooted packed-host follow-on (2026-10-10), accepted for bounded ownership/conservation and off-UI
 production allocation: the neutral storage/ledger
@@ -1949,9 +1955,14 @@ and helpers, with source/binary receipts preserved separately from historical B 
 
 The refreshed eleven-body sanitizer witness passes neutral core ASAN/UBSAN/LSAN. Native host
 functional, validation and ASAN access/UBSAN checks pass, but unsuppressed LSAN reports 2,468 bytes
-in six allocations, repeated without a session bus. Stacks show libdbus and unknown callers, no
-Bloom frame; external attribution remains unproven. This is an accepted scoped-cut limitation and
-handoff item, not clean native LSAN. Uninstrumented linked archives remain outside the witness.
+in six allocations, repeated without a session bus. This remains the historical result. A later
+standalone zero-Bloom Vulkan control and the refreshed scoped host both report 3,308 bytes in the
+same six-allocation DBus stack family, with native callers mapped to `libnvidia-eglcore.so` and DBus
+functions resolved from matching debug information. Default EGL vendor discovery adds independently
+reproduced Mesa/libdrm dependency allocations. The
+[owning attribution record and public reproducer](../architecture/gpu-backend.md#native-loader-leaksanitizer-attribution)
+resolve dependency provenance without suppressions or a clean native-LSAN claim. Uninstrumented
+linked archives remain outside the historical witness.
 
 Probe/hash still precedes still-cache lookup and video selection may already decode. This cut does
 not satisfy G5’s zero-source-read/hash gate, diagnose similar Full/Half fill times, or establish FPS,

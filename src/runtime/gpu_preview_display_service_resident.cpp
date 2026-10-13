@@ -70,6 +70,7 @@ bool createAndQualifyResidentRoute(
             executorBudgets.maxImageBytes = core->options.previewByteAllowance.value_or(
                 core->effectivePreviewByteAllowance.load(std::memory_order_relaxed));
         }
+        executorBudgets.collectQueueTimestamps = core->queueTimingRequested();
         auto executor =
             GpuSceneExecutor::create(*core->device, *core->residentSceneCache, executorBudgets);
         if (!executor) {
@@ -172,8 +173,14 @@ void publishResidentStatus(const std::shared_ptr<PreviewDisplayServiceCore>& cor
 }
 
 void retireResidentRoute(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
+    if (core->packedQueueTiming) {
+        core->packedQueueTiming->cancel();
+        core->packedQueueTiming.reset();
+    }
     if (core->packedTransfer) {
         core->packedTransfer->cancel();
+        if (core->packedQueueTimingActive && core->packedQueueTiming)
+            core->packedQueueTiming->cancel();
         core->packedTransfer
             .reset(); // unproved source + parent admission move to bounded quarantine
     }
@@ -678,6 +685,8 @@ residentFinishFrame(const std::shared_ptr<PreviewDisplayServiceCore>& core,
 void residentCancelNative(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
     if (core->packedTransfer)
         core->packedTransfer->cancel();
+    if (core->packedQueueTiming)
+        core->packedQueueTiming->cancel();
     if (core->residentExecutor != nullptr) {
         core->residentExecutor->cancel();
     }
@@ -714,10 +723,17 @@ void noteResidentExecutorCounters(const std::shared_ptr<PreviewDisplayServiceCor
     // ACTUAL native operations performed by the executor. A warm cache hit that cuts the whole
     // subtree performs none, so this stays unchanged. `readbacks` is asserted zero by the
     // executor's own contract; it is never a full-frame host transfer.
-    core->counterNativeDispatches.store(counters.solidDispatches + counters.coveredSolidDispatches +
-                                            counters.translationDispatches +
-                                            counters.sourceOverDispatches + counters.uploads,
-                                        std::memory_order_relaxed);
+    core->counterNativeDispatches.store(counters.dispatches, std::memory_order_relaxed);
+    core->counterUploadSubmitNanoseconds.store(counters.uploadSubmitNanoseconds,
+                                               std::memory_order_relaxed);
+    core->counterUploadFenceObservationNanoseconds.store(counters.uploadFenceObservationNanoseconds,
+                                                         std::memory_order_relaxed);
+    core->counterProcessingSubmitNanoseconds.store(counters.processingSubmitNanoseconds,
+                                                   std::memory_order_relaxed);
+    core->counterProcessingFenceObservationNanoseconds.store(
+        counters.processingFenceObservationNanoseconds, std::memory_order_relaxed);
+    core->counterCompletedStepContinuations.store(counters.completedStepContinuations,
+                                                  std::memory_order_relaxed);
     core->counterFullFrameReadbacks.store(
         counters.readbacks + core->counterPackedTransfers.load(std::memory_order_relaxed),
         std::memory_order_relaxed);

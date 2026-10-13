@@ -8,7 +8,9 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace bloom::media {
@@ -72,6 +74,60 @@ struct ImageProbe {
     std::string colorSpaceTag;
     std::string interpretationAssumption;
 };
+
+// A session-owned, immutable source revision. Its digest, header and every decoder read refer to
+// these exact captured bytes, never to a reopened pathname or a timestamp. Capture is worker-only;
+// callers bound both transient capture and retention through their current host allowances.
+struct ImageSourceCaptureStatistics final {
+    std::uint64_t ioNanoseconds = 0;
+    std::uint64_t hashNanoseconds = 0;
+    std::uint64_t probeNanoseconds = 0;
+    std::uint64_t bytesRead = 0;
+    std::uint64_t bytesHashed = 0;
+};
+struct ImageDecodeStatistics final {
+    // Codec, image construction and any requested input colour processing. Source capture I/O,
+    // SHA256, metadata probe, proxy resampling and cache lookup are excluded.
+    std::uint64_t decodeNanoseconds = 0;
+};
+class ImageSourceRevision final {
+  public:
+    [[nodiscard]] const ImageProbe& probe() const noexcept { return probe_; }
+    [[nodiscard]] std::span<const std::byte> bytes() const noexcept { return bytes_; }
+    [[nodiscard]] const ImageSourceCaptureStatistics& captureStatistics() const noexcept {
+        return captureStatistics_;
+    }
+    [[nodiscard]] std::size_t retainedBytes() const noexcept {
+        return sizeof(ImageSourceRevision) + bytes_.capacity() + probe_.colorSpaceTag.capacity() +
+               probe_.interpretationAssumption.capacity();
+    }
+
+  private:
+    ImageSourceRevision(std::vector<std::byte> bytes, ImageProbe probe,
+                        ImageSourceCaptureStatistics statistics)
+        : bytes_(std::move(bytes)), probe_(std::move(probe)), captureStatistics_(statistics) {}
+    friend ImageResult<std::shared_ptr<const ImageSourceRevision>>
+    captureImageSourceRevision(const std::filesystem::path&, std::size_t, const CancelImageWork&,
+                               std::optional<core::Sha256Digest>);
+    std::vector<std::byte> bytes_;
+    ImageProbe probe_;
+    ImageSourceCaptureStatistics captureStatistics_;
+};
+
+[[nodiscard]] ImageResult<std::shared_ptr<const ImageSourceRevision>>
+captureImageSourceRevision(const std::filesystem::path& path, std::size_t hostByteBudget,
+                           const CancelImageWork& cancel = {},
+                           std::optional<core::Sha256Digest> expectedDigest = {});
+
+// The revision remains live throughout decode. Its encoded storage is subtracted from the total
+// host allowance before admitting codec staging and output. No path is reopened and no hash
+// repeats.
+[[nodiscard]] ImageResult<std::shared_ptr<const render::Rgba32fImage>>
+decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& interpretation = {},
+            std::shared_ptr<const color::CpuColorSpaceProcessor> processor = {},
+            const CancelImageWork& cancel = {}, const ImageProgress& progress = {},
+            std::size_t hostByteBudget = kMaxImageStorageBytes,
+            ImageDecodeStatistics* statistics = nullptr);
 
 enum class ImageProviderRole : std::uint8_t { Decode, Encode };
 

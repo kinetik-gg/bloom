@@ -66,7 +66,8 @@ class RamPreviewController final : public QObject {
                          CompositionPreviewController& previewController,
                          runtime::TaskScheduler& scheduler, TaskUiBridge& taskUiBridge,
                          PreviewPreparationFunction preparation, QObject* parent = nullptr,
-                         PreviewPreparationSubmitter submitter = {});
+                         PreviewPreparationSubmitter submitter = {},
+                         std::optional<std::size_t> preparationWidth = std::nullopt);
     ~RamPreviewController() override;
 
     // Refresh at the autoplay boundary, including external callbacks/rebinds and expired leases.

@@ -62,6 +62,8 @@ void GpuOcioProgram::Impl::clearJob() {
 void GpuOcioProgram::Impl::beginImpl(const bool display, std::shared_ptr<const GpuImage> input,
                                      const std::span<const std::byte> uniformBytes,
                                      const std::uint64_t byteBudget) {
+    control->bufferStorageRefusal.reset();
+    control->imageStorageRefusal.reset();
     const GpuImageImpl* const inputImpl = gpuImageImpl(*input);
     if (inputImpl == nullptr || !inputImpl->onOwnerThread() ||
         inputImpl->state.get() != control.get() || inputImpl->width == 0 ||
@@ -142,7 +144,8 @@ void GpuOcioProgram::Impl::beginImpl(const bool display, std::shared_ptr<const G
                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                   0, false, packed)) {
-            fail(GpuOcioProgramDiagnosticCode::AllocationFailed,
+            fail(state.bufferStorageRefusal ? GpuOcioProgramDiagnosticCode::OverBudget
+                                            : GpuOcioProgramDiagnosticCode::AllocationFailed,
                  "the packed display buffer could not be created");
             return;
         }
@@ -386,11 +389,10 @@ GpuOcioProgram::Impl::~Impl() {
     for (auto& texture : textures) {
         ocio_program_detail::destroySampledResource(*control, texture, failedOrigin);
     }
-    if (uniformBuffer.buffer != VK_NULL_HANDLE) {
-        destroyResidentBuffer(*control, uniformBuffer);
-    }
-    if (status.buffer != VK_NULL_HANDLE) {
-        destroyResidentBuffer(*control, status);
+    for (auto* buffer : {&uniformBuffer, &status}) {
+        if (buffer->buffer == VK_NULL_HANDLE)
+            continue;
+        destroyResidentBuffer(*control, *buffer, failedOrigin);
     }
 }
 

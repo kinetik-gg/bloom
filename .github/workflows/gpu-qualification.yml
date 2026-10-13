@@ -1,0 +1,181 @@
+name: Focused GPU and CPU fallback evidence
+
+on:
+  workflow_call:
+    inputs:
+      run_native:
+        type: boolean
+        default: false
+      native_runner_labels:
+        type: string
+        default: '["ubuntu-24.04"]'
+  workflow_dispatch:
+    inputs:
+      run_native:
+        description: Run bounded native gates on the selected runner; unavailable GPU fails explicitly
+        type: boolean
+        default: false
+      native_runner_labels:
+        description: JSON runner labels for a real GPU runner (standard hosted runners may report NotRun)
+        type: string
+        default: '["ubuntu-24.04"]'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpu-qualification-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  cpu-fallback:
+    name: Explicit CPU fallback (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            python: python3
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      QT_QPA_PLATFORM: offscreen
+      BLOOM_CI_PREFIX: ${{ github.workspace }}/build/gpu-qualification-prefix
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Install locked Linux compiler and worker prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          bash tools/ci/install_linux_llvm22.sh
+          echo 'CC=clang-22' >> "$GITHUB_ENV"
+          echo 'CXX=clang++-22' >> "$GITHUB_ENV"
+
+      # The same archive sources/hashes as the main superbuild. No package-manager versions,
+      # invented ABI profiles, or quality-wide rebuild is introduced by this focused workflow.
+      - name: Cache locked archives
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/bloom-dependency-downloads
+          key: bloom-dependency-archives-82571923722fa396b5d40449e487c86b8ab421e66581f34a0de828b9e13eb9e8
+
+      - name: Cache focused dependency closure
+        id: prefix
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ${{ runner.temp }}/bloom-gpu-fallback-superbuild
+            build/gpu-qualification-prefix
+          key: bloom-gpu-fallback-prefix-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('dependencies/dependencies.lock.json', 'dependencies/superbuild/**') }}
+
+      - name: Build locked image and core dependency closure
+        if: steps.prefix.outputs.cache-hit != 'true'
+        run: |
+          ${{ matrix.python }} tools/ci/configure_gpu_qualification.py dependencies \
+            --build-dir "$RUNNER_TEMP/bloom-gpu-fallback-superbuild" \
+            --prefix "$BLOOM_CI_PREFIX" --download-dir "$RUNNER_TEMP/bloom-dependency-downloads"
+
+      - name: Configure explicit Vulkan-OFF fallback
+        run: |
+          ${{ matrix.python }} tools/ci/configure_gpu_qualification.py project \
+            --build-dir build/gpu-cpu-fallback --prefix "$BLOOM_CI_PREFIX"
+
+      - name: Build and verify focused fallback and require-device refusal
+        run: |
+          ${{ matrix.python }} tools/ci/gpu_qualification.py --build-dir build/gpu-cpu-fallback \
+            --mode fallback --build --output build/gpu-evidence/fallback.json
+
+      - name: Publish evidence summary
+        if: always()
+        run: |
+          if [ -f build/gpu-evidence/fallback.json ]; then
+            {
+              printf '```json\n'
+              cat build/gpu-evidence/fallback.json
+              printf '```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Fallback build/configure failed before runnable evidence; native qualification: NotRun.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload focused evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gpu-fallback-${{ matrix.os }}-${{ github.run_id }}
+          path: build/gpu-evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+  native:
+    name: Required hardware GPU (bounded compute gates)
+    if: inputs.run_native
+    runs-on: ${{ fromJSON(inputs.native_runner_labels) }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      BLOOM_CI_PREFIX: ${{ github.workspace }}/build/gpu-qualification-prefix
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Install locked compiler on hosted Linux
+        if: runner.os == 'Linux' && !contains(inputs.native_runner_labels, 'self-hosted')
+        run: |
+          bash tools/ci/install_linux_llvm22.sh
+          echo 'CC=clang-22' >> "$GITHUB_ENV"
+          echo 'CXX=clang++-22' >> "$GITHUB_ENV"
+
+      # Self-hosted workers use their explicitly configured compiler/driver. The Linux qualified
+      # consumer fails closed if its compiler has no matching locked profile.
+      - name: Cache locked native archives
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/bloom-dependency-downloads
+          key: bloom-dependency-archives-82571923722fa396b5d40449e487c86b8ab421e66581f34a0de828b9e13eb9e8
+
+      - name: Cache native dependency closure
+        id: prefix
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ${{ runner.temp }}/bloom-gpu-native-superbuild
+            build/gpu-qualification-prefix
+          key: bloom-gpu-native-prefix-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('dependencies/dependencies.lock.json', 'dependencies/superbuild/**') }}
+
+      - name: Build locked native dependency closure
+        env:
+          BLOOM_CI_PYTHON: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
+        if: steps.prefix.outputs.cache-hit != 'true'
+        run: |
+          "$BLOOM_CI_PYTHON" tools/ci/configure_gpu_qualification.py dependencies --mode native \
+            --build-dir "$RUNNER_TEMP/bloom-gpu-native-superbuild" \
+            --prefix "$BLOOM_CI_PREFIX" --download-dir "$RUNNER_TEMP/bloom-dependency-downloads"
+
+      - name: Configure native capability probe
+        env:
+          BLOOM_CI_PYTHON: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
+        run: |
+          "$BLOOM_CI_PYTHON" tools/ci/configure_gpu_qualification.py project --mode native \
+            --build-dir build/gpu-native-evidence --prefix "$BLOOM_CI_PREFIX"
+
+      - name: Require actual hardware and run bounded native gates
+        env:
+          BLOOM_CI_PYTHON: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
+        run: |
+          "$BLOOM_CI_PYTHON" tools/ci/gpu_qualification.py --build-dir build/gpu-native-evidence \
+            --mode native --build --require-device --output build/gpu-evidence/native.json
+
+      - name: Upload native evidence including NotRun or failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gpu-native-${{ runner.os }}-${{ github.run_id }}
+          path: build/gpu-evidence
+          if-no-files-found: warn
+          retention-days: 14

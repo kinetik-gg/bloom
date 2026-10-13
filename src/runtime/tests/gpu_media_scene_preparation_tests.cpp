@@ -1,4 +1,5 @@
 #include "gpu_media_scene_preparation_test_support.hpp"
+#include "gpu_process_frame_preparation_private.hpp"
 
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/runtime/gpu_memory_budget.hpp>
@@ -50,6 +51,8 @@ int main() {
         testProxyNonSquarePar(expectations, evaluator, fixture);
         testSequenceFrames(expectations, evaluator, fixture);
         testWarmReuseAndChangedSource(expectations, evaluator, fixture);
+        testImmutableSourceRevisionReuse(expectations, fixture);
+        testGestureSourceRevisionIsReadOnly(expectations, fixture);
         testChangedFrameAndBypass(expectations, evaluator, fixture);
         testChangedColourInterpretation(expectations, evaluator, fixture);
         testSourceKeyExcludesIdsAndRevision(expectations, evaluator, fixture);

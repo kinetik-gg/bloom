@@ -53,6 +53,8 @@ struct SwapchainResources final {
     // Offscreen test seam: a non-swapchain color target whose render pass writes `finalLayout`
     // instead of PRESENT_SRC_KHR. `offscreen` marks it so present is never attempted.
     bool offscreen = false;
+    GpuPresentationImageStorage imageStorage =
+        GpuPresentationImageStorage::PresentationEngineUnowned;
     VkImageLayout finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     GpuPresentationRetirement retirement = GpuPresentationRetirement::None;
     std::uint32_t width = 0;

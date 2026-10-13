@@ -105,7 +105,12 @@ prepareExportScene(const GpuProcessFrameEvaluatorOptions& options,
                                      options.ocioContext != nullptr ? *options.ocioContext
                                                                     : GpuSceneOcioContext{},
                                      std::move(phase));
-    auto built = builder.build(plan, request, cancellation);
+    // Final output owns this boundary. A request copied from interactive preview must never
+    // import its retained-source availability policy into export, including a warm cache hit.
+    auto finalRequest = request;
+    finalRequest.mediaSourceRevisionPolicy = MediaSourceRevisionPolicy::Revalidate;
+    finalRequest.requireVerifiedMediaSources = true;
+    auto built = builder.build(plan, finalRequest, cancellation);
     if (!built.hasValue()) {
         result.diagnosticCode = mapSceneDiagnostic(built.diagnostic.code);
         result.status = result.diagnosticCode == GpuProcessFrameDiagnosticCode::SceneUnsupported

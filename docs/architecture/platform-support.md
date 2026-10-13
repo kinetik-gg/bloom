@@ -8,7 +8,7 @@ rejection, and publication blocked until acceptance. Non-Linux providers current
 as unsupported. Format-specific semantic validators, cancellation/progress integration, macOS and
 Windows providers, and three-platform parity qualification remain pending.
 
-Updated: 2026-08-25
+Updated: 2026-10-13
 
 ## Objective
 
@@ -188,3 +188,87 @@ A user-facing feature is cross-platform complete only when:
 - known presentation differences are intentional and documented
 
 This definition applies from the first vertical proof onward, not as a cleanup phase before release.
+
+
+## Focused GPU And Explicit CPU Fallback Gate
+
+The manual [`gpu-qualification.yml`](../../.github/workflows/gpu-qualification.yml) workflow builds
+an explicit Vulkan-OFF CPU fallback on Linux, then runs the bounded image,
+source-revision, CPU evaluation, processing-budget and host-lifetime tests. It builds selected targets
+and does not repeat the repository-wide quality sweep. Locked superbuild archive hashes and library
+versions are reused and Linux uses the locked Clang 22 family. The current issue qualification scope
+is explicitly Linux. The helper retains portable Apple/MSVC configuration support, but those jobs are
+not in the default matrix and no macOS/Windows execution is claimed.
+
+Before the new workflow is on the default branch, the existing `ci.yml` dispatch entry calls it
+from the selected branch with `focused_gpu_gate=true`. That explicit manual mode skips the four
+normal CI jobs; pull-request/push behavior is unchanged. A concrete branch run is:
+
+```sh
+gh workflow run ci.yml --ref <branch> -f focused_gpu_gate=true -f run_native=false
+```
+
+Native execution additionally requires `run_native=true` and explicit `native_runner_labels`, for
+example `["self-hosted","linux","gpu"]`. No workflow is dispatched by saving these files.
+
+Dependency provenance remains separate from functional test results. The current production lock
+contains only a Linux Clang profile. A future explicit macOS/Windows run consumes its exact
+source-built prefix in `developer-system` mode and reports **Unqualified**, even if its CPU tests pass. No accepted
+Apple/MSVC ABI profile, release qualification or native GPU capability is fabricated. Linux's existing
+`Qualified-pending-manifest` state is preserved rather than upgraded by this focused gate.
+
+The reusable [`gpu_qualification.py`](../../tools/ci/gpu_qualification.py) runner writes JSON with
+separate CPU fallback, native, dependency-provenance and qualified-native fields. The fallback gate
+requires Vulkan explicitly OFF, rejects an internally skipped required CPU test, verifies that the
+optional resident-display binary reports its typed CPU fallback, and verifies that its
+`--require-device` invocation fails. The optional device skip is recorded as **NotRun native**, never
+as a passing native render. Test processes have inherited display/Wayland bindings removed and use
+Qt's offscreen platform; this gate launches no desktop application.
+
+For an existing configured fallback build:
+
+```sh
+python3 tools/ci/gpu_qualification.py --build-dir build/gpu-cpu-fallback \
+  --mode fallback --build --output build/gpu-evidence/fallback.json
+```
+
+The workflow's optional native job takes explicit JSON runner labels, builds the locked Vulkan
+bootstrap closure, and runs the bounded processing-buffer, image-allocation, display-transfer and
+resident-display parity gates with `--require-device`. Device diagnostic `device_type` must identify
+an integrated, discrete or virtual GPU. Missing capability and CPU/software Vulkan produce
+**NotRun**; an explicitly requested native job fails in that state. An invariant failure remains a
+failure and is never relabelled device unavailability. The native gate does not qualify GUI
+presentation, all production render routes, sustained playback, platform packaging or full prefix
+manifests; those remain independent gates.
+
+```sh
+python3 tools/ci/gpu_qualification.py --build-dir build/gpu-native-evidence \
+  --mode native --build --require-device --output build/gpu-evidence/native.json
+```
+
+An available Windows Vulkan driver may support a native probe, but a prepared workflow is not proof
+that a particular Windows machine has that device or that Bloom's Windows GPU routes are qualified.
+macOS additionally needs an explicitly supplied, compatible MoltenVK/ICD setup; a system Metal GPU
+alone does not establish a Vulkan capability. The optional job probes the actual selected runner and
+retains unavailable/failure evidence. As of 2026-10-13, this continuation has local Linux CPU fallback
+evidence; macOS/Windows execution remains **NotRun** and outside the current Linux-focused
+qualification. Actual target evidence is required before platform parity is claimed.
+
+The immutable still-source seam uses native `std::filesystem::path` file opening, UTF-8 locator/base
+identity, fixed-width digest/counters and `steady_clock` timings. Decoder input is one owned byte
+vector on every platform, with independent EXR/stb streams and subtraction-checked request budgets.
+A filename suffix is appended to the native path without narrowing its existing Unicode spelling.
+The source ticket does not depend on filesystem timestamps, watcher semantics or an operating-system
+file handle surviving external mutation. The shared fallback tests cover same-size/same-timestamp
+replacement, concurrent decode budgets, cancellation, refresh generations, gesture read-only access,
+final revalidation and charged worker retirement; execution on each platform is still required.
+
+Linux video source preparation now owns a disk-backed, SHA-256-verified anonymous read-only file.
+The process supervisor installs that typed host capability on a dedicated inherited descriptor; the
+FFmpeg provider consumes the exact descriptor through custom AVIO. Source-byte quotas include live
+captures and pending retirement until the worker closes the backing. The macOS video provider keeps
+its existing fresh-verification path and does not advertise retained-video hash elision; Windows
+keeps the typed unavailable worker fallback. Portable descriptor plumbing alone is not Apple video
+qualification. The Linux source fixture covers same-size/same-mtime replacement, removed originals,
+uncached frame parity from retained bytes, cancellation, quota, final revalidation, refresh/reconnect,
+gesture read-only behavior and charged worker retirement.

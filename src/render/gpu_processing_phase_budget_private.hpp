@@ -23,4 +23,58 @@ inline void incrementSaturating(std::uint64_t& value) noexcept {
         ++value;
     }
 }
+
+struct PresentationAdmission final {
+    GpuProcessingPhaseAdmission status;
+    GpuProcessingPhaseDomain domain;
+    std::uint64_t revision;
+};
+// Independent, exact-root allocation admission. This is a native backing claim, never a phase
+// count slot or a conversion of another frame's working/source/output allowance.
+[[nodiscard]] inline PresentationAdmission
+admitPresentation(GpuProcessingPhaseBudgetState& state, const std::uint64_t bytes, const bool local,
+                  const bool image, const std::chrono::steady_clock::time_point now) noexcept {
+    const std::lock_guard lock(state.mutex);
+    auto& counters = state.counters;
+    const auto refuse = [&](GpuProcessingPhaseAdmission status, GpuProcessingPhaseDomain domain) {
+        if (status == GpuProcessingPhaseAdmission::BudgetRefused)
+            incrementSaturating(counters.budgetRefusals);
+        return PresentationAdmission{status, domain, counters.admissionRevision};
+    };
+    if (counters.hostReady && now > state.hostValidUntil) {
+        counters.hostReady = false;
+        incrementSaturating(counters.admissionRevision);
+    }
+    if (!counters.hostReady || !counters.hostCapacityBytes || now > state.hostValidUntil)
+        return refuse(GpuProcessingPhaseAdmission::AwaitingCapacity,
+                      GpuProcessingPhaseDomain::Host);
+    if (!counters.deviceReady || !counters.deviceCapacityBytes)
+        return refuse(GpuProcessingPhaseAdmission::AwaitingCapacity,
+                      GpuProcessingPhaseDomain::Device);
+    if (bytes > remaining(*counters.deviceCapacityBytes, counters.totalDeviceClaimBytes))
+        return refuse(GpuProcessingPhaseAdmission::BudgetRefused, GpuProcessingPhaseDomain::Device);
+    if (!local && bytes > remaining(*counters.hostCapacityBytes, counters.totalHostClaimBytes))
+        return refuse(GpuProcessingPhaseAdmission::BudgetRefused, GpuProcessingPhaseDomain::Host);
+    counters.totalDeviceClaimBytes += bytes;
+    if (image) {
+        counters.ownedNativeImageBytes += bytes;
+        counters.ownedPresentationImageBytes += bytes;
+        ++counters.ownedNativeImages;
+        ++counters.ownedPresentationImages;
+    } else {
+        counters.ownedNativeBufferBytes += bytes;
+        counters.ownedPresentationBufferBytes += bytes;
+        ++counters.ownedNativeBuffers;
+        ++counters.ownedPresentationBuffers;
+    }
+    if (!local) {
+        counters.totalHostClaimBytes += bytes;
+        if (image)
+            counters.ownedNonlocalNativeHostBytes += bytes;
+        else
+            counters.ownedNonlocalNativeBufferHostBytes += bytes;
+    }
+    return {GpuProcessingPhaseAdmission::Accepted, GpuProcessingPhaseDomain::None,
+            counters.admissionRevision};
+}
 } // namespace bloom::render::detail

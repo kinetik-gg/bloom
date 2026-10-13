@@ -43,13 +43,22 @@ struct GpuPathCoverageMaskOwner final {
     void release() noexcept;
 
     std::shared_ptr<vulkan_detail::DeviceAllocatorState> state;
+    NativeBufferStorageToken storageToken;
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
     std::uint64_t bytes = 0;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     std::uint32_t generation = 0;
+    GpuPathCoverageMaskOwner* retirementNext = nullptr;
 };
+
+namespace path_coverage_detail {
+// Shared mask aliases may die after their producing pipeline. Foreign last release only queues
+// the existing owner; the exact native owner lifetime destroys backing outside the queue lock.
+void retireMaskOwner(GpuPathCoverageMaskOwner* owner) noexcept;
+void drainMaskOwnersOnOwnerThread() noexcept;
+} // namespace path_coverage_detail
 
 // Move-only host-visible storage buffer for geometry upload or the resident mask.
 struct GpuPathCoverageHostBuffer final {
@@ -63,6 +72,7 @@ struct GpuPathCoverageHostBuffer final {
         if (this != &other) {
             release();
             state = other.state;
+            storageToken = std::move(other.storageToken);
             buffer = other.buffer;
             allocation = other.allocation;
             bytes = other.bytes;
@@ -80,7 +90,10 @@ struct GpuPathCoverageHostBuffer final {
     void release() noexcept {
         if (armed && state != nullptr) {
             vmaDestroyBuffer(state->allocator, buffer, allocation);
+            if (storageToken.bytes() != 0 && state->nativeBufferBackingsDestroyed != UINT64_MAX)
+                ++state->nativeBufferBackingsDestroyed;
         }
+        storageToken = {};
         state = nullptr;
         buffer = VK_NULL_HANDLE;
         allocation = VK_NULL_HANDLE;
@@ -89,6 +102,7 @@ struct GpuPathCoverageHostBuffer final {
     }
 
     vulkan_detail::DeviceAllocatorState* state = nullptr;
+    NativeBufferStorageToken storageToken;
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
     std::uint64_t bytes = 0;

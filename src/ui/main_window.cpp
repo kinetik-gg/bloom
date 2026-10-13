@@ -491,8 +491,21 @@ void MainWindow::purgeMediaCache() {
     if (cachePurgeController_ != nullptr) {
         if (!cachePurgeController_->requestMediaPurge()) {
             statusStrip_->showTransientMessage(tr("A cache purge is already running"));
+            return;
+        }
+        // Completed frames also encode the retained source revision. Drop them while the producer
+        // gate is active, so the first request after refresh cannot bypass source verification.
+        if (previewController_ != nullptr) {
+            previewController_->purgePreviewCache();
+        } else if (ramPreview_ != nullptr) {
+            ramPreview_->cancel();
         }
         return;
+    }
+    if (previewController_ != nullptr) {
+        previewController_->purgePreviewCache();
+    } else if (ramPreview_ != nullptr) {
+        ramPreview_->cancel();
     }
     if (operationCache_ != nullptr) {
         // Memory-only fallback for a host with no task system. The disk store is deliberately not

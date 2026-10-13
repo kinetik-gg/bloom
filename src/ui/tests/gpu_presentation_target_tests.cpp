@@ -45,6 +45,7 @@
 #include "gpu_presentation_target_private.hpp"
 #endif
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -255,6 +256,13 @@ int main(int argc, char** argv) {
         return skipOrFail(options);
     }
     bloom::render::GpuDevice& device = *created.device;
+    bloom::render::GpuProcessingPhaseBudget presentationBudget(1);
+    presentationBudget.setHostCapacity(1ULL << 30, true);
+    presentationBudget.setDeviceCapacity(1ULL << 30, true);
+    if (!device.bindProcessingRoot(presentationBudget.rootIdentity())) {
+        std::cerr << "FAIL: presentation device could not bind its exact allocation root\n";
+        return 1;
+    }
     if (device.presentationStatus().availability !=
         bloom::render::GpuPresentationAvailability::Ready) {
         std::cout << "SKIP: presentation not ready: " << device.presentationStatus().detail << '\n';
@@ -341,6 +349,11 @@ int main(int argc, char** argv) {
         return 1;
     }
     bloom::render::GpuPresentationTarget& target = *targetResult.target;
+    if (target.info().image_storage !=
+        bloom::render::GpuPresentationImageStorage::PresentationEngineUnowned) {
+        std::cerr << "FAIL: external swapchain allocation provenance was not disclosed\n";
+        std::_Exit(1);
+    }
 
     const auto acquireMode = options.bounded_acquire
                                  ? bloom::render::GpuPresentationAcquireMode::BoundedProgress
@@ -401,6 +414,7 @@ int main(int argc, char** argv) {
         params.background = bloom::render::GpuPresentBackground::Black;
         return params;
     };
+    const std::array<std::uint8_t, std::size_t{4} * 4 * 4> transparentOverlay{};
     const auto presentResident = [&](const std::uint32_t width, const std::uint32_t height) {
         const auto params = residentParams(width, height);
         for (int attempt = 0; attempt < 400; ++attempt) {
@@ -408,11 +422,14 @@ int main(int argc, char** argv) {
             const auto acquire = target.acquire(acquireMode);
             if (acquire == bloom::render::GpuPresentationTargetCode::Ok ||
                 acquire == bloom::render::GpuPresentationTargetCode::Suboptimal) {
-                const auto present =
-                    target.presentImage(displayImage, params, bloom::render::GpuPresentOverlay{});
+                const bloom::render::GpuPresentOverlay overlay{
+                    .pixels = transparentOverlay.data(), .width = 4, .height = 4, .token = 1};
+                const auto present = target.presentImage(displayImage, params, overlay);
                 if (present == bloom::render::GpuPresentationTargetCode::Ok ||
                     present == bloom::render::GpuPresentationTargetCode::Suboptimal) {
-                    return true;
+                    const auto owned = presentationBudget.snapshot();
+                    return owned.ownedPresentationImages == 1 &&
+                           owned.ownedPresentationBuffers == 2 && owned.admittedPhases == 0;
                 }
                 if (present == bloom::render::GpuPresentationTargetCode::InvalidArgument ||
                     present == bloom::render::GpuPresentationTargetCode::PresentationUnavailable) {
@@ -587,6 +604,12 @@ int main(int argc, char** argv) {
     // Normal owner-thread lifecycle: the target is already retired, so destroying it on the owner
     // releases its Vulkan resources before Qt destroys the surface, and the instance goes last.
     targetResult.target.reset();
+    const auto owned = presentationBudget.snapshot();
+    if (owned.ownedPresentationImages != 0 || owned.ownedPresentationBuffers != 0 ||
+        owned.totalDeviceClaimBytes != 0 || owned.totalHostClaimBytes != 0) {
+        std::cerr << "FAIL: retired Wayland presentation backing remained charged\n";
+        std::_Exit(1);
+    }
     window->hide();
     delete window;
     instance.destroy();

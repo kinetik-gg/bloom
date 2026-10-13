@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -201,6 +202,13 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollPathCoverage() {
         return GpuSceneExecutorPollResult::Failure;
     }
 
+    const auto coverageReady = std::chrono::steady_clock::now();
+    const auto coverageElapsed =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(coverageReady - nativeStart).count();
+    auto& fenceTime = counters.processingFenceObservationNanoseconds;
+    if (coverageElapsed > 0)
+        fenceTime += std::min(static_cast<std::uint64_t>(coverageElapsed),
+                              std::numeric_limits<std::uint64_t>::max() - fenceTime);
     // Ready: the producer's mask is resident. A cancellation discards it without a fill.
     if (cancelRequested) {
         nativeInFlight = false;
@@ -223,6 +231,7 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollPathCoverage() {
     }
     const render::GpuSolidParameters parameters{step.solidPixel, *step.solidDataWindow,
                                                 *step.solidDisplayWindow, step.solidPixelAspect};
+    const auto submitStarted = std::chrono::steady_clock::now();
     const auto native = solid->beginCoveredResident(parameters, *pathCoverage, step.coveredOpacity,
                                                     remainingBudget());
     if (native.code != render::GpuSolidDiagnosticCode::None) {
@@ -232,6 +241,12 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollPathCoverage() {
     ++counters.coveredSolidDispatches;
     nativeKind = NativeKind::Solid;
     nativeStart = std::chrono::steady_clock::now();
+    const auto submitElapsed =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(nativeStart - submitStarted).count();
+    auto& submitTime = counters.processingSubmitNanoseconds;
+    if (submitElapsed > 0)
+        submitTime += std::min(static_cast<std::uint64_t>(submitElapsed),
+                               std::numeric_limits<std::uint64_t>::max() - submitTime);
     timeoutRequested = false;
     cancelIssued = false;
     return GpuSceneExecutorPollResult::Pending;

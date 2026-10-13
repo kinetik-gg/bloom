@@ -406,6 +406,10 @@ struct GpuSceneExecutor::Impl final {
     std::uint64_t deviceEpoch = 0;
     GpuSceneCache* cache = nullptr;
     GpuSceneExecutorBudgets budgets;
+    std::unique_ptr<render::GpuQueueTiming> queueTiming;
+    render::GpuQueueTimingSample queueTimingSample;
+    bool queueTimingAttempted = false;
+    bool queueTimingStarted = false;
 
     // Declared BEFORE the pipelines so that on destruction the pipelines (which drain/quarantine
     // the in-flight submission) are destroyed before the scene/input pins are released.

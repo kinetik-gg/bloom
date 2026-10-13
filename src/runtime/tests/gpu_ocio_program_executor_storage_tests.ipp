@@ -19,7 +19,7 @@ void testRootedLutLifetime(Expectations& expectations, const GpuDeviceCreationOp
     const auto& bytes = prepared.command->artifact().spirv;
     std::vector<std::uint32_t> words(bytes.size() / sizeof(std::uint32_t));
     std::memcpy(words.data(), bytes.data(), bytes.size());
-    bloom::render::GpuProcessingPhaseBudget budget;
+    bloom::render::GpuProcessingPhaseBudget budget(1);
     budget.setHostCapacity(kBudget, true);
     budget.setDeviceCapacity(kBudget, true);
     auto madeDevice = GpuDevice::create(options);
@@ -45,6 +45,11 @@ void testRootedLutLifetime(Expectations& expectations, const GpuDeviceCreationOp
                                 prepared.command->program().textures.size() &&
                             provisional.ownedNativeImageBytes > 0,
                         "each actual retained LUT carries one unique native token");
+    expectations.expect(
+        provisional.ownedNativeBuffers >= 1 && provisional.ownedNativeBufferBytes > 0 &&
+            provisional.ownedNativeImageBytes + provisional.ownedNativeBufferBytes ==
+                made.program->retainedAllocationBytes(),
+        "retained LUT/UBO/status allocations are covered by exact backing tokens");
     auto retained = std::shared_ptr<bloom::render::GpuOcioProgram>(std::move(made.program));
     expectations.expect(retained->publishSampledStorage(),
                         "actual retained LUT publication succeeds");
@@ -54,7 +59,10 @@ void testRootedLutLifetime(Expectations& expectations, const GpuDeviceCreationOp
     const auto published = budget.snapshot();
     expectations.expect(weak.expired() && published.admittedPhases == 0 &&
                             published.ownedNativeImageBytes == provisional.ownedNativeImageBytes &&
-                            published.totalDeviceClaimBytes == published.ownedNativeImageBytes,
+                            published.ownedNativeBufferBytes ==
+                                provisional.ownedNativeBufferBytes &&
+                            published.totalDeviceClaimBytes ==
+                                published.ownedNativeImageBytes + published.ownedNativeBufferBytes,
                         "published LUT ownership outlives its phase without pinning it");
     std::vector<std::shared_ptr<bloom::render::GpuOcioProgram>> aliases(256, retained);
     retained.reset();
@@ -71,13 +79,18 @@ void testRootedLutLifetime(Expectations& expectations, const GpuDeviceCreationOp
         device.ocioProgramRetirementStats().pendingPrograms == 1 &&
             budget.snapshot().ownedNativeImageBytes == published.ownedNativeImageBytes &&
             budget.snapshot().ownedNonlocalNativeHostBytes ==
-                published.ownedNonlocalNativeHostBytes,
+                published.ownedNonlocalNativeHostBytes &&
+            budget.snapshot().ownedNativeBufferBytes == published.ownedNativeBufferBytes &&
+            budget.snapshot().ownedNonlocalNativeBufferHostBytes ==
+                published.ownedNonlocalNativeBufferHostBytes,
         "foreign final release retains LUT/device/overlapping-host claims until native drain");
     device.reclaimReleasedImages();
     expectations.expect(device.ocioProgramRetirementStats().registeredPrograms == 0 &&
                             budget.snapshot().ownedNativeImages == 0 &&
                             budget.snapshot().ownedNativeImageBytes == 0 &&
                             budget.snapshot().ownedNonlocalNativeHostBytes == 0 &&
+                            budget.snapshot().ownedNativeBuffers == 0 &&
+                            budget.snapshot().ownedNativeBufferBytes == 0 &&
                             budget.snapshot().totalHostClaimBytes == 0 &&
                             budget.snapshot().totalDeviceClaimBytes == 0,
                         "actual owner LUT destruction releases all alias-backed claims");
@@ -87,13 +100,14 @@ void testRootedLutLifetime(Expectations& expectations, const GpuDeviceCreationOp
     // The actual runtime program cache must promote LUTs, independently of direct aliases.
     {
         auto cacheUploader = GpuImageUpload::create(device);
-        auto cacheInput = cacheUploader ? uploadImage(*cacheUploader.upload, geometry.width,
-                                                       geometry.height,
-                                                       fixturePixels(geometry.width, geometry.height))
-                                         : nullptr;
+        auto cacheInput = cacheUploader
+                              ? uploadImage(*cacheUploader.upload, geometry.width, geometry.height,
+                                            fixturePixels(geometry.width, geometry.height))
+                              : nullptr;
         phase = budget.reserve({.deviceWorkingBytes = envelope});
         auto executor = GpuOcioProgramExecutor::create(device);
-        if (!cacheInput || !phase.lease || !device.retainProcessingPhase(phase.lease) || !executor) {
+        if (!cacheInput || !phase.lease || !device.retainProcessingPhase(phase.lease) ||
+            !executor) {
             expectations.expect(false, "actual textured runtime cache prerequisites are ready");
             return;
         }
@@ -110,12 +124,13 @@ void testRootedLutLifetime(Expectations& expectations, const GpuDeviceCreationOp
             rejected = executor.executor->begin(prepared.command, cacheInput, {}, kBudget);
         }
         const auto rolledBack = executor.executor->counters();
-        expectations.expect(rejected.code == GpuOcioExecutorDiagnosticCode::DeviceUnavailable &&
-                                rolledBack.cacheEntries == 0 && rolledBack.cacheBytes == 0 &&
-                                rolledBack.programCreations == 0 &&
-                                budget.snapshot().ownedNativeImages == 0 &&
-                                budget.snapshot().admissionRevision == cacheRevision,
-                            "post-emplace publication rejection rolls back actual LUT cache ownership");
+        expectations.expect(
+            rejected.code == GpuOcioExecutorDiagnosticCode::DeviceUnavailable &&
+                rolledBack.cacheEntries == 0 && rolledBack.cacheBytes == 0 &&
+                rolledBack.programCreations == 0 && budget.snapshot().ownedNativeImages == 0 &&
+                budget.snapshot().ownedNativeBuffers == 0 &&
+                budget.snapshot().admissionRevision == cacheRevision,
+            "post-emplace publication rejection rolls back actual LUT cache ownership");
         const auto runCached = [&] {
             const auto begun = executor.executor->begin(prepared.command, cacheInput, {}, kBudget);
             if (begun.code != GpuOcioExecutorDiagnosticCode::None)
@@ -134,11 +149,14 @@ void testRootedLutLifetime(Expectations& expectations, const GpuDeviceCreationOp
         const std::weak_ptr<bloom::render::GpuProcessingPhaseLease> cacheOrigin = phase.lease;
         device.retireProcessingPhase(phase.lease->id(), true);
         phase.lease.reset();
-        expectations.expect(cacheOrigin.expired() && budget.snapshot().admittedPhases == 0 &&
-                                cold.ownedNativeImages == prepared.command->program().textures.size() &&
-                                cold.ownedNativeImageBytes > 0 &&
-                                budget.snapshot().ownedNativeImageBytes == cold.ownedNativeImageBytes,
-                            "runtime cache publication detaches the exact original phase");
+        expectations.expect(
+            cacheOrigin.expired() && budget.snapshot().admittedPhases == 0 &&
+                cold.ownedNativeImages == prepared.command->program().textures.size() &&
+                cold.ownedNativeImageBytes > 0 &&
+                budget.snapshot().ownedNativeImageBytes == cold.ownedNativeImageBytes &&
+                budget.snapshot().ownedNativeBufferBytes == cold.ownedNativeBufferBytes &&
+                cold.ownedNativeBuffers >= 1,
+            "runtime cache publication detaches the exact original phase");
         phase = budget.reserve({.deviceWorkingBytes = envelope});
         if (!phase.lease || !device.retainProcessingPhase(phase.lease)) {
             expectations.expect(false, "same-root new phase admits actual warm LUT cache use");
@@ -149,7 +167,12 @@ void testRootedLutLifetime(Expectations& expectations, const GpuDeviceCreationOp
         const auto warmCounters = executor.executor->counters();
         expectations.expect(warm.ownedNativeImages == cold.ownedNativeImages &&
                                 warm.ownedNativeImageBytes == cold.ownedNativeImageBytes &&
-                                warm.ownedNonlocalNativeHostBytes == cold.ownedNonlocalNativeHostBytes &&
+                                warm.ownedNonlocalNativeHostBytes ==
+                                    cold.ownedNonlocalNativeHostBytes &&
+                                warm.ownedNativeBuffers == cold.ownedNativeBuffers &&
+                                warm.ownedNativeBufferBytes == cold.ownedNativeBufferBytes &&
+                                warm.ownedNonlocalNativeBufferHostBytes ==
+                                    cold.ownedNonlocalNativeBufferHostBytes &&
                                 warmCounters.programCreations == coldCounters.programCreations &&
                                 warmCounters.programReuses == coldCounters.programReuses + 1,
                             "warm runtime LUT cache adds no program or retained native claim");
@@ -158,6 +181,7 @@ void testRootedLutLifetime(Expectations& expectations, const GpuDeviceCreationOp
         phase.lease.reset();
         expectations.expect(budget.snapshot().ownedNativeImageBytes == 0 &&
                                 budget.snapshot().ownedNativeImages == 0 &&
+                                budget.snapshot().ownedNativeBuffers == 0 &&
                                 budget.snapshot().totalHostClaimBytes == 0 &&
                                 budget.snapshot().totalDeviceClaimBytes == 0,
                             "actual runtime LUT cache destruction returns all claims once");
@@ -194,6 +218,8 @@ void testRootedLutLifetime(Expectations& expectations, const GpuDeviceCreationOp
     const auto unknownClaims = budget.snapshot();
     expectations.expect(unknownClaims.ownedNativeImageBytes > published.ownedNativeImageBytes,
                         "actual submitted output and LUT backing both remain charged");
+    expectations.expect(unknownClaims.ownedNativeBufferBytes > published.ownedNativeBufferBytes,
+                        "actual submitted packed backing and retained status remain charged");
     std::thread unknownForeign([held = std::move(made.program)]() mutable { held.reset(); });
     unknownForeign.join();
     expectations.expect(
@@ -201,6 +227,7 @@ void testRootedLutLifetime(Expectations& expectations, const GpuDeviceCreationOp
             budget.snapshot().ownedNativeImageBytes == unknownClaims.ownedNativeImageBytes &&
             budget.snapshot().ownedNonlocalNativeHostBytes ==
                 unknownClaims.ownedNonlocalNativeHostBytes &&
+            budget.snapshot().ownedNativeBufferBytes == unknownClaims.ownedNativeBufferBytes &&
             budget.snapshot().unprovenPhases == 1,
         "submitted-unknown foreign handoff retains actual new tokens and sticky phase");
     bloom::render::ocio_program_detail::setJobFenceUnknownForTest(false);
@@ -212,7 +239,8 @@ void testRootedLutLifetime(Expectations& expectations, const GpuDeviceCreationOp
     expectations.expect(
         device.ocioProgramRetirementStats().registeredPrograms == 0 &&
             budget.snapshot().ownedNativeImageBytes == 0 &&
-            budget.snapshot().ownedNativeImages == 0 && budget.snapshot().unprovenPhases == 1,
+            budget.snapshot().ownedNativeBuffers == 0 && budget.snapshot().ownedNativeImages == 0 &&
+            budget.snapshot().unprovenPhases == 1,
         "actual owner fence/backing destruction removes tokens but preserves sticky authority");
     phase.lease.reset();
     input.reset();

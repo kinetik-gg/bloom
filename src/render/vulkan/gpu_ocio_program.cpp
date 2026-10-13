@@ -182,7 +182,9 @@ bool GpuOcioProgram::Impl::createOcioResources() {
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
                 true, uniformBuffer) ||
             uniformBuffer.info.pMappedData == nullptr) {
-            createDiagnostic = makeDiagnostic(GpuOcioProgramDiagnosticCode::AllocationFailed,
+            createDiagnostic = makeDiagnostic(control->bufferStorageRefusal
+                                                  ? GpuOcioProgramDiagnosticCode::OverBudget
+                                                  : GpuOcioProgramDiagnosticCode::AllocationFailed,
                                               "the OCIO uniform buffer could not be created");
             return false;
         }
@@ -203,7 +205,9 @@ bool GpuOcioProgram::Impl::createOcioResources() {
         return false;
     }
     if (!createStatusBuffer(*control, status)) {
-        createDiagnostic = makeDiagnostic(GpuOcioProgramDiagnosticCode::AllocationFailed,
+        createDiagnostic = makeDiagnostic(control->bufferStorageRefusal
+                                              ? GpuOcioProgramDiagnosticCode::OverBudget
+                                              : GpuOcioProgramDiagnosticCode::AllocationFailed,
                                           "the status buffer could not be created");
         return false;
     }

@@ -49,6 +49,7 @@ struct GpuSolidUploadBuffer final {
         if (this != &other) {
             release();
             state = other.state;
+            storageToken = std::move(other.storageToken);
             buffer = other.buffer;
             allocation = other.allocation;
             bytes = other.bytes;
@@ -67,7 +68,10 @@ struct GpuSolidUploadBuffer final {
     void release() noexcept {
         if (armed && state != nullptr) {
             vmaDestroyBuffer(state->allocator, buffer, allocation);
+            if (storageToken.bytes() != 0 && state->nativeBufferBackingsDestroyed != UINT64_MAX)
+                ++state->nativeBufferBackingsDestroyed;
         }
+        storageToken = {};
         state = nullptr;
         buffer = VK_NULL_HANDLE;
         allocation = VK_NULL_HANDLE;
@@ -77,6 +81,7 @@ struct GpuSolidUploadBuffer final {
     }
 
     vulkan_detail::DeviceAllocatorState* state = nullptr;
+    NativeBufferStorageToken storageToken;
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
     std::uint64_t bytes = 0;

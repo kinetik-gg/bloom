@@ -113,6 +113,16 @@ struct GpuSceneMediaStatistics final {
     std::uint64_t uploadCacheHits = 0;
     std::uint64_t uploadCacheMisses = 0;
     std::uint64_t uploadKeyConstructions = 0;
+    std::uint64_t sourceRevisionCacheHits = 0;
+    std::uint64_t sourceRevisionCaptures = 0;
+    std::uint64_t sourceRevisionBytesHashed = 0;
+    std::uint64_t sourceBytesRead = 0;
+    std::uint64_t sourceIoNanoseconds = 0;
+    std::uint64_t sourceHashNanoseconds = 0;
+    std::uint64_t sourceProbeNanoseconds = 0;
+    // Actual image decoder call, including image construction/input processing when requested;
+    // excludes source capture/hash/probe, cache lookup and proxy rebasing.
+    std::uint64_t imageDecodeNanoseconds = 0;
     friend bool operator==(const GpuSceneMediaStatistics&,
                            const GpuSceneMediaStatistics&) = default;
 };

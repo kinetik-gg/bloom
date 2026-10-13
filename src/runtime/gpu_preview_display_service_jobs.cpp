@@ -265,6 +265,18 @@ void runGpuStartupImpl(const std::shared_ptr<PreviewDisplayServiceCore>& core, T
     }
     core->device = std::move(created.device);
     if (core->options.processingPhasePolicy &&
+        !core->device->bindProcessingRoot(core->options.processingPhasePolicy->rootIdentity())) {
+        core->publishState(GpuPreviewDisplayServiceState::Unavailable, false,
+                           {GpuPreviewDisplayServiceDiagnosticCode::AdmissionUnavailable,
+                            "The native device could not bind its shared processing root."},
+                           nullptr);
+        static_cast<void>(std::move(completion)
+                              .fail(previewDiagnostic(
+                                  "preview.processing-root-binding-failed",
+                                  "The native device could not bind its shared processing root.")));
+        return;
+    }
+    if (core->options.processingPhasePolicy &&
         !core->options.processingPhasePolicy->reportDevice(
             core->device->ownershipEpoch(), core->device->availableAllocationBudget())) {
         core->publishState(GpuPreviewDisplayServiceState::Unavailable, false,

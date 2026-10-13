@@ -139,6 +139,11 @@ bool GpuOcioProgram::publishSampledStorage() noexcept {
         (current ? current->rootIdentity() : GpuProcessingRootIdentity{}) != impl_->creationRoot) {
         return false;
     }
+    // Validate the whole retained buffer set before transferring any member out of the phase.
+    for (const auto* buffer : {&impl_->uniformBuffer, &impl_->status}) {
+        if (buffer->storageToken.bytes() != 0 && !buffer->storageToken.canPromote())
+            return false;
+    }
     std::uint32_t promoted = 0;
     for (auto& texture : impl_->textures) {
         if (promoted >=
@@ -148,6 +153,19 @@ bool GpuOcioProgram::publishSampledStorage() noexcept {
         if (texture.storage.bytes() != 0 && !texture.storage.promote()) {
             return false;
         }
+        ++promoted;
+    }
+    // The retained descriptor set owns these buffers for the same cache lifetime as its LUTs.
+    // Failed partial publication remains internal: the destructor folds the proved destroyed
+    // prefix into the exact creating phase, including already-promoted buffers.
+    for (auto* buffer : {&impl_->uniformBuffer, &impl_->status}) {
+        if (buffer->buffer == VK_NULL_HANDLE)
+            continue;
+        if (promoted >=
+            ocio_program_detail::ocioFaultPublicationAfter().load(std::memory_order_acquire))
+            return false;
+        if (buffer->storageToken.bytes() != 0 && !buffer->storageToken.promote())
+            return false;
         ++promoted;
     }
     impl_->sampledPublished = true;
@@ -316,10 +334,20 @@ std::shared_ptr<GpuImage> GpuOcioProgram::takeEffectOutput() noexcept {
 }
 
 GpuDisplayImage GpuOcioProgram::takeDisplayOutput() noexcept {
-    if (impl_ == nullptr || impl_->jobState != GpuOcioProgramJobState::Ready ||
-        impl_->displayOutput == nullptr) {
+    if (impl_ == nullptr || !impl_->onOwnerThread() ||
+        impl_->jobState != GpuOcioProgramJobState::Ready || impl_->displayOutput == nullptr) {
         return {};
     }
+    const auto& current = impl_->control->processingPhase;
+    if (impl_->control->processingPhaseUnproven || (current && current->isUnproven()) ||
+        (current ? current->rootIdentity() : GpuProcessingRootIdentity{}) != impl_->creationRoot)
+        return {};
+    // The packed intermediate survives in the retained program for same-size reuse. Only actual
+    // fence-ready output publication transfers it out of this job's phase; an unknown/pending
+    // submission keeps its provisional lease through the existing owner quarantine.
+    if (impl_->sampledPublished && impl_->packed.storageToken.bytes() != 0 &&
+        (!impl_->packed.storageToken.canPromote() || !impl_->packed.storageToken.promote()))
+        return {};
     GpuDisplayImage output = std::move(*impl_->displayOutput);
     impl_->displayOutput.reset();
     impl_->inputRetained.reset();

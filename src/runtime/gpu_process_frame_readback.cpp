@@ -60,6 +60,7 @@ FinalReadbackOutcome runFinalCombinedReadback(
     }
 
     nativeRetirementProven = false; // begin can synchronously upload/quarantine an OCIO LUT
+    const auto transferStarted = std::chrono::steady_clock::now();
     const auto accepted =
         stage.begin(std::move(outputCommand), std::move(image), readbackByteBudget, phase);
     if (accepted.code != GpuOutputColorDiagnosticCode::None) {
@@ -125,6 +126,10 @@ FinalReadbackOutcome runFinalCombinedReadback(
         return outcome;
     }
 
+    const auto publicationStarted = std::chrono::steady_clock::now();
+    outcome.transferNanoseconds = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(publicationStarted - transferStarted)
+            .count());
     auto imageBuilder = phase ? render::Rgba32fImageBuilder::create(
                                     descriptor, static_cast<std::size_t>(readbackByteBudget), phase)
                               : render::Rgba32fImageBuilder::create(
@@ -161,6 +166,10 @@ FinalReadbackOutcome runFinalCombinedReadback(
     }
     outcome.processImage = std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
 
+    outcome.hostPublicationNanoseconds =
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                       std::chrono::steady_clock::now() - publicationStarted)
+                                       .count());
     outcome.status = GpuProcessFrameStatus::Evaluated;
     outcome.encodedArm = colorFrame->arm;
     outcome.encodedEffectRgba32f = std::move(colorFrame->effectRgba32f);

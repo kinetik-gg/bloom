@@ -128,8 +128,8 @@ void testGpuServiceSeamAdmitsBoth(Expectations& expectations) {
     expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
                             ram.cachedFrameCount() == 3 && ram.totalFrameCount() == 3,
                         "the real service seam caches the whole range on the CPU path");
-    expectations.expect(calls->load() >= 1 && ram.peakInFlightFrames() <= 2,
-                        "the service admitted the submitted frames without breaking the bound");
+    expectations.expect(calls->load() >= 1 && ram.peakInFlightFrames() == 1,
+                        "the production service default prepares one frame at a time");
     expectations.expect(preparations->load() == 3,
                         "missing-loader route reached every actual CPU stage");
     for (std::int64_t time = 0; time < 3; ++time) {
@@ -239,7 +239,8 @@ void testGpuServiceEnabledOverlapsStages(Expectations& expectations,
                               const std::vector<runtime::SnapshotParameterOverride>& overrides) {
                 calls->fetch_add(1);
                 return service.submit(std::move(request), snapshot, identity, limit, overrides);
-            });
+            },
+            ui::RamPreviewPipeline::kMaxInFlight);
         ram.start();
         // The barrier is a hard rendezvous: a passing completion is itself the overlap proof.
         expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&

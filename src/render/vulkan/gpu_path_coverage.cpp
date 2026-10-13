@@ -1,3 +1,4 @@
+#include "gpu_native_buffer_allocation_private.hpp"
 #include "gpu_path_coverage_private.hpp"
 
 #include <algorithm>
@@ -67,8 +68,12 @@ std::atomic<std::uint64_t> g_nativeDispatchCount{0};
 
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
-    if (vmaCreateBuffer(state.allocator, &bufferInfo, &allocationInfo, &buffer, &allocation,
-                        nullptr) != VK_SUCCESS) {
+    VmaAllocationInfo actual{};
+    NativeBufferStorageToken token;
+    if (vulkan_detail::allocateCoveredBuffer(
+            state, bufferInfo, allocationInfo, std::numeric_limits<std::uint64_t>::max(), buffer,
+            allocation, actual, token, vulkan_detail::NativeBufferPurpose::Processing) !=
+        vulkan_detail::NativeBufferAllocationOutcome::Allocated) {
         return false;
     }
     out.state = &state;
@@ -76,6 +81,7 @@ std::atomic<std::uint64_t> g_nativeDispatchCount{0};
     out.allocation = allocation;
     out.bytes = bytes;
     out.armed = true;
+    out.storageToken = std::move(token);
     return true;
 }
 
@@ -84,7 +90,8 @@ std::atomic<std::uint64_t> g_nativeDispatchCount{0};
 [[nodiscard]] std::shared_ptr<GpuPathCoverageMaskOwner>
 createMaskBuffer(const std::shared_ptr<DeviceAllocatorState>& state, const std::uint64_t bytes,
                  const std::uint32_t width, const std::uint32_t height) {
-    auto owner = std::make_shared<GpuPathCoverageMaskOwner>();
+    auto owner = std::shared_ptr<GpuPathCoverageMaskOwner>(new GpuPathCoverageMaskOwner(),
+                                                           path_coverage_detail::retireMaskOwner);
     GpuPathCoverageHostBuffer buffer;
     if (!createHostStorageBuffer(*state, bytes, true, buffer)) {
         return nullptr;
@@ -96,6 +103,7 @@ createMaskBuffer(const std::shared_ptr<DeviceAllocatorState>& state, const std::
     owner->width = width;
     owner->height = height;
     owner->generation = state->generation;
+    owner->storageToken = std::move(buffer.storageToken);
     buffer.armed = false;
     return owner;
 }

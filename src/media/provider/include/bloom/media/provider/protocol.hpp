@@ -3,7 +3,7 @@
 #include <bloom/media/provider/registry.hpp>
 
 namespace bloom::media::provider {
-inline constexpr std::uint16_t kProtocolVersion = 1, kSchemaVersion = 3;
+inline constexpr std::uint16_t kProtocolVersion = 1, kSchemaVersion = 4;
 inline constexpr std::uint32_t kEnvelopeBytes = 25;
 enum class MessageKind : std::uint8_t {
     Handshake = 1,
@@ -36,6 +36,9 @@ struct CallRequest {
     std::uint64_t frame = 0;
     std::uint32_t stream = 0, samples = 1024;
     Digest sourceDigest{};
+    // Nonzero only for a host-owned descriptor capability. A wire value by itself cannot grant
+    // this authority: the worker also requires the anonymous read-only inherited source handle.
+    std::uint64_t snapshotBytes = 0;
 };
 using Payload = std::variant<Handshake, CallRequest, ProbeResult, FrameProduct, DemuxIndex,
                              AudioBlock, EncodeSettingsV1, EncodedChunkV1, EncodeQcV1,

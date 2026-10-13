@@ -6,7 +6,7 @@
 
 namespace bloom::render::vulkan_detail {
 
-enum class NativeBufferPurpose { Output, Upload, Processing };
+enum class NativeBufferPurpose { Output, Upload, Processing, Presentation };
 
 enum class NativeBufferAllocationOutcome { Allocated, TransferBudgetRefused, PhaseRefused, Failed };
 
@@ -20,14 +20,17 @@ allocateCoveredBuffer(DeviceAllocatorState& state, const VkBufferCreateInfo& buf
                       NativeBufferStorageToken& token,
                       NativeBufferPurpose purpose = NativeBufferPurpose::Output) noexcept {
     state.bufferStorageRefusal.reset();
-    if (!state.processingPhase) {
+    const bool presentation = purpose == NativeBufferPurpose::Presentation;
+    if (presentation)
+        state.presentationStorageRefusal.reset();
+    if (presentation ? !state.processingRoot : !state.processingPhase) {
         // Explicit rootless compatibility preserves the original allocator route.
         return vmaCreateBuffer(state.allocator, &bufferInfo, &original, &buffer, &allocation,
                                &allocationInfo) == VK_SUCCESS
                    ? NativeBufferAllocationOutcome::Allocated
                    : NativeBufferAllocationOutcome::Failed;
     }
-    if (state.processingPhaseUnproven || state.processingPhase->isUnproven())
+    if (!presentation && (state.processingPhaseUnproven || state.processingPhase->isUnproven()))
         return NativeBufferAllocationOutcome::Failed;
     const auto* dispatch = state.device.getDispatcher();
     const VkDevice device = static_cast<VkDevice>(*state.device);
@@ -85,7 +88,9 @@ allocateCoveredBuffer(DeviceAllocatorState& state, const VkBufferCreateInfo& buf
             state.presentationEpoch, selected, heap,
             (memory->memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0};
         auto grant =
-            purpose == NativeBufferPurpose::Processing
+            presentation ? NativeBufferStorageToken::reservePresentation(
+                               state.processingRoot, requirements.memoryRequirements.size, identity)
+            : purpose == NativeBufferPurpose::Processing
                 ? NativeBufferStorageToken::reserveProcessing(
                       state.processingPhase, requirements.memoryRequirements.size, identity)
             : purpose == NativeBufferPurpose::Upload
@@ -97,8 +102,12 @@ allocateCoveredBuffer(DeviceAllocatorState& state, const VkBufferCreateInfo& buf
             if (grant.status == GpuProcessingPhaseAdmission::BudgetRefused ||
                 grant.status == GpuProcessingPhaseAdmission::AwaitingCapacity)
                 state.bufferStorageRefusal = {grant.status, grant.domain,
-                                              state.processingPhase->id(),
+                                              presentation ? 0 : state.processingPhase->id(),
                                               grant.revisionAfterOwnRelease};
+            if (presentation && (grant.status == GpuProcessingPhaseAdmission::BudgetRefused ||
+                                 grant.status == GpuProcessingPhaseAdmission::AwaitingCapacity))
+                state.presentationStorageRefusal = {grant.status, grant.domain,
+                                                    grant.revisionAfterOwnRelease, false};
             continue;
         }
         token = std::move(*grant.token);
@@ -114,6 +123,8 @@ allocateCoveredBuffer(DeviceAllocatorState& state, const VkBufferCreateInfo& buf
             destroyUnbound();
             token = {};
             state.bufferStorageRefusal.reset();
+            if (presentation)
+                state.presentationStorageRefusal.reset();
             return NativeBufferAllocationOutcome::Failed;
         }
         attempted = true;
@@ -141,13 +152,21 @@ allocateCoveredBuffer(DeviceAllocatorState& state, const VkBufferCreateInfo& buf
             allocation = VK_NULL_HANDLE;
             token = {};
             state.bufferStorageRefusal.reset();
+            if (presentation)
+                state.presentationStorageRefusal.reset();
             return NativeBufferAllocationOutcome::Failed;
         }
         state.bufferStorageRefusal.reset();
+        if (presentation)
+            state.presentationStorageRefusal.reset();
+        if (presentation)
+            static_cast<void>(token.promote());
         return NativeBufferAllocationOutcome::Allocated;
     }
     if (attempted)
         state.bufferStorageRefusal.reset();
+    if (presentation && attempted)
+        state.presentationStorageRefusal.reset();
     destroyUnbound();
     return state.bufferStorageRefusal ? NativeBufferAllocationOutcome::PhaseRefused
                                       : NativeBufferAllocationOutcome::Failed;

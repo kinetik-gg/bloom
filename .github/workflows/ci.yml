@@ -8,6 +8,23 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      linux_only:
+        description: Limit this manual CI run to Linux qualification
+        type: boolean
+        default: false
+      focused_gpu_gate:
+        description: Run focused cross-platform CPU fallback and optional native gates only
+        type: boolean
+        default: false
+      run_native:
+        description: Require bounded native execution on the selected GPU runner
+        type: boolean
+        default: false
+      native_runner_labels:
+        description: JSON runner labels used only by the focused native gate
+        type: string
+        default: '["ubuntu-24.04"]'
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
@@ -18,6 +35,7 @@ permissions:
 
 jobs:
   linux:
+    if: github.event_name != 'workflow_dispatch' || !inputs.focused_gpu_gate
     name: Linux Clang quality
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -140,6 +158,7 @@ jobs:
           "${{ runner.temp }}/bloom-consume/bloom_consume_smoke"
 
   linux-desktop:
+    if: github.event_name != 'workflow_dispatch' || !inputs.focused_gpu_gate
     name: Linux Qt desktop
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -284,6 +303,7 @@ jobs:
   # the VideoToolbox/AVFoundation media worker), so this job builds and tests them off the Qt shell.
   # Non-required: Linux remains the automated merge gate.
   macos-native:
+    if: github.event_name != 'workflow_dispatch' || (!inputs.focused_gpu_gate && !inputs.linux_only)
     name: macOS Clang quality
     runs-on: macos-latest
     timeout-minutes: 60
@@ -296,7 +316,7 @@ jobs:
       # ships from a recent Xcode; select the newest installed toolchain.
       - name: Select newest Xcode
         run: |
-          newest=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1 || true)
+          newest=$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print | sort -V | tail -1)
           if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
           xcodebuild -version || clang++ --version | head -1
 
@@ -322,6 +342,7 @@ jobs:
   # macOS desktop build: the Qt shell, the bundled media worker, and macdeployqt packaging.
   # Non-required for the same reason as macos-native.
   macos-desktop:
+    if: github.event_name != 'workflow_dispatch' || (!inputs.focused_gpu_gate && !inputs.linux_only)
     name: macOS Qt desktop
     runs-on: macos-latest
     timeout-minutes: 90
@@ -332,7 +353,7 @@ jobs:
 
       - name: Select newest Xcode
         run: |
-          newest=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1 || true)
+          newest=$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print | sort -V | tail -1)
           if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
           xcodebuild -version || clang++ --version | head -1
 
@@ -384,4 +405,11 @@ jobs:
 
       - name: Package Bloom.app with macdeployqt
         run: cmake --build build/macos-desktop --target bloom-deploy-macos
+
+  focused-gpu:
+    if: github.event_name == 'workflow_dispatch' && inputs.focused_gpu_gate
+    uses: ./.github/workflows/gpu-qualification.yml
+    with:
+      run_native: ${{ inputs.run_native }}
+      native_runner_labels: ${{ inputs.native_runner_labels }}
 

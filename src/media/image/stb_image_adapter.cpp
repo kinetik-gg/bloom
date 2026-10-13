@@ -1,5 +1,6 @@
 #include "stb_image_adapter.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -87,6 +88,37 @@ void skipStream(void* user, int count) {
 }
 int streamEof(void* user) { return static_cast<std::ifstream*>(user)->eof() ? 1 : 0; }
 const stbi_io_callbacks kFileCallbacks{readStream, skipStream, streamEof};
+struct ByteStream {
+    std::span<const std::byte> bytes;
+    std::size_t position = 0;
+};
+int readBytes(void* user, char* data, const int size) {
+    auto& stream = *static_cast<ByteStream*>(user);
+    if (size <= 0)
+        return 0;
+    const auto count =
+        std::min(static_cast<std::size_t>(size), stream.bytes.size() - stream.position);
+    if (count == 0)
+        return 0;
+    std::memcpy(data, stream.bytes.data() + stream.position, count);
+    stream.position += count;
+    return static_cast<int>(count);
+}
+void skipBytes(void* user, const int count) {
+    auto& stream = *static_cast<ByteStream*>(user);
+    if (count < 0) {
+        const auto distance = static_cast<std::uint64_t>(-static_cast<std::int64_t>(count));
+        stream.position -= std::min<std::uint64_t>(stream.position, distance);
+    } else {
+        stream.position +=
+            std::min(static_cast<std::size_t>(count), stream.bytes.size() - stream.position);
+    }
+}
+int bytesEof(void* user) {
+    const auto& stream = *static_cast<ByteStream*>(user);
+    return stream.position == stream.bytes.size() ? 1 : 0;
+}
+const stbi_io_callbacks kByteCallbacks{readBytes, skipBytes, bytesEof};
 } // namespace
 
 namespace bloom::media::detail {
@@ -102,8 +134,18 @@ bool imageInfo(const std::filesystem::path& path, ImageInfo& info) {
     info.sixteenBit = stbi_is_16_bit_from_callbacks(&kFileCallbacks, &stream) != 0;
     return true;
 }
-std::vector<std::uint16_t> imageSamples(const std::filesystem::path& path, const ImageInfo& info,
-                                        const std::size_t pixelBudget) {
+bool imageInfo(const std::span<const std::byte> bytes, ImageInfo& info) {
+    ByteStream stream{bytes};
+    int channels = 0;
+    if (!stbi_info_from_callbacks(&kByteCallbacks, &stream, &info.width, &info.height, &channels))
+        return false;
+    stream.position = 0;
+    info.sixteenBit = stbi_is_16_bit_from_callbacks(&kByteCallbacks, &stream) != 0;
+    return true;
+}
+static std::vector<std::uint16_t> decodeSamples(const stbi_io_callbacks& callbacks, void* source,
+                                                const ImageInfo& info,
+                                                const std::size_t pixelBudget) {
     if (info.width <= 0 || info.height <= 0)
         return {};
     const auto pixels =
@@ -114,15 +156,11 @@ std::vector<std::uint16_t> imageSamples(const std::filesystem::path& path, const
     if (pixels > std::numeric_limits<std::uint64_t>::max() / kPeakBytesPerPixel ||
         pixels * kPeakBytesPerPixel > pixelBudget)
         return {};
-    std::ifstream stream(path, std::ios::binary);
-    if (!stream)
-        return {};
     const ImageAllocationBudgetScope budgetScope(pixelBudget);
     int width = 0;
     int height = 0;
     int channels = 0;
-    auto* decoded =
-        stbi_load_16_from_callbacks(&kFileCallbacks, &stream, &width, &height, &channels, 4);
+    auto* decoded = stbi_load_16_from_callbacks(&callbacks, source, &width, &height, &channels, 4);
     if (!decoded)
         return {};
     if (width != info.width || height != info.height) {
@@ -138,5 +176,17 @@ std::vector<std::uint16_t> imageSamples(const std::filesystem::path& path, const
         stbi_image_free(decoded);
         throw;
     }
+}
+std::vector<std::uint16_t> imageSamples(const std::filesystem::path& path, const ImageInfo& info,
+                                        const std::size_t pixelBudget) {
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream)
+        return {};
+    return decodeSamples(kFileCallbacks, &stream, info, pixelBudget);
+}
+std::vector<std::uint16_t> imageSamples(const std::span<const std::byte> bytes,
+                                        const ImageInfo& info, const std::size_t pixelBudget) {
+    ByteStream stream{bytes};
+    return decodeSamples(kByteCallbacks, &stream, info, pixelBudget);
 }
 } // namespace bloom::media::detail

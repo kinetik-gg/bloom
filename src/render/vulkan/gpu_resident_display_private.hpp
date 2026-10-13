@@ -75,14 +75,15 @@ struct ResidentBuffer final {
                                         std::uint64_t bytes, VkBufferUsageFlags usage,
                                         VmaAllocationCreateFlags flags, bool hostVisible,
                                         ResidentBuffer& out);
-// Transient resident-display jobs use allocation ownership. Cached OCIO buffers need a distinct
-// publication/lifetime adoption before they can retain these phase-bound tokens.
+// Resident-display jobs use the same processing ownership as OCIO. Cache owners explicitly
+// publish retained buffers after complete bookkeeping, while job-only buffers stay provisional.
 [[nodiscard]] bool createResidentDisplayBuffer(vulkan_detail::DeviceAllocatorState& state,
                                                std::uint64_t bytes, VkBufferUsageFlags usage,
                                                VmaAllocationCreateFlags flags, bool hostVisible,
                                                ResidentBuffer& out);
-void destroyResidentBuffer(vulkan_detail::DeviceAllocatorState& state,
-                           ResidentBuffer& buffer) noexcept;
+void destroyResidentBuffer(
+    vulkan_detail::DeviceAllocatorState& state, ResidentBuffer& buffer,
+    const std::shared_ptr<GpuProcessingPhaseLease>& failedOrigin = {}) noexcept;
 
 // Device-limit/format facts for the resident route: RGBA32F storage buffer reads, packed-output
 // buffer, RGBA8_UNORM output image, and the aggregate job bytes.

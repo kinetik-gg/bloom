@@ -14,6 +14,29 @@ struct PackedSourcePin final {
 };
 } // namespace
 
+void pollServiceQueueTimings(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
+    if (!core->queueTimingRequested())
+        return;
+    const auto graph = core->residentExecutor ? core->residentExecutor->pollQueueTiming()
+                                              : render::GpuQueueTimingSample{};
+    if (core->packedQueueTimingActive && core->packedQueueTiming)
+        core->packedQueueTimingSample = core->packedQueueTiming->poll();
+    const auto transfer = core->packedQueueTimingSample;
+    const auto now = std::chrono::steady_clock::now();
+    // This helper is owner-only. Published sample fields are read under stateMutex by clients.
+    const bool sampleMemory =
+        core->device && now - core->allocatorMemorySampledAt >= std::chrono::seconds(1);
+    const auto memory = sampleMemory ? core->device->allocatorMemorySnapshot()
+                                     : render::GpuAllocatorMemorySnapshot{};
+    const std::lock_guard lock(core->stateMutex);
+    if (sampleMemory) {
+        core->publishedAllocatorMemory = memory;
+        core->allocatorMemorySampledAt = now;
+    }
+    core->publishedGraphQueueTiming = graph;
+    core->publishedPackedQueueTiming = transfer;
+}
+
 bool residentPackedTransferBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                                  const std::shared_ptr<PreviewDisplayStageRecord>& stage,
                                  std::string& reason) noexcept {
@@ -53,11 +76,24 @@ bool residentPackedTransferBegin(const std::shared_ptr<PreviewDisplayServiceCore
             reason = "the previous transfer still owns its independent reservation";
             return false;
         }
+        if (core->queueTimingRequested()) {
+            pollServiceQueueTimings(core);
+            if (!core->packedQueueTiming)
+                core->packedQueueTiming = render::GpuQueueTiming::create(*core->device);
+            core->packedQueueTimingSample = {};
+            const auto started = core->packedQueueTiming ? core->packedQueueTiming->begin()
+                                                         : render::GpuQueueTimingStatus::Failed;
+            core->packedQueueTimingActive = started == render::GpuQueueTimingStatus::Active;
+            core->packedQueueTimingSample.status = started;
+        }
+        stage->packedTransferStartedAt = std::chrono::steady_clock::now();
         core->packedTransfer = std::make_unique<render::GpuDisplayTransfer>();
         if (!core->packedTransfer->begin(*core->device, std::move(source),
                                          std::min(allowance - metadata - sourceBytes,
                                                   core->options.packedTransferByteAllowance),
                                          stage->gpuStage->phaseLease())) {
+            if (core->packedQueueTimingActive && core->packedQueueTiming)
+                core->packedQueueTiming->cancel();
             reason = core->packedTransfer->diagnostic().message;
             return false;
         }
@@ -77,6 +113,8 @@ bool residentPackedTransferBegin(const std::shared_ptr<PreviewDisplayServiceCore
             std::memory_order_relaxed);
         return true;
     } catch (...) {
+        if (core->packedQueueTimingActive && core->packedQueueTiming)
+            core->packedQueueTiming->cancel();
         reason = "final GPU packed transfer allocation failed";
         return false;
     }
@@ -91,8 +129,22 @@ residentPackedTransferFinish(const std::shared_ptr<PreviewDisplayServiceCore>& c
     }
     auto result = core->packedTransfer->take();
     if (!result) {
+        if (core->packedQueueTimingActive && core->packedQueueTiming)
+            core->packedQueueTiming->cancel();
         reason = "final GPU packed transfer has no fence-proven output";
         return std::nullopt;
+    }
+    if (core->packedQueueTimingActive && core->packedQueueTiming)
+        core->packedQueueTiming->end();
+    pollServiceQueueTimings(core);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                             std::chrono::steady_clock::now() - stage.packedTransferStartedAt)
+                             .count();
+    if (elapsed > 0) {
+        const auto before = core->counterPackedTransferNanoseconds.load(std::memory_order_relaxed);
+        core->counterPackedTransferNanoseconds.store(
+            before + std::min(static_cast<std::uint64_t>(elapsed), UINT64_MAX - before),
+            std::memory_order_relaxed);
     }
     auto frame = makeGpuPreparedPackedPreview(*core->device, core->generation, *stage.gpuStage,
                                               core->residentQualification, std::move(*result),

@@ -385,6 +385,9 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                     }
                     hostPhase = std::move(grant.lease);
                     auto cpuEvaluation = evaluation;
+                    cpuEvaluation.mediaSourceRevisionPolicy =
+                        runtime::MediaSourceRevisionPolicy::Revalidate;
+                    cpuEvaluation.requireVerifiedMediaSources = true;
                     cpuEvaluation.pixelStorageByteLimit =
                         static_cast<std::size_t>(hostPhase->sourceByteLimit());
                     const runtime::CpuCompositionEvaluator evaluator;

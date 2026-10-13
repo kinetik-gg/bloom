@@ -119,7 +119,18 @@ struct GpuProcessFrameCounters final {
                            const GpuProcessFrameCounters&) = default;
 };
 
+// Per-request CPU steady-clock wall stages. Fence observations include queue execution and
+// polling delay, not shader-only device timestamps; they are distinct from host submission work.
+struct GpuProcessFrameStageTimes final {
+    GpuSceneMediaStatistics media;
+    render::GpuQueueTimingSample graphQueueTiming;
+    std::uint64_t uploadSubmitNanoseconds = 0, uploadFenceObservationNanoseconds = 0;
+    std::uint64_t processingSubmitNanoseconds = 0, processingFenceObservationNanoseconds = 0;
+    std::uint64_t finalTransferNanoseconds = 0, finalHostPublicationNanoseconds = 0;
+};
+
 struct GpuProcessFrameOutcome final {
+    GpuProcessFrameStageTimes stageTimes;
     GpuProcessFrameStatus status = GpuProcessFrameStatus::Failed;
     std::shared_ptr<const ProcessFrame> frame;
     GpuProcessFrameDiagnostic diagnostic;
@@ -180,6 +191,8 @@ struct GpuProcessFrameEvaluatorOptions final {
     // uses requestByteBudget as the producer image upper ceiling; actual work remains bounded by
     // the admitted phase, live-pin accounting and native resource limits. Metadata/structural
     // defaults remain bounded. An unrooted legacy evaluator retains the reusable-cache defaults.
+    // Diagnostics preserve omitted producer defaults; enabling timing is not a budget override.
+    bool collectQueueTimestamps = false;
     std::optional<GpuSceneExecutorBudgets> executorBudgets = {};
     // Off-UI resolved, immutable OCIO context (one shared preparer + qualified compile options) for
     // media-source colour conversion and image-effect transforms. Null fails every non-identity
