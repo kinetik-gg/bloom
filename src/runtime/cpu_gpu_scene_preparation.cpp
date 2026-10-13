@@ -80,7 +80,13 @@ CpuGpuSceneBuilder::build(const std::shared_ptr<const CompiledCompositionPlan>& 
                           const EvaluationRequest& request,
                           const CancellationToken& cancellation) const {
     try {
-        return buildImpl(plan, request, cancellation);
+        auto capturedRequest = request;
+        const auto color = captureEvaluationColorIntent(request.colorIntent);
+        if (!color)
+            return failed(PreparedGpuSceneDiagnosticCode::AllocationFailure,
+                          "Scene colour intent could not be captured");
+        capturedRequest.colorIntent = *color;
+        return buildImpl(plan, capturedRequest, cancellation);
     } catch (const std::bad_alloc&) {
         return failed(PreparedGpuSceneDiagnosticCode::AllocationFailure,
                       "Scene preparation ran out of memory");

@@ -1,4 +1,8 @@
+#include "generated_jpeg.hpp"
 #include "packed_host_retirement_private.hpp"
+#include <bloom/media/image.hpp>
+#include <filesystem>
+#include <fstream>
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/image.hpp>
@@ -194,6 +198,7 @@ struct RetirementScope final {
     std::condition_variable wake;
     bool blocked = false;
     bool entered = false;
+    std::thread::id freeThread;
     RetirementScope() {
         auto state = owner->producerState();
         state->testContext = this;
@@ -201,6 +206,7 @@ struct RetirementScope final {
             auto& self = *static_cast<RetirementScope*>(context);
             std::unique_lock lock(self.mutex);
             self.entered = true;
+            self.freeThread = std::this_thread::get_id();
             self.wake.notify_all();
             self.wake.wait(lock, [&] { return !self.blocked; });
         };
@@ -301,6 +307,75 @@ void testSharedNamespaceAndPolicy(Expectations& checks) {
     zero.store("none", image);
     checks.expect(zero.entryCount() == 0 && zero.retainedBytes() == 0,
                   "explicit zero disables optional retention");
+}
+
+void testSourceRevisionWorkerRetirement(Expectations& checks) {
+    RetirementScope scope;
+    scope.blocked = true;
+    bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
+    auto pool = std::make_shared<bloom::runtime::OperationCache>(1U << 20U, ledger);
+    GpuPreparedUploadCache prepared(pool, scope.owner);
+    const auto path =
+        std::filesystem::temp_directory_path() /
+        ("bloom-source-ticket-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".jpg");
+    {
+        std::ofstream file(path, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(kGeneratedJpeg.data()), kGeneratedJpeg.size());
+    }
+    auto captured = bloom::media::captureImageSourceRevision(path, 1U << 20U);
+    std::filesystem::remove(path);
+    if (!captured.value.has_value())
+        throw std::runtime_error("source revision retirement fixture capture");
+    const std::weak_ptr<const bloom::media::ImageSourceRevision> backing = *captured.value;
+    bool wrongKindRejected = false;
+    try {
+        pool->store("default-operation-source", {},
+                    {.image = {}, .values = {}, .bounds = {}, .sourceRevision = *captured.value});
+    } catch (const std::invalid_argument&) {
+        wrongKindRejected = true;
+    }
+    pool->clearOperations();
+    checks.expect(wrongKindRejected && pool->retainedBytes() == 0 &&
+                      pool->retainedBytes(bloom::runtime::OperationCacheEntryKind::DecodedMedia) ==
+                          0 &&
+                      scope.owner->snapshot().allocations == 0,
+                  "source revisions reject default Operation kind before registration/accounting");
+
+    pool->store(
+        "source", {}, {.image = {}, .values = {}, .bounds = {}, .sourceRevision = *captured.value},
+        bloom::runtime::OperationCacheEntryKind::DecodedMedia, pool->decodedMediaGeneration());
+    captured.value.reset();
+    const auto charged = pool->retainedBytes();
+    checks.expect(charged > kGeneratedJpeg.size() && scope.owner->snapshot().allocations == 1,
+                  "rooted source ticket charges encoded backing/metadata and host registration");
+    pool->setByteBudget(charged);
+    const auto releasingThread = std::this_thread::get_id();
+    pool->invalidateSourceRevisions();
+    checks.expect(until([&] {
+                      const std::lock_guard lock(scope.mutex);
+                      return scope.entered;
+                  }),
+                  "source ticket reaches existing worker free gate");
+    {
+        const std::lock_guard lock(scope.mutex);
+        checks.expect(scope.freeThread != releasingThread,
+                      "source backing release runs off the purge/sampling caller thread");
+    }
+    checks.expect(
+        !pool->find("source", {}) && !backing.expired() && pool->retainedBytes() == charged &&
+            pool->retainedBytes(bloom::runtime::OperationCacheEntryKind::DecodedMedia) == charged,
+        "detached source remains charged and physically alive until worker free");
+    pool->store("new-operation", {}, {.image = makeImage(4, 4), .values = {}, .bounds = {}});
+    checks.expect(!pool->find("new-operation", {}) && pool->retainedBytes() == charged,
+                  "pending source bytes cannot donate reusable admission capacity");
+    pool->closePreparedUploads();
+    scope.owner->beginShutdown();
+    checks.expect(!scope.owner->exitAcknowledged(),
+                  "source registration prevents shutdown exit while free is held");
+    scope.release();
+    checks.expect(until([&] { return backing.expired() && pool->retainedBytes() == 0; }),
+                  "actual encoded backing free precedes source charge foldback");
 }
 
 void testHeldRetirementConservation(Expectations& checks) {
@@ -599,6 +674,7 @@ int main() {
         testSharedNamespaceAndPolicy(expectations);
         testOrdinaryGraceIsPreserved(expectations);
         testHeldRetirementConservation(expectations);
+        testSourceRevisionWorkerRetirement(expectations);
         testSameLedgerFreshnessAndShrink(expectations);
         testProjectedVictimsPreserveWarmEntries(expectations);
         testIdenticalConcurrentStorePreservesWarmEntry(expectations);

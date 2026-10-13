@@ -219,6 +219,7 @@ SwapchainResources::SwapchainResources(vk::raii::Device const& device, VkExtent2
     : format(chosenFormat), colorSpace(VK_COLOR_SPACE_SRGB_NONLINEAR_KHR),
       presentMode(VK_PRESENT_MODE_FIFO_KHR), offscreen(true), finalLayout(chosenFinalLayout),
       retirement(GpuPresentationRetirement::None), width(extent.width), height(extent.height) {
+    imageStorage = GpuPresentationImageStorage::CallerOwnedOffscreen;
     generation = nextSwapchainGeneration();
     images.push_back(offscreenImage);
     presentPending.assign(1, false);

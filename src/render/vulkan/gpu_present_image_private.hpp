@@ -115,11 +115,13 @@ struct PresentImagePipeline final {
     std::uint32_t displayGeneration = 0;
 
     VkBuffer paramsBuffer = VK_NULL_HANDLE;
+    NativeBufferStorageToken paramsStorageToken;
     VmaAllocation paramsAllocation = VK_NULL_HANDLE;
     void* paramsMapped = nullptr;
 
     // Raw VMA-owned image; never wrapped in vk::raii (VMA owns the VkImage lifetime).
     VkImage overlayImage = VK_NULL_HANDLE;
+    NativeImageStorageToken overlayStorageToken;
     vk::raii::ImageView overlayView{nullptr};
     VmaAllocation overlayAllocation = VK_NULL_HANDLE;
     std::uint32_t overlayWidth = 0;
@@ -128,6 +130,7 @@ struct PresentImagePipeline final {
 
     // Overlay staging retained until the render fence that copied it is known complete.
     VkBuffer stagedOverlayBuffer = VK_NULL_HANDLE;
+    NativeBufferStorageToken stagedOverlayStorageToken;
     VmaAllocation stagedOverlayAllocation = VK_NULL_HANDLE;
     std::uint64_t stagedOverlayToken = 0;
     std::uint32_t overlayRowBytes = 0;

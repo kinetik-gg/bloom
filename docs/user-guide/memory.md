@@ -156,10 +156,12 @@ for confirmation; both clear only rebuildable derived data.
   computed again, so the preview cache's held-bytes reading drops to empty and refills only as you
   work.
 - **Purge media cache** clears the on-disk decoded-frame store, the evaluator's in-memory decoded
-  still-image and decoded-video media, the prepared-upload store, and the resident GPU scene store
+  still-image and decoded-video media, retained source revisions and completed RAM preview frames,
+  the prepared-upload store, and the resident GPU scene store
   (which retains decoded/uploaded media sources). Your source files are never read, written, or
   changed: the caches hold decoded or converted copies only, and the next use decodes again. Derived
-  operation results are left alone — those belong to **Purge preview cache**.
+  operation results are left alone — those belong to **Purge preview cache**. The next preview
+  request verifies the source again before reusing any derived operation result.
 
 The work runs off the interface thread on Bloom's existing task system, and the commands show
 **Purging caches…** and disable themselves while a purge is running. Bloom stops the preview, RAM
@@ -171,9 +173,9 @@ references are dropped. If a long-running task (for example an export) has not r
 short bounded wait, the purge stops safely without clearing and says so, rather than leaving the
 commands disabled indefinitely; retry once the work finishes. Both commands stay present even when
 the relevant cache is unavailable (the disk cache is disabled, or no preview pipeline exists); the
-command then reports that clearly instead of silently doing nothing. The two remain independent:
-purging the preview cache does not clear decoded media, and purging the media cache does not clear
-preview frames.
+command then reports that clearly instead of silently doing nothing. Purging the preview cache
+leaves decoded media and verified source revisions available. Purging media also drops completed
+preview frames so they cannot hide a changed or unavailable source after refresh.
 
 RAM Preview counts frames that are currently retained, including frames already cached before the
 run. Its tooltip separates frames prepared this run from retained frames and the longest cached

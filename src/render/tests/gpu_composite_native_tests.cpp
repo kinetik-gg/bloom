@@ -8,6 +8,7 @@
 
 #include "gpu_composite_memory_native_tests.hpp"
 #include "gpu_composite_native_support.hpp"
+#include "gpu_composite_offsets_native_tests.hpp"
 
 // The complete GpuImageImpl so local GpuImage values can be constructed/destroyed in this TU.
 #include "gpu_image_private.hpp"
@@ -575,6 +576,7 @@ int main(int argc, char** argv) {
         memory_proof::run(expectations, *device.device);
         testTranslation(expectations, *device.device);
         testSourceOver(expectations, *device.device);
+        testSourceOverOffsets(expectations, *device.device);
         testChain(expectations, *device.device);
         testRejections(expectations, *device.device);
         testForeignInputs(expectations, *device.device);

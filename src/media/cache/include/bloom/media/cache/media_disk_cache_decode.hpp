@@ -56,6 +56,8 @@ decodeThroughDiskCache(const std::filesystem::path& path, const ImageInterpretat
                        const std::string& cacheKey, MediaDiskCache* diskCache, bool writeAsync,
                        const CancelImageWork& cancel = {}, const ImageProgress& progress = {},
                        std::size_t pixelBudget = kMaxImageStorageBytes,
-                       std::shared_ptr<const color::CpuColorSpaceProcessor> processor = {});
+                       std::shared_ptr<const color::CpuColorSpaceProcessor> processor = {},
+                       const std::shared_ptr<const ImageSourceRevision>& sourceRevision = {},
+                       ImageDecodeStatistics* decodeStatistics = nullptr);
 
 } // namespace bloom::media::cache

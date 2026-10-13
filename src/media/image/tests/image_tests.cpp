@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <future>
 #include <memory>
 #include <optional>
 #include <span>
@@ -206,6 +207,96 @@ int main() {
     namespace media = bloom::media;
     ScratchDirectory scratch("media-image");
     Expectations check;
+    // Every codec reads a frozen revision after its original pathname disappears. Comparing
+    // independent path decode pixels also qualifies the custom EXR/stb stream adapters.
+    for (const auto* extension : {"png", "jpg", "exr", "tiled.exr"}) {
+        const auto path = scratch.file(std::string("revision.") + extension);
+        if (std::string_view(extension) == "png")
+            png(path);
+        else if (std::string_view(extension) == "jpg") {
+            std::ofstream file(path, std::ios::binary);
+            file.write(reinterpret_cast<const char*>(kGeneratedJpeg.data()), kGeneratedJpeg.size());
+        } else
+            exr(path, std::string_view(extension) == "tiled.exr", Imf::FLOAT);
+        const auto oracle = media::decodeImage(path);
+        const auto captured = media::captureImageSourceRevision(path, media::kMaxImageStorageBytes);
+        check.expect(oracle && captured, "capture revision for every supported in-process codec");
+        if (!oracle || !captured)
+            continue;
+        const auto revision = *captured.value;
+        const auto& measured = revision->captureStatistics();
+        check.expect(measured.bytesRead == revision->bytes().size() &&
+                         measured.bytesHashed == revision->bytes().size() &&
+                         measured.ioNanoseconds > 0 && measured.hashNanoseconds > 0 &&
+                         measured.probeNanoseconds > 0,
+                     "fresh revision separates measured I/O, SHA256 and metadata work");
+        const auto ownDigest = bloom::core::Sha256Hasher::hash(revision->bytes());
+        check.expect(ownDigest && *ownDigest == revision->probe().contentDigest,
+                     "source revision SHA256 describes its actual decoder bytes");
+        const auto timestamp = std::filesystem::last_write_time(path);
+        // Same size and timestamp do not authorize reuse or final revalidation.
+        {
+            std::ofstream replacement(path, std::ios::binary | std::ios::trunc);
+            const std::string changed(revision->bytes().size(), 'x');
+            replacement.write(changed.data(), static_cast<std::streamsize>(changed.size()));
+        }
+        std::filesystem::last_write_time(path, timestamp);
+        const auto replaced = media::captureImageSourceRevision(
+            path, media::kMaxImageStorageBytes, {}, revision->probe().contentDigest);
+        check.expect(!replaced && replaced.code == media::ImageDiagnosticCode::DigestMismatch,
+                     "same-size same-timestamp replacement fails strong revision validation");
+        std::filesystem::remove(path);
+
+        media::ImageDecodeStatistics decodeWork;
+        const auto decoded = media::decodeImage(*revision, {}, {}, {}, {},
+                                                media::kMaxImageStorageBytes, &decodeWork);
+        check.expect(decodeWork.decodeNanoseconds > 0,
+                     "decoder duration is measured independently of source I/O/hash/probe");
+        auto constrained = std::async(std::launch::async, [revision] {
+            return media::decodeImage(*revision, {}, {}, {}, {}, revision->retainedBytes());
+        });
+        auto concurrent =
+            std::async(std::launch::async, [revision] { return media::decodeImage(*revision); });
+        check.expect(!constrained.get() && concurrent.get().value.has_value(),
+                     "concurrent revision decoders have independent streams and request budgets");
+        check.expect(decoded && (*decoded.value)->descriptor() &&
+                         *(*decoded.value)->descriptor() == *(*oracle.value)->descriptor() &&
+                         (*decoded.value)->pixels().size() == (*oracle.value)->pixels().size() &&
+                         std::memcmp((*decoded.value)->pixels().data(),
+                                     (*oracle.value)->pixels().data(),
+                                     (*oracle.value)->pixels().size_bytes()) == 0,
+                     "decoding retained immutable bytes stays pixel-identical after path "
+                     "replacement/removal");
+        const auto missing = media::captureImageSourceRevision(path, media::kMaxImageStorageBytes);
+        check.expect(!missing && missing.code == media::ImageDiagnosticCode::FileUnavailable,
+                     "fresh validation reports missing source rather than trusting a revision");
+        const auto refused =
+            media::decodeImage(*revision, {}, {}, {}, {}, revision->retainedBytes());
+        check.expect(!refused && refused.code == media::ImageDiagnosticCode::PixelBudgetExceeded,
+                     "encoded revision is charged before decoder working-set admission");
+    }
+    {
+        const auto path = scratch.file("capture-budget.png");
+        png(path);
+        const auto refused = media::captureImageSourceRevision(path, 1);
+        check.expect(!refused && refused.code == media::ImageDiagnosticCode::PixelBudgetExceeded,
+                     "capture refuses encoded storage before allocation");
+        const auto cancelled = media::captureImageSourceRevision(path, media::kMaxImageStorageBytes,
+                                                                 [] { return true; });
+        check.expect(!cancelled && cancelled.cancelled,
+                     "pre-cancelled capture publishes no source revision");
+        {
+            std::ofstream append(path, std::ios::binary | std::ios::app);
+            const std::string tail(std::size_t{3} * 1024 * 1024, 'x');
+            append.write(tail.data(), static_cast<std::streamsize>(tail.size()));
+        }
+        unsigned polls = 0;
+        const auto interrupted = media::captureImageSourceRevision(
+            path, media::kMaxImageStorageBytes, [&] { return ++polls == 3; });
+        check.expect(!interrupted && interrupted.cancelled && polls == 3,
+                     "large source capture cancels between bounded hashing chunks");
+    }
+
     for (bool sixteen : {false, true}) {
         const auto path = scratch.file(sixteen ? "image16.png" : "image.png");
         png(path, sixteen);

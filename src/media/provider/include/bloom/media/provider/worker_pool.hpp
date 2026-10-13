@@ -32,9 +32,10 @@ class MediaWorkerPool final {
     ~MediaWorkerPool();
     MediaWorkerPool(const MediaWorkerPool&) = delete;
     MediaWorkerPool& operator=(const MediaWorkerPool&) = delete;
-    [[nodiscard]] WorkerTicket submit(runtime::TaskScheduler& scheduler, runtime::TaskOwner owner,
-                                      const MediaAttempt& attempt, std::size_t step,
-                                      CallRequest request);
+    [[nodiscard]] WorkerTicket
+    submit(runtime::TaskScheduler& scheduler, runtime::TaskOwner owner, const MediaAttempt& attempt,
+           std::size_t step, CallRequest request,
+           std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot = {});
     void shutdown();
 
   private:

@@ -9,11 +9,22 @@ namespace bloom::render::vulkan_detail {
 [[nodiscard]] inline bool allocateCoveredImage(DeviceAllocatorState& state,
                                                const VkImageCreateInfo& imageInfo, VkImage& image,
                                                VmaAllocation& allocation,
-                                               NativeImageStorageToken& token) noexcept {
+                                               NativeImageStorageToken& token,
+                                               const bool presentation = false,
+                                               const bool restoreFailedPrefix = false) noexcept {
+    const auto release = [&] {
+        if (restoreFailedPrefix && !presentation)
+            static_cast<void>(
+                token.releaseFailedAttemptAfterBackingDestroyed(state.processingPhase));
+        else
+            token = {};
+    };
     state.imageStorageRefusal.reset();
+    if (presentation)
+        state.presentationStorageRefusal.reset();
     VmaAllocationCreateInfo preferred{};
     preferred.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-    if (!state.processingPhase) {
+    if (presentation ? !state.processingRoot : !state.processingPhase) {
         // Explicit legacy/untracked resources retain the established VMA AUTO route.
         return vmaCreateImage(state.allocator, &imageInfo, &preferred, &image, &allocation,
                               nullptr) == VK_SUCCESS;
@@ -52,14 +63,22 @@ namespace bloom::render::vulkan_detail {
         const NativeImageStorageIdentity identity{
             state.presentationEpoch, selected, heap,
             (memory->memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0};
-        auto grant = NativeImageStorageToken::reserve(
-            state.processingPhase, requirements.memoryRequirements.size, identity);
+        auto grant =
+            presentation
+                ? NativeImageStorageToken::reservePresentation(
+                      state.processingRoot, requirements.memoryRequirements.size, identity)
+                : NativeImageStorageToken::reserve(state.processingPhase,
+                                                   requirements.memoryRequirements.size, identity);
         if (!grant.token) {
             if (grant.status == GpuProcessingPhaseAdmission::AwaitingCapacity ||
                 grant.status == GpuProcessingPhaseAdmission::BudgetRefused)
                 state.imageStorageRefusal = {grant.status, grant.domain,
-                                             state.processingPhase->id(),
+                                             presentation ? 0 : state.processingPhase->id(),
                                              grant.revisionAfterOwnRelease};
+            if (presentation && (grant.status == GpuProcessingPhaseAdmission::BudgetRefused ||
+                                 grant.status == GpuProcessingPhaseAdmission::AwaitingCapacity))
+                state.presentationStorageRefusal = {grant.status, grant.domain,
+                                                    grant.revisionAfterOwnRelease, true};
             continue;
         } // A denied domain must not hide a covered compatible fallback.
         token = std::move(*grant.token);
@@ -72,8 +91,10 @@ namespace bloom::render::vulkan_detail {
             state.nativeImageAllocationFault = NativeImageAllocationFault::None;
             dispatch->vkDestroyImage(device, image, nullptr);
             image = VK_NULL_HANDLE;
-            token = {};
+            release();
             state.imageStorageRefusal.reset();
+            if (presentation)
+                state.presentationStorageRefusal.reset();
             return false; // Injected branch failure, not an observed allocator OOM.
         }
         VmaAllocationInfo actual{};
@@ -82,7 +103,7 @@ namespace bloom::render::vulkan_detail {
             ++state.nativeImageBackingAttempts;
         if (vmaAllocateMemoryForImage(state.allocator, image, &pinned, &allocation, &actual) !=
             VK_SUCCESS) {
-            token = {};
+            release();
             continue;
         }
         // The same actual image remains unbound until its selected allocation is reconciled.
@@ -100,15 +121,23 @@ namespace bloom::render::vulkan_detail {
             if (state.nativeImageBackingsDestroyed != UINT64_MAX)
                 ++state.nativeImageBackingsDestroyed;
             allocation = VK_NULL_HANDLE;
-            token = {};
+            release();
             state.imageStorageRefusal.reset();
+            if (presentation)
+                state.presentationStorageRefusal.reset();
             return false;
         }
         state.imageStorageRefusal.reset();
+        if (presentation)
+            state.presentationStorageRefusal.reset();
+        if (presentation)
+            static_cast<void>(token.promote());
         return true;
     }
     if (allocationAttempted)
         state.imageStorageRefusal.reset(); // Real allocator failure remains terminal, not capacity.
+    if (presentation && allocationAttempted)
+        state.presentationStorageRefusal.reset();
     dispatch->vkDestroyImage(device, image, nullptr);
     image = VK_NULL_HANDLE;
     return false;

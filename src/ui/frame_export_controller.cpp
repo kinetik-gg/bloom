@@ -540,6 +540,19 @@ void FrameExportController::beginExport(std::filesystem::path destination) {
     // CompositionPreviewController::requestPreview() reads to build every preview request
     // (composition_preview_controller.cpp).
     const document::Snapshot snapshot = session_.snapshot();
+    const auto colorIntent = runtime::captureEvaluationColorIntent(session_.colorIntent());
+    if (!colorIntent) {
+        const auto message = tr("The export color intent could not be captured.");
+        if (sequence_)
+            finishSequence(FrameExportOutcome::Failed, message);
+        else
+            emit exportFinished(FrameExportOutcome::Failed, message);
+        return;
+    }
+    const auto projectPath = projectPathProvider_ ? projectPathProvider_() : std::nullopt;
+    pendingAssetBaseDirectory_ = projectPath ? projectPath->parent_path() : std::filesystem::path{};
+    pendingColorIntent_ = *colorIntent;
+    pendingTime_ = session_.currentTime();
     const document::CompositionId compositionId = session_.compositionId();
     if (snapshot.project().findComposition(compositionId) == nullptr) {
         emit exportFinished(FrameExportOutcome::Refused,
@@ -681,7 +694,7 @@ void FrameExportController::handleCompileResult(CompileHandle& compiling) {
         return;
     }
 
-    if (!beginAttempt(plan, session_.currentTime())) {
+    if (!beginAttempt(plan, pendingTime_)) {
         setActivity(FrameExportActivity::Idle);
         finish(FrameExportOutcome::Failed, tr("The export analysis could not be started."));
     }
@@ -705,9 +718,10 @@ bool FrameExportController::beginAttempt(
                        .output = plan->output(),
                        .resolution = runtime::CompositionFormatResolution{},
                        .quality = runtime::EvaluationQuality::Reference,
-                       .colorIntent = session_.colorIntent(),
+                       .colorIntent = pendingColorIntent_,
                        .pixelStorageByteLimit = runtime::defaultGpuProcessFrameByteBudget(),
                        .bypassLookNodes = sequence_ && sequence_->bypassLookNodes},
+        .assetBaseDirectory = pendingAssetBaseDirectory_,
         .targetPath = pendingDestination_,
         .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
         .owner = {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(1)},

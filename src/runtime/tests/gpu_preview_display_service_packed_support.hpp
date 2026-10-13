@@ -5,7 +5,9 @@
 #include <atomic>
 #include <bloom/render/gpu_display_transfer.hpp>
 #include <bloom/runtime/gpu_prepared_packed_preview_product.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/packed_host_retirement.hpp>
+#include <mutex>
 #include <stdexcept>
 namespace {
 #if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
@@ -25,6 +27,62 @@ struct PackedRetirementScope final {
         }
     }
 };
+
+// Capture the exact program-owned buffers before the final transfer allocates its staging.
+// The built-in Neutral OCIO command has no LUT images; its status/optional uniform and packed
+// intermediate remain charged in the owning native program cache after takeDisplayImage().
+struct PackedProgramStorageProbe final {
+    struct Sample final {
+        bloom::render::GpuProcessingPhaseSnapshot root;
+        bloom::runtime::GpuOcioExecutorCounters programs;
+        std::size_t expectedBuffers = 0;
+        std::size_t sampledTextures = 0;
+    };
+    std::mutex mutex;
+    Sample sample;
+    [[nodiscard]] Sample snapshot() {
+        const std::lock_guard lock(mutex);
+        return sample;
+    }
+};
+
+void observePackedProgramStorage(
+    const std::shared_ptr<bloom::runtime::detail::PreviewDisplayServiceCore>& core,
+    const std::shared_ptr<bloom::runtime::GpuProcessingPhasePolicy>& policy,
+    const std::shared_ptr<PackedProgramStorageProbe>& probe) {
+    const std::weak_ptr<bloom::runtime::detail::PreviewDisplayServiceCore> weakCore = core;
+    core->residentGeneralDisplayPollOverride = [weakCore, policy,
+                                                probe](bloom::runtime::GpuOcioDisplayArm& arm) {
+        const auto result = arm.poll();
+        if (result == bloom::runtime::GpuOcioExecutorPollResult::Ready) {
+            if (const auto owner = weakCore.lock();
+                owner && owner->residentNativeActive && owner->residentNativeActive->gpuStage &&
+                owner->residentNativeActive->gpuStage->displayProgram()) {
+                const auto& program =
+                    owner->residentNativeActive->gpuStage->displayProgram()->command->program();
+                const std::lock_guard lock(probe->mutex);
+                probe->sample = {.root = policy->snapshot().reservations,
+                                 .programs = arm.counters(),
+                                 .expectedBuffers = 2U + (program.uniformBufferSize != 0 ? 1U : 0U),
+                                 .sampledTextures = program.textures.size()};
+            }
+        }
+        return result;
+    };
+}
+
+void checkPackedProgramStorage(Expectations& checks,
+                               const PackedProgramStorageProbe::Sample& sample,
+                               const std::uint64_t logicalPackedBytes) {
+    checks.expect(sample.sampledTextures == 0 && sample.programs.cacheEntries == 1 &&
+                      sample.programs.programCreations == 1 &&
+                      sample.root.ownedNativeBuffers == sample.expectedBuffers &&
+                      sample.root.ownedNativeBufferBytes >= sample.programs.cacheBytes &&
+                      sample.root.ownedNativeBufferBytes - sample.programs.cacheBytes >=
+                          logicalPackedBytes,
+                  "one exact native OCIO program owns its status/uniform and packed intermediate");
+}
+
 [[nodiscard]] bloom::runtime::PreviewDisplayBufferView
 packedView(const bloom::runtime::PreparedPreviewFrame& frame) {
     const auto view = frame.displayBufferView();

@@ -105,6 +105,7 @@ void drainService(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core
             detail::processNativeDisplay(core);
             detail::processResidentNativeDisplay(core);
             detail::processServiceCachePurge(core);
+            detail::pollServiceQueueTimings(core);
             detail::pumpServicePresentation(core);
             waitForWake(core, observed, /*wakeOnStopping=*/false);
         } catch (...) {
@@ -147,6 +148,7 @@ void runServiceLoop(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
                 detail::processNativeDisplay(core);
                 detail::processResidentNativeDisplay(core);
                 detail::processServiceCachePurge(core);
+                detail::pollServiceQueueTimings(core);
                 // Presentation must be pumped on every iteration, even when no preview task is
                 // outstanding, so native acquire/present/retire progresses and the shutdown
                 // snapshot stays current.
@@ -520,9 +522,25 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
     result.residentQualification = core.publishedResidentQualification;
     result.residentDetail = core.publishedResidentDetail;
     result.residentCapacityPlan = core.publishedResidentCapacityPlan;
+    result.allocatorMemory = core.publishedAllocatorMemory;
+    result.allocatorMemorySampledAt = core.allocatorMemorySampledAt;
+    result.graphQueueTiming = core.publishedGraphQueueTiming;
+    result.packedTransferQueueTiming = core.publishedPackedQueueTiming;
     result.counters.residentGraphJobs =
         core.counterResidentGraphJobs.load(std::memory_order_relaxed);
     result.counters.nativeDispatches = core.counterNativeDispatches.load(std::memory_order_relaxed);
+    result.counters.uploadSubmitNanoseconds =
+        core.counterUploadSubmitNanoseconds.load(std::memory_order_relaxed);
+    result.counters.uploadFenceObservationNanoseconds =
+        core.counterUploadFenceObservationNanoseconds.load(std::memory_order_relaxed);
+    result.counters.processingSubmitNanoseconds =
+        core.counterProcessingSubmitNanoseconds.load(std::memory_order_relaxed);
+    result.counters.processingFenceObservationNanoseconds =
+        core.counterProcessingFenceObservationNanoseconds.load(std::memory_order_relaxed);
+    result.counters.completedStepContinuations =
+        core.counterCompletedStepContinuations.load(std::memory_order_relaxed);
+    result.counters.packedTransferNanoseconds =
+        core.counterPackedTransferNanoseconds.load(std::memory_order_relaxed);
     result.counters.residentCompletions =
         core.counterResidentCompletions.load(std::memory_order_relaxed);
     result.counters.residentFailures = core.counterResidentFailures.load(std::memory_order_relaxed);
@@ -558,9 +576,20 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
 
 TaskSubmission<PreviewPreparationResultHandle>
 GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& snapshot,
-                                 const PreviewRequestIdentity& identity,
+                                 const PreviewRequestIdentity& borrowedIdentity,
                                  const std::size_t pixelStorageByteLimit,
                                  const std::vector<SnapshotParameterOverride>& overrides) {
+    auto identity = borrowedIdentity;
+    const auto color = captureEvaluationColorIntent(identity.colorIntent);
+    if (!color) {
+        TaskSubmission<PreviewPreparationResultHandle> refused;
+        refused.status = TaskSubmissionStatus::InvalidRequest;
+        refused.diagnostic =
+            previewDiagnostic("bloom.runtime.gpu-preview-color-intent-capture-failed",
+                              "Preview colour intent could not be captured.");
+        return refused;
+    }
+    identity.colorIntent = *color;
     auto core = impl_->core;
     // Admission is synchronized with beginShutdown(): a submission that races shutdown is rejected
     // here, never converted into new work.

@@ -90,7 +90,8 @@ class Expectations final {
 
 [[nodiscard]] inline std::shared_ptr<const GpuImage>
 uploadImage(GpuImageUpload& uploader, const std::uint32_t width, const std::uint32_t height,
-            const std::vector<Rgba32f>& pixels) {
+            const std::vector<Rgba32f>& pixels,
+            const std::shared_ptr<bloom::render::GpuProcessingPhaseLease>& phase = {}) {
     const auto windowResult = bloom::render::ImageWindow::create(0, 0, width, height);
     if (!windowResult) {
         return nullptr;
@@ -118,7 +119,9 @@ uploadImage(GpuImageUpload& uploader, const std::uint32_t width, const std::uint
         return nullptr;
     }
     auto source = std::make_shared<const Rgba32fImage>(std::move(*frozen.value()));
-    if (uploader.begin({source}, kBudget).code != GpuImageUploadDiagnosticCode::None) {
+    const auto begun = uploader.begin({source, phase}, kBudget);
+    if (begun.code != GpuImageUploadDiagnosticCode::None) {
+        std::cerr << "resource upload refused: " << begun.message << '\n';
         return nullptr;
     }
     auto poll = GpuImageUploadPollResult::Pending;
@@ -126,6 +129,7 @@ uploadImage(GpuImageUpload& uploader, const std::uint32_t width, const std::uint
         poll = uploader.poll();
     }
     if (poll != GpuImageUploadPollResult::Ready) {
+        std::cerr << "resource upload failed: " << uploader.diagnostic().message << '\n';
         return nullptr;
     }
     return std::make_shared<GpuImage>(uploader.takeImage());
@@ -396,6 +400,12 @@ void testLut3d(Expectations& expectations, bloom::render::GpuDevice& device,
                const bloom::color::ResolvedBloomNeutralConfig& aces);
 void testMultiLutPrefix(Expectations& expectations,
                         const bloom::render::GpuDeviceCreationOptions& options);
+void testRetainedBuffers(Expectations& expectations,
+                         const bloom::render::GpuDeviceCreationOptions& options,
+                         const bloom::color::ResolvedBloomNeutralConfig& aces);
+void testRetainedPacked(Expectations& expectations,
+                        const bloom::render::GpuDeviceCreationOptions& options,
+                        const bloom::color::ResolvedBloomNeutralConfig& aces);
 void testDispatchPlan(Expectations& expectations);
 void testShaderInterfaceMalformed(Expectations& expectations);
 void testForcedDispatchPlanning(Expectations& expectations, bloom::render::GpuDevice& device,

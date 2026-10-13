@@ -44,6 +44,9 @@ class NativeImageStorageToken final {
     reserve(const std::shared_ptr<GpuProcessingPhaseLease>&, std::uint64_t upperBytes,
             NativeImageStorageIdentity,
             std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
+    [[nodiscard]] static NativeImageStorageGrant reservePresentation(
+        const GpuProcessingRootIdentity&, std::uint64_t upperBytes, NativeImageStorageIdentity,
+        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
     [[nodiscard]] std::uint64_t bytes() const noexcept { return bytes_; }
     [[nodiscard]] NativeImageStorageIdentity identity() const noexcept { return identity_; }
     [[nodiscard]] bool published() const noexcept { return published_; }
@@ -64,6 +67,8 @@ class NativeImageStorageToken final {
   private:
     NativeImageStorageToken(std::shared_ptr<GpuProcessingPhaseLease>, std::uint64_t,
                             NativeImageStorageIdentity) noexcept;
+    NativeImageStorageToken(GpuProcessingRootIdentity, std::uint64_t,
+                            NativeImageStorageIdentity) noexcept;
     void reset() noexcept;
     std::shared_ptr<detail::GpuProcessingPhaseBudgetState> state_;
     std::shared_ptr<GpuProcessingPhaseLease> origin_;
@@ -74,6 +79,7 @@ class NativeImageStorageToken final {
     std::uint64_t bytes_ = 0;
     NativeImageStorageIdentity identity_;
     bool published_ = false;
+    bool presentation_ = false;
 };
 
 struct NativeImageStorageGrant final {

@@ -627,6 +627,11 @@ int main(int argc, char** argv) {
             return expectations.failures() == 0 ? 0 : 1;
         }
         auto uploader = GpuImageUpload::create(*device.device);
+        bloom::render::GpuProcessingPhaseBudget presentationBudget(1);
+        presentationBudget.setHostCapacity(1ULL << 30, true);
+        presentationBudget.setDeviceCapacity(1ULL << 30, true);
+        expectations.expect(device.device->bindProcessingRoot(presentationBudget.rootIdentity()),
+                            "actual present draw has explicit independent processing root");
         auto display = GpuResidentDisplay::create(*device.device);
         expectations.expect(uploader.hasValue() && display.hasValue(),
                             "the upload and resident-display hosts are created");
@@ -662,6 +667,14 @@ int main(int argc, char** argv) {
         }
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " offscreen present expectation(s) failed\n";
+            return 1;
+        }
+        const auto owned = presentationBudget.snapshot();
+        if (owned.ownedPresentationImageBytes != 0 || owned.ownedPresentationBufferBytes != 0 ||
+            owned.totalDeviceClaimBytes != 0 || owned.totalHostClaimBytes != 0 ||
+            owned.admittedPhases != 0) {
+            std::cerr << "FAIL: completed offscreen present/oracle cycles retained owned "
+                         "presentation claims\n";
             return 1;
         }
         std::cout << "PASS: GPU present offscreen native proof\n";

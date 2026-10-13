@@ -205,6 +205,8 @@ void heldTransferProof(
         return;
     }
     auto core = bloom::runtime::detail::GpuPreviewDisplayServiceTestAccess::coreOf(*service);
+    auto programStorage = std::make_shared<PackedProgramStorageProbe>();
+    observePackedProgramStorage(core, configured.processingPhasePolicy, programStorage);
     auto hold = std::make_shared<std::atomic_bool>(true);
     auto teardownObserved = std::make_shared<std::atomic_bool>(false);
     auto allowTeardown = std::make_shared<std::atomic_bool>(false);
@@ -272,10 +274,14 @@ void heldTransferProof(
             initial.reservedBytes >= initial.sourceBytes + initial.stagingBytes + initial.hostBytes,
         "admitted reservation covers every actual source/staging/preallocated host allocation");
     const auto initialRoot = configured.processingPhasePolicy->snapshot().reservations;
+    const auto retainedProgram = programStorage->snapshot();
+    checkPackedProgramStorage(checks, retainedProgram, initial.hostBytes);
     checks.expect(initialRoot.ownedPackedHostAllocations == 1 &&
                       initialRoot.ownedPackedHostBytes == initial.hostBytes &&
-                      initialRoot.ownedNativeBuffers == 1 &&
-                      initialRoot.ownedNativeBufferBytes == initial.stagingBytes &&
+                      initialRoot.ownedNativeBuffers ==
+                          retainedProgram.root.ownedNativeBuffers + 1 &&
+                      initialRoot.ownedNativeBufferBytes ==
+                          retainedProgram.root.ownedNativeBufferBytes + initial.stagingBytes &&
                       initialRoot.admittedPhases == 1 && initialRoot.unprovenPhases == 0,
                   "real submitted copy retains exact rooted staging and provisional packed claims");
     if (shutdownProof) {
@@ -294,8 +300,8 @@ void heldTransferProof(
         }
         const auto unproven = configured.processingPhasePolicy->snapshot().reservations;
         checks.expect(
-            unproven.ownedNativeBuffers == 1 &&
-                unproven.ownedNativeBufferBytes == initial.stagingBytes &&
+            unproven.ownedNativeBuffers == initialRoot.ownedNativeBuffers &&
+                unproven.ownedNativeBufferBytes == initialRoot.ownedNativeBufferBytes &&
                 unproven.ownedNonlocalNativeBufferHostBytes ==
                     initialRoot.ownedNonlocalNativeBufferHostBytes &&
                 unproven.admittedPhases == 1 && unproven.unprovenPhases == 1 &&

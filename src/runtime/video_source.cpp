@@ -10,20 +10,136 @@
 #include <limits>
 #include <numeric>
 namespace bloom::runtime::detail {
-std::shared_ptr<media::video::VideoDecodeSession>
-VideoSourceContext::session(const std::filesystem::path& path) {
-    std::lock_guard lock(mutex_);
-    const auto found =
-        std::ranges::find_if(sessions_, [&](const auto& s) { return s.first == path; });
-    if (found != sessions_.end()) {
-        sessions_.splice(sessions_.begin(), sessions_, found);
-        return sessions_.front().second;
+namespace {
+struct SessionRetirement final : render::detail::PackedHostRetirementNode {
+    std::unique_ptr<media::video::VideoDecodeSession> session;
+    std::shared_ptr<render::detail::PackedHostRetirementState> retirement;
+    bool registered = false;
+    ~SessionRetirement() {
+        session.reset();
+        if (registered)
+            render::detail::releasePackedHostRegistration(retirement);
     }
-    auto session = std::make_shared<media::video::VideoDecodeSession>(path);
-    if (sessions_.size() == 4)
-        sessions_.pop_back();
-    sessions_.emplace_front(path, session);
+};
+std::shared_ptr<media::video::VideoDecodeSession>
+makeSession(const std::filesystem::path& path,
+            const std::shared_ptr<platform::FileSnapshotQuota>& quota,
+            const std::shared_ptr<render::detail::PackedHostRetirementState>& retirement) {
+    auto owner = std::make_unique<SessionRetirement>();
+    owner->retirement = retirement;
+    if (retirement) {
+        if (!render::detail::preparePackedHostRetirement(retirement) ||
+            !render::detail::registerPackedHostAllocation(retirement))
+            return {};
+        owner->registered = true;
+    }
+    owner->session = std::make_unique<media::video::VideoDecodeSession>(
+        path, media::video::VideoDecodeSession::defaultWorker(), quota, std::filesystem::path{},
+        retirement);
+    owner->destroy = [](render::detail::PackedHostRetirementNode* node) noexcept {
+        auto* entry = static_cast<SessionRetirement*>(node);
+        entry->registered = false; // The queue releases its own registration after destroy.
+        delete entry;
+    };
+    auto* entry = owner.release();
+    return std::shared_ptr<media::video::VideoDecodeSession>(
+        entry->session.get(), [entry](media::video::VideoDecodeSession*) noexcept {
+            if (entry->registered)
+                render::detail::enqueuePackedHostRetirement(entry->retirement, entry);
+            else
+                delete entry;
+        });
+}
+} // namespace
+std::shared_ptr<media::video::VideoDecodeSession>
+VideoSourceContext::session(const std::string& key, const std::filesystem::path& path,
+                            const bool allowInsertion) {
+    std::shared_ptr<render::detail::PackedHostRetirementState> retirement;
+    std::uint64_t generation = 0;
+    {
+        std::lock_guard lock(mutex_);
+        if (closed_)
+            return {};
+        const auto found = std::ranges::find(sessions_, key, &SessionEntry::key);
+        if (found != sessions_.end() && found->path == path) {
+            sessions_.splice(sessions_.begin(), sessions_, found);
+            return sessions_.front().session;
+        }
+        retirement = retirement_;
+        generation = generation_;
+    }
+    // Worker bootstrap, library verification and scheduler creation hold no mutex needed by UI
+    // source close. A refresh racing construction prevents insertion into the new generation.
+    auto session = makeSession(path, quota_, retirement);
+    std::list<SessionEntry> detached;
+    if (session && allowInsertion) {
+        std::lock_guard lock(mutex_);
+        if (closed_ || generation != generation_ ||
+            generation == std::numeric_limits<std::uint64_t>::max())
+            return session;
+        const auto found = std::ranges::find(sessions_, key, &SessionEntry::key);
+        if (found != sessions_.end())
+            detached.splice(detached.end(), sessions_, found);
+        if (sessions_.size() == 4)
+            detached.splice(detached.end(), sessions_, std::prev(sessions_.end()));
+        sessions_.push_front({key, path, session});
+    }
     return session;
+}
+std::shared_ptr<media::video::VideoDecodeSession>
+VideoSourceContext::retainedSession(const std::string& key) {
+    std::lock_guard lock(mutex_);
+    if (closed_)
+        return {};
+    const auto found = std::ranges::find(sessions_, key, &SessionEntry::key);
+    if (found == sessions_.end())
+        return {};
+    sessions_.splice(sessions_.begin(), sessions_, found);
+    return sessions_.front().session;
+}
+void VideoSourceContext::discardFailedSession(
+    const std::string& key, const std::shared_ptr<media::video::VideoDecodeSession>& session) {
+    std::list<SessionEntry> detached;
+    {
+        std::lock_guard lock(mutex_);
+        const auto found = std::ranges::find(sessions_, key, &SessionEntry::key);
+        if (found != sessions_.end() && found->session == session)
+            detached.splice(detached.end(), sessions_, found);
+    }
+}
+void VideoSourceContext::bindRetirement(
+    std::shared_ptr<render::detail::PackedHostRetirementState> retirement) {
+    std::list<SessionEntry> detached;
+    {
+        std::lock_guard lock(mutex_);
+        if (retirement_ != retirement) {
+            detached.splice(detached.end(), sessions_);
+            retirement_ = std::move(retirement);
+            if (generation_ != std::numeric_limits<std::uint64_t>::max())
+                ++generation_;
+        }
+    }
+}
+void VideoSourceContext::clear() {
+    invalidateSources();
+    cache.clear(); // Explicit refresh is off-UI; signal-only shutdown does not free decoded planes.
+}
+void VideoSourceContext::invalidateSources() {
+    std::list<SessionEntry> detached;
+    {
+        std::lock_guard lock(mutex_);
+        detached.splice(detached.end(), sessions_);
+        if (generation_ != std::numeric_limits<std::uint64_t>::max())
+            ++generation_;
+    }
+}
+void VideoSourceContext::beginShutdown() {
+    std::list<SessionEntry> detached;
+    {
+        std::lock_guard lock(mutex_);
+        closed_ = true;
+        detached.splice(detached.end(), sessions_);
+    }
 }
 namespace {
 std::optional<core::RationalTime> shifted(core::RationalTime time, std::int64_t start,
@@ -55,7 +171,10 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
                                        document::FrameRate rate, const std::filesystem::path& base,
                                        VideoSourceContext& context, bool useCache,
                                        const CancellationToken& cancel,
-                                       const EvaluationColorIntent& colorIntent) {
+                                       const EvaluationColorIntent& colorIntent,
+                                       const MediaSourceRevisionPolicy revisionPolicy,
+                                       const bool allowInsertion,
+                                       const std::size_t hostByteBudget) {
     VideoSourceSelection selection;
     if (!source.asset || source.asset->kind != document::AssetKind::Video) {
         selection.warning = "Video asset is missing; choose an asset or relink in Assets";
@@ -129,16 +248,47 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
         selection.cacheKey = "video-colour-input-unavailable";
         return selection;
     }
-    const auto path = media::resolveImagePath(asset.locator.path, asset.locator.relinkHint, base);
-    const auto session = context.session(path);
+    OperationKey sourceKey;
+    const auto sourceDigest = asset.contentDigest.toLowercaseHex();
+    sourceKey.add(std::string(sourceDigest.begin(), sourceDigest.end()));
+    sourceKey.add(asset.locator.path);
+    sourceKey.add(asset.locator.relinkHint);
+    const auto baseUtf8 = base.generic_u8string();
+    sourceKey.add(std::string(baseUtf8.begin(), baseUtf8.end()));
+    const auto revisionKey = sourceKey.digest();
+    auto session = revisionPolicy == MediaSourceRevisionPolicy::Retained
+                       ? context.retainedSession(revisionKey)
+                       : nullptr;
+    if (!session) {
+        const auto path =
+            media::resolveImagePath(asset.locator.path, asset.locator.relinkHint, base);
+        session = context.session(revisionKey, path, allowInsertion);
+    }
+    if (!session) {
+        selection.warning = "Video source owner is closing";
+        selection.cancelled = true;
+        return selection;
+    }
     const auto product =
         session->frame(runtime::video::probeMetadata(asset), stream->id, index,
                        selection.interpretation, useCache ? &context.cache : nullptr,
                        selection.inputColorSpaceId, selection.workingColorSpaceId,
-                       selection.configRevision, [&] { return cancel.isCancellationRequested(); });
+                       selection.configRevision, [&] { return cancel.isCancellationRequested(); },
+                       {revisionPolicy == MediaSourceRevisionPolicy::Retained
+                            ? media::video::SourceRevisionPolicy::Retained
+                            : media::video::SourceRevisionPolicy::Revalidate,
+                        allowInsertion,
+                        &selection.sourceWork,
+                        &selection.retainedRevision,
+                        {},
+                        hostByteBudget});
     if (const auto* error = std::get_if<media::provider::Unavailable>(&product)) {
         selection.warning = error->detail;
         selection.cancelled = error->reason == media::provider::Error::Cancelled;
+        // A failed cold capture must not pin an unresolved/offline locator. On reconnect the
+        // next request resolves the locator again. Pointer identity protects a newer generation.
+        if (allowInsertion)
+            context.discardFailedSession(revisionKey, session);
     } else
         selection.frame = std::get<std::shared_ptr<const media::provider::FrameProduct>>(product);
     OperationKey key;
@@ -172,10 +322,12 @@ std::shared_ptr<detail::VideoSourceContext> CpuCompositionEvaluator::videoContex
     std::lock_guard lock(assetContext_->mutex);
     if (!assetContext_->video)
         assetContext_->video = std::make_shared<detail::VideoSourceContext>();
+    assetContext_->video->bindRetirement(cache_->sourceRetirementState());
+    cache_->bindVideoSources(assetContext_->video);
     return assetContext_->video;
 }
 void CpuCompositionEvaluator::setVideoCacheByteBudget(std::size_t budget) const {
     videoContext()->cache.setByteBudget(budget);
 }
-void CpuCompositionEvaluator::clearDecodedVideoCache() const { videoContext()->cache.clear(); }
+void CpuCompositionEvaluator::clearDecodedVideoCache() const { videoContext()->clear(); }
 } // namespace bloom::runtime

@@ -11,10 +11,12 @@
 
 namespace bloom::runtime::detail {
 
-ImageSourceSelection selectImageSource(const CompiledImageSource& source, core::RationalTime time,
-                                       document::FrameRate rate, const std::filesystem::path& base,
-                                       const CancellationToken& cancel,
-                                       const EvaluationColorIntent& colorIntent) {
+ImageSourceSelection
+selectImageSource(const CompiledImageSource& source, core::RationalTime time,
+                  document::FrameRate rate, const std::filesystem::path& base,
+                  const CancellationToken& cancel, const EvaluationColorIntent& colorIntent,
+                  OperationCache* revisionCache, const MediaSourceRevisionPolicy revisionPolicy,
+                  const std::size_t hostByteBudget, const bool allowRevisionInsertion) {
     ImageSourceSelection selected;
     if (!source.asset) {
         selected.warning = "Image asset is missing; choose an asset or relink in Assets";
@@ -63,7 +65,44 @@ ImageSourceSelection selectImageSource(const CompiledImageSource& source, core::
         if (!asset.manifest.gaps.empty())
             selected.warning = "Sequence gaps hold the preceding frame";
     }
-    selected.path = media::resolveImagePath(locator->path, locator->relinkHint, base);
+    OperationKey revisionKey;
+    revisionKey.add(std::string{"immutable-image-source-v1"});
+    const auto digestHex = selected.digest.toLowercaseHex();
+    revisionKey.add(std::string(digestHex.begin(), digestHex.end()));
+    revisionKey.add(locator->path);
+    revisionKey.add(locator->relinkHint);
+    const auto baseUtf8 = base.generic_u8string();
+    revisionKey.add(std::string(reinterpret_cast<const char*>(baseUtf8.data()), baseUtf8.size()));
+    const auto revisionGeneration =
+        revisionCache ? std::optional{revisionCache->decodedMediaGeneration()} : std::nullopt;
+    if (cancel.isCancellationRequested()) {
+        selected.cancelled = true;
+        return selected;
+    }
+    if (revisionPolicy == MediaSourceRevisionPolicy::Retained && revisionCache) {
+        if (const auto cached = revisionCache->find(revisionKey.bytes(), document::Revision{});
+            cached && cached->sourceRevision &&
+            cached->sourceRevision->retainedBytes() < hostByteBudget) {
+            selected.sourceRevision = cached->sourceRevision;
+            selected.retainedRevision = true;
+        }
+    }
+    media::ImageResult<std::shared_ptr<const media::ImageSourceRevision>> capture;
+    if (!selected.sourceRevision) {
+        selected.path = media::resolveImagePath(locator->path, locator->relinkHint, base);
+        capture = media::captureImageSourceRevision(
+            selected.path, hostByteBudget, [&] { return cancel.isCancellationRequested(); },
+            selected.digest);
+        selected.sourceRevision = capture.value ? *capture.value : nullptr;
+        selected.cancelled = capture.cancelled;
+        if (selected.sourceRevision && revisionCache && allowRevisionInsertion)
+            revisionCache->store(revisionKey.bytes(), document::Revision{},
+                                 {.image = {},
+                                  .values = {},
+                                  .bounds = {},
+                                  .sourceRevision = selected.sourceRevision},
+                                 OperationCacheEntryKind::DecodedMedia, revisionGeneration);
+    }
     selected.interpretation.colorSpace = static_cast<media::ImageColorSpace>(
         source.colorSpace == 0 ? static_cast<std::int64_t>(asset.interpretation.colorSpace)
                                : source.colorSpace);
@@ -73,10 +112,8 @@ ImageSourceSelection selectImageSource(const CompiledImageSource& source, core::
     selected.interpretation.alphaAssociation = source.premultiply
                                                    ? media::ImageAlphaAssociation::Straight
                                                    : media::ImageAlphaAssociation::Premultiplied;
-    const auto probe =
-        media::probeImage(selected.path, [&] { return cancel.isCancellationRequested(); });
-    selected.cancelled = probe.cancelled;
-    selected.available = probe.value.has_value() && probe.value->contentDigest == selected.digest;
+    selected.available = selected.sourceRevision != nullptr &&
+                         selected.sourceRevision->probe().contentDigest == selected.digest;
     if (selected.available) {
         auto config = resolveInputColorConfig(colorIntent);
         if (!config) {
@@ -84,7 +121,7 @@ ImageSourceSelection selectImageSource(const CompiledImageSource& source, core::
             selected.warning = "The selected OCIO input configuration is unavailable";
         } else {
             const auto resolution = resolveImageInputColorSpace(
-                *config, *probe.value, selected.interpretation.colorSpace,
+                *config, selected.sourceRevision->probe(), selected.interpretation.colorSpace,
                 selected.interpretation.inputColorSpaceId);
             selected.inputColorSpaceAutomatic = resolution.automatic;
             selected.resolvedInputColorSpaceName = resolution.name;
@@ -108,8 +145,8 @@ ImageSourceSelection selectImageSource(const CompiledImageSource& source, core::
         }
     }
     if (!selected.available && selected.warning.empty())
-        selected.warning = probe.value.has_value() ? "Image changed; relink the asset in Assets"
-                                                   : probe.diagnostic;
+        selected.warning = capture.diagnostic.empty() ? "Image changed; relink the asset in Assets"
+                                                      : capture.diagnostic;
     OperationKey key;
     const auto digest = selected.digest.toLowercaseHex();
     const auto config = selected.configRevision.toLowercaseHex();
@@ -151,12 +188,13 @@ ImageSourceSelection selectImageSource(const CompiledImageSource& source, core::
         media::cache::buildImageCacheKey(diskInputs, media::cache::kImageDecoderIdentity);
     return selected;
 }
-media::ImageResult<render::Rgba32fImage>
-evaluateImageSource(const ImageSourceSelection& selected,
-                    render::Rgba32fImageDescriptor composition, double horizontalScale,
-                    double verticalScale, std::size_t budget, OperationCache* memoryCache,
-                    ImageSourceMemoryCacheAccess memoryAccess, const CancellationToken& cancel,
-                    media::cache::MediaDiskCache* diskCache) {
+media::ImageResult<render::Rgba32fImage> evaluateImageSource(
+    const ImageSourceSelection& selected, render::Rgba32fImageDescriptor composition,
+    double horizontalScale, double verticalScale, std::size_t budget, OperationCache* memoryCache,
+    ImageSourceMemoryCacheAccess memoryAccess, const CancellationToken& cancel,
+    media::cache::MediaDiskCache* diskCache, media::ImageDecodeStatistics* decodeStatistics) {
+    if (decodeStatistics)
+        *decodeStatistics = {};
     if (!selected.available)
         return {{}, selected.warning};
     std::shared_ptr<const render::Rgba32fImage> image;
@@ -179,7 +217,7 @@ evaluateImageSource(const ImageSourceSelection& selected,
         auto decoded = media::cache::decodeThroughDiskCache(
             selected.path, selected.interpretation, selected.digest, selected.diskCacheKey,
             decodeDiskCache, /*writeAsync=*/true, [&] { return cancel.isCancellationRequested(); },
-            {}, budget, selected.inputProcessor);
+            {}, budget, selected.inputProcessor, selected.sourceRevision, decodeStatistics);
         if (!decoded.value.has_value())
             return {{}, decoded.diagnostic, decoded.cancelled};
         image = std::move(*decoded.value);
@@ -194,16 +232,21 @@ evaluateImageSource(const ImageSourceSelection& selected,
 
 media::ImageResult<std::shared_ptr<const render::Rgba32fImage>>
 decodeRawImageSource(const ImageSourceSelection& selected, const std::size_t budget,
-                     const CancellationToken& cancel) {
+                     const CancellationToken& cancel,
+                     media::ImageDecodeStatistics* decodeStatistics) {
+    if (decodeStatistics)
+        *decodeStatistics = {};
     if (!selected.available)
         return {{}, selected.warning};
     media::ImageInterpretation rawInterpretation;
     rawInterpretation.colorSpace = media::ImageColorSpace::Raw;
     rawInterpretation.inputColorSpaceId = {};
     rawInterpretation.alphaAssociation = selected.interpretation.alphaAssociation;
+    if (!selected.sourceRevision)
+        return {{}, "Image selection has no immutable source revision"};
     return media::decodeImage(
-        selected.path, rawInterpretation, {},
-        [&cancel] { return cancel.isCancellationRequested(); }, {}, budget, selected.digest);
+        *selected.sourceRevision, rawInterpretation, {},
+        [&cancel] { return cancel.isCancellationRequested(); }, {}, budget, decodeStatistics);
 }
 
 media::ImageResult<render::Rgba32fImage>

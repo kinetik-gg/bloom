@@ -15,6 +15,7 @@
 #include <bloom/render/gpu_blend.hpp>
 #include <bloom/render/gpu_image_upload.hpp>
 #include <bloom/render/gpu_ocio_program.hpp>
+#include <bloom/render/gpu_operation_batch.hpp>
 #include <bloom/render/gpu_path_coverage.hpp>
 #include <bloom/render/gpu_point_resample.hpp>
 #include <bloom/render/path_raster.hpp>
@@ -406,6 +407,10 @@ struct GpuSceneExecutor::Impl final {
     std::uint64_t deviceEpoch = 0;
     GpuSceneCache* cache = nullptr;
     GpuSceneExecutorBudgets budgets;
+    std::unique_ptr<render::GpuQueueTiming> queueTiming;
+    render::GpuQueueTimingSample queueTimingSample;
+    bool queueTimingAttempted = false;
+    bool queueTimingStarted = false;
 
     // Declared BEFORE the pipelines so that on destruction the pipelines (which drain/quarantine
     // the in-flight submission) are destroyed before the scene/input pins are released.
@@ -421,6 +426,9 @@ struct GpuSceneExecutor::Impl final {
     std::unique_ptr<render::GpuAffine> affine;
     std::unique_ptr<render::GpuBlend> blend;
     std::unique_ptr<render::GpuPointResample> pointResample;
+    std::unique_ptr<render::GpuOperationBatch> operationBatch;
+    bool batchAttempted = false;
+    std::size_t batchStepCount = 0;
     // Retained native vector-coverage producer. Created lazily on the owner thread the first time a
     // command carries coverage geometry, and kept for the executor's lifetime (pipeline reuse). It
     // outlives every consuming fill submission: beginCoveredResident co-owns the resident mask, and
@@ -456,6 +464,7 @@ struct GpuSceneExecutor::Impl final {
         Ocio,
         PointResample,
         PathCoverage,
+        Batch,
     };
     NativeKind nativeKind = NativeKind::None;
     // In-flight OCIO program (borrowed from `ocioPrograms`; the map outlives the job).
@@ -488,6 +497,8 @@ struct GpuSceneExecutor::Impl final {
     [[nodiscard]] GpuSceneExecutorDiagnostic planCommand(GpuSceneCommandIndex index,
                                                          std::vector<std::uint8_t>& color);
     [[nodiscard]] GpuSceneExecutorDiagnostic startStep(const GpuSceneExecutorStep& step);
+    [[nodiscard]] std::optional<GpuSceneExecutorDiagnostic> tryStartBatch();
+    [[nodiscard]] GpuSceneExecutorPollResult pollBatch();
     // Vector coverage, kept in gpu_scene_executor_coverage.cpp so this translation unit stays
     // cohesive. `startCoveredStep` dispatches either the native GpuPathCoverage producer (geometry)
     // or the host-bitmap covered fill (integer-grid text); `pollPathCoverage` advances the producer

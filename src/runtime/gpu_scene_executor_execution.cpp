@@ -51,6 +51,7 @@ void GpuSceneExecutor::Impl::clearJob() noexcept {
     cursor = 0;
     requestBudget = 0;
     coverageBytes = 0;
+    batchAttempted = false;
     nativeKind = NativeKind::None;
     nativeInFlight = false;
     cancelRequested = false;
@@ -70,7 +71,8 @@ bool GpuSceneExecutor::Impl::hasUnretiredNative() const noexcept {
     const bool coverageUnretired =
         pathCoverage != nullptr && pathCoverage->hasUnretiredSubmission();
     return solidUnretired || compositeUnretired || uploadUnretired || affineUnretired ||
-           blendUnretired || pointResampleUnretired || coverageUnretired || ocioProgramsUnretired();
+           blendUnretired || pointResampleUnretired || coverageUnretired ||
+           ocioProgramsUnretired() || (operationBatch && operationBatch->hasUnretiredSubmission());
 }
 
 std::uint64_t GpuSceneExecutor::Impl::remainingBudget() const noexcept {
@@ -148,7 +150,12 @@ void GpuSceneExecutor::Impl::consume(const GpuSceneCommandIndex index) noexcept 
 
 void GpuSceneExecutor::Impl::fail(const GpuSceneExecutorDiagnosticCode code, std::string message,
                                   const bool requireDrain) noexcept {
-    const auto capacityRefusal = device ? device->nativeImageStorageRefusal() : std::nullopt;
+    if (queueTimingStarted && queueTiming) {
+        queueTiming->cancel();
+        queueTimingSample = queueTiming->poll();
+    }
+    const bool capacityRefusal = device && (device->nativeImageStorageRefusal().has_value() ||
+                                            device->nativeBufferStorageRefusal().has_value());
     const bool nativeCapacityRefused = capacityRefusal && !requireDrain && !deviceLost &&
                                        !hasUnretiredNative() &&
                                        code == GpuSceneExecutorDiagnosticCode::DispatchRefused;
@@ -175,6 +182,10 @@ void GpuSceneExecutor::Impl::finishReady() noexcept {
              false);
         return;
     }
+    if (queueTimingStarted && queueTiming) {
+        queueTiming->end();
+        queueTimingSample = queueTiming->poll();
+    }
     state = GpuSceneExecutorJobState::Ready;
     diagnostic = {};
     ++counters.scenesCompleted;
@@ -186,7 +197,9 @@ void GpuSceneExecutor::Impl::finishReady() noexcept {
 }
 
 void GpuSceneExecutor::Impl::advanceDrain() noexcept {
-    if (nativeKind == NativeKind::Solid && solid != nullptr) {
+    if (nativeKind == NativeKind::Batch && operationBatch) {
+        static_cast<void>(operationBatch->poll());
+    } else if (nativeKind == NativeKind::Solid && solid != nullptr) {
         static_cast<void>(solid->poll());
     } else if (nativeKind == NativeKind::Composite && composite != nullptr) {
         static_cast<void>(composite->poll());
@@ -213,6 +226,13 @@ void GpuSceneExecutor::Impl::advanceDrain() noexcept {
 }
 
 GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecutorStep& step) {
+    if (budgets.collectQueueTimestamps && !queueTimingAttempted) {
+        queueTimingAttempted = true;
+        queueTimingSample.status =
+            queueTiming ? queueTiming->begin() : render::GpuQueueTimingStatus::Failed;
+        queueTimingStarted = queueTimingSample.status == render::GpuQueueTimingStatus::Active;
+    }
+    const auto submitStarted = std::chrono::steady_clock::now();
     const std::uint64_t remaining = remainingBudget();
     liveBytesAtDispatch = liveBytes;
     const auto solidParameters = [&step]() -> std::optional<render::GpuSolidParameters> {
@@ -360,6 +380,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
     }
     }
     ++counters.dispatches;
+    ++counters.nativeSubmissions;
     if (step.kind == GpuSceneExecutorStepKind::Solid) {
         nativeKind = NativeKind::Solid;
     } else if (step.kind == GpuSceneExecutorStepKind::CoveredSolid) {
@@ -381,6 +402,14 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
     cancelIssued = false;
     timeoutRequested = false;
     nativeStart = std::chrono::steady_clock::now();
+    const auto elapsed =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(nativeStart - submitStarted).count();
+    auto& submitTime = step.kind == GpuSceneExecutorStepKind::Upload
+                           ? counters.uploadSubmitNanoseconds
+                           : counters.processingSubmitNanoseconds;
+    if (elapsed > 0)
+        submitTime += std::min(static_cast<std::uint64_t>(elapsed),
+                               std::numeric_limits<std::uint64_t>::max() - submitTime);
     return {};
 }
 
@@ -393,6 +422,7 @@ GpuSceneExecutor::Impl::~Impl() {
     // does ordinary member destruction release the executor's own metadata and pins. No separate
     // global registry, leak list, or allocation from this noexcept destructor is used.
     ocioPrograms.clear();
+    operationBatch.reset();
     upload.reset();
     affine.reset();
     blend.reset();
@@ -402,6 +432,9 @@ GpuSceneExecutor::Impl::~Impl() {
     // The producer is destroyed last: a consuming fill's release above has already drained or
     // quarantined its submission, so the co-owned resident mask is safe to release here.
     pathCoverage.reset();
+    if (queueTimingStarted && queueTiming)
+        queueTiming->cancel();
+    queueTiming.reset();
 }
 
 } // namespace bloom::runtime

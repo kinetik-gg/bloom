@@ -35,6 +35,7 @@ struct FinalReadbackOutcome final {
     core::Sha256Digest outputCommandIdentity{};
     GpuOutputColorCounters outputColorCounters;
     std::uint64_t readbacks = 0;
+    std::uint64_t transferNanoseconds = 0, hostPublicationNanoseconds = 0;
     GpuProcessFrameStatus status = GpuProcessFrameStatus::Failed;
     GpuProcessFrameDiagnosticCode diagnosticCode = GpuProcessFrameDiagnosticCode::None;
     std::string diagnosticMessage;

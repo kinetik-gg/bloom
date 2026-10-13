@@ -46,14 +46,21 @@ decodeThroughDiskCache(const std::filesystem::path& path, const ImageInterpretat
                        const std::string& cacheKey, MediaDiskCache* diskCache,
                        const bool writeAsync, const CancelImageWork& cancel,
                        const ImageProgress& progress, const std::size_t pixelBudget,
-                       std::shared_ptr<const color::CpuColorSpaceProcessor> processor) {
+                       std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
+                       const std::shared_ptr<const ImageSourceRevision>& sourceRevision,
+                       ImageDecodeStatistics* decodeStatistics) {
+    if (decodeStatistics)
+        *decodeStatistics = {};
     const bool cacheUsable = diskCache != nullptr && diskCache->enabled() && !cacheKey.empty();
     if (cacheUsable) {
         if (auto hit = diskCache->find(cacheKey))
             return {std::move(hit), {}, false};
     }
-    auto decoded = decodeImage(path, interpretation, std::move(processor), cancel, progress,
-                               pixelBudget, expectedDigest);
+    auto decoded = sourceRevision
+                       ? decodeImage(*sourceRevision, interpretation, std::move(processor), cancel,
+                                     progress, pixelBudget, decodeStatistics)
+                       : decodeImage(path, interpretation, std::move(processor), cancel, progress,
+                                     pixelBudget, expectedDigest);
     if (decoded.value.has_value() && cacheUsable) {
         if (writeAsync)
             diskCache->storeAsync(cacheKey, *decoded.value);

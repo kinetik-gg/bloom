@@ -1,9 +1,12 @@
 #include "gpu_ocio_program_private.hpp"
 
+#include "gpu_native_buffer_allocation_private.hpp"
 #include "gpu_native_image_allocation_private.hpp"
+#include "gpu_ocio_program_upload_layout.hpp"
 #include "ocio_gpu_program_fault.hpp"
 
 #include <bloom/render/gpu_processing_phase_budget.hpp>
+#include <bloom/render/processing_host_storage.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -49,6 +52,7 @@ enum class SlotState : std::uint8_t { Free, Reserved, Quarantined };
 
 struct UploadQuarantine final {
     NativeImageStorageToken storage;
+    NativeBufferStorageToken stagingStorage;
     std::shared_ptr<vulkan_detail::DeviceAllocatorState> state;
     VkImage image = VK_NULL_HANDLE;
     VmaAllocation imageAllocation = VK_NULL_HANDLE;
@@ -85,55 +89,6 @@ void setReasonNoThrow(std::string& reason, const char* text) noexcept {
     }
 }
 
-[[nodiscard]] VkFormat channelFormat(const OcioGpuTextureChannel channel,
-                                     const std::uint32_t components) noexcept {
-    if (components == 4) {
-        return VK_FORMAT_R32G32B32A32_SFLOAT;
-    }
-    return channel == OcioGpuTextureChannel::Red ? VK_FORMAT_R32_SFLOAT
-                                                 : VK_FORMAT_R32G32B32_SFLOAT;
-}
-
-[[nodiscard]] std::uint32_t channelComponents(const OcioGpuTextureChannel channel) noexcept {
-    return channel == OcioGpuTextureChannel::Red ? 1U : 3U;
-}
-
-[[nodiscard]] VkImageType imageType(const OcioGpuTextureDimensions dimensions) noexcept {
-    switch (dimensions) {
-    case OcioGpuTextureDimensions::OneD:
-        return VK_IMAGE_TYPE_1D;
-    case OcioGpuTextureDimensions::TwoD:
-        return VK_IMAGE_TYPE_2D;
-    case OcioGpuTextureDimensions::ThreeD:
-        return VK_IMAGE_TYPE_3D;
-    }
-    return VK_IMAGE_TYPE_2D;
-}
-
-[[nodiscard]] VkImageViewType viewType(const OcioGpuTextureDimensions dimensions) noexcept {
-    switch (dimensions) {
-    case OcioGpuTextureDimensions::OneD:
-        return VK_IMAGE_VIEW_TYPE_1D;
-    case OcioGpuTextureDimensions::TwoD:
-        return VK_IMAGE_VIEW_TYPE_2D;
-    case OcioGpuTextureDimensions::ThreeD:
-        return VK_IMAGE_VIEW_TYPE_3D;
-    }
-    return VK_IMAGE_VIEW_TYPE_2D;
-}
-
-[[nodiscard]] VkExtent3D textureExtent(const OcioGpuTextureDesc& texture) noexcept {
-    switch (texture.dimensions) {
-    case OcioGpuTextureDimensions::OneD:
-        return {texture.width, 1, 1};
-    case OcioGpuTextureDimensions::TwoD:
-        return {texture.width, texture.height, 1};
-    case OcioGpuTextureDimensions::ThreeD:
-        return {texture.edgeLength, texture.edgeLength, texture.edgeLength};
-    }
-    return {1, 1, 1};
-}
-
 struct ImageOwner final {
     NativeImageStorageToken storage;
     vulkan_detail::DeviceAllocatorState* state = nullptr;
@@ -158,12 +113,15 @@ struct ImageOwner final {
 };
 
 struct Staging final {
+    NativeBufferStorageToken storage;
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
     vulkan_detail::DeviceAllocatorState* state = nullptr;
     ~Staging() {
         if (buffer != VK_NULL_HANDLE && state != nullptr) {
             vmaDestroyBuffer(state->allocator, buffer, allocation);
+            if (storage.bytes() != 0 && state->nativeBufferBackingsDestroyed != UINT64_MAX)
+                ++state->nativeBufferBackingsDestroyed;
         }
     }
     void release() noexcept {
@@ -178,8 +136,12 @@ void releaseQuarantineResources(UploadQuarantine& slot) noexcept {
     }
     if (slot.staging != VK_NULL_HANDLE) {
         vmaDestroyBuffer(slot.state->allocator, slot.staging, slot.stagingAllocation);
+        if (slot.stagingStorage.bytes() != 0 &&
+            slot.state->nativeBufferBackingsDestroyed != UINT64_MAX)
+            ++slot.state->nativeBufferBackingsDestroyed;
     }
     slot.staging = VK_NULL_HANDLE;
+    slot.stagingStorage = {};
     if (slot.image != VK_NULL_HANDLE) {
         vmaDestroyImage(slot.state->allocator, slot.image, slot.imageAllocation);
         if (slot.storage.bytes() != 0 && slot.state->nativeImageBackingsDestroyed != UINT64_MAX) {
@@ -234,6 +196,7 @@ void quarantineUpload(ImageOwner& image, Staging& staging, vk::raii::CommandPool
     image.release();
     quarantineStorage()->staging = staging.buffer;
     quarantineStorage()->stagingAllocation = staging.allocation;
+    quarantineStorage()->stagingStorage = std::move(staging.storage);
     staging.release();
     quarantineStorage()->pool = std::move(pool);
     quarantineStorage()->command = std::move(command);
@@ -284,24 +247,6 @@ void quarantineUpload(ImageOwner& image, Staging& staging, vk::raii::CommandPool
     return false;
 }
 
-// Checked sum of the actual image allocation, staging allocation, and padded host scratch against
-// the caller's remaining owned budget. Never wraps.
-[[nodiscard]] bool fitsRemainingBudget(const std::uint64_t imageBytes,
-                                       const std::uint64_t stagingBytes,
-                                       const std::uint64_t scratchBytes,
-                                       const std::uint64_t remaining) noexcept {
-    std::uint64_t total = imageBytes;
-    if (total > std::numeric_limits<std::uint64_t>::max() - stagingBytes) {
-        return false;
-    }
-    total += stagingBytes;
-    if (total > std::numeric_limits<std::uint64_t>::max() - scratchBytes) {
-        return false;
-    }
-    total += scratchBytes;
-    return total <= remaining;
-}
-
 [[nodiscard]] UploadOutcome
 uploadImage(vulkan_detail::DeviceAllocatorState& state,
             const std::shared_ptr<vulkan_detail::DeviceAllocatorState>& owner, ImageOwner& image,
@@ -326,8 +271,21 @@ uploadImage(vulkan_detail::DeviceAllocatorState& state,
     allocationInfo.flags =
         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
     VmaAllocationInfo mappedInfo{};
-    if (vmaCreateBuffer(state.allocator, &bufferInfo, &allocationInfo, &staging.buffer,
-                        &staging.allocation, &mappedInfo) != VK_SUCCESS ||
+    if (!fitsRemainingBudget(imageAllocationBytes, 0, hostScratchBytes, remainingOwnedBytes)) {
+        setReasonNoThrow(reason, "the LUT upload exceeds the remaining owned-byte budget");
+        return UploadOutcome::OverBudget;
+    }
+    const auto allocated = vulkan_detail::allocateCoveredBuffer(
+        state, bufferInfo, allocationInfo,
+        remainingOwnedBytes - imageAllocationBytes - hostScratchBytes, staging.buffer,
+        staging.allocation, mappedInfo, staging.storage,
+        vulkan_detail::NativeBufferPurpose::Processing);
+    if (allocated == vulkan_detail::NativeBufferAllocationOutcome::PhaseRefused ||
+        allocated == vulkan_detail::NativeBufferAllocationOutcome::TransferBudgetRefused) {
+        setReasonNoThrow(reason, "the LUT staging allocation exceeds its admitted budget");
+        return UploadOutcome::OverBudget;
+    }
+    if (allocated != vulkan_detail::NativeBufferAllocationOutcome::Allocated ||
         mappedInfo.pMappedData == nullptr) {
         setReasonNoThrow(reason, "the LUT staging buffer could not be created");
         return UploadOutcome::Failed;
@@ -503,6 +461,7 @@ createSampledResource(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>
                       const OcioGpuTextureDesc& texture, const std::uint64_t remainingOwnedBytes,
                       const GpuOcioProgramCancellation& cancellation,
                       SampledResource& out) noexcept {
+    owner->bufferStorageRefusal.reset();
     if (cancellationRequested(cancellation)) {
         return UploadOutcome::Cancelled;
     }
@@ -513,6 +472,7 @@ createSampledResource(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>
     struct ReservationGuard final {
         ~ReservationGuard() { releaseReservationIfReserved(); }
     } reservationGuard;
+    std::optional<ProcessingHostStorageRefusal> scratchRefusal;
     try {
         vulkan_detail::DeviceAllocatorState& state = *owner;
         const VkDevice device = static_cast<VkDevice>(*state.device);
@@ -592,7 +552,18 @@ createSampledResource(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>
 
         const std::size_t texels =
             static_cast<std::size_t>(extent.width) * extent.height * extent.depth;
-        std::vector<float> padded;
+        const std::uint64_t bytes = static_cast<std::uint64_t>(texels) * components * sizeof(float);
+        constexpr auto scratchHeader = ProcessingHostAllocator<float>::allocationHeaderBytes();
+        if (components != nativeComponents && bytes > UINT64_MAX - scratchHeader)
+            return UploadOutcome::OverBudget;
+        const std::uint64_t scratchUpper =
+            components == nativeComponents ? 0 : bytes + scratchHeader;
+        if (!fitsRemainingBudget(mapped.size, bytes, scratchUpper, remainingOwnedBytes))
+            return UploadOutcome::OverBudget;
+        // Padded texels are a distinct CPU allocation, never spare output/source quota. The
+        // allocator reserves the exact requested payload/header before allocating its backing.
+        std::vector<float, ProcessingHostAllocator<float>> padded{
+            ProcessingHostAllocator<float>{state.processingPhase, &scratchRefusal}};
         const void* source = texture.samples.data();
         if (components != nativeComponents) {
             padded.resize(texels * components, 1.0F);
@@ -606,8 +577,8 @@ createSampledResource(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>
             }
             source = padded.data();
         }
-        const std::uint64_t bytes = static_cast<std::uint64_t>(texels) * components * sizeof(float);
-        const std::uint64_t hostScratchBytes = padded.empty() ? 0U : padded.size() * sizeof(float);
+        const std::uint64_t hostScratchBytes =
+            padded.empty() ? 0U : padded.capacity() * sizeof(float) + scratchHeader;
         std::string reason;
         const UploadOutcome outcome = uploadImage(
             state, owner, image, extent, source, bytes, static_cast<std::uint64_t>(mapped.size),
@@ -631,6 +602,13 @@ createSampledResource(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>
         image.release();
         return UploadOutcome::Retired;
     } catch (...) {
+        if (scratchRefusal) {
+            owner->bufferStorageRefusal = {scratchRefusal->status, scratchRefusal->domain,
+                                           owner->processingPhase ? owner->processingPhase->id()
+                                                                  : 0,
+                                           scratchRefusal->revisionAfterOwnRelease};
+            return UploadOutcome::OverBudget;
+        }
         return UploadOutcome::Failed;
     }
 }

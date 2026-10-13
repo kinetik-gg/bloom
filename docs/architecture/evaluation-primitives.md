@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-09-17
+Updated: 2026-10-13
 
 ## Purpose And Scope
 
@@ -462,6 +462,16 @@ alpha remains finite in `[0, 1]`, and alpha zero canonicalizes RGB to exact zero
 config must resolve that exact id as a non-data scene-linear colour space before any operation that
 needs an OCIO transform; a matching alias, role, or display name is insufficient.
 
+An escaping colour intent retains immutable ownership of its working-space and configuration-URI
+strings. `captureEvaluationColorIntent` preserves the aggregate request API, reuses an exact existing
+owner, and reports allocation failure explicitly; ownership does not participate in semantic
+equality. CPU/GPU evaluation, prepared-scene construction and asynchronous preview submission
+capture raw caller views before publication. Preview settings, queued work, RAM/background keys,
+thumbnails and retained frame identities keep that owner across colour changes and New/Open.
+Failed capture rejects the request; it never substitutes the Neutral configuration. Immediate UI
+reads may remain borrowed while the session is live; cancelled workers still retain their captured
+strings until they actually finish.
+
 The compatibility spelling `EvaluationColorIntent::LinearRec709Scene` still denotes the zero-revision
 `lin_rec709_scene` intent, preserving existing process-frame and reference-display bytes. Generalized
 intents add their working-space id and config revision to cache/output identity. CPU image primitive
@@ -668,6 +678,15 @@ capacity and actual export reservations use a separate bounded allowance, so col
 does not disable frame preparation. Default construction and settings getters perform no OS reads;
 unactivated standalone ledgers retain the legacy host-only policy.
 
+Foreground admission also respects that existing physically bounded low-memory floor when deriving
+the host reserve. For known physical memory, the reserve cannot consume the usable allowance
+already defined by `MemoryBudgetLedger`: a 7 GiB host reserves 4 GiB, and an 8 GiB host reserves
+5 GiB. Above the low-memory floor the nominal reserve is unchanged. Admission subtracts this reserve
+from **measured available** memory and still applies every finite process ceiling, sample freshness
+and readiness requirement. The floor is not a guaranteed processing allocation: measured zero or
+availability below the reserve still refuses work, and unknown physical memory cannot manufacture
+a low-memory allowance. Reusable host credit remains zero.
+
 The application owns one `MemoryBudgetController`, with at most one `BlockingIo` sampling task,
 no sampling backlog and a five-second cadence. A worker captures host/process data; ordinary task
 completion delivers it independently of Jobs monitoring. The UI applies cache callbacks and updates
@@ -832,7 +851,10 @@ not invalidate readers. Shared image storage is conservatively charged for every
 Concurrent misses may independently evaluate the same operation; cache access is synchronized, but
 row kernels never execute under its mutex.
 
-Decoded media is stored in the same evaluator-session cache with a revision-independent address.
+Decoded media and immutable encoded still-source revisions are stored in the same evaluator-session
+cache with revision-independent content addresses. Source revisions own the bytes used for SHA-256,
+probe and decode, include encoded bytes and metadata in retention charges, and obey the explicit
+interactive reuse/final revalidation contract in [Media I/O](media-io.md#disk-cache).
 Because a burst of new revision-qualified operation entries otherwise makes cold media the oldest
 entry, a decoded entry receives an eight-cache-access grace period. Unprotected operation entries
 are evicted first during that grace; if every entry is protected, the byte budget still wins.

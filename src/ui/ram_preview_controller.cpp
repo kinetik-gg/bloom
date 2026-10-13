@@ -35,10 +35,15 @@ RamPreviewController::RamPreviewController(CompositionSession& session,
                                            runtime::TaskScheduler& scheduler,
                                            TaskUiBridge& taskUiBridge,
                                            PreviewPreparationFunction preparation, QObject* parent,
-                                           PreviewPreparationSubmitter submitter)
+                                           PreviewPreparationSubmitter submitter,
+                                           const std::optional<std::size_t> preparationWidth)
     : QObject(parent), session_(session), previewController_(previewController),
       scheduler_(scheduler), taskUiBridge_(taskUiBridge), preparation_(std::move(preparation)),
-      submitter_(std::move(submitter)) {
+      submitter_(std::move(submitter)),
+      // The measured GPU-service width-two candidate used more peak reservation headroom and
+      // worsened scrub/commit latency. Keep its production fill serial; the existing CPU pipeline
+      // retains its two-worker default. An explicit width is reserved for paired qualification.
+      pipeline_(preparationWidth.value_or(submitter_ ? 1 : RamPreviewPipeline::kMaxInFlight)) {
     connect(&taskUiBridge_, &TaskUiBridge::resultsAvailable, this,
             &RamPreviewController::consumeReadyResult);
     // A render-affecting edit or a composition switch makes every frame this run would still cache

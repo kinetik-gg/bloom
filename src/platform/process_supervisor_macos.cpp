@@ -1,3 +1,4 @@
+#include <bloom/platform/file_snapshot.hpp>
 #include <bloom/platform/process_supervisor.hpp>
 
 #include <algorithm>
@@ -55,7 +56,7 @@ bool makePipe(std::array<Fd, 2>& ends) {
         return false;
     // Keep launch file actions independent of whether stdin/stdout/stderr were open in the host.
     for (std::size_t i = 0; i < raw.size(); ++i) {
-        const int high = ::fcntl(raw[i], F_DUPFD_CLOEXEC, 4);
+        const int high = ::fcntl(raw[i], F_DUPFD_CLOEXEC, 5);
         ::close(raw[i]);
         if (high < 0) {
             for (std::size_t j = i + 1; j < raw.size(); ++j)
@@ -207,6 +208,15 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
                                                 O_WRONLY, 0);
     if (code == 0)
         code = posix_spawn_file_actions_adddup2(&actions.value, gate[0].get(), 3);
+    if (code == 0 && options.inputSnapshot)
+        code = posix_spawn_file_actions_adddup2(&actions.value, options.inputSnapshot->descriptor(),
+                                                4);
+    // Darwin treats closing an already-closed fd in spawn actions as fatal EBADF. Replace any
+    // unrelated inherited fd4 with our own child-only descriptor, then close that known-open fd.
+    if (code == 0 && !options.inputSnapshot)
+        code = posix_spawn_file_actions_addopen(&actions.value, 4, "/dev/null", O_RDONLY, 0);
+    if (code == 0 && !options.inputSnapshot)
+        code = posix_spawn_file_actions_addclose(&actions.value, 4);
     if (code != 0)
         return ProcessFailure{ProcessError::Spawn, code};
     std::vector<std::string> arguments{options.executable};

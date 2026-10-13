@@ -40,6 +40,13 @@
 #include <thread>
 #include <utility>
 
+namespace bloom::render::queue_timing_detail {
+struct State;
+}
+namespace bloom::render::operation_batch_detail {
+struct State;
+}
+
 namespace bloom::render::ocio_program_detail {
 struct ProgramRetirementNode;
 }
@@ -86,6 +93,16 @@ struct DeviceAllocatorState final {
     DeviceAllocatorState& operator=(DeviceAllocatorState&&) = delete;
     ~DeviceAllocatorState();
 
+    // One serial timestamp owner. Final foreign/unproven release preserves this exact native
+    // owner for an allocation-free owner drain; repeated timing requests cannot grow quarantine.
+    std::atomic<bool> queueTimingOccupied{false};
+    std::weak_ptr<queue_timing_detail::State> queueTiming;
+    std::atomic<queue_timing_detail::State*> retiredQueueTiming{nullptr};
+    // One bounded multi-kernel command owner. Unproven/foreign final release preserves this exact
+    // owner, including all intermediate backing, until an owner-thread fence proof drains it.
+    std::atomic<bool> operationBatchOccupied{false};
+    std::atomic<operation_batch_detail::State*> retiredOperationBatch{nullptr};
+
     std::mutex programRetirementMutex;
     ocio_program_detail::ProgramRetirementNode* programRetirementHead = nullptr;
     std::uint64_t registeredPrograms = 0;
@@ -100,6 +117,7 @@ struct DeviceAllocatorState final {
     std::atomic<std::uint64_t> pendingOracleReadbacks{0};
     std::atomic<std::uint64_t> imageReclamationScans{0};
     // Owner-only backing-call witness, distinct from unbound-image/requirements queries.
+    std::uint64_t nativeQueueTimingBackingAttempts = 0;
     std::uint64_t nativeImageBackingAttempts = 0;
     std::uint64_t nativeImageBackingsDestroyed = 0;
     std::uint64_t nativeBufferBackingAttempts = 0;
@@ -113,6 +131,8 @@ struct DeviceAllocatorState final {
     // Declared before native RAII fields: all native teardown precedes final quota release. The
     // lease points only to a neutral ledger, never back to this generation (no reference cycle).
     std::shared_ptr<GpuProcessingPhaseLease> processingPhase;
+    GpuProcessingRootIdentity processingRoot;
+    std::optional<NativePresentationStorageRefusal> presentationStorageRefusal;
     std::optional<NativeImageStorageRefusal> imageStorageRefusal;
     std::optional<NativeBufferStorageRefusal> bufferStorageRefusal;
     // Native RAII declaration order is deliberate: queues/device/instance die before the loader.
@@ -154,6 +174,7 @@ struct DeviceAllocatorState final {
     bool shaderFloat64 = false;
     // True only when VK_EXT_memory_budget and the matching VMA flag are both enabled.
     bool memoryBudgetEnabled = false;
+    bool calibratedTimestampsEnabled = false;
 };
 
 } // namespace bloom::render::vulkan_detail

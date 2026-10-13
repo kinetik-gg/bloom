@@ -139,6 +139,12 @@ bool matrix(Expectations& checks, const TestOptions& options,
                       status.presentationAvailability ==
                           bloom::render::GpuPresentationAvailability::NotRequested,
                   "offscreen product requires no native target or presentation bootstrap");
+    auto programStorage = std::make_shared<PackedProgramStorageProbe>();
+    if (programs) {
+        observePackedProgramStorage(
+            bloom::runtime::detail::GpuPreviewDisplayServiceTestAccess::coreOf(service), policy,
+            programStorage);
+    }
     auto identity = makeIdentity(*plan, 1, {}, {}, {});
     refresh();
     const auto full = requestPacked(checks, service, snapshot, identity);
@@ -149,19 +155,27 @@ bool matrix(Expectations& checks, const TestOptions& options,
         waitUntil([&] { return policy->snapshot().reservations.admittedPhases == 0; }, 2s),
         "native terminal stage aliases release the original phase");
     const auto ownedFull = policy->snapshot().reservations;
+    const auto retainedProgram = programStorage->snapshot();
+    if (programs)
+        checkPackedProgramStorage(checks, retainedProgram,
+                                  full->provenance().gpuPreparedPacked->transfer.logicalBytes);
     checks.expect(
         full->displayOnlyFrame()->packedHostOwnership() ==
                 bloom::render::PackedRgba8Ownership::RootedPublished &&
             ownedFull.hostReservedBytes == 0 && ownedFull.admittedPhases == 0 &&
-            ownedFull.ownedNativeBuffers == 0 && ownedFull.ownedNativeBufferBytes == 0 &&
-            ownedFull.ownedNonlocalNativeBufferHostBytes == 0 &&
+            ownedFull.ownedNativeBuffers == retainedProgram.root.ownedNativeBuffers &&
+            ownedFull.ownedNativeBufferBytes == retainedProgram.root.ownedNativeBufferBytes &&
+            ownedFull.ownedNonlocalNativeBufferHostBytes ==
+                retainedProgram.root.ownedNonlocalNativeBufferHostBytes &&
             ownedFull.ownedPackedHostAllocations == 1 &&
             ownedFull.ownedPackedHostBytes ==
                 full->provenance().gpuPreparedPacked->transfer.hostStorageBytes &&
             ownedFull.totalHostClaimBytes == ownedFull.ownedPackedHostBytes +
                                                  ownedFull.ownedPackedHostMetadataBytes +
-                                                 ownedFull.ownedNonlocalNativeHostBytes,
-        "actual rooted native transfer publishes one independently charged host allocation");
+                                                 ownedFull.ownedNonlocalNativeHostBytes +
+                                                 ownedFull.ownedNonlocalNativeBufferHostBytes,
+        "final transfer staging retires while one published host allocation and exact native "
+        "program storage stay charged");
     const auto proof = full->provenance().gpuPreparedPacked;
     checks.expect(proof && proof->serviceGeneration != 0 && proof->deviceGeneration != 0 &&
                       proof->transfer.submissions == 1 &&
@@ -181,14 +195,17 @@ bool matrix(Expectations& checks, const TestOptions& options,
                           warm->provenance().gpuPreparedPacked == proof,
                       "retained packed product reuse shares immutable bytes and sealed evidence");
     }
-    checks.expect(service.status().counters == beforeWarm &&
-                      preparationCount->load() == beforePreparation &&
-                      policy->snapshot().reservations.ownedPackedHostAllocations == 1 &&
-                      policy->snapshot().reservations.ownedPackedHostBytes ==
-                          ownedFull.ownedPackedHostBytes &&
-                      policy->snapshot().reservations.ownedNativeBufferBytes == 0 &&
-                      policy->snapshot().reservations.ownedNativeBuffers == 0,
-                  "retained packed reuse adds no scene preparation/dispatch or repeated transfer");
+    checks.expect(
+        service.status().counters == beforeWarm && preparationCount->load() == beforePreparation &&
+            policy->snapshot().reservations.ownedPackedHostAllocations == 1 &&
+            policy->snapshot().reservations.ownedPackedHostBytes ==
+                ownedFull.ownedPackedHostBytes &&
+            policy->snapshot().reservations.ownedNativeBufferBytes ==
+                ownedFull.ownedNativeBufferBytes &&
+            policy->snapshot().reservations.ownedNativeBuffers == ownedFull.ownedNativeBuffers &&
+            policy->snapshot().reservations.ownedNonlocalNativeBufferHostBytes ==
+                ownedFull.ownedNonlocalNativeBufferHostBytes,
+        "retained packed reuse adds no scene preparation/dispatch or repeated transfer");
     const auto halfExtent = bloom::render::ImageExtent::create(960, 540);
     identity.requestGeneration = 202;
     identity.resolution = bloom::runtime::ProxyResolution{*halfExtent.value()};
@@ -272,6 +289,13 @@ bool matrix(Expectations& checks, const TestOptions& options,
         waitUntil([&] { return policy->snapshot().deviceReports == 0; }, 2s) &&
             policy->snapshot().reservations.admittedPhases == 0 &&
             policy->snapshot().reservations.hostReservedBytes == 0 &&
+            policy->snapshot().reservations.ownedNativeBufferBytes == 0 &&
+            policy->snapshot().reservations.ownedNativeBuffers == 0 &&
+            policy->snapshot().reservations.ownedNonlocalNativeBufferHostBytes == 0 &&
+            policy->snapshot().reservations.ownedNativeImageBytes == 0 &&
+            policy->snapshot().reservations.ownedNativeImages == 0 &&
+            policy->snapshot().reservations.ownedNonlocalNativeHostBytes == 0 &&
+            policy->snapshot().reservations.totalDeviceClaimBytes == 0 &&
             policy->snapshot().reservations.ownedPackedHostBytes == retainedBytes &&
             externalPin->packedHostOwnership() ==
                 bloom::render::PackedRgba8Ownership::RootedPublished &&

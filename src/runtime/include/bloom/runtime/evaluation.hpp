@@ -47,18 +47,26 @@ inline constexpr std::string_view kLinearRec709SceneColorSpaceId = "lin_rec709_s
 inline constexpr std::string_view kBloomNeutralOcioConfigUri =
     "bloom://ocio/neutral-v1/config.ocio";
 
+struct EvaluationColorIntentStorage;
 struct EvaluationColorIntent final {
     std::string_view workingColorSpaceId{kLinearRec709SceneColorSpaceId};
     core::Sha256Digest ocioConfigRevision{};
     std::string_view ocioConfigUri{kBloomNeutralOcioConfigUri};
+    // Captured asynchronous identities retain their exact strings. Ownership is not pixel identity.
+    std::shared_ptr<const EvaluationColorIntentStorage> storage = nullptr;
 
     // Compatibility spelling for existing request builders. Its value is the generalized
     // identity {lin_rec709_scene, empty revision}; new plans should carry the selected config
     // revision alongside the working-space id.
     static const EvaluationColorIntent LinearRec709Scene;
 
-    friend bool operator==(const EvaluationColorIntent&, const EvaluationColorIntent&) = default;
+    friend bool operator==(const EvaluationColorIntent&, const EvaluationColorIntent&) noexcept;
 };
+
+// Capture while borrowed views are still valid. Failure is explicit; callers must not queue the
+// borrowed input or substitute a different colour intent. Existing captured strings are reused.
+[[nodiscard]] std::optional<EvaluationColorIntent>
+captureEvaluationColorIntent(const EvaluationColorIntent&) noexcept;
 
 // A process produced by the GPU scene executor is never stamped CpuReference: GpuResident records
 // that the scene-linear pixels came from the GPU path. This is provenance only -- it participates
@@ -82,6 +90,11 @@ struct ProxyResolution final {
 
 using EvaluationResolution = std::variant<CompositionFormatResolution, ProxyResolution>;
 
+// Source availability is a caller policy, not pixel identity. Final/headless callers always keep
+// the default Revalidate. Interactive callers may use a retained, immutable last verified source
+// until explicit Refresh/reconnect/relink/purge drops the session's decoded-media entries.
+enum class MediaSourceRevisionPolicy : std::uint8_t { Revalidate, Retained };
+
 struct EvaluationRequest final {
     core::RationalTime time;
     OperationIndex output;
@@ -92,6 +105,10 @@ struct EvaluationRequest final {
     bool bypassOperationCache = false;
     std::optional<render::ImageWindow> roi = std::nullopt;
     bool bypassLookNodes = false;
+    MediaSourceRevisionPolicy mediaSourceRevisionPolicy = MediaSourceRevisionPolicy::Revalidate;
+    // Final CPU boundaries reject unavailable/changed media instead of preview placeholders.
+    // Also forces fresh source revalidation when handed an explicitly Retained preview request.
+    bool requireVerifiedMediaSources = false;
 };
 
 // This deliberately retains the complete immutable plan. Exact deep equality is the conservative

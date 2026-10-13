@@ -1,4 +1,5 @@
 #include "composition_export_dialog.hpp"
+#include "gpu_preview_test_phase.hpp"
 #include <QDialog>
 #include <QSettings>
 #include <QSpinBox>
@@ -293,7 +294,8 @@ independentlyReanalyze(Expectations& expectations, Fixture& fixture,
                        .pixelStorageByteLimit = bloom::ui::kDefaultPreviewPixelStorageByteLimit},
         .targetPath = verifyTarget,
         .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
-        .owner = {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(99)}};
+        .owner = {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(99)},
+        .processingPhasePolicy = bloom::ui::test::previewProcessingPhase()};
 
     auto begin = host::beginOutputAnalysisAttemptV1(fixture.scheduler, fixture.artifacts(),
                                                     verifyLedger, std::move(request));
@@ -904,6 +906,12 @@ void testFrameRangeExportsEveryFrameAtItsOwnTime(Expectations& expectations) {
     // time rather than at its own, every file would come out identical, and the assertions below
     // would fail.
     const auto base = fixture.directory.path() / "ramp.png";
+    int sourceContextCaptures = 0;
+    std::filesystem::path projectPath = fixture.directory.path() / "original" / "scene.bloom";
+    fixture.controller().setProjectPathProvider([&]() -> std::optional<std::filesystem::path> {
+        ++sourceContextCaptures;
+        return projectPath;
+    });
     fixture.controller().setRangeProvider([base]() -> std::optional<FrameExportRangeRequest> {
         return FrameExportRangeRequest{.destination = base, .firstFrame = 0, .lastFrame = 3};
     });
@@ -924,10 +932,16 @@ void testFrameRangeExportsEveryFrameAtItsOwnTime(Expectations& expectations) {
                          diagnosticMessage = text;
                      });
     fixture.controller().requestRangeExport();
+    projectPath = fixture.directory.path() / "saved-as" / "scene.bloom";
+    auto changedColor = fixture.session.colorSettings();
+    changedColor.processColorSpaceId = "missing-after-capture";
+    fixture.session.setColorSettings(std::move(changedColor));
     expectations.expect(waitUntil([&] { return finishedCount == 1; }),
                         "frame range: the range reaches a terminal outcome");
     expectations.expect(outcome == FrameExportOutcome::Published,
                         "frame range: every frame publishes");
+    expectations.expect(sourceContextCaptures == 1,
+                        "frame range: snapshot and source base are captured once before compile");
     if (outcome != FrameExportOutcome::Published) {
         std::cerr << "  diagnostic: " << diagnosticMessage.toStdString() << '\n';
         return;

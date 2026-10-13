@@ -716,6 +716,8 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
                                              render::GpuDisplayTransferCode::Cancelled);
             if (core->packedTransfer) {
                 core->packedTransfer->cancel();
+                if (core->packedQueueTiming)
+                    core->packedQueueTiming->cancel();
                 static_cast<void>(core->packedTransfer->reset());
             }
             releaseProcessingPhase(core, stage, proven);

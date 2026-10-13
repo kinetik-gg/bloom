@@ -1,4 +1,5 @@
 #include "gpu_image_reclamation_private.hpp"
+#include "gpu_native_buffer_allocation_private.hpp"
 #include "gpu_native_image_allocation_private.hpp"
 #include "gpu_resident_display_private.hpp"
 #include "gpu_resident_display_readback_private.hpp"
@@ -36,11 +37,9 @@ displayReadbackFailure(const GpuDisplayImageReadbackCode code,
     return result;
 }
 
-} // namespace
-
-bool createResidentBuffer(DeviceAllocatorState& state, const std::uint64_t bytes,
-                          const VkBufferUsageFlags usage, const VmaAllocationCreateFlags flags,
-                          const bool hostVisible, ResidentBuffer& out) {
+bool createResidentBufferImpl(DeviceAllocatorState& state, const std::uint64_t bytes,
+                              const VkBufferUsageFlags usage, const VmaAllocationCreateFlags flags,
+                              const bool hostVisible, ResidentBuffer& out) {
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferInfo.size = bytes;
@@ -52,8 +51,13 @@ bool createResidentBuffer(DeviceAllocatorState& state, const std::uint64_t bytes
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
     VmaAllocationInfo info{};
-    if (vmaCreateBuffer(state.allocator, &bufferInfo, &allocationInfo, &buffer, &allocation,
-                        &info) != VK_SUCCESS) {
+    NativeBufferStorageToken token;
+    const bool allocated =
+        vulkan_detail::allocateCoveredBuffer(
+            state, bufferInfo, allocationInfo, std::numeric_limits<std::uint64_t>::max(), buffer,
+            allocation, info, token, vulkan_detail::NativeBufferPurpose::Processing) ==
+        vulkan_detail::NativeBufferAllocationOutcome::Allocated;
+    if (!allocated) {
         return false;
     }
     out.buffer = buffer;
@@ -61,13 +65,33 @@ bool createResidentBuffer(DeviceAllocatorState& state, const std::uint64_t bytes
     out.info = info;
     out.bytes = bytes;
     out.hostVisible = hostVisible;
+    out.storageToken = std::move(token);
     return true;
 }
+} // namespace
 
-void destroyResidentBuffer(DeviceAllocatorState& state, ResidentBuffer& buffer) noexcept {
+bool createResidentBuffer(DeviceAllocatorState& state, const std::uint64_t bytes,
+                          const VkBufferUsageFlags usage, const VmaAllocationCreateFlags flags,
+                          const bool hostVisible, ResidentBuffer& out) {
+    return createResidentBufferImpl(state, bytes, usage, flags, hostVisible, out);
+}
+bool createResidentDisplayBuffer(DeviceAllocatorState& state, const std::uint64_t bytes,
+                                 const VkBufferUsageFlags usage,
+                                 const VmaAllocationCreateFlags flags, const bool hostVisible,
+                                 ResidentBuffer& out) {
+    return createResidentBufferImpl(state, bytes, usage, flags, hostVisible, out);
+}
+
+void destroyResidentBuffer(DeviceAllocatorState& state, ResidentBuffer& buffer,
+                           const std::shared_ptr<GpuProcessingPhaseLease>& failedOrigin) noexcept {
     if (buffer.buffer != VK_NULL_HANDLE) {
         vmaDestroyBuffer(state.allocator, buffer.buffer, buffer.allocation);
+        if (buffer.storageToken.bytes() != 0 && state.nativeBufferBackingsDestroyed != UINT64_MAX)
+            ++state.nativeBufferBackingsDestroyed;
     }
+    if (failedOrigin && buffer.storageToken.bytes() != 0)
+        static_cast<void>(
+            buffer.storageToken.releaseFailedAttemptAfterBackingDestroyed(failedOrigin));
     buffer = ResidentBuffer{};
 }
 

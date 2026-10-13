@@ -20,6 +20,20 @@ namespace {
 constexpr std::uint64_t kDrainTimeoutNanoseconds = 2ULL * 1000ULL * 1000ULL * 1000ULL;
 constexpr std::uint64_t kCoverageDeadlineNanoseconds = 2ULL * 1000ULL * 1000ULL * 1000ULL;
 
+std::mutex& maskRetirementMutex() {
+    static auto* const value = new std::mutex();
+    return *value;
+}
+GpuPathCoverageMaskOwner*& retiredMasks() {
+    static GpuPathCoverageMaskOwner* head = nullptr;
+    return head;
+}
+bool ownsMask(const GpuPathCoverageMaskOwner& mask) noexcept {
+    return !mask.state ||
+           (mask.state->owner == std::this_thread::get_id() &&
+            mask.state->ownerLifetimeToken == vulkan_detail::deviceOwnerLifetimeToken());
+}
+
 // Bounded resident pool. Every Impl native resource set (compute pipeline plus resident mask plus
 // any in-flight job resources) occupies exactly one fixed slot, acquired before the Impl's first
 // native allocation and held until owner-thread retirement. A foreign-thread destruction never
@@ -110,6 +124,41 @@ void orphanResidentSlot(GpuPathCoverageImpl* const impl) noexcept {
 // --- Test-only fault seam (production-owned atomics; setters are private and never called by
 // production code) ------------------------------------------------------------------------------
 namespace path_coverage_detail {
+
+void retireMaskOwner(GpuPathCoverageMaskOwner* const owner) noexcept {
+    if (owner == nullptr)
+        return;
+    if (ownsMask(*owner)) {
+        delete owner;
+        return;
+    }
+    const std::lock_guard lock(maskRetirementMutex());
+    owner->retirementNext = retiredMasks();
+    retiredMasks() = owner;
+}
+
+void drainMaskOwnersOnOwnerThread() noexcept {
+    GpuPathCoverageMaskOwner* released = nullptr;
+    {
+        const std::lock_guard lock(maskRetirementMutex());
+        auto** link = &retiredMasks();
+        while (*link != nullptr) {
+            auto* const owner = *link;
+            if (!ownsMask(*owner)) {
+                link = &owner->retirementNext;
+                continue;
+            }
+            *link = owner->retirementNext;
+            owner->retirementNext = released;
+            released = owner;
+        }
+    }
+    while (released != nullptr) {
+        auto* const owner = released;
+        released = owner->retirementNext;
+        delete owner;
+    }
+}
 
 std::atomic<std::uint8_t>& pathCoverageFault() noexcept {
     static std::atomic<std::uint8_t> fault{0};
@@ -220,6 +269,7 @@ std::uint64_t pathCoverageResidentRefusals() noexcept { return residentRefusals(
 std::uint64_t pathCoverageResidentRetired() noexcept { return residentRetired().load(); }
 
 void drainPathCoverageResidentOrphansOnOwnerThread() noexcept {
+    drainMaskOwnersOnOwnerThread();
     std::array<GpuPathCoverageImpl*, kResidentCapacity> freed{};
     std::size_t freedCount = 0;
     {
@@ -257,7 +307,10 @@ GpuPathCoverageMaskOwner::~GpuPathCoverageMaskOwner() { release(); }
 void GpuPathCoverageMaskOwner::release() noexcept {
     if (state != nullptr && buffer != VK_NULL_HANDLE) {
         vmaDestroyBuffer(state->allocator, buffer, allocation);
+        if (storageToken.bytes() != 0 && state->nativeBufferBackingsDestroyed != UINT64_MAX)
+            ++state->nativeBufferBackingsDestroyed;
     }
+    storageToken = {};
     state.reset();
     buffer = VK_NULL_HANDLE;
     allocation = VK_NULL_HANDLE;
@@ -367,6 +420,7 @@ void GpuPathCoverage::releaseImpl() noexcept {
         }
         return;
     }
+    path_coverage_detail::drainMaskOwnersOnOwnerThread();
     // Owner thread: prove retirement if needed, then free native resources and return the slot.
     if (impl_->submitted) {
         cancel();
@@ -401,6 +455,7 @@ GpuPathCoveragePollResult GpuPathCoverage::poll() {
     if (!impl.onOwnerThread()) {
         return GpuPathCoveragePollResult::WrongThread;
     }
+    path_coverage_detail::drainMaskOwnersOnOwnerThread();
     if (impl.quarantineToken != 0) {
         std::lock_guard lock(path_coverage_detail::reservationMutex());
         auto& slot = path_coverage_detail::reservation();
@@ -480,6 +535,14 @@ GpuPathCoveragePollResult GpuPathCoverage::poll() {
     if (impl.mask == nullptr) {
         impl.fail(GpuPathCoverageDiagnosticCode::DeviceUnavailable,
                   "the resident coverage mask is missing");
+        return GpuPathCoveragePollResult::Failure;
+    }
+    // Completed masks can outlive their producer and the consuming Solid job. Retain their exact
+    // backing claim without keeping the whole originating processing phase admitted.
+    if (impl.mask->storageToken.bytes() != 0 && !impl.mask->storageToken.promote()) {
+        impl.mask.reset();
+        impl.fail(GpuPathCoverageDiagnosticCode::DeviceUnavailable,
+                  "the resident coverage ownership could not be published");
         return GpuPathCoveragePollResult::Failure;
     }
     impl.jobState = GpuPathCoverageJobState::Ready;

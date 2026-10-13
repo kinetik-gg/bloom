@@ -38,7 +38,8 @@ void testAcesHdrDisplayLut(Expectations& expectations, GpuDevice& device,
     constexpr std::uint32_t width = 4;
     constexpr std::uint32_t height = 3;
     const auto pixels = fixturePixels(width, height);
-    const auto input = uploadImage(*uploader.upload, width, height, pixels);
+    const auto input =
+        uploadImage(*uploader.upload, width, height, pixels, device.retainedProcessingPhase());
     if (input == nullptr) {
         expectations.expect(false, "the LUT display input uploads");
         return;
@@ -141,7 +142,8 @@ void testExposureContrastUniforms(Expectations& expectations, GpuDevice& device,
     constexpr std::uint32_t width = 4;
     constexpr std::uint32_t height = 2;
     const auto pixels = fixturePixels(width, height);
-    const auto input = uploadImage(*uploader.upload, width, height, pixels);
+    const auto input =
+        uploadImage(*uploader.upload, width, height, pixels, device.retainedProcessingPhase());
     if (input == nullptr) {
         expectations.expect(false, "the exposure/contrast input uploads");
         return;
@@ -235,7 +237,8 @@ void testLut3d(Expectations& expectations, GpuDevice& device,
     constexpr std::uint32_t width = 3;
     constexpr std::uint32_t height = 2;
     const auto pixels = fixturePixels(width, height);
-    const auto input = uploadImage(*uploader.upload, width, height, pixels);
+    const auto input =
+        uploadImage(*uploader.upload, width, height, pixels, device.retainedProcessingPhase());
     if (input == nullptr) {
         expectations.expect(false, "the 3D LUT input uploads");
         return;
@@ -305,8 +308,10 @@ int main(int argc, char** argv) {
     bloom::render::GpuProcessingPhaseBudget budget;
     budget.setHostCapacity(kBudget, true);
     budget.setDeviceCapacity(kBudget, true);
-    auto phase = budget.reserve(
-        {.requestedExecutorBytes = kBudget, .minimumExecutorBytes = kBudget, .sourceFree = true});
+    auto phase = budget.reserve({.requestedSourceBytes = 2ULL * 1024 * 1024,
+                                 .minimumSourceBytes = 2ULL * 1024 * 1024,
+                                 .requestedExecutorBytes = kBudget,
+                                 .minimumExecutorBytes = kBudget});
     if (!phase.lease) {
         std::cerr << "FAILED: the declared resource fixture envelope is not admitted\n";
         return 1;
@@ -340,6 +345,8 @@ int main(int argc, char** argv) {
     bloom::render::ocio_program_detail::setLutRgbaFormatForTest(false);
     std::cout << "LUT_PIXEL_ORACLE forcedRGBA=1 HDR=executed 3D=executed\n";
     testMultiLutPrefix(expectations, options);
+    testRetainedBuffers(expectations, options, *aces);
+    testRetainedPacked(expectations, options, *aces);
     testForcedDispatchPlanning(expectations, *device.device, *aces);
     testDispatchRefusal(expectations, *device.device, *aces);
     testShaderInterfaceReflection(expectations, *device.device, *aces);
@@ -350,6 +357,8 @@ int main(int argc, char** argv) {
     const auto finalClaims = budget.snapshot();
     expectations.expect(
         finalClaims.ownedNativeImageBytes == 0 && finalClaims.ownedNativeImages == 0 &&
+            finalClaims.ownedNativeBufferBytes == 0 && finalClaims.ownedNativeBuffers == 0 &&
+            finalClaims.ownedProcessingHostAllocations == 0 &&
             finalClaims.ownedNonlocalNativeHostBytes == 0 && finalClaims.totalHostClaimBytes == 0 &&
             finalClaims.totalDeviceClaimBytes == 0 && finalClaims.admittedPhases == 0 &&
             finalClaims.unprovenPhases == 0 &&

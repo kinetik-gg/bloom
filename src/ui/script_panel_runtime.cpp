@@ -45,6 +45,7 @@ struct ScriptPanelRuntime::State {
     std::atomic_bool alive = true, executing = false, available = false;
     std::atomic_uint64_t generation = 1, cancellation = 0, activeCancellation = 0;
     std::optional<document::Snapshot> snapshot;
+    std::filesystem::path assetBaseDirectory;
     py::PythonContext context;
     std::deque<Work> scripts;
     std::deque<std::shared_ptr<Request>> requests;
@@ -90,11 +91,19 @@ ScriptPanelRuntime::ScriptPanelRuntime(CompositionSession& session, ProjectHost&
     state_->gpuExportProvider = provider ? std::move(provider) : host::GpuExportProvider::create();
     state_->executable = QCoreApplication::applicationFilePath().toStdString();
     replaceSession();
+    connect(&session_, &CompositionSession::documentRebound, this, [state = state_] {
+        // Rebind refreshes can precede the host's later sessionReplaced slots. Revoke old reads
+        // and queued authoring before any of those refreshes can publish the new snapshot.
+        state->available = false;
+        ++state->generation;
+        ++state->cancellation;
+    });
     connect(&session_, &CompositionSession::snapshotChanged, this, &ScriptPanelRuntime::refresh);
     connect(&session_, &CompositionSession::compositionChanged, this, &ScriptPanelRuntime::refresh);
     connect(&session_, &CompositionSession::selectionChanged, this, &ScriptPanelRuntime::refresh);
     connect(&session_, &CompositionSession::currentTimeChanged, this, &ScriptPanelRuntime::refresh);
     connect(&host_, &ProjectHost::sessionReplaced, this, &ScriptPanelRuntime::replaceSession);
+    connect(&host_, &ProjectHost::saveFinished, this, [this] { refresh(); });
     connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this,
             &ScriptPanelRuntime::shutdown);
     auto* timer = new QTimer(this);
@@ -115,6 +124,8 @@ ScriptPanelRuntime::~ScriptPanelRuntime() {
 void ScriptPanelRuntime::refresh() {
     const std::lock_guard lock(state_->mutex);
     state_->snapshot = session_.snapshot();
+    const auto path = host_.displayPath();
+    state_->assetBaseDirectory = path ? path->parent_path() : std::filesystem::path{};
     state_->context.project = session_.snapshot().project().id().value();
     state_->context.composition = session_.compositionId().value();
     state_->context.time = session_.currentTime();
@@ -124,6 +135,8 @@ void ScriptPanelRuntime::refresh() {
 }
 void ScriptPanelRuntime::replaceSession() {
     cancel();
+    // An early documentRebound may already have revoked the preceding generation. Advancing
+    // again is harmless: neither value can reauthorize an old binding or queued request.
     ++state_->generation;
     state_->observerLife.reset();
     auto* const stack = host_.liveDocumentAndStack().second;
@@ -291,6 +304,13 @@ void ScriptPanelRuntime::work(const std::shared_ptr<State>& state) {
                     }
                     binding.publication = state->publication;
                     binding.artifacts = state->artifacts;
+                    binding.renderSourceSnapshot = [state, valid] {
+                        const std::lock_guard lock(state->mutex);
+                        if (!valid() || !state->snapshot)
+                            throw std::runtime_error("The live project was replaced");
+                        return scripting::SessionRenderSourceSnapshot{*state->snapshot,
+                                                                      state->assetBaseDirectory};
+                    };
                     auto attached = scripting::Session::attach(std::move(binding));
                     if (!attached)
                         throw std::runtime_error(attached.diagnostic().message);

@@ -48,6 +48,7 @@ void retireNativeOnOwner(const std::shared_ptr<PreviewDisplayServiceCore>& core)
 // Defined in gpu_preview_display_service_cache_purge.cpp. Runs on the service owner thread: claims
 // a pending resident-cache purge under `cachePurgeMutex`, clears the scene cache, and publishes
 // completion. A withdrawn (timed-out) request is never cleared.
+void pollServiceQueueTimings(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
 void processServiceCachePurge(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
 // Defined in gpu_preview_display_service_cache_purge.cpp. Worker-thread side: queues a purge and
 // waits, bounded by `timeout`, for the owner to claim and clear it. A timeout withdraws the still-
@@ -111,6 +112,7 @@ struct PreviewDisplayStageRecord final {
     // Native retirement is independent of whether the completed product can be published.
     bool processingPhaseRetired = false;
     std::chrono::steady_clock::time_point nativeStartedAt{};
+    std::chrono::steady_clock::time_point packedTransferStartedAt{};
 
     enum class Phase : std::uint8_t {
         AwaitingStage,
@@ -138,6 +140,11 @@ struct PreviewDisplayServiceCore final {
     TaskScheduler* scheduler = nullptr;
     GpuServiceGeneration generation;
     GpuPreviewDisplayServiceOptions options;
+    [[nodiscard]] bool queueTimingRequested() const noexcept {
+        return options.collectQueueTimestamps ||
+               (options.residentExecutorBudgets &&
+                options.residentExecutorBudgets->collectQueueTimestamps);
+    }
     PreviewCpuStageFunction stageFunction;
     PreviewCpuDisplayFallback fallback;
     // Resident route: the GPU-scene CPU preparation seam. Empty selects the existing
@@ -158,6 +165,13 @@ struct PreviewDisplayServiceCore final {
     std::unique_ptr<GpuSceneExecutor> residentExecutor;
     std::unique_ptr<render::GpuResidentDisplay> residentDisplay;
     std::unique_ptr<render::GpuDisplayTransfer> packedTransfer;
+    std::unique_ptr<render::GpuQueueTiming> packedQueueTiming;
+    bool packedQueueTimingActive = false;
+    render::GpuQueueTimingSample packedQueueTimingSample;
+    // stateMutex protects only these published copies; native polling remains owner-only.
+    render::GpuQueueTimingSample publishedGraphQueueTiming, publishedPackedQueueTiming;
+    render::GpuAllocatorMemorySnapshot publishedAllocatorMemory;
+    std::chrono::steady_clock::time_point allocatorMemorySampledAt{};
     std::shared_ptr<const render::GpuDisplayTransferRetention> packedRetention;
     bool packedTransferLate = false;
     // Owner-thread effective budgets after the device capacity was resolved and clamped. Seeded
@@ -230,6 +244,12 @@ struct PreviewDisplayServiceCore final {
     // Bounded cached counters, owner-written atomics and read locklessly/under lock by status().
     std::atomic<std::uint64_t> counterResidentGraphJobs{0};
     std::atomic<std::uint64_t> counterNativeDispatches{0};
+    std::atomic<std::uint64_t> counterUploadSubmitNanoseconds{0};
+    std::atomic<std::uint64_t> counterUploadFenceObservationNanoseconds{0};
+    std::atomic<std::uint64_t> counterProcessingSubmitNanoseconds{0};
+    std::atomic<std::uint64_t> counterProcessingFenceObservationNanoseconds{0};
+    std::atomic<std::uint64_t> counterCompletedStepContinuations{0};
+    std::atomic<std::uint64_t> counterPackedTransferNanoseconds{0};
     std::atomic<std::uint64_t> counterResidentCompletions{0};
     std::atomic<std::uint64_t> counterPackedTransfers{0};
     std::atomic<std::uint64_t> counterPackedTransferredBytes{0};

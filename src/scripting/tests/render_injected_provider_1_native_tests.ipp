@@ -67,11 +67,38 @@ void testInjectedProviderIsReusedAndNotRetired(Expectations& expectations) {
              .destination = target},
             {}, provider);
         expectations.expect(result.succeeded, "the injected-provider render publishes");
+        if (!result.succeeded) {
+            const auto policy = provider->processingPhasePolicy()->snapshot();
+            std::cerr << "injected render: " << result.diagnostic
+                      << " report=" << result.preservationReport
+                      << " hostReady=" << policy.reservations.hostReady
+                      << " hostCapacity=" << policy.reservations.hostCapacityBytes.value_or(0)
+                      << " processStatus=" << static_cast<unsigned>(policy.processStatus)
+                      << " sampleSerial=" << policy.sampleSerial << '\n';
+        }
         expectations.expect(!provider->retirementComplete(),
                             "Render::run never retires an injected provider between stills");
         expectations.expect(provider->evaluator() != nullptr,
                             "the injected evaluator is still published after a still");
     }
+
+    const auto invalidDestination = scripting::Render::run(
+        *session, scheduler, compiler,
+        {.composition = compositionId,
+         .frame = std::uint64_t{0},
+         .range = std::nullopt,
+         .preset = bloom::output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
+         .destination = directory.path() / "absent-directory" / "frame.exr"},
+        {}, provider);
+    expectations.expect(
+        !invalidDestination.succeeded &&
+            invalidDestination.diagnostic.find("target preflight") != std::string::npos &&
+            invalidDestination.diagnostic.find(
+                "destination error " +
+                std::to_string(static_cast<unsigned>(
+                    bloom::platform::StagedArtifactError::ParentResolutionFailed))) !=
+                std::string::npos,
+        "an output-analysis failure retains its exact stage and typed destination error");
 
     expectations.expect(provider->shutdownAndWait(std::chrono::seconds(10)),
                         "the owner can still retire the injected provider explicitly");
@@ -101,11 +128,12 @@ void testMissingProcessingRootIsRefused(Expectations& expectations) {
          .range = std::nullopt,
          .preset = bloom::output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
          .destination = directory.path() / "local.exr"});
-    expectations.expect(!result.succeeded &&
-                            result.diagnosticCode == scripting::RenderDiagnosticCode::MissingProcessingRoot &&
-                            scheduler.snapshots().empty() &&
-                            !std::filesystem::exists(directory.path() / "local.exr"),
-                        "missing shared process root is typed refusal before compilation/publication");
+    expectations.expect(
+        !result.succeeded &&
+            result.diagnosticCode == scripting::RenderDiagnosticCode::MissingProcessingRoot &&
+            scheduler.snapshots().empty() &&
+            !std::filesystem::exists(directory.path() / "local.exr"),
+        "missing shared process root is typed refusal before compilation/publication");
 }
 
 // Real headless render integration over the production Render::run: at least two PNG frames through

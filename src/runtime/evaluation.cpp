@@ -1,10 +1,43 @@
 #include <bloom/runtime/evaluation.hpp>
 
+#include <string>
 #include <utility>
 
 namespace bloom::runtime {
 
 const EvaluationColorIntent EvaluationColorIntent::LinearRec709Scene{};
+
+struct EvaluationColorIntentStorage final {
+    std::string workingColorSpaceId;
+    std::string ocioConfigUri;
+};
+
+bool operator==(const EvaluationColorIntent& lhs, const EvaluationColorIntent& rhs) noexcept {
+    return lhs.workingColorSpaceId == rhs.workingColorSpaceId &&
+           lhs.ocioConfigRevision == rhs.ocioConfigRevision &&
+           lhs.ocioConfigUri == rhs.ocioConfigUri;
+}
+
+std::optional<EvaluationColorIntent>
+captureEvaluationColorIntent(const EvaluationColorIntent& intent) noexcept {
+    try {
+        if (intent.storage &&
+            intent.workingColorSpaceId.data() == intent.storage->workingColorSpaceId.data() &&
+            intent.workingColorSpaceId.size() == intent.storage->workingColorSpaceId.size() &&
+            intent.ocioConfigUri.data() == intent.storage->ocioConfigUri.data() &&
+            intent.ocioConfigUri.size() == intent.storage->ocioConfigUri.size())
+            return intent;
+        auto storage =
+            std::make_shared<const EvaluationColorIntentStorage>(EvaluationColorIntentStorage{
+                std::string(intent.workingColorSpaceId), std::string(intent.ocioConfigUri)});
+        return EvaluationColorIntent{.workingColorSpaceId = storage->workingColorSpaceId,
+                                     .ocioConfigRevision = intent.ocioConfigRevision,
+                                     .ocioConfigUri = storage->ocioConfigUri,
+                                     .storage = std::move(storage)};
+    } catch (...) {
+        return std::nullopt;
+    }
+}
 
 bool operator==(const ProcessFrameIdentity& lhs, const ProcessFrameIdentity& rhs) {
     const bool plansEqual = lhs.plan == rhs.plan ||

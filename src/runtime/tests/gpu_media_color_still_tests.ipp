@@ -21,12 +21,26 @@ void testColdBuilderToExecutor(Expectations& expectations, bloom::render::GpuDev
                                           plan, request, 3, 2, "ACES2065-1 -> ACEScg"),
                         "cold: ACES input-to-working parity");
 
-    // Warm builder: the raw upload is reused and no decode happens.
-    const auto warm = builder.build(plan, request);
+    // The raw colour split uses the same immutable source authority as the connected CPU arm.
+    // Removing the pathname proves that retained selection performs no probe/read/hash/decode.
+    auto warmRequest = request;
+    warmRequest.mediaSourceRevisionPolicy = bloom::runtime::MediaSourceRevisionPolicy::Retained;
+    auto held = fixture.path;
+    held += ".held-revision";
+    std::filesystem::rename(fixture.path, held);
+    const auto warm = builder.build(plan, warmRequest);
+    std::filesystem::rename(held, fixture.path);
     expectations.expect(warm.hasValue(), "warm: rebuild prepares");
     if (warm) {
         expectations.expect(warm.scene->mediaStatistics().uploadCacheHits == 1 &&
-                                warm.scene->mediaStatistics().imageConversions == 0,
+                                warm.scene->mediaStatistics().imageConversions == 0 &&
+                                warm.scene->mediaStatistics().sourceRevisionCacheHits == 1 &&
+                                warm.scene->mediaStatistics().sourceRevisionBytesHashed == 0 &&
+                                warm.scene->mediaStatistics().sourceBytesRead == 0 &&
+                                warm.scene->mediaStatistics().sourceIoNanoseconds == 0 &&
+                                warm.scene->mediaStatistics().sourceHashNanoseconds == 0 &&
+                                warm.scene->mediaStatistics().sourceProbeNanoseconds == 0 &&
+                                warm.scene->mediaStatistics().imageDecodeNanoseconds == 0,
                             "warm: the decoded raw upload is reused without a re-decode");
         const auto run = runScene(*executor.executor, warm.scene, kSceneBudget);
         const auto counters = executor.executor->counters();

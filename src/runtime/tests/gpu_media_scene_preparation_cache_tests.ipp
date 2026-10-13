@@ -253,3 +253,158 @@ void testGestureCacheNeverTouchesDisk(Expectations& expectations,
                             afterExplicit.storedBytes == beforeExplicit.storedBytes,
                         "an explicit bypass never reads or writes the disk cache either");
 }
+
+void testImmutableSourceRevisionReuse(Expectations& expectations, const MediaFixture& fixture) {
+    using bloom::runtime::MediaSourceRevisionPolicy;
+    using bloom::runtime::OperationCacheEntryKind;
+    CpuCompositionEvaluator evaluator;
+    evaluator.setAssetBaseDirectory(fixture.directory);
+    auto context = legacyPreparedMediaContext(evaluator);
+    const CpuGpuSceneBuilder builder(nullptr, context);
+    const auto planA =
+        mediaPlan(format(8, 8), fixture.asset, LayerValues{.position = {4.3, 3.1}}, 3900);
+    const auto planB =
+        mediaPlan(format(8, 8), fixture.asset, LayerValues{.position = {2.7, 2.4}}, 4000);
+    auto requestA = requestFor(*planA);
+    auto requestB = requestFor(*planB);
+    requestA.mediaSourceRevisionPolicy = MediaSourceRevisionPolicy::Retained;
+    requestB.mediaSourceRevisionPolicy = MediaSourceRevisionPolicy::Retained;
+    const auto cold = builder.build(planA, requestA);
+    expectations.expect(cold && cold.scene->mediaStatistics().sourceRevisionCaptures == 1 &&
+                            cold.scene->mediaStatistics().sourceRevisionBytesHashed > 0 &&
+                            cold.scene->mediaStatistics().sourceBytesRead > 0 &&
+                            cold.scene->mediaStatistics().sourceIoNanoseconds > 0 &&
+                            cold.scene->mediaStatistics().sourceHashNanoseconds > 0 &&
+                            cold.scene->mediaStatistics().sourceProbeNanoseconds > 0 &&
+                            cold.scene->mediaStatistics().imageDecodeNanoseconds > 0,
+                        "cold interactive source captures and hashes one immutable revision");
+    const auto charged =
+        evaluator.operationCache()->retainedBytes(OperationCacheEntryKind::DecodedMedia);
+    expectations.expect(charged >= std::filesystem::file_size(fixture.path),
+                        "same source pool charges encoded source bytes and metadata");
+    // Remove the path while a captured revision is retained. Warm source selection must have no
+    // filesystem dependency: the immutable captured bytes, rather than metadata, are authority.
+    const auto heldPath = fixture.directory / "held_revision.exr";
+    std::filesystem::rename(fixture.path, heldPath);
+    const auto warm = builder.build(planB, requestB);
+    expectations.expect(warm && warm.scene->mediaStatistics().sourceRevisionCacheHits == 1 &&
+                            warm.scene->mediaStatistics().sourceRevisionCaptures == 0 &&
+                            warm.scene->mediaStatistics().sourceRevisionBytesHashed == 0 &&
+                            warm.scene->mediaStatistics().sourceBytesRead == 0 &&
+                            warm.scene->mediaStatistics().sourceIoNanoseconds == 0 &&
+                            warm.scene->mediaStatistics().sourceHashNanoseconds == 0 &&
+                            warm.scene->mediaStatistics().sourceProbeNanoseconds == 0 &&
+                            warm.scene->mediaStatistics().imageDecodeNanoseconds == 0 &&
+                            warm.scene->mediaStatistics().imageConversions == 0,
+                        "warm transform edit reuses actual revision with zero probe/hash/decode");
+    auto finalCpuRequest = requestB;
+    finalCpuRequest.requireVerifiedMediaSources = true;
+    const auto cpuFinal = evaluator.evaluate(planB, finalCpuRequest, {});
+    expectations.expect(
+        cpuFinal.status() == bloom::runtime::EvaluationStatus::Failed && !cpuFinal.frame(),
+        "CPU final boundary rejects missing still despite explicit Retained request");
+    auto finalRequest = requestB;
+    finalRequest.mediaSourceRevisionPolicy = MediaSourceRevisionPolicy::Revalidate;
+    expectations.expect(
+        !builder.build(planB, finalRequest),
+        "default final revalidation refuses a disappeared source despite warm upload");
+    bloom::runtime::GpuProcessFrameEvaluatorOptions finalOptions;
+    finalOptions.mediaContext = context;
+    const auto forcedFinal =
+        bloom::runtime::detail::prepareExportScene(finalOptions, planB, requestB, {}, false);
+    expectations.expect(
+        !forcedFinal.scene,
+        "production final preparation overrides an explicitly Retained preview request");
+    auto bypass = requestB;
+    bypass.bypassOperationCache = true;
+    expectations.expect(!builder.build(planB, bypass),
+                        "explicit bypass revalidates instead of trusting retained revision");
+    auto relinked = fixture.asset;
+    relinked.locator.path = "absent_relink.exr";
+    relinked.locator.relinkHint = "file:///absent_relink.exr";
+    const auto relinkPlan = mediaPlan(format(8, 8), relinked, LayerValues{}, 4100);
+    auto relinkRequest = requestFor(*relinkPlan);
+    relinkRequest.mediaSourceRevisionPolicy = MediaSourceRevisionPolicy::Retained;
+    expectations.expect(!builder.build(relinkPlan, relinkRequest),
+                        "changed locator cannot adopt an unrelated retained ticket");
+    evaluator.operationCache()->invalidateSourceRevisions();
+    expectations.expect(!builder.build(planB, requestB),
+                        "New/Open invalidates source authority even while prepared pixels remain");
+    evaluator.operationCache()->clearDecodedMedia();
+    expectations.expect(
+        !builder.build(planB, requestB),
+        "Refresh/purge drops tickets and rechecks missing bytes before upload hits");
+    std::filesystem::rename(heldPath, fixture.path);
+    const auto reconnected = builder.build(planB, requestB);
+    expectations.expect(reconnected &&
+                            reconnected.scene->mediaStatistics().sourceRevisionCaptures == 1,
+                        "reconnect after refresh captures fresh bytes");
+    const auto captured =
+        bloom::media::captureImageSourceRevision(fixture.path, bloom::media::kMaxImageStorageBytes);
+    const auto generation = evaluator.operationCache()->decodedMediaGeneration();
+    evaluator.operationCache()->clearDecodedMedia();
+    if (captured.value.has_value()) {
+        evaluator.operationCache()->store(
+            "late-before-refresh-source", bloom::document::Revision{},
+            {.image = {}, .values = {}, .bounds = {}, .sourceRevision = *captured.value},
+            OperationCacheEntryKind::DecodedMedia, generation);
+        expectations.expect(!evaluator.operationCache()->find("late-before-refresh-source",
+                                                              bloom::document::Revision{}),
+                            "capture started before refresh cannot repopulate revision authority");
+        const auto stillValid = bloom::media::decodeImage(**captured.value);
+        expectations.expect(stillValid.value.has_value(),
+                            "refresh preserves already-held immutable snapshot lifetime");
+    }
+    evaluator.operationCache()->setByteBudget(0);
+    expectations.expect(evaluator.operationCache()->retainedBytes() == 0,
+                        "live source retention budget reduction removes encoded revision charges");
+    const auto unretained = builder.build(planB, requestB);
+    expectations.expect(unretained &&
+                            unretained.scene->mediaStatistics().sourceRevisionCaptures == 1 &&
+                            unretained.scene->mediaStatistics().sourceRevisionCacheHits == 0 &&
+                            evaluator.operationCache()->retainedBytes() == 0,
+                        "zero retention keeps fresh preparation valid without bypassing live cap");
+    if (cold && warm) {
+        const auto* uploadCold = firstUpload(*cold.scene);
+        const auto* uploadWarm = firstUpload(*warm.scene);
+        expectations.expect(
+            uploadCold && uploadWarm && uploadCold->image == uploadWarm->image,
+            "already published immutable upload remains valid after ticket eviction");
+    }
+}
+
+void testGestureSourceRevisionIsReadOnly(Expectations& checks, const MediaFixture& fixture) {
+    CpuCompositionEvaluator evaluator;
+    evaluator.setAssetBaseDirectory(fixture.directory);
+    auto context = legacyPreparedMediaContext(evaluator);
+    const CpuGpuSceneBuilder builder(nullptr, context);
+    const auto ordinary =
+        mediaPlan(format(8, 8), fixture.asset, LayerValues{.position = {3.0, 3.0}}, 4200);
+    auto definition = ordinary->copyDefinition();
+    definition.bypassOperationCache = true;
+    const auto gesture = publish(std::move(definition));
+    auto request = requestFor(*gesture);
+    request.mediaSourceRevisionPolicy = bloom::runtime::MediaSourceRevisionPolicy::Retained;
+    const auto prepared = builder.build(gesture, request);
+    checks.expect(prepared.hasValue() &&
+                      prepared.scene->mediaStatistics().sourceRevisionCaptures == 1 &&
+                      context.operationCache->retainedBytes() == 0 &&
+                      context.preparedUploadCache->entryCount() == 0,
+                  "cold GPU gesture captures transient source without inserting ticket or upload");
+    const auto cpu = evaluator.evaluate(gesture, request, {});
+    checks.expect(cpu.frame() != nullptr && context.operationCache->retainedBytes() == 0,
+                  "cold CPU gesture inserts neither source revision nor decoded/derived pixels");
+    auto ordinaryRequest = requestFor(*ordinary);
+    ordinaryRequest.mediaSourceRevisionPolicy = bloom::runtime::MediaSourceRevisionPolicy::Retained;
+    const auto warmed = builder.build(ordinary, ordinaryRequest);
+    const auto bytes = context.operationCache->retainedBytes();
+    const auto reused = builder.build(gesture, request);
+    checks.expect(warmed && bytes > 0 && reused &&
+                      reused.scene->mediaStatistics().sourceRevisionCacheHits == 1 &&
+                      reused.scene->mediaStatistics().sourceRevisionCaptures == 0 &&
+                      context.operationCache->retainedBytes() == bytes,
+                  "warm GPU gesture reads the existing immutable ticket without inserting");
+    const auto cpuReused = evaluator.evaluate(gesture, request, {});
+    checks.expect(cpuReused.frame() != nullptr && context.operationCache->retainedBytes() == bytes,
+                  "warm CPU gesture remains a read-only source-cache consumer");
+}

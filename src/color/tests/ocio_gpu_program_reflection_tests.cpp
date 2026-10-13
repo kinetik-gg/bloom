@@ -354,7 +354,8 @@ void testShaderInterfaceReflection(Expectations& expectations, GpuDevice& device
     constexpr std::uint32_t width = 4;
     constexpr std::uint32_t height = 3;
     const auto pixels = fixturePixels(width, height);
-    const auto input = uploadImage(*uploader.upload, width, height, pixels);
+    const auto input =
+        uploadImage(*uploader.upload, width, height, pixels, device.retainedProcessingPhase());
     expectations.expect(input != nullptr, "the reflection input uploads");
     if (input == nullptr) {
         return;

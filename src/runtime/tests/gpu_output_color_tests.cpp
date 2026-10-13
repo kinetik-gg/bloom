@@ -98,10 +98,10 @@ class Expectations final {
     int failures_ = 0;
 };
 
-[[nodiscard]] std::shared_ptr<const GpuImage> uploadImage(GpuImageUpload& uploader,
-                                                          const std::uint32_t width,
-                                                          const std::uint32_t height,
-                                                          const std::vector<Rgba32f>& pixels) {
+[[nodiscard]] std::shared_ptr<const GpuImage>
+uploadImage(GpuImageUpload& uploader, const std::uint32_t width, const std::uint32_t height,
+            const std::vector<Rgba32f>& pixels,
+            std::shared_ptr<bloom::render::GpuProcessingPhaseLease> phase = {}) {
     const auto windowResult = bloom::render::ImageWindow::create(0, 0, width, height);
     if (!windowResult) {
         return nullptr;
@@ -129,7 +129,8 @@ class Expectations final {
         return nullptr;
     }
     auto source = std::make_shared<const Rgba32fImage>(std::move(*frozen.value()));
-    if (uploader.begin({source}, kBudget).code != GpuImageUploadDiagnosticCode::None) {
+    if (uploader.begin({source, std::move(phase)}, kBudget).code !=
+        GpuImageUploadDiagnosticCode::None) {
         return nullptr;
     }
     auto poll = GpuImageUploadPollResult::Pending;

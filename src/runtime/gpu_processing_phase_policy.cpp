@@ -119,11 +119,19 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
     }
     std::optional<std::uint64_t> allowance;
     if (sample.machine.availableBytes) {
-        const auto hostReserve =
+        auto hostReserve =
             std::max(kMinimumHostMemoryReserve, physicalBytes / 100 * kHostMemoryReservePercent);
-        allowance = *sample.machine.availableBytes > hostReserve
-                        ? *sample.machine.availableBytes - hostReserve
-                        : 0;
+        auto available = *sample.machine.availableBytes;
+        if (physicalBytes != 0) {
+            // Preserve ordinary reserve rounding while respecting the ledger's existing
+            // physically bounded low-memory floor. Availability still constrains every byte.
+            const auto usable =
+                std::min(physicalBytes,
+                         MemoryBudgetLedger::usableByteBudgetForPhysicalMemory(physicalBytes));
+            hostReserve = std::min(hostReserve, physicalBytes - usable);
+            available = std::min(available, physicalBytes);
+        }
+        allowance = available > hostReserve ? available - hostReserve : 0;
         if (finiteProcessCeiling_) {
             allowance.emplace(std::min(*allowance, *finiteProcessCeiling_));
         }

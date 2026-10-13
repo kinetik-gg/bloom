@@ -397,6 +397,7 @@ struct SequenceExportRunnerV1::State {
                            .colorIntent = work->colorIntent(),
                            .pixelStorageByteLimit = runtime::defaultGpuProcessFrameByteBudget(),
                            .bypassLookNodes = false},
+            .assetBaseDirectory = work->request.assetBaseDirectory,
             .targetPath = work->request.range.destination,
             .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
             .owner = owner,

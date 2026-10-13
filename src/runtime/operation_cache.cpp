@@ -1,3 +1,5 @@
+#include "video_source.hpp"
+#include <bloom/media/image.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 
 #include <algorithm>
@@ -19,6 +21,7 @@ struct OperationCache::Accounting {
     std::size_t budget = 0;
     std::size_t bytes = 0;
     std::size_t decodedBytes = 0;
+    std::uint64_t decodedMediaGeneration = 0;
     std::size_t preparedBytes = 0;
     std::uint64_t preparedPayload = 0;
     std::size_t preparedCount = 0;
@@ -34,10 +37,12 @@ struct OperationCache::Accounting {
     std::optional<std::size_t> configuredEntryCap;
     OperationCacheAccessStatistics preparedStatistics;
     std::shared_ptr<render::detail::PackedHostRetirementState> retirement;
+    std::weak_ptr<detail::VideoSourceContext> videoSources;
 };
 OperationCache::Entry::~Entry() {
     // Rejected insertion also drops refs before its registration can permit owner exit.
     value.image.reset();
+    value.sourceRevision.reset();
     value.values.clear();
     if (registered)
         render::detail::releasePackedHostRegistration(retirement);
@@ -71,17 +76,32 @@ OperationCache::OperationCache(const std::size_t budget, MemoryBudgetLedger& led
     ledger_.registerCache(this, budget, [this] { return retainedBytes(); }, apply);
 }
 OperationCache::~OperationCache() {
+    closePreparedUploads();
     ledger_.unregisterCache(this);
     // Prepared refs never free on this caller. The explicit host owner outlives queued callbacks.
     const std::lock_guard lock(accounting_->mutex);
     removeKindLocked(OperationCacheEntryKind::PreparedUpload);
+    removeKindLocked(OperationCacheEntryKind::DecodedMedia);
 }
 std::optional<OperationCacheValue> OperationCache::find(const std::string& content,
                                                         const document::Revision revision) {
     const std::lock_guard lock(accounting_->mutex);
     const Key key{content, false};
+    const auto sourceUsable = [&](const Position position) {
+        const auto& entry = **position;
+        if (entry.value.sourceRevision && entry.registered &&
+            (accounting_->preparedClosed || !accounting_->preparedReady ||
+             MemoryBudgetLedger::Clock::now() > accounting_->validUntil)) {
+            removeLocked(position);
+            ++statistics_.misses;
+            return false;
+        }
+        return true;
+    };
     const auto exact = addresses_.find({revision, key});
     if (exact != addresses_.end()) {
+        if (!sourceUsable(exact->second))
+            return std::nullopt;
         touch(exact->second);
         ++statistics_.hits;
         return (*exact->second)->value;
@@ -91,6 +111,8 @@ std::optional<OperationCacheValue> OperationCache::find(const std::string& conte
         ++statistics_.misses;
         return std::nullopt;
     }
+    if (!sourceUsable(found->second))
+        return std::nullopt;
     auto& entry = **found->second;
     addresses_.emplace(Address{revision, {entry.content, false}}, found->second);
     addresses_.erase({entry.revision, key});
@@ -133,10 +155,13 @@ void OperationCache::insertLocked(std::unique_ptr<Entry>& entry) {
     }
 }
 void OperationCache::store(std::string content, const document::Revision revision,
-                           OperationCacheValue value, const OperationCacheEntryKind kind) {
+                           OperationCacheValue value, const OperationCacheEntryKind kind,
+                           const std::optional<std::uint64_t> decodedMediaGeneration) {
     // Prepared admission needs its explicit owner and subset policy, not this ordinary API.
     if (kind == OperationCacheEntryKind::PreparedUpload)
         throw std::invalid_argument("prepared entries require storePreparedUpload");
+    if (value.sourceRevision && kind != OperationCacheEntryKind::DecodedMedia)
+        throw std::invalid_argument("source revisions require decoded-media ownership");
     std::unique_ptr<Entry> entry;
     try {
         entry = std::make_unique<Entry>();
@@ -156,11 +181,39 @@ void OperationCache::store(std::string content, const document::Revision revisio
             addCharge(entry->bytes, addCharge(sizeof(render::Rgba32fImage),
                                               entry->value.image->pixels().size_bytes()));
     entry->bytes = addCharge(entry->bytes, entry->value.values.capacity() * sizeof(CompiledValue));
+    if (entry->value.sourceRevision)
+        entry->bytes = addCharge(entry->bytes, entry->value.sourceRevision->retainedBytes());
     for (const auto& item : entry->value.values)
         if (const auto* string = std::get_if<std::string>(&item))
             entry->bytes = addCharge(entry->bytes, string->capacity());
+    if (entry->value.sourceRevision) {
+        // Capture/store is worker-only. Rooted source tickets use the existing host owner so
+        // sampling, purge and UI teardown never free a large encoded vector under this mutex.
+        {
+            const std::lock_guard lock(accounting_->mutex);
+            if (accounting_->preparedClosed)
+                return;
+            entry->retirement = accounting_->retirement;
+        }
+        if (entry->retirement) {
+            if (!render::detail::preparePackedHostRetirement(entry->retirement) ||
+                !render::detail::registerPackedHostAllocation(entry->retirement))
+                return;
+            entry->registered = true;
+            entry->accounting = accounting_;
+            entry->destroy = destroySourceRevisionEntry;
+        }
+    }
     {
         const std::lock_guard lock(accounting_->mutex);
+        if (entry->value.sourceRevision &&
+            (!decodedMediaGeneration ||
+             *decodedMediaGeneration != accounting_->decodedMediaGeneration ||
+             accounting_->decodedMediaGeneration == std::numeric_limits<std::uint64_t>::max() ||
+             accounting_->preparedClosed ||
+             (entry->registered && (!accounting_->preparedReady ||
+                                    MemoryBudgetLedger::Clock::now() > accounting_->validUntil))))
+            return;
         if (entry->bytes > accounting_->budget || index_.contains({entry->content, false}))
             return;
         ++accessEpoch_;
@@ -168,7 +221,7 @@ void OperationCache::store(std::string content, const document::Revision revisio
                                     ? accessEpoch_ + kDecodedMediaGraceAccesses
                                     : 0;
         std::uint64_t ignored = 0;
-        if (accounting_->preparedCount == 0 &&
+        if (accounting_->preparedCount == 0 && accounting_->pendingBytes == 0 &&
             entry->bytes <= std::numeric_limits<std::size_t>::max() - accounting_->bytes) {
             // Preserve ordinary-only grace: the incoming Operation itself can be the victim.
             insertLocked(entry);
@@ -198,6 +251,18 @@ void OperationCache::destroyPreparedEntry(render::detail::PackedHostRetirementNo
     accounting->pendingBytes -= bytes;
     accounting->pendingPayload -= payload;
 }
+void OperationCache::destroySourceRevisionEntry(
+    render::detail::PackedHostRetirementNode* node) noexcept {
+    auto* entry = static_cast<Entry*>(node);
+    const auto accounting = entry->accounting;
+    const auto bytes = entry->bytes;
+    entry->registered = false; // The generic worker releases registration after this callback.
+    delete entry; // Drop encoded backing and metadata before folding back the logical debit.
+    const std::lock_guard lock(accounting->mutex);
+    accounting->bytes -= bytes;
+    accounting->decodedBytes -= bytes;
+    accounting->pendingBytes -= bytes;
+}
 void OperationCache::removeLocked(const Position candidate) {
     auto& entry = **candidate;
     const bool prepared = entry.kind == OperationCacheEntryKind::PreparedUpload;
@@ -208,6 +273,12 @@ void OperationCache::removeLocked(const Position candidate) {
         ++accounting_->pendingCount;
         accounting_->pendingBytes += entry.bytes;
         accounting_->pendingPayload += entry.value.image->pixels().size_bytes();
+        auto* node = candidate->release();
+        entries_.erase(candidate);
+        const auto retirement = node->retirement;
+        render::detail::enqueuePackedHostRetirement(retirement, node);
+    } else if (entry.value.sourceRevision && entry.registered) {
+        accounting_->pendingBytes += entry.bytes;
         auto* node = candidate->release();
         entries_.erase(candidate);
         const auto retirement = node->retirement;
@@ -242,9 +313,38 @@ void OperationCache::clearOperations() {
     removeKindLocked(OperationCacheEntryKind::Operation);
 }
 void OperationCache::clearDecodedMedia() {
+    std::shared_ptr<detail::VideoSourceContext> video;
+    {
+        const std::lock_guard lock(accounting_->mutex);
+        if (accounting_->decodedMediaGeneration != std::numeric_limits<std::uint64_t>::max())
+            ++accounting_->decodedMediaGeneration;
+        removeKindLocked(OperationCacheEntryKind::DecodedMedia);
+        removeKindLocked(OperationCacheEntryKind::PreparedUpload);
+        video = accounting_->videoSources.lock();
+    }
+    if (video)
+        video->clear();
+}
+void OperationCache::invalidateSourceRevisions() {
+    std::shared_ptr<detail::VideoSourceContext> video;
+    {
+        const std::lock_guard lock(accounting_->mutex);
+        if (accounting_->decodedMediaGeneration != std::numeric_limits<std::uint64_t>::max())
+            ++accounting_->decodedMediaGeneration;
+        for (auto entry = entries_.begin(); entry != entries_.end();) {
+            const auto next = std::next(entry);
+            if ((*entry)->value.sourceRevision)
+                removeLocked(entry);
+            entry = next;
+        }
+        video = accounting_->videoSources.lock();
+    }
+    if (video)
+        video->invalidateSources();
+}
+std::uint64_t OperationCache::decodedMediaGeneration() const {
     const std::lock_guard lock(accounting_->mutex);
-    removeKindLocked(OperationCacheEntryKind::DecodedMedia);
-    removeKindLocked(OperationCacheEntryKind::PreparedUpload);
+    return accounting_->decodedMediaGeneration;
 }
 void OperationCache::touch(const Position position) {
     ++accessEpoch_;
@@ -308,6 +408,21 @@ void OperationCache::bindPreparedUploads(
     accounting_->entryCap = entryCap.value_or(std::numeric_limits<std::size_t>::max());
     accounting_->configuredEntryCap = entryCap;
     accounting_->preparedBound = true;
+}
+std::shared_ptr<render::detail::PackedHostRetirementState>
+OperationCache::sourceRetirementState() const {
+    const std::lock_guard lock(accounting_->mutex);
+    return accounting_->retirement;
+}
+void OperationCache::bindVideoSources(const std::shared_ptr<detail::VideoSourceContext>& sources) {
+    bool closed = false;
+    {
+        const std::lock_guard lock(accounting_->mutex);
+        accounting_->videoSources = sources;
+        closed = accounting_->preparedClosed;
+    }
+    if (closed && sources)
+        sources->beginShutdown();
 }
 std::shared_ptr<const render::Rgba32fImage>
 OperationCache::findPreparedUpload(const std::string& content) {
@@ -392,9 +507,21 @@ void OperationCache::clearPreparedUploads() {
     removeKindLocked(OperationCacheEntryKind::PreparedUpload);
 }
 void OperationCache::closePreparedUploads() {
-    const std::lock_guard lock(accounting_->mutex);
-    accounting_->preparedClosed = true;
-    removeKindLocked(OperationCacheEntryKind::PreparedUpload);
+    std::shared_ptr<detail::VideoSourceContext> video;
+    {
+        const std::lock_guard lock(accounting_->mutex);
+        accounting_->preparedClosed = true;
+        removeKindLocked(OperationCacheEntryKind::PreparedUpload);
+        for (auto entry = entries_.begin(); entry != entries_.end();) {
+            const auto next = std::next(entry);
+            if ((*entry)->value.sourceRevision)
+                removeLocked(entry);
+            entry = next;
+        }
+        video = accounting_->videoSources.lock();
+    }
+    if (video)
+        video->beginShutdown();
 }
 bool OperationCache::preparedUploadsBound() const {
     const std::lock_guard lock(accounting_->mutex);

@@ -5,7 +5,9 @@
 #include "gpu_image_reclamation_private.hpp"
 #include "gpu_image_upload_retirement_private.hpp"
 #include "gpu_ocio_program_private.hpp"
+#include "gpu_operation_batch_private.hpp"
 #include "gpu_output_color_readback_retirement_private.hpp"
+#include "gpu_queue_timing_private.hpp"
 
 #include <array>
 #include <atomic>
@@ -59,6 +61,8 @@ GpuDevice& GpuDevice::operator=(GpuDevice&& other) noexcept {
             output_color_readback_detail::closeReadbacks(*impl_->control);
             ocio_program_detail::closeProgramOwner(*impl_->control);
             image_detail::closeImageOwner(*impl_->control);
+            queue_timing_detail::drainRetired(*impl_->control);
+            operation_batch_detail::drainRetired(*impl_->control);
         }
         impl_ = std::move(other.impl_);
     }
@@ -74,12 +78,15 @@ GpuDevice::~GpuDevice() {
             output_color_readback_detail::closeReadbacks(*impl_->control);
             ocio_program_detail::closeProgramOwner(*impl_->control);
             image_detail::closeImageOwner(*impl_->control);
+            queue_timing_detail::drainRetired(*impl_->control);
+            operation_batch_detail::drainRetired(*impl_->control);
         }
     }
 }
 
 void GpuDevice::reclaimReleasedImages() noexcept {
     if (isOwnerThread() && impl_->control != nullptr) {
+        operation_batch_detail::drainRetired(*impl_->control);
         upload_detail::drainUploads(*impl_->control);
         display_transfer_detail::drainTransfers(*impl_->control);
         output_color_readback_detail::drainReadbacks(*impl_->control);
@@ -126,10 +133,24 @@ const GpuCapabilityReport& GpuDevice::capabilityReport() const noexcept {
     return kEmptyCapabilityReport;
 }
 
+bool GpuDevice::bindProcessingRoot(GpuProcessingRootIdentity root) noexcept {
+    if (!isOwnerThread() || !root || !impl_->control ||
+        (impl_->control->processingRoot && impl_->control->processingRoot != root) ||
+        (impl_->control->processingPhase &&
+         impl_->control->processingPhase->rootIdentity() != root))
+        return false;
+    impl_->control->processingRoot = std::move(root);
+    return true;
+}
+GpuProcessingRootIdentity GpuDevice::processingRootIdentity() const noexcept {
+    return isOwnerThread() && impl_->control ? impl_->control->processingRoot : nullptr;
+}
 bool GpuDevice::retainProcessingPhase(std::shared_ptr<GpuProcessingPhaseLease> lease) noexcept {
     if (!isOwnerThread() || !lease || !impl_->control || impl_->control->processingPhase) {
         return false;
     }
+    if (impl_->control->processingRoot && lease->rootIdentity() != impl_->control->processingRoot)
+        return false;
     impl_->control->imageStorageRefusal.reset();
     impl_->control->bufferStorageRefusal.reset();
     impl_->control->processingPhase = std::move(lease);
@@ -177,6 +198,11 @@ std::optional<NativeBufferStorageRefusal> GpuDevice::nativeBufferStorageRefusal(
 }
 bool GpuDevice::displayTransferPending() const noexcept {
     return impl_ && impl_->control && display_transfer_detail::transferPendingFor(*impl_->control);
+}
+std::optional<NativePresentationStorageRefusal>
+GpuDevice::nativePresentationStorageRefusal() const noexcept {
+    return isOwnerThread() && impl_->control ? impl_->control->presentationStorageRefusal
+                                             : std::nullopt;
 }
 
 bool GpuDevice::imageUploadPending() const noexcept {

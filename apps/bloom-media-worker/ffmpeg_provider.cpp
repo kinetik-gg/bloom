@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
+#include <bloom/platform/file_snapshot.hpp>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -46,6 +47,9 @@ struct Input {
     AVFrame* transfer = av_frame_alloc();
     SwsContext* scale = nullptr;
     SwrContext* resample = nullptr;
+    std::unique_ptr<platform::WorkerSnapshotInput> snapshot;
+    AVIOContext* io = nullptr;
+    std::uint64_t offset = 0;
     ~Input() {
         swr_free(&resample);
         sws_freeContext(scale);
@@ -54,11 +58,42 @@ struct Input {
         av_packet_free(&packet);
         avcodec_free_context(&codec);
         avformat_close_input(&format);
+        if (io) {
+            av_freep(static_cast<void*>(&io->buffer));
+            avio_context_free(&io);
+        }
     }
     Input() = default;
     Input(const Input&) = delete;
     Input& operator=(const Input&) = delete;
 };
+int snapshotRead(void* opaque, std::uint8_t* bytes, const int count) {
+    auto& input = *static_cast<Input*>(opaque);
+    if (count <= 0)
+        return AVERROR(EINVAL);
+    const auto result = input.snapshot->read(
+        input.offset, std::as_writable_bytes(std::span(bytes, static_cast<std::size_t>(count))));
+    const auto* read = std::get_if<std::size_t>(&result);
+    if (!read)
+        return AVERROR(EIO);
+    input.offset += *read;
+    return *read == 0 ? AVERROR_EOF : static_cast<int>(*read);
+}
+std::int64_t snapshotSeek(void* opaque, const std::int64_t offset, int whence) {
+    auto& input = *static_cast<Input*>(opaque);
+    const auto size = static_cast<std::int64_t>(input.snapshot->size());
+    if (whence == AVSEEK_SIZE)
+        return size;
+    whence &= ~AVSEEK_FORCE;
+    const auto base = whence == SEEK_SET   ? std::int64_t{0}
+                      : whence == SEEK_CUR ? static_cast<std::int64_t>(input.offset)
+                      : whence == SEEK_END ? size
+                                           : std::int64_t{-1};
+    if (base < 0 || offset < -base || offset > size - base)
+        return AVERROR(EINVAL);
+    input.offset = static_cast<std::uint64_t>(base + offset);
+    return static_cast<std::int64_t>(input.offset);
+}
 std::pair<Digest, std::uint64_t> sourceIdentity(const std::string& path) {
     const std::filesystem::path file(path);
     require(file.is_absolute() && std::filesystem::is_regular_file(file),
@@ -460,24 +495,47 @@ provider::Payload call(const provider::CallRequest& request, bool hardware) {
             std::ranges::any_of(h.declarations,
                                 [&](const auto& d) { return d.capability == request.capability; }),
             "Unsupported FFmpeg capability", provider::Error::Unavailable);
-        const auto [digest, bytes] = sourceIdentity(request.source);
+        const auto identity = request.snapshotBytes != 0
+                                  ? std::pair{request.sourceDigest, request.snapshotBytes}
+                                  : sourceIdentity(request.source);
+        const auto& [digest, bytes] = identity;
         if (request.capability.role != provider::Role::Probe)
             require(digest == request.sourceDigest, "Media source content changed",
                     provider::Error::SourceChanged);
         Input input;
+        if (request.snapshotBytes != 0) {
+            auto opened = platform::WorkerSnapshotInput::open(request.snapshotBytes);
+            auto* snapshot = std::get_if<std::unique_ptr<platform::WorkerSnapshotInput>>(&opened);
+            require(snapshot != nullptr, "Immutable input capability is absent or invalid",
+                    provider::Error::IdentityMismatch);
+            input.snapshot = std::move(*snapshot);
+            auto* buffer = static_cast<unsigned char*>(av_malloc(65536));
+            require(buffer != nullptr, "Input buffer allocation failed",
+                    provider::Error::Oversized);
+            input.io =
+                avio_alloc_context(buffer, 65536, 0, &input, snapshotRead, nullptr, snapshotSeek);
+            if (!input.io)
+                av_free(buffer);
+            require(input.io != nullptr, "Input context allocation failed",
+                    provider::Error::Oversized);
+        }
         require(input.packet && input.frame && input.transfer, "Media allocation failed",
                 provider::Error::Oversized);
         input.format = avformat_alloc_context();
         require(input.format != nullptr, "Media context allocation failed",
                 provider::Error::Oversized);
         input.format->max_streams = provider::Limits::entries;
+        if (input.io) {
+            input.format->pb = input.io;
+            input.format->flags |= AVFMT_FLAG_CUSTOM_IO;
+        }
         AVDictionary* options = nullptr;
         av_dict_set(&options, "protocol_whitelist", "file", 0);
         av_dict_set(&options, "format_whitelist", "mov,matroska,webm,mxf,mpegts,wav,mp3,aac", 0);
         av_dict_set(&options, "probesize", "8388608", 0);
         av_dict_set(&options, "analyzeduration", "5000000", 0);
-        const auto opened =
-            avformat_open_input(&input.format, request.source.c_str(), nullptr, &options);
+        const auto opened = avformat_open_input(
+            &input.format, input.io ? nullptr : request.source.c_str(), nullptr, &options);
         av_dict_free(&options);
         require(opened >= 0, "Malformed or unsupported media input");
         require(avformat_find_stream_info(input.format, nullptr) >= 0 &&
@@ -499,8 +557,8 @@ provider::Payload call(const provider::CallRequest& request, bool hardware) {
                          ? provider::Payload(video(input, request, hardware))
                          : provider::Payload(audio(input, request));
         }
-        require(sourceIdentity(request.source).first == digest, "Source changed during media read",
-                provider::Error::SourceChanged);
+        require(input.snapshot || sourceIdentity(request.source).first == digest,
+                "Source changed during media read", provider::Error::SourceChanged);
         return result;
     } catch (const provider::Unavailable& error) {
         return error;

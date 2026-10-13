@@ -102,10 +102,10 @@ class Expectations final {
 
 constexpr std::uint64_t kBudget = std::uint64_t{1} << 32;
 
-[[nodiscard]] std::shared_ptr<const GpuImage> uploadImage(GpuImageUpload& uploader,
-                                                          const std::uint32_t width,
-                                                          const std::uint32_t height,
-                                                          const std::vector<Rgba32f>& pixels) {
+[[nodiscard]] std::shared_ptr<const GpuImage>
+uploadImage(GpuImageUpload& uploader, const std::uint32_t width, const std::uint32_t height,
+            const std::vector<Rgba32f>& pixels,
+            const std::shared_ptr<bloom::render::GpuProcessingPhaseLease>& phase = {}) {
     const auto windowResult = bloom::render::ImageWindow::create(0, 0, width, height);
     if (!windowResult) {
         return nullptr;
@@ -133,7 +133,9 @@ constexpr std::uint64_t kBudget = std::uint64_t{1} << 32;
         return nullptr;
     }
     auto source = std::make_shared<const Rgba32fImage>(std::move(*frozen.value()));
-    if (uploader.begin({source}, kBudget).code != GpuImageUploadDiagnosticCode::None) {
+    const auto begun = uploader.begin({source, phase}, kBudget);
+    if (begun.code != GpuImageUploadDiagnosticCode::None) {
+        std::cerr << "executor upload refused: " << begun.message << '\n';
         return nullptr;
     }
     auto poll = GpuImageUploadPollResult::Pending;

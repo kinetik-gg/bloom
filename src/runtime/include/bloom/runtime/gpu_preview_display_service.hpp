@@ -19,7 +19,9 @@
 // the scheduler MUST outlive the service. beginShutdown() is non-blocking; the destructor joins
 // the service thread and drains child/native ownership before releasing the lease.
 
+#include <bloom/render/gpu_allocator_memory.hpp>
 #include <bloom/render/gpu_neutral_display.hpp>
+#include <bloom/render/gpu_queue_timing.hpp>
 #include <bloom/render/gpu_resident_display.hpp>
 #include <bloom/runtime/gpu_memory_budget.hpp>
 #include <bloom/runtime/gpu_presentation_coordinator.hpp>
@@ -121,10 +123,17 @@ struct GpuPreviewDisplayServiceCounters final {
     // operations. This is deliberately distinct from `nativeDispatches` so "graph jobs" are never
     // confused with "actual native operations".
     std::uint64_t residentGraphJobs = 0;
-    // ACTUAL native operation begin() count executed by the GpuSceneExecutor
-    // (solid + covered-solid + translation + source-over + uploads). A warm content-cache hit that
-    // cuts the whole subtree leaves this unchanged (zero for an identical warm request).
+    // Actual native work operations (dispatches and uploads) executed by GpuSceneExecutor,
+    // including every family. Several operations may share one work submission. A warm cache hit
+    // that cuts the whole subtree leaves this unchanged (zero for an identical warm request).
     std::uint64_t nativeDispatches = 0;
+    // CPU wall stages, including host submission and fence observation/polling delay.
+    std::uint64_t uploadSubmitNanoseconds = 0;
+    std::uint64_t uploadFenceObservationNanoseconds = 0;
+    std::uint64_t processingSubmitNanoseconds = 0;
+    std::uint64_t processingFenceObservationNanoseconds = 0;
+    std::uint64_t completedStepContinuations = 0;
+    std::uint64_t packedTransferNanoseconds = 0;
     // Resident graph jobs that produced a published native or GPU-prepared packed frame.
     std::uint64_t residentCompletions = 0;
     // Resident graph jobs that failed, timed out, or were cancelled after admission.
@@ -195,6 +204,11 @@ struct GpuPreviewDisplayServiceStatus final {
     // device itself.
     GpuResidentCapacityPlan residentCapacityPlan;
     GpuPreviewDisplayServiceCounters counters;
+    // Latest owner-observed diagnostic intervals; these never establish painted-frame identity.
+    render::GpuAllocatorMemorySnapshot allocatorMemory;
+    std::chrono::steady_clock::time_point allocatorMemorySampledAt{};
+    render::GpuQueueTimingSample graphQueueTiming;
+    render::GpuQueueTimingSample packedTransferQueueTiming;
 
     // Presentation capability of this service generation. NotRequested for the default Disabled
     // mode; Unavailable when Wayland was requested but a required capability is missing.
@@ -241,6 +255,8 @@ struct GpuPreviewDisplayServiceOptions final {
     // the finite owner-resolved physical request ceiling when a live default view is injected.
     // Each request still applies its delivered/default or explicit allowance, admitted phase,
     // live pins and native resource limits. Unrooted omission retains legacy producer budgets.
+    // Diagnostics preserve omitted producer defaults; enabling timing is not a budget override.
+    bool collectQueueTimestamps = false;
     std::optional<GpuSceneExecutorBudgets> residentExecutorBudgets = {};
     // Bounded resident display pipeline owned-bytes budget per job.
     render::GpuResidentDisplayBudgets residentDisplayBudgets{};

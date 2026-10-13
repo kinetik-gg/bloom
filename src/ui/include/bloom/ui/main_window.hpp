@@ -2,6 +2,7 @@
 
 #include <QMainWindow>
 #include <QPointer>
+#include <QTimer>
 
 #include <cstdint>
 
@@ -138,7 +139,7 @@ class MainWindow final : public QMainWindow {
     void updateDisplayedViewer();
     void scheduleDisplayedViewerUpdate();
     QPointer<ViewerEditor> lastActiveViewer_;
-    bool displayedViewerUpdateQueued_ = false;
+    QTimer displayedViewerUpdateTimer_;
     void updateFileActions();
     void updateExportAction();
     void updateWindowTitle();

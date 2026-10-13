@@ -140,13 +140,22 @@ void testHygiene(int& failures) {
            "scripting fixtures are accepted", failures);
     expect(hygieneFixture("examples/scripting/hello_bloom.py", "import bloom\n").empty(),
            "artist scripting examples are accepted", failures);
+    for (const auto* qualificationTool :
+         {"tools/ci/configure_gpu_qualification.py", "tools/ci/gpu_qualification.py",
+          "tools/quality/qualify_private_share_outage.py"}) {
+        expect(hygieneFixture(qualificationTool, "print('qualification')\n").empty(),
+               "named manual qualification drivers are accepted", failures);
+    }
+    expect(containsCategory(hygieneFixture("tools/ci/other.py", "print('build')\n"),
+                            "python placement"),
+           "qualification drivers do not allow arbitrary Python infrastructure", failures);
 
     const auto rootPython = hygieneFixture("scripts/quality_check.py", "print('check')\n");
     expect(containsCategory(rootPython, "python placement"),
-           "Python cannot implement repository infrastructure", failures);
+           "arbitrary Python repository infrastructure is rejected", failures);
     const auto actionPython = hygieneFixture(".github/scripts/build.py", "print('build')\n");
     expect(containsCategory(actionPython, "python placement"),
-           "Python cannot implement CI infrastructure", failures);
+           "arbitrary Python CI infrastructure is rejected", failures);
     const auto misplacedStub = hygieneFixture("tools/generated_api.pyi", "class Project: ...\n");
     expect(containsCategory(misplacedStub, "python placement"),
            "Python type stubs remain scoped to the scripting module", failures);

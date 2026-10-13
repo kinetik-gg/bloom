@@ -413,6 +413,16 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     const bool swapchainExtensionEnabled = swapchainAvailable;
 
     std::vector<const char*> deviceExtensions;
+    const char* const calibratedExtension =
+        deviceExtensionAvailable(instance, selection->physicalDevice,
+                                 "VK_KHR_calibrated_timestamps")
+            ? "VK_KHR_calibrated_timestamps"
+        : deviceExtensionAvailable(instance, selection->physicalDevice,
+                                   "VK_EXT_calibrated_timestamps")
+            ? "VK_EXT_calibrated_timestamps"
+            : nullptr;
+    if (calibratedExtension)
+        deviceExtensions.push_back(calibratedExtension);
     if (selection->portabilitySubset) {
         deviceExtensions.push_back(kPortabilitySubsetExtensionName);
     }
@@ -597,6 +607,7 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     control->maxComputeWorkGroupSizeX = selection->properties.limits.maxComputeWorkGroupSize[0];
     control->deviceLocalBytes = selection->deviceMemoryBytes;
     control->memoryBudgetEnabled = selection->memoryBudgetSupported;
+    control->calibratedTimestampsEnabled = calibratedExtension != nullptr;
 
     VmaVulkanFunctions vmaFunctions{};
     vmaFunctions.vkGetInstanceProcAddr = getInstanceProcAddr;
@@ -638,6 +649,7 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     impl->report.compute_queue = true;
     impl->report.timeline_semaphore = true;
     impl->report.memory_budget_supported = selection->memoryBudgetSupported;
+    impl->report.cross_submission_timestamps = calibratedExtension != nullptr;
     impl->report.device_memory_bytes = selection->deviceMemoryBytes;
 
     GpuPresentationStatus presentationStatus;

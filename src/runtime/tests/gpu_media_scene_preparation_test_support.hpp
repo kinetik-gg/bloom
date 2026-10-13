@@ -111,9 +111,9 @@ void writeExrRgba(const std::filesystem::path& path, const int width, const int 
     return asset;
 }
 
-[[nodiscard]] document::AssetSequenceMember sequenceMember(const std::filesystem::path& path,
-                                                           const std::int64_t frame,
-                                                           const std::uint64_t rawId) {
+[[nodiscard]] inline document::AssetSequenceMember sequenceMember(const std::filesystem::path& path,
+                                                                  const std::int64_t frame,
+                                                                  const std::uint64_t rawId) {
     const auto probe = bloom::media::probeImage(path);
     if (!probe.value.has_value()) {
         throw std::logic_error("EXR sequence member could not be probed: " + probe.diagnostic);
@@ -212,7 +212,7 @@ inline void writeLargeExrRgba(const std::filesystem::path& path, const int width
 // A large EXR source + FHD solid + text -> three layers -> Normal merge -> Composition Output. This
 // is the reported graph shape; the source is deliberately larger than the composition so the
 // converted upload keeps full source detail (no resize to composition dimensions).
-[[nodiscard]] std::shared_ptr<const CompiledCompositionPlan>
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
 largeSourcePlan(const CompositionFormat compositionFormat, const document::AssetRecord& asset,
                 const std::uint64_t idBase) {
     const auto parameter = [](const std::uint64_t raw) {

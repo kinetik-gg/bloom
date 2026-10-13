@@ -92,7 +92,9 @@ struct GpuTranslationParameters final {
 
 // Validated inputs for SourceOverV1. `source` is the foreground, `destination` the backdrop; both
 // are shared immutable ownership retained for the job's lifetime. Neither input is mutated: the
-// result is a new resident output image.
+// result is a new resident output image. The exact origin difference and every destination-local
+// coordinate plus that difference must fit int32; otherwise begin refuses as Unsupported before
+// allocating or submitting work.
 struct GpuSourceOverParameters final {
     std::shared_ptr<const GpuImage> source;
     std::shared_ptr<const GpuImage> destination;

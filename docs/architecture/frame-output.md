@@ -42,6 +42,9 @@ Explicit final-evaluator `executorBudgets` remain authoritative. With a processi
 override, the producer image upper ceiling follows `requestByteBudget` rather than a startup
 reusable-cache allocation; the admitted per-request allowance, live pins and native resource limits
 still constrain execution. The owning GPU contract defines phase-retirement proof on budget refusal.
+If final host adoption fails after the readback fence completes, the evaluator releases only the
+exact positively retired phase. Unknown native work or an independent pending OCIO upload still
+prevents retirement and retains the generation.
 GUI provider/evaluator retirement does not join native or packed-host owners on the active UI loop;
 actual exit is polled and collection follows event processing. Independently owned headless roots
 retire after active renders finish, with the GIL released where applicable. Owned providers retain
@@ -260,6 +263,21 @@ approve anything, its dependent worker stages perform, in order:
 1. cheap blocking-I/O target preflight, including canonical target identity and no-follow observed
    destination state;
 2. CPU evaluation or exact immutable `ProcessFrame` reuse under the closed output limits;
+   Final preparation forces `MediaSourceRevisionPolicy::Revalidate`. CPU final boundaries also set
+   `requireVerifiedMediaSources`, rejecting changed/unavailable media before memoized pixels can be
+   accepted. A preview `Retained` request never carries source availability authority into final
+   output. Any future exact `ProcessFrame` reuse must first revalidate every media dependency from
+   the original source; a media-derived preview frame alone is insufficient. The current host
+   attempt runner accepts a plan/request, evaluates afresh, and has no preview-frame reuse input.
+   Each attempt also captures the project's media base directory independently of its destination.
+   CPU fallback and GPU preparation install that context before evaluation, so portable relative
+   locators work without an absolute relink hint. Live scripting captures the document snapshot and
+   media base together; a range retains that pair across Save As or project replacement. A failed
+   preview image decode never publishes a successful source cache entry, and its downstream
+   placeholder identity differs from a later successful decode of the same bytes.
+   UI export also captures color intent and still-frame time at admission. The host owns the color
+   intent's strings through the completed frame lifetime, so later editor color changes cannot
+   mutate an admitted attempt or leave its identity with dangling views.
 3. cancellable CPU preparation of the frame-bound `ProcessFrameSemanticIdentityV1`;
 4. for PNG, bounded color/config resolution plus preparation or exact reuse of the qualified
    display processor and its canonical `DisplayProcessorIdentity`; EXR has no display product;

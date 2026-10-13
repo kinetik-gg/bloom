@@ -50,8 +50,10 @@ class TaskUiBridge final : public QObject {
   private slots:
     void poll();
     void drainResults();
+    void reportCompletionDeliveryFailure(bool serialExhausted);
 
   private:
+    Q_SIGNAL void completionDeliveryFailed(bool serialExhausted);
     void scheduleNextPoll();
     void setMonitorError(QString error);
     void assertUiThread() const;

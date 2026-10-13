@@ -1,5 +1,6 @@
 #include "gpu_solid_private.hpp"
 
+#include "gpu_native_buffer_allocation_private.hpp"
 #include "gpu_path_coverage_private.hpp"
 
 #include <bloom/render/cpu_image_primitives.hpp>
@@ -128,8 +129,12 @@ void packCoverageLittleEndian(const std::span<const std::uint8_t> coverage,
 
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
-    if (vmaCreateBuffer(state.allocator, &bufferInfo, &allocationInfo, &buffer, &allocation,
-                        nullptr) != VK_SUCCESS) {
+    VmaAllocationInfo actual{};
+    NativeBufferStorageToken token;
+    if (vulkan_detail::allocateCoveredBuffer(
+            state, bufferInfo, allocationInfo, std::numeric_limits<std::uint64_t>::max(), buffer,
+            allocation, actual, token, vulkan_detail::NativeBufferPurpose::Processing) !=
+        vulkan_detail::NativeBufferAllocationOutcome::Allocated) {
         return false;
     }
     out.state = &state;
@@ -137,6 +142,7 @@ void packCoverageLittleEndian(const std::span<const std::uint8_t> coverage,
     out.allocation = allocation;
     out.bytes = bytes;
     out.armed = true;
+    out.storageToken = std::move(token);
     return true;
 }
 

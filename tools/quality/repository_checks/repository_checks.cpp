@@ -60,6 +60,11 @@ constexpr auto kCppSuffixes = std::to_array<std::string_view>(
     {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl"});
 constexpr auto kPythonSourceRoots = std::to_array<std::string_view>(
     {"examples/scripting", "src/scripting/python", "tests/fixtures/scripting"});
+// Manual qualification orchestration only; no application/build code generation. The owning
+// scripting architecture document names this bounded exception, not a general tools/ Python root.
+constexpr auto kPythonQualificationTools = std::to_array<std::string_view>(
+    {"tools/ci/configure_gpu_qualification.py", "tools/ci/gpu_qualification.py",
+     "tools/quality/qualify_private_share_outage.py"});
 
 template <std::size_t Size>
 [[nodiscard]] constexpr auto contains(const std::array<std::string_view, Size>& values,
@@ -137,9 +142,10 @@ template <std::size_t Size>
 
 [[nodiscard]] auto isAllowedPythonSource(const Path& relative) -> bool {
     const auto normalized = normalizedRelative(relative);
-    return std::ranges::any_of(kPythonSourceRoots, [&normalized](const std::string_view root) {
-        return normalized.starts_with(std::string{root} + '/');
-    });
+    return contains(kPythonQualificationTools, normalized) ||
+           std::ranges::any_of(kPythonSourceRoots, [&normalized](const std::string_view root) {
+               return normalized.starts_with(std::string{root} + '/');
+           });
 }
 
 void appendPathFindings(const Path& root, const Path& relative,
@@ -161,7 +167,7 @@ void appendPathFindings(const Path& root, const Path& relative,
     if ((suffix == ".py" || suffix == ".pyi") && !isAllowedPythonSource(relative)) {
         findings.push_back(
             {relative, "python placement",
-             "Python sources are restricted to Bloom scripting, scripting fixtures, and examples",
+             "Python sources are restricted to scripting roots and named qualification tools",
              std::nullopt});
     }
 

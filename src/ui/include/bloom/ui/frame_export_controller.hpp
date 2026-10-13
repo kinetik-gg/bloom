@@ -335,6 +335,10 @@ class FrameExportController final : public QObject {
 
     FrameExportActivity activity_ = FrameExportActivity::Idle;
     std::filesystem::path pendingDestination_;
+    // Captured on the UI thread beside the snapshot, retained for every compiled range frame.
+    std::filesystem::path pendingAssetBaseDirectory_;
+    runtime::EvaluationColorIntent pendingColorIntent_;
+    core::RationalTime pendingTime_;
     output::OutputPresetV1 pendingPreset_ = output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1;
 
     std::variant<std::monostate, CompileHandle, host::OutputAnalysisAttemptRunnerV1,

@@ -1,7 +1,12 @@
 #include "gpu_media_cache_test_support.hpp"
 #include "gpu_media_video_scene_preparation_test_support.hpp"
 
+#include "gpu_process_frame_preparation_private.hpp"
+#include "packed_host_retirement_private.hpp"
 #include "video_source.hpp"
+#include <chrono>
+#include <fstream>
+#include <thread>
 
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
@@ -21,6 +26,8 @@ using bloom::runtime::GpuSceneMediaContext;
 using bloom::runtime::GpuSceneTranslationCommand;
 using bloom::runtime::GpuSceneUploadCommand;
 using bloom::runtime::PreparedGpuScene;
+
+#include "gpu_media_video_source_revision_tests.ipp"
 
 [[nodiscard]] const GpuSceneUploadCommand* firstUpload(const PreparedGpuScene& scene) {
     for (const auto& command : scene.commands()) {
@@ -399,6 +406,8 @@ int main(int argc, char** argv) {
         testVideoBypassMatrix(expectations, evaluator, fixtures);
         testVideoAffineAndBlend(expectations, evaluator, fixtures);
         testVideoBudgetRefusal(expectations, fixtures);
+        testVideoSourceRevisionBoundary(expectations, fixtures);
+        testRootedVideoSourceClosure(expectations, fixtures);
         if (!expectations.ok()) {
             std::cerr << "FAIL: GPU media video scene preparation expectations failed\n";
             return 1;

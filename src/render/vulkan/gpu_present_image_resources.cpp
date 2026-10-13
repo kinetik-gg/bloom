@@ -1,5 +1,7 @@
 #include "gpu_present_image_private.hpp"
 
+#include "gpu_native_buffer_allocation_private.hpp"
+#include "gpu_native_image_allocation_private.hpp"
 #include "gpu_resident_display_private.hpp"
 
 #include "shaders/viewer_present_spirv.inc"
@@ -9,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,7 +31,8 @@ std::atomic<std::uint32_t> gDeviceResourceFault{UINT32_MAX};
 [[nodiscard]] bool createBufferVma(DeviceAllocatorState& control, const std::uint64_t bytes,
                                    const VkBufferUsageFlags usage,
                                    const VmaAllocationCreateFlags flags, VkBuffer& outBuffer,
-                                   VmaAllocation& outAllocation, VmaAllocationInfo& outInfo) {
+                                   VmaAllocation& outAllocation, VmaAllocationInfo& outInfo,
+                                   NativeBufferStorageToken& token) {
     VkBufferCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     createInfo.size = bytes;
@@ -37,22 +41,29 @@ std::atomic<std::uint32_t> gDeviceResourceFault{UINT32_MAX};
     VmaAllocationCreateInfo allocationInfo{};
     allocationInfo.usage = VMA_MEMORY_USAGE_AUTO;
     allocationInfo.flags = flags;
-    return vmaCreateBuffer(control.allocator, &createInfo, &allocationInfo, &outBuffer,
-                           &outAllocation, &outInfo) == VK_SUCCESS;
+    return vulkan_detail::allocateCoveredBuffer(control, createInfo, allocationInfo,
+                                                std::numeric_limits<std::uint64_t>::max(),
+                                                outBuffer, outAllocation, outInfo, token,
+                                                vulkan_detail::NativeBufferPurpose::Presentation) ==
+           vulkan_detail::NativeBufferAllocationOutcome::Allocated;
 }
 
-void destroyBufferVma(DeviceAllocatorState& control, VkBuffer& buffer,
-                      VmaAllocation& allocation) noexcept {
+void destroyBufferVma(DeviceAllocatorState& control, VkBuffer& buffer, VmaAllocation& allocation,
+                      NativeBufferStorageToken& token) noexcept {
     if (buffer != VK_NULL_HANDLE && allocation != VK_NULL_HANDLE) {
         vmaDestroyBuffer(control.allocator, buffer, allocation);
+        if (token.bytes() != 0 && control.nativeBufferBackingsDestroyed != UINT64_MAX)
+            ++control.nativeBufferBackingsDestroyed;
     }
+    token = {};
     buffer = VK_NULL_HANDLE;
     allocation = VK_NULL_HANDLE;
 }
 
 [[nodiscard]] bool createOverlayImageVma(DeviceAllocatorState& control, const std::uint32_t width,
                                          const std::uint32_t height, VkImage& outImage,
-                                         VmaAllocation& outAllocation) {
+                                         VmaAllocation& outAllocation,
+                                         NativeImageStorageToken& token) {
     VkImageCreateInfo createInfo;
     std::memset(&createInfo, 0, sizeof(createInfo));
     createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -66,17 +77,18 @@ void destroyBufferVma(DeviceAllocatorState& control, VkBuffer& buffer,
     createInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    VmaAllocationCreateInfo allocationInfo{};
-    allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-    return vmaCreateImage(control.allocator, &createInfo, &allocationInfo, &outImage,
-                          &outAllocation, nullptr) == VK_SUCCESS;
+    return vulkan_detail::allocateCoveredImage(control, createInfo, outImage, outAllocation, token,
+                                               true);
 }
 
-void destroyImageVma(DeviceAllocatorState& control, VkImage& image,
-                     VmaAllocation& allocation) noexcept {
+void destroyImageVma(DeviceAllocatorState& control, VkImage& image, VmaAllocation& allocation,
+                     NativeImageStorageToken& token) noexcept {
     if (image != VK_NULL_HANDLE && allocation != VK_NULL_HANDLE) {
         vmaDestroyImage(control.allocator, image, allocation);
+        if (token.bytes() != 0 && control.nativeImageBackingsDestroyed != UINT64_MAX)
+            ++control.nativeImageBackingsDestroyed;
     }
+    token = {};
     image = VK_NULL_HANDLE;
     allocation = VK_NULL_HANDLE;
 }
@@ -118,11 +130,12 @@ void PresentImagePipeline::resetDeviceResources() noexcept {
         // vmaUnmapMemory must never be called for the creation mapping. vmaDestroyBuffer below
         // releases that mapping.
         paramsMapped = nullptr;
-        destroyBufferVma(*control, paramsBuffer, paramsAllocation);
-        destroyBufferVma(*control, stagedOverlayBuffer, stagedOverlayAllocation);
+        destroyBufferVma(*control, paramsBuffer, paramsAllocation, paramsStorageToken);
+        destroyBufferVma(*control, stagedOverlayBuffer, stagedOverlayAllocation,
+                         stagedOverlayStorageToken);
         overlayView = vk::raii::ImageView{nullptr};
         if (overlayImage != VK_NULL_HANDLE) {
-            destroyImageVma(*control, overlayImage, overlayAllocation);
+            destroyImageVma(*control, overlayImage, overlayAllocation, overlayStorageToken);
         }
     } else {
         paramsMapped = nullptr;
@@ -277,7 +290,7 @@ bool PresentImagePipeline::ensureDeviceResources(
                          VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                          VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                              VMA_ALLOCATION_CREATE_MAPPED_BIT,
-                         paramsBuffer, paramsAllocation, paramsInfo) ||
+                         paramsBuffer, paramsAllocation, paramsInfo, paramsStorageToken) ||
         paramsInfo.pMappedData == nullptr) {
         message = "the viewer present uniform buffer could not be created";
         return false;
@@ -561,7 +574,8 @@ bool PresentImagePipeline::ensureOverlay(DeviceAllocatorState& /*deviceControl*/
     }
     // Free the previous staged buffer: the caller acquires only after the previous render fence is
     // known complete, so no submission still references it.
-    destroyBufferVma(*control, stagedOverlayBuffer, stagedOverlayAllocation);
+    destroyBufferVma(*control, stagedOverlayBuffer, stagedOverlayAllocation,
+                     stagedOverlayStorageToken);
     stagedOverlayPending = false;
 
     const bool needsImage = overlayImage == VK_NULL_HANDLE || overlayWidth != overlay.width ||
@@ -569,11 +583,11 @@ bool PresentImagePipeline::ensureOverlay(DeviceAllocatorState& /*deviceControl*/
     if (needsImage) {
         overlayView = vk::raii::ImageView{nullptr};
         if (overlayImage != VK_NULL_HANDLE) {
-            destroyImageVma(*control, overlayImage, overlayAllocation);
+            destroyImageVma(*control, overlayImage, overlayAllocation, overlayStorageToken);
         }
         VkImage rawOverlay = VK_NULL_HANDLE;
         if (!createOverlayImageVma(*control, overlay.width, overlay.height, rawOverlay,
-                                   overlayAllocation)) {
+                                   overlayAllocation, overlayStorageToken)) {
             message = "the overlay image could not be created";
             return false;
         }
@@ -600,7 +614,8 @@ bool PresentImagePipeline::ensureOverlay(DeviceAllocatorState& /*deviceControl*/
     if (!createBufferVma(*control, stagingBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                          VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                              VMA_ALLOCATION_CREATE_MAPPED_BIT,
-                         stagedOverlayBuffer, stagedOverlayAllocation, stagingInfo) ||
+                         stagedOverlayBuffer, stagedOverlayAllocation, stagingInfo,
+                         stagedOverlayStorageToken) ||
         stagingInfo.pMappedData == nullptr) {
         message = "the overlay staging buffer could not be created";
         return false;
@@ -611,7 +626,13 @@ bool PresentImagePipeline::ensureOverlay(DeviceAllocatorState& /*deviceControl*/
                     overlay.pixels + static_cast<std::size_t>(row) * rowBytes,
                     static_cast<std::size_t>(overlay.width) * 4U);
     }
-    vmaFlushAllocation(control->allocator, stagedOverlayAllocation, 0, VK_WHOLE_SIZE);
+    if (vmaFlushAllocation(control->allocator, stagedOverlayAllocation, 0, VK_WHOLE_SIZE) !=
+        VK_SUCCESS) {
+        destroyBufferVma(*control, stagedOverlayBuffer, stagedOverlayAllocation,
+                         stagedOverlayStorageToken);
+        message = "the overlay staging buffer could not be flushed";
+        return false;
+    }
     stagedOverlayToken = overlay.token;
     overlayRowBytes = static_cast<std::uint32_t>(rowBytes);
     stagedOverlayPending = true;

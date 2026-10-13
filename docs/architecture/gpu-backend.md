@@ -708,6 +708,23 @@ locally exercised on Linux. The Vulkan device service, fence integration, and re
 are implemented; the cross-platform Linux/macOS/Windows qualification spike remains pending, and a
 synchronous fence wait hidden inside a task function is not a valid interim implementation.
 
+### Bounded Native Command Batches
+
+The production scene executor records two to eight consecutive eligible Solid, translation,
+affine and source-over kernels into one command buffer with explicit dependencies and one fence.
+Other kernels delimit those runs and retain their existing native paths. Inputs may reference
+earlier batch outputs or Ready images from the exact device generation; every GPU status word is
+validated before outputs leave the native batch owner.
+
+All image and buffer backings reserve and reconcile against the existing phase. Translation-axis
+scratch uses fresh additive host admission in both serial and batched native paths. Oversized or
+failed pre-submit preparation may fall back to serial native execution only after actual backing
+destruction and same-origin prefix restoration. An uncertain attempted submission retains the exact
+cancelled owner and all inputs until real fence/loss proof; later proof discards its outputs.
+Foreign release queues that bounded owner for its native thread. The default remains one admitted
+frame; measurements and width-two limits are in the
+[Linux qualification record](../plans/gpu-304-linux-qualification.md).
+
 ### CPU Composition Seam
 
 The composition preview's CPU half is now split from the display product applied to it, so a later
@@ -1340,6 +1357,86 @@ follow the bounded qualification recorded in the
 staging buffer creators remain unowned by this slice. No whole-buffer/native, physical/UMA/OOM,
 performance or other-platform execution qualification is adopted here.
 
+### Rooted resident-display processing buffers (bounded increment)
+
+The 2026-10-13 continuation from issue #304 adopts the transient input, packed-output and status
+buffers of `GpuResidentDisplay`. Each embeds one move-only `NativeBufferStorageToken`; the same
+existing job owner retains it through submission, cancellation, failed-job cleanup and quarantine.
+Native destruction precedes token foldback. Taking a completed display image destroys the retired
+working buffers; keeping their pipeline alive does not pin the phase through these buffers.
+
+Processing tokens transfer existing native working debit. A nonlocal processing allocation also
+requires fresh additional host headroom, checked atomically before backing allocation. It cannot
+spend the protected output or source/scratch/upload host partitions. Its host charge contributes
+to `totalHostClaimBytes` and the overlapping `ownedNonlocalNativeBufferHostBytes` subset; it does
+not reduce `hostReservedBytes`. Downward reconciliation and backing destruction release only that
+additional host charge. Local/BAR backing consumes native debit without claiming physical UMA
+separation. Output and upload tokens keep their existing conversion rules.
+
+The native helper preserves AUTO memory-type ranking, compatible masks and original access/mapping
+preferences. Processing input/output buffers may remain unmapped; mapped status backing must be
+HOST_VISIBLE and have an actual mapped pointer. Actual VMA size/type/heap/allocator generation
+must reconcile before bind/use. Typed device-budget, host-budget and awaiting-headroom refusals
+retain exact phase/release metadata. A failed allocator, bind, reconciliation or map path destroys
+backing and returns its token without fabricating capacity retry provenance.
+
+Focused native checks exercise actual unmapped/mapped identity, one-byte-short refusal before a
+backing attempt, forced nonlocal host admission and staleness, allocation/reconcile/bind/map faults,
+partial production buffer-prefix refusal/cleanup with an external phase alias and exact own-release
+revision, CPU pixel parity and ten alternating completion/cancellation cycles. Each settled cycle returns
+covered claims and actual VMA allocation count/bytes to baseline at request capacity one. These
+are small resident-display iterations, not the sustained fill/purge, 60-second playback or RSS
+qualification required by issue #304. Neutral tests separately cover partition isolation, moves,
+unproven-phase lifetime, freshness and integer boundaries.
+
+The six required production preview/still/range/video/headless routes and native coverage gate pass
+on Linux. Private-compositor packed animation/drag and native capacity-recovery checks also pass.
+Independent focused regressions pass thirteen native checks and ten CPU-stub checks, with one
+additional explicit native-unavailable outcome. Neutral ASan/UBSan/LeakSanitizer checks are clean.
+These results do not establish the unresolved native-host LeakSanitizer allocation ownership.
+
+Cached OCIO resources use the existing separate buffer factory until their own publication and
+retirement adoption is implemented; attaching a transient token there would keep its whole origin
+phase alive across cache hits. OCIO packed/UBO/status/LUT staging/scratch, coverage/palette,
+composite/axis/map/affine/blend buffers, presentation storage and legacy/direct/oracle allocations
+remain outside this increment. No operation or render-route GPU coverage exemption is introduced.
+Committed VMA blocks, allocator/driver/RSS residuals, physical/UMA/OOM guarantees and macOS/Windows
+native qualification remain open.
+
+### Independently rooted presentation backing
+
+Bloom-owned presentation uniform and overlay-staging buffers and overlay images use the device's
+explicit processing root. Preview startup binds that stable root before native qualification;
+the bound device rejects a different root and cannot retain another root's processing phase.
+Presentation admission never borrows an arbitrary active frame, consumes a phase count slot or
+pins the whole phase. New backing requires fresh host readiness, device readiness and sufficient
+remaining device capacity, plus additional host capacity for an actual nonlocal heap. The paired
+claims are committed before the VMA backing call, with exact generation/type/heap/size reconciliation
+before binding. Original AUTO memory preferences and mapping requirements are preserved.
+
+Presentation bytes remain included in the general owned native-image/buffer counters and are also
+reported as separate presentation subsets. Downward provisional reconciliation and actual native
+destruction return only their own claims. Native release exposes an independent admission revision;
+there is no originating phase-release watermark to suppress. A failed allocator/bind/map path
+destroys backing before releasing credit and reports no fabricated capacity-refusal provenance.
+
+The existing presenter and target own these tokens through their render and presentation retirement
+proofs. Overlay replacement and resize destroy old backing only after the previous render retires;
+target quarantine retains the whole native owner and its charges. Vulkan WSI swapchain images are
+explicitly reported as `PresentationEngineUnowned`: their physical allocation size is unknown and
+Bloom does not count them as VMA-owned backing. Offscreen oracle attachments retain separate
+caller-owned provenance. Driver allocations, committed VMA blocks, WSI memory and a physical/UMA
+or whole-process OOM guarantee remain outside these requested-suballocation counters.
+
+Focused neutral checks qualify phase isolation, provisional reconciliation, independent release
+revisions, staleness and integer limits. Actual Linux native tests qualify uniform/image/staging
+identity, pre-backing refusal, allocator/bind/map cleanup, ten overlay resize cycles and exact VMA
+allocation-count/bytes return. Rooted offscreen production draws still pass the independent
+QPainter oracle, including nonuniform 1280×720 images, with zero presentation claims after owner
+retirement. The private Wayland lifecycle passes using the production coordinator's bounded
+acquire mode through clear/resident presents, resize and acquired-unpresented close. Zero-timeout
+poll-only acquire does not progress in that private fixture and is not qualified by these results.
+
 ### Rooted combined final-readback staging (bounded final-output slice)
 
 The final-output increment adopts the transient staging buffer used by
@@ -1363,6 +1460,12 @@ through fence proof and destruction outside the handoff mutex. Preview/final exi
 readback pending state. Proven budget refusal drops attempt-owned aliases before phase retirement,
 allowing a second request at capacity one; loss or unknown work is not that proof. No timeout or
 closed-owner state is reported as reclaimed success.
+
+A host handoff may fail after the actual readback fence has completed. That failure releases its
+attempt aliases only after checking the owner thread, device epoch, exact retained phase and every
+independent readback, transfer and OCIO retirement witness. It remains a failed render, but does not
+poison the next capacity-one admission. Unknown completion and device loss cannot satisfy this
+proof; cached OCIO buffers remain independently charged until their actual destruction.
 
 Focused native helper and complete evaluator evidence qualifies this behavior independently.
 The evaluator's real submitted work with a privately overridden unknown observation retains buffer,
@@ -1536,9 +1639,10 @@ Refreshed sanitizer compilation instruments eleven actual core/consumer/test bod
 linked archives are not claimed as instrumented. Core ASAN/UBSAN/LSAN passes. Native host functional
 assertions, core/synchronization validation and ASAN access/UBSAN checks pass, but unsuppressed
 LSAN exits nonzero with 2,468 bytes in six allocations, also reproduced without a session bus.
-Reported stacks contain libdbus and unknown unloaded callers, with no Bloom frame. External
-attribution is plausible but unproven; this unresolved leak result is explicitly accepted as a
-scoped shipping limitation, not clean native LSAN.
+At that checkpoint, stacks contained libdbus and unknown unloaded callers, with no Bloom frame;
+dependency attribution remained unproven. The later
+[native-loader attribution](#native-loader-leaksanitizer-attribution) resolves that stack-family
+ownership question without changing the historical nonzero result or claiming clean native LSAN.
 
 The narrow source union is the shipping cut; broader G5 and memory/performance work is postponed.
 
@@ -1549,6 +1653,57 @@ Full/Half may retain the same full-resolution raw source while downstream work c
 identity, bypass/read-only behavior and actual final revalidation remain required; this slice
 claims no zero-I/O speedup, sustained throughput, other-platform execution or whole-memory/OOM
 accounting. Native image/buffer ownership and their retirement are unchanged separate domains.
+
+### Native loader LeakSanitizer attribution
+
+The 2026-10-13 attribution follow-on uses the standalone Linux
+[`native_loader_lsan_probe.cpp`](../../tools/quality/native_loader_lsan_probe.cpp). It links no Bloom,
+Qt, media or project libraries. Loader-only admission is a clean unsuppressed control; creating a
+Vulkan instance already reproduces dependency leaks, before any Bloom device, image or buffer
+allocation. Required enumeration/device modes fail if the native API is unavailable. Each cycle
+destroys its actual Vulkan device and instance before closing the loader, and records loaded-module
+ranges before unloading so subsequent LeakSanitizer addresses retain module provenance.
+
+With Vulkan and EGL vendor discovery both pinned to the qualified NVIDIA vendor, the two-cycle
+zero-Bloom baseline and the refreshed scoped native-host witness both report 3,308 bytes in six
+allocations. The original 2,468-byte/six-allocation receipt remains historical evidence; the current
+received-message buffers differ in size. Matching DBus debug information names
+`dbus_message_new_signal`, `_dbus_message_loader_queue_messages`, `internal_bus_get`,
+`dbus_bus_register` and `dbus_connection_send_with_reply_and_block`. Same-process loader/module
+records place their previously unnamed native callers in `libnvidia-eglcore.so`. Its stripped
+internal functions are recorded by module-relative offsets rather than assigned invented names.
+The same six allocation shapes and DBus paths occur with no Bloom code linked. This resolves the
+previously unattributed DBus stack family to the native dependency path.
+
+Default EGL discovery is a separate unsuppressed control. It also initializes `libEGL_mesa.so`
+through `libEGL.so` and `libGLX_nvidia.so`; additional retained allocations reach `libdrm.so` through
+`drmGetDevices2`, `drmProcessPciDevice` and `drmDeviceAlloc`.
+That refreshed two-cycle baseline reports 4,300 bytes in fourteen allocations. Vendor selection
+isolates dependencies; it is not a leak suppression or proof that default discovery is clean.
+Neither result changes application ownership, performs global DBus shutdown, keeps a loader handle
+alive to hide leaked reachability, or claims whole-native-host LeakSanitizer cleanliness. The
+historical eleven-body instrumentation scope still excludes uninstrumented linked archives.
+
+The probe is compiled separately from production. Set `icd_manifest` and `egl_manifest` to the
+qualified vendor manifests; keep resulting addresses, local paths and raw loader logs private.
+
+```sh
+mkdir -p .cache
+clang++ -std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined \
+  -I build/dependency-prefix/include tools/quality/native_loader_lsan_probe.cpp \
+  -ldl -o .cache/native-loader-lsan-probe
+env -u DISPLAY -u WAYLAND_DISPLAY -u LSAN_OPTIONS \
+  ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+  UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+  .cache/native-loader-lsan-probe --loader build/dependency-prefix/lib/libvulkan.so.1 \
+  --mode loader
+env -u DISPLAY -u WAYLAND_DISPLAY -u LSAN_OPTIONS \
+  ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+  UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+  VK_DRIVER_FILES="$icd_manifest" __EGL_VENDOR_LIBRARY_FILENAMES="$egl_manifest" \
+  .cache/native-loader-lsan-probe --loader build/dependency-prefix/lib/libvulkan.so.1 \
+  --mode device --cycles 2 --snapshot
+```
 
 ### Rooted packed-host payload ownership (bounded ownership slice)
 

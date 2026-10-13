@@ -10,6 +10,8 @@ file(GLOB_RECURSE bloom_media_identity_sources CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/src/media/provider/*.cpp"
      "${PROJECT_SOURCE_DIR}/src/media/provider/*.hpp"
      "${PROJECT_SOURCE_DIR}/src/platform/process_*.cpp"
+     "${PROJECT_SOURCE_DIR}/src/platform/file_snapshot.cpp"
+     "${PROJECT_SOURCE_DIR}/src/platform/include/bloom/platform/file_snapshot.hpp"
      "${PROJECT_SOURCE_DIR}/src/platform/include/bloom/platform/process_*.hpp"
      "${PROJECT_SOURCE_DIR}/src/core/sha256.cpp"
      "${PROJECT_SOURCE_DIR}/src/core/include/bloom/core/sha256.hpp"
@@ -60,7 +62,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(BLOOM_OPENH264_SHIM_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/lib")
     add_subdirectory(openh264_shim)
     add_library(bloom_media_ffmpeg_worker_provider STATIC ffmpeg_provider.cpp)
-    target_link_libraries(bloom_media_ffmpeg_worker_provider PRIVATE bloom_media_provider
+    target_link_libraries(bloom_media_ffmpeg_worker_provider PRIVATE bloom_media_provider bloom_platform_process
                           FFmpeg::avformat FFmpeg::avcodec FFmpeg::swscale FFmpeg::swresample
                           "${BLOOM_DEPENDENCY_PREFIX}/lib/libopenh264.so")
     bloom_enable_warnings(bloom_media_ffmpeg_worker_provider)
@@ -204,7 +206,7 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endif()
     add_library(bloom_media_ffmpeg_fixture_worker_provider STATIC ffmpeg_provider.cpp)
     target_compile_definitions(bloom_media_ffmpeg_fixture_worker_provider PRIVATE BLOOM_MEDIA_FIXTURE_GENERATOR)
-    target_link_libraries(bloom_media_ffmpeg_fixture_worker_provider PRIVATE bloom_media_provider
+    target_link_libraries(bloom_media_ffmpeg_fixture_worker_provider PRIVATE bloom_media_provider bloom_platform_process
                           FFmpeg::avformat FFmpeg::avcodec FFmpeg::swscale FFmpeg::swresample
                           "${BLOOM_DEPENDENCY_PREFIX}/lib/libopenh264.so")
     bloom_enable_warnings(bloom_media_ffmpeg_fixture_worker_provider)
@@ -255,6 +257,14 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     bloom_add_test(NAME bloom.media.video-session COMMAND bloom_media_video_session_test
                    "${CMAKE_CURRENT_BINARY_DIR}/fixtures" LABELS unit media TIMEOUT 60)
     set_tests_properties(bloom.media.video-session PROPERTIES FIXTURES_REQUIRED media3)
+    add_executable(bloom_media_video_source_revision_test "${PROJECT_SOURCE_DIR}/src/media/video/tests/source_revision_tests.cpp")
+    target_include_directories(bloom_media_video_source_revision_test PRIVATE "${PROJECT_SOURCE_DIR}/src/render")
+    target_link_libraries(bloom_media_video_source_revision_test PRIVATE bloom_media_video)
+    bloom_enable_warnings(bloom_media_video_source_revision_test)
+    add_dependencies(bloom_media_video_source_revision_test bloom-media-worker bloom_media_generate_fixtures)
+    bloom_add_test(NAME bloom.media.video-source-revision COMMAND bloom_media_video_source_revision_test
+                   "${CMAKE_CURRENT_BINARY_DIR}/fixtures" LABELS unit media security TIMEOUT 60)
+    set_tests_properties(bloom.media.video-source-revision PROPERTIES FIXTURES_REQUIRED media3)
     add_executable(bloom_media_video_integration_test "tests/video_integration_tests.cpp")
     target_link_libraries(bloom_media_video_integration_test PRIVATE bloom_commands bloom_runtime_evaluator bloom_project bloom_media_video)
     bloom_enable_warnings(bloom_media_video_integration_test)

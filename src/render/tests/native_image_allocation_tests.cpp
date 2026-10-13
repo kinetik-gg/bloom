@@ -13,6 +13,11 @@
 
 namespace {
 using namespace bloom::render;
+bool createResidentImageForTest(vulkan_detail::DeviceAllocatorState& owner,
+                                const std::uint32_t width, const std::uint32_t height,
+                                GpuImageImpl& image) {
+    return createResidentImage(owner, width, height, image);
+}
 void require(bool condition, const char* message) {
     if (!condition)
         throw std::runtime_error(message);
@@ -252,7 +257,7 @@ void nonlocalDomains(GpuDevice& device) {
         std::cout << "NotRun: nonlocal types incompatible with actual image requirements\n";
         return;
     }
-    foreignAliases<GpuImageImpl, GpuImage>(device, createResidentImage, makeGpuImage);
+    foreignAliases<GpuImageImpl, GpuImage>(device, createResidentImageForTest, makeGpuImage);
     foreignAliases<GpuDisplayImageImpl, GpuDisplayImage>(device, createDisplayImage,
                                                          makeGpuDisplayImage);
     state->nativeImageMemoryTypeMaskForTests = 0;
@@ -266,8 +271,33 @@ void downstreamRefusal(GpuDevice& device) {
     budget.setDeviceCapacity(1ULL << 30, true);
     auto created = GpuResidentDisplay::create(device);
     require(bool(created), "actual neutral display pipeline exists");
+    // Preserve this fixture's output-image refusal after processing buffers gained ownership.
+    // Probe real requirements without an active phase, then admit that exact transient prefix.
+    std::uint64_t workingBytes = 0;
+    struct BufferSpec {
+        std::uint64_t bytes;
+        VkBufferUsageFlags usage;
+        VmaAllocationCreateFlags flags;
+        bool mapped;
+    };
+    const std::array specs{
+        BufferSpec{64ULL * 64ULL * sizeof(Rgba32f),
+                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, false},
+        BufferSpec{64ULL * 64ULL * sizeof(Rgba8),
+                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 0, false},
+        BufferSpec{4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                   VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                   true}};
+    for (const auto& spec : specs) {
+        ResidentBuffer buffer;
+        require(createResidentDisplayBuffer(*state, spec.bytes, spec.usage, spec.flags, spec.mapped,
+                                            buffer),
+                "real downstream buffer requirement probe succeeds");
+        workingBytes += buffer.info.size;
+        destroyResidentBuffer(*state, buffer);
+    }
     for (bool externalHolder : {false, true}) {
-        auto admitted = phase(budget, 64ULL * 64ULL * sizeof(Rgba32f));
+        auto admitted = phase(budget, 64ULL * 64ULL * sizeof(Rgba32f) + workingBytes);
         require(device.retainProcessingPhase(admitted), "display refusal phase retained");
         auto impl = std::make_unique<GpuImageImpl>();
         impl->state = state;
@@ -335,7 +365,8 @@ int main(int argc, char** argv) {
         downstreamRefusal(*device.device);
         backingFaults(*device.device);
         nonlocalDomains(*device.device);
-        foreignAliases<GpuImageImpl, GpuImage>(*device.device, createResidentImage, makeGpuImage);
+        foreignAliases<GpuImageImpl, GpuImage>(*device.device, createResidentImageForTest,
+                                               makeGpuImage);
         foreignAliases<GpuDisplayImageImpl, GpuDisplayImage>(*device.device, createDisplayImage,
                                                              makeGpuDisplayImage);
         std::cout << "PASS: actual two-family native image backing/accounting/turnover\n";

@@ -210,6 +210,7 @@ evaluationRequestFor(const runtime::PreviewRequestIdentity& desiredIdentity,
         .pixelStorageByteLimit = pixelStorageByteLimit,
         .roi = desiredIdentity.roi,
         .bypassLookNodes = !desiredIdentity.showLook,
+        .mediaSourceRevisionPolicy = runtime::MediaSourceRevisionPolicy::Retained,
     };
 }
 

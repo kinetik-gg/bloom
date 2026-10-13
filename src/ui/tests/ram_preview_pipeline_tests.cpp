@@ -368,8 +368,10 @@ void testControllerBudgetStopsBounded(Expectations& expectations) {
     expectations.expect(finishedCompleted, "a budget-limited run reports partial completion");
     expectations.expect(ram.peakInFlightFrames() <= ui::RamPreviewPipeline::kMaxInFlight,
                         "the budget stop never overscheduled past the two-frame bound");
-    expectations.expect(fixture.coordinator.calls() == base + 4,
-                        "at most the four frames that fit were ever prepared");
+    expectations.expect(ram.preparedFrameCount() == 3 && fixture.coordinator.calls() >= base + 3 &&
+                            fixture.coordinator.calls() <= base + 4,
+                        "the foreground frame is reused, three results are consumed and only the "
+                        "already-started sibling may prepare before eviction detaches it");
     finishFixture(fixture, expectations);
 }
 

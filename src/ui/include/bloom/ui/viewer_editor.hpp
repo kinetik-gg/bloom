@@ -571,7 +571,8 @@ class ViewerEditor final : public QWidget,
     std::optional<runtime::PreviewRequestIdentity> probeIdentity_;
     PreparedPreviewFrameHandle probeTaskFrame_;
     QPoint probeTaskPixel_;
-    PreparedPreviewFrameHandle probeCacheFrame_;
+    // Cached scalar probe values do not own an obsolete full-frame backing after purge.
+    std::weak_ptr<const runtime::PreparedPreviewFrame> probeCacheFrame_;
     QPoint probeCachePixel_;
     std::optional<core::Color4d> probeCacheReference_;
     std::optional<core::Color4d> probeCacheDisplayLinear_;

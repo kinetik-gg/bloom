@@ -95,6 +95,9 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
       previewController_(previewController), playbackController_(playbackController),
       operationCache_(operationCache), mediaDiskCache_(mediaDiskCache),
       cachePurgeController_(cachePurgeController), accelerationStatus_(accelerationStatus) {
+    displayedViewerUpdateTimer_.setSingleShot(true);
+    connect(&displayedViewerUpdateTimer_, &QTimer::timeout, this,
+            &MainWindow::updateDisplayedViewer);
     setObjectName("bloomMainWindow");
     setWindowTitle("Bloom");
     resize(1600, 1000);
@@ -488,8 +491,21 @@ void MainWindow::purgeMediaCache() {
     if (cachePurgeController_ != nullptr) {
         if (!cachePurgeController_->requestMediaPurge()) {
             statusStrip_->showTransientMessage(tr("A cache purge is already running"));
+            return;
+        }
+        // Completed frames also encode the retained source revision. Drop them while the producer
+        // gate is active, so the first request after refresh cannot bypass source verification.
+        if (previewController_ != nullptr) {
+            previewController_->purgePreviewCache();
+        } else if (ramPreview_ != nullptr) {
+            ramPreview_->cancel();
         }
         return;
+    }
+    if (previewController_ != nullptr) {
+        previewController_->purgePreviewCache();
+    } else if (ramPreview_ != nullptr) {
+        ramPreview_->cancel();
     }
     if (operationCache_ != nullptr) {
         // Memory-only fallback for a host with no task system. The disk store is deliberately not
@@ -1032,16 +1048,8 @@ void MainWindow::updateWorkspaceActions() {
 }
 
 void MainWindow::scheduleDisplayedViewerUpdate() {
-    if (displayedViewerUpdateQueued_)
-        return;
-    displayedViewerUpdateQueued_ = true;
-    QMetaObject::invokeMethod(
-        this,
-        [this] {
-            displayedViewerUpdateQueued_ = false;
-            updateDisplayedViewer();
-        },
-        Qt::QueuedConnection);
+    if (!displayedViewerUpdateTimer_.isActive())
+        displayedViewerUpdateTimer_.start(0);
 }
 
 void MainWindow::updateDisplayedViewer() {

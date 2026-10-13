@@ -1,5 +1,6 @@
 #include "exr_backend.hpp"
 #include "image_budget.hpp"
+#include "image_work_statistics.hpp"
 #include "stb_image_adapter.hpp"
 #include <algorithm>
 #include <array>
@@ -205,6 +206,125 @@ std::filesystem::path resolveImagePath(std::string_view relativePath, std::strin
     return std::filesystem::path(
         std::u8string(reinterpret_cast<const char8_t*>(path.data()), path.size()));
 }
+ImageResult<std::shared_ptr<const ImageSourceRevision>>
+captureImageSourceRevision(const std::filesystem::path& path, const std::size_t hostByteBudget,
+                           const CancelImageWork& cancel,
+                           const std::optional<core::Sha256Digest> expectedDigest) {
+    try {
+        if (cancelled(cancel))
+            return {{}, {}, true, ImageDiagnosticCode::Cancelled};
+        ImageSourceCaptureStatistics statistics;
+        auto ioStart = detail::ImageWorkClock::now();
+        std::ifstream input(path, std::ios::binary | std::ios::ate);
+        if (!input)
+            return {{},
+                    "Image file is missing or unreadable",
+                    false,
+                    ImageDiagnosticCode::FileUnavailable};
+        const auto length = input.tellg();
+        detail::addImageWork(statistics.ioNanoseconds, detail::imageWorkNanoseconds(ioStart));
+        if (length < 0)
+            return {{}, "Image size could not be read", false, ImageDiagnosticCode::FileReadFailed};
+        // File size admits a capture, never proves an unchanged revision. SHA256 below is over
+        // the same owned bytes the parsers will read, even if the path is concurrently replaced.
+        constexpr auto overhead = sizeof(ImageSourceRevision) + std::size_t{512};
+        const auto lengthBytes = static_cast<std::uint64_t>(length);
+        if (hostByteBudget < overhead || lengthBytes > hostByteBudget - overhead)
+            return {{},
+                    "Image source capture exceeds the host byte budget",
+                    false,
+                    ImageDiagnosticCode::PixelBudgetExceeded};
+        std::vector<std::byte> bytes(static_cast<std::size_t>(lengthBytes));
+        ioStart = detail::ImageWorkClock::now();
+        input.seekg(0);
+        detail::addImageWork(statistics.ioNanoseconds, detail::imageWorkNanoseconds(ioStart));
+        core::Sha256Hasher hasher;
+        for (std::size_t offset = 0; offset < bytes.size();) {
+            if (cancelled(cancel))
+                return {{}, {}, true, ImageDiagnosticCode::Cancelled};
+            const auto count = std::min(kHashChunkBytes, bytes.size() - offset);
+            ioStart = detail::ImageWorkClock::now();
+            input.read(reinterpret_cast<char*>(bytes.data() + offset),
+                       static_cast<std::streamsize>(count));
+            detail::addImageWork(statistics.ioNanoseconds, detail::imageWorkNanoseconds(ioStart));
+            const auto hashStart = detail::ImageWorkClock::now();
+            const auto hashed = hasher.update(std::span(bytes).subspan(offset, count));
+            detail::addImageWork(statistics.hashNanoseconds,
+                                 detail::imageWorkNanoseconds(hashStart));
+            if (input.gcount() != static_cast<std::streamsize>(count) || !hashed)
+                return {{},
+                        "Image source changed or failed during capture",
+                        false,
+                        ImageDiagnosticCode::FileReadFailed};
+            detail::addImageWork(statistics.bytesRead, count);
+            detail::addImageWork(statistics.bytesHashed, count);
+            offset += count;
+        }
+        ioStart = detail::ImageWorkClock::now();
+        const auto trailing = input.peek();
+        detail::addImageWork(statistics.ioNanoseconds, detail::imageWorkNanoseconds(ioStart));
+        if (trailing != std::char_traits<char>::eof() || input.bad())
+            return {{},
+                    "Image source changed during capture",
+                    false,
+                    ImageDiagnosticCode::FileReadFailed};
+        if (cancelled(cancel))
+            return {{}, {}, true, ImageDiagnosticCode::Cancelled};
+        const auto hashStart = detail::ImageWorkClock::now();
+        const auto digest = hasher.finalize();
+        detail::addImageWork(statistics.hashNanoseconds, detail::imageWorkNanoseconds(hashStart));
+        if (expectedDigest && digest != *expectedDigest)
+            return {{},
+                    "Image content changed; relink the asset",
+                    false,
+                    ImageDiagnosticCode::DigestMismatch};
+        const auto probeStart = detail::ImageWorkClock::now();
+        ImageResult<ImageProbe> probe;
+        const auto view = std::span<const std::byte>(bytes);
+        if (isExrMagic(view)) {
+            probe = detail::probeExr(view, digest, cancel);
+        } else if (isTiffMagic(view)) {
+            // Worker TIFF providers currently consume locators, not immutable byte revisions.
+            return providerMissing<std::shared_ptr<const ImageSourceRevision>>();
+        } else {
+            detail::ImageInfo info;
+            if (!detail::imageInfo(view, info) || !validInfo(info))
+                return {{},
+                        "Invalid PNG/JPEG header or image dimensions",
+                        false,
+                        ImageDiagnosticCode::InvalidHeader};
+            probe = {ImageProbe{static_cast<std::uint32_t>(info.width),
+                                static_cast<std::uint32_t>(info.height),
+                                static_cast<std::uint8_t>(info.sixteenBit ? 16 : 8),
+                                digest,
+                                isPngMagic(view) ? ImageFormat::Png : ImageFormat::Jpeg,
+                                ImageColorSpace::Srgb,
+                                ImageAlphaAssociation::Straight,
+                                "srgb_rec709_display",
+                                {}},
+                     {}};
+        }
+        detail::addImageWork(statistics.probeNanoseconds, detail::imageWorkNanoseconds(probeStart));
+        if (!probe.value.has_value())
+            return {{}, probe.diagnostic, probe.cancelled, probe.code};
+        auto revision = std::shared_ptr<const ImageSourceRevision>(
+            new ImageSourceRevision(std::move(bytes), std::move(*probe.value), statistics));
+        if (revision->retainedBytes() > hostByteBudget)
+            return {{},
+                    "Image source metadata exceeds the host byte budget",
+                    false,
+                    ImageDiagnosticCode::PixelBudgetExceeded};
+        return {std::move(revision), {}};
+    } catch (const std::bad_alloc&) {
+        return {{},
+                "Image source capture allocation failed",
+                false,
+                ImageDiagnosticCode::AllocationFailure};
+    } catch (...) {
+        return {{}, "Image source capture I/O failed", false, ImageDiagnosticCode::FileReadFailed};
+    }
+}
+
 ImageResult<ImageProbe> probeImage(const std::filesystem::path& path, const CancelImageWork& cancel,
                                    const ImageProvider* provider) {
     try {
@@ -257,15 +377,19 @@ ImageResult<ImageProbe> probeImage(const std::filesystem::path& path, const Canc
         return {{}, "Image probe allocation or I/O failed"};
     }
 }
-ImageResult<std::shared_ptr<const render::Rgba32fImage>>
-decodeImage(const std::filesystem::path& path, const ImageInterpretation& interpretation,
-            std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
-            const CancelImageWork& cancel, const ImageProgress& progress, std::size_t pixelBudget,
-            std::optional<core::Sha256Digest> expectedDigest, const ImageProvider* provider) {
+static ImageResult<std::shared_ptr<const render::Rgba32fImage>>
+decodeImageImpl(const std::filesystem::path& path, const ImageSourceRevision* revision,
+                const ImageInterpretation& interpretation,
+                std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
+                const CancelImageWork& cancel, const ImageProgress& progress,
+                std::size_t pixelBudget, std::optional<core::Sha256Digest> expectedDigest,
+                const ImageProvider* provider) {
     try {
         if (progress)
             progress(0, 0);
-        auto digest = hashFile(path, cancel);
+        auto digest = revision
+                          ? ImageResult<core::Sha256Digest>{revision->probe().contentDigest, {}}
+                          : hashFile(path, cancel);
         if (!digest.value.has_value())
             return {{}, digest.diagnostic, digest.cancelled};
         if (expectedDigest && *digest.value != *expectedDigest)
@@ -275,15 +399,23 @@ decodeImage(const std::filesystem::path& path, const ImageInterpretation& interp
                     ImageDiagnosticCode::DigestMismatch};
         std::array<std::byte, kImageHeaderBytes> head{};
         std::size_t headBytes = 0;
-        if (!readHeader(path, head, headBytes))
+        if (revision) {
+            headBytes = std::min(head.size(), revision->bytes().size());
+            std::copy_n(revision->bytes().begin(), headBytes, head.begin());
+        }
+        if (!revision && !readHeader(path, head, headBytes))
             return {{},
                     "Image file is missing or unreadable",
                     false,
                     ImageDiagnosticCode::FileUnavailable};
         const auto view = std::span<const std::byte>(head.data(), headBytes);
-        if (isExrMagic(view))
+        if (isExrMagic(view)) {
+            if (revision)
+                return detail::decodeExr(revision->bytes(), interpretation, std::move(processor),
+                                         cancel, progress, pixelBudget);
             return detail::decodeExr(path, interpretation, std::move(processor), cancel, progress,
                                      pixelBudget);
+        }
         if (isTiffMagic(view)) {
             if (provider == nullptr || !provider->decode)
                 return providerMissing<std::shared_ptr<const render::Rgba32fImage>>();
@@ -320,7 +452,9 @@ decodeImage(const std::filesystem::path& path, const ImageInterpretation& interp
             return applyInputProcessor(response.value->image, processor, cancel, pixelBudget);
         }
         detail::ImageInfo info;
-        if (!detail::imageInfo(path, info) || !validInfo(info))
+        if (!(revision ? detail::imageInfo(revision->bytes(), info)
+                       : detail::imageInfo(path, info)) ||
+            !validInfo(info))
             return {{},
                     "Invalid PNG/JPEG header or image dimensions",
                     false,
@@ -344,7 +478,8 @@ decodeImage(const std::filesystem::path& path, const ImageInterpretation& interp
                     ImageDiagnosticCode::PixelBudgetExceeded};
         if (cancelled(cancel))
             return {{}, {}, true};
-        auto samples = detail::imageSamples(path, info, pixelBudget);
+        auto samples = revision ? detail::imageSamples(revision->bytes(), info, pixelBudget)
+                                : detail::imageSamples(path, info, pixelBudget);
         if (samples.empty())
             return {{},
                     "PNG/JPEG decode failed or exceeded the pixel budget",
@@ -436,6 +571,36 @@ decodeImage(const std::filesystem::path& path, const ImageInterpretation& interp
     } catch (const std::exception&) {
         return {{}, "Image decode allocation or I/O failed"};
     }
+}
+
+ImageResult<std::shared_ptr<const render::Rgba32fImage>>
+decodeImage(const std::filesystem::path& path, const ImageInterpretation& interpretation,
+            std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
+            const CancelImageWork& cancel, const ImageProgress& progress,
+            const std::size_t pixelBudget, const std::optional<core::Sha256Digest> expectedDigest,
+            const ImageProvider* provider) {
+    return decodeImageImpl(path, nullptr, interpretation, std::move(processor), cancel, progress,
+                           pixelBudget, expectedDigest, provider);
+}
+
+ImageResult<std::shared_ptr<const render::Rgba32fImage>>
+decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& interpretation,
+            std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
+            const CancelImageWork& cancel, const ImageProgress& progress,
+            const std::size_t hostByteBudget, ImageDecodeStatistics* statistics) {
+    if (statistics)
+        *statistics = {};
+    if (cancelled(cancel))
+        return {{}, {}, true, ImageDiagnosticCode::Cancelled};
+    if (revision.retainedBytes() >= hostByteBudget)
+        return {{},
+                "Image revision and decode exceed the host byte budget",
+                false,
+                ImageDiagnosticCode::PixelBudgetExceeded};
+    const detail::ImageWorkTimer timer(statistics ? &statistics->decodeNanoseconds : nullptr);
+    return decodeImageImpl({}, &revision, interpretation, std::move(processor), cancel, progress,
+                           hostByteBudget - revision.retainedBytes(),
+                           revision.probe().contentDigest, nullptr);
 }
 
 ImageResult<ImageProviderEncodeResponse> encodeImage(const ImageProviderEncodeRequest& request,

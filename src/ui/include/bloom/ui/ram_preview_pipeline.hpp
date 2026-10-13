@@ -11,10 +11,10 @@ namespace bloom::ui {
 
 using PreviewPreparationResultHandle = runtime::PreviewPreparationResultHandle;
 
-// The bounded, interface-thread-only bookkeeping behind the RAM preview fill's TWO-deep pipeline.
+// The bounded, interface-thread-only bookkeeping behind the RAM preview fill pipeline.
 //
-// A RAM preview must keep two frames preparing at once so that the CPU preparation of the next
-// frame overlaps the display stage of the previous one. That overlap is only honest if the bound,
+// CPU preparation may overlap the next frame with the display stage of the previous one; the
+// measured service-backed GPU default is serial. Overlap is only honest if the bound,
 // the identity of each in-flight frame, and cancellation all live in one place: a range rebase
 // must never submit a second copy of a frame that is already preparing, and a cancel/display/
 // resolution change must detach every frame, not just the newest.
@@ -26,9 +26,7 @@ using PreviewPreparationResultHandle = runtime::PreviewPreparationResultHandle;
 // exercised with real scheduler handles and no UI at all.
 class RamPreviewPipeline final {
   public:
-    // Two frames in flight, never three. The GPU preview display service admits a 512 MiB
-    // request-owned reservation per request against a 1 GiB scheduler capacity, so two is also the
-    // exact number the existing service can run a stage for at once.
+    // A hard maximum of two, independent of the selected production or qualification width.
     static constexpr std::size_t kMaxInFlight = 2;
 
     struct InFlight final {
@@ -45,11 +43,14 @@ class RamPreviewPipeline final {
         runtime::TaskResult<PreviewPreparationResultHandle> result;
     };
 
-    RamPreviewPipeline() = default;
+    // The paired width experiment uses the same production pipeline. Width is clamped to
+    // the existing hard bound; no setting can admit a third simultaneous preparation.
+    explicit RamPreviewPipeline(std::size_t width = kMaxInFlight) noexcept
+        : width_(width == 1 ? 1 : kMaxInFlight) {}
     RamPreviewPipeline(const RamPreviewPipeline&) = delete;
     RamPreviewPipeline& operator=(const RamPreviewPipeline&) = delete;
 
-    [[nodiscard]] bool hasCapacity() const noexcept { return slots_.size() < kMaxInFlight; }
+    [[nodiscard]] bool hasCapacity() const noexcept { return slots_.size() < width_; }
     [[nodiscard]] std::size_t inFlightCount() const noexcept { return slots_.size(); }
     [[nodiscard]] bool empty() const noexcept { return slots_.empty(); }
     // The high-water mark since construction, so a test can prove the bound held even after the
@@ -75,6 +76,7 @@ class RamPreviewPipeline final {
     void cancelAllAndDetach() noexcept;
 
   private:
+    std::size_t width_ = kMaxInFlight;
     std::vector<InFlight> slots_;
     std::uint32_t peakInFlight_ = 0;
 };

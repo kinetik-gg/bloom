@@ -225,6 +225,7 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
                        "cancelled before GPU dispatch");
     }
 
+    const auto beforeStages = executor->counters();
     // 2. Admit the scene through the real executor.
     const auto begun = executor->begin(scene, phase.lease ? phase.lease->executorByteLimit()
                                                           : options.requestByteBudget);
@@ -283,6 +284,19 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
                      !executor->hasUnretiredSubmission() && !executor->ownerDrainRequired());
     GpuProcessFrameOutcome outcome;
     outcome.counters = snapshotCounters(*executor);
+    const auto afterStages = executor->counters();
+    outcome.stageTimes.media = scene->mediaStatistics();
+    outcome.stageTimes.uploadSubmitNanoseconds =
+        afterStages.uploadSubmitNanoseconds - beforeStages.uploadSubmitNanoseconds;
+    outcome.stageTimes.uploadFenceObservationNanoseconds =
+        afterStages.uploadFenceObservationNanoseconds -
+        beforeStages.uploadFenceObservationNanoseconds;
+    outcome.stageTimes.processingSubmitNanoseconds =
+        afterStages.processingSubmitNanoseconds - beforeStages.processingSubmitNanoseconds;
+    outcome.stageTimes.processingFenceObservationNanoseconds =
+        afterStages.processingFenceObservationNanoseconds -
+        beforeStages.processingFenceObservationNanoseconds;
+
     // Genuine device identity for diagnostics: read directly from the actual native device on this
     // owner thread. Never fabricated; stays zero for outcomes that never reached a device.
     outcome.deviceOwnershipEpoch = device->ownershipEpoch();
@@ -334,6 +348,9 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
     auto transfer = detail::runFinalCombinedReadback(
         *outputColor, descriptor, std::move(outputCommand), std::move(image), readbackByteAllowance,
         options.nativeDeadline, cancellation, stopRequested, phase.retired, phase.lease);
+    outcome.stageTimes.graphQueueTiming = executor->pollQueueTiming();
+    outcome.stageTimes.finalTransferNanoseconds = transfer.transferNanoseconds;
+    outcome.stageTimes.finalHostPublicationNanoseconds = transfer.hostPublicationNanoseconds;
     if (transfer.status != GpuProcessFrameStatus::Evaluated || transfer.processImage == nullptr) {
         outcome.counters.readbacks = transfer.readbacks;
         outcome.status = transfer.status;
@@ -427,6 +444,8 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
                     // reusable-cache split must not impose an unrelated per-image ceiling.
                     executorBudgets.maxImageBytes = options.requestByteBudget;
                 }
+                executorBudgets.collectQueueTimestamps =
+                    executorBudgets.collectQueueTimestamps || options.collectQueueTimestamps;
                 auto createdExecutor = GpuSceneExecutor::create(*device, *cache, executorBudgets);
                 if (!createdExecutor) {
                     availability = {GpuProcessFrameDiagnosticCode::ExecutorUnavailable,
@@ -600,9 +619,10 @@ GpuProcessFrameDiagnostic GpuProcessFrameEvaluator::availabilityDiagnostic() con
 }
 
 GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
-    std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
+    std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& borrowedRequest,
     const CancellationToken& cancellation, EvaluationProgressCallback progress,
-    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand) {
+    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand,
+    const std::optional<std::filesystem::path>& assetBaseDirectory) {
     if (impl_ == nullptr) {
         return failure(GpuProcessFrameStatus::Failed,
                        GpuProcessFrameDiagnosticCode::InternalInvariant, "no evaluator");
@@ -611,6 +631,12 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
         return failure(GpuProcessFrameStatus::Disabled, GpuProcessFrameDiagnosticCode::Disabled,
                        "GPU process-frame evaluation is disabled");
     }
+    auto request = borrowedRequest;
+    const auto capturedColor = captureEvaluationColorIntent(request.colorIntent);
+    if (!capturedColor)
+        return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::BadAllocation,
+                       "GPU evaluation colour intent could not be captured");
+    request.colorIntent = *capturedColor;
     // Reentrancy: a progress callback runs on the CALLING CPU worker (scene preparation) or, for
     // the native-phase event, on the owner. Reject a nested evaluate() from either the same calling
     // thread or the owner thread before any wait, so it cannot deadlock on its own completion.
@@ -684,8 +710,9 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
         // Prepare the immutable scene HERE, on the calling CPU worker, never on the GPU owner
         // thread. Media decode, OCIO configuration, and shader compilation all run on this thread;
         // the owner only performs native work on the finished scene.
-        auto preparation = detail::prepareExportScene(impl_->options, plan, request, cancellation,
-                                                      static_cast<bool>(outputCommand));
+        auto preparation =
+            detail::prepareExportScene(impl_->options, plan, request, cancellation,
+                                       static_cast<bool>(outputCommand), assetBaseDirectory);
         if (preparation.scene == nullptr) {
             return failure(preparation.status, preparation.diagnosticCode,
                            std::move(preparation.diagnosticMessage));

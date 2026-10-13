@@ -1,5 +1,35 @@
 include(BloomTesting)
 
+add_executable(bloom_render_gpu_queue_timing_test gpu_queue_timing_tests.cpp)
+target_link_libraries(bloom_render_gpu_queue_timing_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_gpu_queue_timing_test)
+bloom_add_test(NAME bloom.render.gpu_queue_timing
+    COMMAND bloom_render_gpu_queue_timing_test LABELS unit gpu render)
+set_tests_properties(bloom.render.gpu_queue_timing PROPERTIES SKIP_RETURN_CODE 77)
+if(BLOOM_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_render_gpu_operation_batch_test gpu_operation_batch_tests.cpp)
+    target_link_libraries(bloom_render_gpu_operation_batch_test PRIVATE
+        bloom_render Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+    target_include_directories(bloom_render_gpu_operation_batch_test PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/render/vulkan")
+    bloom_enable_warnings(bloom_render_gpu_operation_batch_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_operation_batch_test)
+    bloom_add_test(NAME bloom.render.gpu_operation_batch
+        COMMAND bloom_render_gpu_operation_batch_test LABELS unit gpu render)
+    set_tests_properties(bloom.render.gpu_operation_batch PROPERTIES SKIP_RETURN_CODE 77)
+    target_compile_definitions(bloom_render_gpu_queue_timing_test PRIVATE BLOOM_QUEUE_TIMING_NATIVE)
+    target_include_directories(bloom_render_gpu_queue_timing_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+    target_link_libraries(bloom_render_gpu_queue_timing_test PRIVATE
+        Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+endif()
+
+add_executable(bloom_render_processing_host_storage_test processing_host_storage_tests.cpp)
+target_link_libraries(bloom_render_processing_host_storage_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_processing_host_storage_test)
+bloom_add_test(NAME bloom.render.processing_host_storage
+    COMMAND bloom_render_processing_host_storage_test LABELS unit memory)
+
 add_executable(bloom_render_packed_host_retirement_test packed_host_retirement_tests.cpp)
 target_link_libraries(bloom_render_packed_host_retirement_test PRIVATE bloom_render)
 target_include_directories(bloom_render_packed_host_retirement_test PRIVATE
@@ -15,6 +45,11 @@ bloom_add_test(NAME bloom.render.gpu_processing_phase_budget
     COMMAND bloom_render_gpu_processing_phase_budget_test LABELS unit gpu memory)
 
 add_executable(bloom_render_native_image_storage_test native_image_storage_tests.cpp)
+add_executable(bloom_render_native_presentation_storage_test native_presentation_storage_tests.cpp)
+target_link_libraries(bloom_render_native_presentation_storage_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_native_presentation_storage_test)
+bloom_add_test(NAME bloom.render.native_presentation_storage
+    COMMAND bloom_render_native_presentation_storage_test LABELS unit gpu memory)
 target_link_libraries(bloom_render_native_image_storage_test PRIVATE bloom_render)
 bloom_enable_warnings(bloom_render_native_image_storage_test)
 bloom_add_test(NAME bloom.render.native_image_storage
@@ -77,6 +112,42 @@ bloom_add_test(
 add_executable(bloom_render_gpu_device_test gpu_device_tests.cpp)
 target_link_libraries(bloom_render_gpu_device_test PRIVATE bloom_render)
 if(BLOOM_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_render_gpu_allocator_memory_test gpu_allocator_memory_tests.cpp)
+    target_link_libraries(bloom_render_gpu_allocator_memory_test PRIVATE
+        bloom_render Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+    target_include_directories(bloom_render_gpu_allocator_memory_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+    bloom_enable_warnings(bloom_render_gpu_allocator_memory_test)
+    bloom_add_test(NAME bloom.render.gpu_allocator_memory
+        COMMAND bloom_render_gpu_allocator_memory_test LABELS unit gpu memory)
+    set_tests_properties(bloom.render.gpu_allocator_memory PROPERTIES SKIP_RETURN_CODE 77)
+    add_executable(bloom_render_native_presentation_allocation_test native_presentation_allocation_tests.cpp)
+    target_link_libraries(bloom_render_native_presentation_allocation_test PRIVATE
+        bloom_render Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+    target_include_directories(bloom_render_native_presentation_allocation_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+    bloom_enable_warnings(bloom_render_native_presentation_allocation_test)
+    bloom_add_test(NAME bloom.render.native_presentation_allocation
+        COMMAND bloom_render_native_presentation_allocation_test LABELS unit gpu memory)
+    set_tests_properties(bloom.render.native_presentation_allocation PROPERTIES SKIP_RETURN_CODE 77)
+    add_executable(bloom_render_native_operation_buffer_test native_operation_buffer_tests.cpp)
+    target_link_libraries(bloom_render_native_operation_buffer_test PRIVATE
+        bloom_render Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+    target_include_directories(bloom_render_native_operation_buffer_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+    bloom_enable_warnings(bloom_render_native_operation_buffer_test)
+    bloom_add_test(NAME bloom.render.native_operation_buffer
+        COMMAND bloom_render_native_operation_buffer_test LABELS unit gpu memory)
+    set_tests_properties(bloom.render.native_operation_buffer PROPERTIES SKIP_RETURN_CODE 77)
+    add_executable(bloom_render_native_processing_buffer_test native_processing_buffer_tests.cpp)
+    target_link_libraries(bloom_render_native_processing_buffer_test PRIVATE
+        bloom_render Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+    target_include_directories(bloom_render_native_processing_buffer_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+    bloom_enable_warnings(bloom_render_native_processing_buffer_test)
+    bloom_add_test(NAME bloom.render.native_processing_buffer
+        COMMAND bloom_render_native_processing_buffer_test LABELS unit gpu memory)
+    set_tests_properties(bloom.render.native_processing_buffer PROPERTIES SKIP_RETURN_CODE 77)
     add_executable(bloom_render_native_image_allocation_test native_image_allocation_tests.cpp)
     target_link_libraries(bloom_render_native_image_allocation_test PRIVATE
         bloom_render Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
@@ -618,6 +689,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     add_library(bloom_render_gpu_scene_executor_fault OBJECT
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/vma.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_device.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_operation_batch.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_device_bootstrap.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_reclamation.cpp"
@@ -629,6 +701,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_path_coverage_resources.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite_resources.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite_buffer.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite_retirement.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_upload.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_upload_resources.cpp"
@@ -641,6 +714,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_blend_retirement.cpp"
     )
     target_include_directories(bloom_render_gpu_scene_executor_fault PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/.."
         "${CMAKE_CURRENT_SOURCE_DIR}/../include"
         "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan"

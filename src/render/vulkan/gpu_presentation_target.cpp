@@ -328,6 +328,7 @@ GpuPresentationTarget::create(GpuDevice& device,
     impl->info.height = planned.extent.height;
     impl->info.image_count = static_cast<std::uint32_t>(resources->images.size());
     impl->info.retirement = planned.retirement;
+    impl->info.image_storage = resources->imageStorage;
     impl->resources = std::move(resources);
     impl->lastCode = GpuPresentationTargetCode::Ok;
     return {std::unique_ptr<GpuPresentationTarget>(new GpuPresentationTarget(std::move(impl))),
@@ -493,6 +494,7 @@ GpuPresentationTarget::recreate(const GpuPresentationTargetDescription& descript
     impl_->info.height = planned.extent.height;
     impl_->info.image_count = static_cast<std::uint32_t>(impl_->resources->images.size());
     impl_->info.retirement = planned.retirement;
+    impl_->info.image_storage = impl_->resources->imageStorage;
     impl_->lastCode = GpuPresentationTargetCode::Ok;
     impl_->lastMessage.clear();
     return impl_->lastCode;

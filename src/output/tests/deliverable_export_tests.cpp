@@ -114,17 +114,18 @@ void testConfigBinding(const runtime::EvaluationColorIntent& intent) {
     check(report.hasReport() && report.report()->display(),
           "TIFF retains the source display processor");
     output::ExportResourceLedgerV1 ledger;
-    auto inputs = output::OutputAnalysisAttemptBuildInputsV1{
-        .frame = substituted.frame,
-        .processIdentity = substituted.processIdentity,
-        .report = report.report(),
-        .target = {.targetKey = core::ArtifactTargetKey::fromRaw(1), .targetPath = "shot.tiff"},
-        .display = {}};
-    check(output::buildOutputAnalysisAttemptV1(inputs, ledger).error() ==
-              output::OutputAnalysisAttemptErrorCodeV1::InvalidReport,
+    const auto inputsFor = [&](const auto& identity) {
+        return output::OutputAnalysisAttemptBuildInputsV1{
+            .frame = substituted.frame,
+            .processIdentity = identity,
+            .report = report.report(),
+            .target = {.targetKey = core::ArtifactTargetKey::fromRaw(1), .targetPath = "shot.tiff"},
+            .display = {}};
+    };
+    check(output::buildOutputAnalysisAttemptV1(inputsFor(substituted.processIdentity), ledger)
+                  .error() == output::OutputAnalysisAttemptErrorCodeV1::InvalidReport,
           "TIFF rejects substitution of the source config revision");
-    inputs.processIdentity = source.processIdentity;
-    check(output::buildOutputAnalysisAttemptV1(inputs, ledger).error() ==
+    check(output::buildOutputAnalysisAttemptV1(inputsFor(source.processIdentity), ledger).error() ==
               output::OutputAnalysisAttemptErrorCodeV1::InvalidIdentity,
           "attempt rejects substitution of its identity's source frame");
 }

@@ -328,7 +328,9 @@ void ViewerEditor::updateGpuResidentPresentationBody() {
             gpuContainer_->hide();
         }
         gpuResident_->concealCpuCover();
-        gpuRequestedFrame_ = frame;
+        // This slot correlates an in-flight native presentation, which does not exist on the
+        // packed route. Retaining its old CPU image here would survive a cache purge indefinitely.
+        gpuRequestedFrame_.reset();
         gpuRequestedTransform_ = transform_;
         return;
     }

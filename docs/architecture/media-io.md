@@ -2,7 +2,7 @@
 
 Status: working research
 
-Updated: 2026-09-17
+Updated: 2026-10-13
 
 ## v0 implemented boundary
 
@@ -495,10 +495,112 @@ memory source key (`selected.cacheKey`: asset digest, member/frame, interpretati
 processor/color-space id, OCIO identity, plus the resolved path/relink/availability that key already
 carried). It never inserts a source entry on a gesture miss, so gesture data cannot land under an
 unchanged source key, and the disk cache stays null: an interactive miss decodes directly and
-uncached. Content verification is unchanged -- the probe/hash gate still runs before either cache is
-consulted. Motion video already has its own decoded cache and is unchanged by this exception. Nested
+uncached. Source verification follows the immutable revision contracts below. Motion video uses
+its own decoded-frame cache and disk-backed source revision, with the same read-only gesture and
+explicit bypass lookup/insertion gates. Nested
 compositions remain conservatively fully bypassed on an override (no read-only reuse in the child)
 for this slice.
+
+**Immutable still-source revisions (2026-10-13).** A worker captures one bounded encoded byte vector,
+hashes those exact bytes in cancellation-aware chunks and probes that vector. PNG/JPEG callbacks and
+the OpenEXR input stream subsequently decode the same immutable bytes. The revision is runtime
+state; its SHA-256 must match the selected asset or sequence-member digest. Neither timestamps,
+file size, a pathname nor an open mutable source handle proves content identity. A concurrent path
+replacement cannot change an admitted revision's decoder input.
+
+`EvaluationRequest::mediaSourceRevisionPolicy` defaults to `Revalidate`: source capture and digest
+validation precede CPU operation memoization and GPU prepared-upload lookup, including nested
+evaluation. Final/headless requests retain that default. The production GPU final preparation and host output-
+analysis CPU fallback explicitly force `Revalidate`, including when passed a copied interactive
+request that says `Retained`. CPU final callers also set `requireVerifiedMediaSources`, which forces
+fresh source verification and fails unavailable/changed media before memoization instead of accepting
+the preview placeholder. The flag propagates through nested evaluation and is availability policy,
+not pixel identity. Explicit `bypassOperationCache` always
+revalidates and disables revision lookup/insertion. Interactive callers explicitly choose `Retained`
+to use the last verified, owned revision while its source entry remains resident. A warm parameter
+edit then performs no source probe, hash or decode; this is captured-source provenance, not a claim
+that the current external path was rechecked. A missing or externally replaced file can still show
+its retained interactive revision until a refresh boundary. Final revalidation reports it unavailable
+or changed and never substitutes the retained source for the missing/changed bytes.
+
+Tickets share the evaluator's existing decoded-media LRU and live host retention assignment.
+Encoded bytes, probe strings and entry/key metadata are charged; there is no separate owning cache.
+Interactive override plans may read an existing ticket but never insert one on a gesture miss;
+uncached captured bytes remain transient. Source tickets are accepted only as typed decoded-media
+entries, so operation purge/retirement cannot fold their debit through the wrong accounting class.
+Rooted tickets use the same explicit host retirement owner as prepared uploads. Eviction and purge
+detach the ticket, then the worker drops its backing and metadata before folding back the decoded
+host charge. Pending tickets cannot donate capacity, and producer close detaches them before host
+owner shutdown. Thus UI sampling callbacks never free a large rooted encoded vector. Standalone
+unbound pools retain their existing direct-release behavior.
+Capture is admitted against the current request/source working allowance before allocation, and
+encoded storage is subtracted before codec working-set admission. A zero retention assignment still
+allows bounded fresh preparation, but stores no revision. Eviction releases only the cache's owner;
+an already-held revision remains valid. Refresh/reconnect/media purge clears decoded-media tickets;
+a generation guard prevents a capture begun before that boundary repopulating source authority.
+Relink, changed locator/base directory or changed asset/member digest uses another ticket identity.
+`OperationCache::invalidateSourceRevisions()` is the neutral New/Open authority boundary. It
+advances the capture generation and detaches still tickets and video source sessions while preserving
+decoded/derived pixels and disk entries; the desktop rooted retirement worker releases their backing.
+New/Open document handling invokes it before session rebind and interactive reuse. These
+rules do not extend the still-image byte-vector ticket to TIFF's locator-based worker provider.
+Linux motion video uses the separate disk-backed revision described below.
+
+Per-build GPU scene statistics expose encoded bytes read/hashed, revision captures/hits and monotonic
+nanosecond durations for source open/read/seek, SHA-256, metadata probe and actual image decoder
+calls. Decoder duration includes image construction and any requested connected-path input colour
+processing; it excludes source I/O, digest, probe, cache lookup and proxy rebasing. New counters
+saturate rather than wrap. A retained upload hit records zero source I/O/hash/probe/decode work,
+instead of replaying the original revision's capture measurements. These are observed stage costs,
+not a sustained-throughput qualification.
+
+**Immutable Linux video-source revisions (2026-10-13).** Supported movie imports, frame/audio
+reads and demux indexing capture a local regular file once into bounded private spool storage while
+hashing the exact chunks written. Capture subtracts snapshot/temporary-path metadata from the current host working allowance,
+then uses the remaining allowance for a chunk buffer of at most 64 KiB, without a fixed buffer floor.
+It never retains the
+whole encoded movie in RAM. The original source pathname never authorizes hash elision. Before a
+revision is published, the write descriptor is closed, the temporary filename and private directory
+are removed, and only an owning read-only file descriptor remains. The SHA-256 and captured length
+are tied to that host-created type. Publication also verifies that the no-follow read-only open has
+the writer's exact device/inode identity and length, and that its link count is zero after unlink and
+writer close. A replaced temporary pathname, symlink or surviving hard link fails with typed I/O
+diagnostics and releases the capture quota; it cannot publish a mismatched digest/decoder source.
+A malicious process controlling the same user/debugger is outside
+this ownership contract; filesystem timestamps and mutable artist paths cannot change admitted bytes.
+
+The worker-pool host accepts that owning capability separately from serialized request fields.
+The process supervisor passes only its read descriptor to the fresh Linux worker, whose custom
+FFmpeg AVIO reads/seeks that exact file. A request claiming immutable bytes without the inherited,
+read-only, anonymous, exact-length regular file is rejected. Ordinary external-path worker requests
+retain their existing source verification. Schema 4 carries bounded snapshot length; a wire value
+alone cannot manufacture source authority. Standard FFmpeg demux/codec and colour boundaries remain
+unchanged, and this mechanism does not upgrade provider/delivery qualification.
+
+The evaluator retains at most four source-keyed decode sessions. A shared 32 GiB / eight-file disk
+quota bounds retained revisions, captures in flight and unlinked handles pending retirement; each
+source is also subject to the existing 16 GiB intake limit. These are separate from decoded-frame RAM
+retention. Exhaustion returns typed `Oversized` rather than overcommitting or reusing stale bytes.
+Capture exposes chunk cancellation/progress and numeric read/hash stage costs. Source-key identity
+contains asset digest, locator/relink hint and base directory. `Retained` can reuse captured bytes for
+interactive edits, including uncached frame decode when the artist path disappears, with zero source
+I/O/hash. Read-only gestures may look up existing sessions/revisions/frames but cannot insert new ones.
+`Revalidate` captures the original before decoded/prepared cache lookup; production final preparation
+forces it even for an explicitly copied `Retained` request. A changed digest or missing original is
+reported before cached pixels are accepted. Media refresh/reconnect removes both decoded frames and
+source sessions. Sessions are installed before capture, so an in-flight old session may finish its
+own revision but cannot repopulate the refreshed session list.
+
+Rooted snapshots register with the existing composition-root retirement lane. Session and snapshot last release enqueue
+only their small intrusive nodes; the worker closes the anonymous file before the disk quota is returned.
+Pending handles cannot donate capacity. The existing source pool close also closes its typed weak
+video producer attachment, so retained sessions cannot prevent host-worker exit while an evaluator
+remains alive. Bootstrap/library verification and session construction hold no UI-close mutex;
+refresh generations reject construction that finishes after invalidation. Unbound headless sessions
+release on their calling worker.
+The current qualification scope is Linux. macOS retains its existing fresh-verification video path
+without advertising retained-video hash elision; Windows retains the explicit worker unavailable
+fallback. Neither is described as qualified by this Linux implementation.
 
 **Controls.** `media/disk-cache-enabled` (default on), `media/disk-cache-budget-bytes`, and
 `media/disk-cache-directory` in QSettings; **Edit → Purge… → Purge media cache** clears every entry

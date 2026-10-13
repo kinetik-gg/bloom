@@ -17,6 +17,17 @@
 namespace bloom::ui {
 namespace {
 
+[[nodiscard]] bool retainColorIntent(CompositionPreviewSettings& settings,
+                                     const runtime::EvaluationColorIntent& intent) noexcept {
+    const auto captured = runtime::captureEvaluationColorIntent(intent);
+    if (!captured) {
+        settings.colorIntent = {.workingColorSpaceId = {}, .ocioConfigUri = {}};
+        return false;
+    }
+    settings.colorIntent = *captured;
+    return true;
+}
+
 QString submissionFailureMessage(const runtime::TaskSubmissionStatus status) {
     switch (status) {
     case runtime::TaskSubmissionStatus::QueueFull:
@@ -67,6 +78,7 @@ CompositionPreviewController::CompositionPreviewController(
                       ? std::move(frameCache)
                       : std::make_shared<PreviewFrameCache>(settings.ramPreviewByteBudget)),
       processingPolicy_(std::move(processingPolicy)) {
+    colorIntentCaptured_ = retainColorIntent(settings_, settings_.colorIntent);
     if (trace_) {
         frameCache_->setFrameTrace(trace_);
         taskUiBridge_.setFrameTrace(trace_);
@@ -95,6 +107,7 @@ CompositionPreviewController::CompositionPreviewController(
     // displayed/request state, so a queued old completion cannot populate a colliding cache key.
     connect(&session_, &CompositionSession::documentRebound, this, [this] {
         Q_ASSERT(QThread::currentThread() == thread());
+        colorIntentCaptured_ = retainColorIntent(settings_, session_.colorIntent());
         interactiveCadenceTimer_.stop();
         interactiveSubmissionClock_.invalidate();
         interactiveTimeChangeArmed_ = false;
@@ -114,11 +127,7 @@ CompositionPreviewController::CompositionPreviewController(
     connect(&session_, &CompositionSession::liveValueChanged, this,
             &CompositionPreviewController::handleLiveValueChanged);
     connect(&session_, &CompositionSession::colorSettingsChanged, this, [this] {
-        const auto intent = session_.colorIntent();
-        if (settings_.colorIntent == intent) {
-            return;
-        }
-        settings_.colorIntent = intent;
+        colorIntentCaptured_ = retainColorIntent(settings_, session_.colorIntent());
         // No request here: setColorSettings() also publishes evaluationChanged(), which is the one
         // refresh trigger for this transition -- requesting from both would double the work.
     });
@@ -219,8 +228,8 @@ CompositionPreviewController::selectedLayerBounds(PreparedPreviewFrameHandle sou
 bool CompositionPreviewController::isShuttingDown() const noexcept { return shuttingDown_; }
 
 bool CompositionPreviewController::backgroundWorkAllowed() const noexcept {
-    return !shuttingDown_ && !cachePurgeGate_ && !active_.has_value() && !pending_.has_value() &&
-           !interactiveTimeChangeArmed_ && !session_.valueEditActive() &&
+    return colorIntentCaptured_ && !shuttingDown_ && !cachePurgeGate_ && !active_.has_value() &&
+           !pending_.has_value() && !interactiveTimeChangeArmed_ && !session_.valueEditActive() &&
            session_.transformInteractionOverrides().empty() && !ramPreviewProgress_.has_value();
 }
 
@@ -230,6 +239,8 @@ PreviewFrameCache& CompositionPreviewController::frameCache() const noexcept {
 
 std::optional<PreviewFrameCacheKey>
 CompositionPreviewController::cacheKeyForTime(const core::RationalTime time) const {
+    if (!colorIntentCaptured_)
+        return std::nullopt;
     // TEMPORAL-2B: resolve the genuine snapshot for THIS time, so a key matches the frame the
     // committed preview actually produced at that time even after a finite clip-range edit left a
     // different revision live elsewhere. This is what lets RAM preview, background caching and the
@@ -433,6 +444,7 @@ void CompositionPreviewController::requestRefresh() {
 
 void CompositionPreviewController::handleCompositionChanged() {
     Q_ASSERT(QThread::currentThread() == thread());
+    colorIntentCaptured_ = retainColorIntent(settings_, session_.colorIntent());
     // A different composition has its own work area, so re-scope retention before the new request
     // is built.
     refreshRetentionRange();
@@ -444,6 +456,7 @@ void CompositionPreviewController::handleCompositionChanged() {
 
 void CompositionPreviewController::handleDocumentEvaluationChanged() {
     Q_ASSERT(QThread::currentThread() == thread());
+    colorIntentCaptured_ = retainColorIntent(settings_, session_.colorIntent());
     // Re-scope retention first: the changed interval's entries are dropped here, unaffected
     // segments are kept.
     refreshRetentionRange();
@@ -794,6 +807,19 @@ void CompositionPreviewController::requestPreview(
     }
     deferredAdmission_.reset();
     deferredDefaultBudget_.reset();
+    if (!colorIntentCaptured_) {
+        interactiveCadenceTimer_.stop();
+        pending_.reset();
+        cancelAndDetachActive();
+        auto failed = state_;
+        failed.activity = PreviewActivity::Failed;
+        failed.desiredIdentity.reset();
+        failed.taskId.reset();
+        failed.freshness = freshnessFor(failed.frame, failed.desiredIdentity);
+        failed.message = tr("The preview colour intent could not be captured");
+        publish(std::move(failed));
+        return;
+    }
     // Overrides ride ONLY Interactive requests from an active gesture (docs/architecture/
     // animation-and-time.md), and are read fresh here -- never cached across requests. They are
     // assembled BEFORE the snapshot is selected because an override names the live document

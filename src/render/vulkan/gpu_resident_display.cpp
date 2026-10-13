@@ -369,13 +369,15 @@ GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const Gpu
 
     impl.clearJob();
     impl.input = std::move(input);
-    if (!createResidentBuffer(*impl.control, inputBytes,
-                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                              0, false, impl.jobInput) ||
-        !createResidentBuffer(*impl.control, packedBytes,
-                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                              0, false, impl.jobOutput) ||
-        !createResidentBuffer(
+    if (!createResidentDisplayBuffer(*impl.control, inputBytes,
+                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                     0, false, impl.jobInput) ||
+        !createResidentDisplayBuffer(*impl.control, packedBytes,
+                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                     0, false, impl.jobOutput) ||
+        !createResidentDisplayBuffer(
             *impl.control, sizeof(std::uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT, true,
             impl.jobStatus)) {

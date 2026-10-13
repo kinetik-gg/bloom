@@ -349,6 +349,7 @@ class CompositionPreviewController final : public QObject {
     PreviewPreparationFunction preparation_;
     PreviewPreparationSubmitter submitter_;
     CompositionPreviewSettings settings_;
+    bool colorIntentCaptured_ = false;
     const std::size_t legacyPixelStorageByteLimit_ = runtime::gpuPreviewRequestByteAllowance();
     PreviewFrameCacheHandle frameCache_;
     CompositionPreviewState state_;

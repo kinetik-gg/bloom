@@ -10,6 +10,7 @@
 #include <ImfChromaticitiesAttribute.h>
 #include <ImfFrameBuffer.h>
 #include <ImfHeader.h>
+#include <ImfIO.h>
 #include <ImfInputFile.h>
 #include <ImfIntAttribute.h>
 #include <ImfPixelType.h>
@@ -17,6 +18,8 @@
 #include <ImfStringAttribute.h>
 #include <ImfTileDescriptionAttribute.h>
 #include <ImfVersion.h>
+#include <cstring>
+#include <stdexcept>
 
 #include <algorithm>
 #include <array>
@@ -42,6 +45,29 @@ constexpr std::array<std::uint32_t, 8> kRec709D65ChromaticityBits{
 constexpr std::array<float, 8> kAcesAp0Chromaticities{0.7347F, 0.2653F,  0.0F,     1.0F,
                                                       0.0001F, -0.0770F, 0.32168F, 0.33767F};
 constexpr std::size_t kMaximumChannels = 4;
+
+class RevisionStream final : public Imf::IStream {
+  public:
+    explicit RevisionStream(const std::span<const std::byte> bytes)
+        : Imf::IStream("immutable-image-source"), bytes_(bytes) {}
+    bool read(char* destination, const int count) override {
+        if (count < 0 || static_cast<std::size_t>(count) > bytes_.size() - position_)
+            throw std::runtime_error("truncated immutable image source");
+        std::memcpy(destination, bytes_.data() + position_, static_cast<std::size_t>(count));
+        position_ += static_cast<std::size_t>(count);
+        return position_ != bytes_.size();
+    }
+    std::uint64_t tellg() override { return position_; }
+    void seekg(const std::uint64_t position) override {
+        if (position > bytes_.size())
+            throw std::runtime_error("invalid immutable image seek");
+        position_ = static_cast<std::size_t>(position);
+    }
+
+  private:
+    std::span<const std::byte> bytes_;
+    std::size_t position_ = 0;
+};
 
 template <typename T>
 [[nodiscard]] ImageResult<T> failure(const ImageDiagnosticCode code, std::string message) {
@@ -347,16 +373,15 @@ ImageResult<ImageProbe> probeExr(const std::filesystem::path& path,
     }
 }
 
-ImageResult<std::shared_ptr<const render::Rgba32fImage>>
-decodeExr(const std::filesystem::path& path, const ImageInterpretation& interpretation,
-          std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
-          const CancelImageWork& cancel, const ImageProgress& progress,
-          const std::size_t pixelBudget) {
+static ImageResult<std::shared_ptr<const render::Rgba32fImage>>
+decodeExrInput(Imf::InputFile& input, const ImageInterpretation& interpretation,
+               std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
+               const CancelImageWork& cancel, const ImageProgress& progress,
+               const std::size_t pixelBudget) {
     if (cancelled(cancel))
         return failure<std::shared_ptr<const render::Rgba32fImage>>(ImageDiagnosticCode::Cancelled,
                                                                     "Image decode cancelled");
     try {
-        Imf::InputFile input(utf8Path(path).c_str(), 1);
         ImageDiagnosticCode error = ImageDiagnosticCode::InvalidHeader;
         const auto version = static_cast<std::uint32_t>(input.version());
         if (const auto versionFailure = validateVersion(version); versionFailure.has_value())
@@ -564,6 +589,65 @@ decodeExr(const std::filesystem::path& path, const ImageInterpretation& interpre
     } catch (...) {
         return failure<std::shared_ptr<const render::Rgba32fImage>>(
             ImageDiagnosticCode::Truncated, "OpenEXR pixel data could not be decoded");
+    }
+}
+
+ImageResult<ImageProbe> probeExr(const std::span<const std::byte> bytes,
+                                 const core::Sha256Digest digest, const CancelImageWork& cancel) {
+    if (cancelled(cancel))
+        return {{}, "Image probe cancelled", true, ImageDiagnosticCode::Cancelled};
+    try {
+        if (bytes.size() < 8)
+            return failure<ImageProbe>(ImageDiagnosticCode::Truncated,
+                                       "OpenEXR revision version field is truncated");
+        std::uint32_t encodedVersion = 0;
+        for (std::size_t index = 0; index < 4; ++index)
+            encodedVersion |= static_cast<std::uint32_t>(bytes[index + 4]) << (8U * index);
+        if (const auto error = validateVersion(encodedVersion))
+            return failure<ImageProbe>(*error, "OpenEXR version or flags are unsupported");
+        RevisionStream stream(bytes);
+        Imf::InputFile input(stream, 1);
+        const auto version = static_cast<std::uint32_t>(input.version());
+        if (const auto error = validateVersion(version))
+            return failure<ImageProbe>(*error, "OpenEXR version or flags are unsupported");
+        ImageDiagnosticCode error = ImageDiagnosticCode::InvalidHeader;
+        const auto layout =
+            inspectHeader(input.header(), Imf::isTiled(static_cast<int>(version)), error);
+        if (!layout)
+            return failure<ImageProbe>(error, "OpenEXR header is unsupported or invalid");
+        return {makeProbe(*layout, digest), {}};
+    } catch (...) {
+        return failure<ImageProbe>(ImageDiagnosticCode::InvalidHeader,
+                                   "OpenEXR revision header could not be read");
+    }
+}
+
+ImageResult<std::shared_ptr<const render::Rgba32fImage>>
+decodeExr(const std::filesystem::path& path, const ImageInterpretation& interpretation,
+          std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
+          const CancelImageWork& cancel, const ImageProgress& progress, const std::size_t budget) {
+    try {
+        Imf::InputFile input(utf8Path(path).c_str(), 1);
+        return decodeExrInput(input, interpretation, std::move(processor), cancel, progress,
+                              budget);
+    } catch (...) {
+        return failure<std::shared_ptr<const render::Rgba32fImage>>(
+            ImageDiagnosticCode::Truncated, "OpenEXR pixel data could not be decoded");
+    }
+}
+
+ImageResult<std::shared_ptr<const render::Rgba32fImage>>
+decodeExr(const std::span<const std::byte> bytes, const ImageInterpretation& interpretation,
+          std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
+          const CancelImageWork& cancel, const ImageProgress& progress, const std::size_t budget) {
+    try {
+        RevisionStream stream(bytes);
+        Imf::InputFile input(stream, 1);
+        return decodeExrInput(input, interpretation, std::move(processor), cancel, progress,
+                              budget);
+    } catch (...) {
+        return failure<std::shared_ptr<const render::Rgba32fImage>>(
+            ImageDiagnosticCode::Truncated, "OpenEXR revision pixel data could not be decoded");
     }
 }
 

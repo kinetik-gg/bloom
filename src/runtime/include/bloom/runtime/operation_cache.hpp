@@ -15,7 +15,14 @@
 #include <unordered_map>
 #include <vector>
 
+namespace bloom::media {
+class ImageSourceRevision;
+}
+
 namespace bloom::runtime {
+namespace detail {
+class VideoSourceContext;
+}
 
 enum class OperationCacheEntryKind : std::uint8_t {
     Operation,
@@ -53,6 +60,9 @@ struct OperationCacheValue final {
     std::shared_ptr<const render::Rgba32fImage> image;
     std::vector<CompiledValue> values;
     EvaluatedOperationBounds bounds{};
+    // Immutable encoded revision retained under the SAME decoded-media LRU/ledger. No pathname or
+    // metadata-only entry can authorize hash elision; the actual verified decoder bytes are owned.
+    std::shared_ptr<const media::ImageSourceRevision> sourceRevision{};
 };
 
 // Owned by the evaluator session. Concurrent preview/export tasks share this bounded LRU.
@@ -64,7 +74,8 @@ class OperationCache final {
     [[nodiscard]] std::optional<OperationCacheValue> find(const std::string& content,
                                                           document::Revision revision);
     void store(std::string content, document::Revision revision, OperationCacheValue value,
-               OperationCacheEntryKind kind = OperationCacheEntryKind::Operation);
+               OperationCacheEntryKind kind = OperationCacheEntryKind::Operation,
+               std::optional<std::uint64_t> decodedMediaGeneration = {});
     void setByteBudget(std::size_t budget);
     [[nodiscard]] std::size_t byteBudget() const;
     [[nodiscard]] std::size_t retainedBytes() const;
@@ -83,6 +94,12 @@ class OperationCache final {
     // "Purge media cache": removes every DECODED-MEDIA entry, leaving derived operation results
     // alone. The same shared_ptr rule applies: no live product is invalidated, only re-derived.
     void clearDecodedMedia();
+    // New/Open/refresh authority boundary. Invalidates captured source tickets only, preserving
+    // decoded/derived pixels and disk cache. Rooted backing/session destruction stays on workers.
+    void invalidateSourceRevisions();
+    // Source capture records this before I/O and passes it to store(). A concurrent refresh may
+    // leave the in-flight immutable snapshot valid, but prevents it repopulating source authority.
+    [[nodiscard]] std::uint64_t decodedMediaGeneration() const;
     [[nodiscard]] OperationCacheAccessStatistics statistics() const;
 
     // One immutable prepared subset policy, on this pool's existing retention registration.
@@ -99,6 +116,10 @@ class OperationCache final {
     // Irreversible producer close, serialized with insertion; binding remains rooted.
     void closePreparedUploads();
     [[nodiscard]] bool preparedUploadsBound() const;
+    [[nodiscard]] std::shared_ptr<render::detail::PackedHostRetirementState>
+    sourceRetirementState() const;
+    // Typed weak producer attachment: this pool's source close also detaches video sessions.
+    void bindVideoSources(const std::shared_ptr<detail::VideoSourceContext>& sources);
     [[nodiscard]] PreparedUploadRetentionPolicy preparedRetentionPolicy() const;
     [[nodiscard]] std::uint64_t preparedPayloadBytes() const;
     [[nodiscard]] std::size_t preparedEntryCount() const;
@@ -144,6 +165,7 @@ class OperationCache final {
     using Entries = std::list<std::unique_ptr<Entry>>;
     using Position = Entries::iterator;
     static void destroyPreparedEntry(render::detail::PackedHostRetirementNode*) noexcept;
+    static void destroySourceRevisionEntry(render::detail::PackedHostRetirementNode*) noexcept;
     void touch(Position entry);
     void evictToLocked(std::size_t limit, std::uint64_t& counter);
     void removeLocked(Position candidate);

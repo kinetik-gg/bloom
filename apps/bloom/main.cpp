@@ -121,18 +121,6 @@ int main(int argc, char* argv[]) try {
     // the stale CompositionSession this lambda leaves bound is never shown to the artist. Returning
     // to decoded content (a New or an editable Open) switches the workspace back into view and this
     // lambda rebinds normally.
-    QObject::connect(
-        &projectHost, &bloom::ui::ProjectHost::sessionReplaced, &compositionSession,
-        [&projectHost, &compositionSession] {
-            auto [document, commandStack] = projectHost.liveDocumentAndStack();
-            if (document == nullptr || commandStack == nullptr) {
-                return;
-            }
-            compositionSession.rebind(*document, *commandStack, projectHost.lowestCompositionId());
-            if (const auto* settings = projectHost.colorSettings(); settings != nullptr) {
-                compositionSession.setColorSettings(*settings);
-            }
-        });
     QObject::connect(&projectHost, &bloom::ui::ProjectHost::colorSettingsChanged,
                      &compositionSession, [&projectHost, &compositionSession] {
                          if (const auto* settings = projectHost.colorSettings();
@@ -147,6 +135,25 @@ int main(int argc, char* argv[]) try {
     nodeDefinitions.freeze();
     bloom::runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
     bloom::runtime::CpuCompositionEvaluator cpuEvaluator;
+    QObject::connect(
+        &projectHost, &bloom::ui::ProjectHost::sessionReplaced, &compositionSession,
+        [&projectHost, &compositionSession, &cpuEvaluator] {
+            const auto path = projectHost.displayPath();
+            cpuEvaluator.setAssetBaseDirectory(path ? path->parent_path()
+                                                    : std::filesystem::path{});
+            // Invalidate source authority before rebind emits any new preview request. Even an
+            // identical reopened document must verify its sources in the new session. Rooted
+            // tickets/sessions retire on their worker; this boundary performs no source I/O.
+            cpuEvaluator.operationCache()->invalidateSourceRevisions();
+            auto [document, commandStack] = projectHost.liveDocumentAndStack();
+            if (document == nullptr || commandStack == nullptr) {
+                return;
+            }
+            compositionSession.rebind(*document, *commandStack, projectHost.lowestCompositionId());
+            if (const auto* settings = projectHost.colorSettings(); settings != nullptr) {
+                compositionSession.setColorSettings(*settings);
+            }
+        });
     const QSettings playbackSettings;
     const auto cacheBudgets = bloom::ui::cacheMemoryBudgetsFromSettings(playbackSettings);
     {
@@ -216,8 +223,6 @@ int main(int argc, char* argv[]) try {
         const auto path = projectHost.displayPath();
         cpuEvaluator.setAssetBaseDirectory(path ? path->parent_path() : std::filesystem::path{});
     };
-    QObject::connect(&projectHost, &bloom::ui::ProjectHost::sessionReplaced, &assetController,
-                     updateMediaDirectory);
     QObject::connect(&projectHost, &bloom::ui::ProjectHost::saveFinished, &assetController,
                      updateMediaDirectory);
     updateMediaDirectory();
@@ -381,8 +386,8 @@ int main(int argc, char* argv[]) try {
     // definitions: the provider's CPU-worker bootstrap qualifies the tools once and publishes the
     // same shared context for the export evaluator's media/effect transforms and output display, so
     // preview and export share one tool qualification and one program cache. The media context is
-    // refreshed per request on the calling CPU worker so a session Open/SaveAs that moves the asset
-    // base directory is observed exactly as the preview path observes it.
+    // refreshed per request on the calling CPU worker. Final requests override the live base with
+    // the source directory captured beside their own immutable snapshot, including across Save As.
     gpuExportOptions.ocioResolver = gpuOcioContextResolver;
     gpuExportOptions.mediaContextProvider = [&cpuEvaluator, gpuPreparedUploadCache] {
         auto context = bloom::runtime::GpuSceneMediaContext::fromEvaluator(cpuEvaluator);
@@ -436,6 +441,8 @@ int main(int argc, char* argv[]) try {
         compositionSession, taskScheduler, taskUiBridge, snapshotCompiler,
         projectHost.publicationCoordinator(), projectHost.artifactCoordinator(), {},
         &qualifiedDisplayProcessorProvider, gpuExportProvider);
+    frameExportController.setProjectPathProvider(
+        [&projectHost] { return projectHost.displayPath(); });
 
     // The typed viewer GPU dependency context. Its presentation-client getter reads the cached
     // service capability, so an editor created before the async startup qualification finishes is

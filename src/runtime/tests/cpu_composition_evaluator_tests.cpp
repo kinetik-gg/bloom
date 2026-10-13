@@ -1412,6 +1412,34 @@ void testProxyAndPeakBudget(Expectations& expectations) {
 void testIdentityAndPreparedHandoff(Expectations& expectations) {
     const runtime::CpuCompositionEvaluator evaluator;
     const auto firstPlan = oneSolidPlan();
+    std::shared_ptr<const runtime::ProcessFrame> retainedColorFrame;
+    {
+        std::string working(runtime::kLinearRec709SceneColorSpaceId);
+        std::string uri(runtime::kBloomNeutralOcioConfigUri);
+        auto borrowed = requestFor(*firstPlan);
+        borrowed.colorIntent = {.workingColorSpaceId = working, .ocioConfigUri = uri};
+        const auto owned = runtime::captureEvaluationColorIntent(borrowed.colorIntent);
+        const auto another = runtime::captureEvaluationColorIntent(borrowed.colorIntent);
+        expectations.expect(owned.has_value() && another.has_value() &&
+                                *owned == borrowed.colorIntent && *owned == *another &&
+                                owned->storage != another->storage,
+                            "colour string ownership does not change semantic identity");
+        if (owned.has_value()) {
+            const auto reused = runtime::captureEvaluationColorIntent(*owned);
+            expectations.expect(reused.has_value() && reused->storage == owned->storage,
+                                "matching immutable colour strings reuse their typed owner");
+        }
+        retainedColorFrame = evaluator.evaluate(firstPlan, borrowed, {}).frame();
+        working.assign(4096, 'x');
+        uri.assign(4096, 'y');
+    }
+    expectations.expect(
+        retainedColorFrame && retainedColorFrame->identity().colorIntent.storage &&
+            retainedColorFrame->identity().colorIntent.workingColorSpaceId ==
+                runtime::kLinearRec709SceneColorSpaceId &&
+            retainedColorFrame->identity().colorIntent.ocioConfigUri ==
+                runtime::kBloomNeutralOcioConfigUri,
+        "published CPU frame owns raw request colour strings after mutation/destruction");
     const auto equivalentPlan = publishPlan(firstPlan->copyDefinition());
     const auto divergentPlan = oneSolidPlan({0.0, 1.0, 0.0, 1.0});
     const auto first = evaluator.evaluate(firstPlan, requestFor(*firstPlan), {});

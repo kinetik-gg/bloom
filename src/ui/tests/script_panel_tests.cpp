@@ -216,10 +216,21 @@ void exercise() {
 
     fixture.projectHost.setUnsavedChangeDecisionProvider(
         [] { return ui::UnsavedChangeDecision::Discard; });
+    // Hold the replacement's snapshot refresh inside a nested UI loop before the host's later
+    // sessionReplaced slots run. Old scripting work must already be revoked in this real window.
+    const auto replacementWindow =
+        QObject::connect(&fixture.session, &ui::CompositionSession::snapshotChanged,
+                         &fixture.session, [held = false]() mutable {
+                             if (!held) {
+                                 held = true;
+                                 QTest::qWait(250);
+                             }
+                         });
     const auto beforeReplace = finished.size();
     start("time.sleep(0.2)\nbloom.ops.project.set_name(name='Must not reach new project')");
     QTimer::singleShot(50, &fixture.projectHost, &ui::ProjectHost::newProject);
     waitFor([&] { return finished.size() > beforeReplace; });
+    QObject::disconnect(replacementWindow);
     require(!finished.last().front().toBool(), "Project replacement cancels old work");
     run("assert bloom.context.project.name == 'Untitled'\ntry:\n    old.resolve()\nexcept "
         "bloom.StaleObjectError as error:\n    assert error.id == old.id\nelse:\n    raise "

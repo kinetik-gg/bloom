@@ -29,6 +29,8 @@ void testRootAuthority(Expectations& expectations, GpuDevice& device,
     }
     const bloom::render::GpuProcessingPhaseRequest request{
         .fixedHostBytes = 1024,
+        .requestedSourceBytes = 1024,
+        .minimumSourceBytes = 1024,
         .deviceWorkingBytes = 64ULL * 1024ULL * 1024ULL,
     };
     auto a = first.reserve(request);
@@ -60,6 +62,10 @@ void testRootAuthority(Expectations& expectations, GpuDevice& device,
                                                        {}, {}, a.lease);
     expectations.expect(exact && exact.program->creationRootIdentity() == a.lease->rootIdentity(),
                         "zero-LUT creation records the exact neutral root");
+    if (exact)
+        expectations.expect(
+            exact.program->publishSampledStorage(),
+            "the separately retained zero-LUT program publishes its status backing");
     auto uploader = GpuImageUpload::create(device);
     auto executor = GpuOcioProgramExecutor::create(device);
     if (!uploader || !executor) {
@@ -68,7 +74,7 @@ void testRootAuthority(Expectations& expectations, GpuDevice& device,
         return;
     }
     auto input = uploadImage(*uploader.upload, geometry.width, geometry.height,
-                             fixturePixels(geometry.width, geometry.height));
+                             fixturePixels(geometry.width, geometry.height), a.lease);
     if (!input) {
         expectations.expect(false, "the rooted authority input uploads");
         device.retireProcessingPhase(a.lease->id(), true);
@@ -95,7 +101,7 @@ void testRootAuthority(Expectations& expectations, GpuDevice& device,
     expectations.expect(device.retainProcessingPhase(b.lease),
                         "the foreign root phase is retained");
     input = uploadImage(*uploader.upload, geometry.width, geometry.height,
-                        fixturePixels(geometry.width, geometry.height));
+                        fixturePixels(geometry.width, geometry.height), b.lease);
     if (exact) {
         const auto direct = exact.program->beginEffect(input, {}, kBudget);
         expectations.expect(direct.code ==

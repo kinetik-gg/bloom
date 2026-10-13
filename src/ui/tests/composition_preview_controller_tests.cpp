@@ -1172,6 +1172,7 @@ bloom::document::NodeId firstGraphNode(const bloom::ui::CompositionSession& sess
 #include "composition_preview_controller_02_snapshot.ipp"
 #include "composition_preview_controller_03_split.ipp"
 #include "composition_preview_controller_04_retention.ipp"
+#include "composition_preview_controller_color_lifetime.ipp"
 #include "composition_preview_controller_pause.ipp"
 } // namespace
 
@@ -1194,6 +1195,7 @@ int main(int argc, char** argv) {
         testProxyPipelineUsesRoundedExtent(expectations);
         testRevisionAndPanelSuppression(expectations);
         testNewestPendingRequestGate(expectations);
+        testQueuedColorIntentOwnership(expectations);
         testInteractiveCadenceCoalescesBurstAndVisibleBypasses(expectations);
         testDroppedFrameCountingIsArmedAndHonest(expectations);
         testActiveGateHoldsAndScrubEndBypassesRemainingCadence(expectations);

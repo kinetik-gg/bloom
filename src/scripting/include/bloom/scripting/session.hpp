@@ -83,6 +83,11 @@ struct SessionCommandResult final {
     }
 };
 
+struct SessionRenderSourceSnapshot final {
+    document::Snapshot snapshot;
+    std::filesystem::path assetBaseDirectory;
+};
+
 // A live client borrows typed host services and immutable reads, never mutable document
 // pointers. The owner revokes valid() before replacing or destroying its authoring session.
 struct SessionBinding final {
@@ -93,6 +98,8 @@ struct SessionBinding final {
     std::shared_ptr<EventStream> events;
     host::PublicationCoordinator* publication = nullptr;
     platform::StagedArtifactCoordinator* artifacts = nullptr;
+    // Capture both values together so project replacement/Save As cannot mix their authority.
+    std::function<SessionRenderSourceSnapshot()> renderSourceSnapshot{};
 };
 
 class Session final {
@@ -139,6 +146,7 @@ class Session final {
     [[nodiscard]] SessionSaveResult save();
     [[nodiscard]] SessionSaveResult saveAs(const std::filesystem::path& path);
     [[nodiscard]] const std::filesystem::path& displayPath() const noexcept { return displayPath_; }
+    [[nodiscard]] SessionRenderSourceSnapshot renderSourceSnapshot() const;
 
     [[nodiscard]] commands::CommandStack* commandStack() noexcept;
     [[nodiscard]] document::Document* document() noexcept;

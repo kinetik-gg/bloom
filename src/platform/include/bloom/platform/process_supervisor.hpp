@@ -10,6 +10,7 @@
 #include <vector>
 
 namespace bloom::platform {
+class ReadOnlyFileSnapshot;
 enum class ProcessError { Unavailable, Spawn, ResourceLimit, Io, Crashed, Timeout, Cancelled };
 struct ProcessFailure {
     ProcessError code = ProcessError::Io;
@@ -27,6 +28,9 @@ struct ProcessOptions {
     std::uint64_t addressSpaceBytes = 2ULL * 1024 * 1024 * 1024;
     std::uint32_t openFiles = 64;
     std::chrono::milliseconds messageGrace{50}, termGrace{100};
+    // Owning, captured source capability. Only this handle can install child fd 4; ordinary
+    // external paths cannot opt into the immutable-input provider contract.
+    std::shared_ptr<const ReadOnlyFileSnapshot> inputSnapshot{};
 };
 // Blocking API. Call only on a BlockingIo executor. No detached threads or host signal handlers.
 // The trusted worker must call processWorkerBootstrap() before loading provider code.

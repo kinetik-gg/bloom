@@ -9,8 +9,11 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>
+#include <bloom/output/flat_exr_output_adapter.hpp>
+#include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/gpu_prepared_packed_preview_product.hpp>
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
+#include <bloom/runtime/gpu_process_frame.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
@@ -46,6 +49,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -173,13 +177,15 @@ void observe(const char* name, ui::ViewerEditor& viewer, QSplitter& splitter, QW
 
 #include "gpu_packed_animation_proof.ipp"
 #include "gpu_packed_host_retirement_proof.ipp"
+#include "gpu_packed_stress_proof.ipp"
 // Cache qualification reuses the explicit retirement teardown guard above.
 #include "gpu_packed_cache100_proof.ipp"
 #include "gpu_packed_playing_proof.ipp"
 
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     bool cache100 = false, half = false, partial = false, playing = false, animatedDrag = false;
-    bool hostOwnership = false, hostRetirement = false;
+    bool hostOwnership = false, hostRetirement = false, sustained = false;
+    std::size_t preparationWidth = 1;
     std::string sequenceManifest;
     std::vector<char*> forwarded{argv[0]};
     for (int index = 1; index < argc; ++index) {
@@ -188,6 +194,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             if (++index >= argc)
                 return 2;
             sequenceManifest = argv[index];
+        } else if (argument == "--sustained") {
+            sustained = cache100 = true;
+        } else if (argument == "--width-one") {
+            preparationWidth = 1;
+        } else if (argument == "--width-two") {
+            preparationWidth = ui::RamPreviewPipeline::kMaxInFlight;
         } else if (argument == "--cache100-half") {
             cache100 = true;
             half = true;
@@ -207,7 +219,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             forwarded.push_back(argv[index]);
     }
     const auto options = parseOptions(static_cast<int>(forwarded.size()), forwarded.data());
-    if (!options.valid || (!sequenceManifest.empty() && !cache100))
+    if (!options.valid || (!sequenceManifest.empty() && !cache100) || (sustained && partial))
         return 2;
     QApplication application(argc, argv);
     QTemporaryDir temporary;
@@ -221,7 +233,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         return options.require_device ? 1 : 77;
     }
     if (cache100)
-        return runPackedCache100(options, temporary, half, partial, sequenceManifest);
+        return runPackedCache100(options, temporary, half, partial, sequenceManifest, sustained,
+                                 preparationWidth);
     Expectations checks;
     Fixture fixture(temporary.path().toStdString());
     auto format = document::CompositionFormat::create(1920, 1080);

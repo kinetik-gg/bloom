@@ -12,9 +12,11 @@
 
 #include "gpu_borrowed_instance.hpp"
 #include "gpu_native_test_environment.hpp"
+#include "gpu_preview_test_phase.hpp"
 
 #include <bloom/core/color.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/runtime/gpu_presentation_coordinator.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
@@ -161,6 +163,7 @@ class Expectations final {
     options.loaderPath = loader;
     options.presentation = GpuPreviewDisplayServicePresentationMode::Wayland;
     options.previewByteAllowance = kBudget;
+    options.processingPhasePolicy = bloom::ui::test::previewProcessingPhase();
     options.presentationCoordinator.maxTargets = 3U;
     options.presentationCoordinator.maxRetainedTargets = 64U;
     options.presentationCoordinator.shutdownDrainPumps = 600U;
@@ -220,8 +223,19 @@ awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds tim
 }
 
 [[nodiscard]] bloom::document::Snapshot makeSnapshot(const std::uint64_t id, std::string name) {
-    bloom::document::Document document(
-        bloom::document::Project(bloom::document::ProjectId::fromRaw(id), std::move(name)));
+    bloom::document::Project project(bloom::document::ProjectId::fromRaw(id), std::move(name));
+    const auto format = bloom::document::CompositionFormat::create(16, 8);
+    if (!format)
+        std::abort();
+    const auto seed = bloom::document::makeNewProject(
+        "Fixture", "Preview", bloom::core::RationalTime::fromInteger(1), *format);
+    const auto* composition = seed.project.findComposition(seed.initialCompositionId);
+    if (!composition ||
+        !project.addComposition(bloom::document::Composition(
+            bloom::document::CompositionId::fromRaw(1), "Preview",
+            bloom::core::RationalTime::fromInteger(1), composition->graph(), *format)))
+        std::abort();
+    bloom::document::Document document(std::move(project));
     return document.snapshot();
 }
 
@@ -259,8 +273,11 @@ struct UiSurface final {
     bloom::runtime::TaskOwner taskOwner;
     taskOwner.kind = bloom::runtime::TaskOwnerKind::Composition;
     taskOwner.id = bloom::runtime::TaskOwnerId::fromRaw(7);
-    auto submission = service.submit(TaskRequest("ordinary preview", taskOwner), snapshot,
-                                     bloom::runtime::PreviewRequestIdentity{}, kBudget, {});
+    bloom::runtime::PreviewRequestIdentity identity;
+    identity.projectId = snapshot.project().id();
+    identity.compositionId = bloom::document::CompositionId::fromRaw(1);
+    auto submission =
+        service.submit(TaskRequest("ordinary preview", taskOwner), snapshot, identity, kBudget, {});
     if (submission.status != bloom::runtime::TaskSubmissionStatus::Accepted) {
         expectations.expect(false, "the ordinary preview request was admitted");
         return false;
@@ -269,6 +286,9 @@ struct UiSurface final {
     const auto* carried =
         result.has_value() && result->state() == TaskState::Succeeded ? &result->value() : nullptr;
     const bool finished = carried != nullptr && carried->has_value();
+    if (!finished && result)
+        for (const auto& diagnostic : result->diagnostics())
+            std::cerr << diagnostic.code << ": " << diagnostic.summary << '\n';
     expectations.expect(finished, "the ordinary preview request completed on the CPU path");
     if (carried != nullptr && carried->has_value()) {
         expectations.expect(
@@ -289,6 +309,7 @@ struct UiSurface final {
     options.loaderPath = "/nonexistent/bloom-loader.so";
     options.presentation = GpuPreviewDisplayServicePresentationMode::Wayland;
     options.previewByteAllowance = kBudget;
+    options.processingPhasePolicy = bloom::ui::test::previewProcessingPhase();
     GpuPreviewDisplayService service(scheduler, unsupportedStage(), unreachableFallback(), options);
     static_cast<void>(waitUntil(
         [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; },
@@ -391,8 +412,10 @@ int runTests(int argc, char** argv) {
         surface.window->show();
         surface.width = width;
         surface.height = height;
-        if (!waitUntil(
+        if (!waitUntilEvents(
                 [&surface] {
+                    if (!surface.window->isExposed())
+                        return false;
                     surface.surface = QVulkanInstance::surfaceForWindow(surface.window);
                     return surface.surface != VK_NULL_HANDLE;
                 },

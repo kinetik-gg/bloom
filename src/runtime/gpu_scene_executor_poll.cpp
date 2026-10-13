@@ -78,7 +78,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::finishNative(render::GpuImage
     // The op's own actual retained bytes (image plus its native metadata). The true during-op live
     // peak is the pins at dispatch plus this, so the request budget bounds the temporary peak too.
     const std::uint64_t opPeakBytes =
-        nativeKind == NativeKind::Solid           ? solid->lastJobAllocationBytes()
+        nativeKind == NativeKind::Batch           ? produced.allocationBytes()
+        : nativeKind == NativeKind::Solid         ? solid->lastJobAllocationBytes()
         : nativeKind == NativeKind::Upload        ? upload->lastJobAllocationBytes()
         : nativeKind == NativeKind::Affine        ? affine->lastJobAllocationBytes()
         : nativeKind == NativeKind::Blend         ? blend->lastJobAllocationBytes()
@@ -146,6 +147,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::finishNative(render::GpuImage
     }
     ++counters.commandsExecuted;
     ++cursor;
+    batchAttempted = false;
     return {};
 }
 
@@ -182,6 +184,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::completeNative() {
 }
 
 GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
+    if (nativeKind == NativeKind::Batch)
+        return pollBatch();
     if (nativeKind == NativeKind::PathCoverage) {
         // The native coverage producer owns its own poll ladder: on Ready it starts the resident
         // covered fill, so it short-circuits the generic status handling below.
@@ -240,6 +244,15 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
         return GpuSceneExecutorPollResult::Pending;
     }
     if (status == NativePoll::Ready) {
+        auto& fenceTime = nativeKind == NativeKind::Upload
+                              ? counters.uploadFenceObservationNanoseconds
+                              : counters.processingFenceObservationNanoseconds;
+        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                 std::chrono::steady_clock::now() - nativeStart)
+                                 .count();
+        if (elapsed > 0)
+            fenceTime += std::min(static_cast<std::uint64_t>(elapsed),
+                                  std::numeric_limits<std::uint64_t>::max() - fenceTime);
         if (cancelRequested) {
             if (nativeKind == NativeKind::Solid) {
                 static_cast<void>(solid->takeImage());

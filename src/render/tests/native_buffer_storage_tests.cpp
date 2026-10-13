@@ -383,6 +383,136 @@ void nonemptyCrossRootMove() {
             "incoming final disposal releases its own phase once outside the mutex");
     empty(second);
 }
+void processingHeadroomAndPartitions() {
+    GpuProcessingPhaseBudget budget;
+    budget.setHostCapacity(400, true);
+    budget.setDeviceCapacity(1000, true);
+    auto phase = budget.reserve(mediaRequest());
+    require(phase.lease != nullptr, "processing phase admitted with full protected host grant");
+    auto denied = NativeBufferStorageToken::reserveProcessing(phase.lease, 1, nonlocal());
+    require(!denied.token && denied.domain == GpuProcessingPhaseDomain::Host &&
+                budget.snapshot().deviceReservedBytes == 300,
+            "processing cannot spend output or source partitions as supplemental host credit");
+    budget.setHostCapacity(550, true);
+    auto processing = NativeBufferStorageToken::reserveProcessing(phase.lease, 150, nonlocal());
+    require(processing.token && budget.snapshot().totalHostClaimBytes == 550 &&
+                budget.snapshot().hostReservedBytes == 400 &&
+                budget.snapshot().ownedNonlocalNativeBufferHostBytes == 150,
+            "nonlocal processing adds exact fresh host headroom and transfers native debit");
+    auto output = NativeBufferStorageToken::reserve(phase.lease, 50, nonlocal());
+    auto upload = NativeBufferStorageToken::reserveUpload(phase.lease, 100, nonlocal());
+    require(output.token && upload.token && budget.snapshot().totalHostClaimBytes == 550 &&
+                budget.snapshot().hostReservedBytes == 250 &&
+                budget.snapshot().ownedNativeBufferBytes == 300,
+            "output and upload retain their independent partitions alongside processing");
+    require(token(processing).reconcile(100, nonlocal()) &&
+                budget.snapshot().totalHostClaimBytes == 500 &&
+                budget.snapshot().hostReservedBytes == 250,
+            "processing reconciliation releases only additive host bytes");
+    auto moved = NativeBufferStorageToken(std::move(token(processing)));
+    token(output) = std::move(moved);
+    processing.token.reset();
+    require(budget.snapshot().totalHostClaimBytes == 500 &&
+                budget.snapshot().hostReservedBytes == 300 &&
+                budget.snapshot().ownedNativeBufferBytes == 200,
+            "processing tag survives construction and nonempty cross-partition assignment");
+    const auto revision = budget.snapshot().admissionRevision;
+    phase.lease->markUnproven();
+    phase.lease.reset();
+    require(budget.snapshot().unprovenPhases == 1 && budget.snapshot().totalHostClaimBytes == 500,
+            "live processing tokens retain exact unproven phase and supplemental claim");
+    upload.token.reset();
+    output.token.reset();
+    empty(budget);
+    require(budget.snapshot().admissionRevision == revision + 1,
+            "last processing token releases its retained phase once outside the lock");
+}
+void processingFreshnessAndOverflow() {
+    GpuProcessingPhaseBudget budget;
+    const auto now = Clock::now();
+    budget.setHostCapacity(1000, true, now);
+    budget.setDeviceCapacity(1000, true);
+    auto phase = budget.reserve(request());
+    require(phase.lease != nullptr, "freshness phase admitted");
+    auto denied = NativeBufferStorageToken::reserveProcessing(phase.lease, 1, nonlocal(),
+                                                              now + std::chrono::seconds(1));
+    require(!denied.token && denied.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
+                !budget.snapshot().hostReady && budget.snapshot().ownedNativeBuffers == 0,
+            "expired supplemental headroom closes readiness before any host/native half claim");
+    auto localBuffer = NativeBufferStorageToken::reserveProcessing(phase.lease, 100, local());
+    require(localBuffer.token && budget.snapshot().totalHostClaimBytes == 80,
+            "local processing only converts admitted native debit under host staleness");
+    localBuffer.token.reset();
+    phase.lease.reset();
+    empty(budget);
+    constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+    budget.setHostCapacity(maximum, true);
+    budget.setDeviceCapacity(maximum, true);
+    phase = budget.reserve(request(maximum, maximum));
+    require(phase.lease != nullptr, "maximum processing grant admitted");
+    denied = NativeBufferStorageToken::reserveProcessing(phase.lease, 1, nonlocal());
+    require(!denied.token && denied.domain == GpuProcessingPhaseDomain::Host &&
+                budget.snapshot().totalHostClaimBytes == maximum &&
+                budget.snapshot().deviceReservedBytes == maximum,
+            "supplemental host addition rejects overflow before atomic native conversion");
+    phase.lease.reset();
+    empty(budget);
+}
+void retainedProcessingOwnership() {
+    GpuProcessingPhaseBudget budget(1);
+    budget.setHostCapacity(1000, true);
+    budget.setDeviceCapacity(150, true);
+    auto phase = budget.reserve(request());
+    require(phase.lease != nullptr, "retained processing origin admitted");
+    auto first = NativeBufferStorageToken::reserveProcessing(phase.lease, 40, local());
+    auto second = NativeBufferStorageToken::reserveProcessing(phase.lease, 30, nonlocal());
+    require(first.token && second.token && token(first).canPromote() && token(first).promote() &&
+                token(second).promote(),
+            "retained buffers publish from their exact proven origin");
+    require(!token(first).reconcile(30, local()), "published backing cannot be reconciled later");
+    const auto weak = std::weak_ptr<GpuProcessingPhaseLease>(phase.lease);
+    phase.lease.reset();
+    require(weak.expired() && budget.snapshot().admittedPhases == 0 &&
+                budget.snapshot().totalDeviceClaimBytes == 70 &&
+                budget.snapshot().totalHostClaimBytes == 30,
+            "cached charges survive independently without pinning the whole origin phase");
+    const auto denied = budget.reserve(request());
+    require(!denied.lease && denied.domain == GpuProcessingPhaseDomain::Device,
+            "later phase cannot double-spend retained buffer backing");
+    const auto revision = budget.snapshot().admissionRevision;
+    auto moved = NativeBufferStorageToken(std::move(token(first)));
+    first.token.reset();
+    moved = {};
+    second.token.reset();
+    require(budget.snapshot().admissionRevision == revision + 2,
+            "actual independent retained releases emit one capacity pulse each");
+    empty(budget);
+    phase = budget.reserve(request());
+    require(phase.lease != nullptr, "retained destruction restores capacity-one admission");
+    auto prefix = NativeBufferStorageToken::reserveProcessing(phase.lease, 40, nonlocal());
+    require(prefix.token && token(prefix).promote(), "partly published failed prefix exists");
+    const auto before = budget.snapshot();
+    GpuProcessingPhaseBudget foreign;
+    foreign.setHostCapacity(1000, true);
+    foreign.setDeviceCapacity(1000, true);
+    auto wrong = foreign.reserve(request());
+    require(wrong.lease && !token(prefix).releaseFailedAttemptAfterBackingDestroyed(wrong.lease) &&
+                token(prefix).releaseFailedAttemptAfterBackingDestroyed(phase.lease),
+            "only exact root/phase may quietly fold destroyed failed-prefix backing");
+    require(budget.snapshot().admissionRevision == before.admissionRevision &&
+                budget.snapshot().deviceReservedBytes == 100 &&
+                budget.snapshot().totalHostClaimBytes == 80,
+            "failed publication foldback conserves origin debit without self-retry pulse");
+    prefix.token.reset();
+    auto transient = NativeBufferStorageToken::reserve(phase.lease, 20, local());
+    require(transient.token && !token(transient).canPromote() && !token(transient).promote(),
+            "ordinary output partition cannot become retained processing storage");
+    transient.token.reset();
+    phase.lease.reset();
+    wrong.lease.reset();
+    empty(budget);
+    empty(foreign);
+}
 } // namespace
 
 int main() {
@@ -395,6 +525,9 @@ int main() {
         grandfatheredProtectedUpload();
         movedUploadPartition();
         maximumMediaPartition();
+        processingHeadroomAndPartitions();
+        processingFreshnessAndOverflow();
+        retainedProcessingOwnership();
         std::cout << "PASS: neutral transient native buffer storage\n";
         return 0;
     } catch (const std::exception& error) {

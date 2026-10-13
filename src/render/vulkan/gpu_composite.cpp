@@ -1,3 +1,4 @@
+#include "gpu_translation_axis_private.hpp"
 #include <bloom/render/gpu_composite.hpp>
 
 #include "gpu_composite_fault.hpp"
@@ -36,19 +37,7 @@ std::vector<GpuAxisSample> prepareTranslationAxis(const std::uint32_t outputExte
                                                   const std::uint32_t sourceExtent,
                                                   const double translation) {
     std::vector<GpuAxisSample> axis(outputExtent);
-    for (std::uint32_t local = 0; local < outputExtent; ++local) {
-        // Exact CPU arithmetic: Float64 subtraction, then floor and a single Float32 rounding of
-        // the fractional part. The sentinel mirrors the CPU's `sampleLocal <= -1.0 || >=
-        // sourceExtent` transparent branch.
-        const auto sample = static_cast<double>(local) - translation;
-        if (sample <= -1.0 || sample >= static_cast<double>(sourceExtent)) {
-            axis[local] = GpuAxisSample{kGpuAxisOutOfRange, 0.0F};
-            continue;
-        }
-        const auto base = static_cast<std::int64_t>(std::floor(sample));
-        axis[local] = GpuAxisSample{static_cast<std::int32_t>(base),
-                                    static_cast<float>(sample - static_cast<double>(base))};
-    }
+    composite_detail::fillTranslationAxis(axis, sourceExtent, translation);
     return axis;
 }
 
@@ -337,8 +326,23 @@ GpuCompositeDiagnostic GpuComposite::beginTranslation(const GpuTranslationParame
         }
     } preparationCleanup{impl};
     // Prepare host metadata first so any allocation failure is before any device work.
-    const auto axisX = prepareTranslationAxis(outputWidth, sourceWidth, parameters.translationX);
-    const auto axisY = prepareTranslationAxis(outputHeight, sourceHeight, parameters.translationY);
+    std::optional<ProcessingHostStorageRefusal> axisRefusal;
+    const ProcessingHostAllocator<GpuAxisSample> axisAllocator{impl.control->processingPhase,
+                                                               &axisRefusal};
+    composite_detail::TranslationAxisStorage axisX{axisAllocator};
+    composite_detail::TranslationAxisStorage axisY{axisAllocator};
+    try {
+        axisX = composite_detail::prepareProcessingTranslationAxis(
+            outputWidth, sourceWidth, parameters.translationX, impl.control->processingPhase,
+            &axisRefusal);
+        axisY = composite_detail::prepareProcessingTranslationAxis(
+            outputHeight, sourceHeight, parameters.translationY, impl.control->processingPhase,
+            &axisRefusal);
+    } catch (const std::bad_alloc&) {
+        return makeDiagnostic(axisRefusal ? GpuCompositeDiagnosticCode::OverBudget
+                                          : GpuCompositeDiagnosticCode::AllocationFailed,
+                              "translation axis host scratch was refused");
+    }
     if (!createCompositeBuffer(impl.control, axisX.size() * sizeof(CompositeAxisSampleGpu), false,
                                axisX.data(), impl.axisX) ||
         !createCompositeBuffer(impl.control, axisY.size() * sizeof(CompositeAxisSampleGpu), false,

@@ -75,6 +75,22 @@ bloom_enable_strict_floating_point(bloom_runtime_qualified_display_preparation_t
 
 include(BloomTesting)
 
+# Manual, CPU-only private-share qualification. The owning script creates and tears down its own
+# loopback SSHFS fixture; ordinary CTest never creates network services or mounts.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(bloom_runtime_private_share_outage_probe EXCLUDE_FROM_ALL
+        "${PROJECT_SOURCE_DIR}/tools/quality/private_share_outage_probe.cpp")
+    target_include_directories(bloom_runtime_private_share_outage_probe
+        PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS} "${PROJECT_SOURCE_DIR}/src/runtime"
+                "${PROJECT_SOURCE_DIR}/src/runtime/tests")
+    target_link_libraries(bloom_runtime_private_share_outage_probe
+        PRIVATE bloom_runtime_evaluator bloom_render bloom_media_video bloom_platform_process
+                OpenEXR::OpenEXR)
+    bloom_enable_warnings(bloom_runtime_private_share_outage_probe)
+    bloom_enable_strict_floating_point(bloom_runtime_private_share_outage_probe)
+    add_dependencies(bloom_runtime_private_share_outage_probe bloom-media-worker)
+endif()
+
 bloom_add_test(
     NAME bloom.runtime.completions
     COMMAND bloom_runtime_completion_test
@@ -702,7 +718,7 @@ endif()
 # zero-budget disable, and per-entry accounting. CPU-only; no loader and no device.
 add_executable(bloom_runtime_gpu_prepared_upload_cache_test gpu_prepared_upload_cache_tests.cpp)
 target_include_directories(bloom_runtime_gpu_prepared_upload_cache_test PRIVATE
-    ${PROJECT_SOURCE_DIR}/src/render)
+    ${PROJECT_SOURCE_DIR}/src/render ${PROJECT_SOURCE_DIR}/src/media/image/tests)
 target_link_libraries(bloom_runtime_gpu_prepared_upload_cache_test
     PRIVATE bloom_runtime_evaluator bloom_render)
 bloom_enable_warnings(bloom_runtime_gpu_prepared_upload_cache_test)
@@ -740,7 +756,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(bloom_runtime_gpu_media_video_scene_preparation_test
         gpu_media_video_scene_preparation_tests.cpp)
     target_include_directories(bloom_runtime_gpu_media_video_scene_preparation_test
-        PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime)
+        PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime ${PROJECT_SOURCE_DIR}/src/render)
     target_link_libraries(bloom_runtime_gpu_media_video_scene_preparation_test
         PRIVATE bloom_runtime_evaluator bloom_render bloom_media_video)
     bloom_enable_warnings(bloom_runtime_gpu_media_video_scene_preparation_test)

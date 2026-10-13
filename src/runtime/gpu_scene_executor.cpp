@@ -95,6 +95,8 @@ GpuSceneExecutorCreateResult GpuSceneExecutor::create(render::GpuDevice& device,
     impl->deviceEpoch = device.ownershipEpoch();
     impl->cache = &cache;
     impl->budgets = budgets;
+    if (budgets.collectQueueTimestamps)
+        impl->queueTiming = render::GpuQueueTiming::create(device);
     impl->solid = std::move(solid.solid);
     impl->composite = std::move(composite.composite);
     impl->upload = std::move(upload.upload);
@@ -127,6 +129,16 @@ GpuSceneExecutorCounters GpuSceneExecutor::counters() const noexcept {
     // reported zero here means no peak was ever observed, never that a failure erased the evidence.
     snapshot.peakLiveImageBytes = std::max(snapshot.peakLiveImageBytes, impl_->peakLiveBytes);
     return snapshot;
+}
+
+render::GpuQueueTimingSample GpuSceneExecutor::pollQueueTiming() noexcept {
+    if (!impl_)
+        return {};
+    if (!impl_->onOwnerThread())
+        return {render::GpuQueueTimingStatus::WrongThread};
+    if (impl_->queueTimingStarted && impl_->queueTiming)
+        impl_->queueTimingSample = impl_->queueTiming->poll();
+    return impl_->queueTimingSample;
 }
 
 GpuSceneExecutorProgress GpuSceneExecutor::progress() const noexcept {
@@ -178,6 +190,9 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::begin(std::shared_ptr<const Prepare
         return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InvalidArgument, "no scene");
     }
     impl.clearJob();
+    impl.queueTimingAttempted = false;
+    impl.queueTimingStarted = false;
+    impl.queueTimingSample = {};
     impl.diagnostic = {};
     impl.state = GpuSceneExecutorJobState::Idle;
 
@@ -280,6 +295,23 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::begin(std::shared_ptr<const Prepare
 }
 
 GpuSceneExecutorPollResult GpuSceneExecutor::poll() {
+    // Never spin on a pending fence. Exactly one completed step may continue directly to its next
+    // submission (or Ready); cancellation and failure gates are rechecked by pollOnce().
+    if (!impl_ || !impl_->onOwnerThread())
+        return pollOnce();
+    static_cast<void>(pollQueueTiming());
+    const auto before = impl_->counters.nativeJobsCompleted;
+    auto result = pollOnce();
+    if (impl_->budgets.continueCompletedStepImmediately &&
+        result == GpuSceneExecutorPollResult::Pending && !impl_->nativeInFlight &&
+        impl_->counters.nativeJobsCompleted > before) {
+        ++impl_->counters.completedStepContinuations;
+        result = pollOnce();
+    }
+    return result;
+}
+
+GpuSceneExecutorPollResult GpuSceneExecutor::pollOnce() {
     if (impl_ != nullptr && impl_->device != nullptr) {
         impl_->device->reclaimReleasedImages();
     }
@@ -309,7 +341,9 @@ GpuSceneExecutorPollResult GpuSceneExecutor::poll() {
     }
     if (impl.nativeInFlight) {
         if (impl.cancelRequested && !impl.cancelIssued) {
-            if (impl.nativeKind == Impl::NativeKind::Solid) {
+            if (impl.nativeKind == Impl::NativeKind::Batch) {
+                impl.operationBatch->cancel();
+            } else if (impl.nativeKind == Impl::NativeKind::Solid) {
                 impl.solid->cancel();
             } else if (impl.nativeKind == Impl::NativeKind::Upload) {
                 impl.upload->cancel();
@@ -343,6 +377,13 @@ GpuSceneExecutorPollResult GpuSceneExecutor::poll() {
         impl.finishReady();
         return impl.state == GpuSceneExecutorJobState::Ready ? GpuSceneExecutorPollResult::Ready
                                                              : GpuSceneExecutorPollResult::Failure;
+    }
+    if (const auto batch = impl.tryStartBatch(); batch.has_value()) {
+        if (batch->code != GpuSceneExecutorDiagnosticCode::None) {
+            impl.fail(batch->code, batch->message, impl.hasUnretiredNative());
+            return GpuSceneExecutorPollResult::Failure;
+        }
+        return GpuSceneExecutorPollResult::Pending;
     }
     const auto started = impl.startStep(impl.steps[impl.cursor]);
     if (started.code != GpuSceneExecutorDiagnosticCode::None) {
@@ -396,7 +437,9 @@ void GpuSceneExecutor::cancel() noexcept {
     }
     impl_->cancelRequested = true;
     if (impl_->nativeInFlight && !impl_->cancelIssued) {
-        if (impl_->nativeKind == Impl::NativeKind::Solid) {
+        if (impl_->nativeKind == Impl::NativeKind::Batch) {
+            impl_->operationBatch->cancel();
+        } else if (impl_->nativeKind == Impl::NativeKind::Solid) {
             impl_->solid->cancel();
         } else if (impl_->nativeKind == Impl::NativeKind::Upload) {
             impl_->upload->cancel();
@@ -433,6 +476,7 @@ bool GpuSceneExecutor::teardownDrainIncomplete() noexcept {
            render::GpuBlend::teardownDrainIncomplete() ||
            render::GpuPointResample::teardownDrainIncomplete() ||
            render::GpuPathCoverage::teardownDrainIncomplete() ||
+           render::GpuOperationBatch::teardownDrainIncomplete() ||
            render::GpuOcioProgram::teardownDrainIncomplete();
 }
 

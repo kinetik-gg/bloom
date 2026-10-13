@@ -59,6 +59,8 @@ GpuOcioProgramRetirementStats GpuDevice::ocioProgramRetirementStats() const noex
 GpuImageReclamationStats GpuDevice::processImageReclamationStats() noexcept { return {}; }
 
 // Inert portable implementation preserves the owning native API without retaining a lease.
+bool GpuDevice::bindProcessingRoot(GpuProcessingRootIdentity) noexcept { return false; }
+GpuProcessingRootIdentity GpuDevice::processingRootIdentity() const noexcept { return {}; }
 // NOLINTNEXTLINE(performance-unnecessary-value-param): native implementation retains shared lease.
 bool GpuDevice::retainProcessingPhase(std::shared_ptr<GpuProcessingPhaseLease>) noexcept {
     return false;
@@ -76,8 +78,14 @@ std::optional<NativeBufferStorageRefusal> GpuDevice::nativeBufferStorageRefusal(
     return {};
 }
 bool GpuDevice::displayTransferPending() const noexcept { return false; }
+std::optional<NativePresentationStorageRefusal>
+GpuDevice::nativePresentationStorageRefusal() const noexcept {
+    return {};
+}
 bool GpuDevice::imageUploadPending() const noexcept { return false; }
 bool GpuDevice::outputColorReadbackPending() const noexcept { return false; }
+
+GpuAllocatorMemorySnapshot GpuDevice::allocatorMemorySnapshot() const noexcept { return {}; }
 
 GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept { return {}; }
 

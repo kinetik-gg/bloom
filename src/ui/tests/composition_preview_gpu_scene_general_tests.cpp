@@ -104,7 +104,7 @@ constexpr std::size_t kBudget = std::size_t{1} << 28;
 
 [[nodiscard]] bloom::runtime::PreviewRequestIdentity
 identityFor(const bloom::document::Snapshot& snapshot, const bloom::document::CompositionId id,
-            const bloom::runtime::EvaluationColorIntent intent) {
+            const bloom::runtime::EvaluationColorIntent& intent) {
     return {.projectId = snapshot.project().id(),
             .compositionId = id,
             .sourceRevision = snapshot.revision(),

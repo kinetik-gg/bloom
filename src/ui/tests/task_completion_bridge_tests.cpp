@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QPointer>
+#include <QThread>
 #include <QTimer>
 
 #include <algorithm>
@@ -220,6 +221,37 @@ void testConstructionRefusal(Expectations& checks) {
                   "released slot admits functional adapter after failed construction");
     scheduler.beginShutdown();
 }
+
+void testCompletionServiceClosure(Expectations& checks) {
+    auto scheduler = std::make_unique<runtime::TaskScheduler>(config());
+    auto bridge = std::make_unique<ui::TaskUiBridge>(*scheduler);
+    int errors = 0;
+    QThread* errorThread = nullptr;
+    QObject::connect(bridge.get(), &ui::TaskUiBridge::monitorErrorChanged,
+                     QCoreApplication::instance(), [&] {
+                         ++errors;
+                         errorThread = QThread::currentThread();
+                     });
+    // The neutral subscription may outlive its scheduler. No monitor poll is running, and the
+    // failure handler must not dereference the expired scheduler while delivering its diagnostic.
+    scheduler.reset();
+    checks.expect(errors == 0, "completion closure is queued instead of invoking UI on waiter");
+    checks.expect(spinUntil([&] { return errors == 1; }) &&
+                      errorThread == QCoreApplication::instance()->thread() &&
+                      bridge->monitorError().contains(QStringLiteral("closed unexpectedly")) &&
+                      !bridge->isRunning(),
+                  "closed completion service reports one UI-thread error with stopped monitor");
+    bridge.reset();
+
+    scheduler = std::make_unique<runtime::TaskScheduler>(config());
+    bridge = std::make_unique<ui::TaskUiBridge>(*scheduler);
+    QObject::connect(bridge.get(), &ui::TaskUiBridge::monitorErrorChanged,
+                     QCoreApplication::instance(), [&] { ++errors; });
+    scheduler.reset();
+    bridge.reset();
+    QCoreApplication::processEvents();
+    checks.expect(errors == 1, "destroyed bridge discards queued completion-service failure");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -229,5 +261,6 @@ int main(int argc, char** argv) {
     testDuringDrainAndAlreadyReady(checks);
     testDestructionAndObserverDeletion(checks);
     testConstructionRefusal(checks);
+    testCompletionServiceClosure(checks);
     return checks.failures == 0 ? 0 : 1;
 }

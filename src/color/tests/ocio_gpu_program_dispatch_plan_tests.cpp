@@ -111,7 +111,8 @@ void testForcedDispatchPlanning(Expectations& expectations, GpuDevice& device,
     const auto run = [&](const std::uint32_t width, const std::uint32_t height,
                          const std::string_view label) {
         const auto pixels = fixturePixels(width, height);
-        const auto input = uploadImage(*uploader.upload, width, height, pixels);
+        const auto input =
+            uploadImage(*uploader.upload, width, height, pixels, device.retainedProcessingPhase());
         expectations.expect(input != nullptr, "a forced-planning input uploads");
         if (input == nullptr) {
             return;
@@ -165,7 +166,8 @@ void testDispatchRefusal(Expectations& expectations, GpuDevice& device,
     constexpr std::uint32_t width = 65;
     constexpr std::uint32_t height = 1;
     const auto pixels = fixturePixels(width, height);
-    const auto input = uploadImage(*uploader.upload, width, height, pixels);
+    const auto input =
+        uploadImage(*uploader.upload, width, height, pixels, device.retainedProcessingPhase());
     expectations.expect(input != nullptr, "the refusal input uploads");
     if (input == nullptr) {
         return;
@@ -181,7 +183,8 @@ void testDispatchRefusal(Expectations& expectations, GpuDevice& device,
     constexpr std::uint32_t okWidth = 32;
     constexpr std::uint32_t okHeight = 2;
     const auto okPixels = fixturePixels(okWidth, okHeight);
-    const auto okInput = uploadImage(*uploader.upload, okWidth, okHeight, okPixels);
+    const auto okInput = uploadImage(*uploader.upload, okWidth, okHeight, okPixels,
+                                     device.retainedProcessingPhase());
     expectations.expect(okInput != nullptr, "the recovery input uploads");
     if (okInput == nullptr) {
         return;
