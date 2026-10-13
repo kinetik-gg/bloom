@@ -21,6 +21,7 @@
 
 #include "gpu_borrowed_instance.hpp"
 #include "gpu_native_test_environment.hpp"
+#include "gpu_preview_test_phase.hpp"
 
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
@@ -28,6 +29,7 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
@@ -236,18 +238,6 @@ residentFallback(std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessor
     };
 }
 
-[[nodiscard]] GpuPreviewDisplayServiceOptions serviceOptions(const std::filesystem::path& loader) {
-    GpuPreviewDisplayServiceOptions options;
-    options.enabled = true;
-    options.loaderPath = loader;
-    options.presentation = GpuPreviewDisplayServicePresentationMode::Wayland;
-    options.previewByteAllowance = kBudget;
-    options.presentationCoordinator.maxTargets = 3U;
-    options.presentationCoordinator.maxRetainedTargets = 64U;
-    options.presentationCoordinator.shutdownDrainPumps = 600U;
-    return options;
-}
-
 template <typename Predicate>
 [[nodiscard]] bool waitUntil(Predicate predicate, const std::chrono::milliseconds timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -285,12 +275,6 @@ awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds tim
         std::this_thread::sleep_for(500us);
     }
     return std::nullopt;
-}
-
-[[nodiscard]] bloom::document::Snapshot makeSnapshot(const std::uint64_t id, std::string name) {
-    bloom::document::Document document(
-        bloom::document::Project(bloom::document::ProjectId::fromRaw(id), std::move(name)));
-    return document.snapshot();
 }
 
 [[nodiscard]] GpuPresentationUpdate makeUpdate(const GpuResidentFrameLease& lease,
@@ -351,7 +335,17 @@ int runTests(int argc, char** argv) {
         std::cout << "SKIP: the Bloom Neutral v1 processor is unavailable\n";
         return options.require_device ? 1 : 0;
     }
-    auto builder = std::make_shared<CpuGpuSceneBuilder>();
+    const auto policy = bloom::ui::test::previewProcessingPhase();
+    const auto hostRefresh = bloom::ui::test::refreshPreviewProcessingPhaseWhileRunning(policy);
+    const bloom::runtime::GpuScenePreparationPhase phase{
+        .policy = policy,
+        .envelope = {.metadataBytes = 1024ULL * 1024,
+                     .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                     .requestedExecutorBytes = kBudget,
+                     .deviceWorkingBytes = 832ULL * 1024 * 1024}};
+    auto builder =
+        std::make_shared<CpuGpuSceneBuilder>(nullptr, bloom::runtime::GpuSceneMediaContext{},
+                                             bloom::runtime::GpuSceneOcioContext{}, phase);
     auto evaluator = std::make_shared<CpuCompositionEvaluator>();
     auto gateEntered = std::make_shared<std::atomic<bool>>(false);
     auto gateRelease = std::make_shared<std::atomic<bool>>(false);
@@ -360,7 +354,7 @@ int runTests(int argc, char** argv) {
     GpuPreviewDisplayService service(
         scheduler, residentStageFunction(plan, processor, builder, gateEntered, gateRelease),
         residentCpuStageFunction(plan, processor, evaluator), residentFallback(processor),
-        serviceOptions(options.loader_path));
+        serviceOptions(options.loader_path, policy));
 
     const bool terminal = waitUntil(
         [&] {
@@ -416,8 +410,10 @@ int runTests(int argc, char** argv) {
     surface.window->show();
     surface.width = 320U;
     surface.height = 240U;
-    expectations.expect(waitUntil(
+    expectations.expect(waitUntilEvents(
                             [&] {
+                                if (!surface.window->isExposed())
+                                    return false;
                                 surface.surface = QVulkanInstance::surfaceForWindow(surface.window);
                                 return surface.surface != VK_NULL_HANDLE;
                             },
@@ -459,6 +455,9 @@ int runTests(int argc, char** argv) {
     const bool firstPrepared =
         firstCarried != nullptr && firstCarried->has_value() &&
         (**firstCarried)->status() == bloom::runtime::PreviewPreparationStatus::Prepared;
+    if (!firstPrepared && firstResult)
+        for (const auto& diagnostic : firstResult->diagnostics())
+            std::cerr << diagnostic.code << ": " << diagnostic.summary << '\n';
     expectations.expect(firstPrepared, "the resident request produced a prepared frame");
     std::optional<GpuResidentFrameLease> presentedLease;
     if (firstCarried != nullptr && firstCarried->has_value()) {
@@ -586,6 +585,9 @@ int runTests(int argc, char** argv) {
         unsupportedResult->value().value()->frame()->provenance().provider !=
             bloom::runtime::PreviewDisplayProvider::GpuResident &&
         unsupportedResult->value().value()->frame()->displayBufferView().has_value();
+    if (!unsupportedCpu && unsupportedResult)
+        for (const auto& diagnostic : unsupportedResult->diagnostics())
+            std::cerr << diagnostic.code << ": " << diagnostic.summary << '\n';
     expectations.expect(unsupportedCpu,
                         "an unsupported GPU subset took the full CPU path with CPU pixels");
     expectations.expect(service.status().counters.cpuFallbacks > beforeUnsupported.cpuFallbacks,
@@ -644,6 +646,9 @@ int runTests(int argc, char** argv) {
         stalledResult->value().value()->frame()->provenance().provider !=
             bloom::runtime::PreviewDisplayProvider::GpuResident &&
         stalledResult->value().value()->frame()->displayBufferView().has_value();
+    if (!stalledFellBack && stalledResult)
+        for (const auto& diagnostic : stalledResult->diagnostics())
+            std::cerr << diagnostic.code << ": " << diagnostic.summary << '\n';
     expectations.expect(stalledFellBack,
                         "the stalled submission was released only via the CPU fallback");
     const auto afterStalled = service.status().counters;

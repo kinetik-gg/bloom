@@ -95,6 +95,9 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
       previewController_(previewController), playbackController_(playbackController),
       operationCache_(operationCache), mediaDiskCache_(mediaDiskCache),
       cachePurgeController_(cachePurgeController), accelerationStatus_(accelerationStatus) {
+    displayedViewerUpdateTimer_.setSingleShot(true);
+    connect(&displayedViewerUpdateTimer_, &QTimer::timeout, this,
+            &MainWindow::updateDisplayedViewer);
     setObjectName("bloomMainWindow");
     setWindowTitle("Bloom");
     resize(1600, 1000);
@@ -1032,16 +1035,8 @@ void MainWindow::updateWorkspaceActions() {
 }
 
 void MainWindow::scheduleDisplayedViewerUpdate() {
-    if (displayedViewerUpdateQueued_)
-        return;
-    displayedViewerUpdateQueued_ = true;
-    QMetaObject::invokeMethod(
-        this,
-        [this] {
-            displayedViewerUpdateQueued_ = false;
-            updateDisplayedViewer();
-        },
-        Qt::QueuedConnection);
+    if (!displayedViewerUpdateTimer_.isActive())
+        displayedViewerUpdateTimer_.start(0);
 }
 
 void MainWindow::updateDisplayedViewer() {

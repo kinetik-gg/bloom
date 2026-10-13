@@ -1,3 +1,31 @@
+[[nodiscard]] GpuPreviewDisplayServiceOptions
+serviceOptions(const std::filesystem::path& loader,
+               const std::shared_ptr<bloom::runtime::GpuProcessingPhasePolicy>& policy) {
+    GpuPreviewDisplayServiceOptions options;
+    options.enabled = true;
+    options.loaderPath = loader;
+    options.presentation = GpuPreviewDisplayServicePresentationMode::Wayland;
+    options.previewByteAllowance = kBudget;
+    options.processingPhasePolicy = policy;
+    options.presentationCoordinator.maxTargets = 3U;
+    options.presentationCoordinator.maxRetainedTargets = 64U;
+    options.presentationCoordinator.shutdownDrainPumps = 600U;
+    return options;
+}
+
+[[nodiscard]] bloom::document::Snapshot makeSnapshot(const std::uint64_t id, std::string name) {
+    bloom::document::Project project(bloom::document::ProjectId::fromRaw(id), std::move(name));
+    const auto seed = bloom::document::makeNewProject(
+        "Fixture", "Preview", RationalTime::fromInteger(1), format(1920, 1080));
+    const auto* composition = seed.project.findComposition(seed.initialCompositionId);
+    if (!composition || !project.addComposition(bloom::document::Composition(
+                            kCompositionId, "Preview", RationalTime::fromInteger(1),
+                            composition->graph(), format(1920, 1080))))
+        std::abort();
+    bloom::document::Document document(std::move(project));
+    return document.snapshot();
+}
+
 [[nodiscard]] std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>
 makePlan(const std::uint32_t w, const std::uint32_t h) {
     const auto compositionFormat = format(w, h);
@@ -129,7 +157,8 @@ makeIdentity(const bloom::runtime::CompiledCompositionPlan& plan, const std::uin
                 return R::succeeded(std::move(outcome));
             }
             auto stage = std::make_shared<const PreviewGpuSceneStage>(
-                identity, built.scene, processor, limit, std::vector<TaskDiagnostic>{});
+                identity, built.scene, processor, limit, std::vector<TaskDiagnostic>{},
+                std::move(built.phaseLease));
             auto outcome =
                 std::make_shared<const PreviewGpuSceneStageOutcome>(PreviewGpuSceneStageOutcome{
                     PreviewGpuSceneStageStatus::Prepared, std::move(stage), {}});
