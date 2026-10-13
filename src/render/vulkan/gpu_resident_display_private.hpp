@@ -63,6 +63,7 @@ struct GpuDisplayImageImpl final {
 };
 
 struct ResidentBuffer final {
+    NativeBufferStorageToken storageToken;
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
     VmaAllocationInfo info{};
@@ -74,6 +75,12 @@ struct ResidentBuffer final {
                                         std::uint64_t bytes, VkBufferUsageFlags usage,
                                         VmaAllocationCreateFlags flags, bool hostVisible,
                                         ResidentBuffer& out);
+// Transient resident-display jobs use allocation ownership. Cached OCIO buffers need a distinct
+// publication/lifetime adoption before they can retain these phase-bound tokens.
+[[nodiscard]] bool createResidentDisplayBuffer(vulkan_detail::DeviceAllocatorState& state,
+                                               std::uint64_t bytes, VkBufferUsageFlags usage,
+                                               VmaAllocationCreateFlags flags, bool hostVisible,
+                                               ResidentBuffer& out);
 void destroyResidentBuffer(vulkan_detail::DeviceAllocatorState& state,
                            ResidentBuffer& buffer) noexcept;
 

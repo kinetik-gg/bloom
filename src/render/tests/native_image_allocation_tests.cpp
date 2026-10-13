@@ -266,8 +266,33 @@ void downstreamRefusal(GpuDevice& device) {
     budget.setDeviceCapacity(1ULL << 30, true);
     auto created = GpuResidentDisplay::create(device);
     require(bool(created), "actual neutral display pipeline exists");
+    // Preserve this fixture's output-image refusal after processing buffers gained ownership.
+    // Probe real requirements without an active phase, then admit that exact transient prefix.
+    std::uint64_t workingBytes = 0;
+    struct BufferSpec {
+        std::uint64_t bytes;
+        VkBufferUsageFlags usage;
+        VmaAllocationCreateFlags flags;
+        bool mapped;
+    };
+    const std::array specs{
+        BufferSpec{64ULL * 64ULL * sizeof(Rgba32f),
+                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, false},
+        BufferSpec{64ULL * 64ULL * sizeof(Rgba8),
+                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 0, false},
+        BufferSpec{4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                   VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                   true}};
+    for (const auto& spec : specs) {
+        ResidentBuffer buffer;
+        require(createResidentDisplayBuffer(*state, spec.bytes, spec.usage, spec.flags, spec.mapped,
+                                            buffer),
+                "real downstream buffer requirement probe succeeds");
+        workingBytes += buffer.info.size;
+        destroyResidentBuffer(*state, buffer);
+    }
     for (bool externalHolder : {false, true}) {
-        auto admitted = phase(budget, 64ULL * 64ULL * sizeof(Rgba32f));
+        auto admitted = phase(budget, 64ULL * 64ULL * sizeof(Rgba32f) + workingBytes);
         require(device.retainProcessingPhase(admitted), "display refusal phase retained");
         auto impl = std::make_unique<GpuImageImpl>();
         impl->state = state;

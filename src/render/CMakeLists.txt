@@ -975,6 +975,7 @@ target_sources(
     bloom_render
     PRIVATE
         cpu_image_primitives.cpp
+        native_buffer_storage.cpp
         gpu_processing_phase_budget.cpp
         packed_rgba8_storage.cpp
         packed_host_retirement.cpp

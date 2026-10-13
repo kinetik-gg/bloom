@@ -72,8 +72,9 @@ struct GpuProcessingPhaseSnapshot final {
     std::uint64_t ownedNonlocalNativeHostBytes = 0;
     std::uint64_t totalDeviceClaimBytes = 0;
     std::size_t ownedNativeImages = 0;
-    // Covered transient buffer suballocations. Their nonlocal host subset replaces an existing
-    // host phase debit, unlike the additive nonlocal image subset above.
+    // Covered transient buffer suballocations. Output/upload nonlocal backing replaces planned
+    // host debit; processing nonlocal backing adds a fresh headroom claim. This subset overlaps
+    // the device constraint and is not additive physical memory.
     std::uint64_t ownedNativeBufferBytes = 0;
     std::uint64_t ownedNonlocalNativeBufferHostBytes = 0;
     std::size_t ownedNativeBuffers = 0;

@@ -1340,6 +1340,52 @@ follow the bounded qualification recorded in the
 staging buffer creators remain unowned by this slice. No whole-buffer/native, physical/UMA/OOM,
 performance or other-platform execution qualification is adopted here.
 
+### Rooted resident-display processing buffers (bounded increment)
+
+The 2026-10-13 continuation from issue #304 adopts the transient input, packed-output and status
+buffers of `GpuResidentDisplay`. Each embeds one move-only `NativeBufferStorageToken`; the same
+existing job owner retains it through submission, cancellation, failed-job cleanup and quarantine.
+Native destruction precedes token foldback. Taking a completed display image destroys the retired
+working buffers; keeping their pipeline alive does not pin the phase through these buffers.
+
+Processing tokens transfer existing native working debit. A nonlocal processing allocation also
+requires fresh additional host headroom, checked atomically before backing allocation. It cannot
+spend the protected output or source/scratch/upload host partitions. Its host charge contributes
+to `totalHostClaimBytes` and the overlapping `ownedNonlocalNativeBufferHostBytes` subset; it does
+not reduce `hostReservedBytes`. Downward reconciliation and backing destruction release only that
+additional host charge. Local/BAR backing consumes native debit without claiming physical UMA
+separation. Output and upload tokens keep their existing conversion rules.
+
+The native helper preserves AUTO memory-type ranking, compatible masks and original access/mapping
+preferences. Processing input/output buffers may remain unmapped; mapped status backing must be
+HOST_VISIBLE and have an actual mapped pointer. Actual VMA size/type/heap/allocator generation
+must reconcile before bind/use. Typed device-budget, host-budget and awaiting-headroom refusals
+retain exact phase/release metadata. A failed allocator, bind, reconciliation or map path destroys
+backing and returns its token without fabricating capacity retry provenance.
+
+Focused native checks exercise actual unmapped/mapped identity, one-byte-short refusal before a
+backing attempt, forced nonlocal host admission and staleness, allocation/reconcile/bind/map faults,
+partial production buffer-prefix refusal/cleanup with an external phase alias and exact own-release
+revision, CPU pixel parity and ten alternating completion/cancellation cycles. Each settled cycle returns
+covered claims and actual VMA allocation count/bytes to baseline at request capacity one. These
+are small resident-display iterations, not the sustained fill/purge, 60-second playback or RSS
+qualification required by issue #304. Neutral tests separately cover partition isolation, moves,
+unproven-phase lifetime, freshness and integer boundaries.
+
+The six required production preview/still/range/video/headless routes and native coverage gate pass
+on Linux. Private-compositor packed animation/drag and native capacity-recovery checks also pass.
+Independent focused regressions pass thirteen native checks and ten CPU-stub checks, with one
+additional explicit native-unavailable outcome. Neutral ASan/UBSan/LeakSanitizer checks are clean.
+These results do not establish the unresolved native-host LeakSanitizer allocation ownership.
+
+Cached OCIO resources use the existing separate buffer factory until their own publication and
+retirement adoption is implemented; attaching a transient token there would keep its whole origin
+phase alive across cache hits. OCIO packed/UBO/status/LUT staging/scratch, coverage/palette,
+composite/axis/map/affine/blend buffers, presentation storage and legacy/direct/oracle allocations
+remain outside this increment. No operation or render-route GPU coverage exemption is introduced.
+Committed VMA blocks, allocator/driver/RSS residuals, physical/UMA/OOM guarantees and macOS/Windows
+native qualification remain open.
+
 ### Rooted combined final-readback staging (bounded final-output slice)
 
 The final-output increment adopts the transient staging buffer used by

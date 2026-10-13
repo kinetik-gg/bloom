@@ -48,6 +48,12 @@ class NativeBufferStorageToken final {
     [[nodiscard]] static NativeBufferStorageGrant
     reserveUpload(const std::shared_ptr<GpuProcessingPhaseLease>&, std::uint64_t upperBytes,
                   NativeBufferStorageIdentity) noexcept;
+    // Processing buffers consume native working debit. Nonlocal backing needs fresh additional
+    // host headroom; it cannot borrow the output or source/upload partitions.
+    [[nodiscard]] static NativeBufferStorageGrant reserveProcessing(
+        const std::shared_ptr<GpuProcessingPhaseLease>&, std::uint64_t upperBytes,
+        NativeBufferStorageIdentity,
+        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
     [[nodiscard]] std::uint64_t bytes() const noexcept { return bytes_; }
     [[nodiscard]] NativeBufferStorageIdentity identity() const noexcept { return identity_; }
     // Actual allocator size/type/heap/generation must match before bind/map; only shrink is valid.
@@ -57,15 +63,17 @@ class NativeBufferStorageToken final {
   private:
     [[nodiscard]] static NativeBufferStorageGrant
     reserveInPartition(const std::shared_ptr<GpuProcessingPhaseLease>&, std::uint64_t,
-                       NativeBufferStorageIdentity, bool upload) noexcept;
+                       NativeBufferStorageIdentity, bool upload, bool processing = false,
+                       std::chrono::steady_clock::time_point now = {}) noexcept;
     NativeBufferStorageToken(std::shared_ptr<GpuProcessingPhaseLease>, std::uint64_t,
-                             NativeBufferStorageIdentity, bool upload) noexcept;
+                             NativeBufferStorageIdentity, bool upload, bool processing) noexcept;
     void reset() noexcept;
     std::shared_ptr<detail::GpuProcessingPhaseBudgetState> state_;
     std::shared_ptr<GpuProcessingPhaseLease> origin_;
     std::uint64_t bytes_ = 0;
     NativeBufferStorageIdentity identity_;
     bool upload_ = false;
+    bool processing_ = false;
 };
 
 struct NativeBufferStorageGrant final {

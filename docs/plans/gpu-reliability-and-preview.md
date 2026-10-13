@@ -1,8 +1,8 @@
 # GPU reliability, media preparation, and preview execution plan
 
-Status: shipping cut — bounded source reuse; remaining overhaul postponed
+Status: resumed — remaining overhaul tracked in issue #304
 
-Updated: 2026-10-10
+Updated: 2026-10-13
 
 ## Execution checkpoint
 
@@ -15,8 +15,10 @@ G6A process-aware reusable headroom/off-UI sampling and terminal mailbox ownersh
 within the bounds below. The first conservative G6B phase-reservation slice is accepted after
 independent review and integrated closure. Allocation-owned aggregate accounting remains separate.
 
-The current round packages the qualified work since `e1086c13`; implementation pauses after this
-shipping cut at the owner’s request. Each future slice requires source review, focused
+The 2026-10-10 round packaged the qualified work since `e1086c13` and paused after the shipping
+cut at the owner's request. Execution resumed on 2026-10-13 from
+[issue #304](https://github.com/kinetik-gg/bloom/issues/304), starting with hosted build blockers
+and transient resident-display buffer ownership. Each future slice requires source review, focused
 regressions, and the applicable native/product evidence before its successor is accepted. A passing
 unit test does not complete an experience gate. A bounded final GPU-packed transfer into QWidget
 is now adopted for the G3B layout repair, after service and Viewer integration review. This adopts
@@ -50,10 +52,23 @@ and evidence-driven G9 work remain separate. No VRAM promotion layer is implied.
 | G6B rooted display-transfer staging buffer | Bounded staging qualification gates pass | Existing phase native/planned-host debit, exact VMA suballocation identity, same-slot foreign/fence retirement and exact-generation exit; native/Viewer/six-route, 325 desktop and sixteen distinct fallback strict, Linux CPU-stub, final quality and artifact readbacks pass; other buffer creators are excluded |
 | G6B combined final-output storage | Bounded final-output qualification gates pass | Exact phase, paired staging debit, same-slot native retirement, capacity-one recovery and rooted process/encoded/header publication with actual worker free; focused/owning/routes, strict/Linux fallback, quality and source-aligned artifacts pass; upload is separate |
 | G6B rooted image-upload staging | Implemented; bounded focused and integration checks pass | Protected unchanged F+3L estimate and all-heap upload occupancy, actual mapped backing/foreign owner lifetime and cache/phase recovery; 28-source checkpoint and final affected gates pass; prepared-upload retention defaults are unchanged |
+| G6B resident-display processing buffers | Implemented; bounded native and production-route checks pass | Exact input/output/status VMA backing, pre-allocation device/nonlocal-host refusal, fault cleanup, partial-prefix own-release recovery, CPU pixels and ten completion/cancellation cycles at capacity one. Six required production routes, isolated packed animation/drag and phase recovery pass. Cached OCIO and other processing buffers remain separate. See the [owning contract](../architecture/gpu-backend.md#rooted-resident-display-processing-buffers-bounded-increment). |
 | G4C prerequisite | Accepted only as the bounded cold-progress prerequisite | One active/newest intent, useful older Stale publication and guarded pause/shutdown pass source review and short real playing pixels; remaining G4 scheduling is pending |
 | G7A / G9 bounded display work | Packed immutable borrowing, off-UI CPU channel derivation and finished-display host choice accepted | Explicit provenance and measured bytes; remaining CPU storage/process/channel work and broader cache policy remain pending |
 | G8 optional two-frame throughput | Investigation complete; implementation and benchmark pending | Source confirms per-service frame serialization; no multi-frame speedup or GPU-utilization result is established |
 | Remaining G4–G10 | Pending | Remaining scheduling, native public hooks, media reuse, aggregate memory, batching and sustained/platform qualification are not completed |
+
+The 2026-10-13 continuation also repairs the four hosted build failures observed on the shipping
+revision: the output-analysis test now constructs a fresh move-only input for each rejection case;
+Viewer-status updates use one owned single-shot timer, retaining queued coalescing without the Qt
+callable-allocation static-analysis finding. Local Clang builds/checks pass; no new hosted macOS or
+Windows qualification is claimed. Legacy presentation fixtures now seed the composition and shared
+processing root required by CPU fallback, carry the same root through native preparation, keep host
+delivery fresh off-UI during held retirement, and wait for Wayland configuration before presenting.
+GUI validation uses a private headless compositor, with the desktop display removed from its test
+environment. Historical setup/theme/fixture failures remain distinct from corrected owning reruns.
+The earlier native LeakSanitizer ownership question remains open; clean neutral storage sanitizers
+do not resolve it.
 
 Rooted packed-host follow-on (2026-10-10), accepted for bounded ownership/conservation and off-UI
 production allocation: the neutral storage/ledger

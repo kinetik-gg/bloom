@@ -6,7 +6,7 @@
 
 namespace bloom::render::vulkan_detail {
 
-enum class NativeBufferPurpose { Output, Upload };
+enum class NativeBufferPurpose { Output, Upload, Processing };
 
 enum class NativeBufferAllocationOutcome { Allocated, TransferBudgetRefused, PhaseRefused, Failed };
 
@@ -58,6 +58,12 @@ allocateCoveredBuffer(DeviceAllocatorState& state, const VkBufferCreateInfo& buf
     if (state.nativeBufferMemoryTypeMaskForTests != 0)
         remaining &= state.nativeBufferMemoryTypeMaskForTests;
     bool attempted = false;
+    const bool mapped = (original.flags & VMA_ALLOCATION_CREATE_MAPPED_BIT) != 0;
+    const bool hostVisible =
+        mapped ||
+        (original.flags & (VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                           VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT)) != 0 ||
+        (original.requiredFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
     while (remaining != 0) {
         VmaAllocationCreateInfo preferred = original;
         preferred.memoryTypeBits = remaining;
@@ -71,21 +77,25 @@ allocateCoveredBuffer(DeviceAllocatorState& state, const VkBufferCreateInfo& buf
             break;
         remaining &= ~bit;
         // UNKNOWN ignores HOST_ACCESS_RANDOM; enforce the actual visibility chosen by AUTO.
-        if ((memory->memoryTypes[selected].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ==
-            0)
+        if (hostVisible && (memory->memoryTypes[selected].propertyFlags &
+                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == 0)
             continue;
         const auto heap = memory->memoryTypes[selected].heapIndex;
         const NativeBufferStorageIdentity identity{
             state.presentationEpoch, selected, heap,
             (memory->memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0};
         auto grant =
-            purpose == NativeBufferPurpose::Upload
+            purpose == NativeBufferPurpose::Processing
+                ? NativeBufferStorageToken::reserveProcessing(
+                      state.processingPhase, requirements.memoryRequirements.size, identity)
+            : purpose == NativeBufferPurpose::Upload
                 ? NativeBufferStorageToken::reserveUpload(
                       state.processingPhase, requirements.memoryRequirements.size, identity)
                 : NativeBufferStorageToken::reserve(state.processingPhase,
                                                     requirements.memoryRequirements.size, identity);
         if (!grant.token) {
-            if (grant.status == GpuProcessingPhaseAdmission::BudgetRefused)
+            if (grant.status == GpuProcessingPhaseAdmission::BudgetRefused ||
+                grant.status == GpuProcessingPhaseAdmission::AwaitingCapacity)
                 state.bufferStorageRefusal = {grant.status, grant.domain,
                                               state.processingPhase->id(),
                                               grant.revisionAfterOwnRelease};
@@ -95,7 +105,8 @@ allocateCoveredBuffer(DeviceAllocatorState& state, const VkBufferCreateInfo& buf
         VmaAllocationCreateInfo pinned = preferred;
         pinned.usage = VMA_MEMORY_USAGE_UNKNOWN;
         pinned.memoryTypeBits = bit;
-        pinned.requiredFlags |= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+        if (hostVisible)
+            pinned.requiredFlags |= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
         if (dedicated.requiresDedicatedAllocation)
             pinned.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
         if (state.nativeBufferAllocationFault == NativeBufferAllocationFault::Allocation) {
@@ -121,7 +132,8 @@ allocateCoveredBuffer(DeviceAllocatorState& state, const VkBufferCreateInfo& buf
                              identity) ||
             fault == NativeBufferAllocationFault::Bind ||
             vmaBindBufferMemory(state.allocator, allocation, buffer) != VK_SUCCESS ||
-            fault == NativeBufferAllocationFault::Map || allocationInfo.pMappedData == nullptr) {
+            fault == NativeBufferAllocationFault::Map ||
+            (mapped && allocationInfo.pMappedData == nullptr)) {
             destroyUnbound();
             vmaFreeMemory(state.allocator, allocation);
             if (state.nativeBufferBackingsDestroyed != UINT64_MAX)
