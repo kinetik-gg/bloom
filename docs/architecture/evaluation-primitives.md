@@ -678,6 +678,15 @@ capacity and actual export reservations use a separate bounded allowance, so col
 does not disable frame preparation. Default construction and settings getters perform no OS reads;
 unactivated standalone ledgers retain the legacy host-only policy.
 
+Foreground admission also respects that existing physically bounded low-memory floor when deriving
+the host reserve. For known physical memory, the reserve cannot consume the usable allowance
+already defined by `MemoryBudgetLedger`: a 7 GiB host reserves 4 GiB, and an 8 GiB host reserves
+5 GiB. Above the low-memory floor the nominal reserve is unchanged. Admission subtracts this reserve
+from **measured available** memory and still applies every finite process ceiling, sample freshness
+and readiness requirement. The floor is not a guaranteed processing allocation: measured zero or
+availability below the reserve still refuses work, and unknown physical memory cannot manufacture
+a low-memory allowance. Reusable host credit remains zero.
+
 The application owns one `MemoryBudgetController`, with at most one `BlockingIo` sampling task,
 no sampling backlog and a five-second cadence. A worker captures host/process data; ordinary task
 completion delivers it independently of Jobs monitoring. The UI applies cache callbacks and updates

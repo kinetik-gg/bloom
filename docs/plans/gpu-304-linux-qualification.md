@@ -6,7 +6,8 @@ Updated: 2026-10-14
 
 This record owns the current Linux evidence for
 [issue #304](https://github.com/kinetik-gg/bloom/issues/304). The owner narrowed this execution to
-Linux. Native Windows/macOS execution and their hosted qualification remain explicitly unqualified.
+Linux. Native Windows/macOS GPU execution remains explicitly unqualified. Hosted build/CPU
+workflow results identify their own revision and do not qualify native hardware.
 The historical checkpoints in [the overhaul plan](gpu-reliability-and-preview.md) retain their
 original scope; this record does not retrospectively enlarge those results.
 
@@ -56,13 +57,13 @@ Scalar probe identity now holds a weak frame reference; the packed path releases
 request correlation frame after retiring the native target. These fixes remove a second hidden
 packed-picture owner found by repeated purge testing.
 
-The final source-aligned width-one run with native batching enabled passes all ten cycles and the
+The measured width-one run with native batching enabled passes all ten cycles and the
 60-second playback check. Median fill is 5,211.405 ms. Each purge returns the same exact host/device
 claims above and 2,073,616 bytes of VMA payload; retained VMA blocks are 201,326,592 bytes. Independent
 driver heap usage is 304,349,184 bytes, explicitly unattributed. Observed RSS ranges from 1,071,324
 to 1,170,748 KiB across the ten cycles; neither RSS nor driver usage is a rooted allocation total.
 
-Directed final-run observations are 68.2304 ms for scrub-to-widget-paint, 108.811 µs for selection
+Directed measured-run observations are 68.2304 ms for scrub-to-widget-paint, 108.811 µs for selection
 feedback, 24.0927 ms for held drag, 10.5983 ms for committed drag and 11.2621 ms for project
 replacement during fill. All identity/geometry checks pass. These are individual observations,
 not a latency distribution or a controlled before/after comparison with the earlier width study.
@@ -269,9 +270,25 @@ fixture. The explicit Vulkan-OFF fallback gate passes all sixteen tests, with ad
 source/bridge regressions and targeted repair reruns. Native mode against that stub reports NotRun
 and fails, including without an explicit requirement flag.
 
-Strict analysis covers 384 changed-source/header translation units: 380 pass the initial final
-sweep, and four test-only optional/type repairs pass exact reruns. Repository quality, formatting,
-architecture boundaries, workflow validation and independent ownership review pass.
+Strict analysis covers 385 changed-source/header translation units: 380 pass the initial final
+sweep, four test-only optional/type repairs pass exact reruns, and the portable worker regression
+adds one translation unit. The final policy and scripting repairs receive exact reruns of their
+existing translation units. Repository quality, formatting, architecture boundaries, workflow
+validation and independent ownership review pass.
+
+Final hosted-check repairs preserve the rendering policy. Ordinary macOS workers now close the
+unused source capability through a known-open child-only descriptor; a codec-free worker regression
+checks initially closed and unrelated open descriptors without changing the parent. Foreground
+host admission also respects the existing physical-bounded low-memory floor instead of applying an
+8 GiB reserve to smaller hosts. Measured availability, zero pressure samples, finite process
+ceilings and freshness still constrain admission; no GPU coverage or budget opt-out is introduced.
+
+The sustained timings above precede these final policy/diagnostic repairs. A directed test verifies
+that the ordinary 60 GiB host branch retains its exact prior allowance, and no Viewer, batching or
+allocation-lifetime code changes in the repair. Afterwards, all ten required-device native suites,
+all six production routes plus native acceptance, the required-device phase recovery fixture,
+sixteen CPU fallback tests and eleven focused worker/policy/scripting checks pass. The sustained
+timings are not represented as a new measurement after that repair.
 
 Hosted Linux Clang and Qt checks are required before integration; the commit-linked workflow
 results identify the qualified revision. Hosted CPU checks do not qualify native hardware. Native

@@ -15,6 +15,57 @@ namespace {
 
 using Plan = std::shared_ptr<const runtime::CompiledCompositionPlan>;
 
+[[nodiscard]] std::string
+analysisFailureDiagnostic(const host::OutputAnalysisAttemptFailureV1* failure) {
+    if (!failure)
+        return "The output analysis failed";
+    std::string diagnostic = "The output analysis failed during ";
+    switch (failure->stage()) {
+    case host::OutputAnalysisAttemptStageV1::Resolving:
+        diagnostic += "target preflight";
+        break;
+    case host::OutputAnalysisAttemptStageV1::ColorPreparing:
+        diagnostic += "color preparation";
+        break;
+    case host::OutputAnalysisAttemptStageV1::Evaluating:
+        diagnostic += "frame evaluation";
+        break;
+    case host::OutputAnalysisAttemptStageV1::Identifying:
+        diagnostic += "frame identity preparation";
+        break;
+    case host::OutputAnalysisAttemptStageV1::Analyzing:
+        diagnostic += "preservation analysis";
+        break;
+    }
+    if (failure->cancelled())
+        return diagnostic + ": cancelled";
+    if (const auto* code = failure->payloadAs<runtime::GpuProcessFrameDiagnosticCode>()) {
+        if (*code == runtime::GpuProcessFrameDiagnosticCode::AwaitingCapacity)
+            diagnostic += ": processing capacity is not ready";
+        else if (*code == runtime::GpuProcessFrameDiagnosticCode::BudgetRefused)
+            diagnostic += ": available processing capacity is insufficient";
+        return diagnostic + " (processing code " + std::to_string(static_cast<unsigned>(*code)) +
+               ")";
+    }
+    if (const auto* code = failure->payloadAs<runtime::EvaluationDiagnosticCode>())
+        return diagnostic + ": " + std::string(runtime::evaluationDiagnosticCodeId(*code));
+    const auto typedCode = [&diagnostic](const char* category, const auto code) {
+        return diagnostic + " (" + category + " error " +
+               std::to_string(static_cast<unsigned>(code)) + ")";
+    };
+    if (const auto* code = failure->payloadAs<platform::StagedArtifactError>())
+        return typedCode("destination", *code);
+    if (const auto* code = failure->payloadAs<output::ProcessFrameSemanticIdentityErrorCode>())
+        return typedCode("frame identity", *code);
+    if (const auto* code = failure->payloadAs<output::OutputAnalysisAnalyzerErrorCodeV1>())
+        return typedCode("preservation analysis", *code);
+    if (const auto* code = failure->payloadAs<output::OutputAnalysisAttemptErrorCodeV1>())
+        return typedCode("attempt", *code);
+    if (const auto* code = failure->payloadAs<runtime::TaskSubmissionStatus>())
+        return typedCode("task submission", *code);
+    return diagnostic;
+}
+
 template <typename Value>
 [[nodiscard]] std::optional<runtime::TaskResult<Value>>
 await(runtime::TaskHandle<Value>& handle, const std::function<bool()>& cancelled) {
@@ -116,7 +167,7 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
         return result;
     };
     if (!*outcome) {
-        return finish(failed("The output analysis failed"));
+        return finish(failed(analysisFailureDiagnostic(outcome->failure())));
     }
     const auto attempt = outcome->attempt();
     const auto digest =

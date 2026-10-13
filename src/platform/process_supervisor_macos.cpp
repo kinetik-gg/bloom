@@ -211,6 +211,10 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
     if (code == 0 && options.inputSnapshot)
         code = posix_spawn_file_actions_adddup2(&actions.value, options.inputSnapshot->descriptor(),
                                                 4);
+    // Darwin treats closing an already-closed fd in spawn actions as fatal EBADF. Replace any
+    // unrelated inherited fd4 with our own child-only descriptor, then close that known-open fd.
+    if (code == 0 && !options.inputSnapshot)
+        code = posix_spawn_file_actions_addopen(&actions.value, 4, "/dev/null", O_RDONLY, 0);
     if (code == 0 && !options.inputSnapshot)
         code = posix_spawn_file_actions_addclose(&actions.value, 4);
     if (code != 0)

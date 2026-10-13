@@ -113,3 +113,11 @@ target_sources(bloom_platform_process PUBLIC FILE_SET HEADERS BASE_DIRS include
                FILES include/bloom/platform/process_supervisor.hpp include/bloom/platform/file_snapshot.hpp)
 target_compile_features(bloom_platform_process PUBLIC cxx_std_20)
 bloom_enable_warnings(bloom_platform_process)
+
+if(BUILD_TESTING AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE))
+    add_executable(bloom_platform_process_descriptor_test tests/process_descriptor_tests.cpp)
+    target_link_libraries(bloom_platform_process_descriptor_test PRIVATE bloom_platform_process)
+    bloom_enable_warnings(bloom_platform_process_descriptor_test)
+    bloom_add_test(NAME bloom.platform.process_descriptors
+                   COMMAND bloom_platform_process_descriptor_test LABELS unit platform process)
+endif()

@@ -133,7 +133,8 @@ int main() {
         {}, renderProvider);
     static_cast<void>(renderProvider->shutdownAndWait(std::chrono::seconds(10)));
     if (!render.succeeded || render.publishedFrames != 1 || !std::filesystem::exists(outputPath)) {
-        std::cerr << "headless script render failed\n";
+        std::cerr << "headless script render failed: " << render.diagnostic
+                  << " report=" << render.preservationReport << '\n';
         return 11;
     }
     std::error_code removeError;
