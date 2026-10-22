@@ -88,7 +88,8 @@ struct WindowFixture {
         }
         assets = std::make_unique<AssetController>(
             session, projectHost, scheduler, bridge, nullptr, nullptr,
-            AudioProcessingAdmission{.standaloneByteAllowance = 16 * 1024 * 1024,
+            AudioProcessingAdmission{.policy = nullptr,
+                                     .standaloneByteAllowance = 16 * 1024 * 1024,
                                      .cacheByteCapacity = audioCacheCapacity});
         if (author)
             author(*this);
