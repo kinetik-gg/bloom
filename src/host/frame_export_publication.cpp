@@ -123,7 +123,7 @@ namespace {
 
 [[nodiscard]] std::filesystem::path
 uniqueScratchFilePath(const std::filesystem::path& directory,
-                      const std::string_view extension) noexcept {
+                      const std::string_view extension) {
     static std::atomic<std::uint64_t> counter{0};
     const auto suffix = counter.fetch_add(1, std::memory_order_relaxed);
     const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -220,10 +220,12 @@ cancelledResult(const FrameExportPublicationStageV1 /*lastStage*/) noexcept {
 
 } // namespace
 
-FrameExportPublicationResultV1 executeExportPublication(
+namespace {
+FrameExportPublicationResultV1 executeExportPublicationImpl(
     runtime::TaskContext& context, platform::StagedArtifactCoordinator& artifacts,
     FrameExportRequestV1 request, const std::filesystem::path& scratchDirectory,
-    output::OutputExportClockV1 clock, output::OutputExportProgressCallbackV1 progress) noexcept {
+    output::OutputExportClockV1 clock, output::OutputExportProgressCallbackV1 progress,
+    FrameExportPublicationStageV1& failureStage) {
     if (!clock) {
         clock = output::systemOutputExportClockV1();
     }
@@ -342,6 +344,7 @@ FrameExportPublicationResultV1 executeExportPublication(
     }
 
     // --- Staging.
+    failureStage = FrameExportPublicationStageV1::Staging;
     auto stageResult = artifacts.stage(std::move(platformTarget));
     if (!stageResult) {
         return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
@@ -352,6 +355,8 @@ FrameExportPublicationResultV1 executeExportPublication(
     if (context.isCancellationRequested()) {
         return cancelledResult(FrameExportPublicationStageV1::Staging);
     }
+    failureStage = isPng ? FrameExportPublicationStageV1::ColorPreparing
+                         : FrameExportPublicationStageV1::Writing;
 
     // --- (PNG only: ColorPreparing + PreparingOutput, node 2) then Writing + Verifying (design
     // decision 4 node 3's first half), through the preset's own bridge: F1's flat OpenEXR
@@ -449,6 +454,7 @@ FrameExportPublicationResultV1 executeExportPublication(
     // verified scratch bytes into the lease's own exclusive staged file, checking cancellation
     // and this stage's deadline/no-progress interval BETWEEN chunks -- the one segment of this
     // pipeline this code fully owns and can therefore genuinely preempt.
+    failureStage = FrameExportPublicationStageV1::ArtifactCopy;
     {
         std::ifstream scratchStream(scratch.path(), std::ios::binary);
         if (!scratchStream) {
@@ -556,6 +562,7 @@ FrameExportPublicationResultV1 executeExportPublication(
     // --- Guard + Publishing: identical composition to executeCopyPublication()'s own final
     // switch (see its declaration comment for the full unreachability argument for
     // InvalidClaim/TargetBusy/AlreadyEntered in a single-executor composition).
+    failureStage = FrameExportPublicationStageV1::Guard;
     auto& claim = FrameExportRequestAccessV1::claim(request);
     auto guardResult = claim.tryEnterPublication();
     const auto intentId = claim.intentId();
@@ -579,6 +586,26 @@ FrameExportPublicationResultV1 executeExportPublication(
     }
     return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
         FrameExportPublicationStageV1::Guard, guardResult.status()));
+}
+} // namespace
+
+FrameExportPublicationResultV1 executeExportPublication(
+    runtime::TaskContext& context, platform::StagedArtifactCoordinator& artifacts,
+    FrameExportRequestV1 request, const std::filesystem::path& scratchDirectory,
+    output::OutputExportClockV1 clock, output::OutputExportProgressCallbackV1 progress) noexcept {
+    auto failureStage = FrameExportPublicationStageV1::Preflight;
+    try {
+        return executeExportPublicationImpl(context, artifacts, std::move(request),
+                                            scratchDirectory, std::move(clock),
+                                            std::move(progress), failureStage);
+    } catch (const std::bad_alloc&) {
+        // Unwinding has already destroyed the staged lease, scratch guard and scratch claim.
+        return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
+            failureStage, FrameExportResourceExhaustedV1{}));
+    } catch (...) {
+        return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
+            failureStage, FrameExportUnexpectedFailureV1{}));
+    }
 }
 
 } // namespace bloom::host

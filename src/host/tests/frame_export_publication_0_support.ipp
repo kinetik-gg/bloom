@@ -258,7 +258,8 @@ struct ExportRun final {
 beginExportRun(runtime::TaskScheduler& scheduler, platform::StagedArtifactCoordinator& artifacts,
                std::unique_ptr<host::FrameExportRequestV1> request,
                const std::filesystem::path& scratchDir,
-               const output::OutputExportClockV1& clock = {}) {
+               const output::OutputExportClockV1& clock = {},
+               const output::OutputExportProgressCallbackV1& progress = {}) {
     auto shared = std::make_shared<std::optional<host::FrameExportPublicationResultV1>>();
     auto sharedRequest = std::shared_ptr<host::FrameExportRequestV1>(std::move(request));
     auto submission = scheduler.submit<void>(
@@ -266,9 +267,9 @@ beginExportRun(runtime::TaskScheduler& scheduler, platform::StagedArtifactCoordi
                              runtime::TaskOwner{.kind = runtime::TaskOwnerKind::Export,
                                                 .id = runtime::TaskOwnerId::fromRaw(2)},
                              runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
-        [&artifacts, sharedRequest, shared, scratchDir, clock](runtime::TaskContext& context) {
+        [&artifacts, sharedRequest, shared, scratchDir, clock, progress](runtime::TaskContext& context) {
             auto result = host::executeExportPublication(
-                context, artifacts, std::move(*sharedRequest), scratchDir, clock);
+                context, artifacts, std::move(*sharedRequest), scratchDir, clock, progress);
             shared->emplace(std::move(result));
             return runtime::TaskResult<void>::succeeded();
         });

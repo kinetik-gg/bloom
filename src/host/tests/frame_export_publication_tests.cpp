@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -36,6 +37,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <new>
 #include <optional>
 #include <source_location>
 #include <span>
@@ -99,6 +101,7 @@ int main(const int argc, char** argv) {
         testCancellationBeforeStagingLeavesTargetIntact(expectations);
         testDeadlineExpiryViaInjectedClock(expectations);
         testNoProgressExpiryViaInjectedClock(expectations);
+        testAllocationFailureAfterStagingIsTyped(expectations);
         testEndToEndPngExportPublished(expectations);
         testPngSemanticDigestStableAcrossTwoRuns(expectations);
         testBothPresetsExportFromTheSameFixture(expectations);

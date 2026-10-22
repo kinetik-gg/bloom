@@ -558,3 +558,52 @@ void testNoProgressExpiryViaInjectedClock(Expectations& expectations) {
         "the injected clock jump is diagnosed as a typed no-progress resource failure");
     expectations.expect(!std::filesystem::exists(target), "no-progress expiry publishes nothing");
 }
+
+void testAllocationFailureAfterStagingIsTyped(Expectations& expectations) {
+    ExportFixture fixture;
+    if (!fixture.setUp(expectations, "allocation failure: fixture is available"))
+        return;
+    const auto target = fixture.path() / "allocation-failure.exr";
+    auto attempt = buildApprovableAttempt(expectations, fixture.scheduler(), fixture.artifacts(),
+                                          fixture.ledger(), target);
+    if (!attempt)
+        return;
+    auto approval = host::approveFrameExportV1(fixture.coordinator(), attempt,
+                                               requireDigest(attempt, expectations));
+    expectations.expect(static_cast<bool>(approval), "allocation failure: approval succeeds");
+    if (!approval)
+        return;
+
+    // Use the existing injected-clock seam to throw exactly after the real writer, verifier and
+    // artifact hash have produced a staged scratch file. The next uncaught call is the publication
+    // owner's after-write check; it follows the same catch path as a failed artifact-copy buffer
+    // allocation, without a process-wide operator-new hook or a production test switch.
+    auto armed = std::make_shared<std::atomic_bool>(false);
+    output::OutputExportClockV1 clock = [armed]() {
+        if (armed->load(std::memory_order_relaxed))
+            throw std::bad_alloc();
+        return std::chrono::steady_clock::time_point{};
+    };
+    output::OutputExportProgressCallbackV1 progress = [armed](const auto& update) {
+        if (update.stage == output::OutputExportStageV1::Publishing && update.completed != 0)
+            armed->store(true, std::memory_order_relaxed);
+    };
+    auto run = beginExportRun(fixture.scheduler(), fixture.artifacts(),
+                              std::move(approval).takeRequest(), fixture.path(), clock, progress);
+    auto* runValue = require(run, expectations, "allocation failure: job is submitted");
+    if (!runValue)
+        return;
+    auto resultOpt = awaitExportRun(*runValue);
+    const auto* result = require(resultOpt, expectations,
+                                 "allocation failure: job reaches a typed terminal state");
+    if (!result)
+        return;
+    const auto* failure = result->failure();
+    expectations.expect(armed->load(std::memory_order_relaxed) && failure &&
+                            failure->stage() == host::FrameExportPublicationStageV1::Writing &&
+                            failure->payloadAs<host::FrameExportResourceExhaustedV1>(),
+                        "a post-staging bad_alloc becomes a writing-stage resource failure");
+    expectations.expect(!std::filesystem::exists(target) &&
+                            std::filesystem::is_empty(fixture.path()),
+                        "allocation failure unwinds the staged lease and scratch-file guard");
+}
