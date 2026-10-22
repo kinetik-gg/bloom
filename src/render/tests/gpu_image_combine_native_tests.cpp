@@ -142,8 +142,13 @@ void runImageCombineTests(Expectations& expectations, GpuDevice& device) {
         }
         const auto readback = readbackResidentImage(result, kBudget);
         expectations.expect(readback.hasValue(), label + ": oracle readback succeeds");
-        if (readback)
+        if (readback) {
             static_cast<void>(pixelsMatch(readback.pixels, expected, expectations, label));
+            if (mode.kind == GpuImageCombineKind::MultiplyAlpha &&
+                mode.factor == std::numeric_limits<float>::min())
+                expectations.expect(readback.pixels[7] == Rgba32f::transparent(),
+                                    label + ": rounded-zero alpha is exactly transparent black");
+        }
     }
 }
 } // namespace bloom::render::blend_proof
