@@ -448,7 +448,8 @@ int main(int argc, char** argv) {
         constexpr std::size_t kRegistryEntries = kCacheEntries + 16;
         constexpr std::size_t kFrameCount = 140;
         // Qualification can choose a larger extent; size this entry-cap case from one actual
-        // resident allocation so a byte cap does not preempt its 128-entry assertion.
+        // resident allocation. Give the byte limits registry-sized headroom so the cache's global
+        // byte eviction cannot preempt the 128-entry GPU sublimit assertion.
         std::uint64_t nativeFrameBytes = 0;
         std::size_t cacheFrameBytes = 0;
         {
@@ -477,13 +478,13 @@ int main(int argc, char** argv) {
             nativeFrameBytes > 0 && cacheFrameBytes >= nativeFrameBytes &&
             nativeFrameBytes <= std::numeric_limits<std::uint64_t>::max() /
                                     static_cast<std::uint64_t>(kRegistryEntries) &&
-            cacheFrameBytes <= std::numeric_limits<std::size_t>::max() / kCacheEntries;
+            cacheFrameBytes <= std::numeric_limits<std::size_t>::max() / kRegistryEntries;
         expectations.expect(safeCharges,
                             "actual resident charges can safely size the count-limit budgets");
         if (!safeCharges) {
             return 1;
         }
-        const std::size_t kCacheBytes = cacheFrameBytes * kCacheEntries;
+        const std::size_t kCacheBytes = cacheFrameBytes * kRegistryEntries;
 
         GpuResidentFrameLeaseBudgets registryBudgets;
         registryBudgets.maxBytes = nativeFrameBytes * static_cast<std::uint64_t>(kRegistryEntries);
