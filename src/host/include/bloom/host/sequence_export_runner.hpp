@@ -11,6 +11,13 @@
 namespace bloom::host {
 namespace detail {
 struct SequenceExportWorkV1;
+// The queue's checked byte envelope enters the same processing root as per-frame final output.
+// Exposed for zero-allocation admission regressions; production calls it on the export worker.
+[[nodiscard]] std::shared_ptr<output::ExportResourceReservationV1>
+reserveSequenceExportQueueV1(output::ExportResourceLedgerV1&, std::uint64_t bytes,
+                             std::optional<std::uint64_t> explicitJobLimit,
+                             std::shared_ptr<GpuExportProvider>, const runtime::CancellationToken&,
+                             output::ExportResourceAdmissionStatusV1&) noexcept;
 }
 class SequenceExportRunnerV1;
 
@@ -64,7 +71,9 @@ struct SequenceExportRequestV1 {
     core::Sha256Digest ocioConfigRevision = {};
     std::string ocioConfigUri = std::string(runtime::kBloomNeutralOcioConfigUri);
     std::string displayName = {}, viewName = {};
-    std::uint64_t queueByteLimit = 512ULL * 1024U * 1024U;
+    // Explicit caller cap on retained queue and decoded audio claims. Omission uses sampled root
+    // headroom; the provider protocol's separate frame/extent/index limits still apply.
+    std::optional<std::uint64_t> queueByteLimit = std::nullopt;
     // Shared final-render provider for every frame of the sequence. Null creates one runner-owned,
     // disabled CPU provider with a worker-sampled processing root. The runner copies the exact
     // provider into every per-frame attempt; an injected application provider retains its shared

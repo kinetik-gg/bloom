@@ -750,11 +750,13 @@ limit. Eviction drops only the cache's references. Active decode, viewer/playbac
 retirement retain ownership until they finish. Active disk writes retain their charge; callbacks
 never perform disk I/O or wait for a writer.
 
-`ExportResourceLedgerV1` registers as `LiveWork`. Its existing 4 GiB concurrent and 2 GiB per-job
-limits are separate export-contract restrictions, not derived from free RAM or cache preferences.
-Existing reservations remain charged through completion; an expansion beyond the current allowance
-returns `ServiceAllowanceExceeded`. These fixed export limits are an audit follow-up, not a physical
-hardware guarantee.
+`ExportResourceLedgerV1` admits production export claims through the shared processing host root.
+Retained attempts, independent publication scratch, sequence queues and decoded audio expansion
+remain charged through their owning work and retirement. The old 4 GiB concurrent and 2 GiB
+per-job allowances apply only to unrooted compatibility callers; an explicit caller job or service
+cap still binds a rooted claim. Sequence queue admission refreshes provider-owned capacity on its
+worker before reserving, and later audio expansion refreshes again. The media provider's separate
+frame geometry and index protocol limits are capability limits, not physical RAM estimates.
 
 If retaining an entry throws `std::bad_alloc`, `OperationCache::store()` and
 `PreviewFrameCache::insert()` unwind the partial insert, count the failure, and preserve the produced
@@ -775,7 +777,7 @@ status bar shows the operation/preview accounts; other counters support tests an
 | `MediaDiskCache` pending async writes | 64 entries **and** up to 256 MiB, scaled by ledger | `statistics().asyncQueueBytes`, `peakAsyncQueueBytes` |
 | `AssetController` proxy thumbnails | 512 entries **and** up to 8 MiB, scaled by ledger | `proxyCacheBytes()` |
 | `AssetController` decoded audio buffers | up to 2 GiB aggregate, scaled by ledger | `decodedAudioBytes()` |
-| `ExportResourceLedgerV1` export frame queue | up to 4 GiB concurrent, scaled by ledger; 2 GiB per job | `chargedBytes()`, `concurrentAllowance()` |
+| `ExportResourceLedgerV1` export frame queue | sampled processing-root headroom, plus any explicit caller cap; legacy unrooted 4 GiB service/2 GiB job defaults | `chargedBytes()`, root reservations |
 | Viewer display buffers | one retained frame plus at most one channel-remap copy, per open viewer | -- |
 
 The disk cache's pending-write queue is the pool that mattered. It was bounded at 64 entries and

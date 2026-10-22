@@ -176,21 +176,26 @@ ExportResourceReservationV1::processingPolicy() const noexcept {
     return rooted_ ? rooted_->policy : nullptr;
 }
 
-std::shared_ptr<ExportResourceReservationV1> ExportResourceReservationV1::reserveScratch(
-    const std::uint64_t additionalBytes, ExportResourceAdmissionStatusV1& status,
+ExportResourceAdmissionStatusV1 ExportResourceReservationV1::refreshCapacity(
     const runtime::CancellationToken& cancellation) const noexcept {
     if (capacityRefresh_) {
         try {
             capacityRefresh_(cancellation);
         } catch (...) {
-            status = ExportResourceAdmissionStatusV1::CapacityRefreshFailed;
-            return {};
+            return ExportResourceAdmissionStatusV1::CapacityRefreshFailed;
         }
     }
-    if (cancellation.isCancellationRequested()) {
-        status = ExportResourceAdmissionStatusV1::CapacityRefreshFailed;
+    return cancellation.isCancellationRequested()
+               ? ExportResourceAdmissionStatusV1::CapacityRefreshFailed
+               : ExportResourceAdmissionStatusV1::Reserved;
+}
+
+std::shared_ptr<ExportResourceReservationV1> ExportResourceReservationV1::reserveScratch(
+    const std::uint64_t additionalBytes, ExportResourceAdmissionStatusV1& status,
+    const runtime::CancellationToken& cancellation) const noexcept {
+    status = refreshCapacity(cancellation);
+    if (status != ExportResourceAdmissionStatusV1::Reserved)
         return {};
-    }
     const std::lock_guard reservationLock(mutex_);
     std::optional<std::uint64_t> remainingJobAllowance;
     if (jobAllowance_) {

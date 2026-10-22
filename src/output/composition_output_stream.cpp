@@ -135,8 +135,11 @@ struct CompositionOutputStreamV1::State {
                     require(total <= std::numeric_limits<std::uint64_t>::max() -
                                          queueReservation->chargedBytes(),
                             "Audio export reservation overflows", Error::Oversized);
+                    require(queueReservation->refreshCapacity(context.cancellation()) ==
+                                ExportResourceAdmissionStatusV1::Reserved,
+                            "Audio export capacity refresh refused", Error::Oversized);
                     require(queueReservation->expand(queueReservation->chargedBytes() + total) ==
-                                output::ExportResourceAdmissionStatusV1::Reserved,
+                                ExportResourceAdmissionStatusV1::Reserved,
                             "Audio decode ledger reservation refused", Error::Oversized);
                     auto buffer = checked(
                         media::video::decodeAudioClip(decoder, probe, decodedSampleCount, cancel));

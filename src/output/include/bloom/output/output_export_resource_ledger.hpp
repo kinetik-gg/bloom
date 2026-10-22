@@ -110,6 +110,10 @@ class ExportResourceReservationV1 final {
     [[nodiscard]] const ExportCapacityRefreshV1& capacityRefresh() const noexcept {
         return capacityRefresh_;
     }
+    // Refresh a retained provider-owned root on the worker before a later expansion. Injected
+    // application roots can omit the callback and must still present a fresh sampled root.
+    [[nodiscard]] ExportResourceAdmissionStatusV1
+    refreshCapacity(const runtime::CancellationToken& cancellation) const noexcept;
     // A publication owns its own incremental scratch claim. Concurrent publications of the same
     // attempt add their simultaneous claims; completed publications release them independently.
     // The parent's explicit per-job cap still applies to retained bytes plus this scratch.

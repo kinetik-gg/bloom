@@ -39,6 +39,40 @@ void check(bool value, const std::string& message) {
     if (!value)
         throw std::runtime_error(message);
 }
+void testRootedQueueAdmission() {
+    constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
+    auto root = std::make_shared<runtime::GpuProcessingPhasePolicy>();
+    runtime::MemoryBudgetState sample;
+    sample.machine.availableBytes = 8 * gib;
+    sample.process.source = runtime::ProcessMemorySource::MacOsHostOnly;
+    sample.process.status = runtime::ProcessMemoryStatus::Unsupported;
+    sample.process.sampledAt = runtime::GpuProcessingPhasePolicy::Clock::now();
+    sample.sampleSerial = 1;
+    sample.processSampleFresh = true;
+    root->applyHostSample(sample, 16 * gib, sample.process.sampledAt);
+    runtime::GpuProcessFrameEvaluatorOptions options;
+    options.enabled = false;
+    options.processingPhasePolicy = root;
+    auto provider = host::GpuExportProvider::create(std::move(options));
+    output::ExportResourceLedgerV1 ledger;
+    output::ExportResourceAdmissionStatusV1 status{};
+    const runtime::CancellationToken cancellation;
+    auto queue = host::detail::reserveSequenceExportQueueV1(ledger, 3 * gib, std::nullopt, provider,
+                                                            cancellation, status);
+    check(queue && status == output::ExportResourceAdmissionStatusV1::Reserved &&
+              ledger.chargedBytes() == 3 * gib &&
+              root->snapshot().reservations.totalHostClaimBytes == 3 * gib,
+          "rooted sequence queue admits a 3 GiB envelope without allocating frame pixels");
+    auto refused =
+        host::detail::reserveSequenceExportQueueV1(ledger, 128, 1, provider, cancellation, status);
+    check(!refused && status == output::ExportResourceAdmissionStatusV1::JobAllowanceExceeded,
+          "explicit tiny sequence queue cap still refuses before allocation");
+    queue.reset();
+    check(ledger.chargedBytes() == 0 && root->snapshot().reservations.totalHostClaimBytes == 0,
+          "sequence queue release retires the rooted claim");
+    check(provider->shutdownAndWait(std::chrono::seconds(1)),
+          "disabled injected sequence provider retires");
+}
 // Declared before attempt aliases so every return drops payloads before collecting their owner.
 class GpuProviderRetirement final {
   public:
@@ -788,6 +822,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error("usage: <fixture-directory> [--require-device] "
                                      "[--route-proof-dir <dir>]");
         }
+        testRootedQueueAdmission();
         const auto outcome = tests(directory, requireDevice, proofDirectory);
         if (outcome == GpuProofOutcome::Skipped) {
             return 77;

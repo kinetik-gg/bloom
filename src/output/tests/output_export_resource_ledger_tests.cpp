@@ -259,6 +259,11 @@ void publicationRefreshFailureRetainsNoScratch(Expectations& checks) {
     checks.expect(scratch && refreshes == 1 && ledger.chargedBytes() == 120,
                   "publication refresh runs before its independent scratch admission");
     scratch.reset();
+    const auto beforeExpansion = attempt->refreshCapacity(cancellation);
+    checks.expect(beforeExpansion == output::ExportResourceAdmissionStatusV1::Reserved &&
+                      refreshes == 2 &&
+                      attempt->expand(130) == output::ExportResourceAdmissionStatusV1::Reserved,
+                  "retained worker refresh also precedes a queue-style expansion");
     attempt.reset();
 
     auto failing = ledger.reserve(100, status, std::nullopt, root, 0,

@@ -34,6 +34,38 @@ template <typename T> T required(std::optional<T> value, const char* message) {
 }
 } // namespace
 
+std::shared_ptr<output::ExportResourceReservationV1> detail::reserveSequenceExportQueueV1(
+    output::ExportResourceLedgerV1& ledger, const std::uint64_t bytes,
+    const std::optional<std::uint64_t> explicitJobLimit,
+    std::shared_ptr<GpuExportProvider> provider, const runtime::CancellationToken& cancellation,
+    output::ExportResourceAdmissionStatusV1& status) noexcept {
+    if (!provider) {
+        status = output::ExportResourceAdmissionStatusV1::CapacityRefreshFailed;
+        return {};
+    }
+    try {
+        provider->refreshProcessingCapacity(cancellation);
+        if (cancellation.isCancellationRequested()) {
+            status = output::ExportResourceAdmissionStatusV1::CapacityRefreshFailed;
+            return {};
+        }
+        auto policy = provider->processingPhasePolicy();
+        if (!policy) {
+            status = output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded;
+            return {};
+        }
+        output::ExportCapacityRefreshV1 refresh =
+            [provider = std::move(provider)](const runtime::CancellationToken& token) {
+                provider->refreshProcessingCapacity(token);
+            };
+        return ledger.reserve(bytes, status, explicitJobLimit, std::move(policy), 0,
+                              std::move(refresh));
+    } catch (...) {
+        status = output::ExportResourceAdmissionStatusV1::CapacityRefreshFailed;
+        return {};
+    }
+}
+
 struct detail::SequenceExportWorkV1 {
     SequenceExportRequestV1 request;
     // UI controllers can retire while an admitted task still runs. Its ledger facade must remain
@@ -202,10 +234,12 @@ struct detail::SequenceExportWorkV1 {
         // Prepared frame, outbound protocol buffer and transport copy; one slot by construction.
         const auto bytes = static_cast<std::uint64_t>(settings().width) * settings().height * 24U +
                            std::uint64_t{8} * kEncodeChunkBytes;
-        require(bytes <= request.queueByteLimit, "Frame queue byte budget exceeded",
-                Error::Oversized);
+        require(!request.queueByteLimit || bytes <= *request.queueByteLimit,
+                "Frame queue byte budget exceeded", Error::Oversized);
         output::ExportResourceAdmissionStatusV1 status{};
-        queueReservation = ledger.reserve(bytes, status);
+        queueReservation = detail::reserveSequenceExportQueueV1(
+            ledger, bytes, request.queueByteLimit, request.gpuProvider, context.cancellation(),
+            status);
         require(queueReservation != nullptr, "Frame queue ledger reservation refused",
                 Error::Oversized);
     }
