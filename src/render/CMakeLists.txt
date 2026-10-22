@@ -216,9 +216,9 @@ set(BLOOM_SOLID_SPV_SHA256
 set(BLOOM_CHECKER_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/checker.comp")
 set(BLOOM_CHECKER_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/checker.manifest")
 set(BLOOM_CHECKER_COMP_SHA256
-    "0bfdf86e26c604bd4cb70ea478d6285e0cd3561e01beb3467974a97e4e5ae200")
+    "63cf2daaa9b3210a8dc2663d7802efefe8143fcf29f4ee640aeb4e6dec6863ac")
 set(BLOOM_CHECKER_SPV_SHA256
-    "94ba2a1a4355d9d1625e09f27257fb4e68df574a26409b8ae8351d16711f14b9")
+    "fbd77d34d3203413940d33041b63032fd8d6dc610ef1b877239bb590b72d2330")
 file(SHA256 "${BLOOM_CHECKER_COMP}" bloom_checker_comp_sha256)
 if(NOT bloom_checker_comp_sha256 STREQUAL BLOOM_CHECKER_COMP_SHA256)
     message(FATAL_ERROR "CheckerV1 source digest changed without artifact regeneration")

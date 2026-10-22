@@ -37,5 +37,6 @@ void main() {
     }
     const float wa = float(countA) * (1.0 / 16.0);
     const float wb = float(countB) * (1.0 / 16.0);
-    imageStore(bloom_checker_output, ivec2(xy), p.colorA * wa + p.colorB * wb);
+    const vec4 result = p.colorA * wa + p.colorB * wb;
+    imageStore(bloom_checker_output, ivec2(xy), result.a == 0.0 ? vec4(0.0) : result);
 }

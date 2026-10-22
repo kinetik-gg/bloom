@@ -4,6 +4,7 @@
 #include <OpenColorIO/OpenColorIO.h>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/render/image_coverage.hpp>
 
 #include <algorithm>
@@ -11,6 +12,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -377,6 +379,31 @@ void testCanvasEffects() {
                                                  runtime::OperationIndex::fromRaw(0), {},
                                                  scaleX, scaleY);
     };
+    runtime::TaskScheduler scheduler;
+    const runtime::TaskOwner owner{runtime::TaskOwnerKind::PanelRequest,
+                                    runtime::TaskOwnerId::fromRaw(9090)};
+    std::promise<runtime::CancellationToken> promised;
+    auto future = promised.get_future();
+    const auto task = scheduler.submit<void>(
+        runtime::TaskRequest("Canvas cancellation", owner),
+        [&](runtime::TaskContext& context) {
+            static_cast<void>(scheduler.cancelOwner(owner));
+            promised.set_value(context.cancellation());
+            return runtime::TaskResult<void>::cancelled();
+        });
+    expect(task.accepted(), "canvas cancellation task is admitted");
+    if (task.accepted()) {
+        const auto token = future.get();
+        for (const auto kind : {runtime::CanvasImageEffect::Crop, runtime::CanvasImageEffect::Pad}) {
+            runtime::detail::PreparedImageEffect effect;
+            effect.canvas = runtime::detail::CanvasMargins{kind, {1, 0, 0, 0}};
+            const auto cancelled = runtime::detail::applyImageEffect(
+                effect, *source.value(), nullptr, 0, token,
+                runtime::OperationIndex::fromRaw(0), {});
+            expect(cancelled.cancelled && !cancelled.diagnostic && !cancelled.image,
+                   "cancelled canvas work stops before output allocation or budget refusal");
+        }
+    }
     const auto cropped = run(runtime::CanvasImageEffect::Crop, {1, 1, 1, 0});
     expect(cropped.image && cropped.image->descriptor()->dataWindow() ==
                                 window(-2, 3, 2, 2),
@@ -409,6 +436,12 @@ void testCanvasEffects() {
     expect(proxy.image && proxy.image->descriptor()->dataWindow() ==
                               window(-2, 3, 3, 2),
            "proxy crop rounds authored margins once on each axis");
+    for (const auto kind : {runtime::CanvasImageEffect::Crop, runtime::CanvasImageEffect::Pad}) {
+        const runtime::detail::CanvasMargins invalid{kind, {16777217.0, 0, 0, 0}};
+        expect(!runtime::detail::canvasOutputWindow(*data.value(), invalid, 1.0, 1.0) &&
+                   !runtime::detail::canvasOutputWindow(*data.value(), invalid, 0.5, 0.5),
+               "authored canvas margin domain is independent of proxy resolution");
+    }
     const auto empty = run(runtime::CanvasImageEffect::Crop, {4, 0, 0, 0});
     expect(!empty.image && empty.diagnostic,
            "crop that removes its entire data window refuses with a diagnostic");
@@ -419,6 +452,33 @@ void testCanvasEffects() {
         runtime::OperationIndex::fromRaw(0), {});
     expect(!refused.image && refused.diagnostic,
            "pad obeys the output pixel storage budget");
+}
+
+void testCanvasAnimation() {
+    using namespace runtime;
+    using namespace document;
+    for (const auto kind : {CanvasImageEffect::Crop, CanvasImageEffect::Pad}) {
+        CanvasImageKernel kernel{kind, {}};
+        for (std::size_t side = 0; side < kernel.margins.size(); ++side)
+            kernel.margins[side] = {ParameterId::fromRaw(90 + side), 0.0};
+        kernel.margins[0].source = ScalarCurveIndex::fromRaw(0);
+        auto definition = planWith({kernel})->copyDefinition();
+        definition.duration = core::RationalTime::fromInteger(2);
+        definition.scalarCurves.push_back(
+            CompiledScalarCurve{AnimationCurveId::fromRaw(90),
+                                {{KeyframeId::fromRaw(90), core::RationalTime::fromInteger(0), 0.0},
+                                 {KeyframeId::fromRaw(91), core::RationalTime::fromInteger(1), 1.0}}});
+        const auto plan = std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+        CpuCompositionEvaluator evaluator;
+        auto request = requestFor(*plan);
+        const auto first = evaluator.evaluate(plan, request, {});
+        request.time = core::RationalTime::fromInteger(1);
+        const auto next = evaluator.evaluate(plan, request, {});
+        expect(first.frame() && next.frame(), "animated canvas margins pass evaluator preflight");
+        if (kind == CanvasImageEffect::Crop && first.frame() && next.frame())
+            expect(!samePixels(first, next),
+                   "animated crop margins change the cached composition pixels");
+    }
 }
 
 void testBlurEvaluation() {
@@ -838,6 +898,7 @@ int main(const int argc, char** argv) {
         testCst();
         testExposureAndOffset();
         testCanvasEffects();
+        testCanvasAnimation();
         testImageCombineWindows();
         testDiscreteImages();
         testUnaryImageEffectInputArity();

@@ -25,7 +25,7 @@ namespace bloom::runtime::detail {
 inline constexpr std::string_view kGpuSolidSpirvSha256 =
     "2fae4aef67267e98a53034448639bfb00a69568ec3be1d8ed1a1bc60b31a0318";
 inline constexpr std::string_view kGpuCheckerSpirvSha256 =
-    "94ba2a1a4355d9d1625e09f27257fb4e68df574a26409b8ae8351d16711f14b9";
+    "fbd77d34d3203413940d33041b63032fd8d6dc610ef1b877239bb590b72d2330";
 inline constexpr std::string_view kGpuGradientSpirvSha256 =
     "f5999e4e717f50c6b75ca6871dab0f77f0f51ae0909a8544694de5f74e87fc4f";
 inline constexpr std::string_view kGpuTranslationOpacitySpirvSha256 =

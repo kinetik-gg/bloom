@@ -271,6 +271,10 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                                   progress);
     ImageEffectResult result;
     if (effect.canvas) {
+        if (cancellation.isCancellationRequested()) {
+            result.cancelled = true;
+            return result;
+        }
         const auto source = input.descriptor()->dataWindow();
         const auto window = canvasOutputWindow(source, *effect.canvas, horizontalScale,
                                                verticalScale);

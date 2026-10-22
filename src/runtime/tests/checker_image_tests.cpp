@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 int main() {
     using bloom::runtime::detail::CheckerGeometry;
@@ -42,6 +43,15 @@ int main() {
         expect(pixel && std::abs(pixel.value()->red() - 2.0F) < 1e-6F &&
                    pixel.value()->alpha() == 1.0F,
                "checker averaging must preserve signed HDR and premultiplied alpha");
+    }
+    const auto tinyAlpha = bloom::render::Rgba32f::fromPremultiplied(
+        1.0F, 0.0F, 0.0F, std::numeric_limits<float>::denorm_min());
+    expect(static_cast<bool>(tinyAlpha), "subnormal coverage is a valid process pixel");
+    if (tinyAlpha) {
+        const auto pixel = checkerPixel(*tinyAlpha.value(), bloom::render::Rgba32f::transparent(),
+                                        halfPixel);
+        expect(pixel && *pixel.value() == bloom::render::Rgba32f::transparent(),
+               "coverage underflow canonicalizes the checker pixel to transparent black");
     }
     return failures == 0 ? 0 : 1;
 }

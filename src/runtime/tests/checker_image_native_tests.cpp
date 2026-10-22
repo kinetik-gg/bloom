@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <string_view>
 
 namespace {
@@ -94,7 +95,11 @@ int main(int argc, char** argv) {
                                 {-2.0, 0.5, 4.0, 0.5}, {3.0, -1.0, 0.25, 0.75});
     const bool proxy = checkCase(*created.solid, {13, 9, 3, 2, 13, 9, 7, 5},
                                  {-2.0, 0.5, 4.0, 0.5}, {3.0, -1.0, 0.25, 0.75});
-    if (!full || !proxy)
+    const auto tinyAlpha = static_cast<double>(std::numeric_limits<float>::denorm_min());
+    const bool underflow = checkCase(*created.solid, {4, 4, 1, 1, 4, 4, 2, 2},
+                                     {1.0 / tinyAlpha, 0.0, 0.0, tinyAlpha},
+                                     {0.0, 0.0, 0.0, 0.0});
+    if (!full || !proxy || !underflow)
         std::cerr << "Checker native pixels differ from the CPU reference\n";
-    return full && proxy ? 0 : 1;
+    return full && proxy && underflow ? 0 : 1;
 }

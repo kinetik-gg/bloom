@@ -35,8 +35,8 @@ canvasOutputWindow(const render::ImageWindow source, const CanvasMargins& margin
     for (std::size_t i = 0; i < pixels.size(); ++i) {
         const double amount = margins.sides[i];
         const double scaled = amount * (i == 0 || i == 2 ? horizontalScale : verticalScale);
-        if (!std::isfinite(amount) || amount < 0.0 || !std::isfinite(scaled) ||
-            scaled > 16777216.0)
+        if (!std::isfinite(amount) || amount < 0.0 || amount > 16777216.0 ||
+            !std::isfinite(scaled) || scaled > 16777216.0)
             return std::nullopt;
         pixels[i] = static_cast<std::int64_t>(std::round(scaled));
     }

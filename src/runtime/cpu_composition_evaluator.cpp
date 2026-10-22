@@ -1065,6 +1065,15 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                         static_cast<void>(registerScalar(blur->radius, "radius",
                                                          ScalarDomain::BlurRadius,
                                                          operationSubject));
+                    if (const auto* canvas = std::get_if<CanvasImageKernel>(&effect.kernel)) {
+                        constexpr std::array<std::string_view, 4> fields{
+                            "left", "top", "right", "bottom"};
+                        for (std::size_t side = 0; side < canvas->margins.size(); ++side) {
+                            if (!registerScalar(canvas->margins[side], fields[side],
+                                                ScalarDomain::Unbounded, operationSubject))
+                                break;
+                        }
+                    }
                 },
                 [](const CompiledImageSource&) {},
                 [](const CompiledVideoSource&) {},
@@ -2416,12 +2425,15 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             const auto outcome = runRowBandPass(
                                 rowBands, cancellation, data.extent().height(), data.originY(),
                                 [&image, geometry, a = *a.value(), b = *b.value(),
-                                 &operationSubject](const std::int64_t y) -> RowFailure {
+                                 &operationSubject, &cancellation](const std::int64_t y) -> RowFailure {
                                     auto row = image.row(y);
                                     if (!row)
                                         return imageDiagnostic(*row.error(), operationSubject,
                                                                "Checker row could not be addressed");
                                     for (std::size_t column = 0; column < row.value()->size(); ++column) {
+                                        if ((column & 4095U) == 0 &&
+                                            cancellation.isCancellationRequested())
+                                            return std::nullopt;
                                         const auto x = static_cast<std::uint32_t>(
                                             image.descriptor()->dataWindow().originX() +
                                             static_cast<std::int64_t>(column));
@@ -2435,7 +2447,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     }
                                     return std::nullopt;
                                 });
-                            if (outcome.cancelled) {
+                            if (outcome.cancelled || cancellation.isCancellationRequested()) {
                                 operationCancelled = true;
                                 return;
                             }
