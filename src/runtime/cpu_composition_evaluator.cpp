@@ -249,6 +249,7 @@ enum class ScalarDomain : std::uint8_t {
     TextSize,
     Dimension,
     Positive,
+    BlurRadius,
 };
 
 [[nodiscard]] bool withinScalarDomain(const ScalarDomain domain, const double value) noexcept {
@@ -263,6 +264,8 @@ enum class ScalarDomain : std::uint8_t {
         return value >= 1.0;
     case ScalarDomain::TextSize:
         return value > 0.0 && value <= document::kMaximumTextSizePixels;
+    case ScalarDomain::BlurRadius:
+        return value >= 0.0 && value <= document::kMaximumBlurRadiusPixels;
     }
     return false;
 }
@@ -279,6 +282,8 @@ enum class ScalarDomain : std::uint8_t {
         return "Dimension must be at least one pixel";
     case ScalarDomain::TextSize:
         return "Text size is outside its domain";
+    case ScalarDomain::BlurRadius:
+        return "Blur radius is outside its domain";
     }
     return "Scalar parameter is outside its domain";
 }
@@ -1055,7 +1060,12 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                                       registerScalar(source.timeMapping.scale, "timeScale",
                                                      ScalarDomain::Unbounded, operationSubject));
                 },
-                [](const CompiledImageEffect&) {},
+                [&](const CompiledImageEffect& effect) {
+                    if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel))
+                        static_cast<void>(registerScalar(blur->radius, "radius",
+                                                         ScalarDomain::BlurRadius,
+                                                         operationSubject));
+                },
                 [](const CompiledImageSource&) {},
                 [](const CompiledVideoSource&) {},
                 [](const CompiledMerge&) {},

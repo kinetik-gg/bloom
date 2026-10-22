@@ -470,8 +470,9 @@ void testBlurEvaluation() {
         auto start = requestFor(*animated);
         auto end = start;
         end.time = *core::RationalTime::create(1, 1);
-        expect(!samePixels(evaluator.evaluate(animated, start, {}),
-                           evaluator.evaluate(animated, end, {})),
+        const auto startResult = evaluator.evaluate(animated, start, {});
+        const auto endResult = evaluator.evaluate(animated, end, {});
+        expect(startResult.frame() && endResult.frame() && !samePixels(startResult, endResult),
                "animated radius cannot reuse an earlier frame");
         const auto changed = planWith({blur(1, runtime::BlurEdgeMode::Clamp)});
         const auto changedResult = evaluator.evaluate(changed, requestFor(*changed), {});
@@ -825,6 +826,10 @@ void testPointwiseFailureAndTimeDependence() {
 
 int main(const int argc, char** argv) {
     try {
+        if (argc == 2 && std::string_view(argv[1]) == "--blur-only") {
+            testBlurEvaluation();
+            return failures == 0 ? 0 : 1;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--discrete-only") {
             testDiscreteImages();
             testUnaryImageEffectInputArity();
