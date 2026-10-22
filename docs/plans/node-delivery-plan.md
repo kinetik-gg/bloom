@@ -2,7 +2,7 @@
 
 Status: source-audited inventory and bounded implementation plan; planned nodes are not completed
 
-Updated: 2026-10-22
+Updated: 2026-10-23
 
 Owner: [issue #331](https://github.com/kinetik-gg/bloom/issues/331).
 
@@ -38,133 +38,122 @@ and missing shape parameter animation should be bounded follow-up slices rather 
 
 ### 1. [#332: Pointwise image effects: Exposure, Offset, Multiply, Invert](https://github.com/kinetik-gg/bloom/issues/332)
 
-undefined
+Extend the existing ImageEffectKernel and production preparation. Define scene-linear working color, alpha association and negative/HDR behavior; share CPU/GPU math. Do not introduce a separate render engine.
 
 Independent foundation; schedule after existing correctness fixes.
 
 ### 2. [#333: Image generators: Linear Gradient, Radial Gradient, Checker](https://github.com/kinetik-gg/bloom/issues/333)
 
-undefined
+Add one coordinate-aware generator primitive with explicit interpolation space, alpha, extents, pixel aspect, animated endpoints and proxy/full agreement. Four-Point Gradient remains a later addition.
 
 Depends on #332.
 
-Bou
 
 ### 3. [#334: Image Mix, Set Alpha and Multiply Alpha](https://github.com/kinetik-gg/bloom/issues/334)
 
-undefined
+Implement explicit image/mask alignment, channel-to-coverage extraction, factor policy and output windows. Flat RGBA masking first; do not require arbitrary AOV infrastructure.
 
 Depends on #332.
 
-Bou
 
 ### 4. [#335: Canvas operations: Crop, Pad, Flip and Rotate 90](https://github.com/kinetik-gg/bloom/issues/335)
 
-undefined
+Reuse display/data-window and exact discrete-mapping helpers; test offset origins, negative windows, pixel aspect and avoid accidental filtering.
 
 Independent foundation; schedule after existing correctness fixes.
 
 ### 5. [#336: Resize, Fit and standalone Transform 2D](https://github.com/kinetik-gg/bloom/issues/336)
 
-undefined
+Reuse Layer affine/resampling kernels with explicit extent/filter controls. Test degenerate transforms, nonuniform scale, ROI and preview/final agreement.
 
 Depends on #335.
 
-Bou
 
 ### 6. [#337: Gaussian Blur, Box Blur and Matte Blur](https://github.com/kinetik-gg/bloom/issues/337)
 
-undefined
+One separable neighborhood primitive, halo/ROI planning, explicit edges and alpha/coverage behavior. This is the dependency for shadows/glow, not three separate engines.
 
 Depends on #334.
 
-Bou
 
 ### 7. [#338: Luma Key, Matte Erode and Matte Dilate](https://github.com/kinetik-gg/bloom/issues/338)
 
-undefined
+Reuse explicit color/channel coverage and morphology. Test HDR/partial alpha, inverted keys, image boundaries, radius changes and cancellation.
 
 Depends on #334, #337.
 
-Bou
 
 ### 8. [#339: Drop Shadow, Glow and Light Wrap recipes](https://github.com/kinetik-gg/bloom/issues/339)
 
-undefined
+Compose existing matte/threshold/filter/offset/composite primitives. Separate Light Wrap until foreground reconstruction semantics are ready; do not clone blur code.
 
 Depends on #337, #338.
 
-Bou
 
 ### 9. [#340: Levels, Curves and image Hue/Saturation](https://github.com/kinetik-gg/bloom/issues/340)
 
-undefined
+Build on pointwise effects and usable typed curve/ramp editing. Explicit color model and HDR/alpha behavior. Prerequisite: data reader block picker/create/edit workflow and color audit corrections.
 
 Depends on #332.
 
-Bou
 
 ### 10. [#341: Scalar Sine, Cosine and Power; separate deterministic motion utilities](https://github.com/kinetik-gg/bloom/issues/341)
 
-undefined
+First implement exactly Sine/Cosine/Power using checked primitives. Follow-up bounded sub-slice Oscillator/Wiggle/Loop Value uses versioned noise and arbitrary-time evaluation. No general expression engine.
 
 Independent foundation; schedule after existing correctness fixes.
 
 ### 11. [#342: Reusable Group Input, Group Output and Node Group](https://github.com/kinetik-gg/bloom/issues/342)
 
-undefined
+Typed exposed ports, nested dependency identity, parameter ownership, commands, persistence and cycle checks. Existing organizational frames remain presentation-only.
 
 Independent foundation; schedule after existing correctness fixes.
 
 ### 12. [#343: Static SVG Vector Asset import and Vector Source](https://github.com/kinetik-gg/bloom/issues/343)
 
-undefined
+Adopt a bounded static artwork profile and qualified Qt-free reference library; preserve source/dependencies. Produce through native geometry/coverage/composite paths where qualified; CPU-rasterize/upload is not GPU pixel implementation. Editable conversion follows later.
 
 Independent foundation; schedule after existing correctness fixes.
 
 ### 13. [#344: Path processing: Transform Path, Trim Path and Offset Path](https://github.com/kinetik-gg/bloom/issues/344)
 
-undefined
+Introduce minimum typed path-flow boundary, stable subpath identity and robust length/join/offset diagnostics. Dash/Repeater/Boolean Paths are a separate follow-up chunk.
 
 Depends on #343.
 
-Bou
 
 ### 14. [#345: Shaped Text Layout, Text Animator and Text On Path](https://github.com/kinetik-gg/bloom/issues/345)
 
-undefined
+Portable shaping/layout with stable glyph identity and selector semantics. Reuse current Text Source controls; Text To Shape follows path/layout maturity.
 
 Depends on #344.
 
-Bou
 
 ### 15. [#346: Image Time Offset, Frame Hold and Time Remap](https://github.com/kinetik-gg/bloom/issues/346)
 
-undefined
+Generic image-input time mapping reusing exact rational/source mapping; temporal dependency identity and seek behavior. Echo/Trails/transform Motion Blur remain a separate follow-up chunk.
 
 Independent foundation; schedule after existing correctness fixes.
 
 ### 16. [#347: Audio Amplitude, Audio Waveform and Audio Spectrum](https://github.com/kinetik-gg/bloom/issues/347)
 
-undefined
+Prepared cancellable analysis, exact time and source revision caches. Reuse media services after #329 audio repair; no general DAW graph.
 
 Independent foundation; schedule after existing correctness fixes.
 
 ### 17. [#348: Corner Pin, ST Map and Displace](https://github.com/kinetik-gg/bloom/issues/348)
 
-undefined
+Shared inverse-mapping/gather primitive, explicit coordinates, filtering, border/ROI and invalid-map behavior. Keep absolute UV and relative displacement distinct.
 
 Depends on #336.
 
-Bou
 
 ### 18. [#349: Histogram, Image Statistics and Compare](https://github.com/kinetik-gg/bloom/issues/349)
 
-undefined
+Worker reductions and existing Viewer/readout services. Add standalone nodes only where durable connected output is useful; inspection alone must not duplicate project render truth.
 
 Depends on #332.
 
-Bou
 
 ## Workflow milestones
 
