@@ -269,6 +269,29 @@ void testDiscreteImages() {
     }
 }
 
+void testUnaryImageEffectInputArity() {
+    using namespace runtime;
+    for (const ImageEffectKernel& kernel :
+         {ImageEffectKernel{DiscreteImageKernel{true, false, 0}},
+          ImageEffectKernel{DiscreteImageKernel{false, false, 1}},
+          ImageEffectKernel{ResizeFitKernel{4, 2}}}) {
+        for (const auto secondary : {std::size_t{0}, std::numeric_limits<std::size_t>::max()}) {
+            auto definition = planWith({kernel})->copyDefinition();
+            std::get<CompiledImageEffect>(definition.operations[1]).secondaryInput =
+                OperationIndex::fromRaw(secondary);
+            const auto plan =
+                std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+            CpuCompositionEvaluator evaluator;
+            const auto result = evaluator.evaluate(plan, requestFor(*plan), {});
+            expect(!result.frame() &&
+                       std::ranges::any_of(result.diagnostics(), [](const auto& diagnostic) {
+                           return diagnostic.code == EvaluationDiagnosticCode::InvalidPlan;
+                       }),
+                   "Flip, Rotate90 and Resize reject unexpected secondary inputs before evaluation");
+        }
+    }
+}
+
 void testExposureAndOffset() {
     runtime::CpuCompositionEvaluator evaluator;
     const auto baseline = planWith({});
@@ -804,6 +827,7 @@ int main(const int argc, char** argv) {
     try {
         if (argc == 2 && std::string_view(argv[1]) == "--discrete-only") {
             testDiscreteImages();
+            testUnaryImageEffectInputArity();
             return failures == 0 ? 0 : 1;
         }
         testCst();
@@ -811,6 +835,7 @@ int main(const int argc, char** argv) {
         testCanvasEffects();
         testImageCombineWindows();
         testDiscreteImages();
+        testUnaryImageEffectInputArity();
         testBlurEvaluation();
         testLookBypass();
         testFileTransform();

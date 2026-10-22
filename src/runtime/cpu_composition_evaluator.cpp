@@ -381,6 +381,9 @@ enum class ScalarDomain : std::uint8_t {
                        hasValidScalarCurveReference(mapping.scale, plan, index, failure);
             },
             [index, &plan, &failure](const CompiledImageEffect& effect) {
+                const bool validInputArity =
+                    effect.secondaryInput.has_value() ==
+                    std::holds_alternative<ImageCombineKernel>(effect.kernel);
                 bool validKernel = true;
                 if (const auto* combine = std::get_if<ImageCombineKernel>(&effect.kernel)) {
                     validKernel = effect.secondaryInput.has_value() &&
@@ -395,8 +398,6 @@ enum class ScalarDomain : std::uint8_t {
                                     combine->factor.has_value() &&
                                     hasValidScalarCurveReference(*combine->factor, plan, index,
                                                                  failure)));
-                } else if (effect.secondaryInput) {
-                    validKernel = false;
                 }
                 if (const auto* discrete = std::get_if<DiscreteImageKernel>(&effect.kernel))
                     validKernel = discrete->quarterTurns <= 3;
@@ -428,7 +429,7 @@ enum class ScalarDomain : std::uint8_t {
                                   file->processSpaceId.size() <= 256 &&
                                   (!file->asset || (file->asset->kind == document::AssetKind::Lut &&
                                                     file->asset->validate().ok()));
-                if (effect.input.value() < index && validKernel)
+                if (effect.input.value() < index && validInputArity && validKernel)
                     return true;
                 failure = diagnostic(
                     EvaluationDiagnosticCode::InvalidPlan,
