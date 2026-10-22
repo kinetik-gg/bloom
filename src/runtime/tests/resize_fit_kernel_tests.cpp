@@ -123,6 +123,17 @@ void testKernel() {
                proxy->descriptor.pixelAspect() == *core::PixelAspectRatio::create(7, 5),
            "asymmetric proxies round extents and retain the exact physical output aspect");
 
+    const auto exactProxy = runtime::detail::resolveResizeFitGeometry(
+        {25, 25}, *input.descriptor(), 7.0 / 25.0, 7.0 / 25.0);
+    const auto fractionalProxy = runtime::detail::resolveResizeFitGeometry(
+        {26, 26}, *input.descriptor(), 7.0 / 25.0, 7.0 / 25.0);
+    expect(exactProxy && exactProxy->descriptor.dataWindow().extent().width() == 7 &&
+               exactProxy->descriptor.dataWindow().extent().height() == 7,
+           "integer proxy extents do not gain a pixel from floating-point roundoff");
+    expect(fractionalProxy && fractionalProxy->descriptor.dataWindow().extent().width() == 8 &&
+               fractionalProxy->descriptor.dataWindow().extent().height() == 8,
+           "genuinely fractional proxy extents still round upward");
+
     const auto offsetData = render::ImageWindow::create(-1, 0, 6, 2);
     const auto sparseDescriptor = render::Rgba32fImageDescriptor::create(
         *offsetData.value(), input.descriptor()->displayWindow(), core::PixelAspectRatio::square());

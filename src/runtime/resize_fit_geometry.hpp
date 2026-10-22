@@ -32,8 +32,14 @@ resolveResizeFitGeometry(const ResizeFitKernel& kernel,
     if (!validResizeFitKernel(kernel) || !std::isfinite(proxyX) || !std::isfinite(proxyY) ||
         proxyX <= 0 || proxyY <= 0)
         return std::nullopt;
-    const double width = std::max(1.0, std::ceil(static_cast<double>(kernel.width) * proxyX));
-    const double height = std::max(1.0, std::ceil(static_cast<double>(kernel.height) * proxyY));
+    // Production proxy scales are ratios of uint32 extents. With authored extents <= 32768,
+    // a genuinely fractional product is more than one ULP from an integer. Remove the one-ULP
+    // round-up possible when a division followed by multiplication should produce an integer.
+    const auto scaledExtent = [](const std::int64_t extent, const double scale) {
+        return std::max(1.0, std::ceil(std::nextafter(static_cast<double>(extent) * scale, 0.0)));
+    };
+    const double width = scaledExtent(kernel.width, proxyX);
+    const double height = scaledExtent(kernel.height, proxyY);
     if (width > std::numeric_limits<std::uint32_t>::max() ||
         height > std::numeric_limits<std::uint32_t>::max())
         return std::nullopt;
