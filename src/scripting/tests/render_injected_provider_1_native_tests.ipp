@@ -293,6 +293,8 @@ GpuProofOutcome testNativeHeadlessRenderProvenanceAndParity(Expectations& expect
     }
     expectations.expect(!provider->retirementComplete() && provider->evaluator() != nullptr,
                         "native render: the repeated injected provider stays live");
+    expectations.expect(cpuProvider->shutdownAndWait(std::chrono::seconds(10)),
+                        "native render: the CPU reference provider retires with completion proof");
     expectations.expect(provider->shutdownAndWait(std::chrono::seconds(10)),
                         "native render: the provider retires with completion proof");
     if (expectations.failures() == 0 && identityHex.size() == 2) {
@@ -360,6 +362,8 @@ GpuProofOutcome testNativeSequenceRangeProvenanceAndParity(Expectations& expecta
     const auto* composition = snapshot.project().findComposition(compositionId);
     expectations.expect(composition != nullptr, "native sequence range: the composition exists");
     if (composition == nullptr) {
+        (void)cpuProvider->shutdownAndWait(std::chrono::seconds(10));
+        (void)provider->shutdownAndWait(std::chrono::seconds(10));
         return GpuProofOutcome::Ran;
     }
     const auto planResult =
@@ -446,6 +450,9 @@ GpuProofOutcome testNativeSequenceRangeProvenanceAndParity(Expectations& expecta
             evidence.push_back(comparePngEvidence(gpuImage, cpuImage, identity));
         }
     }
+    expectations.expect(cpuProvider->shutdownAndWait(std::chrono::seconds(10)),
+                        "native sequence range: the CPU reference provider retires with "
+                        "completion proof");
     expectations.expect(provider->shutdownAndWait(std::chrono::seconds(10)),
                         "native sequence range: the provider retires with completion proof");
     if (expectations.failures() == 0 && identityHex.size() == 3) {
