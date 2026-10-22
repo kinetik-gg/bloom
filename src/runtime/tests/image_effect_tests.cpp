@@ -182,6 +182,23 @@ void testDiscreteImages() {
     }
     const auto frozen = std::move(*builder.value()).freeze();
     const auto& image = *frozen.value();
+    for (const std::uint8_t turn : {std::uint8_t{1}, std::uint8_t{3}}) {
+        const DiscreteImageKernel kernel{false, false, turn};
+        const auto proxy = runtime::detail::applyDiscreteImageEffect(
+            kernel, image, 4096, {}, OperationIndex::fromRaw(1), {}, 0.5, 1.0);
+        const auto fullWindow = ImageWindow::create(-22, 17, 6, 2);
+        const auto fullOutput = runtime::detail::discreteOutputWindow(kernel, *fullWindow.value());
+        expect(proxy.image && fullOutput &&
+                   proxy.image->descriptor()->dataWindow().extent().width() * 2 ==
+                       fullOutput.value()->extent().width() &&
+                   proxy.image->descriptor()->dataWindow().extent().height() ==
+                       fullOutput.value()->extent().height() &&
+                   proxy.image->descriptor()->dataWindow().originX() * 2 ==
+                       fullOutput.value()->originX() &&
+                   proxy.image->descriptor()->dataWindow().originY() ==
+                       fullOutput.value()->originY(),
+               "unequal-axis quarter-turn proxy preserves full-reference authored bounds");
+    }
     // Independent expected source indices: clockwise quarter turns of [0 1 2; 3 4 5].
     const std::array<std::array<std::size_t, 6>, 4> expected{
         {{{0, 1, 2, 3, 4, 5}}, {{3, 0, 4, 1, 5, 2}}, {{5, 4, 3, 2, 1, 0}}, {{2, 5, 1, 4, 0, 3}}}};

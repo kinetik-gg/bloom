@@ -1019,8 +1019,11 @@ controls. Rotate 90 has one static signed integer `quarterTurns` control (defaul
 modulo four; positive turns are clockwise. Generic AddNode/parameter commands own edits and undo;
 the versioned definitions and parameter records use ordinary project persistence.
 
-These nodes permute the stored pixel lattice without colour conversion, unpremultiplication,
-filtering, alpha arithmetic or HDR clipping. Flip reflects within the input data rectangle.
+At Full resolution and equal-axis proxies these nodes permute the stored pixel lattice without
+colour conversion, unpremultiplication, filtering, alpha arithmetic or HDR clipping. Odd quarter
+turns at unequal-axis proxy scales instead conjugate the rotation by those scales and use the
+shared premultiplied bilinear affine sampler on CPU and GPU, preserving Full-reference authored
+bounds and physical aspect. Flip reflects within the input data rectangle.
 Rotation exchanges data width/height on odd turns and retains the data rectangle's top-left
 origin on every turn, including negative and off-canvas origins. The display canvas and pixel
 aspect ratio are retained: an image operation does not resize the composition. Full overscan is

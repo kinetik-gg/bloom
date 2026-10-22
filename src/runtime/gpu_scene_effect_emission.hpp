@@ -223,7 +223,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
             inputWindow->maxYExclusive() > exactOriginLimit)
             return fail(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
                         "Discrete image origin exceeds exact GPU affine coordinates");
-        const auto window = discreteOutputWindow(*discrete, *inputWindow);
+        const auto window = discreteOutputWindow(*discrete, *inputWindow, ctx.hScale, ctx.vScale);
         if (!window)
             return fail(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
                         "Discrete image output window overflows");
@@ -243,7 +243,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                 return error;
             result.consumedLeaf = chain->source;
         }
-        const auto matrix = discreteAffineMatrix(*discrete, *inputWindow);
+        const auto matrix = discreteAffineMatrix(*discrete, *inputWindow, ctx.hScale, ctx.vScale);
         result.key =
             makeGpuSceneAffineSemanticKey(inputKey, *inputWindow, matrix, 1.0F, *window.value(),
                                           ctx.fullPixelAspect, std::string{kGpuAffineSpirvSha256});

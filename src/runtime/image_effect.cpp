@@ -271,7 +271,7 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                                    const double horizontalScale, const double verticalScale) {
     if (effect.discrete)
         return applyDiscreteImageEffect(*effect.discrete, input, pixelBudget, cancellation,
-                                        operation, progress);
+                                        operation, progress, horizontalScale, verticalScale);
     if (effect.blur)
         return applySeparableBlur(*effect.blur, input, pixelBudget, cancellation, operation,
                                   progress);
