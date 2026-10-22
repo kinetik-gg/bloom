@@ -39,6 +39,7 @@ class AssetsEditor final : public QWidget, public EditorChromeProvider {
     void createFolder();
     void beginRename(QTreeWidgetItem* item);
     void editTags(document::AssetId id);
+    void editInputColor(document::AssetId id);
     void removeSelected();
     void refreshDisclosure(QTreeWidgetItem* item);
     void buildFooter();

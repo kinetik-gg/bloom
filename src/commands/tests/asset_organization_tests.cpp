@@ -189,6 +189,47 @@ void testOrganization(TestContext& test) {
                     document.snapshot().revision() == beforeCollision.revision(),
                 "promotion name collision refuses atomically");
 }
+void testAssetInputColor(TestContext& test) {
+    auto initial =
+        document::makeNewProject("Input colour", "Main", core::RationalTime::fromInteger(1));
+    document::AssetRecord asset;
+    asset.id = AssetId::fromRaw(1);
+    asset.kind = document::AssetKind::Image;
+    asset.locator = {"file", "project-relative", "media/test.png", "file:///media/test.png"};
+    asset.width = 4;
+    asset.height = 3;
+    requireFixture(initial.project.addAsset(asset), "input colour asset fixture");
+    Document document(std::move(initial.project));
+    CommandStack stack(document);
+    const auto original = document.snapshot();
+    test.expect(execute<SetAssetInputColor>(document, stack, asset.id,
+                                            document::AssetColorSpace::Auto, std::string{"ACEScg"})
+                    .changed(),
+                "asset-level config input choice is an undoable command");
+    const auto selected = document.snapshot().project().findAsset(asset.id)->interpretation;
+    test.expect(selected.inputColorSpaceId == "ACEScg" &&
+                    selected.colorSpace == document::AssetColorSpace::Auto,
+                "explicit asset id clears the legacy interpretation");
+    test.expect(stack.undo().changed() &&
+                    document.snapshot().project().findAsset(asset.id)->interpretation ==
+                        original.project().findAsset(asset.id)->interpretation,
+                "undo restores asset input interpretation");
+    test.expect(stack.redo().changed() &&
+                    document.snapshot().project().findAsset(asset.id)->interpretation == selected,
+                "redo restores exact config input id");
+    test.expect(execute<SetAssetInputColor>(document, stack, asset.id,
+                                            document::AssetColorSpace::Raw, std::string{})
+                        .changed() &&
+                    document.snapshot()
+                        .project()
+                        .findAsset(asset.id)
+                        ->interpretation.inputColorSpaceId.empty(),
+                "Raw choice replaces config input id rather than leaving a hidden override");
+    test.expect(execute<SetAssetInputColor>(document, stack, asset.id,
+                                            document::AssetColorSpace::Raw, std::string{"ACEScg"})
+                        .status == CommandStatus::Rejected,
+                "contradictory legacy and config choices are rejected");
+}
 void testRelinkAndSaturatedOrder(TestContext& test) {
     auto initial = document::makeNewProject("Assets", "Main", core::RationalTime::fromInteger(24));
     document::AssetRecord existing;
@@ -242,6 +283,7 @@ int main() {
     try {
         bloom::commands::test::testLutImport(test);
         bloom::commands::test::testOrganization(test);
+        bloom::commands::test::testAssetInputColor(test);
         bloom::commands::test::testRelinkAndSaturatedOrder(test);
     } catch (const std::exception& error) {
         test.fail(error.what());

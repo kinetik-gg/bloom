@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QStringList>
 #include <QTimer>
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/media/audio/audio.hpp>
@@ -41,6 +42,9 @@ class AssetController final : public QObject {
     [[nodiscard]] QImage nodeThumbnail(document::NodeId id) const;
     [[nodiscard]] QString inputColorSpaceDisplay(document::AssetId id) const;
     [[nodiscard]] QString inputColorSpaceWarning(document::AssetId id) const;
+    void requestInputColorSpaces();
+    [[nodiscard]] const std::vector<color::OcioColorSpaceInfo>* inputColorSpaces() const noexcept;
+    [[nodiscard]] QString inputColorCatalogDiagnostic() const;
     [[nodiscard]] std::shared_ptr<const media::audio::WaveformSummary>
     waveform(document::AssetId id) const;
     [[nodiscard]] std::shared_ptr<const media::audio::AudioBuffer>
@@ -90,6 +94,12 @@ class AssetController final : public QObject {
         std::size_t audioBytes = 0;
         bool timeDependentNodes = false;
     };
+    struct InputColorCatalog {
+        document::ColorSettings settings;
+        std::string workingColorSpaceId;
+        std::vector<color::OcioColorSpaceInfo> spaces;
+        QString diagnostic;
+    };
     void prepare(const QStringList& paths, document::AssetId relinkId = {});
     void refresh();
     void refreshNodeThumbnails();
@@ -102,6 +112,11 @@ class AssetController final : public QObject {
     media::cache::MediaDiskCache* mediaDiskCache_ = nullptr;
     runtime::TaskHandle<OperationHandle> import_;
     runtime::TaskHandle<std::shared_ptr<Thumbnails>> preview_;
+    runtime::TaskHandle<std::shared_ptr<InputColorCatalog>> inputColorCatalogTask_;
+    std::shared_ptr<InputColorCatalog> inputColorCatalog_;
+    std::optional<document::ColorSettings> inputColorCatalogRequestedSettings_;
+    std::string inputColorCatalogRequestedWorking_;
+    bool inputColorCatalogPending_ = false;
     std::optional<document::Snapshot> base_;
     Previews previews_;
     std::map<document::NodeId, Preview> nodePreviews_;

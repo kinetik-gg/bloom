@@ -1,6 +1,8 @@
 #include <bloom/runtime/input_color_context.hpp>
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/document/asset.hpp>
+#include <bloom/media/cache/media_disk_cache_decode.hpp>
 #include <bloom/media/video/colour.hpp>
 
 #include <iostream>
@@ -178,11 +180,41 @@ void testVideoRules(Expectations& expectations) {
     expectations.expect(!missing, "a missing explicit id fails closed before decoding");
 }
 
+void testSourcePrecedenceAndCache(Expectations& expectations) {
+    bloom::document::AssetInterpretation asset;
+    asset.colorSpace = bloom::document::AssetColorSpace::Raw;
+    asset.inputColorSpaceId = "ACEScg";
+    const auto inherited = bloom::document::effectiveAssetInputColor(asset, 0, {});
+    const auto sourceLegacy = bloom::document::effectiveAssetInputColor(asset, 1, {});
+    const auto sourceConfig = bloom::document::effectiveAssetInputColor(asset, 1, "ACES2065-1");
+    expectations.expect(inherited.colorSpace == bloom::document::AssetColorSpace::Auto &&
+                            inherited.inputColorSpaceId == "ACEScg" &&
+                            sourceLegacy.colorSpace == bloom::document::AssetColorSpace::Srgb &&
+                            sourceLegacy.inputColorSpaceId.empty() &&
+                            sourceConfig.colorSpace == bloom::document::AssetColorSpace::Auto &&
+                            sourceConfig.inputColorSpaceId == "ACES2065-1",
+                        "source config > source legacy > asset config; hidden ids never win");
+    bloom::media::cache::ImageCacheKeyInputs inputs;
+    inputs.workingColorSpaceId = "ACEScg";
+    inputs.inputColorSpaceId = inherited.inputColorSpaceId;
+    const auto inheritedKey = bloom::media::cache::buildImageCacheKey(inputs, "test-decoder");
+    inputs.colorSpace = bloom::media::ImageColorSpace::Srgb;
+    inputs.inputColorSpaceId = sourceLegacy.inputColorSpaceId;
+    const auto sourceKey = bloom::media::cache::buildImageCacheKey(inputs, "test-decoder");
+    inputs.colorSpace = bloom::media::ImageColorSpace::Auto;
+    inputs.inputColorSpaceId = sourceConfig.inputColorSpaceId;
+    const auto explicitKey = bloom::media::cache::buildImageCacheKey(inputs, "test-decoder");
+    expectations.expect(inheritedKey != sourceKey && sourceKey != explicitKey &&
+                            inheritedKey != explicitKey,
+                        "asset/source interpretation changes invalidate decoded-image cache");
+}
+
 } // namespace
 
 int main() {
     Expectations expectations;
     testImageRules(expectations);
     testVideoRules(expectations);
+    testSourcePrecedenceAndCache(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

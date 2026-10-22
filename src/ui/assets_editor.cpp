@@ -201,6 +201,15 @@ void AssetsEditor::showContextMenu(const QPoint position) {
         auto* tags = menu->addAction(tr("Edit Tags…"));
         tags->setObjectName(QStringLiteral("assetsEditTagsAction"));
         connect(tags, &QAction::triggered, this, [this, assetId] { editTags(assetId); });
+        if (const auto* asset = session_.snapshot().project().findAsset(assetId);
+            asset && (asset->kind == document::AssetKind::Image ||
+                      asset->kind == document::AssetKind::Sequence ||
+                      asset->kind == document::AssetKind::Video)) {
+            auto* inputColor = menu->addAction(tr("Input Colour…"));
+            inputColor->setObjectName(QStringLiteral("assetsInputColorAction"));
+            connect(inputColor, &QAction::triggered, this,
+                    [this, assetId] { editInputColor(assetId); });
+        }
         auto* relink = menu->addAction(tr("Relink…"));
         relink->setObjectName(QStringLiteral("assetsRelinkAction"));
         auto* remove = menu->addAction(tr("Remove"));

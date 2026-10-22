@@ -94,6 +94,26 @@ inputColorConfig(const CompositionSession& session) {
     return {};
 }
 
+[[nodiscard]] std::int64_t sourceLegacyInputColorSpace(const CompositionSession& session,
+                                                       const document::NodeRecord* node) {
+    const auto* composition = session.composition();
+    if (!node || !composition)
+        return 0;
+    for (const auto& binding : node->parameters) {
+        if (binding.role != "colorSpace")
+            continue;
+        const auto* parameter = composition->parameters().find(binding.parameterId);
+        if (!parameter)
+            return 0;
+        const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source);
+        if (!constant)
+            return 0;
+        const auto* value = std::get_if<std::int64_t>(&constant->value);
+        return value ? *value : 0;
+    }
+    return 0;
+}
+
 [[nodiscard]] QString fontReference(const platform::FontFace& face) {
     const auto digest = face.contentDigest.toLowercaseHex();
     return QString::fromStdString(face.family) + QLatin1Char('|') +
@@ -543,6 +563,25 @@ void PropertiesRegistryRow::refresh() {
                           static_cast<QWidget*>(integer_), static_cast<QWidget*>(slider_)})
         if (control)
             control->setEnabled(editable);
+    if (selector_ && node &&
+        (definition_.schemaKey == "bloom.image.color-space" ||
+         definition_.schemaKey == "bloom.video.color-space")) {
+        const auto explicitInput = std::ranges::find_if(node->parameters, [](const auto& binding) {
+            return binding.role == "inputColorSpaceId";
+        });
+        const auto configured = explicitInput == node->parameters.end()
+                                    ? std::optional<QString>{}
+                                    : session_.constantStringValue(explicitInput->parameterId);
+        if (configured.has_value() && !configured->isEmpty()) {
+            selector_->setEnabled(false);
+            selector_->setToolTip(tr("Input colour space (%1) takes precedence. Set it to Auto "
+                                     "to use this legacy Color Space choice.")
+                                      .arg(*configured));
+        } else {
+            selector_->setToolTip(tr("An explicit source Color Space overrides the asset's "
+                                     "input interpretation."));
+        }
+    }
     if (parameter) {
         auto value = definition_.defaultValue;
         if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source))
@@ -652,16 +691,23 @@ void PropertiesRegistryRow::refresh() {
                 const bool effect = isEffectColorSpaceSchema(definition_.schemaKey);
                 auto automatic = effect ? tr("Working space") : tr("Auto");
                 if (!effect && text->empty()) {
-                    const auto resolved = sourceAssetInputColorSpace(session_, node);
-                    if (!resolved.isEmpty())
-                        automatic = resolved;
+                    if (sourceLegacyInputColorSpace(session_, node) != 0)
+                        automatic = tr("Legacy Color Space choice");
+                    else {
+                        const auto resolved = sourceAssetInputColorSpace(session_, node);
+                        if (!resolved.isEmpty())
+                            automatic = resolved;
+                    }
                 }
                 selector_->setItemText(0, automatic);
                 selector_->setItemToolTip(
                     0, effect ? tr("Composition working colour space: %1")
                                     .arg(QString::fromStdString(
                                         std::string(session_.colorIntent().workingColorSpaceId)))
-                              : tr("Inherit the asset's automatic interpretation"));
+                       : sourceLegacyInputColorSpace(session_, node) != 0
+                           ? tr("The source's legacy Color Space choice overrides the "
+                                "asset input colour space")
+                           : tr("Inherit the asset's input interpretation"));
                 for (int index = 0; index < selector_->count(); ++index)
                     if (selector_->itemData(index).toString() == QString::fromStdString(*text)) {
                         selector_->setCurrentIndex(index);

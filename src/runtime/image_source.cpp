@@ -103,12 +103,10 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
                                   .sourceRevision = selected.sourceRevision},
                                  OperationCacheEntryKind::DecodedMedia, revisionGeneration);
     }
-    selected.interpretation.colorSpace = static_cast<media::ImageColorSpace>(
-        source.colorSpace == 0 ? static_cast<std::int64_t>(asset.interpretation.colorSpace)
-                               : source.colorSpace);
-    selected.interpretation.inputColorSpaceId = !source.inputColorSpaceId.empty()
-                                                    ? source.inputColorSpaceId
-                                                    : asset.interpretation.inputColorSpaceId;
+    const auto input = document::effectiveAssetInputColor(asset.interpretation, source.colorSpace,
+                                                          source.inputColorSpaceId);
+    selected.interpretation.colorSpace = static_cast<media::ImageColorSpace>(input.colorSpace);
+    selected.interpretation.inputColorSpaceId = input.inputColorSpaceId;
     selected.interpretation.alphaAssociation = source.premultiply
                                                    ? media::ImageAlphaAssociation::Straight
                                                    : media::ImageAlphaAssociation::Premultiplied;

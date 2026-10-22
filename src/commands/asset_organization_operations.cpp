@@ -153,6 +153,28 @@ OperationResult SetAssetTags::apply(document::Draft& draft) const {
     }
     return changed ? OperationResult::applied() : OperationResult::noChange();
 }
+OperationResult SetAssetInputColor::apply(document::Draft& draft) const {
+    auto* asset = draft.project().findAsset(asset_);
+    if (asset == nullptr ||
+        (asset->kind != document::AssetKind::Image &&
+         asset->kind != document::AssetKind::Sequence && asset->kind != document::AssetKind::Video))
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                         "Image or video asset does not exist");
+    if (legacy_ > document::AssetColorSpace::Raw ||
+        (legacy_ != document::AssetColorSpace::Auto && !inputColorSpaceId_.empty()))
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Choose one input colour interpretation");
+    auto updated = *asset;
+    updated.interpretation.colorSpace = legacy_;
+    updated.interpretation.inputColorSpaceId = inputColorSpaceId_;
+    if (!updated.validate().ok())
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Invalid input colour space id");
+    if (updated.interpretation == asset->interpretation)
+        return OperationResult::noChange();
+    asset->interpretation = std::move(updated.interpretation);
+    return OperationResult::applied();
+}
 OperationResult ReorderAssets::apply(document::Draft& draft) const {
     auto& project = draft.project();
     if (!folderExists(project, folder_) || !validAssets(project, order_) ||

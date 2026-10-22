@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace bloom::document {
@@ -21,6 +22,24 @@ struct AssetInterpretation {
     AssetAlphaAssociation alphaAssociation = AssetAlphaAssociation::Straight;
     friend bool operator==(const AssetInterpretation&, const AssetInterpretation&) = default;
 };
+struct EffectiveAssetInputColor final {
+    AssetColorSpace colorSpace = AssetColorSpace::Auto;
+    std::string inputColorSpaceId;
+};
+// A source's explicit config id wins first, then its explicit legacy choice. Only when the
+// source inherits both does the asset's config id (or legacy choice) apply. Keep this single
+// precedence rule shared by stills, video and UI proxies so every visible choice changes pixels.
+[[nodiscard]] inline EffectiveAssetInputColor
+effectiveAssetInputColor(const AssetInterpretation& asset, const std::int64_t sourceColorSpace,
+                         const std::string_view sourceInputColorSpaceId) {
+    if (!sourceInputColorSpaceId.empty())
+        return {AssetColorSpace::Auto, std::string(sourceInputColorSpaceId)};
+    if (sourceColorSpace != 0)
+        return {static_cast<AssetColorSpace>(sourceColorSpace), {}};
+    if (!asset.inputColorSpaceId.empty())
+        return {AssetColorSpace::Auto, asset.inputColorSpaceId};
+    return {asset.colorSpace, {}};
+}
 struct AssetLocator {
     std::string kind = "file";
     std::string portability = "project-relative";

@@ -85,6 +85,23 @@ class SetAssetTags final : public Operation {
     std::vector<document::AssetId> assets_;
     std::vector<std::string> tags_;
 };
+// One undoable edit of an asset's input colour choice. Exact OCIO ids use Auto in the legacy
+// field; Auto/Raw/legacy choices clear the id, so the two controls cannot contradict each other.
+class SetAssetInputColor final : public Operation {
+  public:
+    SetAssetInputColor(document::AssetId asset, document::AssetColorSpace legacy,
+                       std::string inputColorSpaceId)
+        : asset_(asset), legacy_(legacy), inputColorSpaceId_(std::move(inputColorSpaceId)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.asset.set-input-color";
+    }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::AssetId asset_;
+    document::AssetColorSpace legacy_;
+    std::string inputColorSpaceId_;
+};
 // A complete permutation of the assets in one folder (nullopt denotes the project root).
 class ReorderAssets final : public Operation {
   public:

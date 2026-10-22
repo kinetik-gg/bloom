@@ -210,12 +210,10 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
             index = 2 * (asset.frames - 1) - index;
     } else
         index = std::min(index, asset.frames - 1);
-    selection.interpretation = static_cast<std::uint32_t>(
-        source.colorSpace == 0 ? static_cast<std::int64_t>(asset.interpretation.colorSpace)
-                               : source.colorSpace);
-    selection.inputColorSpaceId = !source.inputColorSpaceId.empty()
-                                      ? source.inputColorSpaceId
-                                      : asset.interpretation.inputColorSpaceId;
+    const auto input = document::effectiveAssetInputColor(asset.interpretation, source.colorSpace,
+                                                          source.inputColorSpaceId);
+    selection.interpretation = static_cast<std::uint32_t>(input.colorSpace);
+    selection.inputColorSpaceId = input.inputColorSpaceId;
     auto config = resolveInputColorConfig(colorIntent);
     if (!config) {
         selection.warning = "The selected OCIO input configuration is unavailable";

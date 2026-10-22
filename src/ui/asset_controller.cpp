@@ -189,12 +189,10 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
         memberFrame = found->frame;
     }
     selected.path = media::resolveImagePath(locator->path, locator->relinkHint, directory);
-    selected.interpretation.colorSpace = static_cast<media::ImageColorSpace>(
-        source.colorSpace == 0 ? static_cast<std::int64_t>(asset.interpretation.colorSpace)
-                               : source.colorSpace);
-    selected.interpretation.inputColorSpaceId = !source.inputColorSpaceId.empty()
-                                                    ? source.inputColorSpaceId
-                                                    : asset.interpretation.inputColorSpaceId;
+    const auto input = document::effectiveAssetInputColor(asset.interpretation, source.colorSpace,
+                                                          source.inputColorSpaceId);
+    selected.interpretation.colorSpace = static_cast<media::ImageColorSpace>(input.colorSpace);
+    selected.interpretation.inputColorSpaceId = input.inputColorSpaceId;
     selected.interpretation.alphaAssociation = source.premultiply
                                                    ? media::ImageAlphaAssociation::Straight
                                                    : media::ImageAlphaAssociation::Premultiplied;
@@ -326,6 +324,15 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
         decodedAudioBytes_ = 0;
         refresh();
     });
+    connect(&host_, &ProjectHost::colorSettingsChanged, this, [this] {
+        const bool requested = inputColorCatalogPending_ || inputColorCatalog_ != nullptr;
+        if (inputColorCatalogPending_)
+            inputColorCatalogTask_.cancel();
+        inputColorCatalog_.reset();
+        if (requested)
+            requestInputColorSpaces();
+        emit changed();
+    });
     connect(this, &AssetController::diagnostic, &session_, &CompositionSession::commandRejected);
     refresh();
 }
@@ -343,6 +350,80 @@ void AssetController::cancel() {
         import_.cancel();
     if (previewPending_)
         preview_.cancel();
+    if (inputColorCatalogPending_)
+        inputColorCatalogTask_.cancel();
+}
+const std::vector<color::OcioColorSpaceInfo>* AssetController::inputColorSpaces() const noexcept {
+    return inputColorCatalog_ && inputColorCatalog_->diagnostic.isEmpty()
+               ? &inputColorCatalog_->spaces
+               : nullptr;
+}
+QString AssetController::inputColorCatalogDiagnostic() const {
+    return inputColorCatalog_ ? inputColorCatalog_->diagnostic : QString{};
+}
+void AssetController::requestInputColorSpaces() {
+    const auto* current = host_.colorSettings();
+    if (!current)
+        return;
+    const auto settings = *current;
+    const std::string working(session_.colorIntent().workingColorSpaceId);
+    if (inputColorCatalog_ && inputColorCatalog_->diagnostic.isEmpty() &&
+        inputColorCatalog_->settings == settings &&
+        inputColorCatalog_->workingColorSpaceId == working)
+        return;
+    if (inputColorCatalogPending_ && inputColorCatalogRequestedSettings_ == settings &&
+        inputColorCatalogRequestedWorking_ == working)
+        return;
+    if (inputColorCatalogPending_)
+        inputColorCatalogTask_.cancel();
+    inputColorCatalog_.reset();
+    auto submission = scheduler_.submit<std::shared_ptr<InputColorCatalog>>(
+        runtime::TaskRequest(
+            "Prepare input colour choices",
+            {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
+            runtime::TaskPriority::Foreground, runtime::TaskExecutor::Cpu),
+        [settings, working](runtime::TaskContext& context) {
+            if (context.isCancellationRequested())
+                return runtime::TaskResult<std::shared_ptr<InputColorCatalog>>::cancelled();
+            auto result = std::make_shared<InputColorCatalog>();
+            result->settings = settings;
+            result->workingColorSpaceId = working;
+            const auto* builtIn =
+                std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator);
+            if (!builtIn || settings.ocioConfig.expectedRevision.algorithm !=
+                                document::OcioRevisionAlgorithm::Sha256) {
+                result->diagnostic = QObject::tr("This OCIO configuration is not available in the "
+                                                 "current runtime.");
+            } else {
+                auto resolved = color::resolveOcioBuiltIn(
+                    color::OcioConfigLocatorKind::BloomBuiltIn, builtIn->uri,
+                    settings.ocioConfig.expectedRevision.digest, working);
+                if (resolved.ready()) {
+                    auto config = std::move(resolved).takeResolved();
+                    result->spaces = config.colorSpaces();
+                } else
+                    result->diagnostic = QObject::tr("The selected OCIO configuration could not "
+                                                     "be resolved.");
+            }
+            if (context.isCancellationRequested())
+                return runtime::TaskResult<std::shared_ptr<InputColorCatalog>>::cancelled();
+            return runtime::TaskResult<std::shared_ptr<InputColorCatalog>>::succeeded(
+                std::move(result));
+        });
+    if (submission.accepted()) {
+        inputColorCatalogTask_ = std::move(submission.handle);
+        inputColorCatalogPending_ = true;
+        inputColorCatalogRequestedSettings_ = settings;
+        inputColorCatalogRequestedWorking_ = working;
+        bridge_.wake();
+    } else {
+        inputColorCatalog_ = std::make_shared<InputColorCatalog>();
+        inputColorCatalog_->settings = settings;
+        inputColorCatalog_->workingColorSpaceId = working;
+        inputColorCatalog_->diagnostic = tr("Colour choices are unavailable while processing "
+                                            "capacity is full.");
+        emit changed();
+    }
 }
 std::filesystem::path AssetController::baseDirectory() const {
     const auto path = host_.displayPath();
@@ -362,10 +443,26 @@ QImage AssetController::nodeThumbnail(document::NodeId id) const {
 }
 QString AssetController::inputColorSpaceDisplay(const document::AssetId id) const {
     const auto found = previews_.find(id);
-    if (found == previews_.end() || found->second.inputColorSpaceName.empty())
+    if (found != previews_.end() && !found->second.inputColorSpaceName.empty()) {
+        const auto name = QString::fromStdString(found->second.inputColorSpaceName);
+        return found->second.inputColorSpaceAutomatic ? tr("Auto (resolved: %1)").arg(name) : name;
+    }
+    const auto* asset = session_.snapshot().project().findAsset(id);
+    if (!asset)
         return {};
-    const auto name = QString::fromStdString(found->second.inputColorSpaceName);
-    return found->second.inputColorSpaceAutomatic ? tr("Auto (resolved: %1)").arg(name) : name;
+    if (!asset->interpretation.inputColorSpaceId.empty())
+        return QString::fromStdString(asset->interpretation.inputColorSpaceId);
+    switch (asset->interpretation.colorSpace) {
+    case document::AssetColorSpace::Raw:
+        return tr("Raw data (no colour conversion)");
+    case document::AssetColorSpace::Srgb:
+        return tr("Legacy sRGB");
+    case document::AssetColorSpace::Linear:
+        return tr("Legacy Linear");
+    case document::AssetColorSpace::Auto:
+        return tr("Auto (from media tags)");
+    }
+    return {};
 }
 QString AssetController::inputColorSpaceWarning(const document::AssetId id) const {
     const auto found = previews_.find(id);
@@ -941,6 +1038,28 @@ void AssetController::startThumbnails() {
     }
 }
 void AssetController::poll() {
+    if (inputColorCatalogPending_) {
+        if (auto result = inputColorCatalogTask_.tryTakeResult()) {
+            inputColorCatalogPending_ = false;
+            if (result->state() == runtime::TaskState::Succeeded && result->value().has_value() &&
+                *result->value() && host_.colorSettings() &&
+                (*result->value())->settings == *host_.colorSettings() &&
+                (*result->value())->workingColorSpaceId ==
+                    session_.colorIntent().workingColorSpaceId)
+                inputColorCatalog_ = *result->value();
+            else if (result->state() == runtime::TaskState::Failed &&
+                     inputColorCatalogRequestedSettings_ && host_.colorSettings() &&
+                     *inputColorCatalogRequestedSettings_ == *host_.colorSettings()) {
+                inputColorCatalog_ = std::make_shared<InputColorCatalog>();
+                inputColorCatalog_->settings = *inputColorCatalogRequestedSettings_;
+                inputColorCatalog_->workingColorSpaceId = inputColorCatalogRequestedWorking_;
+                inputColorCatalog_->diagnostic =
+                    tr("OCIO colour choices could not be prepared. Reopen the picker to retry.");
+            }
+            inputColorCatalogRequestedSettings_.reset();
+            emit changed();
+        }
+    }
     if (busy_) {
         auto result = import_.tryTakeResult();
         if (result) {

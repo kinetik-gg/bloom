@@ -1,17 +1,23 @@
 #include "assets_editor_internal.hpp"
 #include <QDialog>
+#include <QDialogButtonBox>
 #include <QHBoxLayout>
+#include <QLabel>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <set>
+#include <tuple>
 
 namespace bloom::ui {
 void AssetsEditor::createFolder() {
@@ -143,6 +149,120 @@ void AssetsEditor::editTags(document::AssetId id) {
     }
     commands::Transaction transaction("Edit Asset Tags", snapshot.revision());
     transaction.emplace<commands::SetAssetTags>(ids, std::move(edited));
+    (void)session_.executeTransaction(std::move(transaction));
+}
+void AssetsEditor::editInputColor(const document::AssetId id) {
+    const auto snapshot = session_.snapshot();
+    const auto* asset = snapshot.project().findAsset(id);
+    auto* controller = session_.assetController();
+    if (!asset || !controller || !controller->acceptsEdits())
+        return;
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("assetsInputColorDialog"));
+    dialog.setWindowTitle(tr("Input Colour — %1").arg(QString::fromStdString(asset->name)));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* explanation = new QLabel(
+        tr("Choose how this asset's pixels are interpreted. A source node can override this "
+           "choice in Properties."),
+        &dialog);
+    explanation->setWordWrap(true);
+    layout->addWidget(explanation);
+    auto* selector = new kit::KDropdown(&dialog);
+    selector->setObjectName(QStringLiteral("assetsInputColorSelector"));
+    selector->setSearchable(true);
+    selector->setWidthFloor(kit::px(kit::Size::DropdownWidth) * 2);
+    layout->addWidget(selector);
+    auto* status = new QLabel(&dialog);
+    status->setObjectName(QStringLiteral("assetsInputColorStatus"));
+    status->setWordWrap(true);
+    layout->addWidget(status);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, &dialog);
+    buttons->addButton(tr("Apply"), QDialogButtonBox::AcceptRole);
+    buttons->setObjectName(QStringLiteral("assetsInputColorButtons"));
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    const auto initial = [&] {
+        if (!asset->interpretation.inputColorSpaceId.empty())
+            return QStringLiteral("id:") +
+                   QString::fromStdString(asset->interpretation.inputColorSpaceId);
+        switch (asset->interpretation.colorSpace) {
+        case document::AssetColorSpace::Raw:
+            return QStringLiteral("raw");
+        case document::AssetColorSpace::Srgb:
+            return QStringLiteral("srgb");
+        case document::AssetColorSpace::Linear:
+            return QStringLiteral("linear");
+        case document::AssetColorSpace::Auto:
+            return QStringLiteral("auto");
+        }
+        return QStringLiteral("auto");
+    }();
+    const auto refreshChoices = [&] {
+        const QString selected = selector->count() ? selector->currentData().toString() : initial;
+        const QSignalBlocker blocked(selector);
+        selector->clearItems();
+        selector->addItem(tr("Automatic (from media tags)"), QStringLiteral("auto"));
+        selector->addItem(tr("Raw data (no colour conversion)"), QStringLiteral("raw"));
+        selector->addItem(tr("Legacy sRGB"), QStringLiteral("srgb"));
+        selector->addItem(tr("Legacy Linear"), QStringLiteral("linear"));
+        if (const auto* spaces = controller->inputColorSpaces()) {
+            auto ordered = *spaces;
+            std::ranges::sort(ordered, [](const auto& left, const auto& right) {
+                return std::tie(left.family, left.id) < std::tie(right.family, right.id);
+            });
+            for (const auto& space : ordered) {
+                const auto name = QString::fromStdString(space.id);
+                const auto family = QString::fromStdString(space.family);
+                selector->addItem(family.isEmpty() ? name : family + QStringLiteral(" / ") + name,
+                                  QStringLiteral("id:") + name);
+            }
+            status->setText(tr("OCIO colour spaces from the selected project configuration."));
+        } else if (!controller->inputColorCatalogDiagnostic().isEmpty()) {
+            status->setText(controller->inputColorCatalogDiagnostic());
+        } else {
+            status->setText(tr("Preparing OCIO colour spaces…"));
+        }
+        if (selector->findData(selected) < 0 && selected.startsWith(QStringLiteral("id:"))) {
+            selector->addItem(tr("Current space unavailable: %1").arg(selected.mid(3)), selected);
+        }
+        const auto index = selector->findData(selected);
+        selector->setCurrentIndex(index < 0 ? 0 : index);
+    };
+    connect(controller, &AssetController::changed, &dialog, refreshChoices);
+    controller->requestInputColorSpaces();
+    refreshChoices();
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    if (&snapshot.project() != &session_.snapshot().project()) {
+        emit session_.commandRejected(tr("Assets changed while choosing input colour. Open the "
+                                         "picker again."));
+        return;
+    }
+    const auto choice = selector->currentData().toString();
+    if (choice == initial)
+        return;
+    document::AssetColorSpace legacy = document::AssetColorSpace::Auto;
+    std::string inputId;
+    if (choice == QStringLiteral("raw"))
+        legacy = document::AssetColorSpace::Raw;
+    else if (choice == QStringLiteral("srgb"))
+        legacy = document::AssetColorSpace::Srgb;
+    else if (choice == QStringLiteral("linear"))
+        legacy = document::AssetColorSpace::Linear;
+    else if (choice.startsWith(QStringLiteral("id:"))) {
+        inputId = choice.mid(3).toStdString();
+        const auto* spaces = controller->inputColorSpaces();
+        if (!spaces ||
+            std::ranges::none_of(*spaces, [&](const auto& space) { return space.id == inputId; })) {
+            emit session_.commandRejected(tr("That OCIO colour space is unavailable. Reopen the "
+                                             "picker after the configuration is ready."));
+            return;
+        }
+    } else if (choice != QStringLiteral("auto"))
+        return;
+    commands::Transaction transaction("Set Asset Input Colour", snapshot.revision());
+    transaction.emplace<commands::SetAssetInputColor>(id, legacy, std::move(inputId));
     (void)session_.executeTransaction(std::move(transaction));
 }
 void AssetsEditor::removeSelected() {
