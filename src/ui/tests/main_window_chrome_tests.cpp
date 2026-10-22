@@ -672,7 +672,7 @@ void testWindowStatusBarKeepsMemoryReasonDuringRamPreview(Expectations& expectat
                    QStringLiteral("Longest cached span: 2 frames"));
     };
     expectations.expect(includesBoth(), "RAM tooltip: progress preserves the memory explanation");
-    strip.pollMemoryPressureForTest({.availableBytes = 16 * gib});
+    strip.pollMemoryPressureForTest(16 * gib);
     expectations.expect(includesBoth(), "RAM tooltip: a memory refresh preserves preview progress");
     preview.endRamPreviewProgress();
     expectations.expect(
