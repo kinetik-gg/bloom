@@ -219,6 +219,7 @@ void BackgroundPreviewController::fillNextFrame() {
             runtime::TaskPriority::Background);
         request.sourceVersion = {.documentRevision = key->sourceRevision.value(),
                                  .requestGeneration = identity.requestGeneration};
+        request.usesPurgeableCaches = true;
         submittedAt_ = std::chrono::steady_clock::now();
         // TEMPORAL-2B: the snapshot is resolved for THIS frame's time, matching the identity's
         // sourceRevision from cacheKeyForTime above.

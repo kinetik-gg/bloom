@@ -129,6 +129,9 @@ struct TaskRequest {
     std::optional<TaskGroupId> groupId;
     std::optional<std::string> coalescingKey;
     TaskSourceVersion sourceVersion;
+    // True for a task whose lifetime can read or publish an application purgeable cache.
+    // A root task keeps this set while its asynchronous cache-using children are in flight.
+    bool usesPurgeableCaches = false;
 };
 
 struct TaskSnapshot {
@@ -140,6 +143,7 @@ struct TaskSnapshot {
     TaskState state = TaskState::Queued;
     std::optional<TaskGroupId> groupId;
     TaskSourceVersion sourceVersion;
+    bool usesPurgeableCaches = false;
     TaskProgress progress;
     std::vector<TaskDiagnostic> diagnostics;
     bool cancellationRequested = false;

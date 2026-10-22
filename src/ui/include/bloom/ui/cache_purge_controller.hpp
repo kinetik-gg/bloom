@@ -29,15 +29,15 @@ class TaskUiBridge;
 // never touch project truth, revision, dirty state, or undo.
 //
 // The purge is asynchronous and off the UI thread. It gates the preview/background/RAM producers
-// for the duration, so no request for the generation being purged can be submitted; then it waits
-// for the scheduler to retire the work already in flight before it clears, so a value that was
-// already being computed cannot land in a cache after the clear. If work does not retire within a
-// bounded wait (for example a long export), the purge fails safely without clearing and releases
-// the gate, rather than leaving the commands disabled indefinitely.
+// for the duration, along with asset-thumbnail and export stage submissions. It then waits for
+// tasks explicitly marked as users of the purgeable caches to retire before clearing. Unrelated
+// Save/I/O tasks can continue. If a cache consumer does not retire within a bounded wait, the
+// purge fails safely without clearing and releases the gate.
 //
 // The heavy step -- MediaDiskCache::clear(), which flushes the pending writer and removes every
-// entry from disk -- runs on the existing runtime::TaskScheduler's BlockingIo lane, never on the
-// UI thread. The GPU resident scene cache is cleared through the owning service's own owner-thread
+// entry from disk -- runs on the existing runtime::TaskScheduler's CPU worker, never on the UI
+// thread. This keeps it independent of an unrelated Save occupying the BlockingIo worker. The GPU
+// resident scene cache is cleared through the owning service's own owner-thread
 // API. Clearing a cache drops only that cache's own references; a frame already handed to the
 // viewer, an export, or a task stays valid until its owner releases it, and no lease is globally
 // invalidated.
@@ -47,9 +47,9 @@ class CachePurgeController final : public QObject {
   public:
     // Every pointer may be null (that store is simply not cleared for this session).
     // `clearDecodedVideoMemory` runs on the purge worker; the composition root binds it to the
-    // evaluator's decoded-video cache. `setProducerGate` runs on the UI thread and is bound to the
-    // preview controller's purge gate. `purgeGpuRetainedCaches` runs on the purge worker, is passed
-    // a timeout, and is bound to the preview service's owner-thread resident-cache clear.
+    // evaluator's decoded-video cache. `setProducerGate` runs on the UI thread and gates preview,
+    // asset thumbnails, and export stage advancement. `purgeGpuRetainedCaches` runs on the purge
+    // worker, receives a timeout, and reaches the preview service's owner-thread resident cache.
     // `bridge` is borrowed and must outlive this controller; it owns the poll that observes the
     // purge task, and `scheduler` must be the one it wraps.
     CachePurgeController(runtime::TaskScheduler& scheduler, TaskUiBridge& bridge,
@@ -71,9 +71,9 @@ class CachePurgeController final : public QObject {
     bool requestMediaPurge();
 
   public slots:
-    // Drains the in-flight purge task and, once the scheduler is quiescent, submits the next one.
+    // Drains the in-flight purge task and, once cache consumers retire, submits the clear.
     // Terminal delivery is immediate; coarse snapshots retain timeout observation while waiting
-    // for quiescence. Also callable directly by a test.
+    // for cache consumers. Also callable directly by a test.
     void poll();
 
   signals:
@@ -102,7 +102,7 @@ class CachePurgeController final : public QObject {
     std::function<bool(std::chrono::milliseconds)> purgeGpuRetainedCaches_;
     std::optional<runtime::TaskHandle<std::uint64_t>> task_;
     std::chrono::steady_clock::time_point waitStartedAt_{};
-    bool waitingForQuiescence_ = false;
+    bool waitingForConsumers_ = false;
     Mode mode_ = Mode::None;
 };
 

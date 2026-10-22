@@ -440,6 +440,9 @@ class TaskScheduler final {
     void beginShutdown() noexcept;
     [[nodiscard]] bool isAccepting() const noexcept;
     [[nodiscard]] bool isQuiescent() const noexcept;
+    // Cache maintenance can wait only for tasks that may read or publish the purgeable caches.
+    // A terminal task has already released its work closure before this becomes false.
+    [[nodiscard]] bool hasActivePurgeableCacheConsumers() const noexcept;
 
   private:
     using WorkerStartHook = std::function<void(std::size_t)>;

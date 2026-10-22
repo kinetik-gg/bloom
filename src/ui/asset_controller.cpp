@@ -350,6 +350,21 @@ void AssetController::cancel() {
     if (inputColorCatalogPending_)
         inputColorCatalogTask_.cancel();
 }
+void AssetController::setCachePurgeGate(const bool gated) {
+    if (cachePurgeGate_ == gated)
+        return;
+    cachePurgeGate_ = gated;
+    if (gated) {
+        freshnessTimer_.stop();
+        ++contentGeneration_;
+        assetsDirty_ = true;
+        previewDirty_ = true;
+        if (previewPending_)
+            preview_.cancel();
+    } else if (previewDirty_ && !previewPending_) {
+        startThumbnails();
+    }
+}
 const std::vector<color::OcioColorSpaceInfo>* AssetController::inputColorSpaces() const noexcept {
     return inputColorCatalog_ && inputColorCatalog_->diagnostic.isEmpty()
                ? &inputColorCatalog_->spaces
@@ -612,6 +627,8 @@ void AssetController::refreshNodeThumbnails() {
 }
 
 void AssetController::startThumbnails() {
+    if (cachePurgeGate_)
+        return;
     // A preserved-read-only install retires the document behind CompositionSession. Its hidden
     // projection must not be read until the application rebinds it to decoded content again.
     if (!host_.liveDocumentAndStack().first) {
@@ -636,11 +653,13 @@ void AssetController::startThumbnails() {
     const auto* currentComposition = session_.composition();
     const auto rate = currentComposition ? currentComposition->format().frameRate()
                                          : document::FrameRate::framesPerSecond24();
+    runtime::TaskRequest request(
+        "Media thumbnails",
+        {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
+        runtime::TaskPriority::Background, runtime::TaskExecutor::BlockingIo);
+    request.usesPurgeableCaches = true;
     auto submission = scheduler_.submit<std::shared_ptr<Thumbnails>>(
-        runtime::TaskRequest(
-            "Media thumbnails",
-            {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
-            runtime::TaskPriority::Background, runtime::TaskExecutor::BlockingIo),
+        std::move(request),
         [snapshot, directory, time, rate, colorIntent, includeAssets,
          compositionId = session_.compositionId(), cached = thumbnailCache_,
          cachedNodes = nodePreviews_, cachedAudio = includeAssets ? audioBuffers_ : AudioBuffers{},

@@ -326,6 +326,13 @@ timeouts and quiescence remain independent. Native acknowledgement still uses 16
 transport/pointer cadence, background idle-start, separate text-layout isolation and ProjectHost I/O
 polling are outside this slice. G4A does not mean every application timer or poll has disappeared.
 
+Application cache purge uses an explicit `usesPurgeableCaches` task bit, set on preview roots,
+asset-thumbnail decode, and export evaluation. A GPU preview root retains the bit until its
+asynchronous child stages complete. The purge gates those producers and export stage advancement
+before checking their task lifetimes; unrelated Save/I/O tasks do not delay it. Both purge commands
+run on a CPU worker so a held Save on the single blocking-I/O worker cannot queue a media clear
+behind itself. The disk cache's own writer is flushed before on-disk entries are removed.
+
 Private local tests qualify a 64-terminal burst coalescing to one wake with all 64 results delivered
 and no additional Jobs snapshot polls while monitoring is stopped. Four UI heartbeat pulses occur
 while a worker is held. A genuine GPU Half100 range lands all 99 new products through completion

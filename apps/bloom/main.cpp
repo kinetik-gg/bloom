@@ -557,7 +557,11 @@ int main(int argc, char* argv[]) try {
         taskScheduler, taskUiBridge, mediaDiskCache.get(), cpuEvaluator.operationCache().get(),
         gpuPreparedUploadCache.get(), gpuSceneCoverageCache.get(),
         [&cpuEvaluator] { cpuEvaluator.clearDecodedVideoCache(); },
-        [&previewController](const bool gated) { previewController.setCachePurgeGate(gated); },
+        [&previewController, &assetController, &frameExportController](const bool gated) {
+            assetController.setCachePurgeGate(gated);
+            frameExportController.setCachePurgeGate(gated);
+            previewController.setCachePurgeGate(gated);
+        },
         [&gpuPreviewDisplayService](const std::chrono::milliseconds timeout) {
             return gpuPreviewDisplayService.purgeRetainedCaches(timeout);
         });

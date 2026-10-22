@@ -59,6 +59,9 @@ class AssetController final : public QObject {
         return previewPending_ || previewDirty_;
     }
     void cancel();
+    // Prevent thumbnail decode submissions while an application cache purge drains its old
+    // generation. Import/probe work does not access the shared decoded-frame store.
+    void setCachePurgeGate(bool gated);
     [[nodiscard]] bool acceptsEdits() const;
     [[nodiscard]] QByteArray dragToken() const { return dragToken_; }
   signals:
@@ -130,6 +133,7 @@ class AssetController final : public QObject {
     bool busy_ = false;
     bool previewPending_ = false;
     bool previewDirty_ = false;
+    bool cachePurgeGate_ = false;
     bool assetsDirty_ = true;
     bool previewIncludesAssets_ = false;
     bool timeDependentNodes_ = true;

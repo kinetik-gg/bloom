@@ -11,9 +11,9 @@
 namespace bloom::ui {
 namespace {
 
-// Bounded wait for in-flight work to retire before the clear. A long export must not leave the
-// purge commands disabled indefinitely; on expiry the purge fails safely without clearing.
-constexpr auto kPurgeQuiescenceTimeout = std::chrono::seconds(5);
+// Bounded wait for cache consumers to retire before the clear. A long evaluation must not leave
+// the purge commands disabled indefinitely; on expiry the purge fails safely without clearing.
+constexpr auto kPurgeConsumerTimeout = std::chrono::seconds(5);
 // Bound on the GPU owner-thread clear so a stalled service cannot wedge the purge worker.
 constexpr auto kGpuPurgeTimeout = std::chrono::seconds(2);
 
@@ -37,7 +37,7 @@ CachePurgeController::CachePurgeController(
 
 CachePurgeController::~CachePurgeController() {
     if (task_.has_value()) {
-        // Request cancellation; the shutdown coordinator's quiescence gate is what makes the
+        // Request cancellation; the shutdown coordinator's scheduler quiescence gate makes the
         // handle's destruction safe rather than a UI-thread join. The worker captures only cache
         // owners by value, never this controller, so a late result cannot reach a destroyed object.
         task_->cancel();
@@ -56,13 +56,13 @@ bool CachePurgeController::start(const Mode mode) {
         return false;
     }
     mode_ = mode;
-    // Gate the preview/background/RAM producers BEFORE waiting, so no request for the generation
-    // being purged can be submitted between the quiescence observation and the clear.
+    // Gate all app cache producers BEFORE waiting, so no request for the generation being purged
+    // can be submitted between the consumer observation and the clear.
     if (setProducerGate_) {
         setProducerGate_(true);
     }
     waitStartedAt_ = std::chrono::steady_clock::now();
-    waitingForQuiescence_ = true;
+    waitingForConsumers_ = true;
     emit purgeStarted();
     poll();
     return true;
@@ -93,26 +93,26 @@ void CachePurgeController::poll() {
         }
         return;
     }
-    if (!scheduler_.isQuiescent()) {
-        if (waitingForQuiescence_ &&
-            std::chrono::steady_clock::now() - waitStartedAt_ > kPurgeQuiescenceTimeout) {
-            // Bounded safe failure: do not clear while work is still in flight, and do not leave
-            // the commands disabled indefinitely. The artist can retry once the export finishes.
-            finish(false, tr("Cache purge postponed; work is still running"));
+    if (scheduler_.hasActivePurgeableCacheConsumers()) {
+        if (waitingForConsumers_ &&
+            std::chrono::steady_clock::now() - waitStartedAt_ > kPurgeConsumerTimeout) {
+            // Bounded safe failure: do not clear while a cache user is still in flight.
+            finish(false, tr("Cache purge postponed; cache work is still running"));
         }
         return;
     }
-    waitingForQuiescence_ = false;
+    waitingForConsumers_ = false;
     submitPurgeTask(mode_);
 }
 
 void CachePurgeController::submitPurgeTask(const Mode mode) {
-    const auto executor =
-        mode == Mode::Media ? runtime::TaskExecutor::BlockingIo : runtime::TaskExecutor::Cpu;
+    // Use the CPU worker for both maintenance commands. A Save can occupy the application's
+    // single BlockingIo worker indefinitely; queuing media purge there would reintroduce the
+    // global Save dependency after the cache-consumer barrier has already retired.
     runtime::TaskRequest request(
         "Purge derived caches",
         {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
-        runtime::TaskPriority::Background, executor);
+        runtime::TaskPriority::Foreground, runtime::TaskExecutor::Cpu);
     // Capture the BORROWED store pointers and callbacks by value, never `this`: a result that
     // arrives after this controller is destroyed cannot touch the controller. The stores are not
     // owned here; the application composition root declares them after the scheduler and before
@@ -128,7 +128,7 @@ void CachePurgeController::submitPurgeTask(const Mode mode) {
         std::move(request),
         [mode, disk, operation, prepared, coverage, clearVideo, purgeGpu](runtime::TaskContext&) {
             if (mode == Mode::Media) {
-                // On the BlockingIo lane: flush the pending writer and remove every on-disk entry.
+                // Off the UI thread: flush the cache's own writer and remove every on-disk entry.
                 // The source files are never opened for writing.
                 purgeMediaCaches(disk, operation);
                 if (clearVideo) {
@@ -167,7 +167,7 @@ void CachePurgeController::submitPurgeTask(const Mode mode) {
 
 void CachePurgeController::finish(const bool success, const QString& message) {
     mode_ = Mode::None;
-    waitingForQuiescence_ = false;
+    waitingForConsumers_ = false;
     if (setProducerGate_) {
         setProducerGate_(false);
     }

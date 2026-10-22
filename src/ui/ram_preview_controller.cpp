@@ -343,6 +343,7 @@ void RamPreviewController::requestFrames() {
             .documentRevision = desiredIdentity.sourceRevision.value(),
             .requestGeneration = desiredIdentity.requestGeneration,
         };
+        request.usesPurgeableCaches = true;
 
         runtime::TaskSubmission<PreviewPreparationResultHandle> submission;
         if (submitter_) {

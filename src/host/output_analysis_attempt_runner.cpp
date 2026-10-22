@@ -263,6 +263,7 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
         runtime::TaskRequest cpuRequest(
             "Analyze a frame export attempt", attemptOwner(state_->request.owner),
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::Cpu);
+        cpuRequest.usesPurgeableCaches = true;
         auto submission = state_->scheduler->submit<BuildOutcomeV1>(
             std::move(cpuRequest),
             [plan = std::move(plan), evaluation, useRootPixelCapacity,

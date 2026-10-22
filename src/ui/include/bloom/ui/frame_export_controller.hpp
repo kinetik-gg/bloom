@@ -168,6 +168,9 @@ class FrameExportController final : public QObject {
     // A composition exists and no export is currently in flight (menu-enabled rule; MainWindow
     // additionally folds in its own read-only-placeholder check -- see main_window.cpp).
     [[nodiscard]] bool canExport() const noexcept;
+    // Pause stage advancement while cache purge drains evaluation work. An active export keeps
+    // its current task running; its next stage resumes after the cache clear.
+    void setCachePurgeGate(bool gated);
     [[nodiscard]] bool isBusy() const noexcept;
     // True while a FRAME RANGE export is in flight, which is the only export long enough for a
     // cancel affordance to mean anything (a single frame is one attempt plus one publish).
@@ -342,6 +345,7 @@ class FrameExportController final : public QObject {
     // loop.
     bool pollingComposition_ = false;
     bool shuttingDown_ = false;
+    bool cachePurgeGate_ = false;
 
     FrameExportActivity activity_ = FrameExportActivity::Idle;
     std::filesystem::path pendingDestination_;

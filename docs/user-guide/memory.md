@@ -117,18 +117,19 @@ for confirmation; both clear only rebuildable derived data.
   request verifies the source again before reusing any derived operation result.
 
 The work runs off the interface thread on Bloom's existing task system, and the commands show
-**Purging caches…** and disable themselves while a purge is running. Bloom stops the preview, RAM
-preview, and background producers for the whole purge, then waits for work already in flight to
-finish before it clears, so a result that was already being computed cannot land in a cache after
-the purge. The GPU resident scene cache is cleared on its own owner thread; outstanding GPU leases
-(the frame on screen, an export, an in-flight task) stay valid because only the cache's own
-references are dropped. If a long-running task (for example an export) has not retired within a
-short bounded wait, the purge stops safely without clearing and says so, rather than leaving the
-commands disabled indefinitely; retry once the work finishes. Both commands stay present even when
-the relevant cache is unavailable (the disk cache is disabled, or no preview pipeline exists); the
-command then reports that clearly instead of silently doing nothing. Purging the preview cache
-leaves decoded media and verified source revisions available. Purging media also drops completed
-preview frames so they cannot hide a changed or unavailable source after refresh.
+**Purging caches…** and disable themselves while a purge is running. Bloom stops preview, RAM
+preview, background fill, asset thumbnail decode, and new export evaluation stages for the whole
+purge. It waits for tasks already using the purgeable caches to finish before clearing; unrelated
+Save and I/O work can continue. A result from an older cache-producing generation cannot land in
+the cleared cache afterward. The GPU resident scene cache is cleared on its own owner thread;
+outstanding GPU leases (the frame on screen, an export, an in-flight task) stay valid because only
+the cache's own references are dropped. If a long-running task (for example an export) has not
+retired within a short bounded wait, the purge stops safely without clearing and says so, rather
+than leaving the commands disabled indefinitely; retry once the cache work finishes. Both commands
+stay present even when the relevant cache is unavailable (the disk cache is disabled, or no preview
+pipeline exists); the command then reports that clearly instead of silently doing nothing. Purging
+the preview cache leaves decoded media and verified source revisions available. Purging media also
+drops completed preview frames so they cannot hide a changed or unavailable source after refresh.
 
 RAM Preview counts frames that are currently retained, including frames already cached before the
 run. Its tooltip separates frames prepared this run from retained frames and the longest cached

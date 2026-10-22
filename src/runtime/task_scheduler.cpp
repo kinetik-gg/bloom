@@ -483,5 +483,16 @@ bool SchedulerState::isQuiescent() const noexcept {
            finalizing == 0;
 }
 
+bool SchedulerState::hasActivePurgeableCacheConsumers() const noexcept {
+    std::lock_guard lock(mutex);
+    for (const auto& [id, record] : records) {
+        static_cast<void>(id);
+        std::lock_guard recordLock(record->mutex);
+        if (record->snapshot.usesPurgeableCaches && !isTerminal(record->snapshot.state))
+            return true;
+    }
+    return false;
+}
+
 } // namespace detail
 } // namespace bloom::runtime

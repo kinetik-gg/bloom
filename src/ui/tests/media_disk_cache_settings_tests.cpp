@@ -223,8 +223,8 @@ void testPurgeMediaCachesClearsDiskAndDecodedMemory(Expectations& check) {
                  "purge media: no store available reports nothing to purge");
 }
 
-// CACHE-PURGE: the asynchronous controller runs the clears only after the scheduler reports
-// quiescence and does them on a worker lane. Preview purge drops derived operation results and the
+// CACHE-PURGE: the asynchronous controller runs the clears only after marked cache consumers
+// retire and does them on a worker lane. Preview purge drops derived operation results and the
 // shared GPU-scene/prepared-upload stores while leaving decoded media and the disk store for the
 // media purge; media purge clears the disk store, decoded still-image memory, the decoded-video
 // memory and the prepared uploads. A caller-held image is never invalidated.
@@ -351,11 +351,13 @@ void testCachePurgeWaitsForInFlightProducerThenClears(Expectations& check) {
     ui::TaskUiBridge bridge(scheduler, nullptr, std::chrono::milliseconds{1});
     runtime::OperationCache operationCache(std::size_t{1} << 20U);
     ProducerGate producerGate;
+    runtime::TaskRequest request(
+        "Blocked preview producer",
+        {.kind = runtime::TaskOwnerKind::Composition, .id = runtime::TaskOwnerId::fromRaw(1)},
+        runtime::TaskPriority::Foreground);
+    request.usesPurgeableCaches = true;
     auto submission = scheduler.submit<std::uint64_t>(
-        runtime::TaskRequest(
-            "Blocked preview producer",
-            {.kind = runtime::TaskOwnerKind::Composition, .id = runtime::TaskOwnerId::fromRaw(1)},
-            runtime::TaskPriority::Foreground),
+        std::move(request),
         [&producerGate, &operationCache](runtime::TaskContext&) {
             producerGate.enterAndWait();
             operationCache.store("late", bloom::document::Revision::fromRaw(1),
@@ -371,12 +373,13 @@ void testCachePurgeWaitsForInFlightProducerThenClears(Expectations& check) {
     ui::CachePurgeController controller(scheduler, bridge, nullptr, &operationCache, nullptr,
                                         nullptr);
     check.expect(controller.requestPreviewPurge(), "cache purge wait: the purge starts");
+    submission.handle.cancel();
     for (int turn = 0; turn < 20; ++turn) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
         controller.poll();
     }
     check.expect(controller.isPurging(),
-                 "cache purge wait: the purge waits while the producer is still in flight");
+                 "cache purge wait: cancellation does not retire a running cache consumer");
     check.expect(operationCache.retainedBytes() == 0,
                  "cache purge wait: nothing is cleared before the producer retires");
 
@@ -388,6 +391,56 @@ void testCachePurgeWaitsForInFlightProducerThenClears(Expectations& check) {
     check.expect(!controller.isPurging(), "cache purge wait: the purge completes after retirement");
     check.expect(operationCache.retainedBytes() == 0,
                  "cache purge wait: the producer's late store cannot repopulate the cache");
+}
+
+// A held project Save uses the same scheduler, but cannot read or publish the purgeable caches.
+// Both clears therefore complete while that unrelated I/O task is still running.
+void testCachePurgeProceedsWhileSaveIsHeld(Expectations& check) {
+    QTemporaryDir directory;
+    check.expect(directory.isValid(), "cache purge scope: temp directory is available");
+    if (!directory.isValid())
+        return;
+    runtime::TaskScheduler scheduler;
+    ui::TaskUiBridge bridge(scheduler, nullptr, std::chrono::milliseconds{1});
+    runtime::OperationCache operationCache(std::size_t{1} << 20U);
+    cache::MediaDiskCache disk({.rootDirectory =
+                                   std::filesystem::path(directory.filePath("media").toStdString()),
+                               .byteBudget = 4ULL * 1024ULL * 1024ULL});
+    disk.store(std::string(64, 'c'), makeTestImage());
+    operationCache.store("old", bloom::document::Revision::fromRaw(1),
+                         {.image = {}, .values = {}, .bounds = {}});
+    ProducerGate saveGate;
+    auto save = scheduler.submit<void>(
+        runtime::TaskRequest(
+            "Held project Save",
+            {.kind = runtime::TaskOwnerKind::Project, .id = runtime::TaskOwnerId::fromRaw(1)},
+            runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
+        [&saveGate](runtime::TaskContext&) {
+            saveGate.enterAndWait();
+            return runtime::TaskResult<void>::succeeded();
+        });
+    check.expect(save.accepted(), "cache purge scope: Save task is admitted");
+    for (int turn = 0; turn < 2000 && !saveGate.entered(); ++turn)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+    check.expect(saveGate.entered(), "cache purge scope: Save is genuinely in flight");
+
+    ui::CachePurgeController controller(scheduler, bridge, &disk, &operationCache, nullptr,
+                                        nullptr);
+    const auto drain = [&] {
+        for (int turn = 0; turn < 4000 && controller.isPurging(); ++turn) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+            controller.poll();
+        }
+        return !controller.isPurging();
+    };
+    check.expect(controller.requestPreviewPurge(), "cache purge scope: preview purge starts");
+    check.expect(drain() && !scheduler.isQuiescent() &&
+                     operationCache.retainedBytes() == 0,
+                 "cache purge scope: preview cache clears while unrelated Save is held");
+    check.expect(controller.requestMediaPurge(), "cache purge scope: media purge starts");
+    check.expect(drain() && !scheduler.isQuiescent() && disk.statistics().entryCount == 0,
+                 "cache purge scope: media cache clears while unrelated Save is held");
+    saveGate.release();
 }
 
 // CACHE-PURGE: the service owner-thread purge state machine. A timeout withdraws a still-pending
@@ -460,6 +513,7 @@ int main(int argc, char** argv) {
     testPurgeMediaCachesClearsDiskAndDecodedMemory(check);
     testCachePurgeControllerClearsApplicableStores(check);
     testCachePurgeWaitsForInFlightProducerThenClears(check);
+    testCachePurgeProceedsWhileSaveIsHeld(check);
     testServiceCachePurgeTimeoutWithdrawsAndSerializes(check);
     return check.failures() == 0 ? 0 : 1;
 }

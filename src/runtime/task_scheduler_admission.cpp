@@ -91,6 +91,7 @@ SchedulerState::Admission SchedulerState::admit(TaskRequest request,
         .state = TaskState::Queued,
         .groupId = request.groupId,
         .sourceVersion = request.sourceVersion,
+        .usesPurgeableCaches = request.usesPurgeableCaches,
         .progress = {.phase = "Queued", .subphase = {}, .completed = 0, .total = std::nullopt},
         .diagnostics = {},
         .cancellationRequested = false,
@@ -547,6 +548,9 @@ CpuRowBandExecutor* TaskScheduler::rowBandExecutor() const noexcept {
 bool TaskScheduler::isAccepting() const noexcept { return state_->isAccepting(); }
 
 bool TaskScheduler::isQuiescent() const noexcept { return state_->isQuiescent(); }
+bool TaskScheduler::hasActivePurgeableCacheConsumers() const noexcept {
+    return state_->hasActivePurgeableCacheConsumers();
+}
 
 namespace detail {
 

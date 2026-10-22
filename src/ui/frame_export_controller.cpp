@@ -354,8 +354,16 @@ FrameExportController::~FrameExportController() {
 }
 
 bool FrameExportController::canExport() const noexcept {
-    return !shuttingDown_ && activity_ == FrameExportActivity::Idle &&
+    return !shuttingDown_ && !cachePurgeGate_ && activity_ == FrameExportActivity::Idle &&
            session_.composition() != nullptr;
+}
+
+void FrameExportController::setCachePurgeGate(const bool gated) {
+    if (cachePurgeGate_ == gated)
+        return;
+    cachePurgeGate_ = gated;
+    if (!gated)
+        pollOnce();
 }
 
 bool FrameExportController::isBusy() const noexcept {
@@ -651,6 +659,8 @@ void FrameExportController::beginExport(std::filesystem::path destination) {
 }
 
 void FrameExportController::pollOnce() {
+    if (cachePurgeGate_)
+        return;
     if (mediaExport_) {
         pollCompositionExport();
         return;

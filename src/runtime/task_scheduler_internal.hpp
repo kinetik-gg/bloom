@@ -132,6 +132,7 @@ struct SchedulerState final : std::enable_shared_from_this<SchedulerState> {
     void requestShutdown() noexcept;
     [[nodiscard]] bool isAccepting() const noexcept;
     [[nodiscard]] bool isQuiescent() const noexcept;
+    [[nodiscard]] bool hasActivePurgeableCacheConsumers() const noexcept;
     [[nodiscard]] TaskCompletionSubscribeResult subscribeCompletions() noexcept {
         return completions.subscribe();
     }

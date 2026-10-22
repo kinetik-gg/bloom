@@ -1054,6 +1054,7 @@ void CompositionPreviewController::submitPreview(PendingRequest pendingRequest,
          .id = runtime::TaskOwnerId::fromRaw(desiredIdentity.compositionId.value())},
         priority);
     request.coalescingKey = "bloom.preview.render";
+    request.usesPurgeableCaches = true;
     request.sourceVersion = {
         .documentRevision = desiredIdentity.sourceRevision.value(),
         .requestGeneration = desiredIdentity.requestGeneration,
