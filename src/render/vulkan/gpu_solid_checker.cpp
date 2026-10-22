@@ -47,16 +47,16 @@ bool GpuSolid::Impl::createCheckerPipeline() {
     pipelineInfo.stage.module = *checkerShaderModule;
     pipelineInfo.stage.pName = "main";
     pipelineInfo.layout = *checkerPipelineLayout;
-    VkPipeline pipeline = VK_NULL_HANDLE;
+    VkPipeline createdPipeline = VK_NULL_HANDLE;
     if (dispatcher->vkCreateComputePipelines(
             device, VK_NULL_HANDLE, 1,
             reinterpret_cast<const VkComputePipelineCreateInfo*>(&pipelineInfo), nullptr,
-            &pipeline) != VK_SUCCESS) {
+            &createdPipeline) != VK_SUCCESS) {
         createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::ShaderRejected,
                                              "the CheckerV1 compute pipeline was rejected");
         return false;
     }
-    checkerPipeline = vk::raii::Pipeline(control->device, pipeline);
+    checkerPipeline = vk::raii::Pipeline(control->device, createdPipeline);
     return true;
 }
 
