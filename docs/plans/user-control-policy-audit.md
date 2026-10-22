@@ -2,7 +2,7 @@
 
 Status: active implementation and source audit; runtime qualification is recorded separately
 
-Updated: 2026-10-22
+Updated: 2026-10-23
 
 Owner: [issue #320](https://github.com/kinetik-gg/bloom/issues/320).
 Source baseline: `45431368`; current corrections are not claimed as passed until their grouped local gates finish.
@@ -97,14 +97,22 @@ Final render has a separate availableRAM/4 allowance and synchronous OS sampling
 
 First replace repeated synchronous sampling/default fractions with one captured off-UI capacity/admission view for still/range/video/headless. Then qualify configurable/capability-based output bounds across analysis/adapters/reservation identity; preserve representability, codec/device limits, exact peaks, cancellation, one final readback, and atomic verified publication. Tests must cover low retention with valid render, actual capacity refusal/recovery, large output analysis, all production routes. Do not use unbounded numeric maxima as invented capacity.
 
-## Additional audit candidates requiring confirmation
+## Verified follow-up work, not part of this milestone's completion claim
 
-- History retention can reject an otherwise valid command when a before/after snapshot charge exceeds
-  the fixed 512 MiB budget (`src/commands/command_stack.cpp`). Determine a concrete large-document
-  trigger and distinguish retained history cost from executing the edit before changing admission.
-- Recovery discovery compares candidates against the active project's modification time and returns
-  only the newest candidate (`src/host/session_recovery.cpp`). Verify project identity and candidate
-  selection before claiming recovery correctness; do not delete or overwrite recovery files.
+- [#350: Undo retention ownership](https://github.com/kinetik-gg/bloom/issues/350): a small
+  edit can count unchanged live payload against the 512 MiB history allowance. Separate active
+  storage from history retention while preserving the newest atomic undo step and redo integrity.
+- [#351: Recovery association](https://github.com/kinetik-gg/bloom/issues/351): recovery discovery
+  applies the caller project's timestamp and path to candidates without proving project identity.
+  Match identity before filtering or offering candidates; no automatic-overwrite claim is made.
+- [#352: Video provider capacity](https://github.com/kinetik-gg/bloom/issues/352): image/sequence
+  metadata now follows representability and caller decode admission, but the video provider still
+  supports at most 16,384-axis / 16,777,216-pixel frames and 1,000,000 index entries. These are
+  current provider implementation limits, not user cache settings or measured hardware limits.
+  Negotiate capacity and bound indexing/transport before expanding those capabilities.
+
+These issues are explicit planned follow-ups. They remain open; this sprint does not claim every
+policy or planned media/node capability is implemented.
 
 ## Validation and supervision
 
