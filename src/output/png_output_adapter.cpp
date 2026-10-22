@@ -14,7 +14,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -73,7 +72,7 @@ struct ValidatedGeometry final {
 };
 
 // Checked preflight, before any allocation or file I/O: `output_limits.hpp`'s closed version 1
-// PNG dimension and zlib input-domain bounds, `prepared`'s own internal consistency
+// PNG dimension bounds, `prepared`'s own internal consistency
 // (pixels.size() must equal width * height), and checked buffer-size arithmetic.
 [[nodiscard]] std::optional<ValidatedGeometry>
 validateGeometry(const output::PngRgba8SrgbPreparedStreamV1& prepared) noexcept {
@@ -98,7 +97,6 @@ validateGeometry(const output::PngRgba8SrgbPreparedStreamV1& prepared) noexcept 
     const auto totalOutputBytes =
         rowOutputBytes ? multiplyChecked(*rowOutputBytes, height) : std::nullopt;
     if (!rowRgbaBytes || !rowOutputBytes || !totalOutputBytes ||
-        *rowOutputBytes > std::numeric_limits<uInt>::max() ||
         *totalOutputBytes > std::numeric_limits<std::size_t>::max()) {
         return std::nullopt;
     }
@@ -253,48 +251,25 @@ PngRgba8SrgbWriterV1::write(const PngRgba8SrgbPreparedStreamV1& prepared,
         std::vector<std::byte> compressedChunk;
         compressedChunk.reserve(kOutputAdapterMaximumStreamingChunkBytesV1);
 
-        const auto rowsPerChunk =
-            std::max<std::uint64_t>(1, kOutputAdapterMaximumStreamingChunkBytesV1 /
-                                           std::max<std::uint64_t>(geometry->rowOutputBytes, 1));
-        std::vector<std::byte> rowChunkBuffer;
+        static_assert(kOutputAdapterMaximumStreamingChunkBytesV1 <=
+                      std::numeric_limits<uInt>::max());
         constexpr std::size_t kDrainBufferBytes = 1U << 16U;
         std::array<std::byte, kDrainBufferBytes> drainBuffer{};
 
-        std::uint64_t rowsRemaining = geometry->height;
-        std::uint64_t completedRows = 0;
-        ::reportProgress(progress, {0, geometry->height});
         bool compressorFailed = false;
         bool writeFailed = false;
-        while (rowsRemaining > 0) {
-            if (cancellation.isCancellationRequested()) {
-                return PngWriteResultV1::cancelled(::removeDestinationBestEffort(destination));
-            }
-            const auto chunkRows = std::min(rowsPerChunk, rowsRemaining);
-            const bool isLastChunk = chunkRows == rowsRemaining;
-            rowChunkBuffer.resize(chunkRows * geometry->rowOutputBytes);
-            for (std::uint64_t row = 0; row < chunkRows; ++row) {
-                const auto rowIndex = completedRows + row;
-                auto* const rowOut = rowChunkBuffer.data() +
-                                     static_cast<std::ptrdiff_t>(row * geometry->rowOutputBytes);
-                rowOut[0] = static_cast<std::byte>(detail::kPngFilterTypeNoneV1);
-                const auto* const sourceRow =
-                    prepared.pixels.data() +
-                    static_cast<std::ptrdiff_t>(rowIndex * geometry->width);
-                std::memcpy(rowOut + 1, sourceRow,
-                            static_cast<std::size_t>(geometry->rowRgbaBytes));
-            }
-
-            stream.next_in = reinterpret_cast<Bytef*>(rowChunkBuffer.data());
-            stream.avail_in = static_cast<uInt>(rowChunkBuffer.size());
-            const int flush = isLastChunk ? Z_FINISH : Z_NO_FLUSH;
-            int deflateStatus = Z_OK;
-            do {
+        const auto deflateInput = [&](const std::span<const std::byte> input,
+                                      const int flush) {
+            stream.next_in = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(input.data()));
+            stream.avail_in = static_cast<uInt>(input.size());
+            for (;;) {
                 stream.next_out = reinterpret_cast<Bytef*>(drainBuffer.data());
                 stream.avail_out = static_cast<uInt>(drainBuffer.size());
-                deflateStatus = deflate(&stream, flush);
-                if (deflateStatus == Z_STREAM_ERROR) {
+                const auto beforeIn = stream.avail_in;
+                const auto result = deflate(&stream, flush);
+                if (result != Z_OK && result != Z_STREAM_END) {
                     compressorFailed = true;
-                    break;
+                    return false;
                 }
                 const auto produced = drainBuffer.size() - stream.avail_out;
                 std::size_t consumed = 0;
@@ -310,21 +285,53 @@ PngRgba8SrgbWriterV1::write(const PngRgba8SrgbPreparedStreamV1& prepared,
                     if (compressedChunk.size() == kOutputAdapterMaximumStreamingChunkBytesV1) {
                         if (!::writeChunk(file, detail::kPngChunkTypeIdatV1, compressedChunk)) {
                             writeFailed = true;
-                            break;
+                            return false;
                         }
                         compressedChunk.clear();
                     }
                 }
-            } while (!compressorFailed && !writeFailed &&
-                     (stream.avail_out == 0 || (isLastChunk && deflateStatus != Z_STREAM_END)));
-            if (compressorFailed || writeFailed) {
-                break;
+                if (flush == Z_FINISH && result == Z_STREAM_END)
+                    return true;
+                if (flush == Z_NO_FLUSH && stream.avail_in == 0 && stream.avail_out != 0)
+                    return true;
+                if (beforeIn == stream.avail_in && produced == 0) {
+                    compressorFailed = true;
+                    return false;
+                }
             }
+        };
 
-            rowsRemaining -= chunkRows;
-            completedRows += chunkRows;
-            ::reportProgress(progress, {completedRows, geometry->height});
+        // Feed the filter byte and pixel bytes separately. A row may exceed 16 MiB; no complete
+        // row is materialized or narrowed to zlib's uInt input length.
+        const auto sourceBytes = std::as_bytes(prepared.pixels);
+        ::reportProgress(progress, {0, geometry->height});
+        for (std::uint64_t row = 0; row < geometry->height; ++row) {
+            if (cancellation.isCancellationRequested()) {
+                return PngWriteResultV1::cancelled(::removeDestinationBestEffort(destination));
+            }
+            const std::array<std::byte, 1> filter{
+                static_cast<std::byte>(detail::kPngFilterTypeNoneV1)};
+            if (!deflateInput(filter, Z_NO_FLUSH))
+                break;
+            auto rowBytes = sourceBytes.subspan(
+                static_cast<std::size_t>(row * geometry->rowRgbaBytes),
+                static_cast<std::size_t>(geometry->rowRgbaBytes));
+            while (!rowBytes.empty()) {
+                if (cancellation.isCancellationRequested()) {
+                    return PngWriteResultV1::cancelled(::removeDestinationBestEffort(destination));
+                }
+                const auto fragment = rowBytes.first(
+                    std::min(rowBytes.size(), kOutputAdapterMaximumStreamingChunkBytesV1));
+                if (!deflateInput(fragment, Z_NO_FLUSH))
+                    break;
+                rowBytes = rowBytes.subspan(fragment.size());
+            }
+            if (compressorFailed || writeFailed)
+                break;
+            ::reportProgress(progress, {row + 1, geometry->height});
         }
+        if (!compressorFailed && !writeFailed)
+            (void)deflateInput({}, Z_FINISH);
         if (compressorFailed) {
             return ::fail(PngWriteErrorCodeV1::CompressorFailure, destination, destinationCreated);
         }

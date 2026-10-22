@@ -160,6 +160,23 @@ void testIdatChunkingWithoutWholeCompressedImage(support::Expectations& expectat
                         "multiple bounded IDAT chunks independently decode to the full image");
 }
 
+void testOneRowBeyondInputChunk(support::Expectations& expectations) {
+    const support::ScratchDirectory scratch("wide-row");
+    constexpr std::uint32_t width = 4'194'305;
+    std::vector<render::Rgba8> pixels(width, render::Rgba8{9, 10, 11, 255});
+    const auto destination = scratch.file("wide-row.png");
+    const output::PngRgba8SrgbWriterV1 writer;
+    const auto written = writer.write(preparedStream(pixels, width, 1), destination, {});
+    expectations.expect(written.status() == output::PngWriteStatusV1::Written,
+                        "one PNG row larger than the input chunk writes without a row-size gate");
+    if (written.status() != output::PngWriteStatusV1::Written)
+        return;
+    const auto decoded = support::independentlyDecodePng(destination);
+    expectations.expect(decoded.ok && decoded.width == width && decoded.height == 1 &&
+                            decoded.rgba.size() == pixels.size() * 4U,
+                        "a wide row crossing the input-fragment boundary independently decodes");
+}
+
 void testResourceLimitExceededRejected(support::Expectations& expectations) {
     const support::ScratchDirectory scratch("resource-limit");
     // The extent is valid render metadata but exceeds PNG's signed 31-bit dimension domain.
@@ -286,6 +303,7 @@ int main() {
     testInvalidPreparedStreamRejected(expectations);
     testWideShortImageBeyondFormerDimensionCap(expectations);
     testIdatChunkingWithoutWholeCompressedImage(expectations);
+    testOneRowBeyondInputChunk(expectations);
     testResourceLimitExceededRejected(expectations);
     testCancellationMidWrite(expectations);
     testScratchDirectoryIsolation(expectations);

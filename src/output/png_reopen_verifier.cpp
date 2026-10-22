@@ -408,6 +408,9 @@ PngVerifyResultV1 PngRgba8SrgbReopenVerifierV1::verify(
                     bool exceeded = false;
                     bool zlibError = false;
                     while (inflateStream.avail_in > 0 && !sawStreamEnd) {
+                        if (cancellation.isCancellationRequested()) {
+                            return PngVerifyResultV1::cancelled();
+                        }
                         const auto capacity = decoded.size() - decodedFilled;
                         if (capacity == 0) {
                             exceeded = true;
@@ -416,7 +419,8 @@ PngVerifyResultV1 PngRgba8SrgbReopenVerifierV1::verify(
                         inflateStream.next_out =
                             reinterpret_cast<Bytef*>(decoded.data() + decodedFilled);
                         inflateStream.avail_out = static_cast<uInt>(
-                            std::min<std::size_t>(capacity, std::numeric_limits<uInt>::max()));
+                            std::min<std::size_t>(capacity,
+                                                  kOutputAdapterMaximumStreamingChunkBytesV1));
                         const auto beforeOut = inflateStream.avail_out;
                         const auto ret = inflate(&inflateStream, Z_NO_FLUSH);
                         const auto produced = beforeOut - inflateStream.avail_out;
@@ -510,11 +514,19 @@ PngVerifyResultV1 PngRgba8SrgbReopenVerifierV1::verify(
                 const auto* const expectedRow = reinterpret_cast<const std::byte*>(
                     prepared.pixels.data() +
                     static_cast<std::ptrdiff_t>(rowIndex * geometry->width));
-                if (std::memcmp(decodedRow, expectedRow,
-                                static_cast<std::size_t>(geometry->rowRgbaBytes)) != 0) {
-                    return PngVerifyResultV1::failed(::diag(PngVerifyErrorCodeV1::SampleMismatch,
-                                                            {}, std::nullopt, std::nullopt,
-                                                            rowIndex));
+                for (std::size_t offset = 0;
+                     offset < static_cast<std::size_t>(geometry->rowRgbaBytes);) {
+                    if (cancellation.isCancellationRequested())
+                        return PngVerifyResultV1::cancelled();
+                    const auto bytes = std::min(
+                        kOutputAdapterMaximumStreamingChunkBytesV1,
+                        static_cast<std::size_t>(geometry->rowRgbaBytes) - offset);
+                    if (std::memcmp(decodedRow + offset, expectedRow + offset, bytes) != 0) {
+                        return PngVerifyResultV1::failed(::diag(PngVerifyErrorCodeV1::SampleMismatch,
+                                                                {}, std::nullopt, std::nullopt,
+                                                                rowIndex));
+                    }
+                    offset += bytes;
                 }
             }
             completedRows += chunkRows;
@@ -528,8 +540,17 @@ PngVerifyResultV1 PngRgba8SrgbReopenVerifierV1::verify(
         for (std::uint64_t row = 0; row < geometry->height; ++row) {
             const auto sourceOffset = static_cast<std::size_t>(row * geometry->rowOutputBytes) + 1;
             const auto destOffset = static_cast<std::size_t>(row * geometry->rowRgbaBytes);
-            std::memcpy(rgbaBytes.data() + destOffset, decoded.data() + sourceOffset,
-                        static_cast<std::size_t>(geometry->rowRgbaBytes));
+            for (std::size_t offset = 0;
+                 offset < static_cast<std::size_t>(geometry->rowRgbaBytes);) {
+                if (cancellation.isCancellationRequested())
+                    return PngVerifyResultV1::cancelled();
+                const auto bytes = std::min(
+                    kOutputAdapterMaximumStreamingChunkBytesV1,
+                    static_cast<std::size_t>(geometry->rowRgbaBytes) - offset);
+                std::memcpy(rgbaBytes.data() + destOffset + offset,
+                            decoded.data() + sourceOffset + offset, bytes);
+                offset += bytes;
+            }
         }
 
         auto bound = bindPngRgba8SrgbOutputAnalysisV1(processIdentity, report, expectedOcioRevision,
