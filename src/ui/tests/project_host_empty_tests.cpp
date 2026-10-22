@@ -29,6 +29,7 @@
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
@@ -348,10 +349,21 @@ void testBlankStatusBarNeutralThenRestores(Expectations& expectations) {
     expectations.expect(id.has_value() && session.setComposition(*id),
                         "blank status: creating a composition activates it");
     QApplication::processEvents();
-    expectations.expect(strip.colorChipTextForTest() != QStringLiteral("No composition"),
-                        "status restores the ordinary colour state once a composition exists");
+    expectations.expect(strip.colorChipTextForTest() == QStringLiteral("No visible viewer") &&
+                            strip.previewStateTextForTest().isEmpty(),
+                        "a composition without a displayed viewer has no display truth to report");
+
+    ui::ViewerEditor viewer(session, controller);
+    viewer.resize(400, 300);
+    viewer.show();
+    QApplication::processEvents();
+    strip.setDisplayedViewer(&viewer);
+    expectations.expect(strip.colorChipTextForTest() != QStringLiteral("No composition") &&
+                            strip.colorChipTextForTest() != QStringLiteral("No visible viewer"),
+                        "the displayed viewer restores the ordinary colour state");
     expectations.expect(!strip.previewStateTextForTest().isEmpty(),
-                        "status reports an ordinary preview state once a composition exists");
+                        "the displayed viewer restores ordinary preview activity");
+    strip.setDisplayedViewer(nullptr);
 }
 
 void testDurationDefaultsToTenSecondsInFrames(Expectations& expectations) {
