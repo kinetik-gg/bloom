@@ -1815,6 +1815,36 @@ OperationRegistry OperationRegistry::builtIn() {
                 std::make_unique<commands::SetAssetTags>(std::move(ids), *tags), std::nullopt);
         });
 
+    add("bloom.asset.set-input-color",
+        {need("asset", ValueKind::Id, StableId{1}, "The image or video asset to interpret."),
+         maybe("legacy", ValueKind::String, "auto", "Auto, sRGB, Linear or Raw. Defaults to Auto."),
+         maybe("inputColorSpaceId", ValueKind::String, "",
+               "An exact colour-space id in the selected OCIO config; clears the legacy choice.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto asset = id(args, op, "asset", error);
+            const auto legacy = text(args, op, "legacy", error, false);
+            const auto inputId = text(args, op, "inputColorSpaceId", error, false);
+            if (!asset || error)
+                return error;
+            document::AssetColorSpace choice = document::AssetColorSpace::Auto;
+            if (legacy == "srgb")
+                choice = document::AssetColorSpace::Srgb;
+            else if (legacy == "linear")
+                choice = document::AssetColorSpace::Linear;
+            else if (legacy == "raw")
+                choice = document::AssetColorSpace::Raw;
+            else if (legacy && *legacy != "auto")
+                return failure(op, "legacy", "expects auto, srgb, linear or raw");
+            if (inputId && !inputId->empty() && choice != document::AssetColorSpace::Auto)
+                return failure(op, "inputColorSpaceId",
+                               "expects no legacy choice when an OCIO colour-space id is set");
+            return OperationCreateResult(
+                std::make_unique<commands::SetAssetInputColor>(
+                    document::AssetId::fromRaw(*asset), choice, inputId.value_or(std::string{})),
+                std::nullopt);
+        });
+
     // --- data blocks --------------------------------------------------------------------------
     add("bloom.data-block.create",
         {need("typeId", ValueKind::String, "bloom.curve", "The block's authored type id."),

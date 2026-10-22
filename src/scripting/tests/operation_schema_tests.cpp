@@ -149,6 +149,18 @@ void expect(const bool condition, const std::string& what) {
             "the rejection carries the owner's example call");
     }
 
+    const Arguments assetInput{{"asset", Value(StableId{1})},
+                               {"inputColorSpaceId", Value("ACEScg")}};
+    expect(static_cast<bool>(registry.create("bloom.asset.set-input-color", assetInput)),
+           "scripting exposes exact asset input interpretation");
+    const Arguments conflictingAssetInput{{"asset", Value(StableId{1})},
+                                          {"legacy", Value("raw")},
+                                          {"inputColorSpaceId", Value("ACEScg")}};
+    const auto conflicting = registry.create("bloom.asset.set-input-color", conflictingAssetInput);
+    expect(!conflicting && conflicting.diagnostic() != nullptr &&
+               conflicting.diagnostic()->argument == "inputColorSpaceId",
+           "scripting rejects conflicting legacy and exact asset interpretation");
+
     // A contextual argument that the session cannot answer says so rather than reading as a
     // plain missing keyword.
     auto noContext = registry.create("bloom.layer.set-enabled", Arguments{{"enabled", Value(true)}},
