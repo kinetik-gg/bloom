@@ -1,3 +1,4 @@
+#include "asset_thumbnail_display.hpp"
 #include "network_share_paths.hpp"
 #include <QDir>
 #include <QFileDialog>
@@ -6,6 +7,7 @@
 #include <QUuid>
 #include <algorithm>
 #include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/media/audio/audio.hpp>
@@ -25,6 +27,7 @@
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <limits>
 #include <span>
@@ -247,12 +250,6 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
     selected.diskCacheKey =
         media::cache::buildImageCacheKey(diskInputs, media::cache::kImageDecoderIdentity);
     return selected;
-}
-unsigned char srgb(float value) {
-    const double linear = static_cast<double>(value);
-    const double encoded =
-        linear <= 0.0031308 ? linear * 12.92 : 1.055 * std::pow(linear, 1.0 / 2.4) - 0.055;
-    return static_cast<unsigned char>(std::lround(std::clamp(encoded, 0.0, 1.0) * 255.0));
 }
 } // namespace
 AssetController::AssetController(CompositionSession& session, ProjectHost& host,
@@ -696,6 +693,21 @@ void AssetController::startThumbnails() {
                         sources.push_back(std::move(source));
                 }
             auto results = std::make_shared<Thumbnails>();
+            std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> thumbnailDisplay;
+            std::string thumbnailDisplayIdentity = "unavailable";
+            if (auto config = runtime::detail::resolveInputColorConfig(colorIntent)) {
+                auto built = color::buildBloomNeutralCpuDisplayProcessor(*config);
+                auto handle = std::move(built).takeHandle();
+                if (handle) {
+                    const auto identity = detail::assetThumbnailDisplayCacheIdentity(*handle);
+                    if (identity) {
+                        thumbnailDisplayIdentity = *identity;
+                        thumbnailDisplay =
+                            std::make_shared<const color::PreparedCpuDisplayProcessorHandle>(
+                                std::move(*handle));
+                    }
+                }
+            }
             results->timeDependentNodes = std::ranges::any_of(sources, [](const auto& source) {
                 return source.asset && source.asset->kind == document::AssetKind::Sequence;
             });
@@ -735,13 +747,19 @@ void AssetController::startThumbnails() {
                 Preview preview;
                 const auto selected = selectThumbnail(source, sampleTime, rate, directory,
                                                       context.cancellation(), colorIntent);
-                preview.key = selected.cacheKey;
+                preview.key = selected.cacheKey + ':' + thumbnailDisplayIdentity;
                 preview.inputColorSpaceName = selected.inputColorSpaceName;
                 preview.inputColorSpaceWarning = selected.inputColorSpaceWarning;
                 preview.inputColorSpaceAutomatic = selected.inputColorSpaceAutomatic;
                 preview.missing = !selected.available;
                 if (preview.missing)
                     return preview;
+                if (!thumbnailDisplay) {
+                    preview.missing = true;
+                    preview.inputColorSpaceWarning =
+                        "The selected OCIO thumbnail display processor is unavailable";
+                    return preview;
+                }
                 const auto found = results->cache.find(preview.key);
                 if (found != results->cache.end()) {
                     preview.image = found->second;
@@ -768,22 +786,34 @@ void AssetController::startThumbnails() {
                         1, static_cast<int>(std::lround(static_cast<double>(extent.height()) *
                                                         width / extent.width())));
                     preview.image = QImage(width, std::min(64, height), QImage::Format_RGBA8888);
-                    for (int y = 0; y < preview.image.height(); ++y)
+                    std::vector<render::Rgba32f> sourceRow;
+                    sourceRow.reserve(static_cast<std::size_t>(width));
+                    std::vector<float> scratch(static_cast<std::size_t>(width) * 4U);
+                    std::vector<render::Rgba8> packed(static_cast<std::size_t>(width));
+                    bool displayValid = true;
+                    for (int y = 0; y < preview.image.height() && displayValid; ++y) {
+                        sourceRow.clear();
                         for (int x = 0; x < width; ++x) {
                             const auto sx = static_cast<std::uint32_t>(x) * extent.width() /
                                             static_cast<std::uint32_t>(width);
                             const auto sy = static_cast<std::uint32_t>(y) * extent.height() /
                                             static_cast<std::uint32_t>(preview.image.height());
-                            const auto pixel =
-                                image.pixels()[static_cast<std::size_t>(sy) * extent.width() + sx];
-                            auto* output =
-                                preview.image.scanLine(y) + static_cast<std::ptrdiff_t>(x) * 4;
-                            const auto alpha = pixel.alpha();
-                            output[0] = srgb(alpha > 0 ? pixel.red() / alpha : 0);
-                            output[1] = srgb(alpha > 0 ? pixel.green() / alpha : 0);
-                            output[2] = srgb(alpha > 0 ? pixel.blue() / alpha : 0);
-                            output[3] = static_cast<unsigned char>(std::lround(alpha * 255.0F));
+                            sourceRow.push_back(
+                                image.pixels()[static_cast<std::size_t>(sy) * extent.width() + sx]);
                         }
+                        displayValid =
+                            detail::packAssetThumbnailRow(*thumbnailDisplay, std::span(sourceRow),
+                                                          std::span(scratch), std::span(packed));
+                        if (displayValid)
+                            std::memcpy(preview.image.scanLine(y), packed.data(),
+                                        packed.size() * sizeof(render::Rgba8));
+                    }
+                    if (!displayValid) {
+                        preview.image = {};
+                        preview.missing = true;
+                        preview.inputColorSpaceWarning =
+                            "The thumbnail display transform could not process this image";
+                    }
                 }
                 if (!preview.image.isNull()) {
                     // CACHEFIX-1: the 512-entry bound was only ever a bound on COUNT, and the
@@ -875,13 +905,16 @@ void AssetController::startThumbnails() {
                         preview.key += workingId;
                         preview.key += ':';
                         preview.key.append(revision.begin(), revision.end());
+                        preview.key += ':';
+                        preview.key += thumbnailDisplayIdentity;
                         const auto cachedPreview = results->cache.find(preview.key);
-                        if (available && colorAvailable && cachedPreview != results->cache.end()) {
+                        if (available && colorAvailable && thumbnailDisplay &&
+                            cachedPreview != results->cache.end()) {
                             preview.image = cachedPreview->second;
                             preview.missing = false;
                         }
-                        if (available && colorAvailable && preview.image.isNull() &&
-                            stream != probe.streams.end()) {
+                        if (available && colorAvailable && thumbnailDisplay &&
+                            preview.image.isNull() && stream != probe.streams.end()) {
                             const auto frame = video.frame(
                                 probe, stream->id, 0, 0, nullptr, inputId, workingId,
                                 configRevision, [&] { return context.isCancellationRequested(); });
@@ -912,33 +945,42 @@ void AssetController::startThumbnails() {
                                                 QImage(static_cast<int>(extent.width()),
                                                        static_cast<int>(extent.height()),
                                                        QImage::Format_RGBA8888);
-                                            for (std::uint32_t y = 0; y < extent.height(); ++y)
-                                                for (std::uint32_t x = 0; x < extent.width(); ++x) {
-                                                    const auto& pixel =
-                                                        image
-                                                            ->pixels()[static_cast<std::size_t>(y) *
-                                                                           extent.width() +
-                                                                       x];
-                                                    const auto alpha = pixel.alpha();
-                                                    auto* output =
-                                                        preview.image.scanLine(
-                                                            static_cast<int>(y)) +
-                                                        static_cast<std::ptrdiff_t>(x) * 4;
-                                                    output[0] =
-                                                        srgb(alpha > 0 ? pixel.red() / alpha : 0);
-                                                    output[1] =
-                                                        srgb(alpha > 0 ? pixel.green() / alpha : 0);
-                                                    output[2] =
-                                                        srgb(alpha > 0 ? pixel.blue() / alpha : 0);
-                                                    output[3] = static_cast<unsigned char>(
-                                                        std::lround(alpha * 255.0F));
-                                                }
-                                            preview.missing = false;
+                                            std::vector<float> scratch(
+                                                static_cast<std::size_t>(extent.width()) * 4U);
+                                            std::vector<render::Rgba8> packed(extent.width());
+                                            bool displayValid = true;
+                                            for (std::uint32_t y = 0;
+                                                 y < extent.height() && displayValid; ++y) {
+                                                const auto offset =
+                                                    static_cast<std::size_t>(y) * extent.width();
+                                                const std::span<const render::Rgba32f> row(
+                                                    image->pixels().data() + offset,
+                                                    extent.width());
+                                                displayValid = detail::packAssetThumbnailRow(
+                                                    *thumbnailDisplay, row, std::span(scratch),
+                                                    std::span(packed));
+                                                if (displayValid)
+                                                    std::memcpy(
+                                                        preview.image.scanLine(static_cast<int>(y)),
+                                                        packed.data(),
+                                                        packed.size() * sizeof(render::Rgba8));
+                                            }
+                                            if (displayValid)
+                                                preview.missing = false;
+                                            else {
+                                                preview.image = {};
+                                                preview.inputColorSpaceWarning =
+                                                    "The thumbnail display transform could not "
+                                                    "process this video frame";
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
+                        if (!thumbnailDisplay && preview.inputColorSpaceWarning.empty())
+                            preview.inputColorSpaceWarning =
+                                "The selected OCIO thumbnail display processor is unavailable";
                         if (!preview.image.isNull()) {
                             keepProxy(preview.key, preview.image);
                         }

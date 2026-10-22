@@ -1,4 +1,6 @@
+#include "../asset_thumbnail_display.hpp"
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_cpu_display_frame.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
@@ -33,6 +35,7 @@
 #include <QThread>
 #include <QVBoxLayout>
 
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <regex>
@@ -475,6 +478,66 @@ void migrationPin() {
                reopened.snapshot().revision() == revision && reopenedStack.size() == 0,
            "migrated old document keeps every stored colour number; UI adds no command");
 }
+void acesThumbnailDisplayPin() {
+    const auto revision = color::ocioBuiltInContentRevision(
+        color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri);
+    expect(revision.has_value(), "ACES thumbnail config revision resolves");
+    if (!revision)
+        return;
+    auto resolution = color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn,
+                                                color::kAcesCgV1ConfigUri, *revision, "ACEScg");
+    expect(resolution.ready(), "ACES thumbnail working config resolves");
+    if (!resolution.ready())
+        return;
+    auto config = std::move(resolution).takeResolved();
+    auto built = color::buildBloomNeutralCpuDisplayProcessor(*config);
+    expect(built.succeeded(), "ACES thumbnail display processor builds");
+    if (!built.succeeded())
+        return;
+    auto handle = std::move(built).takeHandle();
+    const auto pixel = render::Rgba32f::fromPremultiplied(1.0F, 1.0F, 1.0F, 1.0F);
+    expect(pixel.hasValue(), "ACES thumbnail white pixel constructs");
+    if (!pixel || !handle)
+        return;
+    const std::array source{*pixel.value()};
+    std::array<float, 4> scratch{};
+    std::array<render::Rgba8, 1> thumbnail{};
+    expect(ui::detail::packAssetThumbnailRow(*handle, source, scratch, thumbnail),
+           "ACES thumbnail uses qualified display packing");
+    const auto window = render::ImageWindow::create(0, 0, 1, 1);
+    if (!window)
+        return;
+    const auto descriptor = render::Rgba32fImageDescriptor::create(
+        *window.value(), *window.value(), core::PixelAspectRatio::square());
+    if (!descriptor)
+        return;
+    auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), 1024);
+    if (!builder)
+        return;
+    auto imageBuilder = std::move(*builder.value());
+    expect(!imageBuilder.write(0, 0, source[0]), "ACES display comparison image writes");
+    auto image = std::move(imageBuilder).freeze();
+    if (!image)
+        return;
+    auto view = image.value()->view();
+    if (!view)
+        return;
+    auto displayed = color::produceBloomNeutralDisplayFrame(*handle, *view.value(), 1, 1024);
+    expect(displayed.hasValue() && displayed.value()->pixels()[0] == thumbnail[0] &&
+               thumbnail[0].red < 255 && thumbnail[0].green < 255 && thumbnail[0].blue < 255,
+           "ACES thumbnail matches qualified display output, not fixed sRGB white");
+    const auto defaultIdentity = ui::detail::assetThumbnailDisplayCacheIdentity(*handle);
+    auto review = color::buildBloomNeutralCpuDisplayProcessor(*config, "Rec.1886 Rec.709 - Display",
+                                                              "ACES 1.0 - SDR Video");
+    expect(review.succeeded(), "ACES review display processor builds");
+    if (review.succeeded()) {
+        const auto reviewIdentity =
+            ui::detail::assetThumbnailDisplayCacheIdentity(*review.handle());
+        expect(defaultIdentity.has_value() && reviewIdentity.has_value() &&
+                   defaultIdentity != reviewIdentity,
+               "thumbnail proxy key changes with qualified display identity");
+    }
+}
 } // namespace
 int main(int argc, char** argv) try {
     QApplication application(argc, argv);
@@ -486,6 +549,7 @@ int main(int argc, char** argv) try {
     workingSpaceConverterPin();
     relativeArchiveIntentPin();
     migrationPin();
+    acesThumbnailDisplayPin();
     return failures == 0 ? 0 : 1;
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
