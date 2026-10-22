@@ -119,27 +119,28 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
     }
     std::optional<std::uint64_t> allowance;
     if (sample.machine.availableBytes) {
-        auto hostReserve =
-            std::max(kMinimumHostMemoryReserve, physicalBytes / 100 * kHostMemoryReservePercent);
-        auto available = *sample.machine.availableBytes;
-        if (physicalBytes != 0) {
-            // Preserve ordinary reserve rounding while respecting the ledger's existing
-            // physically bounded low-memory floor. Availability still constrains every byte.
-            const auto usable =
-                std::min(physicalBytes,
-                         MemoryBudgetLedger::usableByteBudgetForPhysicalMemory(physicalBytes));
-            hostReserve = std::min(hostReserve, physicalBytes - usable);
-            available = std::min(available, physicalBytes);
-        }
-        allowance = available > hostReserve ? available - hostReserve : 0;
+        const auto available = *sample.machine.availableBytes;
+        // Cache-pressure reserve is a retention threshold, not a second deduction from live
+        // availability. Reuse the ledger's active-work percentage without reclaimable credit.
+        // Divide first (including the remainder) so even the largest counter cannot overflow.
+        allowance = available / 100 * kDefaultTotalAvailablePercent +
+                    available % 100 * kDefaultTotalAvailablePercent / 100;
+        const auto usable = MemoryBudgetLedger::usableByteBudgetForPhysicalMemory(physicalBytes);
+        allowance = std::min<std::uint64_t>(
+            *allowance, physicalBytes == 0 ? usable : std::min(physicalBytes, usable));
+        // Unknown physical capacity keeps the existing fallback as a ceiling, never a floor.
         if (finiteProcessCeiling_) {
             allowance.emplace(std::min(*allowance, *finiteProcessCeiling_));
         }
     } else if (finiteProcessCeiling_ && *finiteProcessCeiling_ == 0) {
         allowance = 0;
     }
-    const bool ready = allowance && ((*allowance == 0 && recent) ||
-                                     (complete && fresh && !sample.awaitingProcessSample));
+    if (allowance && *allowance != 0 && (!complete || !fresh || sample.awaitingProcessSample)) {
+        const auto current = budget_.snapshot().hostCapacityBytes;
+        allowance = current ? std::optional{std::min(*allowance, *current)} : std::nullopt;
+    }
+    const bool ready =
+        allowance && fresh && (*allowance == 0 || (complete && !sample.awaitingProcessSample));
     if (fresh) {
         hostSampleAt_ = sample.process.sampledAt;
     }
@@ -151,11 +152,15 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
                                                const std::size_t physicalBytes,
                                                const MemoryBudgetAllocation& allocation,
                                                const Clock::time_point now) noexcept {
+    const bool newerDelivery = sample.sampleSerial > snapshot().sampleSerial;
     applyHostSample(sample, physicalBytes, now);
-    if (!budgetView_)
+    if (!budgetView_ || !newerDelivery)
         return;
     const auto current = snapshot();
     if (current.sampleSerial != sample.sampleSerial)
+        return;
+    const auto previous = budgetView_->load();
+    if (previous && previous->sampleSerial >= current.sampleSerial)
         return;
     const auto host = current.reservations.hostCapacityBytes.value_or(0);
     const auto hostCeiling = static_cast<std::size_t>(

@@ -3,6 +3,7 @@
 #include <bloom/render/packed_rgba8_storage.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/packed_host_retirement.hpp>
+#include <bloom/runtime/prepared_gpu_scene.hpp>
 #include <bloom/ui/composition_preview_cpu_stage.hpp>
 
 #include <QApplication>
@@ -31,6 +32,86 @@ runtime::MemoryBudgetState capacity(const std::uint64_t serial,
     state.processSampleFresh = true;
     state.sampleSerial = serial;
     return state;
+}
+// Real scene preparation refusals only; this control witness never claims GPU execution.
+void preparationRefusalFeedback(Expectations& checks) {
+    auto project = makeTestProject("Preparation refusal feedback", timeAt(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, project.initialCompositionId);
+    checks.expect(session.addSolidLayer("Solid", {0.25, 0.5, 0.75, 1}), "feedback solid authored");
+    PipelineFixture fixture;
+    const auto compiled = fixture.compiler.compile({session.snapshot(), session.compositionId()});
+    checks.expect(compiled.plan != nullptr, "feedback scene compiles through the actual compiler");
+    if (!compiled.plan)
+        return;
+    auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(1);
+    runtime::GpuScenePreparationPhase phase{.policy = policy,
+                                            .envelope = {.requestedExecutorBytes = 1024 * 1024}};
+    runtime::CpuGpuSceneBuilder builder(nullptr, {}, {}, phase);
+    const runtime::EvaluationRequest request{.time = timeAt(0),
+                                             .output = compiled.plan->output(),
+                                             .resolution = runtime::CompositionFormatResolution{},
+                                             .colorIntent = session.colorIntent(),
+                                             .pixelStorageByteLimit = 1024 * 1024};
+    const auto awaitingHost = builder.build(compiled.plan, request);
+    checks.expect(!awaitingHost.scene &&
+                      awaitingHost.diagnostic.code ==
+                          runtime::PreparedGpuSceneDiagnosticCode::AwaitingCapacity &&
+                      awaitingHost.diagnostic.message ==
+                          "GPU preparation is awaiting a fresh host-memory sample" &&
+                      awaitingHost.diagnostic.admissionRetry.has_value(),
+                  "missing host sample diagnoses readiness loss with the existing typed retry");
+    auto sample = capacity(1, 0);
+    policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+    const auto refusedHost = builder.build(compiled.plan, request);
+    checks.expect(!refusedHost.scene &&
+                      refusedHost.diagnostic.code ==
+                          runtime::PreparedGpuSceneDiagnosticCode::BudgetRefused &&
+                      refusedHost.diagnostic.message ==
+                          "GPU preparation does not fit the current host-memory capacity" &&
+                      refusedHost.diagnostic.admissionRetry.has_value(),
+                  "fresh zero diagnoses the actual Host refusal before preparation");
+    sample = capacity(2);
+    policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+    const auto awaitingDevice = builder.build(compiled.plan, request);
+    checks.expect(!awaitingDevice.scene &&
+                      awaitingDevice.diagnostic.code ==
+                          runtime::PreparedGpuSceneDiagnosticCode::AwaitingCapacity &&
+                      awaitingDevice.diagnostic.message ==
+                          "GPU preparation is awaiting device-memory capacity",
+                  "missing device capacity is distinct from host readiness");
+    checks.expect(
+        policy->reportDevice(1, {.source = render::GpuAllocationBudgetSource::MemoryBudget,
+                                 .device_local_bytes = gib,
+                                 .available_bytes = 0}),
+        "feedback device reports measured zero");
+    const auto refusedDevice = builder.build(compiled.plan, request);
+    checks.expect(!refusedDevice.scene &&
+                      refusedDevice.diagnostic.code ==
+                          runtime::PreparedGpuSceneDiagnosticCode::BudgetRefused &&
+                      refusedDevice.diagnostic.message ==
+                          "GPU preparation does not fit the current device-memory capacity",
+                  "fresh zero diagnoses the actual Device refusal before preparation");
+    checks.expect(
+        policy->reportDevice(1, {.source = render::GpuAllocationBudgetSource::MemoryBudget,
+                                 .device_local_bytes = gib,
+                                 .available_bytes = gib}),
+        "feedback device capacity becomes positive");
+    auto held = policy->reserve({.pixels = 1, .sourceFree = true, .native = false});
+    checks.expect(held.lease != nullptr, "feedback competing phase holds the only slot");
+    const auto refusedCount = builder.build(compiled.plan, request);
+    checks.expect(
+        !refusedCount.scene &&
+            refusedCount.diagnostic.code ==
+                runtime::PreparedGpuSceneDiagnosticCode::BudgetRefused &&
+            refusedCount.diagnostic.message ==
+                "GPU preparation is waiting for another processing request to finish" &&
+            refusedCount.diagnostic.admissionRetry.has_value(),
+        "RequestCount refusal reports pending work rather than exhausted host/device memory");
+    held.lease.reset();
+    checks.expect(policy->snapshot().reservations.admittedPhases == 0,
+                  "feedback refusal fixture leaves no phase claim");
 }
 void run(Expectations& checks) {
     auto project = makeTestProject("Capacity retry", timeAt(10));
@@ -277,13 +358,15 @@ void deliveredDefaultRetry(Expectations& checks) {
                controller.state().frame && controller.state().frame->desiredIdentity().time == time;
     };
     const auto failed = [&] { return controller.state().activity == ui::PreviewActivity::Failed; };
-    checks.expect(waitUntil(failed) && submissions == 0 && preparations == 0,
-                  "omitted cold default waits before any pixel work");
+    checks.expect(waitUntil(failed) && submissions == 0 && preparations == 0 &&
+                      controller.state().message ==
+                          QStringLiteral("Awaiting a fresh preview memory sample"),
+                  "omitted cold default reports missing delivery before any pixel work");
     for (int index = 0; index < 20; ++index)
         controller.notifyProcessingCapacityChanged();
     checks.expect(submissions == 0, "unknown default pulses cannot spin");
-    const auto deliver = [&](const std::uint64_t serial) {
-        auto sample = capacity(serial);
+    const auto deliver = [&](const std::uint64_t serial, const std::uint64_t limit = 8 * gib) {
+        auto sample = capacity(serial, limit);
         sample.configuredBytes = 30 * gib;
         sample.processingEffectiveBytes = 30 * gib;
         policy->applyHostSample(sample, 60 * gib,
@@ -308,8 +391,10 @@ void deliveredDefaultRetry(Expectations& checks) {
         controller.notifyProcessingCapacityChanged();
     checks.expect(submissions == 2 && preparations == 1,
                   "same stale serial synchronous refusal never self-retries");
-    checks.expect(session.setCurrentTime(timeAt(2)) && waitUntil(failed) && submissions == 2,
-                  "stale default retains newest intent without submission");
+    checks.expect(session.setCurrentTime(timeAt(2)) && waitUntil(failed) && submissions == 2 &&
+                      controller.state().message ==
+                          QStringLiteral("Awaiting a fresh preview memory sample"),
+                  "stalled sample reports readiness loss while retaining newest intent");
     deliver(3);
     checks.expect(waitUntil([&] { return readyAt(timeAt(2)); }) && submissions == 3 &&
                       preparations == 2,
@@ -321,6 +406,26 @@ void deliveredDefaultRetry(Expectations& checks) {
     checks.expect(session.setCurrentTime(timeAt(0)) && readyAt(timeAt(0)) && submissions == 3 &&
                       preparations == 2,
                   "known cached frame remains available during administrative readiness loss");
+    const auto cachedFrame = controller.state().frame;
+    deliver(5, 0);
+    checks.expect(
+        view->load() && view->load()->fresh() && view->load()->previewRequestBytes == 0 &&
+            session.setCurrentTime(timeAt(3)) && waitUntil(failed) &&
+            controller.state().message ==
+                QStringLiteral("Insufficient current memory capacity for preview rendering") &&
+            controller.state().frame == cachedFrame && submissions == 3 && preparations == 2,
+        "fresh measured zero reports insufficient current capacity and keeps good pixels");
+    checks.expect(session.setCurrentTime(timeAt(4)) && waitUntil(failed),
+                  "fresh zero keeps the newest uncached intent");
+    for (int index = 0; index < 20; ++index)
+        controller.notifyProcessingCapacityChanged();
+    QCoreApplication::processEvents();
+    checks.expect(submissions == 3 && preparations == 2,
+                  "repeated fresh-zero capacity notifications do not spin");
+    deliver(6);
+    checks.expect(waitUntil([&] { return readyAt(timeAt(4)); }) && submissions == 4 &&
+                      preparations == 3,
+                  "fresh positive sample automatically retries newest zero-refused intent once");
     controller.beginShutdown();
     service.beginShutdown();
     bridge.beginShutdown();
@@ -528,7 +633,9 @@ int main(int argc, char** argv) {
     try {
         QApplication application(argc, argv);
         Expectations checks;
-        run(checks);
+        preparationRefusalFeedback(checks);
+        if (!checks.failures())
+            run(checks);
         if (!checks.failures())
             deliveredDefaultRetry(checks);
         if (!checks.failures())

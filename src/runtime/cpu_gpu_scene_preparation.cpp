@@ -241,10 +241,31 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             switch (grant.status) {
             case Admission::AwaitingCapacity:
                 refusalRetry = TaskAdmissionRetry{grant.admissionRevision, envelope.native};
+                if (grant.domain == render::GpuProcessingPhaseDomain::Host) {
+                    return fail(PreparedGpuSceneDiagnosticCode::AwaitingCapacity,
+                                "GPU preparation is awaiting a fresh host-memory sample");
+                }
+                if (grant.domain == render::GpuProcessingPhaseDomain::Device) {
+                    return fail(PreparedGpuSceneDiagnosticCode::AwaitingCapacity,
+                                "GPU preparation is awaiting device-memory capacity");
+                }
                 return fail(PreparedGpuSceneDiagnosticCode::AwaitingCapacity,
                             "GPU preparation is awaiting sampled processing capacity");
             case Admission::BudgetRefused:
                 refusalRetry = TaskAdmissionRetry{grant.admissionRevision, envelope.native};
+                if (grant.domain == render::GpuProcessingPhaseDomain::Host) {
+                    return fail(PreparedGpuSceneDiagnosticCode::BudgetRefused,
+                                "GPU preparation does not fit the current host-memory capacity");
+                }
+                if (grant.domain == render::GpuProcessingPhaseDomain::Device) {
+                    return fail(PreparedGpuSceneDiagnosticCode::BudgetRefused,
+                                "GPU preparation does not fit the current device-memory capacity");
+                }
+                if (grant.domain == render::GpuProcessingPhaseDomain::RequestCount) {
+                    return fail(
+                        PreparedGpuSceneDiagnosticCode::BudgetRefused,
+                        "GPU preparation is waiting for another processing request to finish");
+                }
                 return fail(PreparedGpuSceneDiagnosticCode::BudgetRefused,
                             "The paired processing phase envelope was refused before preparation");
             case Admission::InvalidRequest:

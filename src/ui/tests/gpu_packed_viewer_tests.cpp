@@ -185,6 +185,7 @@ void observe(const char* name, ui::ViewerEditor& viewer, QSplitter& splitter, QW
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     bool cache100 = false, half = false, partial = false, playing = false, animatedDrag = false;
     bool hostOwnership = false, hostRetirement = false, sustained = false;
+    bool deliveredDefaults = false;
     std::size_t preparationWidth = 1;
     std::string sequenceManifest;
     std::vector<char*> forwarded{argv[0]};
@@ -194,6 +195,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             if (++index >= argc)
                 return 2;
             sequenceManifest = argv[index];
+        } else if (argument == "--delivered-defaults") {
+            deliveredDefaults = true;
         } else if (argument == "--sustained") {
             sustained = cache100 = true;
         } else if (argument == "--width-one") {
@@ -219,7 +222,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             forwarded.push_back(argv[index]);
     }
     const auto options = parseOptions(static_cast<int>(forwarded.size()), forwarded.data());
-    if (!options.valid || (!sequenceManifest.empty() && !cache100) || (sustained && partial))
+    if (!options.valid || (!sequenceManifest.empty() && !cache100) ||
+        (deliveredDefaults && !cache100) || (sustained && partial))
         return 2;
     QApplication application(argc, argv);
     QTemporaryDir temporary;
@@ -234,7 +238,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     }
     if (cache100)
         return runPackedCache100(options, temporary, half, partial, sequenceManifest, sustained,
-                                 preparationWidth);
+                                 preparationWidth, deliveredDefaults);
     Expectations checks;
     Fixture fixture(temporary.path().toStdString());
     auto format = document::CompositionFormat::create(1920, 1080);

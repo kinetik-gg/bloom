@@ -678,14 +678,18 @@ capacity and actual export reservations use a separate bounded allowance, so col
 does not disable frame preparation. Default construction and settings getters perform no OS reads;
 unactivated standalone ledgers retain the legacy host-only policy.
 
-Foreground admission also respects that existing physically bounded low-memory floor when deriving
-the host reserve. For known physical memory, the reserve cannot consume the usable allowance
-already defined by `MemoryBudgetLedger`: a 7 GiB host reserves 4 GiB, and an 8 GiB host reserves
-5 GiB. Above the low-memory floor the nominal reserve is unchanged. Admission subtracts this reserve
-from **measured available** memory and still applies every finite process ceiling, sample freshness
-and readiness requirement. The floor is not a guaranteed processing allocation: measured zero or
-availability below the reserve still refuses work, and unknown physical memory cannot manufacture
-a low-memory allowance. Reusable host credit remains zero.
+Foreground phase admission uses `min(physical-bounded usable budget, 80% of measured available)`
+when physical memory is known, then applies every finite process ceiling and the existing complete,
+fresh, monotonic sample and readiness requirements. This reuses the ledger's active-work availability
+percentage; the `max(8 GiB, 40% of physical)` reserve remains the cache-pressure threshold and is not
+deducted a second time from available memory. For example, 64 GiB physical with 22 GiB available
+still triggers cache trimming while allowing a fitting phase within 17.6 GiB of live host capacity.
+The physical-bounded low-memory usable floor remains a ceiling, never a guaranteed allocation:
+measured zero refuses growth and missing availability cannot authorize it. With unknown physical
+capacity, 80% of fresh measured availability is capped by the existing 3 GiB fallback ceiling,
+without granting a floor. Duplicate deliveries cannot refresh numeric defaults, and incomplete or
+stale deliveries cannot grow host capacity. Reusable host credit remains zero; held and retained
+claims, native/device and request-count limits remain charged independently of cache retention.
 
 The application owns one `MemoryBudgetController`, with at most one `BlockingIo` sampling task,
 no sampling backlog and a five-second cadence. A worker captures host/process data; ordinary task

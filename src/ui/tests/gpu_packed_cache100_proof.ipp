@@ -32,7 +32,7 @@ ui::PreparedPreviewFrameHandle footageCpuReference(
 }
 int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, const bool half,
                       const bool partial, const std::string& manifestPath, const bool sustained,
-                      const std::size_t preparationWidth) {
+                      const std::size_t preparationWidth, bool deliveredDefaults) {
     Expectations checks;
     QSettings().setValue("viewer/resolution", half ? "Half" : "Full");
     Fixture fixture(temporary.path().toStdString());
@@ -43,7 +43,6 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                 retainedCacheBudget = 1ULL << 30;
     std::uint64_t transferBudget = 320ULL << 20;
     std::optional<std::uint64_t> explicitExecutorBudget;
-    bool deliveredDefaults = false;
     std::string sourceRate = "25/1";
     sequence.width = 1920;
     sequence.height = 1080;
@@ -82,7 +81,7 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                 throw std::runtime_error(
                     "Descriptor must select the controlled A or native B qualification");
             if (heavierB) {
-                deliveredDefaults = object["deliveredDefaults"].toBool(false);
+                deliveredDefaults = deliveredDefaults || object["deliveredDefaults"].toBool(false);
                 const auto processing = object["processingByteBudget"].toInteger();
                 const auto oracle = object["oracleByteBudget"].toInteger();
                 const auto retained = object["cacheByteBudget"].toInteger();
@@ -360,6 +359,11 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                   << " assignedPreview=" << delivered->assignedPreviewBytes
                   << " configured=" << ledger.state().configuredBytes
                   << " liveProcessing=" << ledger.state().processingEffectiveBytes
+                  << " physical=" << ledger.physicalByteBudget()
+                  << " hostAvailable=" << ledger.state().machine.availableBytes.value_or(0)
+                  << " phaseHostCapacity="
+                  << processingPolicy->snapshot().reservations.hostCapacityBytes.value_or(0)
+                  << " retentionPercent=" << ledger.state().retentionPercent
                   << " savedOperationOverride="
                   << playbackSettings.contains("playback/operation-cache-bytes")
                   << " savedPreviewOverride="

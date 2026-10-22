@@ -1,12 +1,16 @@
+#include "ram_preview_pipeline_test_support.hpp"
+
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
+#include <bloom/ui/composition_preview_cpu_stage.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/memory_budget_controller.hpp>
@@ -213,6 +217,147 @@ void deliveredSettingsRecovery() {
                published->previewRequestBytes == gib,
            "first recovery growth stays at 25 percent and publishes proportional defaults");
 }
+void sampledPressurePreviewRecovery() {
+    using namespace ui::ram_pipeline_test;
+    runtime::MemoryBudgetLedger ledger(64 * gib, 64 * gib);
+    ledger.setConfiguredTotal(30 * gib);
+    ledger.beginProcessSampling();
+    auto project = makeTestProject("Sampled pressure preview", timeAt(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, project.initialCompositionId);
+    expect(session.addSolidLayer("Solid", {0.2, 0.4, 0.8, 1}), "pressure solid authored");
+    PipelineFixture fixture;
+    auto view = std::make_shared<runtime::TaskBudgetView>();
+    auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(1, nullptr, view);
+    auto schedulerConfig = config();
+    schedulerConfig.gpuRequestOwnedByteCapacity.reset();
+    schedulerConfig.budgetView = view;
+    runtime::TaskScheduler scheduler(schedulerConfig);
+    ui::TaskUiBridge bridge(scheduler);
+    bridge.stop();
+    std::atomic_size_t preparations{0};
+    std::atomic_bool admittedWithinLiveBudget{true};
+    const auto stage = ui::makeCompositionPreviewCpuStage(
+        fixture.compiler, fixture.evaluator, fixture.qualifiedProcessorProvider, fixture.planCache);
+    runtime::GpuPreviewDisplayServiceOptions options;
+    options.enabled = false; // This is production CPU fallback/control evidence, never GPU pixels.
+    options.processingPhasePolicy = policy;
+    runtime::GpuPreviewDisplayService service(
+        scheduler,
+        [&, stage](const document::Snapshot& snapshot,
+                   const runtime::PreviewRequestIdentity& identity, const std::size_t bytes,
+                   const std::vector<runtime::SnapshotParameterOverride>& overrides,
+                   runtime::TaskContext& context) {
+            ++preparations;
+            const auto delivered = view->load();
+            const auto admitted = policy->snapshot().reservations;
+            admittedWithinLiveBudget = admittedWithinLiveBudget && delivered &&
+                                       delivered->fresh() && bytes > 0 &&
+                                       bytes <= delivered->previewRequestBytes &&
+                                       admitted.admittedPhases == 1 && admitted.hostCapacityBytes &&
+                                       admitted.totalHostClaimBytes <= *admitted.hostCapacityBytes;
+            return stage(snapshot, identity, bytes, overrides, context);
+        },
+        ui::makeCompositionPreviewCpuDisplayFallback(fixture.displayPreparer), options);
+    auto cache = std::make_shared<ui::PreviewFrameCache>(12 * gib, ledger);
+    const ui::PreviewPreparationSubmitter submitter =
+        [&](runtime::TaskRequest request, const document::Snapshot& snapshot,
+            const runtime::PreviewRequestIdentity& identity, const std::size_t bytes,
+            const std::vector<runtime::SnapshotParameterOverride>& overrides) {
+            return service.submit(std::move(request), snapshot, identity, bytes, overrides);
+        };
+    ui::CompositionPreviewSettings settings;
+    settings.resolutionPolicy = runtime::PreviewResolutionPolicy::Full;
+    ui::CompositionPreviewController preview(
+        session, scheduler, bridge,
+        ui::makeCompositionPreviewPipeline(fixture.compiler, fixture.evaluator,
+                                           fixture.displayPreparer,
+                                           fixture.qualifiedProcessorProvider, fixture.planCache),
+        settings, cache, nullptr, submitter, {}, policy);
+    const auto readyAt = [&](const core::RationalTime time,
+                             const runtime::PreviewResolutionPolicy resolution) {
+        return preview.state().activity == ui::PreviewActivity::Ready && preview.state().frame &&
+               preview.state().freshness == ui::FrameFreshness::Current &&
+               preview.state().frame->desiredIdentity().time == time &&
+               preview.state().frame->desiredIdentity().resolutionPolicy == resolution;
+    };
+    auto held = std::make_shared<Held>();
+    std::atomic_bool holdNext{false};
+    std::atomic_size_t available{64 * gib};
+    ui::MemoryBudgetController owner(scheduler, bridge, ledger, [&](const auto&) {
+        if (holdNext.exchange(false)) {
+            held->entered = true;
+            held->release.wait();
+        }
+        auto measured = sample();
+        measured.physicalBytes = 64 * gib;
+        measured.machine.availableBytes = available.load();
+        measured.process.status = runtime::ProcessMemoryStatus::Unsupported;
+        measured.process.domains.clear();
+        return measured;
+    });
+    QObject::connect(&owner, &ui::MemoryBudgetController::sampleApplied, &preview, [&] {
+        const auto state = ledger.state();
+        policy->applyHostSample(state, ledger.physicalByteBudget(),
+                                ledger.allocate(18 * gib, 12 * gib));
+        preview.notifyProcessingCapacityChanged();
+    });
+    expect(spin([&] { return readyAt(timeAt(0), runtime::PreviewResolutionPolicy::Full); }) &&
+               preparations == 1 && cache->size() != 0 && cache->residentBytes() > 0,
+           "first delivered sample prepares and retains a real Full preview");
+    available = 22 * gib;
+    owner.requestSample();
+    expect(spin([&] { return ledger.state().sampleSerial == 2; }),
+           "22 GiB availability is delivered through the actual sampler owner");
+    const auto pressure = ledger.state();
+    const auto host = policy->snapshot().reservations;
+    expect(pressure.memoryPressure && pressure.retentionPercent == 25 &&
+               pressure.retainedBytes > 0 && cache->size() != 0 &&
+               ledger.physicalByteBudget() == 64 * gib && host.hostReady &&
+               host.hostCapacityBytes && *host.hostCapacityBytes > 0 && view->load() &&
+               view->load()->fresh() && view->load()->previewRequestBytes > 0,
+           "pressure trims reusable retention while populated caches keep positive live capacity");
+    expect(session.setCurrentTime(timeAt(1)) &&
+               spin([&] { return readyAt(timeAt(1), runtime::PreviewResolutionPolicy::Full); }) &&
+               preparations == 2,
+           "uncached Full preview executes under the delivered pressure budget");
+    preview.setResolutionPolicy(runtime::PreviewResolutionPolicy::Quarter);
+    expect(spin([&] { return readyAt(timeAt(1), runtime::PreviewResolutionPolicy::Quarter); }) &&
+               preparations == 3 && admittedWithinLiveBudget,
+           "uncached Quarter preview executes with a fitting real phase and request budget");
+    auto stale = *view->load();
+    stale.sampledAt -= 11s;
+    expect(view->publish(stale), "stalled sample fixture expires actual delivered defaults");
+    holdNext = true;
+    owner.requestSample();
+    expect(spin([&] { return held->entered.load(); }), "replacement memory sampler is held off UI");
+    expect(session.setCurrentTime(timeAt(2)) &&
+               preview.state().activity == ui::PreviewActivity::Failed &&
+               preview.state().message ==
+                   QStringLiteral("Awaiting a fresh preview memory sample") &&
+               preview.state().frame && preparations == 3,
+           "stalled sample is readiness loss with retained pixels, not measured memory exhaustion");
+    expect(session.setCurrentTime(timeAt(3)), "newest Quarter intent replaces stalled request");
+    for (int index = 0; index < 20; ++index) {
+        owner.requestSample();
+        preview.notifyProcessingCapacityChanged();
+    }
+    QCoreApplication::processEvents();
+    expect(owner.admittedSampleCount() == 3 && preparations == 3 && !bridge.isRunning(),
+           "held sampler and stale defaults admit no backlog or retry spin with Jobs stopped");
+    held->release.count_down();
+    expect(spin([&] { return readyAt(timeAt(3), runtime::PreviewResolutionPolicy::Quarter); }) &&
+               preparations == 4 && admittedWithinLiveBudget,
+           "sample completion automatically recovers only the newest Quarter intent");
+    owner.beginShutdown();
+    preview.beginShutdown();
+    service.beginShutdown();
+    bridge.beginShutdown();
+    expect(spin([&] { return scheduler.isQuiescent(); }), "pressure recovery tasks retire");
+    expect(policy->snapshot().reservations.admittedPhases == 0,
+           "pressure recovery leaves no processing phase claims");
+}
 void coldForegroundAndSettings() {
     auto& ledger = runtime::processMemoryBudgetLedger();
     ledger.beginProcessSampling();
@@ -302,6 +447,7 @@ int main(int argc, char** argv) {
     heldSampling();
     teardown();
     deliveredSettingsRecovery();
+    sampledPressurePreviewRecovery();
     coldForegroundAndSettings();
     return failures == 0 ? 0 : 1;
 }

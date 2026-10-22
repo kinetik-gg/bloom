@@ -954,7 +954,10 @@ void CompositionPreviewController::requestPreview(
         const auto delivered = processingPolicy_->budgetView()->load();
         deferredDefaultBudget_ =
             runtime::TaskDefaultBudgetRetry{delivered ? delivered->sampleSerial : 0};
-        publishTerminal(PreviewActivity::Failed, tr("Awaiting delivered preview memory capacity"));
+        publishTerminal(PreviewActivity::Failed,
+                        delivered && delivered->fresh()
+                            ? tr("Insufficient current memory capacity for preview rendering")
+                            : tr("Awaiting a fresh preview memory sample"));
         return;
     }
 
