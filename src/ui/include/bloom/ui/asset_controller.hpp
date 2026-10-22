@@ -38,6 +38,7 @@ class AssetController final : public QObject {
     void remove(document::AssetId id);
     [[nodiscard]] bool busy() const noexcept { return busy_; }
     [[nodiscard]] bool missing(document::AssetId id) const;
+    [[nodiscard]] QString audioDiagnostic(document::AssetId id) const;
     [[nodiscard]] QImage thumbnail(document::AssetId id) const;
     [[nodiscard]] QImage nodeThumbnail(document::NodeId id) const;
     [[nodiscard]] QString inputColorSpaceDisplay(document::AssetId id) const;
@@ -77,6 +78,7 @@ class AssetController final : public QObject {
         std::string key;
         std::string inputColorSpaceName;
         std::string inputColorSpaceWarning;
+        std::string audioDiagnostic;
         bool inputColorSpaceAutomatic = false;
         bool missing = false;
     };

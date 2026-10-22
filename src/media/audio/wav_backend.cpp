@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <limits>
 #include <new>
 #include <utility>
@@ -28,18 +29,6 @@ using bloom::media::audio::AudioResult;
     return result.value_or(RationalTime{});
 }
 
-[[nodiscard]] AudioResult<drwav> open(std::span<const std::byte> bytes) noexcept {
-    drwav wav{};
-    if (bytes.empty() || !drwav_init_memory(&wav, bytes.data(), bytes.size(), nullptr)) {
-        return AudioResult<drwav>::failure(AudioError::codeOnly(AudioErrorCode::MalformedFile));
-    }
-    auto result = AudioResult<drwav>::success(wav);
-    // dr_wav's memory callbacks keep the owning decoder in pUserData. Repair that self-pointer
-    // after the value moves into the Bloom result wrapper.
-    result.value()->pUserData = result.value();
-    return result;
-}
-
 [[nodiscard]] AudioResult<AudioProbe> probeOpened(drwav& wav) noexcept {
     if (wav.channels == 0 || wav.sampleRate == 0 ||
         wav.totalPCMFrameCount >
@@ -56,73 +45,115 @@ using bloom::media::audio::AudioResult;
     });
 }
 
-} // namespace
-
-namespace bloom::media::audio::detail {
-
-AudioResult<AudioProbe> probeWav(const std::span<const std::byte> bytes) noexcept {
-    auto opened = open(bytes);
-    if (!opened) {
-        return AudioResult<AudioProbe>::failure(*opened.error());
-    }
-    auto result = probeOpened(*opened.value());
-    drwav_uninit(opened.value());
-    return result;
+size_t readFile(void* user, void* buffer, size_t bytes) {
+    auto& stream = *static_cast<std::ifstream*>(user);
+    const auto count = static_cast<std::streamsize>(
+        std::min(bytes, static_cast<std::size_t>(std::numeric_limits<std::streamsize>::max())));
+    stream.read(static_cast<char*>(buffer), count);
+    return static_cast<size_t>(stream.gcount());
 }
 
-AudioResult<AudioBuffer> decodeWav(const std::span<const std::byte> bytes,
-                                   const AudioDecodeLimits& limits) noexcept {
-    auto opened = open(bytes);
-    if (!opened) {
-        return AudioResult<AudioBuffer>::failure(*opened.error());
-    }
-    auto& wav = *opened.value();
-    const auto finish = [&wav](AudioResult<AudioBuffer> result) {
-        drwav_uninit(&wav);
-        return result;
-    };
-    if (wav.channels == 0 || wav.sampleRate == 0 ||
+drwav_bool32 seekFile(void* user, int offset, drwav_seek_origin origin) {
+    auto& stream = *static_cast<std::ifstream*>(user);
+    stream.clear();
+    stream.seekg(offset, origin == DRWAV_SEEK_SET ? std::ios::beg : std::ios::cur);
+    return stream.good() ? DRWAV_TRUE : DRWAV_FALSE;
+}
+
+[[nodiscard]] bool openFile(std::ifstream& input, drwav& wav) noexcept {
+    return drwav_init(&wav, readFile, seekFile, nullptr, &input, nullptr) != DRWAV_FALSE;
+}
+
+[[nodiscard]] AudioResult<AudioBuffer> decodeOpened(drwav& wav,
+                                                    const AudioDecodeLimits& limits) noexcept {
+    if (wav.channels == 0 || wav.sampleRate == 0 || wav.totalPCMFrameCount == 0 ||
         wav.totalPCMFrameCount >
             static_cast<drwav_uint64>(std::numeric_limits<std::size_t>::max()) ||
         wav.totalPCMFrameCount >
-            static_cast<drwav_uint64>(std::numeric_limits<std::int64_t>::max())) {
-        return finish(AudioResult<AudioBuffer>::failure(
-            AudioError::codeOnly(AudioErrorCode::InvalidAudioFormat)));
-    }
+            static_cast<drwav_uint64>(std::numeric_limits<std::int64_t>::max()))
+        return AudioResult<AudioBuffer>::failure(
+            AudioError::codeOnly(AudioErrorCode::InvalidAudioFormat));
     if (wav.totalPCMFrameCount > limits.sampleBudget / wav.channels) {
-        return finish(AudioResult<AudioBuffer>::failure(
-            AudioError::limited(AudioErrorCode::SampleBudgetExceeded,
-                                wav.totalPCMFrameCount * static_cast<std::uint64_t>(wav.channels),
-                                limits.sampleBudget)));
+        const auto observed =
+            wav.totalPCMFrameCount > std::numeric_limits<std::uint64_t>::max() / wav.channels
+                ? std::numeric_limits<std::uint64_t>::max()
+                : wav.totalPCMFrameCount * wav.channels;
+        return AudioResult<AudioBuffer>::failure(AudioError::limited(
+            AudioErrorCode::SampleBudgetExceeded, observed, limits.sampleBudget));
     }
-
     try {
         const auto frames = static_cast<std::size_t>(wav.totalPCMFrameCount);
         const auto channels = static_cast<std::size_t>(wav.channels);
-        auto interleaved = std::vector<float>(frames * channels);
-        const auto readFrames =
-            drwav_read_pcm_frames_f32(&wav, wav.totalPCMFrameCount, interleaved.data());
-        if (readFrames != wav.totalPCMFrameCount) {
-            return finish(AudioResult<AudioBuffer>::failure(
-                AudioError::codeOnly(AudioErrorCode::MalformedFile)));
-        }
+        if (frames > std::numeric_limits<std::size_t>::max() / channels)
+            return AudioResult<AudioBuffer>::failure(AudioError::limited(
+                AudioErrorCode::SampleBudgetExceeded, std::numeric_limits<std::uint64_t>::max(),
+                std::numeric_limits<std::size_t>::max()));
         AudioBuffer buffer;
         buffer.rate = wav.sampleRate;
         buffer.channels = wav.channels;
         buffer.frames = wav.totalPCMFrameCount;
         buffer.planes.resize(channels);
-        for (auto& plane : buffer.planes) {
+        for (auto& plane : buffer.planes)
             plane.resize(frames);
+        constexpr std::size_t kFramesPerChunk = 4096;
+        auto interleaved = std::vector<float>(std::min(kFramesPerChunk, frames) * channels);
+        for (std::size_t start = 0; start < frames;) {
+            const auto count = std::min(kFramesPerChunk, frames - start);
+            if (drwav_read_pcm_frames_f32(&wav, count, interleaved.data()) != count)
+                return AudioResult<AudioBuffer>::failure(
+                    AudioError::codeOnly(AudioErrorCode::MalformedFile));
+            for (std::size_t frame = 0; frame < count; ++frame)
+                for (std::size_t channel = 0; channel < channels; ++channel)
+                    buffer.planes[channel][start + frame] = interleaved[frame * channels + channel];
+            start += count;
         }
-        for (std::size_t frame = 0; frame < frames; ++frame) {
-            for (std::size_t channel = 0; channel < channels; ++channel) {
-                buffer.planes[channel][frame] = interleaved[frame * channels + channel];
-            }
-        }
-        return finish(AudioResult<AudioBuffer>::success(std::move(buffer)));
+        return AudioResult<AudioBuffer>::success(std::move(buffer));
     } catch (const std::bad_alloc&) {
-        return finish(AudioResult<AudioBuffer>::failure(
-            AudioError::codeOnly(AudioErrorCode::AllocationFailure)));
+        return AudioResult<AudioBuffer>::failure(
+            AudioError::codeOnly(AudioErrorCode::AllocationFailure));
+    }
+}
+
+} // namespace
+
+namespace bloom::media::audio::detail {
+
+AudioResult<AudioProbe> probeWavFile(const std::filesystem::path& path) noexcept {
+    try {
+        std::ifstream input(path, std::ios::binary);
+        if (!input)
+            return AudioResult<AudioProbe>::failure(
+                AudioError::codeOnly(AudioErrorCode::FileReadFailed));
+        drwav wav{};
+        if (!openFile(input, wav))
+            return AudioResult<AudioProbe>::failure(
+                AudioError::codeOnly(AudioErrorCode::MalformedFile));
+        auto result = probeOpened(wav);
+        drwav_uninit(&wav);
+        return result;
+    } catch (const std::bad_alloc&) {
+        return AudioResult<AudioProbe>::failure(
+            AudioError::codeOnly(AudioErrorCode::AllocationFailure));
+    }
+}
+
+AudioResult<AudioBuffer> decodeWavFile(const std::filesystem::path& path,
+                                       const AudioDecodeLimits& limits) noexcept {
+    try {
+        std::ifstream input(path, std::ios::binary);
+        if (!input)
+            return AudioResult<AudioBuffer>::failure(
+                AudioError::codeOnly(AudioErrorCode::FileReadFailed));
+        drwav wav{};
+        if (!openFile(input, wav))
+            return AudioResult<AudioBuffer>::failure(
+                AudioError::codeOnly(AudioErrorCode::MalformedFile));
+        auto result = decodeOpened(wav, limits);
+        drwav_uninit(&wav);
+        return result;
+    } catch (const std::bad_alloc&) {
+        return AudioResult<AudioBuffer>::failure(
+            AudioError::codeOnly(AudioErrorCode::AllocationFailure));
     }
 }
 

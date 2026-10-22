@@ -259,7 +259,8 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
             if (extension == ".wav" || extension == ".mp3") {
                 const auto probe = media::audio::probeAudio(path);
                 if (!probe.value()) {
-                    diagnostic_ = "Audio import failed";
+                    diagnostic_ =
+                        "Audio import failed: " + media::audio::describeAudioError(*probe.error());
                     assets_.clear();
                     return;
                 }

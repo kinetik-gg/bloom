@@ -221,6 +221,41 @@ void testHostileInputsAndLimits(Expectations& expectations) {
     const auto fileResult = bloom::media::audio::decodeAudio(wav.path(), fileLimit);
     expectations.expect(!fileResult && fileResult.error()->code == AudioErrorCode::FileTooLarge,
                         "file-size cap rejects input before it is read");
+
+    TemporaryFile large{".wav"};
+    constexpr std::uint32_t largeDataBytes = 65U * 1024U * 1024U;
+    {
+        std::ofstream output(large.path(), std::ios::binary);
+        output.write("RIFF", 4);
+        writeU32(output, 36U + largeDataBytes);
+        output.write("WAVE", 4);
+        output.write("fmt ", 4);
+        writeU32(output, 16);
+        writeU16(output, 3);
+        writeU16(output, 2);
+        writeU32(output, 48'000);
+        writeU32(output, 48'000U * 8U);
+        writeU16(output, 8);
+        writeU16(output, 32);
+        output.write("data", 4);
+        writeU32(output, largeDataBytes);
+        output.seekp(44 + largeDataBytes - 1);
+        output.put('\0');
+    }
+    const auto largeProbe = bloom::media::audio::probeAudio(large.path());
+    expectations.expect(largeProbe && largeProbe.value()->frames == largeDataBytes / 8,
+                        "WAV metadata probe streams a file larger than the former 64 MiB cap");
+    const auto largeDecode = bloom::media::audio::decodeAudio(large.path());
+    expectations.expect(largeDecode && largeDecode.value()->frames == largeDataBytes / 8,
+                        "WAV decode streams a file larger than the former 64 MiB cap");
+    AudioDecodeLimits explicitFileLimit;
+    explicitFileLimit.fileSizeCap = 64U * 1024U * 1024U;
+    const auto explicitRefusal = bloom::media::audio::decodeAudio(large.path(), explicitFileLimit);
+    expectations.expect(!explicitRefusal &&
+                            explicitRefusal.error()->code == AudioErrorCode::FileTooLarge &&
+                            bloom::media::audio::describeAudioError(*explicitRefusal.error())
+                                    .find("configured encoded-file limit") != std::string::npos,
+                        "explicit file limit reports an exact typed refusal");
 }
 
 } // namespace

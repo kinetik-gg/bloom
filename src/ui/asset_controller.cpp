@@ -462,6 +462,11 @@ bool AssetController::missing(document::AssetId id) const {
     const auto found = previews_.find(id);
     return found != previews_.end() && found->second.missing;
 }
+QString AssetController::audioDiagnostic(document::AssetId id) const {
+    const auto found = previews_.find(id);
+    return found == previews_.end() ? QString{}
+                                    : QString::fromStdString(found->second.audioDiagnostic);
+}
 QImage AssetController::thumbnail(document::AssetId id) const {
     const auto found = previews_.find(id);
     return found == previews_.end() ? QImage{} : found->second.image;
@@ -601,9 +606,20 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
             } else if (relinkId.isValid())
                 *result = std::make_unique<commands::RelinkAsset>(relinkId, files.front(),
                                                                   directory, cancel);
-            else
-                *result =
+            else {
+                auto prepared =
                     std::make_unique<commands::ImportAssets>(files, directory, cancel, progress);
+                if (context.isCancellationRequested())
+                    return runtime::TaskResult<OperationHandle>::cancelled();
+                if (!prepared->diagnostic().empty())
+                    return runtime::TaskResult<OperationHandle>::failed(
+                        {.code = "bloom.media.import-failed",
+                         .severity = runtime::DiagnosticSeverity::Error,
+                         .summary = prepared->diagnostic(),
+                         .detail = prepared->diagnostic(),
+                         .suggestedAction = "Check the file and its reported limit."});
+                *result = std::move(prepared);
+            }
             if (context.isCancellationRequested())
                 return runtime::TaskResult<OperationHandle>::cancelled();
             return runtime::TaskResult<OperationHandle>::succeeded(std::move(result));
@@ -1064,10 +1080,12 @@ void AssetController::startThumbnails() {
                     } else if (asset.kind == document::AssetKind::Audio) {
                         Preview preview;
                         preview.missing = true;
-                        auto path = directory / asset.locator.path;
-                        if (!std::filesystem::exists(path) && !asset.locator.relinkHint.empty())
-                            path = nativePath(QString::fromStdString(asset.locator.relinkHint));
+                        const auto path = media::resolveImagePath(
+                            asset.locator.path, asset.locator.relinkHint, directory);
                         auto decoded = media::audio::decodeAudio(path);
+                        if (!decoded)
+                            preview.audioDiagnostic =
+                                media::audio::describeAudioError(*decoded.error());
                         if (decoded.value() != nullptr) {
                             const auto summary =
                                 media::audio::waveformSummary(*decoded.value(), 256);
@@ -1079,7 +1097,9 @@ void AssetController::startThumbnails() {
                                 keepAudio(asset.id,
                                           std::make_shared<const media::audio::AudioBuffer>(
                                               std::move(*decoded.value())));
-                            }
+                            } else
+                                preview.audioDiagnostic =
+                                    media::audio::describeAudioError(*summary.error());
                         }
                         results->assets.emplace(asset.id, std::move(preview));
                     } else if (asset.kind == document::AssetKind::Lut) {
@@ -1191,6 +1211,7 @@ void AssetController::poll() {
                            left.second.inputColorSpaceName == right.second.inputColorSpaceName &&
                            left.second.inputColorSpaceWarning ==
                                right.second.inputColorSpaceWarning &&
+                           left.second.audioDiagnostic == right.second.audioDiagnostic &&
                            left.second.inputColorSpaceAutomatic ==
                                right.second.inputColorSpaceAutomatic;
                 };

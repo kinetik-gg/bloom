@@ -269,12 +269,19 @@ void AssetsEditor::rebuild() {
         item->setData(0, assets::kTagsRole, tags);
         const auto* controller = session_.assetController();
         const bool missing = controller && controller->missing(asset.id);
-        auto tooltip = missing ? (lut     ? tr("Missing LUT — Relink in Assets")
-                                  : font  ? tr("Missing font — Relink in Assets")
-                                  : audio ? tr("Missing audio — Relink in Assets")
-                                  : video ? tr("Missing video — Relink in Assets")
-                                          : tr("Missing image — Relink in Assets"))
-                               : QString::fromStdString(asset.locator.path);
+        const auto audioError =
+            audio && controller ? controller->audioDiagnostic(asset.id) : QString{};
+        QString tooltip;
+        if (!audioError.isEmpty())
+            tooltip = tr("Audio preview unavailable: %1").arg(audioError);
+        else if (missing)
+            tooltip = lut     ? tr("Missing LUT — Relink in Assets")
+                      : font  ? tr("Missing font — Relink in Assets")
+                      : audio ? tr("Missing audio — Relink in Assets")
+                      : video ? tr("Missing video — Relink in Assets")
+                              : tr("Missing image — Relink in Assets");
+        else
+            tooltip = QString::fromStdString(asset.locator.path);
         if (video) {
             const auto containerTags = videoContainerTags(asset);
             if (!containerTags.isEmpty())

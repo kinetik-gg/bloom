@@ -3,13 +3,12 @@
 #include <bloom/media/audio/audio.hpp>
 
 #include <cstddef>
-#include <span>
 
 namespace bloom::media::audio::detail {
 
-[[nodiscard]] AudioResult<AudioProbe> probeMp3(std::span<const std::byte> bytes) noexcept;
+[[nodiscard]] AudioResult<AudioProbe> probeMp3File(const std::filesystem::path& path) noexcept;
 
-[[nodiscard]] AudioResult<AudioBuffer> decodeMp3(std::span<const std::byte> bytes,
-                                                 const AudioDecodeLimits& limits) noexcept;
+[[nodiscard]] AudioResult<AudioBuffer> decodeMp3File(const std::filesystem::path& path,
+                                                     const AudioDecodeLimits& limits) noexcept;
 
 } // namespace bloom::media::audio::detail

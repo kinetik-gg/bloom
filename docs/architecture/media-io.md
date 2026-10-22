@@ -332,10 +332,9 @@ Bloom does not need DAW-grade mixing to preserve source audio correctly.
 
 ## Audio v0 (AUDIO-1)
 
-The engine-only v0 slice implements bounded local preview for WAV and MP3. It is the companion audio
-paragraph to the narrow in-process image exception introduced by MEDIA-1; it does not accept the
-general worker/provider design as complete and it does not add audio to project schema, the graph,
-or the timeline. AUDIO-2 owns those document and UI connections.
+The in-process audio path supports WAV and MP3 import and local preview. It remains a narrow
+exception to the general worker/provider design; audio is represented in project assets and UI
+previews, while broader audio editing is a separate concern.
 
 ### Formats And Limits
 
@@ -347,10 +346,14 @@ or the timeline. AUDIO-2 owns those document and UI connections.
 - `probeAudio(path)` returns the container, sample rate, channel count, frame count, and exact
   `core::RationalTime` duration. `decodeAudio(path, limits)` returns an `AudioBuffer` with one
   float32 plane per channel and rejects partial reads.
-- The default file-size cap is 64 MiB and the decoded sample budget is 48,000,000 interleaved
-  samples. Limits are checked before decoder entry and before decoded storage allocation; wrong
-  magic, truncated input, malformed headers, invalid formats, and budget violations return typed
-  errors without publishing a partial buffer.
+- Probe and decode read WAV/MP3 from file-backed decoder callbacks; neither retains the whole
+  encoded file. Decode deinterleaves in 4,096-frame chunks. There is no default encoded-file cap;
+  callers may set an explicit `fileSizeCap`. The default whole-buffer admission remains 48,000,000
+  interleaved samples because playback currently retains a planar float32 buffer. The size and
+  sample limits are checked before decoded storage allocation. Wrong magic, truncated input,
+  malformed headers, invalid formats, and budget violations return typed errors without publishing
+  a partial buffer. Import reports the typed reason; a rejected audio preview shows it in the
+  asset tooltip instead of claiming the source file is missing.
 - `waveformSummary(buffer, bucketCount)` derives per-bucket minimum and maximum values per channel
   from the immutable buffer. Waveforms are derived runtime state, never document truth.
 

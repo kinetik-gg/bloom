@@ -4,6 +4,7 @@
 #include "wav_backend.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
@@ -19,49 +20,7 @@ using bloom::media::audio::AudioError;
 using bloom::media::audio::AudioErrorCode;
 using bloom::media::audio::AudioResult;
 
-[[nodiscard]] AudioResult<std::vector<std::byte>>
-readFile(const std::filesystem::path& path, const AudioDecodeLimits& limits) noexcept {
-    if (path.empty()) {
-        return AudioResult<std::vector<std::byte>>::failure(
-            AudioError::codeOnly(AudioErrorCode::InvalidPath));
-    }
-
-    std::error_code status;
-    const auto size = std::filesystem::file_size(path, status);
-    if (status) {
-        return AudioResult<std::vector<std::byte>>::failure(
-            AudioError::codeOnly(AudioErrorCode::FileNotFound));
-    }
-    if (size > limits.fileSizeCap) {
-        return AudioResult<std::vector<std::byte>>::failure(
-            AudioError::limited(AudioErrorCode::FileTooLarge, size, limits.fileSizeCap));
-    }
-    if (size > static_cast<std::uintmax_t>(std::numeric_limits<std::size_t>::max())) {
-        return AudioResult<std::vector<std::byte>>::failure(
-            AudioError::codeOnly(AudioErrorCode::FileTooLarge));
-    }
-
-    try {
-        auto bytes = std::vector<std::byte>(static_cast<std::size_t>(size));
-        std::ifstream input(path, std::ios::binary);
-        if (!input) {
-            return AudioResult<std::vector<std::byte>>::failure(
-                AudioError::codeOnly(AudioErrorCode::FileReadFailed));
-        }
-        if (!bytes.empty()) {
-            input.read(reinterpret_cast<char*>(bytes.data()),
-                       static_cast<std::streamsize>(bytes.size()));
-            if (input.gcount() != static_cast<std::streamsize>(bytes.size())) {
-                return AudioResult<std::vector<std::byte>>::failure(
-                    AudioError::codeOnly(AudioErrorCode::FileReadFailed));
-            }
-        }
-        return AudioResult<std::vector<std::byte>>::success(std::move(bytes));
-    } catch (const std::bad_alloc&) {
-        return AudioResult<std::vector<std::byte>>::failure(
-            AudioError::codeOnly(AudioErrorCode::AllocationFailure));
-    }
-}
+enum class AudioKind : std::uint8_t { Wav, Mp3 };
 
 [[nodiscard]] bool hasBytes(const std::span<const std::byte> bytes,
                             const char (&text)[5]) noexcept {
@@ -97,49 +56,104 @@ readFile(const std::filesystem::path& path, const AudioDecodeLimits& limits) noe
            (std::to_integer<unsigned char>(bytes[1]) & 0xE0U) == 0xE0U;
 }
 
-template <typename ProbeOrBuffer>
-[[nodiscard]] AudioResult<ProbeOrBuffer> readAndDispatch(const std::filesystem::path& path,
-                                                         const AudioDecodeLimits& limits,
-                                                         const bool decode) noexcept {
-    if (limits.fileSizeCap == 0 || limits.sampleBudget == 0) {
-        return AudioResult<ProbeOrBuffer>::failure(
+[[nodiscard]] AudioResult<AudioKind> readKind(const std::filesystem::path& path,
+                                              const AudioDecodeLimits& limits) noexcept {
+    if (path.empty())
+        return AudioResult<AudioKind>::failure(AudioError::codeOnly(AudioErrorCode::InvalidPath));
+    if (limits.fileSizeCap == 0 || limits.sampleBudget == 0)
+        return AudioResult<AudioKind>::failure(
             AudioError::codeOnly(AudioErrorCode::InvalidAudioFormat));
+    std::error_code status;
+    const auto size = std::filesystem::file_size(path, status);
+    if (status)
+        return AudioResult<AudioKind>::failure(AudioError::codeOnly(AudioErrorCode::FileNotFound));
+    if (size > limits.fileSizeCap)
+        return AudioResult<AudioKind>::failure(
+            AudioError::limited(AudioErrorCode::FileTooLarge, size, limits.fileSizeCap));
+    try {
+        std::ifstream input(path, std::ios::binary);
+        if (!input)
+            return AudioResult<AudioKind>::failure(
+                AudioError::codeOnly(AudioErrorCode::FileReadFailed));
+        std::array<std::byte, 12> header{};
+        input.read(reinterpret_cast<char*>(header.data()),
+                   static_cast<std::streamsize>(header.size()));
+        if (input.bad())
+            return AudioResult<AudioKind>::failure(
+                AudioError::codeOnly(AudioErrorCode::FileReadFailed));
+        const auto bytes =
+            std::span<const std::byte>(header.data(), static_cast<std::size_t>(input.gcount()));
+        if (isWav(bytes))
+            return AudioResult<AudioKind>::success(AudioKind::Wav);
+        if (isMp3(bytes))
+            return AudioResult<AudioKind>::success(AudioKind::Mp3);
+        return AudioResult<AudioKind>::failure(AudioError::codeOnly(AudioErrorCode::InvalidMagic));
+    } catch (const std::bad_alloc&) {
+        return AudioResult<AudioKind>::failure(
+            AudioError::codeOnly(AudioErrorCode::AllocationFailure));
     }
-
-    auto input = readFile(path, limits);
-    if (!input) {
-        return AudioResult<ProbeOrBuffer>::failure(*input.error());
-    }
-    const auto bytes = std::span<const std::byte>{input.value()->data(), input.value()->size()};
-    if (isWav(bytes)) {
-        if constexpr (std::is_same_v<ProbeOrBuffer, bloom::media::audio::AudioProbe>) {
-            return bloom::media::audio::detail::probeWav(bytes);
-        } else if (decode) {
-            return bloom::media::audio::detail::decodeWav(bytes, limits);
-        }
-    }
-    if (isMp3(bytes)) {
-        if constexpr (std::is_same_v<ProbeOrBuffer, bloom::media::audio::AudioProbe>) {
-            return bloom::media::audio::detail::probeMp3(bytes);
-        } else if (decode) {
-            return bloom::media::audio::detail::decodeMp3(bytes, limits);
-        }
-    }
-    return AudioResult<ProbeOrBuffer>::failure(AudioError::codeOnly(AudioErrorCode::InvalidMagic));
 }
 
 } // namespace
 
 namespace bloom::media::audio {
 
+std::string describeAudioError(const AudioError& error) {
+    switch (error.code) {
+    case AudioErrorCode::InvalidPath:
+        return "Audio path is empty";
+    case AudioErrorCode::FileNotFound:
+        return "Audio file is unavailable";
+    case AudioErrorCode::FileTooLarge:
+        return "Audio file is " + std::to_string(error.observed) +
+               " bytes; configured encoded-file limit is " + std::to_string(error.limit) + " bytes";
+    case AudioErrorCode::FileReadFailed:
+        return "Audio file could not be read";
+    case AudioErrorCode::InvalidMagic:
+        return "File is not a supported WAV or MP3";
+    case AudioErrorCode::UnsupportedContainer:
+        return "Audio container is unsupported";
+    case AudioErrorCode::MalformedFile:
+        return "Audio file is malformed or truncated";
+    case AudioErrorCode::DecoderFailure:
+        return "Audio decoder failed";
+    case AudioErrorCode::InvalidAudioFormat:
+        return "Audio format or decode limits are invalid";
+    case AudioErrorCode::SampleBudgetExceeded:
+        return "Audio has " + std::to_string(error.observed) +
+               " interleaved samples; whole-buffer decode limit is " + std::to_string(error.limit);
+    case AudioErrorCode::InvalidBucketCount:
+        return "Waveform bucket count is invalid";
+    case AudioErrorCode::InvalidBuffer:
+        return "Decoded audio buffer is invalid";
+    case AudioErrorCode::AllocationFailure:
+        return "Audio allocation failed";
+    case AudioErrorCode::BackendUnavailable:
+        return "Audio backend is unavailable";
+    case AudioErrorCode::BackendStartFailed:
+        return "Audio backend could not start";
+    case AudioErrorCode::InvalidState:
+        return "Audio backend state is invalid";
+    }
+    return "Audio error";
+}
+
 AudioResult<AudioProbe> probeAudio(const std::filesystem::path& path,
                                    const AudioDecodeLimits limits) noexcept {
-    return readAndDispatch<AudioProbe>(path, limits, false);
+    const auto kind = readKind(path, limits);
+    if (!kind)
+        return AudioResult<AudioProbe>::failure(*kind.error());
+    return *kind.value() == AudioKind::Wav ? detail::probeWavFile(path)
+                                           : detail::probeMp3File(path);
 }
 
 AudioResult<AudioBuffer> decodeAudio(const std::filesystem::path& path,
                                      const AudioDecodeLimits limits) noexcept {
-    return readAndDispatch<AudioBuffer>(path, limits, true);
+    const auto kind = readKind(path, limits);
+    if (!kind)
+        return AudioResult<AudioBuffer>::failure(*kind.error());
+    return *kind.value() == AudioKind::Wav ? detail::decodeWavFile(path, limits)
+                                           : detail::decodeMp3File(path, limits);
 }
 
 AudioResult<WaveformSummary> waveformSummary(const AudioBuffer& buffer,

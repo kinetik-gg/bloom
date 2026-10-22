@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <string>
 
 namespace bloom::commands::test {
 namespace {
@@ -50,6 +51,15 @@ void testLutImport([[maybe_unused]] TestContext& test) {
     test.expect(stack.undo().changed() && document.snapshot().project().assets().empty(),
                 "LUT import undo");
     test.expect(stack.redo().changed(), "LUT import redo");
+    const auto brokenAudio = directory / "broken.wav";
+    {
+        std::ofstream out(brokenAudio, std::ios::binary);
+        out << "not audio";
+    }
+    ImportAssets invalidAudio({brokenAudio}, directory);
+    test.expect(invalidAudio.prepared().empty() &&
+                    invalidAudio.diagnostic().find("supported WAV or MP3") != std::string::npos,
+                "audio import retains the typed probe reason for the UI");
 #endif
 }
 

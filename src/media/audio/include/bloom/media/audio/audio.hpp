@@ -5,7 +5,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <span>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -53,6 +55,7 @@ struct AudioError final {
 
     friend constexpr bool operator==(const AudioError&, const AudioError&) noexcept = default;
 };
+[[nodiscard]] std::string describeAudioError(const AudioError& error);
 
 template <typename T> class [[nodiscard]] AudioResult final {
   public:
@@ -90,8 +93,8 @@ template <typename T> class [[nodiscard]] AudioResult final {
 };
 
 struct AudioDecodeLimits final {
-    static constexpr std::uint64_t kDefaultFileSizeCap =
-        std::uint64_t{64} * std::uint64_t{1024} * std::uint64_t{1024};
+    // Streaming decoders need no encoded-file cap. Callers may still set one explicitly.
+    static constexpr std::uint64_t kDefaultFileSizeCap = std::numeric_limits<std::uint64_t>::max();
     static constexpr std::uint64_t kDefaultSampleBudget = 48'000'000U;
 
     std::uint64_t fileSizeCap = kDefaultFileSizeCap;

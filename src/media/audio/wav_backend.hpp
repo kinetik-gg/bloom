@@ -3,13 +3,12 @@
 #include <bloom/media/audio/audio.hpp>
 
 #include <cstddef>
-#include <span>
 
 namespace bloom::media::audio::detail {
 
-[[nodiscard]] AudioResult<AudioProbe> probeWav(std::span<const std::byte> bytes) noexcept;
+[[nodiscard]] AudioResult<AudioProbe> probeWavFile(const std::filesystem::path& path) noexcept;
 
-[[nodiscard]] AudioResult<AudioBuffer> decodeWav(std::span<const std::byte> bytes,
-                                                 const AudioDecodeLimits& limits) noexcept;
+[[nodiscard]] AudioResult<AudioBuffer> decodeWavFile(const std::filesystem::path& path,
+                                                     const AudioDecodeLimits& limits) noexcept;
 
 } // namespace bloom::media::audio::detail
