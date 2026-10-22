@@ -129,10 +129,17 @@ void testWrapper(Expectations& expectations) {
                         "the effect wrapper binds the resident input at set 1 binding 0");
     // The accepted precise-sampling wrapper premultiplies through the shared precise
     // bloom_ocio_cpu_premul helper (a precise stored-variable multiply), not an inline `t.rgb * a`.
-    expectations.expect(contains(effect.source, "imageStore(bloom_ocio_output, c, "
-                                                "vec4(bloom_ocio_cpu_premul(t.rgb, a), a));"),
+    expectations.expect(contains(effect.source,
+                                 "vec3 premultiplied = bloom_ocio_cpu_premul(t.rgb, a);") &&
+                            contains(effect.source,
+                                     "imageStore(bloom_ocio_output, c, vec4(premultiplied, a));"),
                         "the effect wrapper publishes premultiplied RGBA32F through the precise "
                         "premultiply helper");
+    expectations.expect(
+        contains(effect.source,
+                 "if (any(isnan(premultiplied)) || any(isinf(premultiplied))) { "
+                 "bloom_ocio_status.flags[0] = 1u; return; }"),
+        "the effect wrapper refuses a non-finite stored premultiplied pixel");
     expectations.expect(
         contains(effect.source, "precise vec3 bloom_ocio_cpu_premul(vec3 rgb, float a)"),
         "the premultiply helper is a precise stored-variable multiply");

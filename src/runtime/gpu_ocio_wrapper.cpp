@@ -223,8 +223,12 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
             out << "  uint qa = bloom_ocio_quantize(a);\n";
             out << "  bloom_ocio_output.words[index] = r | (g << 8) | (b << 16) | (qa << 24);\n";
         } else {
-            out << "  imageStore(bloom_ocio_output, c, vec4(bloom_ocio_cpu_premul(t.rgb, a), "
-                   "a));\n";
+            // The CPU reference validates the *stored* premultiplied pixel, not just the
+            // straight-RGB intermediate. Never publish a non-finite resident process pixel.
+            out << "  vec3 premultiplied = bloom_ocio_cpu_premul(t.rgb, a);\n";
+            out << "  if (any(isnan(premultiplied)) || any(isinf(premultiplied))) { "
+                   "bloom_ocio_status.flags[0] = 1u; return; }\n";
+            out << "  imageStore(bloom_ocio_output, c, vec4(premultiplied, a));\n";
         }
         out << "}\n";
 
