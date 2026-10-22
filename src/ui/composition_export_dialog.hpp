@@ -4,5 +4,6 @@
 namespace bloom::ui {
 [[nodiscard]] std::optional<CompositionExportRequest>
 compositionExportDialog(std::uint64_t maximumFrame, std::uint32_t sampleRate,
-                        const QString& projectKey = {});
+                        const QString& projectKey = {},
+                        const document::ColorSettings* colorSettings = nullptr);
 }

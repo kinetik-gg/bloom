@@ -57,11 +57,18 @@ ARRI LogC3 and RED Log3G10 are not container-tagged automatic cases. The Assets 
 pickers list every non-data colour space, grouped by the config's family, so an artist can choose
 those spaces explicitly for camera footage. The resolved id and config revision are shown in the
 Assets tooltip and source row; video tooltips also retain the numeric H.273 container tags.
+The Assets input-colour choice is an undoable asset command. Effective interpretation is selected
+in this order: a source's exact config id, its explicit legacy choice, the asset's exact config id,
+then the asset's legacy or automatic choice. The source row shows when its legacy choice is
+superseded. An asset choice applies to every source that inherits from it.
 
 The read path is probe/metadata resolution → bounded decode to straight RGB `RGBA32F` → OCIO
 input transform → unchanged alpha association/premultiplication into the working space. Decoded
 image and video-frame keys include source/member identity, resolved input id, effective working id,
 and OCIO config revision. Changing any of those values re-decodes thumbnails, proxies, and frames.
+Still and video thumbnail proxies use the qualified default display/view processor for the
+effective working space. Its canonical display identity is part of the proxy key, so a working
+space, config, display, or packing change cannot reuse differently displayed pixels.
 The CPU AP0 EXR read is pinned against the OCIO reference processor to an absolute channel delta of
 `1e-5`; Neutral sRGB PNG defaults retain the existing byte-identical goldens.
 
@@ -819,3 +826,6 @@ The ACES 1.3 CG built-in's default display is sRGB; the named review deliberatel
 Rec.709 pair. Raw display-referred presets use the config's default display/view. Missing pairs
 fail explicitly. The processor pair and config revision are recorded in analysis and evidence;
 there is no export display/view picker.
+The named ACES handoff and review options require the selected built-in ACES CG config with a
+pinned revision. The export dialog disables them with a Project Settings diagnostic otherwise;
+direct export requests are refused before preparation. Generic export presets remain selectable.

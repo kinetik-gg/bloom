@@ -1,3 +1,4 @@
+#include "composition_export_capability.hpp"
 #include "composition_export_dialog.hpp"
 #include "gpu_preview_test_phase.hpp"
 #include <QDialog>
@@ -1190,6 +1191,63 @@ void testCompositionExportUi(Expectations& expectations) {
 }
 
 void testDeliverableDialog(Expectations& expectations) {
+    const auto revision = bloom::color::ocioBuiltInContentRevision(
+        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
+    expectations.expect(revision.has_value(), "ACES deliverable config revision resolves");
+    if (!revision)
+        return;
+    auto acesSettings = document::makeBloomNeutralColorSettingsV1(*revision);
+    acesSettings.processColorSpaceId = "ACEScg";
+    acesSettings.ocioConfig.locator =
+        document::BuiltInOcioConfigLocator{std::string(bloom::color::kAcesCgV1ConfigUri)};
+    const auto neutralSettings = document::makeBloomNeutralColorSettingsV1({});
+    expectations.expect(!bloom::ui::detail::namedDeliverableAvailability(
+                             neutralSettings, bloom::ui::DeliverablePreset::VfxHandoff)
+                                .available &&
+                            !bloom::ui::detail::namedDeliverableAvailability(
+                                 neutralSettings, bloom::ui::DeliverablePreset::Review)
+                                 .available &&
+                            bloom::ui::detail::namedDeliverableAvailability(
+                                acesSettings, bloom::ui::DeliverablePreset::VfxHandoff)
+                                .available,
+                        "ACES deliverables require the selected ACES configuration");
+    QTimer::singleShot(0, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        auto* preset =
+            dialog ? dialog->findChild<bloom::ui::kit::KDropdown*>("compositionExportPreset")
+                   : nullptr;
+        auto* reason =
+            dialog ? dialog->findChild<bloom::ui::kit::KLabel*>("compositionExportColorNote")
+                   : nullptr;
+        expectations.expect(preset && !preset->isItemEnabled(0) && !preset->isItemEnabled(1) &&
+                                preset->currentIndex() >= 2 && reason &&
+                                reason->text().contains("Project Settings"),
+                            "Neutral dialog disables ACES deliverables with a visible reason");
+        if (dialog)
+            dialog->reject();
+    });
+    expectations.expect(
+        !bloom::ui::compositionExportDialog(47, 48000, "neutral-color", &neutralSettings),
+        "unsupported deliverable dialog cancels without a request");
+    Fixture neutralFixture;
+    if (neutralFixture.setUp(expectations, "neutral deliverable preflight fixture")) {
+        int refusals = 0;
+        QObject::connect(&neutralFixture.controller(), &FrameExportController::exportFinished,
+                         [&](const FrameExportOutcome outcome, const QString& message) {
+                             expectations.expect(outcome == FrameExportOutcome::Refused &&
+                                                     message.contains("Project Settings"),
+                                                 "unsupported named export reports a remedy");
+                             ++refusals;
+                         });
+        for (const auto deliverable :
+             {bloom::ui::DeliverablePreset::VfxHandoff, bloom::ui::DeliverablePreset::Review}) {
+            bloom::ui::CompositionExportRequest unsupported;
+            unsupported.deliverable = deliverable;
+            unsupported.range.destination = neutralFixture.directory.path() / "unsupported.exr";
+            neutralFixture.controller().beginCompositionExport(std::move(unsupported));
+        }
+        expectations.expect(refusals == 2, "both ACES deliverables refuse Neutral before export");
+    }
     QSettings settings;
     settings.remove("export/projects/color5-a");
     settings.remove("export/projects/color5-b");
@@ -1220,7 +1278,7 @@ void testDeliverableDialog(Expectations& expectations) {
         padding->setValue(5);
         dialog->accept();
     });
-    const auto request = bloom::ui::compositionExportDialog(47, 48000, "color5-a");
+    const auto request = bloom::ui::compositionExportDialog(47, 48000, "color5-a", &acesSettings);
     expectations.expect(
         request && request->deliverable == bloom::ui::DeliverablePreset::VfxHandoff &&
             request->range.naming.startFrame == 1010 && request->range.naming.framePadding == 5 &&
@@ -1249,7 +1307,7 @@ void testDeliverableDialog(Expectations& expectations) {
             }
             dialog->reject();
         });
-        expectations.expect(!bloom::ui::compositionExportDialog(47, 48000, key),
+        expectations.expect(!bloom::ui::compositionExportDialog(47, 48000, key, &acesSettings),
                             "persistence probe cancelled");
     }
     settings.remove("export/projects/color5-a");

@@ -1,4 +1,5 @@
 #include "composition_editor_support.hpp"
+#include "composition_export_capability.hpp"
 #include "composition_export_dialog.hpp"
 #include <QCryptographicHash>
 #include <bloom/ui/composition_session.hpp>
@@ -32,12 +33,20 @@ void FrameExportController::requestCompositionExport() {
                     QCryptographicHash::Sha256)
                     .toHex());
     }
-    const auto request =
-        compositionExportDialog(mapping.value()->maximumFrameIndex(), rate, projectKey);
+    const auto request = compositionExportDialog(mapping.value()->maximumFrameIndex(), rate,
+                                                 projectKey, &session_.colorSettings());
     if (request)
         beginCompositionExport(*request);
 }
 void FrameExportController::beginCompositionExport(CompositionExportRequest request) {
+    const auto capability =
+        detail::namedDeliverableAvailability(session_.colorSettings(), request.deliverable);
+    if (!capability.available) {
+        emit exportFinished(FrameExportOutcome::Refused,
+                            QString::fromUtf8(capability.reason.data(),
+                                              static_cast<qsizetype>(capability.reason.size())));
+        return;
+    }
     if (!canExport() || request.range.destination.empty()) {
         emit exportFinished(FrameExportOutcome::Refused, tr("Composition export is unavailable."));
         return;

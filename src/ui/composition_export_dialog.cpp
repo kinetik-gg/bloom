@@ -1,4 +1,5 @@
 #include "composition_export_dialog.hpp"
+#include "composition_export_capability.hpp"
 #include <QDialog>
 #include <QFileDialog>
 #include <QFormLayout>
@@ -17,9 +18,9 @@
 #include <limits>
 
 namespace bloom::ui {
-std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t maximumFrame,
-                                                                std::uint32_t sampleRate,
-                                                                const QString& projectKey) {
+std::optional<CompositionExportRequest>
+compositionExportDialog(std::uint64_t maximumFrame, std::uint32_t sampleRate,
+                        const QString& projectKey, const document::ColorSettings* colorSettings) {
     QDialog dialog;
     dialog.setWindowTitle(QObject::tr("Export Composition"));
     dialog.setMinimumWidth(kit::px(kit::Size::DialogTextWidth));
@@ -28,8 +29,29 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
     preset->setObjectName("compositionExportPreset");
     preset->addItem(QObject::tr("VFX handoff EXR (ACES2065-1, PIZ, 1001, ####)"), 101);
     preset->addItem(QObject::tr("Review H.264 (Rec.709, look on)"), 102);
-    preset->setItemEnabled(
-        1, output::outputPresetAvailabilityV1(output::OutputPresetV1::H264MovV1).available);
+    const auto namedAvailability =
+        colorSettings
+            ? detail::namedDeliverableAvailability(*colorSettings, DeliverablePreset::VfxHandoff)
+            : detail::NamedDeliverableAvailability{false,
+                                                   "Choose the built-in ACES CG configuration in "
+                                                   "Project Settings to use ACES deliverables."};
+    const auto reviewAvailability =
+        colorSettings
+            ? detail::namedDeliverableAvailability(*colorSettings, DeliverablePreset::Review)
+            : namedAvailability;
+    preset->setItemEnabled(0, namedAvailability.available);
+    preset->setItemEnabled(1, reviewAvailability.available);
+    if (!namedAvailability.available) {
+        const auto reason =
+            QString::fromUtf8(namedAvailability.reason.data(),
+                              static_cast<qsizetype>(namedAvailability.reason.size()));
+        preset->setItemToolTip(0, reason);
+        preset->setItemToolTip(1, reason);
+    } else if (!reviewAvailability.available) {
+        preset->setItemToolTip(
+            1, QString::fromUtf8(reviewAvailability.reason.data(),
+                                 static_cast<qsizetype>(reviewAvailability.reason.size())));
+    }
     const auto selectedPreset = [&] {
         const int value = preset->currentData().toInt();
         return value == 101   ? output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1
@@ -113,6 +135,13 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
     auto* note = new kit::KLabel(&dialog);
     note->setWordWrap(true);
     note->setObjectName("compositionExportNote");
+    auto* colorNote = new kit::KLabel(&dialog);
+    colorNote->setObjectName("compositionExportColorNote");
+    colorNote->setWordWrap(true);
+    if (!namedAvailability.available)
+        colorNote->setText(
+            QString::fromUtf8(namedAvailability.reason.data(),
+                              static_cast<qsizetype>(namedAvailability.reason.size())));
     auto* install = new kit::KButton(QObject::tr("Install OpenH264…"), &dialog);
     install->setObjectName("installOpenH264");
     auto* locate = new kit::KButton(QObject::tr("Locate downloaded file…"), &dialog);
@@ -138,6 +167,8 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
     buttons->addWidget(cancel);
     buttons->addWidget(proceed);
     layout->addRow(QObject::tr("Preset"), preset);
+    layout->addRow(colorNote);
+    colorNote->setVisible(!namedAvailability.available);
     layout->addRow(QObject::tr("Profile"), profile);
     layout->addRow(QObject::tr("First frame"), first);
     layout->addRow(QObject::tr("Last frame"), last);
@@ -247,6 +278,7 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
         const bool h264 = id == output::OutputPresetV1::H264MovV1;
         proceed->setEnabled(
             !destination->text().trimmed().isEmpty() && first->value() <= last->value() &&
+            preset->isItemEnabled(preset->currentIndex()) &&
             output::outputPresetAvailabilityV1(id).available &&
             (!h264 || hardware->isChecked() || openh264Installed || openh264Consent));
     };
@@ -306,6 +338,8 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
     QObject::connect(proceed, &kit::KButton::clicked, &dialog, &QDialog::accept);
     QObject::connect(cancel, &kit::KButton::clicked, &dialog, &QDialog::reject);
     if (dialog.exec() != QDialog::Accepted)
+        return std::nullopt;
+    if (!preset->isItemEnabled(preset->currentIndex()))
         return std::nullopt;
     CompositionExportRequest request;
     request.range = {std::filesystem::path(destination->text().toStdString()),
