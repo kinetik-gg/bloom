@@ -56,6 +56,12 @@ struct RenderResult final {
     RenderDiagnosticCode diagnosticCode = RenderDiagnosticCode::None;
 };
 
+// Own the effective working-space/config identity before dispatching an asynchronous export.
+// Missing project settings are a refusal, never an implicit Neutral/Rec.709 substitution.
+[[nodiscard]] std::optional<runtime::EvaluationColorIntent>
+captureRenderColorIntent(const SessionRenderSourceSnapshot& source,
+                         const document::Composition& composition);
+
 class Render final {
   public:
     // The caller owns/injects one provider shared across concurrent/still/range requests and

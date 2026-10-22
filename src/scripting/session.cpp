@@ -154,7 +154,9 @@ SessionRenderSourceSnapshot Session::renderSourceSnapshot() const {
         return binding_->renderSourceSnapshot ? binding_->renderSourceSnapshot()
                                               : SessionRenderSourceSnapshot{snapshot(), {}};
     }
-    return {snapshot(), displayPath_.parent_path()};
+    const auto* settings = session_->colorSettings();
+    return {snapshot(), displayPath_.parent_path(),
+            settings ? std::optional<document::ColorSettings>(*settings) : std::nullopt};
 }
 
 host::ProjectSessionStateSnapshot Session::state() const {

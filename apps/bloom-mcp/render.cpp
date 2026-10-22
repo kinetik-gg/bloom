@@ -63,11 +63,15 @@ yyjson_mut_val* Server::render(Json& out, yyjson_val* arguments, const bool comp
     if (still && (member(arguments, "profile") || member(arguments, "audio") ||
                   member(arguments, "sampleRate")))
         throw InvalidInput("Still presets do not accept media encoding settings");
-    const auto snapshot = facade_.query.snapshot();
+    const auto source = session_->renderSourceSnapshot();
+    const auto& snapshot = source.snapshot;
     const auto* composition =
         snapshot.project().findComposition(document::CompositionId::fromRaw(id));
     if (!composition)
         throw InvalidInput("Composition does not exist");
+    const auto colorIntent = scripting::captureRenderColorIntent(source, *composition);
+    if (!colorIntent)
+        throw std::runtime_error("Project color settings are unavailable for export");
     runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
     std::uint64_t frames = 0;
     std::string report;
@@ -125,8 +129,11 @@ yyjson_mut_val* Server::render(Json& out, yyjson_val* arguments, const bool comp
              .sampleRate = static_cast<std::uint32_t>(rate),
              .pcmCodec = *preset == output::OutputPresetV1::PcmWavV1 ? profile : "pcm_s16le",
              .bwfDescription = {},
-             .assetBaseDirectory = session_->displayPath().parent_path(),
+             .assetBaseDirectory = source.assetBaseDirectory,
              .worker = {},
+             .workingColorSpaceId = std::string(colorIntent->workingColorSpaceId),
+             .ocioConfigRevision = colorIntent->ocioConfigRevision,
+             .ocioConfigUri = std::string(colorIntent->ocioConfigUri),
              .gpuProvider = gpuExportProvider_},
             *retirement);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(10);

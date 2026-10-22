@@ -3,6 +3,7 @@
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/color_settings.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
@@ -86,6 +87,9 @@ struct SessionCommandResult final {
 struct SessionRenderSourceSnapshot final {
     document::Snapshot snapshot;
     std::filesystem::path assetBaseDirectory;
+    // Project color settings are archive state, not part of document::Snapshot. Capture them
+    // with the document and asset base so a later Save As or settings edit cannot mix intents.
+    std::optional<document::ColorSettings> colorSettings;
 };
 
 // A live client borrows typed host services and immutable reads, never mutable document

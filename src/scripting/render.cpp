@@ -6,9 +6,11 @@
 #include <bloom/output/output_export_resource_ledger.hpp>
 
 #include <chrono>
+#include <string_view>
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <variant>
 
 namespace bloom::scripting {
 namespace {
@@ -102,6 +104,7 @@ await(runtime::TaskHandle<Value>& handle, const std::function<bool()>& cancelled
 [[nodiscard]] RenderResult
 exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& plan,
                const std::filesystem::path& assetBaseDirectory, const core::RationalTime time,
+               const runtime::EvaluationColorIntent& colorIntent,
                const output::OutputPresetV1 preset, const std::filesystem::path& destination,
                std::filesystem::path scratchDirectory, output::ExportResourceLedgerV1& ledger,
                const std::shared_ptr<host::GpuExportProvider>& gpuProvider,
@@ -123,7 +126,7 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
                        .output = plan->output(),
                        .resolution = runtime::CompositionFormatResolution{},
                        .quality = runtime::EvaluationQuality::Reference,
-                       .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
+                       .colorIntent = colorIntent,
                        .pixelStorageByteLimit = runtime::defaultGpuProcessFrameByteBudget()},
         .assetBaseDirectory = assetBaseDirectory,
         .targetPath = destination,
@@ -284,6 +287,31 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
 
 } // namespace
 
+std::optional<runtime::EvaluationColorIntent>
+captureRenderColorIntent(const SessionRenderSourceSnapshot& source,
+                         const document::Composition& composition) {
+    if (!source.colorSettings.has_value())
+        return std::nullopt;
+    const auto& settings = *source.colorSettings;
+    std::string_view uri;
+    if (const auto* builtIn =
+            std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator))
+        uri = builtIn->uri;
+    else if (const auto* externalArchive =
+                 std::get_if<document::ExternalOciozLocator>(&settings.ocioConfig.locator))
+        uri = externalArchive->uri;
+    else if (const auto* externalConfig =
+                 std::get_if<document::ExternalOcioConfigLocator>(&settings.ocioConfig.locator))
+        uri = externalConfig->uri;
+    const auto& working = composition.workingColorSpaceId();
+    return runtime::captureEvaluationColorIntent(
+        {.workingColorSpaceId = working.has_value()
+                                    ? std::string_view(*working)
+                                    : std::string_view(settings.processColorSpaceId),
+         .ocioConfigRevision = settings.ocioConfig.expectedRevision.digest,
+         .ocioConfigUri = uri});
+}
+
 RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
                          const runtime::SnapshotCompiler& compiler, RenderRequest request,
                          std::filesystem::path scratchDirectory,
@@ -311,6 +339,9 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
     if (composition == nullptr) {
         return failed("Composition does not exist");
     }
+    const auto colorIntent = captureRenderColorIntent(source, *composition);
+    if (!colorIntent.has_value())
+        return failed("Project color settings are unavailable for render");
     if (!request.frame.has_value() && !request.range.has_value()) {
         return failed("Render requires a frame or range");
     }
@@ -336,9 +367,10 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
         const auto rangeResult = host::FrameRangeRunnerV1::run(
             range,
             [&](const host::FrameRangeFrameV1& frame) {
-                const auto current = exportWithPlan(
-                    session, scheduler, plan, source.assetBaseDirectory, frame.time, request.preset,
-                    frame.path, scratchDirectory, ledger, gpuProvider, request.cancelled);
+                const auto current =
+                    exportWithPlan(session, scheduler, plan, source.assetBaseDirectory, frame.time,
+                                   *colorIntent, request.preset, frame.path, scratchDirectory,
+                                   ledger, gpuProvider, request.cancelled);
                 aggregate.gpuEvaluatedFrames += current.gpuEvaluatedFrames;
                 aggregate.gpuNativeDispatches += current.gpuNativeDispatches;
                 aggregate.gpuReadbacks += current.gpuReadbacks;
@@ -378,7 +410,7 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
     if (!time.has_value()) {
         return failed("Frame is outside the composition range");
     }
-    return exportWithPlan(session, scheduler, plan, source.assetBaseDirectory, *time,
+    return exportWithPlan(session, scheduler, plan, source.assetBaseDirectory, *time, *colorIntent,
                           request.preset, request.destination, std::move(scratchDirectory), ledger,
                           gpuProvider, request.cancelled);
 }

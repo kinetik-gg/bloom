@@ -46,6 +46,7 @@ struct ScriptPanelRuntime::State {
     std::atomic_uint64_t generation = 1, cancellation = 0, activeCancellation = 0;
     std::optional<document::Snapshot> snapshot;
     std::filesystem::path assetBaseDirectory;
+    std::optional<document::ColorSettings> colorSettings;
     py::PythonContext context;
     std::deque<Work> scripts;
     std::deque<std::shared_ptr<Request>> requests;
@@ -103,6 +104,7 @@ ScriptPanelRuntime::ScriptPanelRuntime(CompositionSession& session, ProjectHost&
     connect(&session_, &CompositionSession::selectionChanged, this, &ScriptPanelRuntime::refresh);
     connect(&session_, &CompositionSession::currentTimeChanged, this, &ScriptPanelRuntime::refresh);
     connect(&host_, &ProjectHost::sessionReplaced, this, &ScriptPanelRuntime::replaceSession);
+    connect(&host_, &ProjectHost::colorSettingsChanged, this, &ScriptPanelRuntime::refresh);
     connect(&host_, &ProjectHost::saveFinished, this, [this] { refresh(); });
     connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this,
             &ScriptPanelRuntime::shutdown);
@@ -126,6 +128,8 @@ void ScriptPanelRuntime::refresh() {
     state_->snapshot = session_.snapshot();
     const auto path = host_.displayPath();
     state_->assetBaseDirectory = path ? path->parent_path() : std::filesystem::path{};
+    const auto* colorSettings = host_.colorSettings();
+    state_->colorSettings = colorSettings ? std::optional(*colorSettings) : std::nullopt;
     state_->context.project = session_.snapshot().project().id().value();
     state_->context.composition = session_.compositionId().value();
     state_->context.time = session_.currentTime();
@@ -308,8 +312,8 @@ void ScriptPanelRuntime::work(const std::shared_ptr<State>& state) {
                         const std::lock_guard lock(state->mutex);
                         if (!valid() || !state->snapshot)
                             throw std::runtime_error("The live project was replaced");
-                        return scripting::SessionRenderSourceSnapshot{*state->snapshot,
-                                                                      state->assetBaseDirectory};
+                        return scripting::SessionRenderSourceSnapshot{
+                            *state->snapshot, state->assetBaseDirectory, state->colorSettings};
                     };
                     auto attached = scripting::Session::attach(std::move(binding));
                     if (!attached)
