@@ -129,6 +129,21 @@ template <typename Definition>
     using namespace bloom::document;
     switch (definition.lowering) {
     case NodeLoweringKind::ImageEffect:
+        if (definition.key.typeId == "bloom.gaussian-blur" ||
+            definition.key.typeId == "bloom.box-blur") {
+            return definition.key.schemaVersion == 1 &&
+                   definition.inputs == std::vector<InputPortDefinition>{
+                       {"input", SocketValueKind::Image},
+                       {"radius", SocketValueKind::Scalar, false}} &&
+                   definition.parameters.size() == 2 &&
+                   hasParameter(definition, 0, "radius", "bloom.blur.radius",
+                                ParameterValueKind::Float64, true) &&
+                   hasParameter(definition, 1, "edge", "bloom.blur.edge",
+                                ParameterValueKind::Integer) &&
+                   definition.outputs ==
+                       std::vector<OutputPortDefinition>{{"image", SocketValueKind::Image}} &&
+                   !definition.layerSlotInput && !definition.audioLayerSlotInput;
+        }
         if (definition.key.typeId == "bloom.image-mix" ||
             definition.key.typeId == "bloom.set-alpha") {
             const bool mix = definition.key.typeId == "bloom.image-mix";

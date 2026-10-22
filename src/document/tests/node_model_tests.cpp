@@ -223,6 +223,12 @@ void multiplyInvertDefinitions() {
 } // namespace
 
 int main() {
+    NodeDefinitionRegistry completeRegistry;
+    expect(registerBuiltInNodeDefinitions(completeRegistry),
+           "all built-in nodes register successfully at application startup");
+    for (const auto* type : {"bloom.gaussian-blur", "bloom.box-blur", "bloom.video-source"})
+        expect(completeRegistry.find(type, 1) != nullptr,
+               "blur registration does not truncate the built-in registry");
     const auto* shape = builtInNodeDefinitions().find(kShapeSourceNodeType, 1);
     expect(shape && shape->parameters.size() == 17 && shape->category == NodeCategory::Sources,
            "one shape source shares all properties");
