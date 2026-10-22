@@ -368,28 +368,35 @@ void exercisePackedStress(Expectations& checks, Fixture& fixture, const TestOpti
     auto lastAdvance = started;
     bool continuouslyPlaying = true;
     std::uint64_t observed = 0;
+    std::vector<double> observedPaintGapsMs;
+    observedPaintGapsMs.reserve(60ULL * rate);
     std::optional<core::RationalTime> previous;
-    checks.expect(waitUntil(
-                      [&] {
-                          const auto shown = viewer.displayedFrameForTest();
-                          if (shown && (!previous || *previous != shown->desiredIdentity().time)) {
-                              ++observed;
-                              lastAdvance = PackedStressClock::now();
-                              previous = shown->desiredIdentity().time;
-                              checks.expect(
-                                  shown->provenance().provider ==
+    checks.expect(
+        waitUntil(
+            [&] {
+                const auto shown = viewer.displayedFrameForTest();
+                if (shown && (!previous || *previous != shown->desiredIdentity().time)) {
+                    const auto advanceAt = PackedStressClock::now();
+                    if (previous)
+                        observedPaintGapsMs.push_back(
+                            std::chrono::duration<double, std::milli>(advanceAt - lastAdvance)
+                                .count());
+                    ++observed;
+                    lastAdvance = advanceAt;
+                    previous = shown->desiredIdentity().time;
+                    checks.expect(shown->provenance().provider ==
                                           runtime::PreviewDisplayProvider::GpuPreparedPacked &&
                                       std::ranges::find(retainedTimes, *previous) !=
                                           retainedTimes.end(),
                                   "sustained playback paints retained exact GPU products");
-                          }
-                          continuouslyPlaying = continuouslyPlaying &&
-                                                playback.state() == ui::PlaybackState::Playing &&
-                                                PackedStressClock::now() - lastAdvance < 1s;
-                          return PackedStressClock::now() - started >= 60s;
-                      },
-                      65s),
-                  "real retained transport remains active for sixty seconds");
+                }
+                continuouslyPlaying = continuouslyPlaying &&
+                                      playback.state() == ui::PlaybackState::Playing &&
+                                      PackedStressClock::now() - lastAdvance < 1s;
+                return PackedStressClock::now() - started >= 60s;
+            },
+            65s),
+        "real retained transport remains active for sixty seconds");
     playback.pause();
     checks.expect(waitUntil([&] { return packedStressCurrent(viewer, controller, session); }, 5s),
                   "sustained playback settles at exact requested paint");
@@ -402,6 +409,20 @@ void exercisePackedStress(Expectations& checks, Fixture& fixture, const TestOpti
                       afterClaims.ownedPackedHostAllocations ==
                           beforeClaims.ownedPackedHostAllocations,
                   "sixty-second warm playback performs no render, transfer or retained growth");
+    std::sort(observedPaintGapsMs.begin(), observedPaintGapsMs.end());
+    std::cout << "PACKED_PAINT_GAPS endpoint=widgetPaintedFrame sampling=polled"
+              << " definition=betweenObservedDistinctPaints sampleCount="
+              << observedPaintGapsMs.size() << " quantile=nearestRank p50Ms=";
+    if (observedPaintGapsMs.empty()) {
+        std::cout << "NA p95Ms=NA p99Ms=NA maxMs=NA";
+    } else {
+        const auto percentile = [&](const std::size_t percent) {
+            return observedPaintGapsMs[(observedPaintGapsMs.size() * percent + 99U) / 100U - 1U];
+        };
+        std::cout << percentile(50) << " p95Ms=" << percentile(95) << " p99Ms=" << percentile(99)
+                  << " maxMs=" << observedPaintGapsMs.back();
+    }
+    std::cout << " scanout=unmeasured inputLatency=unmeasured\n";
     std::cout << "PACKED_SUSTAINED seconds=60 observedPaintedTimes=" << observed
               << " observedPaintedTimesPerSecond=" << static_cast<double>(observed) / 60.0
               << " continuouslyPlaying=" << continuouslyPlaying << " looped=1 scanout=unmeasured"
