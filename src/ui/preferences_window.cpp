@@ -41,7 +41,8 @@ constexpr auto kMaximumBudgetBytes = std::min<std::uint64_t>(
 constexpr double kMaximumBudgetGiB = static_cast<double>(kMaximumBudgetBytes) / kBytesPerGiB;
 
 [[nodiscard]] std::uint64_t budgetBytesFromGiB(const double value) {
-    const auto bytes = std::round(static_cast<long double>(std::max(0.0, value)) * kBytesPerGiB);
+    const auto bytes = std::round(static_cast<long double>(std::max(0.0, value)) *
+                                  static_cast<long double>(kBytesPerGiB));
     return bytes >= static_cast<long double>(kMaximumBudgetBytes)
                ? kMaximumBudgetBytes
                : static_cast<std::uint64_t>(bytes);
