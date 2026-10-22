@@ -8,6 +8,7 @@
 #include <bloom/project/project_io_memory.hpp>
 #include <bloom/project/save_archive.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -107,6 +108,13 @@ class [[nodiscard]] SessionRecoveryResult final {
     const ProjectSession& session, PublicationCoordinator& coordinator,
     platform::StagedArtifactCoordinator& artifacts, const std::filesystem::path& recoveryPath,
     project::SaveArchiveLimits limits, project::ProjectIoOperationMemory operation) noexcept;
+
+// Worker-only half of recovery. `input` owns the UI-captured immutable revision; cancellation is
+// checked by the shared Save pipeline through its final publication guard.
+[[nodiscard]] SessionRecoveryResult executeSessionRecoverySnapshot(
+    PublicationCoordinator& coordinator, platform::StagedArtifactCoordinator& artifacts,
+    const SessionSaveOwningInput& input, const std::atomic_bool* cancellationFlag,
+    project::ProjectIoOperationMemory operation) noexcept;
 
 // Removes a recovery file that is no longer needed (a successful Save, or closing a session that
 // has nothing unsaved). True when nothing is left at `recoveryPath` afterwards, including when

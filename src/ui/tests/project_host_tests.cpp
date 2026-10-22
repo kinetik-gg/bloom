@@ -18,10 +18,12 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <source_location>
 #include <string>
@@ -273,6 +275,8 @@ void testRecoverySnapshotAndStartupOffer(Expectations& expectations) {
     expectations.expect(executeRename(host, "Recovered Project"),
                         "recovery: the rename transaction commits");
     host.writeRecoverySnapshot();
+    expectations.expect(waitUntil([&] { return host.recoveryOffer().has_value(); }),
+                        "recovery: the asynchronous snapshot completes");
     const auto offer = host.recoveryOffer();
     expectations.expect(offer.has_value() && std::filesystem::exists(offer->recoveryPath),
                         "recovery: a dirty session writes a recovery file worth offering");
@@ -283,7 +287,9 @@ void testRecoverySnapshotAndStartupOffer(Expectations& expectations) {
     expectations.expect(waitUntilIdle(host), "recovery: the real save reaches a terminal state");
     expectations.expect(!host.isDirty() && std::filesystem::exists(targetPath),
                         "recovery: the real save publishes and cleans the session");
-    expectations.expect(offer.has_value() && !std::filesystem::exists(offer->recoveryPath),
+    expectations.expect(offer.has_value() && waitUntil([&] {
+                            return !std::filesystem::exists(offer->recoveryPath);
+                        }),
                         "recovery: a successful save removes the recovery file");
     expectations.expect(!host.recoveryOffer().has_value(),
                         "recovery: and there is nothing left to offer on the next launch");
@@ -292,6 +298,8 @@ void testRecoverySnapshotAndStartupOffer(Expectations& expectations) {
     // file through the ordinary Open path.
     expectations.expect(executeRename(host, "Edited Again"), "recovery: a second edit commits");
     host.writeRecoverySnapshot();
+    expectations.expect(waitUntil([&] { return host.recoveryOffer().has_value(); }),
+                        "recovery: the second asynchronous snapshot completes");
     const auto secondOffer = host.recoveryOffer();
     expectations.expect(secondOffer.has_value(), "recovery: the second edit is described on disk");
     if (!secondOffer.has_value()) {
@@ -304,6 +312,8 @@ void testRecoverySnapshotAndStartupOffer(Expectations& expectations) {
         return false;
     });
     host.offerRecoveryOnStartup();
+    expectations.expect(waitUntil([&] { return asked == 1; }),
+                        "recovery: the startup scan reaches its decision");
     expectations.expect(asked == 1 && !host.isBusy(),
                         "recovery: a declined offer asks once and opens nothing");
 
@@ -313,6 +323,8 @@ void testRecoverySnapshotAndStartupOffer(Expectations& expectations) {
         return true;
     });
     host.offerRecoveryOnStartup();
+    expectations.expect(waitUntil([&] { return asked == 2; }),
+                        "recovery: the second startup scan reaches its decision");
     expectations.expect(asked == 2, "recovery: an accepted offer asks again and proceeds");
     expectations.expect(waitUntilIdle(host),
                         "recovery: the recovery open reaches a terminal state");
@@ -343,6 +355,8 @@ void testRecoverySurvivesCleanRestartAndPendingDecision(Expectations& expectatio
         expectations.expect(executeRename(crashed, "Unsaved before restart"),
                             "recovery restart: the first host becomes dirty");
         crashed.writeRecoverySnapshot();
+        expectations.expect(waitUntil([&] { return crashed.recoveryOffer().has_value(); }),
+                            "recovery restart: the asynchronous snapshot completes");
         const auto offer = crashed.recoveryOffer();
         expectations.expect(offer.has_value(),
                             "recovery restart: the first host publishes a recovery artifact");
@@ -374,6 +388,8 @@ void testRecoverySurvivesCleanRestartAndPendingDecision(Expectations& expectatio
         return false;
     });
     restarted.offerRecoveryOnStartup();
+    expectations.expect(waitUntil([&] { return decisions == 1; }),
+                        "recovery restart: the asynchronous scan reaches its decision");
     expectations.expect(decisions == 1 && std::filesystem::exists(crashedPath),
                         "recovery restart: declining the offer leaves the prior artifact intact");
 }
@@ -396,6 +412,8 @@ void testConcurrentRecoveryOwnersAndExplicitDiscard(Expectations& expectations) 
     expectations.expect(executeRename(first, "First unsaved"),
                         "recovery owners: the first host becomes dirty");
     first.writeRecoverySnapshot();
+    expectations.expect(waitUntil([&] { return first.recoveryOffer().has_value(); }),
+                        "recovery owners: first asynchronous snapshot completes");
     const auto firstOffer = first.recoveryOffer();
     expectations.expect(firstOffer.has_value(),
                         "recovery owners: the first host publishes an artifact");
@@ -405,6 +423,14 @@ void testConcurrentRecoveryOwnersAndExplicitDiscard(Expectations& expectations) 
     const auto firstPath = firstOffer->recoveryPath;
 
     second.writeRecoverySnapshot();
+    expectations.expect(waitUntil([&] {
+                            std::error_code code;
+                            return std::filesystem::exists(recoveryDirectory, code) &&
+                                   std::distance(
+                                       std::filesystem::directory_iterator(recoveryDirectory, code),
+                                       std::filesystem::directory_iterator{}) >= 2;
+                        }),
+                        "recovery owners: second asynchronous snapshot completes");
     expectations.expect(std::filesystem::exists(firstPath),
                         "recovery owners: a concurrent clean host cannot remove the first file");
     expectations.expect(executeRename(second, "Second unsaved"),
@@ -427,15 +453,161 @@ void testConcurrentRecoveryOwnersAndExplicitDiscard(Expectations& expectations) 
 
     second.setUnsavedChangeDecisionProvider([] { return UnsavedChangeDecision::Discard; });
     second.newProject();
-    expectations.expect(!std::filesystem::exists(secondPath) &&
+    expectations.expect(waitUntil([&] { return !std::filesystem::exists(secondPath); }) &&
                             std::filesystem::exists(firstPath) && !second.isDirty(),
                         "recovery owners: explicit Discard retires only the discarded session's "
                         "artifact");
 
     first.beginSaveAs(directory.path() / "first.bloom");
     expectations.expect(waitUntilIdle(first), "recovery owners: the first real save completes");
-    expectations.expect(!std::filesystem::exists(firstPath) && !first.isDirty(),
+    expectations.expect(waitUntil([&] { return !std::filesystem::exists(firstPath); }) &&
+                            !first.isDirty(),
                         "recovery owners: saving the remaining host retires its own artifact");
+}
+
+void testDiscardKeepsRecoveryWhenOpenFails(Expectations& expectations) {
+    TempDirectory directory;
+    if (!directory.isValid()) {
+        expectations.expect(false, "failed open: temp directory is available");
+        return;
+    }
+    bloom::runtime::TaskScheduler scheduler;
+    ProjectHost host(scheduler);
+    host.setRecoveryDirectory(directory.path() / "recovery");
+    expectations.expect(executeRename(host, "Keep this work"),
+                        "failed open: the current project becomes dirty");
+    host.writeRecoverySnapshot();
+    expectations.expect(waitUntil([&] { return host.recoveryOffer().has_value(); }),
+                        "failed open: recovery snapshot completes");
+    const auto offer = host.recoveryOffer();
+    if (!offer.has_value()) {
+        return;
+    }
+    OutcomeCapture opened;
+    connectOpenCapture(host, opened);
+    host.setUnsavedChangeDecisionProvider([] { return UnsavedChangeDecision::Discard; });
+    host.setOpenPathProvider([&] { return directory.path() / "absent.bloom"; });
+    host.requestOpen();
+    expectations.expect(waitUntil([&] { return opened.count == 1; }),
+                        "failed open: the worker reports the missing path");
+    expectations.expect(opened.outcome == ProjectHostOperationOutcome::Failed && host.isDirty() &&
+                            std::filesystem::exists(offer->recoveryPath),
+                        "failed open: the dirty session and its recovery file survive Discard");
+    host.newProject();
+    expectations.expect(waitUntil([&] { return !std::filesystem::exists(offer->recoveryPath); }),
+                        "failed open: actual replacement retires the old owned artifact");
+}
+
+void testOpenCancellationIsPromptWhileWorkerIsHeld(Expectations& expectations) {
+    bloom::runtime::TaskScheduler scheduler;
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered = false;
+    bool released = false;
+    auto gate = scheduler.submit<void>(
+        bloom::runtime::TaskRequest("Held project read",
+                                    {.kind = bloom::runtime::TaskOwnerKind::Application,
+                                     .id = bloom::runtime::TaskOwnerId::fromRaw(902)},
+                                    bloom::runtime::TaskPriority::Foreground,
+                                    bloom::runtime::TaskExecutor::BlockingIo),
+        [&](bloom::runtime::TaskContext&) -> bloom::runtime::TaskResult<void> {
+            std::unique_lock lock(mutex);
+            entered = true;
+            condition.notify_all();
+            condition.wait(lock, [&] { return released; });
+            return bloom::runtime::TaskResult<void>::succeeded();
+        });
+    expectations.expect(gate.accepted(), "cancel Open: the held worker is admitted");
+    if (!gate.accepted()) {
+        return;
+    }
+    {
+        std::unique_lock lock(mutex);
+        expectations.expect(
+            condition.wait_for(lock, std::chrono::seconds{2}, [&] { return entered; }),
+            "cancel Open: the worker is held before path I/O");
+    }
+    ProjectHost host(scheduler);
+    OutcomeCapture opened;
+    connectOpenCapture(host, opened);
+    const auto originalSession = host.stateSnapshot().projectSessionId;
+    host.beginOpen("/tmp/bloom-missing-held-open.bloom");
+    expectations.expect(host.activity() == ProjectHostActivity::Opening,
+                        "cancel Open: Opening activity is published before worker I/O");
+    host.cancelOpen();
+    expectations.expect(!host.isBusy() && opened.count == 1 &&
+                            opened.outcome == ProjectHostOperationOutcome::Cancelled,
+                        "cancel Open: cancellation acknowledges without waiting for the worker");
+    {
+        std::lock_guard lock(mutex);
+        released = true;
+    }
+    condition.notify_all();
+    expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }) &&
+                            host.stateSnapshot().projectSessionId == originalSession,
+                        "cancel Open: abandoned worker cannot install a replacement");
+}
+
+void testRecoveryCoalescesToNewestRevision(Expectations& expectations) {
+    TempDirectory directory;
+    if (!directory.isValid()) {
+        expectations.expect(false, "recovery revision: temporary directory exists");
+        return;
+    }
+    bloom::runtime::TaskScheduler scheduler;
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered = false;
+    bool released = false;
+    auto gate = scheduler.submit<void>(
+        bloom::runtime::TaskRequest("Held recovery worker",
+                                    {.kind = bloom::runtime::TaskOwnerKind::Application,
+                                     .id = bloom::runtime::TaskOwnerId::fromRaw(903)},
+                                    bloom::runtime::TaskPriority::Foreground,
+                                    bloom::runtime::TaskExecutor::BlockingIo),
+        [&](bloom::runtime::TaskContext&) -> bloom::runtime::TaskResult<void> {
+            std::unique_lock lock(mutex);
+            entered = true;
+            condition.notify_all();
+            condition.wait(lock, [&] { return released; });
+            return bloom::runtime::TaskResult<void>::succeeded();
+        });
+    expectations.expect(gate.accepted(), "recovery revision: held worker admits");
+    if (!gate.accepted()) {
+        return;
+    }
+    {
+        std::unique_lock lock(mutex);
+        expectations.expect(
+            condition.wait_for(lock, std::chrono::seconds{2}, [&] { return entered; }),
+            "recovery revision: worker is held");
+    }
+    ProjectHost host(scheduler);
+    host.setRecoveryDirectory(directory.path() / "recovery");
+    expectations.expect(executeRename(host, "First revision"),
+                        "recovery revision: first edit succeeds");
+    host.writeRecoverySnapshot();
+    expectations.expect(executeRename(host, "Latest revision"),
+                        "recovery revision: second edit succeeds while worker is held");
+    host.writeRecoverySnapshot();
+    {
+        std::lock_guard lock(mutex);
+        released = true;
+    }
+    condition.notify_all();
+    expectations.expect(waitUntil([&] { return host.recoveryOffer().has_value(); }),
+                        "recovery revision: newest snapshot publishes after held worker releases");
+    const auto offer = host.recoveryOffer();
+    if (!offer.has_value()) {
+        return;
+    }
+    ProjectHost reader(scheduler);
+    reader.beginOpen(offer->recoveryPath);
+    expectations.expect(waitUntilIdle(reader), "recovery revision: recovery archive reopens");
+    const auto* document = reader.liveDocumentAndStack().first;
+    expectations.expect(document != nullptr &&
+                            document->snapshot().project().name() == "Latest revision",
+                        "recovery revision: stale captured input never replaces the newest edit");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -703,6 +875,9 @@ int main(int argc, char** argv) {
     testRecoverySnapshotAndStartupOffer(expectations);
     testRecoverySurvivesCleanRestartAndPendingDecision(expectations);
     testConcurrentRecoveryOwnersAndExplicitDiscard(expectations);
+    testDiscardKeepsRecoveryWhenOpenFails(expectations);
+    testOpenCancellationIsPromptWhileWorkerIsHeld(expectations);
+    testRecoveryCoalescesToNewestRevision(expectations);
     testBusyRefusalWhileInFlight(expectations);
     testTypedFailureSurfacedOnUnwritablePath(expectations);
     testUnsavedChangeDecisionSeamForNew(expectations);

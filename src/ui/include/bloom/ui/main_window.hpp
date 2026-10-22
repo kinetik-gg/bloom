@@ -182,6 +182,7 @@ class MainWindow final : public QMainWindow {
     QLabel* readOnlyPlaceholderBodyLabel_ = nullptr;
     QAction* newProjectAction_ = nullptr;
     QAction* openProjectAction_ = nullptr;
+    QAction* cancelOpenAction_ = nullptr;
     QAction* saveProjectAction_ = nullptr;
     QAction* saveProjectAsAction_ = nullptr;
     QAction* saveProjectCopyAction_ = nullptr;

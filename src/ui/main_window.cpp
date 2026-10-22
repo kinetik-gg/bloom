@@ -127,6 +127,15 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
     connect(&projectHost_, &ProjectHost::dirtyStateChanged, this, &MainWindow::updateWindowTitle);
     connect(&projectHost_, &ProjectHost::sessionReplaced, this, &MainWindow::updateWindowTitle);
     connect(&projectHost_, &ProjectHost::activityChanged, this, &MainWindow::updateFileActions);
+    connect(&projectHost_, &ProjectHost::recoveryScanActivityChanged, this,
+            [this](const bool active) {
+                if (projectHost_.activity() == ProjectHostActivity::Idle) {
+                    statusStrip_->setPersistentMessage(active ? tr("Checking recovery files…")
+                                                              : QString{});
+                }
+            });
+    connect(&projectHost_, &ProjectHost::recoveryDiagnostic, this,
+            [this](const QString& message) { statusStrip_->showTransientMessage(message); });
     connect(&projectHost_, &ProjectHost::sessionReplaced, this, &MainWindow::updateFileActions);
     // Presentation-level read-only surface (task R1, issue #74): switch which central-stack page
     // is authoritative every time ProjectHost replaces its installed content. Frozen design
@@ -290,13 +299,15 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         // ignored; the artist retries once it finishes.
         return;
     }
-    projectHost_.confirmUnsavedChanges([this] {
-        if (shutdownRequested_) {
-            return;
-        }
-        shutdownRequested_ = true;
-        emit shutdownRequested();
-    });
+    projectHost_.confirmUnsavedChanges(
+        [this] {
+            if (shutdownRequested_) {
+                return;
+            }
+            shutdownRequested_ = true;
+            emit shutdownRequested();
+        },
+        true);
 }
 
 void MainWindow::createChrome() {
@@ -594,6 +605,9 @@ void MainWindow::createFileMenu(QMenu& fileMenu) {
     openProjectAction_->setShortcut(QKeySequence::Open);
     openProjectAction_->setShortcutContext(Qt::WindowShortcut);
     connect(openProjectAction_, &QAction::triggered, &projectHost_, &ProjectHost::requestOpen);
+    cancelOpenAction_ = fileMenu.addAction(tr("Cancel Open"));
+    cancelOpenAction_->setObjectName(QStringLiteral("cancelOpenAction"));
+    connect(cancelOpenAction_, &QAction::triggered, &projectHost_, &ProjectHost::cancelOpen);
 
     auto* importAction = fileMenu.addAction(tr("&Import…"));
     importAction->setObjectName(QStringLiteral("importAssetsAction"));
@@ -818,6 +832,7 @@ void MainWindow::updateFileActions() {
         import->setEnabled(projectHost_.canSave());
     newProjectAction_->setEnabled(!busy);
     openProjectAction_->setEnabled(!busy);
+    cancelOpenAction_->setEnabled(projectHost_.activity() == ProjectHostActivity::Opening);
     saveProjectAction_->setEnabled(!busy && projectHost_.canSave());
     saveProjectAsAction_->setEnabled(!busy && projectHost_.canSave());
     saveProjectCopyAction_->setEnabled(!busy && projectHost_.canSaveCopy());

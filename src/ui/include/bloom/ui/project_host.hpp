@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -32,6 +33,9 @@ class CommandStack;
 }
 
 namespace bloom::ui {
+
+struct RecoveryWorkerState;
+struct RecoveryScanState;
 
 // The artist's Save/Discard/Cancel answer to an unsaved-change prompt (docs/architecture/
 // project-session.md, "Unsaved-Change State Machine"). Returned by an injected
@@ -174,7 +178,8 @@ class ProjectHost final : public QObject {
     // decision 1's newProject()/beginOpen()/beginSave()/beginSaveAs() list) so MainWindow's window
     // close can share the exact same composed logic per decision 4 ("before New, Open, and window
     // close ... prompt") instead of duplicating it.
-    void confirmUnsavedChanges(std::function<void()> onProceed);
+    void confirmUnsavedChanges(std::function<void()> onProceed,
+                               bool retireRecoveryOnProceed = false);
 
   public slots:
     // Composes the unsaved-change flow, then REPLACES the session in-place with a fresh
@@ -202,6 +207,9 @@ class ProjectHost final : public QObject {
     // Lower-level primitives (decision 1's literal list): begin the async op against an
     // already-known path. Public so tests can drive them directly, bypassing the dialog seams.
     void beginOpen(const std::filesystem::path& path);
+    // Abandons an in-flight Open immediately after requesting worker cancellation. The source
+    // archive belongs to the worker and cannot install after this returns.
+    void cancelOpen();
     void beginSaveAs(std::filesystem::path path);
     // Lower-level primitive mirroring beginOpen()/beginSaveAs(): begins Save Copy against an
     // already-known target path, bypassing the Save As dialog seam. Public so tests can drive it
@@ -228,6 +236,8 @@ class ProjectHost final : public QObject {
     // success message names the target file. Never fired for a state that also changes
     // dirtyStateChanged()/sessionReplaced() -- Save Copy never touches session state.
     void copyFinished(bloom::ui::ProjectHostOperationOutcome outcome, QString message);
+    void recoveryScanActivityChanged(bool active);
+    void recoveryDiagnostic(QString message);
 
   private:
     void poll();
@@ -239,17 +249,24 @@ class ProjectHost final : public QObject {
     void startSave(std::filesystem::path targetPath, host::SessionPathIntentCapture intent);
     void startSaveCopy(std::filesystem::path targetPath);
     void handleSaveResult(host::SessionSaveResult result);
-    void handleOpenResult(host::SessionOpenResult result);
+    void handleOpenResult(host::SessionOpenResult result,
+                          std::shared_ptr<const host::detail::AsyncSessionOpenArchive> archive);
     void handleCopyResult(host::CopyPublicationResult result);
     [[nodiscard]] std::optional<project::ProjectIoOperationMemory> makeOperation() const;
+    [[nodiscard]] std::optional<project::ProjectIoOperationMemory> makeOpenOperation() const;
     [[nodiscard]] bool hasDirtyDecodedContent() const;
     void discardRecoveryFile();
+    void retireRecoveryPath(std::filesystem::path path);
+    void scheduleRecoveryWork();
+    void pollRecoveryWork();
+    void pollRecoveryScan();
+    void handleRecoveryOffer(host::SessionRecoveryOffer offer);
     [[nodiscard]] std::filesystem::path currentRecoveryPath() const;
 
     runtime::TaskScheduler& scheduler_;
     host::ProjectSessionIdentitySource identitySource_;
-    std::optional<host::PublicationCoordinator> publicationCoordinator_;
-    std::optional<platform::StagedArtifactCoordinator> artifactCoordinator_;
+    std::shared_ptr<host::PublicationCoordinator> publicationCoordinator_;
+    std::shared_ptr<platform::StagedArtifactCoordinator> artifactCoordinator_;
     std::optional<project::ProjectIoMemoryCoordinator> memoryCoordinator_;
     std::optional<host::ProjectSession> session_;
 
@@ -263,20 +280,25 @@ class ProjectHost final : public QObject {
     // larger than the archive size limit) independently of any operation's budget. Cleared whenever
     // installed content is replaced by anything other than a matching preserved-read-only open
     // (New, a decoded/editable Open, or a failed-to-retain preserved-read-only open).
-    std::vector<std::byte> retainedArchiveBytes_;
-    // Holds the bytes read for an in-flight Open until handleOpenResult() knows whether to promote
-    // them into retainedArchiveBytes_ (Installed + PreservedReadOnly) or drop them (any other
-    // outcome); see beginOpen()'s own comment.
-    std::vector<std::byte> pendingOpenArchiveBytes_;
+    std::shared_ptr<const host::detail::AsyncSessionOpenArchive> retainedArchive_;
     // The target path an in-flight Save Copy is publishing to, retained only to name the file in
     // copyFinished()'s success message once the async operation completes.
     std::filesystem::path pendingCopyTargetPath_;
+    std::filesystem::path pendingOpenRecoveryPath_;
 
     std::variant<std::monostate, host::AsyncSessionSave, host::AsyncSessionOpen,
                  host::AsyncCopyPublication>
         inFlight_;
     QTimer pollTimer_;
     QTimer recoveryTimer_;
+    QTimer recoveryWorkPollTimer_;
+    QTimer recoveryScanPollTimer_;
+    std::optional<runtime::TaskHandle<void>> recoveryTask_;
+    std::shared_ptr<RecoveryWorkerState> recoveryTaskState_;
+    std::optional<runtime::TaskHandle<void>> recoveryScanTask_;
+    std::shared_ptr<RecoveryScanState> recoveryScanState_;
+    std::vector<std::filesystem::path> recoveryRetirePaths_;
+    bool recoveryRefreshPending_ = false;
     ProjectHostActivity activity_ = ProjectHostActivity::Idle;
     host::SessionRecoveryPolicy recoveryPolicy_;
     std::filesystem::path recoveryDirectory_;
@@ -300,6 +322,7 @@ class ProjectHost final : public QObject {
     // the newer edit" -- implemented by re-running confirmUnsavedChanges(), which re-reads dirty
     // state fresh).
     std::optional<std::function<void()>> pendingUnsavedContinuation_;
+    bool pendingUnsavedRetireOnProceed_ = false;
 };
 
 } // namespace bloom::ui

@@ -14,6 +14,7 @@
 #include <atomic>
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -117,13 +118,20 @@ struct AsyncSessionSaveSharedState final {
     std::optional<PublicationAdmission> preAdmitted;
 };
 
+struct AsyncSessionOpenArchive final {
+    std::vector<std::byte> bytes;
+    std::optional<project::ProjectIoMemoryReservation> reservation;
+};
+
 struct AsyncSessionOpenSharedState final {
     std::atomic_bool cancellationFlag{false};
     // Set by the worker instead of `opened` when cancellation was observed at entry (see the
     // cancellation-bridge documentation above): the worker never called
     // project::openProjectArchive().
     bool cancelledBeforeOpening = false;
+    std::optional<SessionOpenNotOpenedReason> notOpenedReason;
     std::optional<project::OpenArchiveResult> opened;
+    std::shared_ptr<const AsyncSessionOpenArchive> archive;
 };
 
 } // namespace detail
@@ -256,6 +264,10 @@ enum class AsyncSessionOpenBeginStage : std::uint8_t { Admission, Submission };
 
 class AsyncSessionOpenResult;
 
+struct AsyncSessionOpenPathHooks final {
+    std::function<void()> beforeRead;
+};
+
 class AsyncSessionOpen final {
   public:
     AsyncSessionOpen(AsyncSessionOpen&&) noexcept = default;
@@ -273,6 +285,8 @@ class AsyncSessionOpen final {
     // returns the full result exactly once, applying installOpenedArchiveResult() (the O2 install
     // gates, which already refuse edit-during-open as RevisionChanged) against `session`.
     [[nodiscard]] std::optional<SessionOpenResult> tryComplete(ProjectSession& session);
+    [[nodiscard]] std::shared_ptr<const detail::AsyncSessionOpenArchive>
+    takeArchiveOwner() noexcept;
 
   private:
     friend class AsyncSessionOpenResult;
@@ -281,6 +295,10 @@ class AsyncSessionOpen final {
                                                    std::optional<ProjectDisplayPath>,
                                                    const project::SaveArchiveLimits&,
                                                    project::ProjectIoOperationMemory);
+    friend AsyncSessionOpenResult
+    beginSessionOpen(ProjectSession&, runtime::TaskScheduler&, std::filesystem::path,
+                     std::optional<ProjectDisplayPath>, const project::SaveArchiveLimits&,
+                     project::ProjectIoOperationMemory, AsyncSessionOpenPathHooks);
 
     AsyncSessionOpen(runtime::TaskScheduler& scheduler, runtime::TaskHandle<void> handle,
                      std::shared_ptr<detail::AsyncSessionOpenSharedState> shared,
@@ -322,6 +340,10 @@ class [[nodiscard]] AsyncSessionOpenResult final {
                                                    std::optional<ProjectDisplayPath>,
                                                    const project::SaveArchiveLimits&,
                                                    project::ProjectIoOperationMemory);
+    friend AsyncSessionOpenResult
+    beginSessionOpen(ProjectSession&, runtime::TaskScheduler&, std::filesystem::path,
+                     std::optional<ProjectDisplayPath>, const project::SaveArchiveLimits&,
+                     project::ProjectIoOperationMemory, AsyncSessionOpenPathHooks);
 
     explicit AsyncSessionOpenResult(OpenIntentAdmissionStatus status) noexcept;
     explicit AsyncSessionOpenResult(runtime::TaskSubmissionStatus status) noexcept;
@@ -345,5 +367,13 @@ class [[nodiscard]] AsyncSessionOpenResult final {
                                                       std::optional<ProjectDisplayPath> displayPath,
                                                       const project::SaveArchiveLimits& limits,
                                                       project::ProjectIoOperationMemory operation);
+
+// The path overload admits first, then performs stat, bounded allocation, read and decode on
+// BlockingIo. The one archive owner carries its budget reservation into read-only retention.
+[[nodiscard]] AsyncSessionOpenResult
+beginSessionOpen(ProjectSession& session, runtime::TaskScheduler& scheduler,
+                 std::filesystem::path path, std::optional<ProjectDisplayPath> displayPath,
+                 const project::SaveArchiveLimits& limits,
+                 project::ProjectIoOperationMemory operation, AsyncSessionOpenPathHooks hooks = {});
 
 } // namespace bloom::host

@@ -136,12 +136,18 @@ SavePublicationResult executeSavePublication(PublicationCoordinator& coordinator
         // non-cancellable publication lease, the staged artifact must still own the application
         // coordinator's winning intent for that target").
         stage = SavePublicationStage::Guard;
+        if (cancelled(request.cancellationFlag)) {
+            return cancelledResult();
+        }
         auto guardResult = claim.tryEnterPublication();
         switch (guardResult.status()) {
         case PublicationGuardStatus::Entered: {
             // Held only for the duration of publish(): `guard` releases its publication-guard
             // record when this case's scope ends, after publish() has already run.
             auto guard = std::move(guardResult).takeGuard();
+            if (cancelled(request.cancellationFlag)) {
+                return cancelledResult();
+            }
             auto publication = lease.publish(platform::PublicationDisposition::Proceed);
             return SavePublicationResult::published(publication, intentId);
         }

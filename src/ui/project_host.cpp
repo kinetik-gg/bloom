@@ -11,8 +11,9 @@
 #include <QStandardPaths>
 #include <QUuid>
 
+#include <algorithm>
+#include <atomic>
 #include <cstddef>
-#include <fstream>
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
@@ -24,7 +25,6 @@ namespace bloom::ui {
 namespace {
 
 constexpr int kPollIntervalMs = 100;
-constexpr std::uint64_t kBytesPerMebibyte = 1024ULL * 1024ULL;
 
 // SAVEFIX-1. Recovery files live beside the application's own data, never beside the artist's
 // project: a crash-safe copy is Bloom's business, not something to scatter through their folders.
@@ -69,20 +69,34 @@ nonFiniteSaveFieldPath(const host::SavePublicationFailure* const failure) noexce
 
 } // namespace
 
+struct RecoveryWorkerState final {
+    std::atomic_bool cancelled{false};
+    std::atomic_bool retireAfter{false};
+    std::filesystem::path path;
+    std::optional<document::Revision> revision;
+    std::optional<host::SessionRecoveryResult> result;
+};
+
+struct RecoveryScanState final {
+    std::optional<host::SessionRecoveryOffer> offer;
+};
+
 ProjectHost::ProjectHost(runtime::TaskScheduler& scheduler, QObject* parent)
     : QObject(parent), scheduler_(scheduler) {
     auto publicationResult = host::PublicationCoordinator::create();
     if (!publicationResult.has_value()) {
         throw std::runtime_error("Bloom could not create the publication coordinator");
     }
-    publicationCoordinator_.emplace(std::move(*publicationResult));
+    publicationCoordinator_ =
+        std::make_shared<host::PublicationCoordinator>(std::move(*publicationResult));
 
     auto artifactResult =
         platform::StagedArtifactCoordinator::create(platform::StagedArtifactConfig{});
     if (!artifactResult) {
         throw std::runtime_error("Bloom could not create the staged-artifact coordinator");
     }
-    artifactCoordinator_.emplace(std::move(artifactResult).takeCoordinator());
+    artifactCoordinator_ = std::make_shared<platform::StagedArtifactCoordinator>(
+        std::move(artifactResult).takeCoordinator());
 
     auto memoryResult = project::ProjectIoMemoryCoordinator::create();
     if (!memoryResult.has_value()) {
@@ -153,6 +167,10 @@ ProjectHost::ProjectHost(runtime::TaskScheduler& scheduler, QObject* parent)
     recoveryTimer_.setInterval(static_cast<int>(recoveryPolicy_.interval.count()) * 1000);
     connect(&recoveryTimer_, &QTimer::timeout, this, &ProjectHost::writeRecoverySnapshot);
     recoveryTimer_.start();
+    recoveryWorkPollTimer_.setSingleShot(true);
+    connect(&recoveryWorkPollTimer_, &QTimer::timeout, this, &ProjectHost::pollRecoveryWork);
+    recoveryScanPollTimer_.setSingleShot(true);
+    connect(&recoveryScanPollTimer_, &QTimer::timeout, this, &ProjectHost::pollRecoveryScan);
 
     // Bootstrap the initial session (decision 1/5): the application always starts on a fresh,
     // untouched new project. No one is connected to sessionReplaced()/dirtyStateChanged() yet, so
@@ -161,6 +179,15 @@ ProjectHost::ProjectHost(runtime::TaskScheduler& scheduler, QObject* parent)
 }
 
 ProjectHost::~ProjectHost() {
+    if (recoveryTaskState_) {
+        recoveryTaskState_->cancelled.store(true, std::memory_order_release);
+    }
+    if (recoveryTask_) {
+        recoveryTask_->cancel();
+    }
+    if (recoveryScanTask_) {
+        recoveryScanTask_->cancel();
+    }
     if (auto* save = std::get_if<host::AsyncSessionSave>(&inFlight_)) {
         save->requestCancellation();
     } else if (auto* open = std::get_if<host::AsyncSessionOpen>(&inFlight_)) {
@@ -188,7 +215,7 @@ bool ProjectHost::canSave() const {
 }
 
 bool ProjectHost::canSaveCopy() const {
-    if (!session_.has_value() || isBusy() || retainedArchiveBytes_.empty()) {
+    if (!session_.has_value() || isBusy() || !retainedArchive_ || retainedArchive_->bytes.empty()) {
         return false;
     }
     const auto snapshot = session_->stateSnapshot();
@@ -317,44 +344,96 @@ std::filesystem::path ProjectHost::currentRecoveryPath() const {
                                          session_->stateSnapshot().projectSessionId);
 }
 
-void ProjectHost::discardRecoveryFile() {
-    const auto path = currentRecoveryPath();
-    if (!path.empty() && protectedRecoveryOfferPath_ != path) {
-        static_cast<void>(host::removeSessionRecoveryFile(path));
+void ProjectHost::discardRecoveryFile() { retireRecoveryPath(currentRecoveryPath()); }
+
+void ProjectHost::retireRecoveryPath(std::filesystem::path path) {
+    if (path.empty() || protectedRecoveryOfferPath_ == path) {
+        return;
     }
+    if (recoveryTaskState_ && recoveryTaskState_->path == path) {
+        recoveryTaskState_->cancelled.store(true, std::memory_order_release);
+        recoveryTaskState_->retireAfter.store(true, std::memory_order_release);
+    }
+    if (std::find(recoveryRetirePaths_.begin(), recoveryRetirePaths_.end(), path) ==
+        recoveryRetirePaths_.end()) {
+        recoveryRetirePaths_.push_back(std::move(path));
+    }
+    scheduleRecoveryWork();
 }
 
 void ProjectHost::writeRecoverySnapshot() {
-    // Never while a real Save/Open/Copy is in flight: that operation owns the publication ordering
-    // for its own target, and a recovery write has no claim to compete with it.
-    if (!session_.has_value() || isBusy() || !publicationCoordinator_.has_value() ||
-        !artifactCoordinator_.has_value()) {
-        return;
-    }
-    auto operation = makeOperation();
-    if (!operation.has_value()) {
+    if (!session_.has_value()) {
         return;
     }
     const auto path = currentRecoveryPath();
     if (path.empty() || protectedRecoveryOfferPath_ == path) {
         return;
     }
-    std::error_code code;
-    std::filesystem::create_directories(recoveryDirectory_, code);
-    if (code) {
+    const auto state = session_->stateSnapshot();
+    if (!state.dirty.value_or(false)) {
+        retireRecoveryPath(path);
         return;
     }
-    // The result is deliberately not surfaced: a recovery write is Bloom protecting itself, and a
-    // failed one is not something to interrupt the artist over. Every failure it can report is
-    // typed and non-fatal (see bloom/host/session_recovery.hpp), and the next tick retries.
-    static_cast<void>(host::writeSessionRecoverySnapshot(*session_, *publicationCoordinator_,
-                                                         *artifactCoordinator_, path, {},
-                                                         std::move(*operation)));
+    if (recoveryTaskState_ && recoveryTaskState_->path == path &&
+        recoveryTaskState_->revision != state.currentRevision) {
+        recoveryTaskState_->cancelled.store(true, std::memory_order_release);
+        recoveryRefreshPending_ = true;
+    }
+    if (!recoveryTask_ && !isBusy()) {
+        recoveryRefreshPending_ = true;
+        scheduleRecoveryWork();
+    }
 }
 
 void ProjectHost::offerRecoveryOnStartup() {
-    const auto offer = recoveryOffer();
-    if (!offer.has_value() || !recoveryDecisionProvider_) {
+    if (recoveryScanTask_ || !recoveryDecisionProvider_) {
+        return;
+    }
+    auto state = std::make_shared<RecoveryScanState>();
+    runtime::TaskRequest request(
+        "Find recoverable project",
+        {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
+        runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo);
+    auto submission = scheduler_.submit<void>(
+        std::move(request),
+        [state, directory = recoveryDirectory_,
+         projectPath = displayPath()](runtime::TaskContext& context) -> runtime::TaskResult<void> {
+            if (!context.isCancellationRequested()) {
+                state->offer = host::findSessionRecoveryOffer(directory, projectPath);
+            }
+            return runtime::TaskResult<void>::succeeded();
+        });
+    if (!submission.accepted()) {
+        emit recoveryDiagnostic(tr("Recovery files could not be checked right now."));
+        return;
+    }
+    recoveryScanState_ = std::move(state);
+    recoveryScanTask_.emplace(std::move(submission.handle));
+    emit recoveryScanActivityChanged(true);
+    recoveryScanPollTimer_.start(kPollIntervalMs);
+}
+
+void ProjectHost::pollRecoveryScan() {
+    if (!recoveryScanTask_) {
+        return;
+    }
+    const auto snapshot = scheduler_.snapshot(recoveryScanTask_->id());
+    if (!snapshot.has_value() || !runtime::isTerminal(snapshot->state) || isBusy()) {
+        recoveryScanPollTimer_.start(kPollIntervalMs);
+        return;
+    }
+    static_cast<void>(recoveryScanTask_->tryTakeResult());
+    recoveryScanTask_.reset();
+    auto offer = std::move(recoveryScanState_->offer);
+    recoveryScanState_.reset();
+    emit recoveryScanActivityChanged(false);
+    if (offer.has_value()) {
+        handleRecoveryOffer(std::move(*offer));
+    }
+}
+
+void ProjectHost::handleRecoveryOffer(host::SessionRecoveryOffer offer) {
+    if (!recoveryDecisionProvider_) {
         return;
     }
     protectedRecoveryOfferPath_ = offer->recoveryPath;
@@ -375,6 +454,120 @@ void ProjectHost::offerRecoveryOnStartup() {
     }
 }
 
+void ProjectHost::scheduleRecoveryWork() {
+    if (recoveryTask_) {
+        return;
+    }
+    if (!recoveryRetirePaths_.empty()) {
+        auto state = std::make_shared<RecoveryWorkerState>();
+        state->path = recoveryRetirePaths_.front();
+        runtime::TaskRequest request(
+            "Retire recovery file",
+            {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
+            runtime::TaskPriority::Background, runtime::TaskExecutor::BlockingIo);
+        auto submission = scheduler_.submit<void>(
+            std::move(request), [state](runtime::TaskContext&) -> runtime::TaskResult<void> {
+                static_cast<void>(host::removeSessionRecoveryFile(state->path));
+                return runtime::TaskResult<void>::succeeded();
+            });
+        if (!submission.accepted()) {
+            emit recoveryDiagnostic(tr("Recovery cleanup is waiting for an I/O worker."));
+            return;
+        }
+        recoveryRetirePaths_.erase(recoveryRetirePaths_.begin());
+        recoveryTaskState_ = std::move(state);
+        recoveryTask_.emplace(std::move(submission.handle));
+        recoveryWorkPollTimer_.start(kPollIntervalMs);
+        return;
+    }
+    if (!recoveryRefreshPending_ || !session_.has_value() || isBusy() ||
+        !hasDirtyDecodedContent() || !publicationCoordinator_ || !artifactCoordinator_) {
+        return;
+    }
+    const auto path = currentRecoveryPath();
+    if (path.empty() || protectedRecoveryOfferPath_ == path) {
+        return;
+    }
+    auto operation = makeOperation();
+    if (!operation.has_value()) {
+        emit recoveryDiagnostic(tr("Recovery snapshot is waiting for memory."));
+        return;
+    }
+    std::shared_ptr<host::SessionSaveOwningInput> input;
+    try {
+        auto captured = session_->captureRecoveryInput();
+        if (!captured) {
+            emit recoveryDiagnostic(tr("Recovery snapshot could not capture the project."));
+            return;
+        }
+        input = std::make_shared<host::SessionSaveOwningInput>(host::SessionSaveOwningInput{
+            .capturedInput = std::move(captured).takeValue(),
+            .targetPath = path,
+            .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
+            .expectedTarget = std::nullopt,
+            .limits = {},
+        });
+    } catch (...) {
+        emit recoveryDiagnostic(tr("Recovery snapshot could not capture the project."));
+        return;
+    }
+    auto state = std::make_shared<RecoveryWorkerState>();
+    state->path = path;
+    state->revision = input->capturedInput.revision();
+    runtime::TaskRequest request(
+        "Write recovery snapshot",
+        {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
+        runtime::TaskPriority::Background, runtime::TaskExecutor::BlockingIo);
+    auto submission = scheduler_.submit<void>(
+        std::move(request),
+        [state, input, coordinator = publicationCoordinator_, artifacts = artifactCoordinator_,
+         operation = std::move(*operation)](
+            runtime::TaskContext& context) mutable -> runtime::TaskResult<void> {
+            if (context.isCancellationRequested()) {
+                state->cancelled.store(true, std::memory_order_release);
+            }
+            state->result.emplace(host::executeSessionRecoverySnapshot(
+                *coordinator, *artifacts, *input, &state->cancelled, std::move(operation)));
+            if (state->retireAfter.load(std::memory_order_acquire)) {
+                static_cast<void>(host::removeSessionRecoveryFile(state->path));
+            }
+            return runtime::TaskResult<void>::succeeded();
+        });
+    if (!submission.accepted()) {
+        emit recoveryDiagnostic(tr("Recovery snapshot is waiting for an I/O worker."));
+        return;
+    }
+    recoveryRefreshPending_ = false;
+    recoveryTaskState_ = std::move(state);
+    recoveryTask_.emplace(std::move(submission.handle));
+    recoveryWorkPollTimer_.start(kPollIntervalMs);
+}
+
+void ProjectHost::pollRecoveryWork() {
+    if (!recoveryTask_) {
+        return;
+    }
+    const auto snapshot = scheduler_.snapshot(recoveryTask_->id());
+    if (!snapshot.has_value() || !runtime::isTerminal(snapshot->state)) {
+        recoveryWorkPollTimer_.start(kPollIntervalMs);
+        return;
+    }
+    static_cast<void>(recoveryTask_->tryTakeResult());
+    auto finished = std::move(recoveryTaskState_);
+    recoveryTask_.reset();
+    if (finished->revision.has_value() && session_.has_value() &&
+        finished->path == currentRecoveryPath() && hasDirtyDecodedContent() &&
+        session_->stateSnapshot().currentRevision != finished->revision) {
+        recoveryRefreshPending_ = true;
+    }
+    if (finished->result.has_value() &&
+        finished->result->status() == host::SessionRecoveryStatus::PublicationFailed &&
+        !finished->cancelled.load(std::memory_order_acquire)) {
+        emit recoveryDiagnostic(tr("Recovery snapshot could not be written; Bloom will retry."));
+    }
+    scheduleRecoveryWork();
+}
+
 bool ProjectHost::hasDirtyDecodedContent() const {
     if (!session_.has_value()) {
         return false;
@@ -385,13 +578,17 @@ bool ProjectHost::hasDirtyDecodedContent() const {
            snapshot.dirty.value_or(false);
 }
 
-void ProjectHost::confirmUnsavedChanges(std::function<void()> onProceed) {
+void ProjectHost::confirmUnsavedChanges(std::function<void()> onProceed,
+                                        const bool retireRecoveryOnProceed) {
     if (activity_ == ProjectHostActivity::ResolvingUnsavedChanges) {
         // "Only one destructive continuation is active. Duplicate close/quit requests are
         // idempotent." (docs/architecture/project-session.md, "Unsaved-Change State Machine").
         return;
     }
     if (!hasDirtyDecodedContent()) {
+        if (retireRecoveryOnProceed) {
+            discardRecoveryFile();
+        }
         onProceed();
         return;
     }
@@ -408,14 +605,20 @@ void ProjectHost::confirmUnsavedChanges(std::function<void()> onProceed) {
         return;
     case UnsavedChangeDecision::Discard:
         setActivity(ProjectHostActivity::Idle);
-        // Discard is the artist's explicit decision to abandon this session's unsaved work.
-        // Retire only this host's recovery artifact; an offered file from another launch is
-        // never an automatic cleanup target.
-        discardRecoveryFile();
+        // For Open, keep this file until replacement really installs. A canceled dialog or failed
+        // Open leaves the dirty session and its recovery intact. An accepted close is final.
+        if (retireRecoveryOnProceed) {
+            const auto path = currentRecoveryPath();
+            discardRecoveryFile();
+            if (protectedRecoveryOfferPath_ != path) {
+                static_cast<void>(host::removeSessionRecoveryFile(path));
+            }
+        }
         onProceed();
         return;
     case UnsavedChangeDecision::Save:
         pendingUnsavedContinuation_ = std::move(onProceed);
+        pendingUnsavedRetireOnProceed_ = retireRecoveryOnProceed;
         // Let beginSave() own activity tracking from here; it refuses while busy, and this flow
         // is itself the only reason activity_ is currently non-Idle.
         setActivity(ProjectHostActivity::Idle);
@@ -426,6 +629,7 @@ void ProjectHost::confirmUnsavedChanges(std::function<void()> onProceed) {
             // than looping automatically: the edit is never discarded, but the artist must retry
             // from the menu. The project stays dirty.
             pendingUnsavedContinuation_.reset();
+            pendingUnsavedRetireOnProceed_ = false;
             setActivity(ProjectHostActivity::Idle);
         }
         return;
@@ -563,8 +767,7 @@ void ProjectHost::startSave(std::filesystem::path targetPath,
     // Callers (beginSave()/beginSaveAs()) already checked isBusy()/session_.has_value(); these
     // guards are repeated defensively so this function is never the one place that assumes a
     // caller-side check without stating its own.
-    if (!session_.has_value() || !publicationCoordinator_.has_value() ||
-        !artifactCoordinator_.has_value()) {
+    if (!session_.has_value() || !publicationCoordinator_ || !artifactCoordinator_) {
         emit saveFinished(ProjectHostOperationOutcome::Refused,
                           tr("Another project operation is already in progress."));
         return;
@@ -597,8 +800,7 @@ void ProjectHost::startSave(std::filesystem::path targetPath,
 void ProjectHost::startSaveCopy(std::filesystem::path targetPath) {
     // Callers (requestSaveCopy()/beginSaveCopy()) already checked isBusy()/canSaveCopy(); repeated
     // defensively, matching startSave()'s own precedent.
-    if (!canSaveCopy() || !publicationCoordinator_.has_value() ||
-        !artifactCoordinator_.has_value()) {
+    if (!canSaveCopy() || !publicationCoordinator_ || !artifactCoordinator_) {
         emit copyFinished(ProjectHostOperationOutcome::Refused,
                           tr("Another project operation is already in progress."));
         return;
@@ -614,7 +816,7 @@ void ProjectHost::startSaveCopy(std::filesystem::path targetPath) {
         .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
         .expectedTarget = std::nullopt,
         // Copied, never moved: retainedArchiveBytes_ must survive for a possible future Save Copy.
-        .bytes = retainedArchiveBytes_,
+        .bytes = retainedArchive_->bytes,
         .limits = {},
     };
     auto begun =
@@ -638,27 +840,7 @@ void ProjectHost::beginOpen(const std::filesystem::path& path) {
         return;
     }
 
-    std::error_code sizeError;
-    const auto fileBytes = std::filesystem::file_size(path, sizeError);
-    if (sizeError) {
-        emit openFinished(ProjectHostOperationOutcome::Failed,
-                          tr("The project file could not be read: %1")
-                              .arg(QString::fromStdString(sizeError.message())));
-        return;
-    }
-
-    // Bounded by the archive size limit BEFORE reading fully (task U1 spec): checking the file
-    // size against the same physical-archive limit project::openProjectArchive() itself enforces
-    // avoids reading an oversize file into memory just to have it refused afterward.
     const project::SaveArchiveLimits limits{};
-    if (fileBytes > limits.container.maxArchiveBytes) {
-        emit openFinished(ProjectHostOperationOutcome::Oversize,
-                          tr("This project file is too large to open (%1 MB; the limit is %2 MB).")
-                              .arg(static_cast<qulonglong>(fileBytes / kBytesPerMebibyte))
-                              .arg(static_cast<qulonglong>(limits.container.maxArchiveBytes /
-                                                           kBytesPerMebibyte)));
-        return;
-    }
 
     auto displayPath = host::ProjectDisplayPath::create(path);
     if (!displayPath.has_value()) {
@@ -667,47 +849,38 @@ void ProjectHost::beginOpen(const std::filesystem::path& path) {
         return;
     }
 
-    std::ifstream stream(path, std::ios::binary);
-    if (!stream.is_open()) {
-        emit openFinished(ProjectHostOperationOutcome::Failed,
-                          tr("The project file could not be opened for reading."));
-        return;
-    }
-    std::vector<std::byte> bytes(static_cast<std::size_t>(fileBytes));
-    if (!bytes.empty()) {
-        stream.read(reinterpret_cast<char*>(bytes.data()),
-                    static_cast<std::streamsize>(bytes.size()));
-    }
-    if (!stream) {
-        emit openFinished(ProjectHostOperationOutcome::Failed,
-                          tr("The project file could not be fully read."));
-        return;
-    }
-
-    auto operation = makeOperation();
+    auto operation = makeOpenOperation();
     if (!operation.has_value()) {
         emit openFinished(ProjectHostOperationOutcome::Refused,
                           tr("Not enough memory is available to start this open."));
         return;
     }
 
-    // beginOpen() already owns the bytes it just read (task SC1, issue #77): stash a copy here,
-    // before `bytes` moves into beginSessionOpen(), so handleOpenResult() can retain them on an
-    // Installed+PreservedReadOnly outcome instead of dropping them. Dropped again unconditionally
-    // once that outcome is known (see handleOpenResult()).
-    pendingOpenArchiveBytes_ = bytes;
-
-    auto begun = host::beginSessionOpen(*session_, scheduler_, std::move(bytes),
-                                        std::move(displayPath), limits, std::move(*operation));
+    auto begun = host::beginSessionOpen(*session_, scheduler_, path, std::move(displayPath), limits,
+                                        std::move(*operation));
     if (!begun) {
-        pendingOpenArchiveBytes_.clear();
         emit openFinished(ProjectHostOperationOutcome::Refused,
                           tr("The open could not be started."));
         return;
     }
+    pendingOpenRecoveryPath_ = currentRecoveryPath();
     inFlight_.emplace<host::AsyncSessionOpen>(std::move(begun).takeHandle());
     setActivity(ProjectHostActivity::Opening);
     scheduleNextPoll();
+}
+
+void ProjectHost::cancelOpen() {
+    auto* open = std::get_if<host::AsyncSessionOpen>(&inFlight_);
+    if (open == nullptr) {
+        return;
+    }
+    open->requestCancellation();
+    inFlight_.emplace<std::monostate>();
+    pollTimer_.stop();
+    pendingOpenRecoveryPath_.clear();
+    protectedRecoveryOfferPath_.reset();
+    setActivity(ProjectHostActivity::Idle);
+    emit openFinished(ProjectHostOperationOutcome::Cancelled, tr("The open was cancelled."));
 }
 
 void ProjectHost::replaceWithNewProject() {
@@ -724,11 +897,14 @@ void ProjectHost::replaceWithNewProject() {
         return;
     }
     auto nextRecoveryOwnerToken = newRecoveryOwnerToken();
+    if (session_.has_value()) {
+        retireRecoveryPath(currentRecoveryPath());
+    }
     session_.emplace(std::move(created).takeSession());
     recoveryOwnerToken_.swap(nextRecoveryOwnerToken);
     // A new project is always decoded, editable content -- never preserved-read-only -- so any
     // previously retained original archive bytes no longer describe the installed content.
-    retainedArchiveBytes_.clear();
+    retainedArchive_.reset();
     emit sessionReplaced();
     emit dirtyStateChanged();
 }
@@ -763,10 +939,11 @@ void ProjectHost::poll() {
             return;
         }
         auto result = open->tryComplete(*session_);
+        auto archive = open->takeArchiveOwner();
         inFlight_.emplace<std::monostate>();
         setActivity(ProjectHostActivity::Idle);
         if (result.has_value()) {
-            handleOpenResult(std::move(*result));
+            handleOpenResult(std::move(*result), std::move(archive));
         }
         return;
     }
@@ -860,8 +1037,9 @@ void ProjectHost::handleSaveResult(host::SessionSaveResult result) {
             message = tr("The save failed before the file could be replaced.");
             break;
         }
-        if (publication != nullptr && publication->targetWasPublished()) {
-            // The file on disk now holds this work, so the recovery copy of it is retired.
+        if (publication != nullptr && publication->targetWasPublished() && !isDirty() &&
+            result.savepointStatus() == host::ProjectSessionSavepointStatus::Accepted) {
+            // A save that accepted this exact revision makes its recovery copy redundant.
             discardRecoveryFile();
         }
         if (publication != nullptr && publication->targetWasPublished() &&
@@ -884,18 +1062,22 @@ void ProjectHost::handleSaveResult(host::SessionSaveResult result) {
     if (pendingUnsavedContinuation_.has_value()) {
         auto continuation = std::move(*pendingUnsavedContinuation_);
         pendingUnsavedContinuation_.reset();
+        const auto retireOnProceed = pendingUnsavedRetireOnProceed_;
+        pendingUnsavedRetireOnProceed_ = false;
         // Re-run the flow fresh (docs/architecture/project-session.md's "If the document changes
         // while saving, the flow returns to a fresh decision instead of discarding the newer
         // edit"): confirmUnsavedChanges() re-reads dirty state now, so a clean project proceeds
         // immediately, a still-dirty one (failure/supersession/an intervening edit) re-prompts.
-        confirmUnsavedChanges(std::move(continuation));
+        confirmUnsavedChanges(std::move(continuation), retireOnProceed);
         if (activity_ != ProjectHostActivity::Opening && activity_ != ProjectHostActivity::Saving) {
             protectedRecoveryOfferPath_.reset();
         }
     }
 }
 
-void ProjectHost::handleOpenResult(host::SessionOpenResult result) {
+void ProjectHost::handleOpenResult(
+    host::SessionOpenResult result,
+    std::shared_ptr<const host::detail::AsyncSessionOpenArchive> archive) {
     auto outcome = ProjectHostOperationOutcome::Failed;
     QString message;
     bool installed = false;
@@ -910,8 +1092,27 @@ void ProjectHost::handleOpenResult(host::SessionOpenResult result) {
         message = tr("The project file could not be opened.");
         break;
     case host::SessionOpenStage::NotOpened:
-        outcome = ProjectHostOperationOutcome::Cancelled;
-        message = tr("The open was cancelled.");
+        switch (result.notOpenedReason().value_or(
+            host::SessionOpenNotOpenedReason::WorkerUnexpectedFailure)) {
+        case host::SessionOpenNotOpenedReason::CancelledBeforeOpening:
+            outcome = ProjectHostOperationOutcome::Cancelled;
+            message = tr("The open was cancelled.");
+            break;
+        case host::SessionOpenNotOpenedReason::ArchiveTooLarge:
+            outcome = ProjectHostOperationOutcome::Oversize;
+            message = tr("This project file is too large to open.");
+            break;
+        case host::SessionOpenNotOpenedReason::ResourceExhausted:
+            outcome = ProjectHostOperationOutcome::Refused;
+            message = tr("Not enough memory is available to open this project.");
+            break;
+        case host::SessionOpenNotOpenedReason::PathUnavailable:
+        case host::SessionOpenNotOpenedReason::ReadFailed:
+        case host::SessionOpenNotOpenedReason::WorkerUnexpectedFailure:
+            outcome = ProjectHostOperationOutcome::Failed;
+            message = tr("The project file could not be read.");
+            break;
+        }
         break;
     case host::SessionOpenStage::Installation: {
         const auto* outcomeVariant = result.installOutcome();
@@ -940,24 +1141,22 @@ void ProjectHost::handleOpenResult(host::SessionOpenResult result) {
     }
     }
 
-    // Retention (task SC1, issue #77): promote the pending bytes read for this open into
-    // retainedArchiveBytes_ only when they actually became the installed preserved-read-only
-    // content; drop them (never retain) for every other outcome, including a failed install --
-    // installed content, and therefore what may be retained for it, is unchanged in that case.
+    // Retain the one budgeted archive only for installed read-only content.
     if (installed &&
         result.attemptedContentKind() == host::ProjectSessionContentKind::PreservedReadOnly) {
-        retainedArchiveBytes_ = std::move(pendingOpenArchiveBytes_);
+        retainedArchive_ = std::move(archive);
     } else if (installed) {
-        retainedArchiveBytes_.clear();
+        retainedArchive_.reset();
     }
-    pendingOpenArchiveBytes_.clear();
 
     if (installed) {
+        retireRecoveryPath(pendingOpenRecoveryPath_);
         // Open can install an archive from this host's own recovery path. The newly installed
         // content must have a different artifact identity so a later clean tick or Save cannot
         // mistake that opened project file for a disposable recovery snapshot.
         recoveryOwnerToken_ = newRecoveryOwnerToken();
     }
+    pendingOpenRecoveryPath_.clear();
     protectedRecoveryOfferPath_.reset();
 
     emit dirtyStateChanged();
@@ -1030,6 +1229,15 @@ std::optional<project::ProjectIoOperationMemory> ProjectHost::makeOperation() co
         return std::nullopt;
     }
     return memoryCoordinator_->createOperation();
+}
+
+std::optional<project::ProjectIoOperationMemory> ProjectHost::makeOpenOperation() const {
+    if (!memoryCoordinator_.has_value()) {
+        return std::nullopt;
+    }
+    return memoryCoordinator_->createOperation(
+        project::kDefaultProjectIoOperationResidentBytes,
+        project::SaveArchiveLimits{}.container.maxArchiveBytes);
 }
 
 } // namespace bloom::ui

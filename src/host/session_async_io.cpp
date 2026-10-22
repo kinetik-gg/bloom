@@ -1,6 +1,9 @@
 #include <bloom/host/session_async_io.hpp>
 
+#include <algorithm>
 #include <exception>
+#include <fstream>
+#include <limits>
 #include <new>
 #include <span>
 #include <utility>
@@ -223,6 +226,9 @@ std::optional<SessionOpenResult> AsyncSessionOpen::tryComplete(ProjectSession& s
     if (shared_->cancelledBeforeOpening) {
         return SessionOpenResult::notOpened(SessionOpenNotOpenedReason::CancelledBeforeOpening);
     }
+    if (shared_->notOpenedReason.has_value()) {
+        return SessionOpenResult::notOpened(*shared_->notOpenedReason);
+    }
     if (!shared_->opened.has_value()) {
         // Same scheduler-level "never populated" edge as AsyncSessionSave::tryComplete() -- no
         // install*() call is ever made, session untouched.
@@ -230,6 +236,14 @@ std::optional<SessionOpenResult> AsyncSessionOpen::tryComplete(ProjectSession& s
     }
     return installOpenedArchiveResult(session, intent_, std::move(*shared_->opened),
                                       std::move(displayPath_));
+}
+
+std::shared_ptr<const detail::AsyncSessionOpenArchive>
+AsyncSessionOpen::takeArchiveOwner() noexcept {
+    if (!completed_ || !shared_) {
+        return {};
+    }
+    return std::move(shared_->archive);
 }
 
 AsyncSessionOpenResult::AsyncSessionOpenResult(const OpenIntentAdmissionStatus status) noexcept
@@ -288,6 +302,105 @@ AsyncSessionOpenResult beginSessionOpen(ProjectSession& session, runtime::TaskSc
         return AsyncSessionOpenResult(submission.status);
     }
 
+    return AsyncSessionOpenResult(AsyncSessionOpen(scheduler, std::move(submission.handle),
+                                                   std::move(shared), intent,
+                                                   std::move(displayPath)));
+}
+
+AsyncSessionOpenResult beginSessionOpen(ProjectSession& session, runtime::TaskScheduler& scheduler,
+                                        std::filesystem::path path,
+                                        std::optional<ProjectDisplayPath> displayPath,
+                                        const project::SaveArchiveLimits& limits,
+                                        project::ProjectIoOperationMemory operation,
+                                        AsyncSessionOpenPathHooks hooks) {
+    const auto admission = session.admitOpenIntent();
+    if (!admission) {
+        return AsyncSessionOpenResult(admission.status());
+    }
+    const auto intent = admission.capture();
+    const auto limitsCopy = limits;
+    auto shared = std::make_shared<detail::AsyncSessionOpenSharedState>();
+    runtime::TaskRequest taskRequest("Open project from path", asyncSessionIoOwner(),
+                                     runtime::TaskPriority::Foreground,
+                                     runtime::TaskExecutor::BlockingIo);
+    auto submission = scheduler.submit<void>(
+        std::move(taskRequest),
+        [path = std::move(path), limitsCopy, operation = std::move(operation),
+         hooks = std::move(hooks),
+         shared](runtime::TaskContext& context) -> runtime::TaskResult<void> {
+            const auto cancelled = [&] {
+                return context.isCancellationRequested() ||
+                       shared->cancellationFlag.load(std::memory_order_acquire);
+            };
+            if (cancelled()) {
+                shared->cancelledBeforeOpening = true;
+                return runtime::TaskResult<void>::succeeded();
+            }
+            if (hooks.beforeRead) {
+                hooks.beforeRead();
+            }
+            if (cancelled()) {
+                shared->cancelledBeforeOpening = true;
+                return runtime::TaskResult<void>::succeeded();
+            }
+            std::error_code error;
+            const auto size = std::filesystem::file_size(path, error);
+            if (error) {
+                shared->notOpenedReason = SessionOpenNotOpenedReason::PathUnavailable;
+                return runtime::TaskResult<void>::succeeded();
+            }
+            if (size > limitsCopy.container.maxArchiveBytes ||
+                size > std::numeric_limits<std::size_t>::max() ||
+                size > static_cast<std::uint64_t>(std::numeric_limits<std::streamsize>::max())) {
+                shared->notOpenedReason = SessionOpenNotOpenedReason::ArchiveTooLarge;
+                return runtime::TaskResult<void>::succeeded();
+            }
+            auto reservation = operation.reserve(size);
+            if (!reservation) {
+                shared->notOpenedReason = SessionOpenNotOpenedReason::ResourceExhausted;
+                return runtime::TaskResult<void>::succeeded();
+            }
+            try {
+                auto archive = std::make_shared<detail::AsyncSessionOpenArchive>();
+                archive->reservation.emplace(std::move(reservation).takeReservation());
+                archive->bytes.resize(static_cast<std::size_t>(size));
+                std::ifstream stream(path, std::ios::binary);
+                if (!stream.is_open()) {
+                    shared->notOpenedReason = SessionOpenNotOpenedReason::PathUnavailable;
+                    return runtime::TaskResult<void>::succeeded();
+                }
+                constexpr std::size_t kReadChunkBytes = 1024 * 1024;
+                for (std::size_t offset = 0; offset < archive->bytes.size();) {
+                    if (cancelled()) {
+                        shared->cancelledBeforeOpening = true;
+                        return runtime::TaskResult<void>::succeeded();
+                    }
+                    const auto chunk = std::min(kReadChunkBytes, archive->bytes.size() - offset);
+                    stream.read(reinterpret_cast<char*>(archive->bytes.data() + offset),
+                                static_cast<std::streamsize>(chunk));
+                    if (!stream) {
+                        shared->notOpenedReason = SessionOpenNotOpenedReason::ReadFailed;
+                        return runtime::TaskResult<void>::succeeded();
+                    }
+                    offset += chunk;
+                }
+                if (cancelled()) {
+                    shared->cancelledBeforeOpening = true;
+                    return runtime::TaskResult<void>::succeeded();
+                }
+                shared->opened.emplace(project::openProjectArchive(
+                    std::span<const std::byte>(archive->bytes), limitsCopy, operation));
+                shared->archive = std::move(archive);
+            } catch (const std::bad_alloc&) {
+                shared->notOpenedReason = SessionOpenNotOpenedReason::ResourceExhausted;
+            } catch (...) {
+                shared->notOpenedReason = SessionOpenNotOpenedReason::ReadFailed;
+            }
+            return runtime::TaskResult<void>::succeeded();
+        });
+    if (!submission.accepted()) {
+        return AsyncSessionOpenResult(submission.status);
+    }
     return AsyncSessionOpenResult(AsyncSessionOpen(scheduler, std::move(submission.handle),
                                                    std::move(shared), intent,
                                                    std::move(displayPath)));

@@ -480,6 +480,90 @@ void testAsyncOpenEndToEnd(Expectations& expectations) {
                         "async open end to end: the session installs the opened content cleanly");
 }
 
+void testPathOpenReadsAfterAdmissionAndRetainsOneBudgetedArchive(Expectations& expectations) {
+    TempDirectory directory;
+    expectations.expect(directory.isValid(), "path open: temporary directory exists");
+    if (!directory.isValid()) {
+        return;
+    }
+    ProjectSessionIdentitySource identitySource;
+    TaskScheduler scheduler;
+    auto session = makeDecodedSession(expectations, identitySource, "Path Open Host");
+    const auto missingPath = directory.path() / "missing.bloom";
+    auto displayPath = ProjectDisplayPath::create(missingPath);
+    auto missing = beginSessionOpen(session, scheduler, missingPath, displayPath,
+                                    SaveArchiveLimits{}, makeOperation());
+    expectations.expect(static_cast<bool>(missing),
+                        "path open: a missing path still admits before worker stat");
+    if (missing) {
+        auto handle = std::move(missing).takeHandle();
+        expectations.expect(pollUntilReady(handle), "path open: missing path reaches terminal");
+        const auto result = handle.tryComplete(session);
+        expectations.expect(result.has_value() && result->notOpenedReason() ==
+                                                      SessionOpenNotOpenedReason::PathUnavailable,
+                            "path open: worker reports missing path without installing");
+    }
+
+    const auto path = directory.path() / "valid.bloom";
+    const auto bytes = buildMinimalArchiveBytesOrAbort("Path opened content");
+    {
+        std::ofstream stream(path, std::ios::binary);
+        stream.write(reinterpret_cast<const char*>(bytes.data()),
+                     static_cast<std::streamsize>(bytes.size()));
+    }
+    auto opened = beginSessionOpen(session, scheduler, path, ProjectDisplayPath::create(path),
+                                   SaveArchiveLimits{}, makeOperation());
+    expectations.expect(static_cast<bool>(opened), "path open: valid archive admits");
+    if (!opened) {
+        return;
+    }
+    auto handle = std::move(opened).takeHandle();
+    expectations.expect(pollUntilReady(handle), "path open: valid archive reaches terminal");
+    auto result = handle.tryComplete(session);
+    auto archive = handle.takeArchiveOwner();
+    expectations.expect(result.has_value() && static_cast<bool>(*result),
+                        "path open: valid archive installs");
+    expectations.expect(archive && archive->bytes == bytes && archive->reservation.has_value() &&
+                            archive->reservation->isValid(),
+                        "path open: one source buffer retains its memory reservation");
+
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered = false;
+    bool released = false;
+    auto held =
+        beginSessionOpen(session, scheduler, missingPath, ProjectDisplayPath::create(missingPath),
+                         SaveArchiveLimits{}, makeOperation(),
+                         bloom::host::AsyncSessionOpenPathHooks{.beforeRead = [&] {
+                             std::unique_lock lock(mutex);
+                             entered = true;
+                             condition.notify_all();
+                             condition.wait(lock, [&] { return released; });
+                         }});
+    expectations.expect(static_cast<bool>(held), "path open: held read admits promptly");
+    if (!held) {
+        return;
+    }
+    auto heldHandle = std::move(held).takeHandle();
+    {
+        std::unique_lock lock(mutex);
+        expectations.expect(condition.wait_for(lock, 2s, [&] { return entered; }),
+                            "path open: worker reaches the held read hook");
+    }
+    heldHandle.requestCancellation();
+    {
+        std::lock_guard lock(mutex);
+        released = true;
+    }
+    condition.notify_all();
+    expectations.expect(pollUntilReady(heldHandle), "path open: cancellation reaches terminal");
+    const auto cancelled = heldHandle.tryComplete(session);
+    expectations.expect(cancelled.has_value() &&
+                            cancelled->notOpenedReason() ==
+                                SessionOpenNotOpenedReason::CancelledBeforeOpening,
+                        "path open: cancellation before read leaves session untouched");
+}
+
 // ---------------------------------------------------------------------------------------------
 // Async open, round-tripped newer minor: a schema {1,3} fixture with an unknown root member opens
 // through the async path exactly as the synchronous flow's
@@ -1086,6 +1170,7 @@ int main() {
     try {
         testAsyncSaveEndToEnd(expectations);
         testAsyncOpenEndToEnd(expectations);
+        testPathOpenReadsAfterAdmissionAndRetainsOneBudgetedArchive(expectations);
         testAsyncOpenRoundTrippedNewerMinor(expectations);
         testSyncAsyncEquivalence(expectations);
         testAsyncPreAdmittedOwnershipSupersession(expectations);

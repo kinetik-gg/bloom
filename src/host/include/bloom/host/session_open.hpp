@@ -51,6 +51,10 @@ enum class SessionOpenStage : std::uint8_t {
 enum class SessionOpenNotOpenedReason : std::uint8_t {
     CancelledBeforeOpening,
     WorkerUnexpectedFailure,
+    PathUnavailable,
+    ArchiveTooLarge,
+    ResourceExhausted,
+    ReadFailed,
 };
 
 // Wraps a thrown exception from ProjectSession::installDecodedReplacement()/

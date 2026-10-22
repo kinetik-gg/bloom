@@ -118,6 +118,27 @@ SessionRecoveryResult writeSessionRecoverySnapshot(
     return SessionRecoveryResult::written();
 }
 
+SessionRecoveryResult executeSessionRecoverySnapshot(
+    PublicationCoordinator& coordinator, platform::StagedArtifactCoordinator& artifacts,
+    const SessionSaveOwningInput& input, const std::atomic_bool* cancellationFlag,
+    project::ProjectIoOperationMemory operation) noexcept {
+    std::error_code code;
+    std::filesystem::create_directories(input.targetPath.parent_path(), code);
+    if (code) {
+        return SessionRecoveryResult::publicationFailed(SavePublicationFailure{});
+    }
+    auto publication = executeSessionSaveMiddle(coordinator, artifacts, input, nullptr,
+                                                cancellationFlag, std::move(operation));
+    if (!publication) {
+        return SessionRecoveryResult::publicationFailed(*publication.failure());
+    }
+    const auto* published = publication.publication();
+    if (published == nullptr || !published->targetWasPublished()) {
+        return SessionRecoveryResult::publicationFailed(SavePublicationFailure{});
+    }
+    return SessionRecoveryResult::written();
+}
+
 bool removeSessionRecoveryFile(const std::filesystem::path& recoveryPath) noexcept {
     std::error_code code;
     std::filesystem::remove(recoveryPath, code);
