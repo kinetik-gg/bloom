@@ -232,6 +232,14 @@ bloom_add_test(
     LABELS unit runtime media color
 )
 
+add_executable(bloom_runtime_separable_image_effect_test separable_image_effect_tests.cpp)
+target_include_directories(bloom_runtime_separable_image_effect_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_separable_image_effect_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_separable_image_effect_test)
+bloom_enable_strict_floating_point(bloom_runtime_separable_image_effect_test)
+bloom_add_test(NAME bloom.runtime.separable-image-effects COMMAND bloom_runtime_separable_image_effect_test
+               LABELS unit runtime render TIMEOUT 30)
+
 bloom_find_dependency(OpenColorIO)
 add_executable(bloom_runtime_image_effect_test image_effect_tests.cpp)
 target_include_directories(bloom_runtime_image_effect_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")

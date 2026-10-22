@@ -976,3 +976,9 @@ Properties command undo, and verified archive reopen. A separate native image-ef
 an asymmetric stroked image fixture for both axes, their combination, and turns 1/2/3; it requires
 exact CPU/GPU pixels, a real resident affine dispatch, no executor readback, and warm cache reuse.
 That harness and the required coverage gate must run on a device before claiming native parity.
+
+## Separable neighborhood filtering
+
+Gaussian Blur and Box Blur share the CPU/GPU kernel, explicit data-window halo and edge policy
+defined in [Image Filters](image-filters.md). Unlike pointwise colour kernels, they filter associated
+RGBA and may expand the data window. Preview and final rendering use the same production scene path.

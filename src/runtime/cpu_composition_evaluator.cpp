@@ -363,6 +363,10 @@ enum class ScalarDomain : std::uint8_t {
                 }
                 if (const auto* resize = std::get_if<ResizeFitKernel>(&effect.kernel))
                     validKernel = detail::validResizeFitKernel(*resize);
+                if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel))
+                    validKernel = static_cast<unsigned>(blur->kind) <= 1 &&
+                                  static_cast<unsigned>(blur->edge) <= 1 &&
+                                  hasValidScalarCurveReference(blur->radius, plan, index, failure);
                 if (const auto* file = std::get_if<FileTransformKernel>(&effect.kernel))
                     validKernel = file->interpolation >= 0 && file->interpolation <= 2 &&
                                   file->direction >= 0 && file->direction <= 1 &&
@@ -1544,7 +1548,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     fullSupport[layer->input.value()] = true;
                 if (const auto* effect = std::get_if<CompiledImageEffect>(&operation);
                     effect && (std::holds_alternative<DiscreteImageKernel>(effect->kernel) ||
-                               std::holds_alternative<ResizeFitKernel>(effect->kernel)))
+                               std::holds_alternative<ResizeFitKernel>(effect->kernel) ||
+                               std::holds_alternative<SeparableBlurKernel>(effect->kernel)))
                     fullSupport[effect->input.value()] = true;
             }
             for (std::size_t i = fullSupport.size(); i-- > 0;)
@@ -1675,13 +1680,22 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     if (sampled)
                         pointwiseAmount = sampled->value;
                 }
+                if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect->kernel)) {
+                    const auto sampled = detail::resolveParameter(blur->radius, *plan, resolved);
+                    if (sampled)
+                        pointwiseAmount = sampled->value;
+                }
                 preparedEffect =
                     request.bypassLookNodes && effect->look
                         ? detail::PreparedImageEffect{}
-                        : imageEffectContext()->prepare(*effect, request.colorIntent, mediaBase,
-                                                        cancellation, pointwiseAmount);
+                        : imageEffectContext()->prepare(
+                              *effect, request.colorIntent, mediaBase, cancellation,
+                              pointwiseAmount, resolved.horizontalScale, resolved.verticalScale);
                 if (preparedEffect->cancelled)
                     return EvaluationResult::cancelled();
+                if (preparedEffect->diagnostic &&
+                    std::holds_alternative<SeparableBlurKernel>(effect->kernel))
+                    return EvaluationResult::failed(*preparedEffect->diagnostic);
                 if (preparedEffect->diagnostic) {
                     auto warning = *preparedEffect->diagnostic;
                     warning.subject = operationSubject;
@@ -1883,6 +1897,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 key.add(pointwise->effect);
                                 if (pointwise->amount)
                                     parameter(*pointwise->amount);
+                            }
+                            if (const auto* blur = std::get_if<SeparableBlurKernel>(&step.kernel)) {
+                                key.add(blur->kind);
+                                key.add(blur->edge);
+                                parameter(blur->radius);
                             }
                             if (const auto* file = std::get_if<FileTransformKernel>(&step.kernel)) {
                                 key.add(file->lutAssetId);
@@ -2208,7 +2227,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                         return;
                                     }
                                     if (std::holds_alternative<DiscreteImageKernel>(
-                                            effect.kernel) || preparedEffect->resizeFit) {
+                                            effect.kernel) || preparedEffect->resizeFit ||
+                                        preparedEffect->blur) {
                                         operationFailure = std::move(*result.diagnostic);
                                         return;
                                     }
@@ -2218,7 +2238,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 } else if (result.image) {
                                     slots[index] = std::move(result.image);
                                     if (std::holds_alternative<DiscreteImageKernel>(
-                                            effect.kernel) || preparedEffect->resizeFit) {
+                                            effect.kernel) || preparedEffect->resizeFit ||
+                                        preparedEffect->blur) {
                                         bounds[index].local = detail::boundsForWindow(
                                             slots[index]->descriptor()->dataWindow(),
                                             resolved.horizontalScale, resolved.verticalScale);

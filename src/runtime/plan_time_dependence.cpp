@@ -62,8 +62,11 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                     return step.asset && step.asset->kind == document::AssetKind::Sequence;
                 else if constexpr (std::is_same_v<Step, CompiledImageEffect>) {
                     const auto* pointwise = std::get_if<PointwiseImageKernel>(&step.kernel);
-                    return input(step.input) || (!step.bypass && pointwise && pointwise->amount &&
-                                                 parameter(*pointwise->amount));
+                    const auto* blur = std::get_if<SeparableBlurKernel>(&step.kernel);
+                    return input(step.input) ||
+                           (!step.bypass &&
+                            ((pointwise && pointwise->amount && parameter(*pointwise->amount)) ||
+                             (blur && parameter(blur->radius))));
                 } else if constexpr (std::is_same_v<Step, CompiledText>)
                     return parameter(step.color) || parameter(step.size) ||
                            driven(step.drivenContent) ||

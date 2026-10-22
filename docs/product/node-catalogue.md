@@ -119,7 +119,7 @@ keeps display transforms out of scene/process pixels.
 
 | Level | Planned nodes | Important behavior |
 | --- | --- | --- |
-| `C1` | Gaussian Blur, Box Blur | Explicit radius units, edge mode, alpha policy, and region expansion |
+| `C1` | Gaussian Blur, Box Blur | Implemented shared separable neighborhood path; [radius, edges, alpha and halo contract](../architecture/image-filters.md); grouped native/platform qualification pending |
 | `C1` | Directional Blur, Radial Blur | Stable spatial convention and bounded sampling |
 | `C1` | Sharpen, Unsharp Mask | Defined kernel and HDR behavior |
 | `C1` | Dilate/Erode, Edge Detect | Separate color-image and mask/data modes |

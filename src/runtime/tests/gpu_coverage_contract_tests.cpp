@@ -526,6 +526,45 @@ displayProofRunner(const bool customView) {
             return runBuilder(effectPlan(
                 bloom::runtime::PointwiseImageKernel{PointwiseImageEffect::Invert, {}}, 114100));
         }, {}, FixturePrerequisite::PackagedShaderTools);
+    const auto runBlur = [](const bloom::runtime::SeparableBlurKind kind) {
+        FixtureRun combined;
+        combined.prepared = true;
+        for (const auto edge :
+             {bloom::runtime::BlurEdgeMode::Transparent, bloom::runtime::BlurEdgeMode::Clamp}) {
+            const auto plan = effectPlan(
+                bloom::runtime::SeparableBlurKernel{
+                    kind, {ParameterId::fromRaw(111101), 2.0}, edge},
+                111100);
+            auto request = requestFor(*plan);
+            auto frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+            const auto roiWindow = bloom::render::ImageWindow::create(1, 1, 3, 2);
+            request.roi = *roiWindow.value();
+            frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+        }
+        combined.evidence = "production separable blur: transparent/clamp and ROI";
+        return combined;
+    };
+    add(
+        "effect.SeparableBlurKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime separable image effect tests",
+        [runBlur] { return runBlur(bloom::runtime::SeparableBlurKind::Gaussian); }, {},
+        FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.gaussian-blur", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime separable image effect tests",
+        [runBlur] { return runBlur(bloom::runtime::SeparableBlurKind::Gaussian); }, {},
+        FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.box-blur", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime separable image effect tests",
+        [runBlur] { return runBlur(bloom::runtime::SeparableBlurKind::Box); }, {},
+        FixturePrerequisite::PackagedShaderTools);
     return list;
 }
 

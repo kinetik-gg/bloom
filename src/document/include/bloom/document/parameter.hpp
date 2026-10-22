@@ -165,6 +165,9 @@ inline constexpr std::string_view kSolidColorEncoding = "bloom.reference.linear-
 // sees both headers, static_asserts the two equal rather than leaving them to drift -- see
 // src/runtime/cpu_composition_evaluator.cpp.
 inline constexpr double kMaximumTextSizePixels = 4096.0;
+// Neighborhood v1 authors at most 513 coefficients per axis at full resolution. Larger
+// unsupported radii are rejected explicitly, never silently clamped by preview or final render.
+inline constexpr double kMaximumBlurRadiusPixels = 256.0;
 // The size a newly authored text layer starts at.
 inline constexpr double kDefaultTextSizePixels = 72.0;
 
@@ -243,7 +246,7 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == "bloom.composition-source.time-offset" ||
            schemaKey == "bloom.composition-source.time-scale" ||
            schemaKey == "bloom.exposure.stops" || schemaKey == "bloom.offset.amount" ||
-           schemaKey == "bloom.multiply.factor";
+           schemaKey == "bloom.multiply.factor" || schemaKey == "bloom.blur.radius";
 }
 
 // The Color4d-valued animatable schemas (task S5): a solid's colour and a text layer's colour.
@@ -287,6 +290,8 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 // is checked separately by each caller because the diagnostic it produces differs.
 [[nodiscard]] constexpr bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
                                                         const double value) noexcept {
+    if (schemaKey == "bloom.blur.radius")
+        return value >= 0.0 && value <= kMaximumBlurRadiusPixels;
     if (schemaKey == "bloom.shape.stroke-width")
         return value >= 0.0;
     if (schemaKey == kSolidWidthParameterSchemaKey || schemaKey == kSolidHeightParameterSchemaKey)

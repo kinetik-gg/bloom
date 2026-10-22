@@ -61,6 +61,8 @@ QString nodeCategoryName(const document::NodeCategory category) {
 QString nodeCategoryName(const QString& category) { return category; }
 QString nodeCategoryName(const document::NodeDefinition& definition) {
     const auto& type = definition.key.typeId;
+    if (type == "bloom.gaussian-blur" || type == "bloom.box-blur")
+        return QCoreApplication::translate("node_editor", "Filters");
     if (type == document::kTimeValueNodeType || type == document::kFrameNumberNodeType ||
         type == document::kFrameRateNodeType || type == document::kSecondsToFramesNodeType ||
         type == document::kFramesToSecondsNodeType ||
@@ -91,11 +93,11 @@ QString nodeCategoryName(const document::NodeDefinition& definition) {
 }
 std::span<const QString> nodeCategoryOrder() {
     static const std::array order{
-        QStringLiteral("Sources"),   QStringLiteral("Layers"), QStringLiteral("Compositing"),
-        QStringLiteral("Colour"),    QStringLiteral("Values"), QStringLiteral("Math"),
-        QStringLiteral("Convert"),   QStringLiteral("String"), QStringLiteral("Logic"),
-        QStringLiteral("Time"),      QStringLiteral("Color"),  QStringLiteral("Vector"),
-        QStringLiteral("Utilities"), QStringLiteral("Output")};
+        QStringLiteral("Sources"), QStringLiteral("Layers"),    QStringLiteral("Compositing"),
+        QStringLiteral("Filters"), QStringLiteral("Colour"),    QStringLiteral("Values"),
+        QStringLiteral("Math"),    QStringLiteral("Convert"),   QStringLiteral("String"),
+        QStringLiteral("Logic"),   QStringLiteral("Time"),      QStringLiteral("Color"),
+        QStringLiteral("Vector"),  QStringLiteral("Utilities"), QStringLiteral("Output")};
     return order;
 }
 
@@ -104,6 +106,10 @@ QString displayTypeName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Flip");
     if (typeId == "bloom.rotate-90")
         return QCoreApplication::translate("node_editor", "Rotate 90");
+    if (typeId == "bloom.gaussian-blur")
+        return QCoreApplication::translate("node_editor", "Gaussian Blur");
+    if (typeId == "bloom.box-blur")
+        return QCoreApplication::translate("node_editor", "Box Blur");
     if (typeId == "bloom.exposure")
         return QCoreApplication::translate("node_editor", "Exposure");
     if (typeId == "bloom.offset")

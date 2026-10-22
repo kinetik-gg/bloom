@@ -118,16 +118,12 @@ effectPlan(const bloom::runtime::ImageEffectKernel& kernel, const std::uint64_t 
                                           {ParameterId::fromRaw(idBase + 2), color},
                                           {ParameterId::fromRaw(idBase + 3), 12.0},
                                           {ParameterId::fromRaw(idBase + 4), 10.0}});
-    if (const auto* file = std::get_if<FileTransformKernel>(&kernel)) {
-        FileTransformKernel copy = *file;
-        copy.asset = lutAsset;
-        operations.emplace_back(CompiledImageEffect{NodeId::fromRaw(idBase + 5),
-                                                    OperationIndex::fromRaw(0), std::move(copy),
-                                                    false, false});
-    } else {
-        operations.emplace_back(CompiledImageEffect{
-            NodeId::fromRaw(idBase + 5), OperationIndex::fromRaw(0), kernel, false, false});
-    }
+    auto capturedKernel = kernel;
+    if (auto* file = std::get_if<FileTransformKernel>(&capturedKernel))
+        file->asset = lutAsset;
+    operations.emplace_back(CompiledImageEffect{NodeId::fromRaw(idBase + 5),
+                                                OperationIndex::fromRaw(0),
+                                                std::move(capturedKernel), false, false});
     operations.emplace_back(CompiledLayerOutput{
         NodeId::fromRaw(idBase + 6), LayerId::fromRaw(layerRaw), OperationIndex::fromRaw(1),
         CompiledVec2Parameter{ParameterId::fromRaw(idBase + 7), bloom::document::Vec2d{6.0, 5.0}},
@@ -585,12 +581,97 @@ void runResizeFit(Expectations& expectations, GpuDevice& device, GpuSceneCache& 
     }
 }
 
+void runBlurs(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::runtime::BlurEdgeMode;
+    using bloom::runtime::SeparableBlurKernel;
+    using bloom::runtime::SeparableBlurKind;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    std::uint64_t id = 7000;
+    for (const auto kind : {SeparableBlurKind::Gaussian, SeparableBlurKind::Box}) {
+        for (const auto edge : {BlurEdgeMode::Transparent, BlurEdgeMode::Clamp}) {
+            for (const bool proxy : {false, true}) {
+                cache.clear();
+                const auto plan = effectPlan(
+                    SeparableBlurKernel{kind, {ParameterId::fromRaw(id + 90), 2.5}, edge}, id);
+                id += 100;
+                auto request = requestFor(*plan);
+                if (proxy) {
+                    const auto extent = bloom::render::ImageExtent::create(7, 6);
+                    request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+                    const auto roi = ImageWindow::create(1, 1, 4, 3);
+                    request.roi = *roi.value();
+                }
+                auto oracleRequest = request;
+                oracleRequest.bypassOperationCache = true;
+                const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+                const auto prepared = builder.build(plan, request);
+                expectations.expect(
+                    oracle.frame() && prepared,
+                    "blur native: CPU oracle and production scene prepare (halo/edge/proxy/ROI)");
+                if (!oracle.frame() || !prepared)
+                    continue;
+                auto executor = GpuSceneExecutor::create(device, cache);
+                expectations.expect(executor.hasValue(), "blur native: executor creates");
+                if (!executor)
+                    continue;
+                const auto cold = runScene(*executor.executor, prepared.scene);
+                const auto coldCounters = executor.executor->counters();
+                std::string detail;
+                expectations.expect(
+                    cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                        parity(cold.pixels, oracle.frame()->processImage().pixels(), detail),
+                    "blur native: signed HDR/partial-alpha CPU parity (2e-6, exact alpha): " +
+                        detail);
+                const auto& descriptor = *oracle.frame()->processImage().descriptor();
+                expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                        cold.displayWindow == descriptor.displayWindow() &&
+                                        cold.pixelAspect == descriptor.pixelAspect(),
+                                    "blur native: ROI/data/display-window and PAR parity");
+                expectations.expect(coldCounters.ocioEffectDispatches == 2 &&
+                                        coldCounters.readbacks == 0,
+                                    "blur native: exactly two resident filter dispatches and no "
+                                    "internal frame readback");
+                const auto warm = runScene(*executor.executor, prepared.scene);
+                expectations.expect(
+                    warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                        parity(warm.pixels, oracle.frame()->processImage().pixels(), detail) &&
+                        executor.executor->counters().ocioEffectDispatches ==
+                            coldCounters.ocioEffectDispatches,
+                    "blur native: warm RAM reuse has identical pixels and zero filter dispatches");
+                auto changedDefinition = plan->copyDefinition();
+                std::get<SeparableBlurKernel>(
+                    std::get<CompiledImageEffect>(changedDefinition.operations[1]).kernel)
+                    .radius.source = 1.0;
+                const auto changedPlan =
+                    std::make_shared<const CompiledCompositionPlan>(std::move(changedDefinition));
+                const auto changed = builder.build(changedPlan, request);
+                const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+                expectations.expect(changed && changedOracle.frame(),
+                                    "blur native: changed radius prepares");
+                if (changed && changedOracle.frame()) {
+                    const auto rerun = runScene(*executor.executor, changed.scene);
+                    expectations.expect(rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                            parity(rerun.pixels,
+                                                   changedOracle.frame()->processImage().pixels(),
+                                                   detail) &&
+                                            executor.executor->counters().ocioEffectDispatches ==
+                                                coldCounters.ocioEffectDispatches + 2,
+                                        "blur native: changed radius invalidates both passes and "
+                                        "retains CPU parity");
+                }
+            }
+        }
+    }
+}
+
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                const std::string& from, const std::string& to) {
     runCst(expectations, device, cache, from, to);
     runPointwise(expectations, device, cache);
     runDiscrete(expectations, device, cache);
     runResizeFit(expectations, device, cache);
+    runBlurs(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
 #endif

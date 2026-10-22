@@ -105,6 +105,7 @@ BLOOM_GPU_REQUIRED_EFFECT(FileTransformKernel, "file transform kernel");
 BLOOM_GPU_REQUIRED_EFFECT(PointwiseImageKernel, "scene-linear pointwise image effect kernel");
 BLOOM_GPU_REQUIRED_EFFECT(DiscreteImageKernel, "exact flip/quarter-turn image kernel");
 BLOOM_GPU_REQUIRED_EFFECT(ResizeFitKernel, "Resize/Fit bilinear kernel");
+BLOOM_GPU_REQUIRED_EFFECT(SeparableBlurKernel, "premultiplied separable neighborhood filter");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT

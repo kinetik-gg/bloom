@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pointwise_image_effect.hpp"
+#include "separable_image_effect.hpp"
 
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
@@ -14,6 +15,7 @@ struct PreparedImageEffect final {
     std::optional<PointwiseAffine> pointwise;
     std::optional<DiscreteImageKernel> discrete;
     std::optional<ResizeFitKernel> resizeFit;
+    std::optional<PreparedSeparableBlur> blur;
     std::shared_ptr<const color::CpuColorSpaceProcessor> processor;
     std::shared_ptr<const color::CpuColorSpaceProcessor> afterProcessor;
     std::shared_ptr<const color::CpuFileTransformProcessor> fileProcessor;
@@ -25,6 +27,7 @@ struct PreparedImageEffect final {
             return false;
         return !diagnostic && !cancelled
                    ? (!discrete || discrete->identity()) && (!pointwise || pointwise->identity()) &&
+                         (!blur || blur->identity()) &&
                          (!processor || processor->isIdentity()) &&
                          (!afterProcessor || afterProcessor->isIdentity()) &&
                          (!fileProcessor || fileProcessor->isIdentity())
@@ -36,11 +39,11 @@ struct PreparedImageEffect final {
 // No OCIO work runs on the UI thread. The bounded cache belongs to the evaluator session.
 class ImageEffectContext final {
   public:
-    [[nodiscard]] PreparedImageEffect prepare(const CompiledImageEffect& effect,
-                                              const EvaluationColorIntent& intent,
-                                              const std::filesystem::path& base = {},
-                                              const CancellationToken& cancellation = {},
-                                              std::optional<double> pointwiseAmount = {});
+    [[nodiscard]] PreparedImageEffect
+    prepare(const CompiledImageEffect& effect, const EvaluationColorIntent& intent,
+            const std::filesystem::path& base = {}, const CancellationToken& cancellation = {},
+            std::optional<double> pointwiseAmount = {}, double horizontalScale = 1.0,
+            double verticalScale = 1.0);
 
   private:
     std::mutex mutex_;

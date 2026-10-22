@@ -237,6 +237,66 @@ void testExposureAndOffset() {
     check(runtime::PointwiseImageEffect::Offset, -0.25, {-0.1875F, -0.035F, 0.875F});
 }
 
+void testBlurEvaluation() {
+    runtime::CpuCompositionEvaluator evaluator;
+    const auto baseline = planWith({});
+    const auto original = evaluator.evaluate(baseline, requestFor(*baseline), {});
+    for (const auto kind :
+         {runtime::SeparableBlurKind::Gaussian, runtime::SeparableBlurKind::Box}) {
+        const auto blur = [&](const double radius, const runtime::BlurEdgeMode edge) {
+            return runtime::SeparableBlurKernel{
+                kind, {document::ParameterId::fromRaw(90), radius}, edge};
+        };
+        const auto zero = planWith({blur(0, runtime::BlurEdgeMode::Transparent)});
+        expect(samePixels(original, evaluator.evaluate(zero, requestFor(*zero), {})),
+               "zero blur preserves exact evaluator pixels");
+        const auto plan = planWith({blur(2, runtime::BlurEdgeMode::Transparent)});
+        const auto cold = evaluator.evaluate(plan, requestFor(*plan), {});
+        const auto warm = evaluator.evaluate(plan, requestFor(*plan), {});
+        expect(cold.frame() && cold.diagnostics().empty() && samePixels(cold, warm) &&
+                   warm.frame()->operationCacheStatistics().misses == 0,
+               "blur warm memo reuses identical process pixels");
+        auto roiRequest = requestFor(*plan);
+        const auto roiWindow = render::ImageWindow::create(1, 0, 2, 2);
+        roiRequest.roi = *roiWindow.value();
+        const auto roi = evaluator.evaluate(plan, roiRequest, {});
+        expect(roi.frame() != nullptr, "blur ROI evaluates with full upstream halo support");
+        if (roi.frame() && cold.frame()) {
+            const auto& image = roi.frame()->processImage();
+            for (std::int64_t y = 0; y < 2; ++y)
+                for (std::int64_t x = 1; x < 3; ++x) {
+                    const auto actual = image.read(x, y);
+                    const auto expected = cold.frame()->processImage().read(x, y);
+                    expect(actual && expected && *actual.value() == *expected.value(),
+                           "ROI blur pixels equal corresponding final full-frame pixels");
+                }
+        }
+        auto animatedDefinition = plan->copyDefinition();
+        std::get<runtime::SeparableBlurKernel>(
+            std::get<runtime::CompiledImageEffect>(animatedDefinition.operations[1]).kernel)
+            .radius.source = runtime::ScalarCurveIndex::fromRaw(0);
+        animatedDefinition.scalarCurves.push_back(
+            {document::AnimationCurveId::fromRaw(190),
+             {{document::KeyframeId::fromRaw(190), {}, 0.0},
+              {document::KeyframeId::fromRaw(191), *core::RationalTime::create(1, 1), 2.0}}});
+        const auto animated =
+            std::make_shared<const runtime::CompiledCompositionPlan>(std::move(animatedDefinition));
+        expect(animated->operationTimeDependent(runtime::OperationIndex::fromRaw(1)),
+               "animated blur marks downstream render time-dependent");
+        auto start = requestFor(*animated);
+        auto end = start;
+        end.time = *core::RationalTime::create(1, 1);
+        expect(!samePixels(evaluator.evaluate(animated, start, {}),
+                           evaluator.evaluate(animated, end, {})),
+               "animated radius cannot reuse an earlier frame");
+        const auto changed = planWith({blur(1, runtime::BlurEdgeMode::Clamp)});
+        const auto changedResult = evaluator.evaluate(changed, requestFor(*changed), {});
+        runtime::CpuCompositionEvaluator fresh;
+        expect(samePixels(changedResult, fresh.evaluate(changed, requestFor(*changed), {})),
+               "radius/edge changes invalidate the memoized image");
+    }
+}
+
 void testCst() {
     runtime::CpuCompositionEvaluator evaluator;
     const auto source = planWith({});
@@ -588,6 +648,7 @@ int main(const int argc, char** argv) {
         testCst();
         testExposureAndOffset();
         testDiscreteImages();
+        testBlurEvaluation();
         testLookBypass();
         testFileTransform();
         testMultiplyAndInvert();

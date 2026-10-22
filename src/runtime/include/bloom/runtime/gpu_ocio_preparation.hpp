@@ -24,6 +24,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace bloom::runtime {
 
@@ -44,6 +45,8 @@ enum class GpuOcioTransformKind : std::uint8_t {
     // Scene-linear affine RGB effect. Coefficients are finite binary32 values, matching the CPU
     // reference and resident image precision. The native ProcessEffect wrapper preserves alpha.
     PointwiseAffine = 5,
+    // Normalized host coefficients; native execution reads and writes resident premultiplied RGBA.
+    SeparableBlur = 6,
 };
 
 struct GpuOcioTransformSpec final {
@@ -56,6 +59,9 @@ struct GpuOcioTransformSpec final {
     double contrast = 1.0;
     float affineScale = 1.0F;
     float affineOffset = 0.0F;
+    std::vector<float> blurWeights;
+    bool blurVertical = false;
+    std::uint8_t blurEdge = 0;
     // FileTransform only. The shared, immutable LUT resource handle; the reservation keeps the
     // exact opened bytes alive for the whole extraction. Null is an InvalidRequest refusal.
     std::shared_ptr<const color::LutFile> lutFile;

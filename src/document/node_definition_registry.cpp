@@ -582,6 +582,19 @@ template <typename Definition>
     return definition;
 }
 
+[[nodiscard]] NodeDefinition blurDefinition(const char* typeId) {
+    return {
+        {typeId, 1},
+        NodeLoweringKind::ImageEffect,
+        {{"input", SocketValueKind::Image}, {"radius", SocketValueKind::Scalar, false}},
+        {{"image", SocketValueKind::Image}},
+        {{"radius", "bloom.blur.radius", ParameterValueKind::Float64, true, true, 0.0},
+         {"edge", "bloom.blur.edge", ParameterValueKind::Integer, true, false, std::int64_t{0}}},
+        std::nullopt,
+        NodeCardinality::Many,
+        NodeCategory::Color};
+}
+
 [[nodiscard]] NodeDefinition imageDefinition() {
     using namespace bloom::document;
     return {
@@ -795,6 +808,8 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         discreteImageDefinition(true),
         resizeFitDefinition(false),
         resizeFitDefinition(true),
+        blurDefinition("bloom.gaussian-blur"),
+        blurDefinition("bloom.box-blur"),
         videoDefinition(),
         audioDefinition(),
         compositionSourceDefinition()};

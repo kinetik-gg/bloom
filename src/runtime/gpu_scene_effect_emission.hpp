@@ -27,6 +27,7 @@
 #include "layer_parent_transform.hpp"
 #include "pointwise_image_effect.hpp"
 #include "resize_fit_geometry.hpp"
+#include "separable_image_effect.hpp"
 
 #include <bloom/media/image.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
@@ -260,7 +261,9 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     const auto* cst = std::get_if<CstKernel>(&effect.kernel);
     const auto* file = std::get_if<FileTransformKernel>(&effect.kernel);
     const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel);
-    if (cst == nullptr && file == nullptr && pointwise == nullptr) {
+    const auto* blurKernel = std::get_if<SeparableBlurKernel>(&effect.kernel);
+    std::optional<PreparedSeparableBlur> blur;
+    if (cst == nullptr && file == nullptr && pointwise == nullptr && blurKernel == nullptr) {
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                     "An image effect kernel is not supported");
     }
@@ -273,7 +276,25 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     // Resolve the exact CPU chain for this kernel, short-circuiting every case the CPU treats as an
     // identity passthrough before any geometry or GPU work happens.
     std::vector<GpuOcioTransformSpec> legs;
-    if (pointwise != nullptr) {
+    if (blurKernel != nullptr) {
+        const auto sampled = resolveParameter(blurKernel->radius, plan, resolved);
+        blur = prepareSeparableBlur(*blurKernel,
+                                    sampled ? std::optional{sampled->value} : std::nullopt,
+                                    ctx.hScale, ctx.vScale);
+        if (!blur)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Blur radius is out of domain");
+        if (blur->identity())
+            return identity();
+        for (unsigned axis = 0; axis < 2; ++axis) {
+            GpuOcioTransformSpec leg;
+            leg.kind = GpuOcioTransformKind::SeparableBlur;
+            leg.blurWeights = axis == 0 ? blur->horizontal : blur->vertical;
+            leg.blurVertical = axis == 1;
+            leg.blurEdge = static_cast<std::uint8_t>(blur->edge);
+            legs.push_back(std::move(leg));
+        }
+    } else if (pointwise != nullptr) {
         std::optional<double> amount;
         if (pointwise->amount.has_value()) {
             const auto sampled = resolveParameter(*pointwise->amount, plan, resolved);
@@ -382,9 +403,12 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                     "The OCIO configuration for the image effect is unavailable");
     }
+    const auto filterWindow = blur ? blurOutputWindow(*blur, *inputWindow) : inputWindow;
+    if (!filterWindow)
+        return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation, "Blur halo overflows");
     const GpuOcioCommandGeometry geometry{
-        .width = static_cast<std::uint32_t>(inputWindow->extent().width()),
-        .height = static_cast<std::uint32_t>(inputWindow->extent().height())};
+        .width = static_cast<std::uint32_t>(filterWindow->extent().width()),
+        .height = static_cast<std::uint32_t>(filterWindow->extent().height())};
     std::vector<std::shared_ptr<const PreparedGpuOcioCommand>> programs;
     programs.reserve(legs.size());
     for (const auto& leg : legs) {
@@ -444,7 +468,32 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
                     "The image effect input descriptor is not derivable");
     }
-    const auto outputWindow = descriptor->data;
+    const auto outputWindow = blur ? *filterWindow : descriptor->data;
+    if (blur && outputWindow != descriptor->data) {
+        if (const auto error = charge(outputWindow.extent().width(), outputWindow.extent().height(),
+                                      sizeof(render::Rgba32f)))
+            return error;
+        OperationKey paddingKey;
+        paddingKey.add(inputKey);
+        paddingKey.add(std::string("blur-transparent-halo-v1"));
+        paddingKey.add(outputWindow.originX());
+        paddingKey.add(outputWindow.originY());
+        paddingKey.add(outputWindow.extent().width());
+        paddingKey.add(outputWindow.extent().height());
+        inputKey = paddingKey.bytes();
+        inputCommand = emit(GpuSceneTranslationCommand{
+            .index = kInvalidGpuSceneCommand,
+            .sourceOperation = operationIndex,
+            .input = inputCommand,
+            .sourceWindow = descriptor->data,
+            .outputWindow = outputWindow,
+            .translationX =
+                static_cast<double>(descriptor->data.originX() - outputWindow.originX()),
+            .translationY =
+                static_cast<double>(descriptor->data.originY() - outputWindow.originY()),
+            .opacity = 1.0F,
+            .semanticKey = inputKey});
+    }
 
     // Emit the prepared legs as one resident RGBA32F chain. Each command's descriptor equals the
     // original input's, so every leg reuses `descriptor`.
@@ -472,7 +521,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     result.command = currentCommand;
     result.key = std::move(currentKey);
     result.window = outputWindow;
-    result.local = bounds[inputValue].output;
+    result.local =
+        blur ? boundsForWindow(outputWindow, ctx.hScale, ctx.vScale) : bounds[inputValue].output;
     result.output = result.local;
     return std::nullopt;
 }

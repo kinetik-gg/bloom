@@ -71,7 +71,7 @@ Depends on #335.
 
 ### 6. [#337: Gaussian Blur, Box Blur and Matte Blur](https://github.com/kinetik-gg/bloom/issues/337)
 
-One separable neighborhood primitive, halo/ROI planning, explicit edges and alpha/coverage behavior. This is the dependency for shadows/glow, not three separate engines.
+One separable neighborhood primitive, halo/ROI planning, explicit edges and alpha/coverage behavior. The current scoped delivery implements Gaussian Blur and Box Blur only; Matte Blur remains separate. This is the dependency for shadows/glow, not three separate engines.
 
 Depends on #334.
 

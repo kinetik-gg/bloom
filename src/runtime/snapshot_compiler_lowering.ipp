@@ -657,6 +657,17 @@ lowerImageEffect(const document::NodeRecord& node,
                 runtime::DiscreteImageKernel{false, false,
                     static_cast<std::uint8_t>((*turns % 4 + 4) % 4)}};
     }
+    if (node.typeId == "bloom.gaussian-blur" || node.typeId == "bloom.box-blur") {
+        const auto radius = compiledScalarParameter(findParameterBinding(node, "radius"));
+        const auto* edge = parameterConstant<std::int64_t>(findParameterBinding(node, "edge"));
+        if (radius && edge && *edge >= 0 && *edge <= 1)
+            return runtime::CompiledImageEffect{
+                node.id, *input,
+                runtime::SeparableBlurKernel{node.typeId == "bloom.gaussian-blur"
+                                                 ? runtime::SeparableBlurKind::Gaussian
+                                                 : runtime::SeparableBlurKind::Box,
+                                             *radius, static_cast<runtime::BlurEdgeMode>(*edge)}};
+    }
     const auto pointwise = [&]() -> std::optional<runtime::PointwiseImageEffect> {
         if (node.typeId == "bloom.exposure")
             return runtime::PointwiseImageEffect::Exposure;

@@ -69,7 +69,9 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
                                                 const EvaluationColorIntent& intent,
                                                 const std::filesystem::path& base,
                                                 const CancellationToken& cancellation,
-                                                const std::optional<double> pointwiseAmount) {
+                                                const std::optional<double> pointwiseAmount,
+                                                const double horizontalScale,
+                                                const double verticalScale) {
     if (effect.bypass || std::holds_alternative<IdentityImageKernel>(effect.kernel))
         return {};
     PreparedImageEffect prepared;
@@ -99,6 +101,25 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
     }
     if (const auto* kernel = std::get_if<ResizeFitKernel>(&effect.kernel)) {
         prepared.resizeFit = *kernel;
+        return prepared;
+    }
+    if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel)) {
+        prepared.blur =
+            prepareSeparableBlur(*blur, pointwiseAmount, horizontalScale, verticalScale);
+        if (!prepared.blur) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
+                                          "Blur radius or scale is out of domain");
+            return prepared;
+        }
+        OperationKey blurKey;
+        blurKey.add(blur->kind);
+        blurKey.add(blur->edge);
+        for (const auto weight : prepared.blur->horizontal)
+            blurKey.add(double(weight));
+        blurKey.add(std::string("vertical"));
+        for (const auto weight : prepared.blur->vertical)
+            blurKey.add(double(weight));
+        prepared.cacheIdentity = blurKey.bytes();
         return prepared;
     }
     OperationKey key;
@@ -206,6 +227,9 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
     if (effect.discrete)
         return applyDiscreteImageEffect(*effect.discrete, input, pixelBudget, cancellation,
                                         operation, progress);
+    if (effect.blur)
+        return applySeparableBlur(*effect.blur, input, pixelBudget, cancellation, operation,
+                                  progress);
     ImageEffectResult result;
     if (effect.resizeFit) {
         if (cancellation.isCancellationRequested()) {

@@ -175,9 +175,10 @@ struct CompiledCompositionSource final {
                            const CompiledCompositionSource&) = default;
 };
 
-// Colour kernels preserve windows/bounds and operate on straight RGB with preserved alpha.
-// Spatial kernels author output geometry and resample premultiplied RGBA directly. All publish
-// finite premultiplied RGBA32F. Identity and bypass share the input storage exactly.
+// Image effects publish finite premultiplied RGBA32F. Pointwise colour kernels preserve windows
+// and alpha while operating on straight RGB; neighborhood kernels declare their own associated-
+// RGBA and window/halo policy. Spatial kernels author output geometry. Identity and bypass share
+// the input storage exactly.
 struct IdentityImageKernel final {
     friend bool operator==(const IdentityImageKernel&, const IdentityImageKernel&) = default;
 };
@@ -225,8 +226,19 @@ struct ResizeFitKernel final {
     std::int64_t policy = 0;
     friend bool operator==(const ResizeFitKernel&, const ResizeFitKernel&) = default;
 };
+// Neighborhood filters operate on associated RGBA, including coverage. Radius is finite full-
+// resolution pixels in [0,256]; Gaussian sigma is radius/3 and support is ceil(radius).
+enum class SeparableBlurKind : std::uint8_t { Gaussian, Box };
+enum class BlurEdgeMode : std::uint8_t { Transparent, Clamp };
+struct SeparableBlurKernel final {
+    SeparableBlurKind kind = SeparableBlurKind::Gaussian;
+    CompiledScalarParameter radius;
+    BlurEdgeMode edge = BlurEdgeMode::Transparent;
+    friend bool operator==(const SeparableBlurKernel&, const SeparableBlurKernel&) = default;
+};
 using ImageEffectKernel = std::variant<IdentityImageKernel, CstKernel, FileTransformKernel,
-                                       PointwiseImageKernel, DiscreteImageKernel, ResizeFitKernel>;
+                                       PointwiseImageKernel, DiscreteImageKernel, ResizeFitKernel,
+                                       SeparableBlurKernel>;
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
     OperationIndex input;

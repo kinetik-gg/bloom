@@ -2,6 +2,7 @@
 
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/node_definition_registry.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/canonical_manifest.hpp>
 #include <bloom/project/open_archive.hpp>
@@ -160,6 +161,72 @@ void discreteImageNodesReopen() {
            "discrete node IDs, signed turns, booleans and schema versions round trip exactly");
 }
 
+void blurNodeReopen() {
+    auto initial = document::makeNewProject("Blur Project", "Blur Composition",
+                                            core::RationalTime::fromInteger(10));
+    document::Document owned(std::move(initial.project));
+    const auto before = owned.snapshot();
+    auto draft = owned.draft(before);
+    auto* composition = draft.project().findComposition(initial.initialCompositionId);
+    std::vector<document::NodeId> nodes;
+    for (const auto* type : {"bloom.gaussian-blur", "bloom.box-blur"}) {
+        const auto node = draft.ids().allocateNode();
+        if (!node)
+            throw std::logic_error("blur node identity");
+        const auto* definition = document::builtInNodeDefinitions().find(type, 1);
+        if (!definition)
+            throw std::logic_error("blur definition");
+        std::vector<document::ParameterBinding> bindings;
+        for (const auto& parameter : definition->parameters) {
+            const auto id = draft.ids().allocateParameter();
+            if (!id)
+                throw std::logic_error("blur parameter identity");
+            const document::ParameterValue value = parameter.role == "radius"
+                                                       ? document::ParameterValue{2.5}
+                                                       : document::ParameterValue{std::int64_t{1}};
+            if (!composition->parameters().insert(
+                    {*id, parameter.schemaKey, document::ConstantValueSource{value}}))
+                throw std::logic_error("blur parameter inserts");
+            bindings.push_back({parameter.role, *id});
+        }
+        if (!composition->graph().addNode({*node, type, std::move(bindings), 1}))
+            throw std::logic_error("blur node inserts");
+        nodes.push_back(*node);
+    }
+    expect(owned.commit(before.revision(), std::move(draft)).committed(), "blur nodes publish");
+    const auto snapshot = owned.snapshot();
+    const auto settings =
+        document::makeBloomNeutralColorSettingsV1(core::Sha256Digest::fromBytes({}));
+    auto archive = buildVerifiedSaveArchive({}, {.snapshot = &snapshot, .colorSettings = &settings},
+                                            {}, memory());
+    expect(static_cast<bool>(archive), "blur graph passes verified save");
+    if (!archive)
+        return;
+    auto result = openProjectArchive(archive.archive()->bytes(), {}, memory());
+    expect(result.outcome() == OpenArchiveOutcome::Opened, "blur archive reopens");
+    if (result.outcome() != OpenArchiveOutcome::Opened)
+        return;
+    auto opened = std::move(result).takeOpened();
+    const auto reopened = opened.document->snapshot();
+    const auto* oldComposition = snapshot.project().findComposition(initial.initialCompositionId);
+    const auto* newComposition = reopened.project().findComposition(initial.initialCompositionId);
+    for (const auto id : nodes) {
+        const auto* oldNode = oldComposition->graph().findNode(id);
+        const auto* newNode = newComposition->graph().findNode(id);
+        expect(oldNode && newNode && *oldNode == *newNode,
+               "blur typed node and bindings survive reopen");
+        if (!oldNode)
+            continue;
+        for (const auto& binding : oldNode->parameters) {
+            const auto* oldParameter = oldComposition->parameters().find(binding.parameterId);
+            const auto* newParameter = newComposition->parameters().find(binding.parameterId);
+            expect(oldParameter && newParameter && oldParameter->source == newParameter->source &&
+                       oldParameter->schemaKey == newParameter->schemaKey,
+                   "blur radius/edge schema and exact values survive reopen");
+        }
+    }
+}
+
 void futureLayoutAttachments() {
     auto baseline = openProjectArchive(currentArchive(), {}, memory());
     if (baseline.outcome() != OpenArchiveOutcome::Opened)
@@ -237,6 +304,7 @@ int main() {
     try {
         layoutAndReopen();
         discreteImageNodesReopen();
+        blurNodeReopen();
         futureLayoutAttachments();
     } catch (const std::exception& error) {
         std::cerr << error.what() << "\n";

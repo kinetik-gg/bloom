@@ -214,7 +214,7 @@ deserializeOcioGpuProgram(const std::span<const std::byte> bytes,
         if (!reader.u32(magic) || magic != kOcioGpuProgramSerializationMagic ||
             !reader.u32(version) || version != kOcioGpuProgramSerializationVersion ||
             !reader.u32(stage) ||
-            stage > static_cast<std::uint32_t>(render::OcioGpuProgramStage::DisplayPacking) ||
+            stage > static_cast<std::uint32_t>(render::OcioGpuProgramStage::ProcessNeighborhood) ||
             !reader.u32(descriptorSetIndex) || !reader.u32(textureBindingStart) ||
             !reader.u32(dynamicPropertyCount) || !reader.u64(uniformBufferSize)) {
             return fail(OcioGpuProgramError::UnsupportedResourceForm);

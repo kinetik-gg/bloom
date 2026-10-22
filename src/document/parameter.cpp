@@ -230,6 +230,15 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* value = std::get_if<double>(&constant.value);
         return value && std::isfinite(*value);
     }
+    if (schemaKey == "bloom.blur.radius") {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value && std::isfinite(*value) && *value >= 0.0 &&
+               *value <= kMaximumBlurRadiusPixels;
+    }
+    if (schemaKey == "bloom.blur.edge") {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value && *value >= 0 && *value <= 1;
+    }
     if (schemaKey == "bloom.exposure.stops" || schemaKey == "bloom.offset.amount" ||
         schemaKey == "bloom.multiply.factor") {
         const auto* value = std::get_if<double>(&constant.value);
