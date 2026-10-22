@@ -533,6 +533,28 @@ template <typename Definition>
     return definition;
 }
 
+[[nodiscard]] NodeDefinition discreteImageDefinition(const bool rotate) {
+    NodeDefinition definition{{rotate ? "bloom.rotate-90" : "bloom.flip", 1},
+                              NodeLoweringKind::ImageEffect,
+                              {{"input", SocketValueKind::Image}},
+                              {{"image", SocketValueKind::Image}},
+                              {},
+                              std::nullopt,
+                              NodeCardinality::Many,
+                              NodeCategory::Utilities};
+    if (rotate) {
+        definition.parameters.push_back({"quarterTurns", "bloom.rotate-90.quarter-turns",
+                                         ParameterValueKind::Integer, true, false,
+                                         std::int64_t{1}});
+    } else {
+        definition.parameters.push_back({"horizontal", "bloom.flip.horizontal",
+                                         ParameterValueKind::Boolean, true, false, true});
+        definition.parameters.push_back(
+            {"vertical", "bloom.flip.vertical", ParameterValueKind::Boolean, true, false, false});
+    }
+    return definition;
+}
+
 [[nodiscard]] NodeDefinition imageDefinition() {
     using namespace bloom::document;
     return {
@@ -728,22 +750,25 @@ bool NodeDefinitionRegistry::containsType(const std::string_view typeId) const n
 }
 
 bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
-    std::vector<NodeDefinition> definitions{shapeDefinition(),
-                                            solidDefinition(),
-                                            layerOutputDefinition(),
-                                            layerStackDefinition(),
-                                            compositionOutputDefinition(),
-                                            textDefinition(),
-                                            imageDefinition(),
-                                            cstDefinition(),
-                                            fileTransformDefinition(),
-                                            pointwiseImageDefinition("bloom.exposure", "bloom.exposure.stops", 0.0),
-                                            pointwiseImageDefinition("bloom.offset", "bloom.offset.amount", 0.0),
-                                            pointwiseImageDefinition("bloom.multiply", "bloom.multiply.factor", 1.0),
-                                            pointwiseImageDefinition("bloom.invert", nullptr, 0.0),
-                                            videoDefinition(),
-                                            audioDefinition(),
-                                            compositionSourceDefinition()};
+    std::vector<NodeDefinition> definitions{
+        shapeDefinition(),
+        solidDefinition(),
+        layerOutputDefinition(),
+        layerStackDefinition(),
+        compositionOutputDefinition(),
+        textDefinition(),
+        imageDefinition(),
+        cstDefinition(),
+        fileTransformDefinition(),
+        pointwiseImageDefinition("bloom.exposure", "bloom.exposure.stops", 0.0),
+        pointwiseImageDefinition("bloom.offset", "bloom.offset.amount", 0.0),
+        pointwiseImageDefinition("bloom.multiply", "bloom.multiply.factor", 1.0),
+        pointwiseImageDefinition("bloom.invert", nullptr, 0.0),
+        discreteImageDefinition(false),
+        discreteImageDefinition(true),
+        videoDefinition(),
+        audioDefinition(),
+        compositionSourceDefinition()};
     // The value library is appended, not interleaved: the five above are the structural node types
     // a composition is built out of, and reading them first in one place is what makes the
     // registry's own contract legible.

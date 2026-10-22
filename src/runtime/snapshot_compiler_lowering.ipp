@@ -643,6 +643,20 @@ lowerImageEffect(const document::NodeRecord& node,
         addTopologyFailure(node.id, "Image effect input could not be lowered.");
         return std::nullopt;
     }
+    if (node.typeId == "bloom.flip") {
+        const auto* horizontal = parameterConstant<bool>(findParameterBinding(node, "horizontal"));
+        const auto* vertical = parameterConstant<bool>(findParameterBinding(node, "vertical"));
+        if (horizontal && vertical)
+            return runtime::CompiledImageEffect{node.id, *input,
+                runtime::DiscreteImageKernel{*horizontal, *vertical, 0}};
+    }
+    if (node.typeId == "bloom.rotate-90") {
+        const auto* turns = parameterConstant<std::int64_t>(findParameterBinding(node, "quarterTurns"));
+        if (turns)
+            return runtime::CompiledImageEffect{node.id, *input,
+                runtime::DiscreteImageKernel{false, false,
+                    static_cast<std::uint8_t>((*turns % 4 + 4) % 4)}};
+    }
     const auto pointwise = [&]() -> std::optional<runtime::PointwiseImageEffect> {
         if (node.typeId == "bloom.exposure")
             return runtime::PointwiseImageEffect::Exposure;

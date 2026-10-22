@@ -354,6 +354,14 @@ displayProofRunner(const bool customView) {
                                          103100));
         }, {}, FixturePrerequisite::PackagedShaderTools);
 
+    addImageEffectPlan("effect.DiscreteImageKernel",
+                       bloom::runtime::DiscreteImageKernel{false, false, 1}, 103200,
+                       "src/runtime exact discrete image tests");
+    addImageEffectPlan("node.bloom.flip", bloom::runtime::DiscreteImageKernel{true, false, 0},
+                       103300, "src/runtime exact discrete image tests");
+    addImageEffectPlan("node.bloom.rotate-90", bloom::runtime::DiscreteImageKernel{false, false, 1},
+                       103400, "src/runtime exact discrete image tests");
+
     // Every one of the eight blend modes is emitted by the real production builder now: Normal
     // stays the retained SourceOver merge, every other mode an explicit BlendV1 fold.
     for (const auto mode : bloom::core::kBlendModes) {

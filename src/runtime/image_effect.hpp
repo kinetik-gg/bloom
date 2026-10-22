@@ -12,6 +12,7 @@ namespace bloom::runtime::detail {
 
 struct PreparedImageEffect final {
     std::optional<PointwiseAffine> pointwise;
+    std::optional<DiscreteImageKernel> discrete;
     std::shared_ptr<const color::CpuColorSpaceProcessor> processor;
     std::shared_ptr<const color::CpuColorSpaceProcessor> afterProcessor;
     std::shared_ptr<const color::CpuFileTransformProcessor> fileProcessor;
@@ -19,11 +20,12 @@ struct PreparedImageEffect final {
     std::string cacheIdentity;
     bool cancelled = false;
     [[nodiscard]] bool identity() const noexcept {
-        return !diagnostic && !cancelled ? (!pointwise || pointwise->identity()) &&
-                                               (!processor || processor->isIdentity()) &&
-                                               (!afterProcessor || afterProcessor->isIdentity()) &&
-                                               (!fileProcessor || fileProcessor->isIdentity())
-                                         : true;
+        return !diagnostic && !cancelled
+                   ? (!discrete || discrete->identity()) && (!pointwise || pointwise->identity()) &&
+                         (!processor || processor->isIdentity()) &&
+                         (!afterProcessor || afterProcessor->isIdentity()) &&
+                         (!fileProcessor || fileProcessor->isIdentity())
+                   : true;
     }
 };
 

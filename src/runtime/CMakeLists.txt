@@ -101,6 +101,7 @@ target_sources(
         gpu_prepared_upload_cache.cpp
         image_effect.cpp
         image_effect.hpp
+        discrete_image_effect.hpp
         cpu_composition_evaluator_support.hpp
         evaluation.cpp
         prepared_preview_frame.cpp

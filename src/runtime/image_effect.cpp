@@ -1,5 +1,6 @@
 #include "image_effect.hpp"
 #include "cpu_composition_evaluator_support.hpp"
+#include "discrete_image_effect.hpp"
 #include "input_color_context.hpp"
 #include "operation_key.hpp"
 
@@ -67,6 +68,16 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
     if (effect.bypass || std::holds_alternative<IdentityImageKernel>(effect.kernel))
         return {};
     PreparedImageEffect prepared;
+    if (const auto* discrete = std::get_if<DiscreteImageKernel>(&effect.kernel)) {
+        prepared.discrete = *discrete;
+        OperationKey key;
+        key.add(std::string("discrete-image-v1"));
+        key.add(discrete->horizontal);
+        key.add(discrete->vertical);
+        key.add(static_cast<std::uint64_t>(discrete->quarterTurns));
+        prepared.cacheIdentity = key.bytes();
+        return prepared;
+    }
     if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel)) {
         prepared.pointwise = pointwiseAffine(*pointwise, pointwiseAmount);
         if (!prepared.pointwise) {
@@ -182,6 +193,9 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                                    const CancellationToken& cancellation,
                                    const OperationIndex operation,
                                    const EvaluationProgressCallback& progress) {
+    if (effect.discrete)
+        return applyDiscreteImageEffect(*effect.discrete, input, pixelBudget, cancellation,
+                                        operation, progress);
     ImageEffectResult result;
     auto builder = render::Rgba32fImageBuilder::create(*input.descriptor(), pixelBudget);
     if (!builder) {

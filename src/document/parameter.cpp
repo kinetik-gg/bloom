@@ -240,6 +240,10 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* value = std::get_if<std::string>(&constant.value);
         return value && value->size() <= 256 && value->find('\0') == std::string::npos;
     }
+    if (schemaKey == "bloom.flip.horizontal" || schemaKey == "bloom.flip.vertical")
+        return std::holds_alternative<bool>(constant.value);
+    if (schemaKey == "bloom.rotate-90.quarter-turns")
+        return std::holds_alternative<std::int64_t>(constant.value);
     if (schemaKey == "bloom.ocio-effect.bypass" || schemaKey == "bloom.ocio-effect.look")
         return std::holds_alternative<bool>(constant.value);
     if (schemaKey == "bloom.ocio-file.lut" || schemaKey == "bloom.ocio-file.interpolation" ||

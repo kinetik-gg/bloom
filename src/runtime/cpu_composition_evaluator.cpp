@@ -349,6 +349,8 @@ enum class ScalarDomain : std::uint8_t {
             },
             [index, &plan, &failure](const CompiledImageEffect& effect) {
                 bool validKernel = true;
+                if (const auto* discrete = std::get_if<DiscreteImageKernel>(&effect.kernel))
+                    validKernel = discrete->quarterTurns <= 3;
                 if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel)) {
                     const bool invert = pointwise->effect == PointwiseImageEffect::Invert;
                     validKernel = static_cast<std::uint8_t>(pointwise->effect) <=
@@ -1534,9 +1536,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
         // conservative, including nested merges and parented transforms. Geometry is never clipped.
         std::vector<bool> fullSupport(plan->operations().size(), false);
         if (request.roi) {
-            for (const auto& operation : plan->operations())
+            for (const auto& operation : plan->operations()) {
                 if (const auto* layer = std::get_if<CompiledLayerOutput>(&operation))
                     fullSupport[layer->input.value()] = true;
+                if (const auto* effect = std::get_if<CompiledImageEffect>(&operation);
+                    effect && std::holds_alternative<DiscreteImageKernel>(effect->kernel))
+                    fullSupport[effect->input.value()] = true;
+            }
             for (std::size_t i = fullSupport.size(); i-- > 0;)
                 if (fullSupport[i])
                     forEachInput(plan->operations()[i],
@@ -2187,11 +2193,23 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                        result.diagnostic->detail, operationSubject);
                                         return;
                                     }
+                                    if (std::holds_alternative<DiscreteImageKernel>(
+                                            effect.kernel)) {
+                                        operationFailure = std::move(*result.diagnostic);
+                                        return;
+                                    }
                                     imageWarnings.push_back(std::move(*result.diagnostic));
                                     effectApplicationFailed = true;
                                     contentHashes[index] += ":effect-failed";
                                 } else if (result.image) {
                                     slots[index] = std::move(result.image);
+                                    if (std::holds_alternative<DiscreteImageKernel>(
+                                            effect.kernel)) {
+                                        bounds[index].local = detail::boundsForWindow(
+                                            slots[index]->descriptor()->dataWindow(),
+                                            resolved.horizontalScale, resolved.verticalScale);
+                                        bounds[index].output = bounds[index].local;
+                                    }
                                 }
                             }
                             reportProgress(progress, {.stage = EvaluationProgressStage::Operation,

@@ -467,10 +467,70 @@ void runFileTransform(Expectations& expectations, GpuDevice& device, GpuSceneCac
 }
 #endif
 
+void runDiscrete(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::runtime::DiscreteImageKernel;
+    std::uint64_t id = 20000;
+    for (const auto kernel :
+         {DiscreteImageKernel{true, false, 0}, DiscreteImageKernel{false, true, 0},
+          DiscreteImageKernel{true, true, 0}, DiscreteImageKernel{false, false, 1},
+          DiscreteImageKernel{false, false, 2}, DiscreteImageKernel{false, false, 3}}) {
+        cache.clear();
+        auto definition = effectPlan(CstKernel{}, id)->copyDefinition();
+        bloom::runtime::CompiledShape shape{};
+        shape.sourceNodeId = NodeId::fromRaw(id + 1);
+        shape.kind = bloom::document::ShapeKind::Line;
+        shape.size = {ParameterId::fromRaw(id + 2), bloom::document::Vec2d{6, 3}};
+        shape.fillEnabled = false;
+        shape.fillColor = {ParameterId::fromRaw(id + 3), Color4d{-0.25, 1.75, 0.5, 0.625}};
+        shape.strokeEnabled = true;
+        shape.strokeColor = {ParameterId::fromRaw(id + 4), Color4d{-0.25, 1.75, 0.5, 0.625}};
+        shape.strokeWidth = {ParameterId::fromRaw(id + 5), 1.5};
+        shape.lineStart = {0, 0};
+        shape.lineEnd = {6, 3};
+        definition.operations[0] = shape;
+        std::get<CompiledImageEffect>(definition.operations[1]).kernel = kernel;
+        definition.operations.resize(2);
+        definition.operations.emplace_back(CompiledMerge{
+            NodeId::fromRaw(id + 20),
+            {{LayerSlotId::fromRaw(id + 20), LayerId{}, OperationIndex::fromRaw(1)}}});
+        definition.operations.emplace_back(
+            CompiledCompositionOutput{NodeId::fromRaw(id + 21), OperationIndex::fromRaw(2)});
+        definition.output = OperationIndex::fromRaw(3);
+        const auto plan = std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+        const auto request = requestFor(*plan);
+        const auto prepared = CpuGpuSceneBuilder{}.build(plan, request);
+        expectations.expect(prepared.hasValue(), "discrete native: production scene prepares");
+        const CpuCompositionEvaluator evaluator;
+        const auto oracle = evaluator.evaluate(plan, request, {});
+        expectations.expect(oracle.frame() != nullptr, "discrete native: CPU oracle evaluates");
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), "discrete native: executor creates");
+        if (!prepared || !oracle.frame() || !executor)
+            return;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        expectations.expect(
+            cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                std::ranges::equal(cold.pixels, oracle.frame()->processImage().pixels()),
+            "discrete native: asymmetric signed/HDR/partial-alpha pixels match CPU exactly");
+        const auto counters = executor.executor->counters();
+        expectations.expect(
+            counters.affineDispatches == 1 && counters.readbacks == 0,
+            "discrete native: one real resident affine pass with no executor readback");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(
+            warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                std::ranges::equal(warm.pixels, oracle.frame()->processImage().pixels()) &&
+                executor.executor->counters().affineDispatches == counters.affineDispatches,
+            "discrete native: warm frame reuses the resident result and preserves exact pixels");
+        id += 100;
+    }
+}
+
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                const std::string& from, const std::string& to) {
     runCst(expectations, device, cache, from, to);
     runPointwise(expectations, device, cache);
+    runDiscrete(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
 #endif

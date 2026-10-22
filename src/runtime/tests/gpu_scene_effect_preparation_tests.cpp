@@ -104,6 +104,28 @@ findOcioCommand(const bloom::runtime::PreparedGpuScene& scene) {
     return nullptr;
 }
 
+void testDiscretePreparation(Expectations& expectations) {
+    for (const auto kernel : {bloom::runtime::DiscreteImageKernel{true, false, 0},
+                              bloom::runtime::DiscreteImageKernel{false, true, 0},
+                              bloom::runtime::DiscreteImageKernel{false, false, 1},
+                              bloom::runtime::DiscreteImageKernel{false, false, 2},
+                              bloom::runtime::DiscreteImageKernel{false, false, 3}}) {
+        const auto plan = effectPlan({solidLeaf(400)}, kernel, 4000);
+        const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+        expectations.expect(prepared.hasValue(), "discrete production scene prepares without OCIO");
+        if (!prepared)
+            continue;
+        const auto index = prepared.scene->commandForOperation()[1];
+        const auto* affine =
+            std::get_if<bloom::runtime::GpuSceneAffineCommand>(&prepared.scene->commands()[index]);
+        expectations.expect(
+            affine && affine->opacity == 1.0F &&
+                affine->outputWindow.extent().width() == ((kernel.quarterTurns & 1U) ? 6U : 8U) &&
+                affine->outputWindow.extent().height() == ((kernel.quarterTurns & 1U) ? 8U : 6U),
+            "discrete effect emits a genuine resident affine pass and exact data extents");
+    }
+}
+
 void testIdentityAndRefusals(Expectations& expectations) {
     // An identity CST aliases the input command exactly.
     const auto identity =
@@ -310,6 +332,7 @@ int main() {
     try {
         Expectations expectations;
         testIdentityAndRefusals(expectations);
+        testDiscretePreparation(expectations);
 
         const auto config = bloom::runtime::detail::resolveInputColorConfig(
             bloom::runtime::EvaluationColorIntent::LinearRec709Scene);

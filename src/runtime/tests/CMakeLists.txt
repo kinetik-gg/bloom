@@ -239,6 +239,7 @@ target_link_libraries(bloom_runtime_image_effect_test PRIVATE bloom_runtime_eval
 bloom_enable_warnings(bloom_runtime_image_effect_test)
 bloom_enable_strict_floating_point(bloom_runtime_image_effect_test)
 bloom_add_test(NAME bloom.runtime.image-effects COMMAND bloom_runtime_image_effect_test LABELS unit runtime color)
+bloom_add_test(NAME bloom.runtime.discrete-image-effects COMMAND bloom_runtime_image_effect_test --discrete-only LABELS unit runtime image)
 
 # Bounded runtime qualification for the embedded Bloom Neutral v1 display operation. The hardware
 # body is compiled unconditionally and depends only on runtime create() availability, so the same

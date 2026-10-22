@@ -19,6 +19,7 @@
 //  * any preparation refusal other than a genuine identity fails closed (Unsupported) so the caller
 //    takes the existing CPU reference path; it is never substituted with an identity result.
 
+#include "discrete_image_effect.hpp"
 #include "gpu_scene_preparation_common.hpp"
 #include "gpu_scene_vector_emission.hpp"
 #include "input_color_context.hpp"
@@ -180,6 +181,65 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     if (effect.bypass || (request.bypassLookNodes && effect.look) ||
         std::holds_alternative<IdentityImageKernel>(effect.kernel)) {
         return identity();
+    }
+    if (const auto* discrete = std::get_if<DiscreteImageKernel>(&effect.kernel)) {
+        if (discrete->quarterTurns > 3)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan, "Invalid quarter turn");
+        const auto inputWindow = outputWindowOf[inputValue];
+        if (discrete->identity() || !inputWindow)
+            return identity();
+        // The CPU lattice supports int64 origins. The affine map is Float64 host metadata;
+        // outside this exact-integer domain, use the explicit CPU fallback rather than round.
+        constexpr std::int64_t exactOriginLimit = std::int64_t{1} << 52;
+        if (inputWindow->originX() < -exactOriginLimit ||
+            inputWindow->originY() < -exactOriginLimit ||
+            inputWindow->maxXExclusive() > exactOriginLimit ||
+            inputWindow->maxYExclusive() > exactOriginLimit)
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
+                        "Discrete image origin exceeds exact GPU affine coordinates");
+        const auto window = discreteOutputWindow(*discrete, *inputWindow);
+        if (!window)
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
+                        "Discrete image output window overflows");
+        GpuSceneCommandIndex inputCommand = commandForOperation[inputValue];
+        std::string inputKey = keyOf[inputValue];
+        if (inputCommand == kInvalidGpuSceneCommand) {
+            const auto& chain = vectors[inputValue];
+            if (!chain || chain->source >= plan.operations().size())
+                return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                            "Discrete image input cannot be materialized");
+            if (const auto error = emitVectorLeafLayer(
+                    plan.operations()[chain->source], plan, resolved, chain->matrix, *inputWindow,
+                    ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale,
+                    chain->opacity, false, ctx.allowance, operationIndex, nullptr,
+                    ctx.coverageCache, cancellation, emit, charge, chargeCoverage, inputCommand,
+                    inputKey, result.consumedText, result.consumedShape))
+                return error;
+            result.consumedLeaf = chain->source;
+        }
+        const auto matrix = discreteAffineMatrix(*discrete, *inputWindow);
+        result.key =
+            makeGpuSceneAffineSemanticKey(inputKey, *inputWindow, matrix, 1.0F, *window.value(),
+                                          ctx.fullPixelAspect, std::string{kGpuAffineSpirvSha256});
+        if (const auto error = charge(window.value()->extent().width(),
+                                      window.value()->extent().height(), sizeof(render::Rgba32f)))
+            return error;
+        result.command = emit(GpuSceneAffineCommand{.sourceOperation = operationIndex,
+                                                    .input = inputCommand,
+                                                    .inputKey = inputKey,
+                                                    .sourceWindow = *inputWindow,
+                                                    .outputWindow = *window.value(),
+                                                    .matrix = matrix,
+                                                    .opacity = 1.0F,
+                                                    .pixelAspect = ctx.fullPixelAspect,
+                                                    .semanticKey = result.key});
+        result.window = *window.value();
+        result.local = {static_cast<double>(window.value()->originX()) / ctx.hScale,
+                        static_cast<double>(window.value()->originY()) / ctx.vScale,
+                        static_cast<double>(window.value()->maxXExclusive()) / ctx.hScale,
+                        static_cast<double>(window.value()->maxYExclusive()) / ctx.vScale};
+        result.output = result.local;
+        return std::nullopt;
     }
     const auto* cst = std::get_if<CstKernel>(&effect.kernel);
     const auto* file = std::get_if<FileTransformKernel>(&effect.kernel);

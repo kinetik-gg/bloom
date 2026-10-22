@@ -67,7 +67,7 @@ level's dependencies.
 | `F1` | Transform 2D | Position, anchor, scale, rotation, opacity, defined sampling, and transparent borders |
 | `F1` | Resize, Fit | Explicit output extent, pixel aspect, filter, and fit/fill policy |
 | `C1` | Crop, Pad, Reformat | Preserve and deliberately change data/display windows and canvas semantics |
-| `C1` | Flip, Mirror, Rotate 90 | Exact discrete transforms where possible |
+| `C1` | Flip, Mirror, Rotate 90 | Flip and Rotate 90 v1 are built: exact pixel permutations, both Flip axes, signed integer clockwise quarter turns. Mirror remains a retained candidate. |
 | `C1` | Tile, Repeat | Defined edge and repeat modes |
 | `C1` | Corner Pin, Perspective Transform | Checked projective mapping with explicit invalid-transform diagnostics |
 | `M1` | Align, Distribute, Auto-Orient | Layout operations over stable bounds and transform identities |

@@ -1,3 +1,4 @@
+#include "discrete_image_effect.hpp"
 #include "image_effect.hpp"
 
 #include <OpenColorIO/OpenColorIO.h>
@@ -80,6 +81,117 @@ bool samePixels(const runtime::EvaluationResult& a, const runtime::EvaluationRes
     return a.frame() && b.frame() &&
            std::ranges::equal(a.frame()->processImage().pixels(),
                               b.frame()->processImage().pixels());
+}
+
+void testDiscreteImages() {
+    using namespace runtime;
+    using namespace render;
+    const auto sourceWindow = ImageWindow::create(-11, 17, 3, 2);
+    const auto display = ImageWindow::create(0, 0, 4, 4);
+    const auto descriptor = Rgba32fImageDescriptor::create(*sourceWindow.value(), *display.value(),
+                                                           core::PixelAspectRatio::square());
+    auto builder = Rgba32fImageBuilder::create(*descriptor.value(), 4096);
+    for (std::int64_t y = 17; y < 19; ++y) {
+        auto row = builder.value()->row(y);
+        for (std::size_t x = 0; x < 3; ++x) {
+            const float value = static_cast<float>((y - 17) * 3 + static_cast<std::int64_t>(x));
+            const auto pixel = Rgba32f::fromPremultiplied(-value, value * 2.0F, value * 4.0F,
+                                                          value == 0 ? 0.0F : 0.5F);
+            (*row.value())[x] = *pixel.value();
+        }
+    }
+    const auto frozen = std::move(*builder.value()).freeze();
+    const auto& image = *frozen.value();
+    // Independent expected source indices: clockwise quarter turns of [0 1 2; 3 4 5].
+    const std::array<std::array<std::size_t, 6>, 4> expected{
+        {{{0, 1, 2, 3, 4, 5}}, {{3, 0, 4, 1, 5, 2}}, {{5, 4, 3, 2, 1, 0}}, {{2, 5, 1, 4, 0, 3}}}};
+    for (std::uint8_t turn = 0; turn < 4; ++turn) {
+        const DiscreteImageKernel kernel{false, false, turn};
+        const auto output = runtime::detail::applyDiscreteImageEffect(
+            kernel, image, 4096, {}, OperationIndex::fromRaw(1), {});
+        expect(output.image && !output.diagnostic, "quarter-turn CPU gather succeeds");
+        if (!output.image)
+            continue;
+        const auto window = output.image->descriptor()->dataWindow();
+        expect(window.originX() == -11 && window.originY() == 17 &&
+                   window.extent().width() == ((turn & 1U) ? 2U : 3U) &&
+                   window.extent().height() == ((turn & 1U) ? 3U : 2U) &&
+                   output.image->descriptor()->displayWindow() == *display.value(),
+               "quarter turns preserve off-canvas origin/display and exchange odd extents");
+        const auto samples = prepareAffineMatrixSamples(
+            runtime::detail::discreteAffineMatrix(kernel, *sourceWindow.value()),
+            *sourceWindow.value(), window);
+        for (std::size_t i = 0; i < 6; ++i) {
+            expect(output.image->pixels()[i] == image.pixels()[expected[turn][i]],
+                   "quarter turns preserve exact signed/HDR RGBA samples");
+            expect(samples[i].factorX == 0.0F && samples[i].factorY == 0.0F &&
+                       samples[i].baseX == static_cast<std::int32_t>(expected[turn][i] % 3) &&
+                       samples[i].baseY == static_cast<std::int32_t>(expected[turn][i] / 3),
+                   "resident affine sampler selects the exact tap without interpolation");
+        }
+    }
+    for (const auto kernel :
+         {DiscreteImageKernel{true, false, 0}, DiscreteImageKernel{false, true, 0},
+          DiscreteImageKernel{true, true, 0}}) {
+        const auto output = runtime::detail::applyDiscreteImageEffect(
+            kernel, image, 4096, {}, OperationIndex::fromRaw(1), {});
+        expect(output.image != nullptr, "flip CPU gather succeeds");
+        const auto samples = prepareAffineMatrixSamples(
+            runtime::detail::discreteAffineMatrix(kernel, *sourceWindow.value()),
+            *sourceWindow.value(), *sourceWindow.value());
+        for (std::size_t i = 0; i < 6 && output.image; ++i) {
+            const auto x = kernel.horizontal ? 2 - i % 3 : i % 3;
+            const auto y = kernel.vertical ? 1 - i / 3 : i / 3;
+            expect(output.image->pixels()[i] == image.pixels()[y * 3 + x] &&
+                       samples[i].baseX == static_cast<std::int32_t>(x) &&
+                       samples[i].baseY == static_cast<std::int32_t>(y) &&
+                       samples[i].factorX == 0 && samples[i].factorY == 0,
+                   "flip CPU/reference GPU sampling permute the same exact taps");
+        }
+    }
+    const auto refused = runtime::detail::applyDiscreteImageEffect({true, false, 0}, image, 1, {},
+                                                                   OperationIndex::fromRaw(1), {});
+    expect(!refused.image && refused.diagnostic &&
+               refused.diagnostic->code == EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
+           "discrete image enforces allocation budget");
+    const auto baseline = planWith({DiscreteImageKernel{false, false, 1}});
+    CpuCompositionEvaluator evaluator;
+    const auto cold = evaluator.evaluate(baseline, requestFor(*baseline), {});
+    const auto warm = evaluator.evaluate(baseline, requestFor(*baseline), {});
+    expect(samePixels(cold, warm) && cold.diagnostics().empty() && warm.diagnostics().empty(),
+           "discrete effect production evaluation and warm cache preserve pixels");
+    expect(!baseline->operationTimeDependent(OperationIndex::fromRaw(1)),
+           "static discrete controls retain static source time dependence");
+    auto timeDefinition = baseline->copyDefinition();
+    timeDefinition.operations[0] = CompiledVideoSource{};
+    const auto timePlan =
+        std::make_shared<const CompiledCompositionPlan>(std::move(timeDefinition));
+    expect(timePlan->operationTimeDependent(OperationIndex::fromRaw(1)),
+           "discrete effects propagate time-varying input dependence");
+    auto directDefinition = baseline->copyDefinition();
+    directDefinition.operations.resize(2);
+    directDefinition.operations.emplace_back(CompiledMerge{
+        document::NodeId::fromRaw(500),
+        {{document::LayerSlotId::fromRaw(500), document::LayerId{}, OperationIndex::fromRaw(1)}}});
+    directDefinition.operations.emplace_back(
+        CompiledCompositionOutput{document::NodeId::fromRaw(501), OperationIndex::fromRaw(2)});
+    directDefinition.output = OperationIndex::fromRaw(3);
+    const auto direct =
+        std::make_shared<const CompiledCompositionPlan>(std::move(directDefinition));
+    auto roiRequest = requestFor(*direct);
+    const auto roi = ImageWindow::create(1, 0, 1, 2);
+    roiRequest.roi = *roi.value();
+    const auto roiFrame = evaluator.evaluate(direct, roiRequest, {});
+    const auto fullFrame = evaluator.evaluate(direct, requestFor(*direct), {});
+    expect(roiFrame.frame() && fullFrame.frame(), "direct discrete output accepts an ROI");
+    if (roiFrame.frame() && fullFrame.frame()) {
+        const auto fullView = fullFrame.frame()->processImage().view();
+        for (std::size_t y = 0; y < 2; ++y) {
+            const auto fullRow = fullView.value()->row(static_cast<std::int64_t>(y));
+            expect(roiFrame.frame()->processImage().pixels()[y] == (*fullRow.value())[1],
+                   "ROI crops rotated output after preserving complete source support");
+        }
+    }
 }
 
 void testExposureAndOffset() {
@@ -467,10 +579,15 @@ void testPointwiseFailureAndTimeDependence() {
 
 } // namespace
 
-int main() {
+int main(const int argc, char** argv) {
     try {
+        if (argc == 2 && std::string_view(argv[1]) == "--discrete-only") {
+            testDiscreteImages();
+            return failures == 0 ? 0 : 1;
+        }
         testCst();
         testExposureAndOffset();
+        testDiscreteImages();
         testLookBypass();
         testFileTransform();
         testMultiplyAndInvert();

@@ -175,9 +175,9 @@ struct CompiledCompositionSource final {
                            const CompiledCompositionSource&) = default;
 };
 
-// Image effects preserve the input's data/display windows and content bounds. Kernels operate
-// on straight RGB, preserve alpha, and publish finite premultiplied RGBA32F. Identity and bypass
-// share the input storage exactly. This is the common lowering for subsequent image effects.
+// Colour effects preserve data/display windows and operate on straight RGB, preserving alpha.
+// Discrete image effects instead permute premultiplied samples and change data bounds. Identity and
+// bypass share the input storage exactly. This is the common lowering for subsequent image effects.
 struct IdentityImageKernel final {
     friend bool operator==(const IdentityImageKernel&, const IdentityImageKernel&) = default;
 };
@@ -202,8 +202,19 @@ struct PointwiseImageKernel final {
     std::optional<CompiledScalarParameter> amount;
     friend bool operator==(const PointwiseImageKernel&, const PointwiseImageKernel&) = default;
 };
-using ImageEffectKernel =
-    std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel>;
+// Exact permutations of the stored pixel lattice, with no colour/alpha arithmetic. Odd turns
+// exchange data-window extents at its top-left; the composition display canvas/PAR are retained.
+struct DiscreteImageKernel final {
+    bool horizontal = false;
+    bool vertical = false;
+    std::uint8_t quarterTurns = 0; // clockwise, canonical 0..3
+    [[nodiscard]] bool identity() const noexcept {
+        return !horizontal && !vertical && quarterTurns == 0;
+    }
+    friend bool operator==(const DiscreteImageKernel&, const DiscreteImageKernel&) = default;
+};
+using ImageEffectKernel = std::variant<IdentityImageKernel, CstKernel, FileTransformKernel,
+                                       PointwiseImageKernel, DiscreteImageKernel>;
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
     OperationIndex input;

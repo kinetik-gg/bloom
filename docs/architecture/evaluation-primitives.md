@@ -906,3 +906,35 @@ At the composition-source landing, compiled-plan semantics was **7**, animation 
 existing arms' pixel semantics are unchanged. The independent `s5-identity-oracle.py` audit
 reproduced all plan-6 analysis/output pins before deriving plan-7 pins, preserving the four
 preimage lengths (PNG analysis 1922, EXR analysis 1485, PNG output 669, EXR output 567 bytes).
+
+## Exact Flip And Rotate 90 Image Nodes
+
+`bloom.flip` v1 and `bloom.rotate-90` v1 lower to the required `DiscreteImageKernel` image-effect
+alternative. Flip has static Boolean horizontal (default true) and vertical (default false)
+controls. Rotate 90 has one static signed integer `quarterTurns` control (default 1), normalized
+modulo four; positive turns are clockwise. Generic AddNode/parameter commands own edits and undo;
+the versioned definitions and parameter records use ordinary project persistence.
+
+These nodes permute the stored pixel lattice without colour conversion, unpremultiplication,
+filtering, alpha arithmetic or HDR clipping. Flip reflects within the input data rectangle.
+Rotation exchanges data width/height on odd turns and retains the data rectangle's top-left
+origin on every turn, including negative and off-canvas origins. The display canvas and pixel
+aspect ratio are retained: an image operation does not resize the composition. Full overscan is
+retained for downstream transforms; Composition Output/ROI determines the final visible crop.
+The CPU reference copies exact premultiplied RGBA32F samples with row/chunk cancellation,
+progress and the existing checked allocation budget. Invalid output windows or failed allocation
+fail evaluation rather than publishing an unchanged final image.
+
+GPU preview and all final routes use the same production scene builder and resident affine
+executor. A signed permutation matrix with integer translations produces zero fractional sample
+weights, so the existing affine shader's explicit zero-factor branches select the exact source tap;
+there is no host full-frame pixel preparation. The ordinary GPU capability, allocation, cancellation,
+cache-key, live-pin and retirement contracts apply. CPU fallback remains explicit on unsupported
+native devices/platforms, and for data origins beyond the exact Float64 integer-coordinate
+domain (absolute coordinate above 2^52). Windows/macOS native qualification is pending, as for the shared affine
+backend. Tests cover every turn, both axes, nonsquare off-canvas windows, signed/HDR/partial-alpha
+sample preservation, exact affine sample bases/zero weights, production preparation, warm cache,
+Properties command undo, and verified archive reopen. A separate native image-effect harness adds
+an asymmetric stroked image fixture for both axes, their combination, and turns 1/2/3; it requires
+exact CPU/GPU pixels, a real resident affine dispatch, no executor readback, and warm cache reuse.
+That harness and the required coverage gate must run on a device before claiming native parity.
