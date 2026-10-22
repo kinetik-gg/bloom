@@ -188,14 +188,11 @@ render::OcioGpuProgramResult buildOcioGpuProgramForPointwiseAffine(
     }
     try {
         auto transform = OCIO::MatrixTransform::Create();
-        const double matrix[16]{static_cast<double>(scale), 0.0, 0.0, 0.0,
-                                0.0, static_cast<double>(scale), 0.0, 0.0,
-                                0.0, 0.0, static_cast<double>(scale), 0.0,
+        const double matrix[16]{static_cast<double>(scale), 0.0, 0.0, static_cast<double>(offset),
+                                0.0, static_cast<double>(scale), 0.0, static_cast<double>(offset),
+                                0.0, 0.0, static_cast<double>(scale), static_cast<double>(offset),
                                 0.0, 0.0, 0.0, 1.0};
-        const double offsets[4]{static_cast<double>(offset), static_cast<double>(offset),
-                                static_cast<double>(offset), 0.0};
         transform->setMatrix(matrix);
-        transform->setOffset(offsets);
         const auto processor = resolved.impl().config()->getProcessor(
             OCIO::Context::Create(), transform, OCIO::TRANSFORM_DIR_FORWARD);
         if (!processor) {

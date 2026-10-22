@@ -2203,7 +2203,8 @@ void testRegionOfInterest(Expectations& expectations) {
                                 "ROI pixels are byte-identical to full evaluation");
         }
         expectations.expect(full.frame()->identity() != cropped.frame()->identity() &&
-                                cropped.frame()->identity().evaluatorSemanticsVersion == 9,
+                                cropped.frame()->identity().evaluatorSemanticsVersion ==
+                                    bloom::runtime::kCpuCompositionEvaluatorSemanticsVersion,
                             "ROI changes request identity without changing semantics versions");
         const auto again = evaluator.evaluate(plan, request, {});
         expectations.expect(again.frame() && again.frame()->operationCacheStatistics().misses == 0,

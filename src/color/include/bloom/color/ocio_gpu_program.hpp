@@ -27,7 +27,7 @@ inline constexpr std::string_view kOcioGpuExposureContrastSemanticsId =
     "bloom.color.ocio-process-exposure-contrast.v1";
 inline constexpr std::string_view kOcioGpuLut3dSemanticsId = "bloom.color.ocio-process-lut3d.v1";
 inline constexpr std::string_view kOcioGpuPointwiseAffineSemanticsId =
-    "bloom.color.ocio-process-pointwise-affine.v1";
+    "bloom.color.ocio-process-pointwise-affine.v2-premultiplied";
 
 // Versioned precise-sampling and CPU-math-parity GLSL adapter. OCIO's generated body samples its
 // LUT resources with the built-in `texture()` function, whose hardware linear filtering quantizes

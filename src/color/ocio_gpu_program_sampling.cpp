@@ -491,7 +491,8 @@ OcioGpuSamplingGlsl ocioGpuSamplingGlslFor(const render::OcioGpuProgramDesc& pro
         declarations += std::string(kFastPowPreamble);
         definitions += std::string(kCpuHelperDefinitions);
         definitions += std::string(kFastPowOverloads);
-    } else if (cpuParity && (hasGamma || hasLog || hasMatrix)) {
+    } else if ((cpuParity && (hasGamma || hasLog || hasMatrix)) ||
+               (hasMatrix && program.semanticsId == kOcioGpuPointwiseAffineSemanticsId)) {
         BodySpecialization specialized = specializeOcioShaderBody(program.shaderText);
         declarations += std::string(kCpuHelperDeclarations);
         definitions += std::string(kCpuHelperDefinitions);

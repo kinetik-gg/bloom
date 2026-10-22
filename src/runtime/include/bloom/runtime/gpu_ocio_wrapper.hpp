@@ -36,7 +36,7 @@ inline constexpr std::uint32_t kGpuOcioWrapperWorkgroupSize = 64;
 // sampling-adapter version: a change to any of those semantics must never reuse an artifact
 // compiled by an older wrapper. Folded into the prepared command identity (see the wrapper
 // source digest and this version).
-inline constexpr std::string_view kGpuOcioWrapperVersion = "bloom-ocio-wrapper-v3-finite-output";
+inline constexpr std::string_view kGpuOcioWrapperVersion = "bloom-ocio-wrapper-v4-premultiplied-affine";
 
 enum class GpuOcioWrapperError : std::uint8_t {
     None,

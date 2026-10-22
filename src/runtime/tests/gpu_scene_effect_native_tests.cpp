@@ -375,16 +375,78 @@ void runPointwise(Expectations& expectations, GpuDevice& device, GpuSceneCache& 
                                 "pointwise: changed amount prepares and evaluates");
             if (changed && changedOracle.frame()) {
                 const auto result = runScene(*executor.executor, changed.scene);
+                const auto changedCounters = executor.executor->counters();
                 expectations.expect(
                     result.pollResult == GpuSceneExecutorPollResult::Ready &&
                         parity(result.pixels, changedOracle.frame()->processImage().pixels(),
-                               detail) &&
-                        executor.executor->counters().ocioEffectDispatches ==
-                            counters.ocioEffectDispatches + 1 &&
-                        executor.executor->counters().solidDispatches == counters.solidDispatches,
+                               detail),
+                    "pointwise: changed amount matches the CPU oracle: " + detail);
+                // The input is a covered solid. A changed effect also invalidates the downstream
+                // merge, whose transparent accumulator adds one ordinary solid dispatch.
+                expectations.expect(
+                    changedCounters.ocioEffectDispatches == counters.ocioEffectDispatches + 1 &&
+                        changedCounters.solidDispatches == counters.solidDispatches + 1 &&
+                        changedCounters.coveredSolidDispatches == counters.coveredSolidDispatches &&
+                        changedCounters.coverageDispatches == counters.coverageDispatches,
                     "pointwise: changing amount invalidates the effect while retaining its input");
             }
         }
+    }
+}
+
+void runPointwiseExtremeAlpha(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    const CpuCompositionEvaluator evaluator;
+    // Valid finite premultiplied RGB near 1e20, but recovering straight RGB in Float32 would
+    // overflow. Each affine result remains representable, including Multiply's exact zero.
+    constexpr Color4d color{1e40, -1e40, 2e40, 1e-20};
+    const std::array cases{
+        PointwiseImageKernel{PointwiseImageEffect::Exposure,
+                             CompiledScalarParameter{ParameterId::fromRaw(900), -1.0}},
+        PointwiseImageKernel{PointwiseImageEffect::Offset,
+                             CompiledScalarParameter{ParameterId::fromRaw(900), -3e38}},
+        PointwiseImageKernel{PointwiseImageEffect::Multiply,
+                             CompiledScalarParameter{ParameterId::fromRaw(900), -2.0}},
+        PointwiseImageKernel{PointwiseImageEffect::Multiply,
+                             CompiledScalarParameter{ParameterId::fromRaw(900), 0.0}},
+        PointwiseImageKernel{PointwiseImageEffect::Invert, {}}};
+    std::uint64_t idBase = 20000;
+    for (const auto& kernel : cases) {
+        cache.clear();
+        const auto plan = effectPlan(kernel, idBase, std::nullopt, color);
+        idBase += 1000;
+        const auto request = requestFor(*plan);
+        const auto prepared = builder.build(plan, request);
+        const auto oracle = evaluator.evaluate(plan, request, {});
+        if (!prepared || !oracle.frame()) {
+            std::cerr << "pointwise extreme alpha effect " << static_cast<unsigned>(kernel.effect)
+                      << ": GPU " << prepared.diagnostic.message << '\n';
+            for (const auto& diagnostic : oracle.diagnostics())
+                std::cerr << "CPU: " << diagnostic.summary << ": " << diagnostic.detail << '\n';
+        }
+        expectations.expect(prepared && oracle.frame(),
+                            "pointwise extreme alpha: finite associated RGB prepares and evaluates");
+        if (!prepared || !oracle.frame())
+            continue;
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), "pointwise extreme alpha: native executor creates");
+        if (!executor)
+            continue;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        std::string detail;
+        expectations.expect(
+            cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail),
+            "pointwise extreme alpha: native finite HDR and exact alpha match CPU: " + detail);
+        const auto counters = executor.executor->counters();
+        expectations.expect(counters.ocioEffectDispatches == 1 && counters.readbacks == 0,
+                            "pointwise extreme alpha: one genuine resident effect without readback");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(
+            warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                parity(warm.pixels, oracle.frame()->processImage().pixels(), detail) &&
+                executor.executor->counters().dispatches == counters.dispatches,
+            "pointwise extreme alpha: warm cache retains parity with zero new dispatches");
     }
 }
 
@@ -755,6 +817,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                const std::string& from, const std::string& to) {
     runCst(expectations, device, cache, from, to);
     runPointwise(expectations, device, cache);
+    runPointwiseExtremeAlpha(expectations, device, cache);
     runCanvas(expectations, device, cache);
     runDiscrete(expectations, device, cache);
     runResizeFit(expectations, device, cache);

@@ -536,6 +536,31 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                 return result;
             }
             const auto count = std::min(chunkSize, source.value()->size() - x);
+            if (effect.pointwise) {
+                // Affine RGB commutes with association. Avoid overflowing an otherwise valid
+                // premultiplied pixel merely to recover an unrepresentable straight value.
+                // Keep the binary32 multiply and add separate, matching the GPU matrix path.
+                for (std::size_t i = 0; i < count; ++i) {
+                    const auto pixel = (*source.value())[x + i];
+                    const auto alpha = pixel.alpha();
+                    if (alpha == 0.0F) {
+                        (*target.value())[x + i] = pixel;
+                        continue;
+                    }
+                    const float offset = alpha * effect.pointwise->offset;
+                    const auto value = render::Rgba32f::fromPremultiplied(
+                        pixel.red() * effect.pointwise->scale + offset,
+                        pixel.green() * effect.pointwise->scale + offset,
+                        pixel.blue() * effect.pointwise->scale + offset, alpha);
+                    if (!value) {
+                        result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                                    "Pointwise effect produced invalid RGB");
+                        return result;
+                    }
+                    (*target.value())[x + i] = *value.value();
+                }
+                continue;
+            }
             auto straight = std::span(buffer).first(count);
             for (std::size_t i = 0; i < count; ++i) {
                 const auto pixel = (*source.value())[x + i];
@@ -564,14 +589,6 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                 result.diagnostic = refusal(EvaluationDiagnosticCode::ColorTransformFailed,
                                             "OCIO could not return finite working RGB");
                 return result;
-            }
-            if (effect.pointwise) {
-                for (auto& pixel : straight) {
-                    for (std::size_t channel = 0; channel < 3; ++channel) {
-                        pixel[channel] = pixel[channel] * effect.pointwise->scale +
-                                         effect.pointwise->offset;
-                    }
-                }
             }
             for (std::size_t i = 0; i < count; ++i) {
                 const auto alpha = (*source.value())[x + i].alpha();

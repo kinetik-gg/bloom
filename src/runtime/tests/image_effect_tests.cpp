@@ -1002,7 +1002,8 @@ void testPointwiseFailureAndTimeDependence() {
               PointwiseImageEffect::Multiply,
               CompiledScalarParameter{parameterId,
                                       static_cast<double>(std::numeric_limits<float>::max())}}}) {
-        const auto plan = planWith({kernel});
+        // Stored blue is 2, so Multiply by FLT_MAX truly overflows associated RGB.
+        const auto plan = planWith({kernel}, {-0.125, 0.18, 4.0, 0.5});
         const auto result = evaluator.evaluate(plan, requestFor(*plan), {});
         expect(!result.frame() && !result.diagnostics().empty(),
                "unrepresentable pointwise parameters and pixels fail instead of bypassing");
@@ -1138,6 +1139,7 @@ void testImageCombineDrivers() {
                    .diagnostic.has_value(),
                "channel preparation refuses missing and invalid samples");
 }
+#include "pointwise_arithmetic_tests.ipp"
 
 } // namespace
 
@@ -1177,6 +1179,7 @@ int main(const int argc, char** argv) {
         testMultiplyAndInvert();
         testPointwiseFailureAndTimeDependence();
         testPointwiseAnimatedPreflight();
+        testPointwisePremultipliedHdr();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

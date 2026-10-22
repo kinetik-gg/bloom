@@ -200,6 +200,15 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
             // coverage that underflows to zero. Validate first so invalid HDR still fails.
             out << "  if (p.a == 0.0) { p = vec4(0.0); }\n";
             out << "  imageStore(bloom_ocio_output, c, p);\n";
+        } else if (effect && program.semanticsId == color::kOcioGpuPointwiseAffineSemanticsId) {
+            // The affine matrix carries its offset in the alpha column. Apply it directly to
+            // associated RGB so legal HDR pixels never overflow an unpremultiply intermediate.
+            out << "  vec4 p = imageLoad(bloom_ocio_input, c);\n";
+            out << "  if (p.a == 0.0) { imageStore(bloom_ocio_output, c, p); return; }\n";
+            out << "  vec4 t = " << program.functionName << "(p);\n";
+            out << "  if (any(isnan(t.rgb)) || any(isinf(t.rgb))) { "
+                   "bloom_ocio_status.flags[0] = 1u; return; }\n";
+            out << "  imageStore(bloom_ocio_output, c, vec4(t.rgb, p.a));\n";
         } else {
             out << "  vec4 p = imageLoad(bloom_ocio_input, c);\n";
             out << "  float a = p.a;\n";
