@@ -12,6 +12,9 @@ class MemoryBudgetLedger;
 class GpuProcessingPhasePolicy;
 class CancellationToken;
 }
+namespace bloom::render {
+class GpuProcessingPhaseLease;
+}
 
 // docs/architecture/frame-output.md "Non-Blocking Execution": attempt admission retains the
 // checked process/output products through approval. Publication claims independently retain their
@@ -87,6 +90,13 @@ class ExportResourceLedgerV1 final {
 
   private:
     friend class ExportResourceReservationV1;
+    [[nodiscard]] std::shared_ptr<ExportResourceReservationV1>
+    reserveWithFixedHostBacking(std::uint64_t bytes, ExportResourceAdmissionStatusV1& status,
+                                std::optional<std::uint64_t> jobAllowance,
+                                std::shared_ptr<runtime::GpuProcessingPhasePolicy> processingPolicy,
+                                std::uint64_t alreadyRootedBytes,
+                                ExportCapacityRefreshV1 capacityRefresh,
+                                std::uint64_t fixedHostBackingBytes) noexcept;
     explicit ExportResourceLedgerV1(
         std::shared_ptr<detail::ExportResourceLedgerState> state) noexcept
         : state_(std::move(state)) {}
@@ -121,6 +131,14 @@ class ExportResourceReservationV1 final {
     [[nodiscard]] std::shared_ptr<ExportResourceReservationV1>
     reserveScratch(std::uint64_t additionalBytes, ExportResourceAdmissionStatusV1& status,
                    const runtime::CancellationToken& cancellation) const noexcept;
+
+    // A retained host allocation gets its own fixed phase claim before construction. The
+    // allocation can then transfer that claim to its real backing without an additive claim.
+    // The caller must keep this reservation until every owner of the adopted backing retires.
+    [[nodiscard]] std::shared_ptr<ExportResourceReservationV1>
+    reserveOwnedHostBacking(std::uint64_t bytes, ExportResourceAdmissionStatusV1& status,
+                            const runtime::CancellationToken& cancellation) const noexcept;
+    [[nodiscard]] std::shared_ptr<render::GpuProcessingPhaseLease> ownedHostPhase() const noexcept;
 
     // Transactionally raises this reservation's own charge to `newTotalBytes` (never lowers it;
     // a `newTotalBytes` at or below the current charge is a no-op success -- "neither

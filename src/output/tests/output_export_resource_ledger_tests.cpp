@@ -1,13 +1,16 @@
 #include <bloom/output/output_analysis_attempt.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
+#include <bloom/render/processing_host_storage.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
 #include "flat_exr_test_support.hpp"
 
 #include <algorithm>
+#include <array>
 #include <barrier>
 #include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -22,6 +25,12 @@ namespace render = bloom::render;
 namespace runtime = bloom::runtime;
 namespace support = bloom_output_flat_exr_test_support;
 constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
+runtime::GpuProcessingPhasePolicy::Clock::time_point scriptedExportSampleAt{};
+runtime::MemoryBudgetSample scriptedExportSample(const runtime::CancellationToken&) noexcept {
+    runtime::MemoryBudgetSample sample;
+    sample.process.sampledAt = scriptedExportSampleAt;
+    return sample;
+}
 
 class Expectations final {
   public:
@@ -279,6 +288,90 @@ void publicationRefreshFailureRetainsNoScratch(Expectations& checks) {
                   "refresh failure refuses publication without a partial scratch claim");
 }
 
+void ownedAudioBackingReconcilesWithoutScratchCredit(Expectations& checks) {
+    const auto firstAt = runtime::GpuProcessingPhasePolicy::Clock::now() - std::chrono::seconds(2);
+    runtime::MemoryBudgetState delivered;
+    delivered.machine.availableBytes = 200;
+    delivered.process.source = runtime::ProcessMemorySource::OtherHostOnly;
+    delivered.process.status = runtime::ProcessMemoryStatus::Unsupported;
+    delivered.process.sampledAt = firstAt;
+    delivered.processSampleFresh = true;
+    delivered.sampleSerial = 1;
+    auto root = std::make_shared<runtime::GpuProcessingPhasePolicy>();
+    root->applyHostSample(delivered, 200, runtime::GpuProcessingPhasePolicy::Clock::now());
+    output::ExportResourceLedgerV1 ledger;
+    output::ExportResourceAdmissionStatusV1 status{};
+    const runtime::CancellationToken cancellation;
+    auto queue = ledger.reserve(10, status, std::nullopt, root);
+    checks.expect(queue && !queue->ownedHostPhase(),
+                  "queue metadata has no materialized-host phase authority");
+    if (!queue)
+        return;
+    auto retained = queue->reserveOwnedHostBacking(80, status, cancellation);
+    auto scratch = queue->reserveScratch(20, status, cancellation);
+    checks.expect(retained && retained->ownedHostPhase() && scratch && !scratch->ownedHostPhase() &&
+                      ledger.chargedBytes() == 110,
+                  "retained backing and temporary decode scratch have distinct root claims");
+    if (!retained || !scratch)
+        return;
+    auto backing = render::adoptProcessingHostBacking(std::make_unique<std::array<std::byte, 80>>(),
+                                                      retained->ownedHostPhase(), 80, 80);
+    checks.expect(backing && root->snapshot().reservations.totalHostClaimBytes == 110 &&
+                      root->snapshot().reservations.ownedProcessingHostBytes == 110,
+                  "materializing retained backing transfers rather than adds to its fixed claim");
+    scratch.reset();
+    checks.expect(ledger.chargedBytes() == 90 &&
+                      root->snapshot().reservations.totalHostClaimBytes == 90,
+                  "decode scratch releases while the real audio buffer remains held");
+
+    scriptedExportSampleAt = firstAt + std::chrono::seconds(1);
+    static_cast<void>(root->sampleHostMemory(cancellation, scriptedExportSample));
+    delivered.machine.availableBytes = 60;
+    delivered.process.sampledAt = scriptedExportSampleAt;
+    ++delivered.sampleSerial;
+    root->applyHostSample(delivered, 200, runtime::GpuProcessingPhasePolicy::Clock::now());
+    auto second = queue->reserveOwnedHostBacking(50, status, cancellation);
+    checks.expect(second && root->snapshot().reservations.hostCapacityBytes == 140 &&
+                      root->snapshot().reservations.totalHostClaimBytes == 140,
+                  "a second audio buffer fits after exact live backing credit and scratch release");
+    auto overcommit = queue->reserveOwnedHostBacking(1, status, cancellation);
+    checks.expect(!overcommit &&
+                      status == output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded,
+                  "simultaneous held audio claims still refuse overcommit");
+    backing.reset();
+    checks.expect(root->snapshot().reservations.hostCapacityBytes == 60,
+                  "audio backing retirement revokes its live-sample credit");
+    second.reset();
+    retained.reset();
+    queue.reset();
+    checks.expect(ledger.chargedBytes() == 0 &&
+                      root->snapshot().reservations.totalHostClaimBytes == 0,
+                  "all audio and queue claims retire after backing ownership ends");
+}
+
+void ownedAudioBackingHonorsExplicitServiceCap(Expectations& checks) {
+    auto root = sampledRoot(gib);
+    output::ExportResourceLedgerV1 ledger(110);
+    output::ExportResourceAdmissionStatusV1 status{};
+    const runtime::CancellationToken cancellation;
+    auto queue = ledger.reserve(10, status, std::nullopt, root);
+    if (!queue) {
+        checks.expect(false, "explicit-cap queue fixture is admitted");
+        return;
+    }
+    auto retained = queue->reserveOwnedHostBacking(80, status, cancellation);
+    auto scratch = queue->reserveScratch(20, status, cancellation);
+    auto denied = queue->reserveOwnedHostBacking(1, status, cancellation);
+    checks.expect(retained && scratch && !denied &&
+                      status == output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded &&
+                      ledger.chargedBytes() == 110,
+                  "explicit service cap includes retained audio and simultaneous decode scratch");
+    scratch.reset();
+    auto next = queue->reserveOwnedHostBacking(20, status, cancellation);
+    checks.expect(next && ledger.chargedBytes() == 110,
+                  "retired scratch frees explicit service allowance for later audio backing");
+}
+
 void attemptDeductsOnlyPublishedSameRootBacking(Expectations& checks) {
     auto root = sampledRoot(8 * gib);
     auto fixture = support::roundTripFixture();
@@ -364,6 +457,8 @@ int main() {
     concurrentExpansionChargesOnce(checks);
     publicationScratchClaimsOverlapAndRetire(checks);
     publicationRefreshFailureRetainsNoScratch(checks);
+    ownedAudioBackingReconcilesWithoutScratchCredit(checks);
+    ownedAudioBackingHonorsExplicitServiceCap(checks);
     attemptDeductsOnlyPublishedSameRootBacking(checks);
     return checks.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

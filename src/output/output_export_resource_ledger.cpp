@@ -46,6 +46,7 @@ struct RootedExportReservationState final {
     std::shared_ptr<render::GpuProcessingPhaseLease> phase;
     std::vector<render::ProcessingHostStorageToken> claims;
     std::uint64_t alreadyRootedBytes = 0;
+    bool ownsFixedHostBacking = false;
 };
 
 } // namespace bloom::output::detail
@@ -72,7 +73,19 @@ ExportResourceLedgerV1::reserve(const std::uint64_t bytes, ExportResourceAdmissi
                                 std::shared_ptr<runtime::GpuProcessingPhasePolicy> processingPolicy,
                                 const std::uint64_t alreadyRootedBytes,
                                 ExportCapacityRefreshV1 capacityRefresh) noexcept {
-    if (alreadyRootedBytes > bytes || (alreadyRootedBytes != 0 && !processingPolicy)) {
+    return reserveWithFixedHostBacking(bytes, status, jobAllowance, std::move(processingPolicy),
+                                       alreadyRootedBytes, std::move(capacityRefresh), 0);
+}
+
+std::shared_ptr<ExportResourceReservationV1> ExportResourceLedgerV1::reserveWithFixedHostBacking(
+    const std::uint64_t bytes, ExportResourceAdmissionStatusV1& status,
+    const std::optional<std::uint64_t> jobAllowance,
+    std::shared_ptr<runtime::GpuProcessingPhasePolicy> processingPolicy,
+    const std::uint64_t alreadyRootedBytes, ExportCapacityRefreshV1 capacityRefresh,
+    const std::uint64_t fixedHostBackingBytes) noexcept {
+    if (alreadyRootedBytes > bytes ||
+        ((alreadyRootedBytes != 0 || fixedHostBackingBytes != 0) && !processingPolicy) ||
+        fixedHostBackingBytes > bytes - alreadyRootedBytes) {
         status = ExportResourceAdmissionStatusV1::ArithmeticOverflow;
         return {};
     }
@@ -92,10 +105,11 @@ ExportResourceLedgerV1::reserve(const std::uint64_t bytes, ExportResourceAdmissi
             rooted = std::make_unique<detail::RootedExportReservationState>();
             rooted->policy = std::move(processingPolicy);
             rooted->alreadyRootedBytes = alreadyRootedBytes;
+            rooted->ownsFixedHostBacking = fixedHostBackingBytes != 0;
             auto phase =
                 rooted->policy->reserve({.output = runtime::GpuProcessingPhaseOutput::FloatFinal,
                                          .pixels = 0,
-                                         .metadataBytes = 0,
+                                         .metadataBytes = fixedHostBackingBytes,
                                          .sourceFree = true,
                                          .native = false});
             if (phase.status != render::GpuProcessingPhaseAdmission::Accepted || !phase.lease) {
@@ -103,7 +117,7 @@ ExportResourceLedgerV1::reserve(const std::uint64_t bytes, ExportResourceAdmissi
                 return {};
             }
             rooted->phase = std::move(phase.lease);
-            const auto unowned = bytes - alreadyRootedBytes;
+            const auto unowned = bytes - alreadyRootedBytes - fixedHostBackingBytes;
             if (unowned != 0) {
                 auto claim = render::ProcessingHostStorageToken::reserve(rooted->phase, unowned);
                 if (!claim.token) {
@@ -176,6 +190,11 @@ ExportResourceReservationV1::processingPolicy() const noexcept {
     return rooted_ ? rooted_->policy : nullptr;
 }
 
+std::shared_ptr<render::GpuProcessingPhaseLease>
+ExportResourceReservationV1::ownedHostPhase() const noexcept {
+    return rooted_ && rooted_->ownsFixedHostBacking ? rooted_->phase : nullptr;
+}
+
 ExportResourceAdmissionStatusV1 ExportResourceReservationV1::refreshCapacity(
     const runtime::CancellationToken& cancellation) const noexcept {
     if (capacityRefresh_) {
@@ -208,6 +227,30 @@ std::shared_ptr<ExportResourceReservationV1> ExportResourceReservationV1::reserv
     ExportResourceLedgerV1 facade(ledger_);
     return facade.reserve(additionalBytes, status, remainingJobAllowance,
                           rooted_ ? rooted_->policy : nullptr);
+}
+
+std::shared_ptr<ExportResourceReservationV1> ExportResourceReservationV1::reserveOwnedHostBacking(
+    const std::uint64_t bytes, ExportResourceAdmissionStatusV1& status,
+    const runtime::CancellationToken& cancellation) const noexcept {
+    status = refreshCapacity(cancellation);
+    if (status != ExportResourceAdmissionStatusV1::Reserved)
+        return {};
+    const std::lock_guard reservationLock(mutex_);
+    if (!rooted_ || bytes == 0) {
+        status = ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded;
+        return {};
+    }
+    std::optional<std::uint64_t> remainingJobAllowance;
+    if (jobAllowance_) {
+        if (chargedBytes_ > *jobAllowance_ || bytes > *jobAllowance_ - chargedBytes_) {
+            status = ExportResourceAdmissionStatusV1::JobAllowanceExceeded;
+            return {};
+        }
+        remainingJobAllowance = *jobAllowance_ - chargedBytes_;
+    }
+    ExportResourceLedgerV1 facade(ledger_);
+    return facade.reserveWithFixedHostBacking(bytes, status, remainingJobAllowance, rooted_->policy,
+                                              0, {}, bytes);
 }
 
 ExportResourceAdmissionStatusV1

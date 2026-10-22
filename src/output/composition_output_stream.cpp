@@ -8,6 +8,7 @@
 #endif
 #include <bloom/media/video/audio.hpp>
 #include <bloom/output/composition_output_stream.hpp>
+#include <bloom/render/processing_host_storage.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <cmath>
 #include <limits>
@@ -42,6 +43,38 @@ Rational fraction(std::uint64_t numerator, std::uint64_t denominator) {
     return {static_cast<std::int64_t>(numerator / gcd),
             static_cast<std::int64_t>(denominator / gcd)};
 }
+
+struct AudioBackingBytes final {
+    std::uint64_t allocated = 0;
+    std::uint64_t initialized = 0;
+};
+
+[[nodiscard]] std::optional<AudioBackingBytes>
+measuredAudioBacking(const media::audio::AudioBuffer& buffer) noexcept {
+    constexpr auto max = std::numeric_limits<std::uint64_t>::max();
+    AudioBackingBytes bytes{sizeof(buffer), sizeof(buffer)};
+    const auto add = [](std::size_t count, std::size_t width, std::uint64_t& total) {
+        if (count > (max - total) / width)
+            return false;
+        total += static_cast<std::uint64_t>(count) * static_cast<std::uint64_t>(width);
+        return true;
+    };
+    if (!add(buffer.planes.capacity(), sizeof(std::vector<float>), bytes.allocated) ||
+        !add(buffer.planes.size(), sizeof(std::vector<float>), bytes.initialized))
+        return {};
+    for (const auto& plane : buffer.planes) {
+        if (!add(plane.capacity(), sizeof(float), bytes.allocated) ||
+            !add(plane.size(), sizeof(float), bytes.initialized))
+            return {};
+    }
+    return bytes;
+}
+
+struct OwnedAudioBuffer final {
+    // The ledger reservation must retire after every buffer owner, including mixer clips.
+    std::shared_ptr<ExportResourceReservationV1> reservation;
+    std::shared_ptr<const media::audio::AudioBuffer> buffer;
+};
 } // namespace
 struct CompositionOutputStreamV1::State {
     CompositionOutputSourceV1 source;
@@ -51,7 +84,7 @@ struct CompositionOutputStreamV1::State {
     std::unique_ptr<EncodeSessionV1> encoder;
     std::unique_ptr<AudioEngine> mixer;
     NullBackend* audioSink = nullptr;
-    std::map<document::AssetId, std::shared_ptr<const media::audio::AudioBuffer>> audioBuffers;
+    std::map<document::AssetId, OwnedAudioBuffer> audioBuffers;
     std::uint64_t samples = 0;
     bool started = false;
     State(CompositionOutputSourceV1 input, EncodeSettingsV1 settings, EncodeSessionOptionsV1 worker,
@@ -60,6 +93,11 @@ struct CompositionOutputStreamV1::State {
         : source(std::move(input)), encoding(std::move(settings)),
           queueReservation(std::move(reservation)), cancellation(std::move(cancel)),
           encoder(std::make_unique<EncodeSessionV1>(std::move(worker), cancellation)) {}
+    ~State() {
+        // AudioEngine keeps shared clip buffers. Drop those before their ledger owners.
+        mixer.reset();
+        audioBuffers.clear();
+    }
     const EncodeSettingsV1& settings() const { return encoding; }
     void checkpoint() const {
         require(!cancellation || !cancellation(), "Composition output cancelled", Error::Cancelled);
@@ -100,8 +138,11 @@ struct CompositionOutputStreamV1::State {
                     require(asset != nullptr, "Audio source asset is missing", Error::Unavailable);
                     const auto path = media::resolveImagePath(
                         asset->locator.path, asset->locator.relinkHint, source.assetBaseDirectory);
-                    media::video::VideoDecodeSession decoder(path);
-                    const auto probe = checked(decoder.probe(cancel));
+                    // On every failure path the decoder retires before its scratch reservation.
+                    std::shared_ptr<ExportResourceReservationV1> retainedClaim;
+                    std::shared_ptr<ExportResourceReservationV1> scratchClaim;
+                    std::optional<media::video::VideoDecodeSession> decoder(std::in_place, path);
+                    const auto probe = checked(decoder->probe(cancel));
                     require(probe.sourceDigest == asset->contentDigest, "Audio source changed",
                             Error::SourceChanged);
                     const auto stream =
@@ -131,27 +172,57 @@ struct CompositionOutputStreamV1::State {
                                 (std::numeric_limits<std::uint64_t>::max() - retained) /
                                     sizeof(float),
                             "Audio decode scratch byte count overflows", Error::Oversized);
-                    const auto total = retained + scratchSamples * sizeof(float);
-                    require(total <= std::numeric_limits<std::uint64_t>::max() -
-                                         queueReservation->chargedBytes(),
-                            "Audio export reservation overflows", Error::Oversized);
-                    require(queueReservation->refreshCapacity(context.cancellation()) ==
-                                ExportResourceAdmissionStatusV1::Reserved,
-                            "Audio export capacity refresh refused", Error::Oversized);
-                    require(queueReservation->expand(queueReservation->chargedBytes() + total) ==
+                    const auto scratchBytes = scratchSamples * sizeof(float);
+                    if (queueReservation->processingPolicy()) {
+                        ExportResourceAdmissionStatusV1 status{};
+                        retainedClaim = queueReservation->reserveOwnedHostBacking(
+                            retained, status, context.cancellation());
+                        require(retainedClaim != nullptr, "Audio backing admission refused",
+                                Error::Oversized);
+                        scratchClaim = queueReservation->reserveScratch(scratchBytes, status,
+                                                                        context.cancellation());
+                        require(scratchClaim != nullptr, "Audio decode scratch admission refused",
+                                Error::Oversized);
+                    } else {
+                        // Legacy callers without a processing root retain the existing ledger
+                        // envelope and cannot claim physical-sample backing credit.
+                        const auto total = retained + scratchBytes;
+                        require(total <= std::numeric_limits<std::uint64_t>::max() -
+                                             queueReservation->chargedBytes(),
+                                "Audio export reservation overflows", Error::Oversized);
+                        require(
+                            queueReservation->expand(queueReservation->chargedBytes() + total) ==
                                 ExportResourceAdmissionStatusV1::Reserved,
                             "Audio decode ledger reservation refused", Error::Oversized);
+                    }
                     auto buffer = checked(
-                        media::video::decodeAudioClip(decoder, probe, decodedSampleCount, cancel));
-                    found = audioBuffers
-                                .emplace(description.assetId,
-                                         std::make_shared<const media::audio::AudioBuffer>(
-                                             std::move(buffer)))
-                                .first;
+                        media::video::decodeAudioClip(*decoder, probe, decodedSampleCount, cancel));
+                    decoder.reset();
+                    auto backing = std::make_unique<media::audio::AudioBuffer>(std::move(buffer));
+                    std::shared_ptr<const media::audio::AudioBuffer> published;
+                    if (retainedClaim) {
+                        const auto measured = measuredAudioBacking(*backing);
+                        require(measured.has_value(), "Audio backing byte count overflows",
+                                Error::Oversized);
+                        published = render::adoptProcessingHostBacking(
+                            std::move(backing), retainedClaim->ownedHostPhase(),
+                            measured->allocated, measured->initialized);
+                        require(published != nullptr,
+                                "Audio backing exceeds its admitted allocation", Error::Oversized);
+                    } else {
+                        published =
+                            std::shared_ptr<const media::audio::AudioBuffer>(std::move(backing));
+                    }
+                    scratchClaim.reset();
+                    found =
+                        audioBuffers
+                            .emplace(description.assetId, OwnedAudioBuffer{std::move(retainedClaim),
+                                                                           std::move(published)})
+                            .first;
                 }
-                require(found->second != nullptr, "Audio source buffer unavailable",
+                require(found->second.buffer != nullptr, "Audio source buffer unavailable",
                         Error::Unavailable);
-                clips.push_back({.buffer = found->second,
+                clips.push_back({.buffer = found->second.buffer,
                                  .startTime = description.startTime,
                                  .level = static_cast<float>(description.level),
                                  .muted = description.muted,
