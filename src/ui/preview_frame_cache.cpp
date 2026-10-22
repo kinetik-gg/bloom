@@ -73,7 +73,10 @@ std::size_t PreviewFrameCache::KeyHash::operator()(const PreviewFrameCacheKey& k
         add(proxy->extent.height());
     }
     add(static_cast<std::uint8_t>(key.quality));
-    add(static_cast<std::uint8_t>(key.colorIntent));
+    add(key.colorIntent.workingColorSpaceId);
+    add(key.colorIntent.ocioConfigUri);
+    for (const auto byte : key.colorIntent.ocioConfigRevision.bytes())
+        add(byte);
     add(static_cast<std::uint8_t>(key.resolutionPolicy));
     add(key.roi.has_value());
     if (key.roi) {

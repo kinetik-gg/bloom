@@ -309,9 +309,9 @@ class PreviewFrameCache final : public QObject {
         // live only while its lease is; an invalidated lease is never a hit and never listed.
         std::shared_ptr<const runtime::PreviewResidentDisplayFrame> resident;
         std::size_t bytes = 0;
-        EntryIterator self;
-        RangeIndex::iterator rangePosition;
-        std::optional<std::list<EntryIterator>::iterator> residentPosition;
+        EntryIterator self{};
+        RangeIndex::iterator rangePosition{};
+        std::optional<std::list<EntryIterator>::iterator> residentPosition{};
     };
 
     void dropStaleRevisions(const PreviewFrameCacheKey& current);

@@ -57,7 +57,7 @@ struct ValueUtilityInvocation final {
     core::RationalTime time;
     document::FrameRate rate = document::FrameRate::framesPerSecond24();
     const document::DataBlockRecord* dataBlock = nullptr;
-    ValueUtilityLimits limits;
+    ValueUtilityLimits limits{};
 };
 
 struct ValueUtilityOutcome final {
