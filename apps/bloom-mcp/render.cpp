@@ -92,7 +92,20 @@ yyjson_mut_val* Server::render(Json& out, yyjson_val* arguments, const bool comp
             member(arguments, "sampleRate") ? integer(member(arguments, "sampleRate")) : 48000;
         if (rate < 8000 || rate > 192000)
             throw InvalidInput("Audio sample rate is outside 8000..192000");
+        const auto retirement = host::SequenceExportRetirementOwnerV1::create();
         output::ExportResourceLedgerV1 ledger;
+        // Headless calls may leave this scope through an exception. Drain after the runner has
+        // released its ticket but before the borrowed ledger and compiler are destroyed.
+        struct RetirementDrain final {
+            std::shared_ptr<host::SequenceExportRetirementOwnerV1> owner;
+            ~RetirementDrain() {
+                owner->beginShutdown();
+                while (!owner->retirementComplete())
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                while (!owner->collect())
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        } drain{retirement};
         // The server-lifetime GPU final-render provider is reused here; the sequence runner copies
         // it into every per-frame attempt and defers the first evaluation until its bootstrap is
         // terminal, so the first frame is genuinely GPU when a device exists. The unchanged CPU
@@ -114,7 +127,8 @@ yyjson_mut_val* Server::render(Json& out, yyjson_val* arguments, const bool comp
              .bwfDescription = {},
              .assetBaseDirectory = session_->displayPath().parent_path(),
              .worker = {},
-             .gpuProvider = gpuExportProvider_});
+             .gpuProvider = gpuExportProvider_},
+            *retirement);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(10);
         while (!runner.result()) {
             runner.poll();

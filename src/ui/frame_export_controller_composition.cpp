@@ -48,6 +48,10 @@ void FrameExportController::beginCompositionExport(CompositionExportRequest requ
         beginRangeExport(std::move(request.range));
         return;
     }
+    if (!sequenceExportRetirement_) {
+        emit exportFinished(FrameExportOutcome::Refused, tr("Composition export is unavailable."));
+        return;
+    }
     const auto* composition = session_.composition();
     if (!composition)
         return;
@@ -83,7 +87,7 @@ void FrameExportController::beginCompositionExport(CompositionExportRequest requ
     }
     mediaExport_ = std::make_unique<host::SequenceExportRunnerV1>(
         scheduler_, compiler_, publicationCoordinator_, artifactCoordinator_, *ledger_,
-        std::move(captured));
+        std::move(captured), *sequenceExportRetirement_, ledger_);
     pendingDestination_ = std::move(request.range.destination);
     pendingPreset_ = request.preset;
     setActivity(FrameExportActivity::CompilingPlan);
@@ -134,9 +138,13 @@ void FrameExportController::pollCompositionExport() {
             }
         }
         setActivity(FrameExportActivity::AwaitingApproval);
-        if (!approvalDecisionProvider_ ||
-            approvalDecisionProvider_(prompt) != FrameExportApprovalDecision::Export ||
-            !mediaExport_->approve(analysis->digest, *frameDigest))
+        const bool approved = approvalDecisionProvider_ && approvalDecisionProvider_(prompt) ==
+                                                               FrameExportApprovalDecision::Export;
+        if (shuttingDown_) {
+            mediaExport_.reset();
+            return;
+        }
+        if (!approved || !mediaExport_->approve(analysis->digest, *frameDigest))
             mediaExport_->cancel();
         setActivity(FrameExportActivity::Publishing);
         taskUiBridge_.wake();

@@ -47,10 +47,12 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <source_location>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -203,6 +205,8 @@ struct Fixture final {
     runtime::TaskScheduler scheduler;
     TaskUiBridge bridge;
     TempDirectory directory;
+    std::shared_ptr<host::SequenceExportRetirementOwnerV1> sequenceExportRetirement =
+        host::SequenceExportRetirementOwnerV1::create();
 
     explicit Fixture(const document::CompositionFormat format = smallFormat(),
                      const core::RationalTime duration = core::RationalTime::fromInteger(10))
@@ -219,6 +223,15 @@ struct Fixture final {
             std::abort();
         }
         nodeDefinitions.freeze();
+    }
+    ~Fixture() {
+        controller_.reset();
+        scheduler.beginShutdown();
+        sequenceExportRetirement->beginShutdown();
+        while (!scheduler.isQuiescent() || !sequenceExportRetirement->retirementComplete())
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        while (!sequenceExportRetirement->collect())
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
     // Two-phase construction: the controller needs `directory` (a member, constructed above) and
@@ -241,6 +254,7 @@ struct Fixture final {
             std::move(*coordinatorResult)); // NOLINT(bugprone-unchecked-optional-access)
         controller_.emplace(session, scheduler, bridge, compiler, *coordinator_, *artifacts_,
                             directory.path() / "scratch");
+        controller_->setSequenceExportRetirementOwner(sequenceExportRetirement);
         return true;
     }
 

@@ -3,12 +3,16 @@
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/output/composition_output_stream.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <condition_variable>
+#include <exception>
 #include <mutex>
+#include <thread>
 
 namespace bloom::host {
-namespace {
 using namespace media::provider;
+namespace {
 using Stage = SequenceExportStageV1;
+using Work = detail::SequenceExportWorkV1;
 const runtime::TaskOwner owner{runtime::TaskOwnerKind::Export, runtime::TaskOwnerId::fromRaw(404)};
 void require(bool condition, const char* detail, Error code = Error::InvalidValue) {
     if (!condition)
@@ -28,8 +32,13 @@ template <typename T> T required(std::optional<T> value, const char* message) {
         throw Unavailable{Error::InvalidValue, message};
     return std::move(*value);
 }
-struct Work {
+} // namespace
+
+struct detail::SequenceExportWorkV1 {
     SequenceExportRequestV1 request;
+    // UI controllers can retire while an admitted task still runs. Its ledger facade must remain
+    // alive until that task or the independent cleanup lane releases the last reservation.
+    std::shared_ptr<output::ExportResourceLedgerV1> ledgerLifetime;
     std::shared_ptr<const runtime::CompiledCompositionPlan> plan;
     std::unique_ptr<output::MediaOutputAnalysisV1> analysis;
     std::shared_ptr<output::ExportResourceReservationV1> queueReservation;
@@ -37,6 +46,7 @@ struct Work {
     std::unique_ptr<FrameExportRequestV1> approvedFrame;
     std::atomic<bool> cancelled{false};
     std::mutex ownership;
+    std::condition_variable ownershipReady;
     bool active = false, abandoned = false;
     runtime::CancellationToken taskCancellation;
     std::optional<Unavailable> error;
@@ -52,7 +62,9 @@ struct Work {
     std::uint64_t gpuDeviceOwnershipEpoch = 0;
     std::unique_ptr<output::OutputAnalysisAttemptTargetV1> target;
     std::optional<SequenceExportResultV1> result;
-    explicit Work(SequenceExportRequestV1 r) : request(std::move(r)) {}
+    explicit SequenceExportWorkV1(SequenceExportRequestV1 r,
+                                  std::shared_ptr<output::ExportResourceLedgerV1> lifetime)
+        : request(std::move(r)), ledgerLifetime(std::move(lifetime)) {}
     runtime::EvaluationColorIntent colorIntent() const {
         const auto* composition = request.composition.snapshot.project().findComposition(
             request.composition.compositionId);
@@ -289,12 +301,144 @@ struct Work {
         clean();
     }
 };
-} // namespace
+struct SequenceExportRetirementOwnerV1::Ticket {
+    std::shared_ptr<Work> work;
+    std::unique_ptr<Ticket> next;
+};
+
+struct SequenceExportRetirementOwnerV1::State {
+    static constexpr std::size_t kMaxLiveRunners = 4;
+    mutable std::mutex mutex;
+    std::condition_variable ready;
+    std::unique_ptr<Ticket> first;
+    Ticket* last = nullptr;
+    std::thread worker;
+    TestGate gate;
+    std::size_t liveRunners = 0;
+    bool closing = false;
+    bool exited = false;
+};
+
+SequenceExportRetirementOwnerV1::SequenceExportRetirementOwnerV1(TestGate gate)
+    : state_(std::make_unique<State>()) {
+    auto* const state = state_.get();
+    state->gate = std::move(gate);
+    state->worker = std::thread([state] {
+        for (;;) {
+            std::unique_ptr<Ticket> ticket;
+            {
+                std::unique_lock lock(state->mutex);
+                state->ready.wait(lock, [&] {
+                    return state->first != nullptr || (state->closing && state->liveRunners == 0);
+                });
+                if (!state->first) {
+                    state->exited = true;
+                    return;
+                }
+                ticket = std::move(state->first);
+                state->first = std::move(ticket->next);
+                if (!state->first)
+                    state->last = nullptr;
+            }
+            // This may close an encoder and reap its child process. It never runs on the authoring
+            // thread, even when the ordinary scheduler has refused all further task admission.
+            if (state->gate.beforeWorkCleanup)
+                state->gate.beforeWorkCleanup();
+            {
+                std::unique_lock lock(ticket->work->ownership);
+                ticket->work->ownershipReady.wait(lock, [&] { return !ticket->work->active; });
+            }
+            ticket->work->clean();
+            ticket->work.reset();
+            {
+                const std::lock_guard lock(state->mutex);
+                --state->liveRunners;
+            }
+            state->ready.notify_all();
+        }
+    });
+}
+
+std::shared_ptr<SequenceExportRetirementOwnerV1>
+SequenceExportRetirementOwnerV1::create(TestGate gate) {
+    return std::shared_ptr<SequenceExportRetirementOwnerV1>(
+        new SequenceExportRetirementOwnerV1(std::move(gate)));
+}
+
+SequenceExportRetirementOwnerV1::~SequenceExportRetirementOwnerV1() {
+    beginShutdown();
+    // Application and headless roots collect after proving exit. This is a final safety net for
+    // an exceptional teardown, never the GUI controller's destructor path.
+    if (state_->worker.joinable())
+        state_->worker.join();
+}
+
+std::unique_ptr<SequenceExportRetirementOwnerV1::Ticket>
+SequenceExportRetirementOwnerV1::reserve() {
+    auto ticket = std::make_unique<Ticket>();
+    const std::lock_guard lock(state_->mutex);
+    if (state_->closing || state_->liveRunners == State::kMaxLiveRunners)
+        return {};
+    ++state_->liveRunners;
+    return ticket;
+}
+
+void SequenceExportRetirementOwnerV1::retire(std::unique_ptr<Ticket> ticket,
+                                             std::shared_ptr<Work> work) noexcept {
+    if (!ticket || !work)
+        std::terminate();
+    work->cancelled.store(true);
+    ticket->work = std::move(work);
+    {
+        const std::lock_guard lock(state_->mutex);
+        auto* const raw = ticket.get();
+        if (state_->last)
+            state_->last->next = std::move(ticket);
+        else
+            state_->first = std::move(ticket);
+        state_->last = raw;
+    }
+    state_->ready.notify_one();
+}
+
+void SequenceExportRetirementOwnerV1::release(std::unique_ptr<Ticket> ticket) noexcept {
+    if (!ticket)
+        return;
+    {
+        const std::lock_guard lock(state_->mutex);
+        --state_->liveRunners;
+    }
+    state_->ready.notify_all();
+}
+
+void SequenceExportRetirementOwnerV1::beginShutdown() noexcept {
+    {
+        const std::lock_guard lock(state_->mutex);
+        state_->closing = true;
+    }
+    state_->ready.notify_all();
+}
+
+bool SequenceExportRetirementOwnerV1::retirementComplete() const noexcept {
+    const std::lock_guard lock(state_->mutex);
+    return state_->closing && state_->exited && state_->liveRunners == 0;
+}
+
+bool SequenceExportRetirementOwnerV1::collect() noexcept {
+    if (!retirementComplete())
+        return false;
+    if (state_->worker.joinable())
+        state_->worker.join();
+    return true;
+}
+
 struct SequenceExportRunnerV1::State {
     runtime::TaskScheduler& scheduler;
     PublicationCoordinator& publications;
     platform::StagedArtifactCoordinator& artifacts;
     output::ExportResourceLedgerV1& ledger;
+    SequenceExportRetirementOwnerV1& retirement;
+    std::unique_ptr<SequenceExportRetirementOwnerV1::Ticket> ticket;
     std::shared_ptr<Work> work;
     Stage stage = Stage::Compiling;
     runtime::TaskHandle<void> task;
@@ -305,9 +449,43 @@ struct SequenceExportRunnerV1::State {
     std::optional<SequenceExportResultV1> outcome;
     State(runtime::TaskScheduler& s, PublicationCoordinator& p,
           platform::StagedArtifactCoordinator& a, output::ExportResourceLedgerV1& l,
-          SequenceExportRequestV1 r)
-        : scheduler(s), publications(p), artifacts(a), ledger(l),
-          work(std::make_shared<Work>(std::move(r))) {}
+          SequenceExportRequestV1 r, SequenceExportRetirementOwnerV1& retirementOwner,
+          std::shared_ptr<output::ExportResourceLedgerV1> ledgerOwner)
+        : scheduler(s), publications(p), artifacts(a), ledger(l), retirement(retirementOwner),
+          ticket(retirement.reserve()) {
+        if (ticket) {
+            try {
+                work = std::make_shared<Work>(std::move(r), std::move(ledgerOwner));
+            } catch (...) {
+                retirement.release(std::move(ticket));
+                throw;
+            }
+        } else {
+            SequenceExportResultV1 refused;
+            refused.failure =
+                Unavailable{Error::Busy, "Composition export retirement capacity refused"};
+            outcome = std::move(refused);
+            stage = Stage::Complete;
+        }
+    }
+    ~State() {
+        if (!ticket)
+            return;
+        if (!work) {
+            retirement.release(std::move(ticket));
+            return;
+        }
+        work->cancelled.store(true);
+        if (attemptRunner)
+            attemptRunner->requestCancellation();
+        task.cancel();
+        auto retained = std::move(work);
+        {
+            const std::lock_guard lock(retained->ownership);
+            retained->abandoned = true;
+        }
+        retirement.retire(std::move(ticket), std::move(retained));
+    }
     void fail(Unavailable error) {
         SequenceExportResultV1 result;
         result.failure = std::move(error);
@@ -319,19 +497,9 @@ struct SequenceExportRunnerV1::State {
         stage = Stage::Complete;
         pending.reset();
         attemptRunner.reset();
-        auto retained = std::move(work);
-        runtime::TaskRequest cleanup("Close composition export", owner,
-                                     runtime::TaskPriority::Foreground,
-                                     runtime::TaskExecutor::BlockingIo);
-        auto submission =
-            scheduler.submit<void>(std::move(cleanup), [retained](runtime::TaskContext&) {
-                retained->clean();
-                return runtime::TaskResult<void>::succeeded();
-            });
-        // Scheduler shutdown retains and destroys work after quiescence; normal cleanup is
-        // worker-side.
-        if (!submission.accepted())
-            retained->cancelled.store(true);
+        // The pre-reserved ticket remains admissible even after scheduler shutdown. It retains
+        // the encoder and ledger charge until the independent owner has closed/reaped them.
+        retirement.retire(std::move(ticket), std::move(work));
     }
     template <typename Callback> void submit(Stage next, Callback callback) {
         stage = next;
@@ -358,14 +526,11 @@ struct SequenceExportRunnerV1::State {
                     work->error = Unavailable{Error::Io, "Composition export failed"};
                     work->clean();
                 }
-                bool dispose = false;
                 {
                     const std::lock_guard lock(work->ownership);
-                    dispose = work->abandoned;
-                    work->active = dispose;
+                    work->active = false;
                 }
-                if (dispose)
-                    work->clean();
+                work->ownershipReady.notify_all();
                 return runtime::TaskResult<void>::succeeded();
             });
         if (!submission.accepted())
@@ -437,14 +602,16 @@ struct SequenceExportRunnerV1::State {
         return true;
     }
 };
-SequenceExportRunnerV1::SequenceExportRunnerV1(runtime::TaskScheduler& scheduler,
-                                               const runtime::SnapshotCompiler& compiler,
-                                               PublicationCoordinator& publications,
-                                               platform::StagedArtifactCoordinator& artifacts,
-                                               output::ExportResourceLedgerV1& ledger,
-                                               SequenceExportRequestV1 request)
-    : state_(
-          std::make_unique<State>(scheduler, publications, artifacts, ledger, std::move(request))) {
+SequenceExportRunnerV1::SequenceExportRunnerV1(
+    runtime::TaskScheduler& scheduler, const runtime::SnapshotCompiler& compiler,
+    PublicationCoordinator& publications, platform::StagedArtifactCoordinator& artifacts,
+    output::ExportResourceLedgerV1& ledger, SequenceExportRequestV1 request,
+    SequenceExportRetirementOwnerV1& retirement,
+    std::shared_ptr<output::ExportResourceLedgerV1> ledgerLifetime)
+    : state_(std::make_unique<State>(scheduler, publications, artifacts, ledger, std::move(request),
+                                     retirement, std::move(ledgerLifetime))) {
+    if (!state_->work)
+        return;
     if (!state_->work->request.gpuProvider) {
         runtime::GpuProcessFrameEvaluatorOptions options;
         options.enabled = false;
@@ -456,27 +623,7 @@ SequenceExportRunnerV1::SequenceExportRunnerV1(runtime::TaskScheduler& scheduler
                        work.prepare(compiler, ledger, context);
                    });
 }
-SequenceExportRunnerV1::~SequenceExportRunnerV1() {
-    cancel();
-    if (!state_->work)
-        return;
-    auto work = std::move(state_->work);
-    bool dispose = false;
-    {
-        const std::lock_guard lock(work->ownership);
-        work->abandoned = true;
-        dispose = !work->active;
-    }
-    if (dispose) {
-        runtime::TaskRequest cleanup("Close abandoned composition export", owner,
-                                     runtime::TaskPriority::Foreground,
-                                     runtime::TaskExecutor::BlockingIo);
-        (void)state_->scheduler.submit<void>(std::move(cleanup), [work](runtime::TaskContext&) {
-            work->clean();
-            return runtime::TaskResult<void>::succeeded();
-        });
-    }
-}
+SequenceExportRunnerV1::~SequenceExportRunnerV1() = default;
 void SequenceExportRunnerV1::cancel() {
     if (!state_->work || state_->stage == Stage::Complete)
         return;

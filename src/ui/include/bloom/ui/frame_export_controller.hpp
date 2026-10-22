@@ -194,6 +194,10 @@ class FrameExportController final : public QObject {
     void setProjectPathProvider(FrameExportDestinationProvider provider);
     void setRangeProvider(FrameExportRangeProvider provider);
     void setApprovalDecisionProvider(FrameExportApprovalDecisionProvider provider);
+    // Composition exports need a process-rooted owner for admission-independent encoder cleanup.
+    // Install it before beginning a media export; the application root retains and drains it.
+    void
+    setSequenceExportRetirementOwner(std::shared_ptr<host::SequenceExportRetirementOwnerV1> owner);
 
     // The artist-facing name of frame `index` under `destination`: the destination's stem, a dot,
     // the index zero-padded to at least four digits (widened when the range needs more), then the
@@ -232,6 +236,10 @@ class FrameExportController final : public QObject {
     // transaction -- and the terminal outcome says how many landed. A no-op when nothing is
     // running.
     void requestCancellation();
+    // Nonblocking shutdown edge: cancel and release the media runner while its independent owner
+    // and the ordinary task scheduler still retain all in-flight work. Safe during a nested
+    // approval prompt; release is deferred until that poll returns.
+    void retireForShutdown();
 
   signals:
     void busyChanged();
@@ -319,6 +327,7 @@ class FrameExportController final : public QObject {
     // retired. Every single-frame and frame-range attempt shares it; the async attempt retains it,
     // so retiring the controller never dangles an in-flight evaluation.
     std::shared_ptr<host::GpuExportProvider> gpuExportProvider_;
+    std::shared_ptr<host::SequenceExportRetirementOwnerV1> sequenceExportRetirement_;
     std::shared_ptr<output::ExportResourceLedgerV1> ledger_ =
         std::make_shared<output::ExportResourceLedgerV1>();
     std::filesystem::path scratchDirectory_;
@@ -332,6 +341,7 @@ class FrameExportController final : public QObject {
     // Guards pollCompositionExport against re-entrancy from the approval prompt's nested event
     // loop.
     bool pollingComposition_ = false;
+    bool shuttingDown_ = false;
 
     FrameExportActivity activity_ = FrameExportActivity::Idle;
     std::filesystem::path pendingDestination_;

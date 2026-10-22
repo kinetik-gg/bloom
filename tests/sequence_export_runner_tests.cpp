@@ -17,17 +17,22 @@
 #include <bloom/media/video/session.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <chrono>
+#include <condition_variable>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 using namespace bloom;
 namespace {
 void check(bool value, const std::string& message) {
@@ -229,6 +234,8 @@ struct Fixture {
     runtime::NodeDefinitionRegistry registry;
     runtime::SnapshotCompiler compiler{registry};
     runtime::TaskScheduler scheduler;
+    std::shared_ptr<host::SequenceExportRetirementOwnerV1> retirement =
+        host::SequenceExportRetirementOwnerV1::create();
     host::PublicationCoordinator publications = need(host::PublicationCoordinator::create());
     output::ExportResourceLedgerV1 ledger;
     platform::StagedArtifactCoordinator artifacts = [] {
@@ -306,6 +313,14 @@ struct Fixture {
             curve, need(core::RationalTime::create(47, 24)), document::Vec2d{180, 64});
         (void)apply.operator()<commands::AddAudioLayer>(asset);
     }
+    ~Fixture() {
+        scheduler.beginShutdown();
+        retirement->beginShutdown();
+        while (!scheduler.isQuiescent() || !retirement->retirementComplete())
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        while (!retirement->collect())
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     host::SequenceExportRequestV1 request(const std::filesystem::path& path,
                                           output::OutputPresetV1 preset) {
         host::SequenceExportRequestV1 r{
@@ -325,7 +340,7 @@ struct Fixture {
         std::atomic<std::int64_t> pid{0};
         request.worker.launched = [&](auto value) { pid.store(value); };
         host::SequenceExportRunnerV1 runner(scheduler, compiler, publications, artifacts, ledger,
-                                            std::move(request));
+                                            std::move(request), *retirement);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
         bool injected = false;
         while (!runner.result() && std::chrono::steady_clock::now() < deadline) {
@@ -518,6 +533,112 @@ GpuProofOutcome testGpuVideoProvenance(Fixture& f, const std::filesystem::path& 
     publishVideoProof(proofDirectory, result, identityHex, evidence);
     return GpuProofOutcome::Ran;
 }
+void testRejectedRetirementWithLiveEncoder(Fixture& f, const std::filesystem::path& directory) {
+    struct Gate final {
+        std::mutex mutex;
+        std::condition_variable ready;
+        bool entered = false;
+        bool open = false;
+        void release() {
+            {
+                const std::lock_guard lock(mutex);
+                open = true;
+            }
+            ready.notify_all();
+        }
+    };
+    const auto gate = std::make_shared<Gate>();
+    const auto blocked = std::make_shared<std::atomic<bool>>(false);
+    const auto retirement =
+        host::SequenceExportRetirementOwnerV1::create({.beforeWorkCleanup = [gate, blocked] {
+            if (blocked->exchange(true))
+                return;
+            std::unique_lock lock(gate->mutex);
+            gate->entered = true;
+            gate->ready.notify_all();
+            gate->ready.wait(lock, [&] { return gate->open; });
+        }});
+    struct ReleaseGate final {
+        std::shared_ptr<Gate> gate;
+        ~ReleaseGate() { gate->release(); }
+    } releaseOnFailure{gate};
+    runtime::GpuProcessFrameEvaluatorOptions cpuOptions;
+    cpuOptions.enabled = false;
+    const auto provider = host::GpuExportProvider::create(cpuOptions);
+    provider->prepare(f.scheduler);
+    std::atomic<std::int64_t> pid{0};
+    auto request = f.request(directory / "rejected-live.mov", output::OutputPresetV1::ProResMovV1);
+    request.gpuProvider = provider;
+    request.worker.launched = [&](auto value) { pid.store(value); };
+    auto runner = std::make_unique<host::SequenceExportRunnerV1>(
+        f.scheduler, f.compiler, f.publications, f.artifacts, f.ledger, std::move(request),
+        *retirement);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!(runner->encodedFrames() >= 8 &&
+             runner->stage() == host::SequenceExportStageV1::AwaitingApproval) &&
+           std::chrono::steady_clock::now() < deadline) {
+        runner->poll();
+        if (runner->stage() == host::SequenceExportStageV1::AwaitingApproval &&
+            runner->encodedFrames() < 8) {
+            const auto* analysis = runner->analysis();
+            check(analysis != nullptr, "rejected retirement analysis");
+            check(runner->approve(analysis->digest, need(runner->frameApprovalDigest())),
+                  "rejected retirement approval");
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    check(runner->stage() == host::SequenceExportStageV1::AwaitingApproval &&
+              runner->encodedFrames() >= 8 && pid.load() > 0 && f.ledger.chargedBytes() > 0,
+          "held encoder and ledger reservation before shutdown");
+    f.scheduler.beginShutdown();
+    std::vector<std::unique_ptr<host::SequenceExportRunnerV1>> rejected;
+    for (int index = 0; index < 3; ++index) {
+        auto refused = f.request(directory / ("queued-" + std::to_string(index) + ".mov"),
+                                 output::OutputPresetV1::ProResMovV1);
+        refused.gpuProvider = provider;
+        rejected.push_back(std::make_unique<host::SequenceExportRunnerV1>(
+            f.scheduler, f.compiler, f.publications, f.artifacts, f.ledger, std::move(refused),
+            *retirement));
+        check(rejected.back()->result() && rejected.back()->result()->failure &&
+                  rejected.back()->result()->failure->reason == media::provider::Error::Busy,
+              "closed scheduler refuses new export task while cleanup ticket remains owned");
+    }
+    {
+        std::unique_lock lock(gate->mutex);
+        check(gate->ready.wait_for(lock, std::chrono::seconds(3), [&] { return gate->entered; }),
+              "independent retirement worker receives rejected export");
+    }
+    auto overCapacity =
+        f.request(directory / "over-capacity.mov", output::OutputPresetV1::ProResMovV1);
+    overCapacity.gpuProvider = provider;
+    host::SequenceExportRunnerV1 fifth(f.scheduler, f.compiler, f.publications, f.artifacts,
+                                       f.ledger, std::move(overCapacity), *retirement);
+    check(fifth.result() && fifth.result()->failure &&
+              fifth.result()->failure->detail == "Composition export retirement capacity refused",
+          "fifth live runner is refused before acquiring export resources");
+    retirement->beginShutdown();
+    runner->cancel();
+    runner->poll();
+    check(runner->result() && runner->result()->failure &&
+              runner->result()->failure->reason == media::provider::Error::Cancelled,
+          "held encoder ticket remains valid after shutdown and scheduler admission close");
+    check(f.ledger.chargedBytes() > 0,
+          "held cleanup retains charge while the retirement worker is gated");
+    check(!retirement->retirementComplete(), "shutdown waits for held cleanup");
+    gate->release();
+    const auto cleanupDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!retirement->retirementComplete() && std::chrono::steady_clock::now() < cleanupDeadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    check(retirement->retirementComplete() && retirement->collect() &&
+              f.ledger.chargedBytes() == 0 && ::kill(static_cast<pid_t>(pid.load()), 0) != 0 &&
+              !std::filesystem::exists(directory / "rejected-live.mov"),
+          "rejected admission retires encoder, reaps worker and releases charge");
+    runner.reset();
+    rejected.clear();
+    check(provider->shutdownAndWait(std::chrono::seconds(3)),
+          "rejected retirement provider retires");
+}
+
 GpuProofOutcome tests(const std::filesystem::path& directory, const bool requireDevice,
                       const std::filesystem::path& proofDirectory) {
     std::filesystem::remove_all(directory);
@@ -595,8 +716,8 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
         f.request(directory / "abandoned.mov", output::OutputPresetV1::ProResMovV1);
     abandonedRequest.worker.launched = [&](auto pid) { abandonedPid.store(pid); };
     auto abandoned = std::make_unique<host::SequenceExportRunnerV1>(
-        f.scheduler, f.compiler, f.publications, f.artifacts, f.ledger,
-        std::move(abandonedRequest));
+        f.scheduler, f.compiler, f.publications, f.artifacts, f.ledger, std::move(abandonedRequest),
+        *f.retirement);
     const auto abandonDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
     while (abandoned->encodedFrames() < 8 && std::chrono::steady_clock::now() < abandonDeadline) {
         abandoned->poll();
@@ -622,7 +743,10 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
     const auto refused = f.run(std::move(oversized));
     check(refused.failure && refused.failure->reason == media::provider::Error::Oversized,
           "frame queue budget enforced");
-    return testGpuVideoProvenance(f, directory, cpuProResPath, proofDirectory, requireDevice);
+    const auto proof =
+        testGpuVideoProvenance(f, directory, cpuProResPath, proofDirectory, requireDevice);
+    testRejectedRetirementWithLiveEncoder(f, directory);
+    return proof;
 }
 } // namespace
 int main(int argc, char** argv) {

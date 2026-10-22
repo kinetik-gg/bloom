@@ -1,5 +1,6 @@
 #include "deferred_editor_teardown.hpp"
 #include "packed_host_process_teardown.hpp"
+#include "sequence_export_process_teardown.hpp"
 
 #include <algorithm>
 #include <bloom/host/gpu_export_provider.hpp>
@@ -181,6 +182,9 @@ int main(int argc, char* argv[]) try {
     const auto packedHostRetirement = bloom::render::PackedHostRetirementOwner::create();
     bloom::app::PackedHostProcessTeardown packedHostTeardown(taskScheduler, packedHostRetirement,
                                                              cpuEvaluator.operationCache());
+    const auto sequenceExportRetirement = bloom::host::SequenceExportRetirementOwnerV1::create();
+    bloom::app::SequenceExportProcessTeardown sequenceExportTeardown(taskScheduler,
+                                                                     sequenceExportRetirement);
     std::unique_ptr<bloom::ui::TaskUiBridge> taskUiBridgeOwner;
     try {
         taskUiBridgeOwner = std::make_unique<bloom::ui::TaskUiBridge>(taskScheduler);
@@ -402,9 +406,13 @@ int main(int argc, char* argv[]) try {
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
                      &memoryBudgetController, &bloom::ui::MemoryBudgetController::beginShutdown);
     shutdownCoordinator.setGpuExportRetirement(
-        [&gpuExportProvider] { gpuExportProvider->beginShutdown(); },
-        [&gpuExportProvider] {
-            if (!gpuExportProvider->retirementComplete()) {
+        [&gpuExportProvider, &sequenceExportRetirement] {
+            sequenceExportRetirement->beginShutdown();
+            gpuExportProvider->beginShutdown();
+        },
+        [&gpuExportProvider, &sequenceExportRetirement] {
+            if (!sequenceExportRetirement->retirementComplete() ||
+                !gpuExportProvider->retirementComplete()) {
                 return false;
             }
             gpuExportProvider->collectRetired();
@@ -441,8 +449,12 @@ int main(int argc, char* argv[]) try {
         compositionSession, taskScheduler, taskUiBridge, snapshotCompiler,
         projectHost.publicationCoordinator(), projectHost.artifactCoordinator(), {},
         &qualifiedDisplayProcessorProvider, gpuExportProvider);
+    frameExportController.setSequenceExportRetirementOwner(sequenceExportRetirement);
     frameExportController.setProjectPathProvider(
         [&projectHost] { return projectHost.displayPath(); });
+    QObject::connect(&shutdownCoordinator,
+                     &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
+                     &frameExportController, &bloom::ui::FrameExportController::retireForShutdown);
 
     // The typed viewer GPU dependency context. Its presentation-client getter reads the cached
     // service capability, so an editor created before the async startup qualification finishes is
@@ -484,6 +496,8 @@ int main(int argc, char* argv[]) try {
             shutdownLoop.exec();
         }
         while (!packedHostRetirement->collect())
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        while (!sequenceExportRetirement->collect())
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         return 1;
     }
@@ -656,6 +670,8 @@ int main(int argc, char* argv[]) try {
             shutdownLoop.exec();
     }
     while (!packedHostRetirement->collect())
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    while (!sequenceExportRetirement->collect())
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     if (previewTrace) {
         // Recording has stopped with the event loop. The worker owns formatting and file I/O;

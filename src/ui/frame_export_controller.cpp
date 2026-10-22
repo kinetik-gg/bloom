@@ -354,7 +354,8 @@ FrameExportController::~FrameExportController() {
 }
 
 bool FrameExportController::canExport() const noexcept {
-    return activity_ == FrameExportActivity::Idle && session_.composition() != nullptr;
+    return !shuttingDown_ && activity_ == FrameExportActivity::Idle &&
+           session_.composition() != nullptr;
 }
 
 bool FrameExportController::isBusy() const noexcept {
@@ -382,6 +383,12 @@ void FrameExportController::setRangeProvider(FrameExportRangeProvider provider) 
 void FrameExportController::setApprovalDecisionProvider(
     FrameExportApprovalDecisionProvider provider) {
     approvalDecisionProvider_ = std::move(provider);
+}
+
+void FrameExportController::setSequenceExportRetirementOwner(
+    std::shared_ptr<host::SequenceExportRetirementOwnerV1> owner) {
+    Q_ASSERT(!mediaExport_);
+    sequenceExportRetirement_ = std::move(owner);
 }
 
 bool FrameExportController::isExportingRange() const noexcept {
@@ -521,6 +528,15 @@ void FrameExportController::requestCancellation() {
         job->handle.cancel();
     }
     taskUiBridge_.wake();
+}
+
+void FrameExportController::retireForShutdown() {
+    if (shuttingDown_)
+        return;
+    shuttingDown_ = true;
+    requestCancellation();
+    if (!pollingComposition_)
+        mediaExport_.reset();
 }
 
 void FrameExportController::beginExport(std::filesystem::path destination) {

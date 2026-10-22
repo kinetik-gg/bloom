@@ -5,7 +5,46 @@
 #include <bloom/output/media_output.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 
+#include <functional>
+#include <memory>
+
 namespace bloom::host {
+namespace detail {
+struct SequenceExportWorkV1;
+}
+class SequenceExportRunnerV1;
+
+// One export-specific cleanup worker, owned by the application or a headless caller. A runner
+// reserves one of four slots before it can start; its slot remains valid after beginShutdown(),
+// so an admission refusal can still retire a live encoder without using TaskScheduler. The owner
+// must outlive its runners and their borrowed dependencies. collect() joins only after the worker
+// has reported exit and is intended for post-event-loop/headless teardown.
+class SequenceExportRetirementOwnerV1 final {
+  public:
+    struct TestGate {
+        // Deterministic lifecycle tests may hold the cleanup lane before it touches Work.
+        // Runs on the retirement worker; production callers leave this empty.
+        std::function<void()> beforeWorkCleanup;
+    };
+    static std::shared_ptr<SequenceExportRetirementOwnerV1> create(TestGate gate = {});
+    ~SequenceExportRetirementOwnerV1();
+    SequenceExportRetirementOwnerV1(const SequenceExportRetirementOwnerV1&) = delete;
+    SequenceExportRetirementOwnerV1& operator=(const SequenceExportRetirementOwnerV1&) = delete;
+    void beginShutdown() noexcept;
+    [[nodiscard]] bool retirementComplete() const noexcept;
+    [[nodiscard]] bool collect() noexcept;
+
+  private:
+    friend class SequenceExportRunnerV1;
+    struct Ticket;
+    struct State;
+    explicit SequenceExportRetirementOwnerV1(TestGate gate);
+    [[nodiscard]] std::unique_ptr<Ticket> reserve();
+    void retire(std::unique_ptr<Ticket>, std::shared_ptr<detail::SequenceExportWorkV1>) noexcept;
+    void release(std::unique_ptr<Ticket>) noexcept;
+    std::unique_ptr<State> state_;
+};
+
 struct SequenceExportRequestV1 {
     runtime::SnapshotCompileRequest composition;
     FrameRangeRequestV1 range;
@@ -72,7 +111,9 @@ class SequenceExportRunnerV1 final {
   public:
     SequenceExportRunnerV1(runtime::TaskScheduler&, const runtime::SnapshotCompiler&,
                            PublicationCoordinator&, platform::StagedArtifactCoordinator&,
-                           output::ExportResourceLedgerV1&, SequenceExportRequestV1);
+                           output::ExportResourceLedgerV1&, SequenceExportRequestV1,
+                           SequenceExportRetirementOwnerV1&,
+                           std::shared_ptr<output::ExportResourceLedgerV1> ledgerLifetime = {});
     ~SequenceExportRunnerV1();
     SequenceExportRunnerV1(const SequenceExportRunnerV1&) = delete;
     SequenceExportRunnerV1& operator=(const SequenceExportRunnerV1&) = delete;
