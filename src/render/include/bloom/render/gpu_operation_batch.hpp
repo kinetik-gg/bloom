@@ -36,6 +36,7 @@ struct GpuBatchAffine final {
     ImageWindow outputWindow;
     GpuAffineMatrix matrix;
     float opacity;
+    std::optional<Rgba32fImageDescriptor> outputDescriptor{};
 };
 struct GpuBatchSourceOver final {
     GpuBatchImageRef source;

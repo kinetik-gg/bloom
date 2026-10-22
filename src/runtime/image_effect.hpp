@@ -2,6 +2,7 @@
 
 #include "pointwise_image_effect.hpp"
 #include "canvas_image_effect.hpp"
+#include "separable_image_effect.hpp"
 
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
@@ -20,6 +21,9 @@ struct PreparedImageEffect final {
     std::optional<Combine> combine;
     std::optional<PointwiseAffine> pointwise;
     std::optional<CanvasMargins> canvas;
+    std::optional<DiscreteImageKernel> discrete;
+    std::optional<ResizeFitKernel> resizeFit;
+    std::optional<PreparedSeparableBlur> blur;
     std::shared_ptr<const color::CpuColorSpaceProcessor> processor;
     std::shared_ptr<const color::CpuColorSpaceProcessor> afterProcessor;
     std::shared_ptr<const color::CpuFileTransformProcessor> fileProcessor;
@@ -27,14 +31,18 @@ struct PreparedImageEffect final {
     std::string cacheIdentity;
     bool cancelled = false;
     [[nodiscard]] bool identity() const noexcept {
-        return !diagnostic && !cancelled ? (!combine || (combine->mode == ImageCombineMode::Mix &&
-                                                         combine->factor == 0.0F)) &&
-                                          (!canvas || canvas->identity()) &&
-                                               (!pointwise || pointwise->identity()) &&
-                                               (!processor || processor->isIdentity()) &&
-                                               (!afterProcessor || afterProcessor->isIdentity()) &&
-                                               (!fileProcessor || fileProcessor->isIdentity())
-                                         : true;
+        if (resizeFit)
+            return false;
+        return !diagnostic && !cancelled
+                   ? (!combine || (combine->mode == ImageCombineMode::Mix &&
+                                   combine->factor == 0.0F)) &&
+                         (!canvas || canvas->identity()) &&
+                         (!discrete || discrete->identity()) &&
+                         (!pointwise || pointwise->identity()) && (!blur || blur->identity()) &&
+                         (!processor || processor->isIdentity()) &&
+                         (!afterProcessor || afterProcessor->isIdentity()) &&
+                         (!fileProcessor || fileProcessor->isIdentity())
+                   : true;
     }
 };
 
@@ -47,7 +55,9 @@ class ImageEffectContext final {
                                               const std::filesystem::path& base = {},
                                               const CancellationToken& cancellation = {},
                                               std::optional<double> sampledAmount = {},
-                                              std::optional<std::array<double, 4>> canvasMargins = {});
+                                              std::optional<std::array<double, 4>> canvasMargins = {},
+                                              double horizontalScale = 1.0,
+                                              double verticalScale = 1.0);
 
   private:
     std::mutex mutex_;

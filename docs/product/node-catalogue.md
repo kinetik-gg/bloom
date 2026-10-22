@@ -65,9 +65,9 @@ level's dependencies.
 | Level | Planned nodes | Important behavior |
 | --- | --- | --- |
 | `F1` | Transform 2D | Position, anchor, scale, rotation, opacity, defined sampling, and transparent borders |
-| `F1` | Resize, Fit | Explicit output extent, pixel aspect, filter, and fit/fill policy |
+| `F1` | Resize, Fit | Built: explicit output extent and PAR, premultiplied bilinear resampling, centred Fit/Fill, shared CPU/GPU affine paths; constant geometry in schema 1, native qualification pending |
 | `C1` | Crop, Pad, Reformat | Crop and Pad built: four animated pixel margins change data/display windows with exact pixel mapping; Reformat remains planned |
-| `C1` | Flip, Mirror, Rotate 90 | Exact discrete transforms where possible |
+| `C1` | Flip, Mirror, Rotate 90 | Flip and Rotate 90 v1 are built: exact pixel permutations, both Flip axes, signed integer clockwise quarter turns. Mirror remains a retained candidate. |
 | `C1` | Tile, Repeat | Defined edge and repeat modes |
 | `C1` | Corner Pin, Perspective Transform | Checked projective mapping with explicit invalid-transform diagnostics |
 | `M1` | Align, Distribute, Auto-Orient | Layout operations over stable bounds and transform identities |
@@ -125,7 +125,7 @@ keeps display transforms out of scene/process pixels.
 
 | Level | Planned nodes | Important behavior |
 | --- | --- | --- |
-| `C1` | Gaussian Blur, Box Blur | Explicit radius units, edge mode, alpha policy, and region expansion |
+| `C1` | Gaussian Blur, Box Blur | Implemented shared separable neighborhood path; [radius, edges, alpha and halo contract](../architecture/image-filters.md); grouped native/platform qualification pending |
 | `C1` | Directional Blur, Radial Blur | Stable spatial convention and bounded sampling |
 | `C1` | Sharpen, Unsharp Mask | Defined kernel and HDR behavior |
 | `C1` | Dilate/Erode, Edge Detect | Separate color-image and mask/data modes |

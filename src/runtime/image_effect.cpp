@@ -1,7 +1,9 @@
 #include "image_effect.hpp"
 #include "cpu_composition_evaluator_support.hpp"
+#include "discrete_image_effect.hpp"
 #include "input_color_context.hpp"
 #include "operation_key.hpp"
+#include "resize_fit_geometry.hpp"
 
 #include <algorithm>
 #include <array>
@@ -57,6 +59,10 @@ processorFailure(const color::OcioColorSpaceProcessorError error) {
     }
     return refusal(EvaluationDiagnosticCode::ColorTransformFailed, "TransformBuildFailed");
 }
+[[nodiscard]] EvaluationDiagnostic spatialFailure(const EvaluationDiagnosticCode code,
+                                                  std::string reason) {
+    return {code, DiagnosticSeverity::Error, {}, "Resize/Fit: " + reason, std::move(reason)};
+}
 } // namespace
 
 PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effect,
@@ -64,7 +70,9 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
                                                 const std::filesystem::path& base,
                                                 const CancellationToken& cancellation,
                                                 const std::optional<double> sampledAmount,
-                                                const std::optional<std::array<double, 4>> canvasMargins) {
+                                                const std::optional<std::array<double, 4>> canvasMargins,
+                                                const double horizontalScale,
+                                                const double verticalScale) {
     if (effect.bypass || std::holds_alternative<IdentityImageKernel>(effect.kernel))
         return {};
     PreparedImageEffect prepared;
@@ -104,6 +112,16 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
         prepared.cacheIdentity = combineKey.bytes();
         return prepared;
     }
+    if (const auto* discrete = std::get_if<DiscreteImageKernel>(&effect.kernel)) {
+        prepared.discrete = *discrete;
+        OperationKey key;
+        key.add(std::string("discrete-image-v1"));
+        key.add(discrete->horizontal);
+        key.add(discrete->vertical);
+        key.add(static_cast<std::uint64_t>(discrete->quarterTurns));
+        prepared.cacheIdentity = key.bytes();
+        return prepared;
+    }
     if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel)) {
         prepared.pointwise = pointwiseAffine(*pointwise, sampledAmount);
         if (!prepared.pointwise) {
@@ -116,6 +134,29 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
         pointwiseKey.add(static_cast<double>(prepared.pointwise->scale));
         pointwiseKey.add(static_cast<double>(prepared.pointwise->offset));
         prepared.cacheIdentity = pointwiseKey.bytes();
+        return prepared;
+    }
+    if (const auto* kernel = std::get_if<ResizeFitKernel>(&effect.kernel)) {
+        prepared.resizeFit = *kernel;
+        return prepared;
+    }
+    if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel)) {
+        prepared.blur =
+            prepareSeparableBlur(*blur, sampledAmount, horizontalScale, verticalScale);
+        if (!prepared.blur) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
+                                          "Blur radius or scale is out of domain");
+            return prepared;
+        }
+        OperationKey blurKey;
+        blurKey.add(blur->kind);
+        blurKey.add(blur->edge);
+        for (const auto weight : prepared.blur->horizontal)
+            blurKey.add(double(weight));
+        blurKey.add(std::string("vertical"));
+        for (const auto weight : prepared.blur->vertical)
+            blurKey.add(double(weight));
+        prepared.cacheIdentity = blurKey.bytes();
         return prepared;
     }
     OperationKey key;
@@ -222,6 +263,12 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                                    const OperationIndex operation,
                                    const EvaluationProgressCallback& progress,
                                    const double horizontalScale, const double verticalScale) {
+    if (effect.discrete)
+        return applyDiscreteImageEffect(*effect.discrete, input, pixelBudget, cancellation,
+                                        operation, progress);
+    if (effect.blur)
+        return applySeparableBlur(*effect.blur, input, pixelBudget, cancellation, operation,
+                                  progress);
     ImageEffectResult result;
     if (effect.canvas) {
         const auto source = input.descriptor()->dataWindow();
@@ -293,6 +340,61 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
         if (!frozen) {
             result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
                                         "Canvas output validation failed");
+            return result;
+        }
+        result.image = std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
+        return result;
+    }
+    if (effect.resizeFit) {
+        if (cancellation.isCancellationRequested()) {
+            result.cancelled = true;
+            return result;
+        }
+        const auto geometry = resolveResizeFitGeometry(*effect.resizeFit, *input.descriptor(),
+                                                       horizontalScale, verticalScale);
+        if (!geometry) {
+            result.diagnostic = spatialFailure(EvaluationDiagnosticCode::InvalidParameter,
+                                               "Resize/Fit output geometry is not representable");
+            return result;
+        }
+        auto target = render::Rgba32fImageBuilder::create(geometry->descriptor, pixelBudget);
+        if (!target) {
+            result.diagnostic =
+                spatialFailure(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
+                               "Resize/Fit output exceeds the pixel storage budget");
+            return result;
+        }
+        const auto source = input.view();
+        if (!source) {
+            result.diagnostic = spatialFailure(EvaluationDiagnosticCode::InvalidPixel,
+                                               "Resize/Fit input image is invalid");
+            return result;
+        }
+        const auto window = geometry->descriptor.dataWindow();
+        const ParentedLayerTransform transform{geometry->matrix, input.descriptor()->dataWindow(),
+                                               1.0, 1.0, 1.0F};
+        for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
+            if (cancellation.isCancellationRequested()) {
+                result.cancelled = true;
+                return result;
+            }
+            const auto row = target.value()->row(y);
+            if (!row || transform.row(*source.value(), window, y, *row.value())) {
+                result.diagnostic = spatialFailure(EvaluationDiagnosticCode::InvalidPixel,
+                                                   "Resize/Fit produced an invalid row");
+                return result;
+            }
+            reportProgress(progress, {EvaluationProgressStage::Operation, operation,
+                                      static_cast<std::uint64_t>(y + 1), window.extent().height()});
+        }
+        if (cancellation.isCancellationRequested()) {
+            result.cancelled = true;
+            return result;
+        }
+        auto frozen = std::move(*target.value()).freeze();
+        if (!frozen) {
+            result.diagnostic = spatialFailure(EvaluationDiagnosticCode::InvalidPixel,
+                                               "Resize/Fit output validation failed");
             return result;
         }
         result.image = std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));

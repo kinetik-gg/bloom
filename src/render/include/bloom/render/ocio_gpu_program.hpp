@@ -114,6 +114,9 @@ enum class OcioGpuProgramStage : std::uint8_t {
     ProcessEffect,
     // Display: straight-RGB display result for the caller's clamp/packing step.
     DisplayPacking,
+    // A bounded image neighborhood function receives an integer local coordinate and returns
+    // associated RGBA. The same resident I/O, finite-status and native retirement contract applies.
+    ProcessNeighborhood,
 };
 
 // Checked ceilings applied before a program is accepted. The producer enforces these against the

@@ -70,6 +70,22 @@ void run(GpuDevice& device) {
     require(batch != nullptr, "bounded batch facade creates");
     const auto before = root.snapshot();
     const auto baseline = device.allocatorMemorySnapshot();
+    {
+        const auto madeOutput = ImageWindow::create(0, 0, 16, 12);
+        const auto output = *madeOutput.value();
+        const auto par = *bloom::core::PixelAspectRatio::create(4, 3);
+        const auto madeDescriptor = Rgba32fImageDescriptor::create(output, output, par);
+        const auto descriptor = *madeDescriptor.value();
+        const std::array<GpuBatchOperation, 2> resized{
+            base, GpuBatchAffine{{nullptr, 0}, output, {1.25, 0, 0, 0, 1.5, 0}, 1.0F, descriptor}};
+        require(batch->begin(resized, capacity).code == GpuOperationBatchCode::None &&
+                    complete(*batch) == GpuOperationBatchState::Ready,
+                "Resize/Fit affine output descriptor executes in the actual batch path");
+        const auto images = batch->takeImages();
+        require(images.size() == 2 && images[1].dataWindow() == output &&
+                    images[1].displayWindow() == output && images[1].pixelAspect() == par,
+                "batched affine publication retains the authored output display window and PAR");
+    }
     // A malformed topological source is refused before any pixel backing allocation.
     auto invalid = ops;
     std::get<GpuBatchAffine>(invalid[1]).source.operation = 1;

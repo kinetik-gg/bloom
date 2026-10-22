@@ -189,9 +189,10 @@ struct CompiledCompositionSource final {
                            const CompiledCompositionSource&) = default;
 };
 
-// Colour image effects preserve input windows and bounds, operate on straight RGB, preserve alpha,
-// and publish finite premultiplied RGBA32F. Canvas kernels change both data and display windows
-// without modifying retained pixels. Identity and bypass share the input storage exactly.
+// Image effects publish finite premultiplied RGBA32F. Pointwise colour kernels preserve windows
+// and alpha while operating on straight RGB; neighborhood kernels declare their own associated-
+// RGBA and window/halo policy. Canvas and spatial kernels can change image windows. Identity and
+// bypass share the input storage exactly.
 struct IdentityImageKernel final {
     friend bool operator==(const IdentityImageKernel&, const IdentityImageKernel&) = default;
 };
@@ -229,9 +230,42 @@ struct CanvasImageKernel final {
     std::array<CompiledScalarParameter, 4> margins;
     friend bool operator==(const CanvasImageKernel&, const CanvasImageKernel&) = default;
 };
-using ImageEffectKernel =
-    std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
-                 ImageCombineKernel, CanvasImageKernel>;
+// Exact permutations of the stored pixel lattice, with no colour/alpha arithmetic. Odd turns
+// exchange data-window extents at its top-left; the composition display canvas/PAR are retained.
+struct DiscreteImageKernel final {
+    bool horizontal = false;
+    bool vertical = false;
+    std::uint8_t quarterTurns = 0; // clockwise, canonical 0..3
+    [[nodiscard]] bool identity() const noexcept {
+        return !horizontal && !vertical && quarterTurns == 0;
+    }
+    friend bool operator==(const DiscreteImageKernel&, const DiscreteImageKernel&) = default;
+};
+// Constant output geometry. Resize stretches; Fit uses a physical-aspect-preserving fit/fill.
+// Bilinear is the initial explicitly versioned filter (0), shared with Layer Output.
+struct ResizeFitKernel final {
+    std::int64_t width = 1920;
+    std::int64_t height = 1080;
+    std::int64_t pixelAspectNumerator = 1;
+    std::int64_t pixelAspectDenominator = 1;
+    std::int64_t filter = 0;
+    // 0 = Resize (stretch), 1 = Fit (contain), 2 = Fill (cover).
+    std::int64_t policy = 0;
+    friend bool operator==(const ResizeFitKernel&, const ResizeFitKernel&) = default;
+};
+// Neighborhood filters operate on associated RGBA, including coverage. Radius is finite full-
+// resolution pixels in [0,256]; Gaussian sigma is radius/3 and support is ceil(radius).
+enum class SeparableBlurKind : std::uint8_t { Gaussian, Box };
+enum class BlurEdgeMode : std::uint8_t { Transparent, Clamp };
+struct SeparableBlurKernel final {
+    SeparableBlurKind kind = SeparableBlurKind::Gaussian;
+    CompiledScalarParameter radius;
+    BlurEdgeMode edge = BlurEdgeMode::Transparent;
+    friend bool operator==(const SeparableBlurKernel&, const SeparableBlurKernel&) = default;
+};
+using ImageEffectKernel = std::variant<IdentityImageKernel, CstKernel, FileTransformKernel,
+                                       PointwiseImageKernel, ImageCombineKernel, CanvasImageKernel,
+                                       DiscreteImageKernel, ResizeFitKernel, SeparableBlurKernel>;
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
     OperationIndex input;

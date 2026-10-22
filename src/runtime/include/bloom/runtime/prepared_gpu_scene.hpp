@@ -271,6 +271,7 @@ struct GpuSceneAffineCommand final {
     // Diagnostics/back-compat only: the executor NEVER uses this for a cache lookup or insertion;
     // it recomputes the effective key from the fields above and the actual device selection.
     std::string semanticKey;
+    std::optional<render::Rgba32fImageDescriptor> outputDescriptor{};
 };
 
 // A BlendV1 composite of two resident inputs under an explicit core::BlendMode. `source` is the
@@ -417,7 +418,8 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
                               const render::GpuAffineMatrix& matrix, const float opacity,
                               const render::ImageWindow& outputWindow,
                               const core::PixelAspectRatio& pixelAspect,
-                              const std::string& artifactDigest) {
+                              const std::string& artifactDigest,
+                              const std::optional<render::Rgba32fImageDescriptor>& output = {}) {
     std::string key = "affine-bilinear-v1|in=";
     key.append(inputKey);
     gpu_scene_key_detail::appendSemanticWindow(key, sourceWindow);
@@ -438,6 +440,12 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
     gpu_scene_key_detail::appendSemanticPixelAspect(key, pixelAspect);
     key.append("|artifact=");
     key.append(artifactDigest);
+    if (output) {
+        key.append("|output-descriptor=");
+        gpu_scene_key_detail::appendSemanticWindow(key, output->dataWindow());
+        gpu_scene_key_detail::appendSemanticWindow(key, output->displayWindow());
+        gpu_scene_key_detail::appendSemanticPixelAspect(key, output->pixelAspect());
+    }
     return key;
 }
 

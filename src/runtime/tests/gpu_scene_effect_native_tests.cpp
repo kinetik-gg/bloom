@@ -118,16 +118,12 @@ effectPlan(const bloom::runtime::ImageEffectKernel& kernel, const std::uint64_t 
                                           {ParameterId::fromRaw(idBase + 2), color},
                                           {ParameterId::fromRaw(idBase + 3), 12.0},
                                           {ParameterId::fromRaw(idBase + 4), 10.0}});
-    if (const auto* file = std::get_if<FileTransformKernel>(&kernel)) {
-        FileTransformKernel copy = *file;
-        copy.asset = lutAsset;
-        operations.emplace_back(CompiledImageEffect{NodeId::fromRaw(idBase + 5),
-                                                    OperationIndex::fromRaw(0), std::move(copy),
-                                                    false, false});
-    } else {
-        operations.emplace_back(CompiledImageEffect{
-            NodeId::fromRaw(idBase + 5), OperationIndex::fromRaw(0), kernel, false, false});
-    }
+    auto capturedKernel = kernel;
+    if (auto* file = std::get_if<FileTransformKernel>(&capturedKernel))
+        file->asset = lutAsset;
+    operations.emplace_back(CompiledImageEffect{NodeId::fromRaw(idBase + 5),
+                                                OperationIndex::fromRaw(0),
+                                                std::move(capturedKernel), false, false});
     operations.emplace_back(CompiledLayerOutput{
         NodeId::fromRaw(idBase + 6), LayerId::fromRaw(layerRaw), OperationIndex::fromRaw(1),
         CompiledVec2Parameter{ParameterId::fromRaw(idBase + 7), bloom::document::Vec2d{6.0, 5.0}},
@@ -551,11 +547,216 @@ void runFileTransform(Expectations& expectations, GpuDevice& device, GpuSceneCac
 }
 #endif
 
+void runDiscrete(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::runtime::DiscreteImageKernel;
+    std::uint64_t id = 20000;
+    for (const auto kernel :
+         {DiscreteImageKernel{true, false, 0}, DiscreteImageKernel{false, true, 0},
+          DiscreteImageKernel{true, true, 0}, DiscreteImageKernel{false, false, 1},
+          DiscreteImageKernel{false, false, 2}, DiscreteImageKernel{false, false, 3}}) {
+        cache.clear();
+        auto definition = effectPlan(CstKernel{}, id)->copyDefinition();
+        bloom::runtime::CompiledShape shape{};
+        shape.sourceNodeId = NodeId::fromRaw(id + 1);
+        shape.kind = bloom::document::ShapeKind::Line;
+        shape.size = {ParameterId::fromRaw(id + 2), bloom::document::Vec2d{6, 3}};
+        shape.fillEnabled = false;
+        shape.fillColor = {ParameterId::fromRaw(id + 3), Color4d{-0.25, 1.75, 0.5, 0.625}};
+        shape.strokeEnabled = true;
+        shape.strokeColor = {ParameterId::fromRaw(id + 4), Color4d{-0.25, 1.75, 0.5, 0.625}};
+        shape.strokeWidth = {ParameterId::fromRaw(id + 5), 1.5};
+        shape.lineStart = {0, 0};
+        shape.lineEnd = {6, 3};
+        definition.operations[0] = shape;
+        std::get<CompiledImageEffect>(definition.operations[1]).kernel = kernel;
+        definition.operations.resize(2);
+        definition.operations.emplace_back(CompiledMerge{
+            NodeId::fromRaw(id + 20),
+            {{LayerSlotId::fromRaw(id + 20), LayerId{}, OperationIndex::fromRaw(1)}}});
+        definition.operations.emplace_back(
+            CompiledCompositionOutput{NodeId::fromRaw(id + 21), OperationIndex::fromRaw(2)});
+        definition.output = OperationIndex::fromRaw(3);
+        const auto plan = std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+        const auto request = requestFor(*plan);
+        const auto prepared = CpuGpuSceneBuilder{}.build(plan, request);
+        expectations.expect(prepared.hasValue(), "discrete native: production scene prepares");
+        const CpuCompositionEvaluator evaluator;
+        const auto oracle = evaluator.evaluate(plan, request, {});
+        expectations.expect(oracle.frame() != nullptr, "discrete native: CPU oracle evaluates");
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), "discrete native: executor creates");
+        if (!prepared || !oracle.frame() || !executor)
+            return;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        expectations.expect(
+            cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                std::ranges::equal(cold.pixels, oracle.frame()->processImage().pixels()),
+            "discrete native: asymmetric signed/HDR/partial-alpha pixels match CPU exactly");
+        const auto counters = executor.executor->counters();
+        expectations.expect(
+            counters.affineDispatches == 1 && counters.readbacks == 0,
+            "discrete native: one real resident affine pass with no executor readback");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(
+            warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                std::ranges::equal(warm.pixels, oracle.frame()->processImage().pixels()) &&
+                executor.executor->counters().affineDispatches == counters.affineDispatches,
+            "discrete native: warm frame reuses the resident result and preserves exact pixels");
+        id += 100;
+    }
+}
+
+void runResizeFit(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    const CpuGpuSceneBuilder builder;
+    const CpuCompositionEvaluator evaluator;
+    for (const bloom::runtime::ResizeFitKernel kernel :
+         {bloom::runtime::ResizeFitKernel{8, 8}, bloom::runtime::ResizeFitKernel{8, 8, 1, 1, 0, 1},
+          bloom::runtime::ResizeFitKernel{8, 8, 1, 1, 0, 2},
+          bloom::runtime::ResizeFitKernel{16, 12, 2, 1, 0, 1}}) {
+        auto definition = effectPlan(CstKernel{}, 25000)->copyDefinition();
+        std::get<CompiledImageEffect>(definition.operations[1]).kernel = kernel;
+        const auto plan = std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+        for (const bool proxy : {false, true}) {
+            auto request = requestFor(*plan);
+            if (proxy) {
+                const auto extent = bloom::render::ImageExtent::create(6, 5);
+                request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+            }
+            const auto prepared = builder.build(plan, request);
+            const auto cpu = evaluator.evaluate(plan, request, {});
+            expectations.expect(prepared && cpu.frame(),
+                                "Resize/Fit native: production GPU/CPU routes prepare");
+            if (!prepared || !cpu.frame())
+                continue;
+            auto executor = GpuSceneExecutor::create(device, cache);
+            expectations.expect(executor.hasValue(), "Resize/Fit native: executor creates");
+            if (!executor)
+                continue;
+            const auto before = executor.executor->counters();
+            const auto cold = runScene(*executor.executor, prepared.scene);
+            const auto after = executor.executor->counters();
+            expectations.expect(
+                cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                    after.readbacks == before.readbacks,
+                "Resize/Fit native: resident evaluation completes without readback");
+            const auto pixels = cpu.frame()->processImage().pixels();
+            bool matches = cold.pixels.size() == pixels.size();
+            for (std::size_t i = 0; matches && i < pixels.size(); ++i)
+                for (std::size_t channel = 0; channel < 4; ++channel) {
+                    const float actual = cold.pixels[i].components()[channel];
+                    const float expected = pixels[i].components()[channel];
+                    matches =
+                        matches && std::isfinite(actual) &&
+                        std::abs(actual - expected) <= 2e-6F * std::max(1.0F, std::abs(expected));
+                    if (channel == 3 && (expected == 0 || expected == 1))
+                        matches = matches && actual == expected;
+                }
+            const auto& descriptor = *cpu.frame()->processImage().descriptor();
+            expectations.expect(matches && cold.dataWindow == descriptor.dataWindow() &&
+                                    cold.displayWindow == descriptor.displayWindow() &&
+                                    cold.pixelAspect == descriptor.pixelAspect(),
+                                "Resize/Fit native: pixels, alpha/HDR and geometry match CPU");
+            const auto warm = runScene(*executor.executor, prepared.scene);
+            expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                    executor.executor->counters().affineDispatches ==
+                                        after.affineDispatches,
+                                "Resize/Fit native: unchanged warm render runs no affine dispatch");
+        }
+    }
+}
+
+void runBlurs(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::runtime::BlurEdgeMode;
+    using bloom::runtime::SeparableBlurKernel;
+    using bloom::runtime::SeparableBlurKind;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    std::uint64_t id = 7000;
+    for (const auto kind : {SeparableBlurKind::Gaussian, SeparableBlurKind::Box}) {
+        for (const auto edge : {BlurEdgeMode::Transparent, BlurEdgeMode::Clamp}) {
+            for (const bool proxy : {false, true}) {
+                cache.clear();
+                const auto plan = effectPlan(
+                    SeparableBlurKernel{kind, {ParameterId::fromRaw(id + 90), 2.5}, edge}, id);
+                id += 100;
+                auto request = requestFor(*plan);
+                if (proxy) {
+                    const auto extent = bloom::render::ImageExtent::create(7, 6);
+                    request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+                    const auto roi = ImageWindow::create(1, 1, 4, 3);
+                    request.roi = *roi.value();
+                }
+                auto oracleRequest = request;
+                oracleRequest.bypassOperationCache = true;
+                const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+                const auto prepared = builder.build(plan, request);
+                expectations.expect(
+                    oracle.frame() && prepared,
+                    "blur native: CPU oracle and production scene prepare (halo/edge/proxy/ROI)");
+                if (!oracle.frame() || !prepared)
+                    continue;
+                auto executor = GpuSceneExecutor::create(device, cache);
+                expectations.expect(executor.hasValue(), "blur native: executor creates");
+                if (!executor)
+                    continue;
+                const auto cold = runScene(*executor.executor, prepared.scene);
+                const auto coldCounters = executor.executor->counters();
+                std::string detail;
+                expectations.expect(
+                    cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                        parity(cold.pixels, oracle.frame()->processImage().pixels(), detail),
+                    "blur native: signed HDR/partial-alpha CPU parity (2e-6, exact alpha): " +
+                        detail);
+                const auto& descriptor = *oracle.frame()->processImage().descriptor();
+                expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                        cold.displayWindow == descriptor.displayWindow() &&
+                                        cold.pixelAspect == descriptor.pixelAspect(),
+                                    "blur native: ROI/data/display-window and PAR parity");
+                expectations.expect(coldCounters.ocioEffectDispatches == 2 &&
+                                        coldCounters.readbacks == 0,
+                                    "blur native: exactly two resident filter dispatches and no "
+                                    "internal frame readback");
+                const auto warm = runScene(*executor.executor, prepared.scene);
+                expectations.expect(
+                    warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                        parity(warm.pixels, oracle.frame()->processImage().pixels(), detail) &&
+                        executor.executor->counters().ocioEffectDispatches ==
+                            coldCounters.ocioEffectDispatches,
+                    "blur native: warm RAM reuse has identical pixels and zero filter dispatches");
+                auto changedDefinition = plan->copyDefinition();
+                std::get<SeparableBlurKernel>(
+                    std::get<CompiledImageEffect>(changedDefinition.operations[1]).kernel)
+                    .radius.source = 1.0;
+                const auto changedPlan =
+                    std::make_shared<const CompiledCompositionPlan>(std::move(changedDefinition));
+                const auto changed = builder.build(changedPlan, request);
+                const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+                expectations.expect(changed && changedOracle.frame(),
+                                    "blur native: changed radius prepares");
+                if (changed && changedOracle.frame()) {
+                    const auto rerun = runScene(*executor.executor, changed.scene);
+                    expectations.expect(rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                            parity(rerun.pixels,
+                                                   changedOracle.frame()->processImage().pixels(),
+                                                   detail) &&
+                                            executor.executor->counters().ocioEffectDispatches ==
+                                                coldCounters.ocioEffectDispatches + 2,
+                                        "blur native: changed radius invalidates both passes and "
+                                        "retains CPU parity");
+                }
+            }
+        }
+    }
+}
+
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                const std::string& from, const std::string& to) {
     runCst(expectations, device, cache, from, to);
     runPointwise(expectations, device, cache);
     runCanvas(expectations, device, cache);
+    runDiscrete(expectations, device, cache);
+    runResizeFit(expectations, device, cache);
+    runBlurs(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
 #endif

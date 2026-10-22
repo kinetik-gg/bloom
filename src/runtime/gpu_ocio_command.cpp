@@ -183,6 +183,7 @@ GpuOcioCommandResult PreparedGpuOcioCommand::prepare(render::OcioGpuProgramDesc 
     GpuOcioOutputEncoding encoding = GpuOcioOutputEncoding::FinalRgba32f;
     switch (program.stage) {
     case render::OcioGpuProgramStage::ProcessEffect:
+    case render::OcioGpuProgramStage::ProcessNeighborhood:
         encoding = GpuOcioOutputEncoding::FinalRgba32f;
         break;
     case render::OcioGpuProgramStage::DisplayPacking:

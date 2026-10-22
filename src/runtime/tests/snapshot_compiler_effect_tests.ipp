@@ -257,3 +257,53 @@ void testCanvasLowering(Expectations& expectations) {
                             "driven canvas margin invalidates itself and downstream output");
     }
 }
+
+void testBlurLowering(Expectations& expectations) {
+    using namespace document;
+    for (const auto* type : {"bloom.gaussian-blur", "bloom.box-blur"}) {
+        auto project = makeProject(singleLayerOptions());
+        auto* composition = project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        const auto node = NodeId::fromRaw(960);
+        const auto radius = ParameterId::fromRaw(960);
+        const auto edge = ParameterId::fromRaw(961);
+        require(composition->parameters().insert(
+                    {radius, "bloom.blur.radius", ConstantValueSource{2.5}}),
+                "blur radius is valid");
+        require(composition->parameters().insert(
+                    {edge, "bloom.blur.edge", ConstantValueSource{std::int64_t{1}}}),
+                "blur edge is valid");
+        require(graph.addNode({node, type, {{"radius", radius}, {"edge", edge}}, 1}),
+                "blur node adds");
+        require(graph.eraseEdge(kFirstSourceEdge), "source edge removed");
+        require(graph.addEdge(
+                    {kFirstSourceEdge, {kFirstSolidNode, "image"}, NodeInputRef{node, "input"}}),
+                "image enters blur");
+        require(graph.addEdge(
+                    {EdgeId::fromRaw(960),
+                     {node, "image"},
+                     NodeInputRef{kFirstLayerNode, std::string(kLayerOutputContentInputPort)}}),
+                "blur enters Layer");
+        expectations.expect(project.validate().ok(), "blur document validates");
+        runtime::NodeDefinitionRegistry registry;
+        require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+        registry.freeze();
+        const auto result = compile(std::move(project), registry);
+        expectations.expect(result.plan != nullptr, "blur graph compiles");
+        if (!result.plan)
+            continue;
+        const auto operation =
+            std::ranges::find_if(result.plan->operations(), [](const auto& value) {
+                return std::holds_alternative<runtime::CompiledImageEffect>(value);
+            });
+        require(operation != result.plan->operations().end(), "blur operation exists");
+        const auto* blur = std::get_if<runtime::SeparableBlurKernel>(
+            &std::get<runtime::CompiledImageEffect>(*operation).kernel);
+        expectations.expect(blur && blur->radius.id == radius &&
+                                blur->edge == runtime::BlurEdgeMode::Clamp &&
+                                blur->kind == (std::string_view(type) == "bloom.gaussian-blur"
+                                                   ? runtime::SeparableBlurKind::Gaussian
+                                                   : runtime::SeparableBlurKind::Box),
+                            "typed blur lowering retains parameter identity, kind and edge policy");
+    }
+}

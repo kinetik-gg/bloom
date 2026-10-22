@@ -1915,6 +1915,7 @@ int main() {
         testMultiplyInvertLowering(expectations);
         testExposureOffsetLowering(expectations);
         testCanvasLowering(expectations);
+        testBlurLowering(expectations);
         testLiveValueOverrideOwners(expectations);
         testOverrideVectorKindsAndLimits(expectations);
         testLayerFlagsAndRangeLowering(expectations);

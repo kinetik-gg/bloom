@@ -292,6 +292,44 @@ kernel in the stage; the translate-only case is a path inside this one.
   picture of the full-resolution frame, a rotated layer included, rather than pretending device
   pixels are square.
 
+### Resize And Fit
+
+`bloom.resize` and `bloom.fit` schema 1 lower through the image-effect boundary to the shared
+`ResizeFitKernel`. Resize stretches the input display canvas independently in X and Y. Fit defaults
+to centred Fit (contain); Fill (cover) instead crops centred overflow. Both compute physical aspect
+from the source and target pixel aspect ratios. Source data-window offsets and overscan remain
+sampling coordinates; they do not redefine the source display canvas.
+
+Both nodes expose constant width, height, pixel-aspect numerator/denominator, a Bilinear filter
+selector, and bypass. Fit also exposes Fit/Fill. Dimensions and ratio terms are positive integers
+up to 32768; zero, negative, unsupported filter/policy values, and driven/animated geometry are
+rejected. Bilinear is the only filter in this version. The generic registered-node commands provide
+Add, parameter edits, duplication, undo/redo, and project persistence; Properties reads these same
+schemas and selectors.
+
+The output data/display canvas starts at zero with the authored extent and PAR. A proxy scales the
+extent with ceiling and derives its exact PAR to preserve the authored physical aspect. The
+Composition Output still chooses the composition render extent. Fit letterboxes with transparent
+black; Fill clips to the target canvas. The existing inverse-mapped affine primitive interpolates
+premultiplied RGBA directly, preserving finite signed/HDR RGB and alpha, with transparent-black
+taps outside the source data window. This initial bilinear filter has no additional downsampling
+antialiasing prefilter.
+
+CPU and GPU share checked geometry. The CPU uses the existing parented affine row reference; GPU
+preparation emits resident `GpuSceneAffineCommand` work using `AffineBilinearV1`, including for
+preview and final-render evaluation. An optional checked output descriptor on individual and batched
+affine work carries the new display canvas/PAR without a pixel readback. Deferred vector inputs
+materialize through existing native coverage before this resample. No CPU-rendered Resize/Fit
+output is uploaded as a GPU implementation.
+
+Cache identity covers every geometry/filter/policy value, input identity, windows/PAR, proxy and ROI;
+the executor independently keys the actual affine map, output descriptor and shader. Spatial inputs
+retain full support for ROI requests. CPU work checks cancellation per row and before publication,
+reports row progress, and refuses invalid geometry or output-budget exhaustion. Native work uses
+the existing executor allocation, cancellation, cache pin and proven-retirement ownership. Native
+numeric parity, warm-cache and batch checks are included in the existing harnesses and remain
+subject to their device qualification; macOS/Windows retain the explicit CPU fallback contract.
+
 ### Blending
 
 The Layer Stack stage folds each entry through one blend kernel carrying that entry's own Layer Output
@@ -941,3 +979,41 @@ At the composition-source landing, compiled-plan semantics was **7**, animation 
 existing arms' pixel semantics are unchanged. The independent `s5-identity-oracle.py` audit
 reproduced all plan-6 analysis/output pins before deriving plan-7 pins, preserving the four
 preimage lengths (PNG analysis 1922, EXR analysis 1485, PNG output 669, EXR output 567 bytes).
+
+## Exact Flip And Rotate 90 Image Nodes
+
+`bloom.flip` v1 and `bloom.rotate-90` v1 lower to the required `DiscreteImageKernel` image-effect
+alternative. Flip has static Boolean horizontal (default true) and vertical (default false)
+controls. Rotate 90 has one static signed integer `quarterTurns` control (default 1), normalized
+modulo four; positive turns are clockwise. Generic AddNode/parameter commands own edits and undo;
+the versioned definitions and parameter records use ordinary project persistence.
+
+These nodes permute the stored pixel lattice without colour conversion, unpremultiplication,
+filtering, alpha arithmetic or HDR clipping. Flip reflects within the input data rectangle.
+Rotation exchanges data width/height on odd turns and retains the data rectangle's top-left
+origin on every turn, including negative and off-canvas origins. The display canvas and pixel
+aspect ratio are retained: an image operation does not resize the composition. Full overscan is
+retained for downstream transforms; Composition Output/ROI determines the final visible crop.
+The CPU reference copies exact premultiplied RGBA32F samples with row/chunk cancellation,
+progress and the existing checked allocation budget. Invalid output windows or failed allocation
+fail evaluation rather than publishing an unchanged final image.
+
+GPU preview and all final routes use the same production scene builder and resident affine
+executor. A signed permutation matrix with integer translations produces zero fractional sample
+weights, so the existing affine shader's explicit zero-factor branches select the exact source tap;
+there is no host full-frame pixel preparation. The ordinary GPU capability, allocation, cancellation,
+cache-key, live-pin and retirement contracts apply. CPU fallback remains explicit on unsupported
+native devices/platforms, and for data origins beyond the exact Float64 integer-coordinate
+domain (absolute coordinate above 2^52). Windows/macOS native qualification is pending, as for the shared affine
+backend. Tests cover every turn, both axes, nonsquare off-canvas windows, signed/HDR/partial-alpha
+sample preservation, exact affine sample bases/zero weights, production preparation, warm cache,
+Properties command undo, and verified archive reopen. A separate native image-effect harness adds
+an asymmetric stroked image fixture for both axes, their combination, and turns 1/2/3; it requires
+exact CPU/GPU pixels, a real resident affine dispatch, no executor readback, and warm cache reuse.
+That harness and the required coverage gate must run on a device before claiming native parity.
+
+## Separable neighborhood filtering
+
+Gaussian Blur and Box Blur share the CPU/GPU kernel, explicit data-window halo and edge policy
+defined in [Image Filters](image-filters.md). Unlike pointwise colour kernels, they filter associated
+RGBA and may expand the data window. Preview and final rendering use the same production scene path.

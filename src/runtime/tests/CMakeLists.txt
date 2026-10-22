@@ -241,6 +241,14 @@ bloom_add_test(
     LABELS unit runtime media color
 )
 
+add_executable(bloom_runtime_separable_image_effect_test separable_image_effect_tests.cpp)
+target_include_directories(bloom_runtime_separable_image_effect_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_separable_image_effect_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_separable_image_effect_test)
+bloom_enable_strict_floating_point(bloom_runtime_separable_image_effect_test)
+bloom_add_test(NAME bloom.runtime.separable-image-effects COMMAND bloom_runtime_separable_image_effect_test
+               LABELS unit runtime render TIMEOUT 30)
+
 bloom_find_dependency(OpenColorIO)
 add_executable(bloom_runtime_image_effect_test image_effect_tests.cpp)
 add_executable(bloom_runtime_checker_image_test checker_image_tests.cpp)
@@ -255,6 +263,14 @@ target_link_libraries(bloom_runtime_image_effect_test PRIVATE bloom_runtime_eval
 bloom_enable_warnings(bloom_runtime_image_effect_test)
 bloom_enable_strict_floating_point(bloom_runtime_image_effect_test)
 bloom_add_test(NAME bloom.runtime.image-effects COMMAND bloom_runtime_image_effect_test LABELS unit runtime color)
+bloom_add_test(NAME bloom.runtime.discrete-image-effects COMMAND bloom_runtime_image_effect_test --discrete-only LABELS unit runtime image)
+
+add_executable(bloom_runtime_resize_fit_kernel_test resize_fit_kernel_tests.cpp)
+target_include_directories(bloom_runtime_resize_fit_kernel_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_resize_fit_kernel_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_resize_fit_kernel_test)
+bloom_enable_strict_floating_point(bloom_runtime_resize_fit_kernel_test)
+bloom_add_test(NAME bloom.runtime.resize-fit-kernel COMMAND bloom_runtime_resize_fit_kernel_test LABELS unit runtime render)
 
 # Bounded runtime qualification for the embedded Bloom Neutral v1 display operation. The hardware
 # body is compiled unconditionally and depends only on runtime create() availability, so the same

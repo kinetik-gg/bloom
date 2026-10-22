@@ -95,7 +95,8 @@ struct GpuAffine::Impl final {
     [[nodiscard]] GpuAffineDiagnostic beginPrepared(const std::shared_ptr<const GpuImage>& source,
                                                     ImageWindow outputWindow,
                                                     const GpuAffineMap& affineMap, float opacity,
-                                                    std::uint64_t byteBudget);
+                                                    std::uint64_t byteBudget,
+                                                    const Rgba32fImageDescriptor* output = nullptr);
     // Bounded resident-slot management, defined in gpu_affine_retirement.cpp. Acquire is called
     // before the first native allocation; release is owner-thread retirement; orphan is the
     // foreign-thread or unproven owner path that preserves the already-owned slot for the owner

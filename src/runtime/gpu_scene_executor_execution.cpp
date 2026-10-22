@@ -335,7 +335,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
                                   "an affine step is incomplete before dispatch");
         }
         const render::GpuAffineMatrixParameters parameters{images[step.input], *step.outputWindow,
-                                                           step.affineMatrix, step.affineOpacity};
+                                                           step.affineMatrix, step.affineOpacity,
+                                                           step.affineOutputDescriptor};
         const auto native = affine->beginAffineMatrix(parameters, remaining);
         if (native.code != render::GpuAffineDiagnosticCode::None) {
             return diagnosticFromAffine(native);

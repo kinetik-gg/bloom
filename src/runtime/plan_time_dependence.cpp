@@ -74,6 +74,8 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                         return std::ranges::any_of(canvas->margins, parameter);
                     if (const auto* combine = std::get_if<ImageCombineKernel>(&step.kernel))
                         return combine->factor && parameter(*combine->factor);
+                    if (const auto* blur = std::get_if<SeparableBlurKernel>(&step.kernel))
+                        return parameter(blur->radius);
                     return false;
                 } else if constexpr (std::is_same_v<Step, CompiledText>)
                     return parameter(step.color) || parameter(step.size) ||

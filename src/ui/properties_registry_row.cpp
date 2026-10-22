@@ -204,6 +204,9 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             ? tr("Matte channel (0 A, 1 R, 2 G, 3 B, 4 Luma)")
         : definition_.schemaKey == "bloom.set-alpha.channel"
             ? tr("Matte channel (0 A, 1 R, 2 G, 3 B, 4 Luma)")
+        : definition_.schemaKey == "bloom.rotate-90.quarter-turns" ? tr("Quarter turns (clockwise)")
+        : definition_.schemaKey == "bloom.blur.radius"               ? tr("Radius (pixels)")
+        : definition_.schemaKey == "bloom.blur.edge"                 ? tr("Edges")
         : definition_.schemaKey == document::kTextAlignmentParameterSchemaKey ? tr("Text Alignment")
         : definition_.schemaKey == document::kTextLineHeightParameterSchemaKey ? tr("Line Height")
         : definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey
@@ -370,6 +373,10 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             field->setAccessibleName(label);
             field->setRange(std::numeric_limits<double>::lowest(),
                             std::numeric_limits<double>::max());
+            if (definition_.schemaKey == "bloom.blur.radius") {
+                field->setRange(0.0, document::kMaximumBlurRadiusPixels);
+                field->setUnit("px");
+            }
             field->setCompact(true);
             if (count == 3)
                 field->setMinimumWidth(kit::px(kit::Size::PropertiesComponentMinWidth));
