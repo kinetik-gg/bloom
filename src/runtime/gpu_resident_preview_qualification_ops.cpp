@@ -249,7 +249,7 @@ ProbeResult verifyUploadAndCompositeParity(ProbeContext& context) noexcept {
         std::shared_ptr<const GpuImage> output;
         std::string reason;
         const render::GpuTranslationParameters params{sharedSource, *outputWindow, testCase.dx,
-                                                      testCase.dy, testCase.opacity};
+                                                      testCase.dy, testCase.opacity, {}};
         auto ran = runTranslationReadback(context, params, measured, output, reason);
         if (ran.code != GpuResidentPreviewDiagnosticCode::None) {
             return ran;
@@ -309,7 +309,7 @@ ProbeResult verifyUploadAndCompositeParity(ProbeContext& context) noexcept {
             }
             const auto badShared = std::move(badResident);
             const auto begin = context.composite.beginTranslation(
-                render::GpuTranslationParameters{badShared, *sourceWindow, 0.0, 0.0, 1.0F},
+                render::GpuTranslationParameters{badShared, *sourceWindow, 0.0, 0.0, 1.0F, {}},
                 context.imageBudget);
             if (begin.code != GpuCompositeDiagnosticCode::None) {
                 return fail(GpuResidentPreviewDiagnosticCode::ParityFailure,
