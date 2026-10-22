@@ -57,7 +57,8 @@ class ImageEffectContext final {
                                               std::optional<double> sampledAmount = {},
                                               std::optional<std::array<double, 4>> canvasMargins = {},
                                               double horizontalScale = 1.0,
-                                              double verticalScale = 1.0);
+                                              double verticalScale = 1.0,
+                                              std::optional<std::int64_t> sampledChannel = {});
 
   private:
     std::mutex mutex_;

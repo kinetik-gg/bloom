@@ -241,6 +241,7 @@ struct ImageCombineKernel final {
     ImageCombineMode mode = ImageCombineMode::Mix;
     std::optional<CompiledScalarParameter> factor;
     render::ImageCoverageChannel channel = render::ImageCoverageChannel::Alpha;
+    std::optional<ValueOutputIndex> drivenChannel = std::nullopt;
     friend bool operator==(const ImageCombineKernel&, const ImageCombineKernel&) = default;
 };
 enum class CanvasImageEffect : std::uint8_t { Crop, Pad };

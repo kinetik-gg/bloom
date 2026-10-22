@@ -1912,6 +1912,7 @@ int main() {
     Expectations expectations;
     try {
         testImageEffectLowering(expectations);
+        testImageCombineChannelLowering(expectations);
         testMultiplyInvertLowering(expectations);
         testExposureOffsetLowering(expectations);
         testCanvasLowering(expectations);

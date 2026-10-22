@@ -72,7 +72,8 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
                                                 const std::optional<double> sampledAmount,
                                                 const std::optional<std::array<double, 4>> canvasMargins,
                                                 const double horizontalScale,
-                                                const double verticalScale) {
+                                                const double verticalScale,
+                                                const std::optional<std::int64_t> sampledChannel) {
     if (effect.bypass || std::holds_alternative<IdentityImageKernel>(effect.kernel))
         return {};
     PreparedImageEffect prepared;
@@ -91,11 +92,15 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
         return prepared;
     }
     if (const auto* combine = std::get_if<ImageCombineKernel>(&effect.kernel)) {
+        const auto channel = combine->drivenChannel
+                                 ? sampledChannel
+                                 : std::optional<std::int64_t>{
+                                       static_cast<std::int64_t>(combine->channel)};
         if (!effect.secondaryInput ||
             static_cast<std::uint8_t>(combine->mode) >
                 static_cast<std::uint8_t>(ImageCombineMode::MultiplyAlpha) ||
-            static_cast<std::uint8_t>(combine->channel) >
-                static_cast<std::uint8_t>(render::ImageCoverageChannel::Luma) ||
+            !channel || *channel < 0 ||
+            *channel > static_cast<std::int64_t>(render::ImageCoverageChannel::Luma) ||
             (combine->mode == ImageCombineMode::SetAlpha) != !combine->factor ||
             (combine->factor && (!sampledAmount || !std::isfinite(*sampledAmount) ||
                                  *sampledAmount < 0.0 || *sampledAmount > 1.0))) {
@@ -104,11 +109,12 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
             return prepared;
         }
         const float factor = combine->factor ? static_cast<float>(*sampledAmount) : 1.0F;
-        prepared.combine = PreparedImageEffect::Combine{combine->mode, factor, combine->channel};
+        const auto coverageChannel = static_cast<render::ImageCoverageChannel>(*channel);
+        prepared.combine = PreparedImageEffect::Combine{combine->mode, factor, coverageChannel};
         OperationKey combineKey;
         combineKey.add(combine->mode);
         combineKey.add(static_cast<double>(factor));
-        combineKey.add(combine->channel);
+        combineKey.add(coverageChannel);
         prepared.cacheIdentity = combineKey.bytes();
         return prepared;
     }

@@ -321,6 +321,19 @@ lower(const std::vector<document::NodeId>& order) {
             operations.emplace_back(runtime::CompiledCompositionOutput{nodeId, empty});
             continue;
         }
+        // A combine's empty second image is still a meaningful transparent matte. Materialize
+        // it through the existing empty Merge path rather than losing the connected input.
+        if (node->typeId == "bloom.image-mix" || node->typeId == "bloom.set-alpha" ||
+            node->typeId == "bloom.multiply-alpha") {
+            const auto* second = fixedInputEdge(
+                nodeId, node->typeId == "bloom.image-mix" ? "second" : "matte");
+            if (second && emptyImages_.contains(second->source.nodeId) &&
+                !indices.contains(second->source.nodeId)) {
+                const auto empty = runtime::OperationIndex::fromRaw(operations.size());
+                operations.emplace_back(runtime::CompiledMerge{second->source.nodeId, {}});
+                indices.emplace(second->source.nodeId, empty);
+            }
+        }
         // An empty transform parent still owns authored transform values. Give it an empty
         // image input without adding document nodes or Merge membership.
         std::optional<runtime::OperationIndex> emptyParentInput;
@@ -709,15 +722,18 @@ lowerImageEffect(const document::NodeRecord& node,
         }
         if (multiplyAlpha) {
             const auto factor = compiledScalarParameter(findParameterBinding(node, "factor"));
-            const auto* channel =
-                parameterConstant<std::int64_t>(findParameterBinding(node, "channel"));
-            if (factor && channel && *channel >= 0 && *channel <= 4)
+            const auto* channelBinding = findParameterBinding(node, "channel");
+            const auto* channel = parameterConstant<std::int64_t>(channelBinding);
+            const auto channelDriver = drivenOutput(channelBinding, runtime::SocketValueKind::Integer);
+            if (factor && ((channel && *channel >= 0 && *channel <= 4) || channelDriver))
                 return runtime::CompiledImageEffect{
                     node.id,
                     *input,
                     runtime::ImageCombineKernel{
                         runtime::ImageCombineMode::MultiplyAlpha, *factor,
-                        static_cast<render::ImageCoverageChannel>(*channel)},
+                        channel ? static_cast<render::ImageCoverageChannel>(*channel)
+                                : render::ImageCoverageChannel::Alpha,
+                        channelDriver},
                     false,
                     false,
                     *second};
@@ -732,16 +748,19 @@ lowerImageEffect(const document::NodeRecord& node,
                     false,
                     *second};
         } else {
-            const auto* channel =
-                parameterConstant<std::int64_t>(findParameterBinding(node, "channel"));
-            if (channel && *channel >= 0 && *channel <= 4)
+            const auto* channelBinding = findParameterBinding(node, "channel");
+            const auto* channel = parameterConstant<std::int64_t>(channelBinding);
+            const auto channelDriver = drivenOutput(channelBinding, runtime::SocketValueKind::Integer);
+            if ((channel && *channel >= 0 && *channel <= 4) || channelDriver)
                 return runtime::CompiledImageEffect{
                     node.id,
                     *input,
                     runtime::ImageCombineKernel{
                         runtime::ImageCombineMode::SetAlpha,
                         {},
-                        static_cast<render::ImageCoverageChannel>(*channel)},
+                        channel ? static_cast<render::ImageCoverageChannel>(*channel)
+                                : render::ImageCoverageChannel::Alpha,
+                        channelDriver},
                     false,
                     false,
                     *second};

@@ -275,11 +275,18 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel);
     const auto* combine = std::get_if<ImageCombineKernel>(&effect.kernel);
     if (combine != nullptr) {
+        auto channel = static_cast<std::int64_t>(combine->channel);
+        if (combine->drivenChannel) {
+            const auto* sampled = resolvedValue<std::int64_t>(*combine->drivenChannel, resolved);
+            if (sampled == nullptr)
+                return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                            "Image combine channel driver is not an Integer");
+            channel = *sampled;
+        }
         if (!effect.secondaryInput || effect.secondaryInput->value() >= plan.operations().size() ||
             static_cast<std::uint8_t>(combine->mode) >
                 static_cast<std::uint8_t>(ImageCombineMode::MultiplyAlpha) ||
-            static_cast<std::uint8_t>(combine->channel) >
-                static_cast<std::uint8_t>(render::ImageCoverageChannel::Luma))
+            channel < 0 || channel > static_cast<std::int64_t>(render::ImageCoverageChannel::Luma))
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                         "Image combine kernel or second input is invalid");
         const auto secondValue = effect.secondaryInput->value();
@@ -348,7 +355,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                                       sizeof(render::Rgba32f)))
             return error;
         const render::GpuImageCombineParameters parameters{
-            static_cast<render::GpuImageCombineKind>(combine->mode), factor, combine->channel};
+            static_cast<render::GpuImageCombineKind>(combine->mode), factor,
+            static_cast<render::ImageCoverageChannel>(channel)};
         GpuSceneBlendCommand command{.sourceOperation = operationIndex,
                                      .source = secondCommand,
                                      .destination = baseCommand,

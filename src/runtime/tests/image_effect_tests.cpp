@@ -925,11 +925,119 @@ void testPointwiseFailureAndTimeDependence() {
 }
 
 #include "pointwise_preflight_tests.ipp"
+void testImageCombineDrivers() {
+    using namespace runtime;
+    using namespace document;
+    const auto makeDefinition = [](const ImageCombineKernel kernel) {
+        auto definition = planWith({kernel})->copyDefinition();
+        std::get<CompiledImageEffect>(definition.operations[1]).secondaryInput =
+            OperationIndex::fromRaw(0);
+        definition.duration = core::RationalTime::fromInteger(2);
+        return definition;
+    };
+    const auto makePlan = [](CompiledCompositionPlanDefinition definition) {
+        return std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+    };
+    const ImageCombineKernel multiplyAlpha{
+        ImageCombineMode::MultiplyAlpha,
+        CompiledScalarParameter{ParameterId::fromRaw(90), ScalarCurveIndex::fromRaw(0)},
+        render::ImageCoverageChannel::Alpha};
+    auto animatedDefinition = makeDefinition(multiplyAlpha);
+    animatedDefinition.scalarCurves.push_back(
+        {AnimationCurveId::fromRaw(90),
+         {{KeyframeId::fromRaw(90), core::RationalTime{}, 0.0,
+           CompiledKeyframeInterpolation::Linear},
+          {KeyframeId::fromRaw(91), core::RationalTime::fromInteger(1), 1.0,
+           CompiledKeyframeInterpolation::Linear}}});
+    const auto animated = makePlan(animatedDefinition);
+    CpuCompositionEvaluator evaluator;
+    auto request = requestFor(*animated);
+    const auto first = evaluator.evaluate(animated, request, {});
+    request.time = core::RationalTime::fromInteger(1);
+    const auto last = evaluator.evaluate(animated, request, {});
+    expect(first.frame() && last.frame() && !samePixels(first, last),
+           "Image Combine registers and samples its animated factor curve");
+    const auto warm = evaluator.evaluate(animated, request, {});
+    expect(samePixels(last, warm), "animated Image Combine warm result is stable");
+    animatedDefinition.scalarCurves.front().keyframes.back().value = 1.5;
+    const auto invalidCurve = makePlan(animatedDefinition);
+    const auto rejectedCurve = evaluator.evaluate(invalidCurve, requestFor(*invalidCurve), {});
+    expect(!rejectedCurve.frame() && !rejectedCurve.diagnostics().empty(),
+           "Image Combine rejects out-of-domain factor keys before image evaluation");
+
+    auto drivenDefinition = makeDefinition(multiplyAlpha);
+    std::get<ImageCombineKernel>(
+        std::get<CompiledImageEffect>(drivenDefinition.operations[1]).kernel).factor->source =
+        ValueOutputIndex::fromRaw(0);
+    drivenDefinition.valueOperations = {
+        {NodeId::fromRaw(200), ValueOutputIndex::fromRaw(0), 2, CompiledValueTime{}}};
+    drivenDefinition.valueOutputCount = 2;
+    const auto driven = makePlan(std::move(drivenDefinition));
+    request = requestFor(*driven);
+    const auto drivenFirst = evaluator.evaluate(driven, request, {});
+    request.time = core::RationalTime::fromInteger(1);
+    const auto drivenLast = evaluator.evaluate(driven, request, {});
+    expect(drivenFirst.frame() && drivenLast.frame() && !samePixels(drivenFirst, drivenLast),
+           "Image Combine resolves a linked Time factor without stale pixels");
+
+    ImageCombineKernel setAlpha{ImageCombineMode::SetAlpha, {},
+                               render::ImageCoverageChannel::Alpha};
+    setAlpha.drivenChannel = ValueOutputIndex::fromRaw(0);
+    auto channelDefinition = makeDefinition(setAlpha);
+    channelDefinition.valueOperations = {
+        {NodeId::fromRaw(201), ValueOutputIndex::fromRaw(0), 1,
+         CompiledValueUtility{ValueUtilityKernel::FrameNumber, {}, {}}}};
+    channelDefinition.valueOutputCount = 1;
+    const auto channelPlan = makePlan(channelDefinition);
+    request = requestFor(*channelPlan);
+    const auto alpha = evaluator.evaluate(channelPlan, request, {});
+    request.time = *core::RationalTime::create(1, 24);
+    const auto red = evaluator.evaluate(channelPlan, request, {});
+    const auto redWarm = evaluator.evaluate(channelPlan, request, {});
+    expect(alpha.frame() && red.frame() && !samePixels(alpha, red) && samePixels(red, redWarm),
+           "linked Integer channel changes coverage and cache identity across frames");
+
+    for (const CompiledValue value : {CompiledValue{0.0}, CompiledValue{std::int64_t{-1}},
+                                      CompiledValue{std::int64_t{5}}}) {
+        auto invalidDefinition = channelDefinition;
+        invalidDefinition.valueOperations.front().kernel = CompiledValuePassthrough{
+            {ParameterId::fromRaw(201), value}};
+        const auto invalid = makePlan(std::move(invalidDefinition));
+        const auto result = evaluator.evaluate(invalid, requestFor(*invalid), {});
+        expect(!result.frame() && !result.diagnostics().empty(),
+               "Image Combine refuses non-Integer and out-of-domain channel drivers");
+    }
+    auto invalidIndex = channelDefinition;
+    std::get<ImageCombineKernel>(std::get<CompiledImageEffect>(invalidIndex.operations[1]).kernel)
+        .drivenChannel = ValueOutputIndex::fromRaw(100);
+    const auto invalid = makePlan(std::move(invalidIndex));
+    expect(!evaluator.evaluate(invalid, requestFor(*invalid), {}).frame(),
+           "Image Combine refuses an invalid channel output index");
+
+    detail::ImageEffectContext context;
+    const auto& effect = std::get<CompiledImageEffect>(channelPlan->operations()[1]);
+    const auto intent = requestFor(*channelPlan).colorIntent;
+    const auto alphaPrepared = context.prepare(effect, intent, {}, {}, {}, {}, 1.0, 1.0, 0);
+    const auto redPrepared = context.prepare(effect, intent, {}, {}, {}, {}, 1.0, 1.0, 1);
+    expect(!alphaPrepared.diagnostic && !redPrepared.diagnostic &&
+               alphaPrepared.cacheIdentity != redPrepared.cacheIdentity,
+           "prepared channel identity includes the resolved channel");
+    for (const auto value : {std::optional<std::int64_t>{}, std::optional<std::int64_t>{-1},
+                             std::optional<std::int64_t>{5}})
+        expect(context.prepare(effect, intent, {}, {}, {}, {}, 1.0, 1.0, value)
+                   .diagnostic.has_value(),
+               "channel preparation refuses missing and invalid samples");
+}
 
 } // namespace
 
 int main(const int argc, char** argv) {
     try {
+        if (argc == 2 && std::string_view(argv[1]) == "--combine-only") {
+            testImageCombineWindows();
+            testImageCombineDrivers();
+            return failures == 0 ? 0 : 1;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--blur-only") {
             testBlurEvaluation();
             testSpatialEffectBudgets();
@@ -945,6 +1053,7 @@ int main(const int argc, char** argv) {
         testCanvasEffects();
         testCanvasAnimation();
         testImageCombineWindows();
+        testImageCombineDrivers();
         testDiscreteImages();
         testUnaryImageEffectInputArity();
         testBlurEvaluation();

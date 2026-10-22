@@ -397,6 +397,8 @@ enum class ScalarDomain : std::uint8_t {
                                       static_cast<std::uint8_t>(ImageCombineMode::MultiplyAlpha) &&
                                   static_cast<std::uint8_t>(combine->channel) <=
                                       static_cast<std::uint8_t>(render::ImageCoverageChannel::Luma) &&
+                                  (!combine->drivenChannel ||
+                                   combine->drivenChannel->value() < plan.valueOutputCount()) &&
                                   ((combine->mode == ImageCombineMode::SetAlpha &&
                                     !combine->factor) ||
                                    (combine->mode != ImageCombineMode::SetAlpha &&
@@ -1081,6 +1083,10 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                                                          ScalarDomain::Unbounded,
                                                          operationSubject));
                     }
+                    if (const auto* combine = std::get_if<ImageCombineKernel>(&effect.kernel);
+                        combine && combine->factor)
+                        static_cast<void>(registerScalar(*combine->factor, "factor",
+                                                         ScalarDomain::Unit, operationSubject));
                 },
                 [](const CompiledImageSource&) {},
                 [](const CompiledVideoSource&) {},
@@ -1377,6 +1383,29 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                                          valueMemoization);
     if (cancellation.isCancellationRequested()) {
         return PreflightOutcome::cancellation();
+    }
+
+    for (std::size_t index = 0; index < plan->operations().size(); ++index) {
+        if (cancellation.isCancellationRequested())
+            return PreflightOutcome::cancellation();
+        const auto* effect = std::get_if<CompiledImageEffect>(&plan->operations()[index]);
+        const auto* combine = effect ? std::get_if<ImageCombineKernel>(&effect->kernel) : nullptr;
+        if (!combine || !combine->drivenChannel)
+            continue;
+        const auto output = combine->drivenChannel->value();
+        const auto* channel = output < valueGraph.outputs.size()
+                                  ? std::get_if<std::int64_t>(&valueGraph.outputs[output])
+                                  : nullptr;
+        if (!channel || *channel < 0 ||
+            *channel > static_cast<std::int64_t>(render::ImageCoverageChannel::Luma)) {
+            auto subject = subjectFor(OperationIndex::fromRaw(index), plan->operations()[index]);
+            subject.field = "channel";
+            return PreflightOutcome::failure(diagnostic(
+                channel ? EvaluationDiagnosticCode::InvalidParameter
+                        : EvaluationDiagnosticCode::InvalidPlan,
+                "Image coverage channel requires an Integer in its channel domain", {},
+                std::move(subject)));
+        }
     }
 
     return PreflightOutcome::success(
@@ -1770,6 +1799,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             std::optional<detail::PreparedImageEffect> preparedEffect;
             if (const auto* effect = std::get_if<CompiledImageEffect>(&plan->operations()[index])) {
                 std::optional<double> pointwiseAmount;
+                std::optional<std::int64_t> sampledChannel;
                 std::optional<std::array<double, 4>> canvasMargins;
                 if (const auto* canvas = std::get_if<CanvasImageKernel>(&effect->kernel)) {
                     std::array<double, 4> values{};
@@ -1793,12 +1823,18 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     if (sampled)
                         pointwiseAmount = sampled->value;
                 }
-                if (const auto* combine = std::get_if<ImageCombineKernel>(&effect->kernel);
-                    combine && combine->factor) {
-                    const auto sampled =
-                        detail::resolveParameter(*combine->factor, *plan, resolved);
-                    if (sampled)
-                        pointwiseAmount = sampled->value;
+                if (const auto* combine = std::get_if<ImageCombineKernel>(&effect->kernel)) {
+                    if (combine->factor) {
+                        const auto sampled =
+                            detail::resolveParameter(*combine->factor, *plan, resolved);
+                        if (sampled)
+                            pointwiseAmount = sampled->value;
+                    }
+                    if (combine->drivenChannel) {
+                        if (const auto* channel = detail::resolvedValue<std::int64_t>(
+                                *combine->drivenChannel, resolved))
+                            sampledChannel = *channel;
+                    }
                 }
                 if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect->kernel)) {
                     const auto sampled = detail::resolveParameter(blur->radius, *plan, resolved);
@@ -1811,7 +1847,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         : imageEffectContext()->prepare(*effect, request.colorIntent, mediaBase,
                                                         cancellation, pointwiseAmount,
                                                         canvasMargins, resolved.horizontalScale,
-                                                        resolved.verticalScale);
+                                                        resolved.verticalScale, sampledChannel);
                 if (preparedEffect->cancelled)
                     return EvaluationResult::cancelled();
                 if (preparedEffect->diagnostic &&

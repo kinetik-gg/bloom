@@ -307,3 +307,90 @@ void testBlurLowering(Expectations& expectations) {
                             "typed blur lowering retains parameter identity, kind and edge policy");
     }
 }
+
+void testImageCombineChannelLowering(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "combine built-ins register");
+    registry.freeze();
+    for (const auto* type : {"bloom.set-alpha", "bloom.multiply-alpha", "bloom.image-mix"}) {
+        for (int scenario = 0; scenario != 4; ++scenario) {
+            const bool mix = std::string_view(type) == "bloom.image-mix";
+            if (mix && scenario != 3)
+                continue;
+            auto project = makeProject();
+            auto* composition = project.findComposition(kCompositionId);
+            auto& graph = composition->graph();
+            const auto effectId = NodeId::fromRaw(900);
+            const auto driverId = NodeId::fromRaw(910);
+            const auto* definition = builtInNodeDefinitions().find(type, 1);
+            require(definition != nullptr, "combine definition exists");
+            std::vector<ParameterBinding> bindings;
+            ParameterId channel;
+            std::uint64_t next = 900;
+            for (const auto& parameter : definition->parameters) {
+                const auto id = ParameterId::fromRaw(next++);
+                require(composition->parameters().insert(
+                            {id, parameter.schemaKey, ConstantValueSource{parameter.defaultValue}}),
+                        "combine parameter is valid");
+                bindings.push_back({parameter.role, id});
+                if (parameter.role == "channel")
+                    channel = id;
+            }
+            require(graph.addNode({effectId, type, std::move(bindings), 1}),
+                    "combine node is accepted");
+            require(graph.eraseEdge(kFirstSourceEdge), "base source edge is removed");
+            require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
+                                   NodeInputRef{effectId, "input"}}), "base feeds combine");
+            require(graph.addEdge({EdgeId::fromRaw(900), {kSecondSolidNode, "image"},
+                                   NodeInputRef{effectId, mix ? "second" : "matte"}}),
+                    "second image feeds combine");
+            require(graph.addEdge({EdgeId::fromRaw(901), {effectId, "image"},
+                                   NodeInputRef{kFirstLayerNode,
+                                                std::string(kLayerOutputContentInputPort)}}),
+                    "combine feeds layer");
+            if (scenario == 1) {
+                attachValueDriver(project, driverId, ParameterId::fromRaw(910),
+                                  kIntegerValueNodeType, kIntegerValueParameterSchemaKey,
+                                  std::int64_t{4}, channel);
+            } else if (scenario == 2) {
+                require(graph.addNode({driverId, std::string(kFrameNumberNodeType), {},
+                                       kValueNodeSchemaVersion}), "frame driver is accepted");
+                require(composition->parameters().setSource(
+                            channel, DriverBindingSource{driverId, std::string(kResultPortName)}),
+                        "frame driver connects to matte channel");
+            } else if (scenario == 3) {
+                composition->nodeLayout().at(kSecondSolidNode).muted = true;
+            }
+            expectations.expect(project.validate().ok(), "combine document remains valid");
+            const auto result = compile(std::move(project), registry);
+            expectations.expect(result.plan != nullptr, "constant, linked and empty-matte combine compiles");
+            if (!result.plan)
+                continue;
+            const auto operation = std::ranges::find_if(result.plan->operations(),
+                [effectId](const auto& item) {
+                    const auto* effect = std::get_if<runtime::CompiledImageEffect>(&item);
+                    return effect && effect->sourceNodeId == effectId;
+                });
+            require(operation != result.plan->operations().end(), "combine operation exists");
+            const auto& effect = std::get<runtime::CompiledImageEffect>(*operation);
+            const auto& kernel = std::get<runtime::ImageCombineKernel>(effect.kernel);
+            expectations.expect(kernel.drivenChannel.has_value() == (scenario == 1 || scenario == 2),
+                                "linked matte channel retains its value output");
+            const auto index = runtime::OperationIndex::fromRaw(static_cast<std::size_t>(
+                std::distance(result.plan->operations().begin(), operation)));
+            expectations.expect(result.plan->operationTimeDependent(index) == (scenario == 2) &&
+                                    result.plan->operationTimeDependent(result.plan->output()) ==
+                                        (scenario == 2),
+                                "only a time-dependent matte channel invalidates downstream frames");
+            if (scenario == 3) {
+                const auto* empty = effect.secondaryInput
+                    ? std::get_if<runtime::CompiledMerge>(
+                          &result.plan->operations()[effect.secondaryInput->value()])
+                    : nullptr;
+                expectations.expect(empty && empty->entries.empty(),
+                                    "empty matte materializes a transparent image operation");
+            }
+        }
+    }
+}
