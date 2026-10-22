@@ -692,7 +692,7 @@ void testFileTransform() {
         if (!capturedAsset)
             throw std::logic_error("Missing LUT fixture asset");
         auto& captured = *capturedAsset;
-        captured.locator.path = renamed.string();
+        captured.locator.path = "same-bytes.spi1d";
         captured.locator.relinkHint = "file://" + renamed.string();
         const auto separatelyPrepared =
             context.prepare(differentFormat, requestFor(*source).colorIntent);
