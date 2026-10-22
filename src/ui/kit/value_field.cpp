@@ -99,7 +99,7 @@ QLineEdit#kValueFieldEditor {
     connect(editor_, &QLineEdit::textEdited, this, [this](const QString& text) {
         bool valid = false;
         const double value = text.toDouble(&valid);
-        if (editing_ && valid && std::isfinite(value))
+        if (editing_ && valid && std::isfinite(value) && value >= minimum_ && value <= maximum_)
             commitValue(value);
     });
 }
@@ -387,7 +387,10 @@ void KValueField::endEdit(const bool keep) {
     editing_ = false;
     bool parsed = false;
     const double entered = editor_->text().toDouble(&parsed);
-    const bool accept = keep && parsed && std::isfinite(entered);
+    // Text entry must never silently turn an out-of-domain number into a boundary value. Scrub
+    // and step gestures remain bounded, but an invalid typed edit rolls back to its starting value.
+    const bool accept =
+        keep && parsed && std::isfinite(entered) && entered >= minimum_ && entered <= maximum_;
     if (accept)
         commitValue(entered);
     editor_->hide();

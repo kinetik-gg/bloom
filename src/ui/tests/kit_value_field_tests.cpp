@@ -457,8 +457,11 @@ void testAClickEntersTextEditAndEscCancels(Expectations& expectations) {
     releaseAt(field, centre);
     expectations.expect(field.isEditing(), "a click with no travel enters text edit");
     expectations.expect(field.lineEdit()->isVisible(), "the text editor is actually shown");
-    expectations.expect(field.lineEdit()->selectedText() == QStringLiteral("20.0"),
-                        "entering text edit selects the whole number, got '" +
+    expectations.expect(field.displayedValue() == QStringLiteral("20.0") &&
+                            field.lineEdit()->selectedText() == field.lineEdit()->text() &&
+                            field.lineEdit()->text().toDouble() == field.value(),
+                        "entering text edit selects the exact numeric value while the resting "
+                        "display keeps its configured precision, got '" +
                             field.lineEdit()->selectedText().toStdString() + '\'');
     expectations.expect(field.borderToken() == kit::Color::Accent,
                         "an editing cell is active, so it wears the accent border");
@@ -500,6 +503,16 @@ void testAClickEntersTextEditAndEscCancels(Expectations& expectations) {
     QCoreApplication::processEvents();
     expectations.expect(field.value() == 13.5,
                         "unparseable text is refused the way Esc is, never silently zero");
+
+    pressAt(field, centre);
+    releaseAt(field, centre);
+    QSignalSpy rejected(&field, &kit::KValueField::editCancelled);
+    field.lineEdit()->setText(QStringLiteral("101"));
+    QKeyEvent outOfRange(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QCoreApplication::sendEvent(field.lineEdit(), &outOfRange);
+    QCoreApplication::processEvents();
+    expectations.expect(field.value() == 13.5 && rejected.count() == 1,
+                        "an out-of-range typed value is rejected, never silently clamped");
 }
 
 } // namespace

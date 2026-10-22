@@ -697,6 +697,10 @@ void testInNodeValueFieldsCommitThroughThePropertiesPath(Expectations& expectati
     }
     const auto positionId = positionParameter->id;
     const auto opacityId = opacityParameter->id;
+    constexpr double untouchedY = -1.2345678901234567e+40;
+    expectations.expect(fixture.session.setParameterComponentValue(
+                            positionId, document::AnimationComponent::Y, untouchedY),
+                        "the fixture can author a high-precision Y before editing X");
     const auto originalPosition = fixture.session.constantVec2Value(positionId);
     const auto originalOpacity = fixture.session.constantValue(opacityId);
     expectations.expect(originalPosition.has_value() && originalOpacity.has_value(),
@@ -716,9 +720,10 @@ void testInNodeValueFieldsCommitThroughThePropertiesPath(Expectations& expectati
                         "one field gesture produces exactly one committed snapshot -- the session "
                         "signal flow is intact and the edit is not split across commands");
     expectations.expect(fixture.session.constantVec2Value(positionId) == editedPosition,
-                        "an in-node X edit writes the canonical position parameter");
+                        "an in-node X edit writes the canonical position parameter without "
+                        "rounding its untouched Y component");
     expectations.expect(fixture.session.undoLabel() == QStringLiteral("Set Position"),
-                        "through PropertiesEditor's own \"Set Position\" command path");
+                        "the component command keeps the artist-facing \"Set Position\" label");
     // Task FIX2: the card names its OWN node as the write target rather than selecting itself
     // first, so an edit authors the card it is drawn on and leaves the selection exactly where the
     // artist put it -- here, still the layer the fixture added.
@@ -727,6 +732,21 @@ void testInNodeValueFieldsCommitThroughThePropertiesPath(Expectations& expectati
     expectations.expect(fixture.session.undo() &&
                             fixture.session.constantVec2Value(positionId) == originalPosition,
                         "ONE undo step reverts the whole in-node edit");
+
+    // The same field's text/scrub lifetime stages a session value edit before committing. That
+    // route must keep the component command's name and the exact sibling as well.
+    const bool staged = fixture.session.beginValueEdit(positionId, document::AnimationComponent::X);
+    const bool updated = staged && fixture.session.setParameterComponentValue(
+                                       positionId, document::AnimationComponent::X, 48.0);
+    const bool committed = updated && fixture.session.commitValueEdit();
+    expectations.expect(committed &&
+                            fixture.session.constantVec2Value(positionId) ==
+                                document::Vec2d{48.0, untouchedY} &&
+                            fixture.session.undoLabel() == QStringLiteral("Set Position"),
+                        "a finished component gesture is one named edit and leaves Y exact");
+    expectations.expect(fixture.session.undo() &&
+                            fixture.session.constantVec2Value(positionId) == originalPosition,
+                        "one undo also reverts the staged component gesture");
 
     // The field survived the snapshot change its own edit produced -- the reconciliation contract
     // that makes an in-node field usable at all (a rebuilt card would delete the widget mid-signal
@@ -796,6 +816,19 @@ void testInNodeTransformFieldsCommitThroughThePropertiesPath(Expectations& expec
     if (!anchorId.isValid() || !scaleId.isValid() || !rotationId.isValid()) {
         return;
     }
+    constexpr double untouchedAnchorY = 1.2345678901234567e+40;
+    constexpr double untouchedScaleX = 1.2345678901234567e+12;
+    expectations.expect(fixture.session.setParameterComponentValue(
+                            anchorId, document::AnimationComponent::Y, untouchedAnchorY) &&
+                            fixture.session.setParameterComponentValue(
+                                scaleId, document::AnimationComponent::X, untouchedScaleX),
+                        "the fixture can author high-precision sibling components");
+    const auto originalAnchor = fixture.session.constantVec2Value(anchorId);
+    const auto originalScale = fixture.session.constantVec2Value(scaleId);
+    if (!originalAnchor || !originalScale) {
+        expectations.expect(false, "the fixture retains both authored sibling components");
+        return;
+    }
 
     int snapshotSignals = 0;
     QObject::connect(&fixture.session, &ui::CompositionSession::snapshotChanged, &fixture.session,
@@ -804,20 +837,22 @@ void testInNodeTransformFieldsCommitThroughThePropertiesPath(Expectations& expec
     anchorX->setValue(-12.0);
     expectations.expect(snapshotSignals == 1 &&
                             fixture.session.constantVec2Value(anchorId) ==
-                                document::Vec2d{-12.0, 0.0} &&
+                                document::Vec2d{-12.0, untouchedAnchorY} &&
                             fixture.session.undoLabel() == QStringLiteral("Set Anchor"),
-                        "an in-card anchor edit is one \"Set Anchor\" command on the canonical "
-                        "parameter");
+                        "an in-card anchor edit is one \"Set Anchor\" command and preserves "
+                        "the untouched high-precision component");
     expectations.expect(fixture.session.undo() &&
-                            fixture.session.constantVec2Value(anchorId) == document::kDefaultAnchor,
+                            fixture.session.constantVec2Value(anchorId) == originalAnchor,
                         "and one undo step reverts it");
 
     scaleY->setValue(25.0);
-    expectations.expect(fixture.session.constantVec2Value(scaleId) == document::Vec2d{1.0, 0.25} &&
+    expectations.expect(fixture.session.constantVec2Value(scaleId) ==
+                                document::Vec2d{untouchedScaleX, 0.25} &&
                             fixture.session.undoLabel() == QStringLiteral("Set Scale"),
-                        "an in-card scale edit stores a unitless factor from its percentage");
+                        "an in-card scale edit stores a unitless factor from its percentage "
+                        "without changing the other component");
     expectations.expect(fixture.session.undo() &&
-                            fixture.session.constantVec2Value(scaleId) == document::kDefaultScale,
+                            fixture.session.constantVec2Value(scaleId) == originalScale,
                         "and one undo step reverts it");
 
     rotation->setValue(-135.0);

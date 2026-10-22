@@ -204,8 +204,13 @@ bool CompositionSession::commitValueEdit() {
     valueEdit_.reset();
     bool result = edit.revision == snapshot_.revision() && edit.time == currentTime_;
     if (result && edit.value != edit.base) {
-        commands::Transaction transaction(edit.text ? "Edit Text" : "Set Parameter", edit.revision);
         const auto* parameter = composition()->parameters().find(edit.parameter);
+        const auto label = edit.text
+                               ? QStringLiteral("Edit Text")
+                               : parameter ? componentCommandLabel(*parameter,
+                                                                   QStringLiteral("Set Parameter"))
+                                           : QStringLiteral("Set Parameter");
+        commands::Transaction transaction(label.toStdString(), edit.revision);
         if (edit.component && parameter &&
             std::holds_alternative<document::AnimationCurveSource>(parameter->source)) {
             transaction.emplace<commands::SetKeyframeAtTimeForParameterComponent>(

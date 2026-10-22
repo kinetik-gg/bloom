@@ -35,6 +35,18 @@
 namespace bloom::ui {
 namespace {
 double* editedComponent(document::ParameterValue& value, document::AnimationComponent component);
+
+// Component writes address a ParameterId so the untouched axes come from document truth. Recover
+// the artist-facing command name from that parameter's schema, for both direct writes and gestures.
+QString componentCommandLabel(const document::ParameterRecord& parameter, const QString& fallback) {
+    if (parameter.schemaKey == document::kPositionParameterSchemaKey)
+        return QStringLiteral("Set Position");
+    if (parameter.schemaKey == document::kAnchorParameterSchemaKey)
+        return QStringLiteral("Set Anchor");
+    if (parameter.schemaKey == document::kScaleParameterSchemaKey)
+        return QStringLiteral("Set Scale");
+    return fallback;
+}
 }
 
 struct SessionColorConverterState final {
@@ -1394,12 +1406,15 @@ bool CompositionSession::setParameterComponentValue(const document::ParameterId 
             },
             updated);
         if (valid)
-            return setParameterValue(parameterId, std::move(updated),
-                                     QStringLiteral("Set Component"));
+            return setParameterValue(
+                parameterId, std::move(updated),
+                componentCommandLabel(*parameter, QStringLiteral("Set Component")));
         reportUnavailable(QStringLiteral("This component does not belong to the parameter"));
         return false;
     }
-    commands::Transaction transaction("Set Component", snapshot_.revision());
+    commands::Transaction transaction(
+        componentCommandLabel(*parameter, QStringLiteral("Set Component")).toStdString(),
+        snapshot_.revision());
     transaction.emplace<commands::SetKeyframeAtTimeForParameterComponent>(
         compositionId_, parameterId, component, currentTime_, value);
     return execute(std::move(transaction));
