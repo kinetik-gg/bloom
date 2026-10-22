@@ -169,10 +169,10 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
         if (elapsed < static_cast<long double>(std::numeric_limits<std::int64_t>::min()) ||
             elapsed > static_cast<long double>(std::numeric_limits<std::int64_t>::max()))
             return selected;
-        const auto length = asset.manifest.last - asset.manifest.first + 1;
-        auto offset = static_cast<std::int64_t>(elapsed);
-        if (offset < 0)
-            offset = 0;
+        const auto length = static_cast<std::uint64_t>(asset.manifest.last) -
+                            static_cast<std::uint64_t>(asset.manifest.first) + 1;
+        const auto signedOffset = static_cast<std::int64_t>(elapsed);
+        std::uint64_t offset = signedOffset < 0 ? 0 : static_cast<std::uint64_t>(signedOffset);
         else if (source.loopMode == 1)
             offset %= length;
         else if (source.loopMode == 2 && length > 1) {
@@ -182,7 +182,8 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
                 offset = period - offset;
         } else
             offset = std::min(offset, length - 1);
-        const auto wanted = asset.manifest.first + offset;
+        const auto wanted =
+            static_cast<std::int64_t>(static_cast<std::uint64_t>(asset.manifest.first) + offset);
         auto found = std::ranges::upper_bound(asset.manifest.members, wanted, {},
                                               &document::AssetSequenceMember::frame);
         if (found != asset.manifest.members.begin())

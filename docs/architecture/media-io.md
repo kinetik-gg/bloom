@@ -50,7 +50,7 @@ Platforms without the process backend expose an unavailable preset with its reas
 | Pixel count | codec sample-count limits; no fixed image ceiling |
 | Decoder allocator live bytes | thread-local, scoped to the request pixel budget (default 256 MiB) |
 | Float image storage | admitted against the request pixel budget (default 256 MiB), including bounded decode scratch |
-| Directory entries and sequence span | 100,000 each |
+| Sequence matching members | 100,000; unrelated directory entries and frame-number span have no fixed cap |
 | Decoded image LRU | 1 GiB per evaluator cache |
 | UI thumbnail cache | 512 RGBA8 images, at most 64 × 64 (8 MiB) |
 
@@ -59,6 +59,11 @@ between file chunks, before and after stb, and during conversion/proxy rows; an 
 call is cooperatively cancellable only after it returns. Import and relink preparation and
 thumbnail work use the blocking-I/O task executor, with Jobs progress, diagnostics and Cancel.
 Publication checks the originating project/revision and discards work after project replacement.
+Sequence scanning checks cancellation while enumerating files and hashes only matching image
+members. Missing intervals in sparse spans are derived from adjacent sorted member numbers, so
+large numeric holes do not allocate one record per absent frame. Spans under 100,000 retain their
+legacy enumerated `gaps` encoding for compatibility with older project readers. Older binaries
+cannot open a newly admitted wider-span sequence, which their own validation already rejected.
 The evaluator decodes only on worker execution; UI paint reads cached thumbnails.
 
 The same C++ decoder, filesystem paths and Qt dialogs/drop events serve Linux, macOS and Windows.

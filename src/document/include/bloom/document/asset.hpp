@@ -60,6 +60,17 @@ struct AssetSequenceManifest {
     std::int64_t last = 0;
     std::vector<AssetSequenceMember> members;
     std::vector<std::int64_t> gaps;
+    [[nodiscard]] bool hasGaps() const noexcept {
+        if (!gaps.empty())
+            return true;
+        for (std::size_t index = 1; index < members.size(); ++index)
+            if (members[index].frame > members[index - 1].frame &&
+                static_cast<std::uint64_t>(members[index].frame) -
+                        static_cast<std::uint64_t>(members[index - 1].frame) >
+                    1)
+                return true;
+        return false;
+    }
     friend bool operator==(const AssetSequenceManifest&, const AssetSequenceManifest&) = default;
 };
 struct AssetFolder {

@@ -33,7 +33,8 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
             selected.warning = "Sequence time is outside the supported range";
             return selected;
         }
-        const auto length = asset.manifest.last - asset.manifest.first + 1;
+        const auto length = static_cast<std::uint64_t>(asset.manifest.last) -
+                            static_cast<std::uint64_t>(asset.manifest.first) + 1;
         // Long-double subtraction avoids signed overflow even for hostile hand-built plans.
         const auto elapsed =
             static_cast<long double>(*frame) - static_cast<long double>(source.startFrame);
@@ -42,9 +43,8 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
             selected.warning = "Sequence time exceeds the frame range";
             return selected;
         }
-        auto offset = static_cast<std::int64_t>(elapsed);
-        if (offset < 0)
-            offset = 0;
+        const auto signedOffset = static_cast<std::int64_t>(elapsed);
+        std::uint64_t offset = signedOffset < 0 ? 0 : static_cast<std::uint64_t>(signedOffset);
         else if (source.loopMode == 1)
             offset %= length;
         else if (source.loopMode == 2 && length > 1) {
@@ -54,7 +54,8 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
                 offset = period - offset;
         } else
             offset = std::min(offset, length - 1);
-        const auto wanted = asset.manifest.first + offset;
+        const auto wanted =
+            static_cast<std::int64_t>(static_cast<std::uint64_t>(asset.manifest.first) + offset);
         auto found = std::ranges::upper_bound(asset.manifest.members, wanted, {},
                                               &document::AssetSequenceMember::frame);
         if (found != asset.manifest.members.begin())
@@ -62,7 +63,7 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
         locator = &found->locator;
         selected.digest = found->contentDigest;
         memberFrame = found->frame;
-        if (!asset.manifest.gaps.empty())
+        if (asset.manifest.hasGaps())
             selected.warning = "Sequence gaps hold the preceding frame";
     }
     OperationKey revisionKey;

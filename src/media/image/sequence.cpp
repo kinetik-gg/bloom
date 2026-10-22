@@ -74,12 +74,12 @@ ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
                 return {{}, "Sequence directory enumeration failed"};
             if (cancel && cancel())
                 return {{}, {}, true};
-            if (++count > kMaxSequenceEntries)
-                return {{}, "Sequence directory exceeds 100000 entries"};
             const auto candidate = numberedName(iterator->path());
             if (!candidate || candidate->prefix != name->prefix ||
                 candidate->suffix != name->suffix || candidate->extension != name->extension)
                 continue;
+            if (++count > kMaxSequenceEntries)
+                return {{}, "Sequence exceeds 100000 matching members"};
             // Mixed padding stays in the sequence: the number is what identifies a frame, the
             // padding is only how it was written. It is reported once so the artist knows.
             if (candidate->padding != name->padding && !mixedPadding) {
@@ -101,14 +101,24 @@ ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
             return {{}, "Selected sequence member is missing"};
         manifest.first = manifest.members.front().frame;
         manifest.last = manifest.members.back().frame;
-        if (manifest.last - manifest.first >= static_cast<std::int64_t>(kMaxSequenceEntries))
-            return {{}, "Sequence span exceeds 100000 frames"};
+        // Keep the legacy per-frame encoding for spans older readers already accepted. A
+        // sparse, wider span uses the sorted members as its compact gap intervals instead.
+        const auto legacyGapList =
+            static_cast<std::uint64_t>(manifest.last) - static_cast<std::uint64_t>(manifest.first) <
+            kMaxSequenceEntries;
         for (std::size_t index = 1; index < manifest.members.size(); ++index) {
-            for (auto frame = manifest.members[index - 1].frame + 1;
-                 frame < manifest.members[index].frame; ++frame)
-                manifest.gaps.push_back(frame);
+            if (manifest.members[index].frame == manifest.members[index - 1].frame)
+                return {{}, "Sequence has duplicate frame numbers"};
+            if (legacyGapList) {
+                for (auto frame = manifest.members[index - 1].frame + 1;
+                     frame < manifest.members[index].frame; ++frame) {
+                    if (cancel && cancel())
+                        return {{}, {}, true};
+                    manifest.gaps.push_back(frame);
+                }
+            }
         }
-        if (!manifest.gaps.empty())
+        if (manifest.hasGaps())
             manifest.diagnostics.emplace_back("Sequence gaps hold the preceding frame");
         return {std::move(manifest), {}};
     } catch (const std::exception&) {

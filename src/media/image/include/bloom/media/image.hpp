@@ -19,6 +19,7 @@ namespace bloom::media {
 // caller-supplied pixelBudget; there is no separate absolute byte, pixel, or dimension ceiling.
 // Geometry is bounded only by the codec's own representable window and by overflow/index checks.
 inline constexpr std::size_t kMaxImageStorageBytes = 268435456;
+// Bounds retained member metadata, not unrelated files in the directory or frame-number span.
 inline constexpr std::size_t kMaxSequenceEntries = 100000;
 using CancelImageWork = std::function<bool()>;
 using ImageProgress = std::function<void(std::uint64_t, std::uint64_t)>;
@@ -185,6 +186,19 @@ struct SequenceManifest {
     std::vector<SequenceMember> members;
     std::vector<std::int64_t> gaps;
     std::vector<std::string> diagnostics;
+    // Missing intervals are implicit between adjacent sorted members. `gaps` remains for
+    // compatibility with older manifests that enumerated every missing frame.
+    [[nodiscard]] bool hasGaps() const noexcept {
+        if (!gaps.empty())
+            return true;
+        for (std::size_t index = 1; index < members.size(); ++index)
+            if (members[index].frame > members[index - 1].frame &&
+                static_cast<std::uint64_t>(members[index].frame) -
+                        static_cast<std::uint64_t>(members[index - 1].frame) >
+                    1)
+                return true;
+        return false;
+    }
 };
 // Worker-only locator resolution: prefer the project-relative file; use the absolute relink
 // hint when that file is unavailable (including an unsaved project's first Save As).

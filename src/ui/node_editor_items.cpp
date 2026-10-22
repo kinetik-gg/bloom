@@ -513,7 +513,7 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
     if ((imageSource_ || audioSource_) && session_) {
         const auto* asset = session_->snapshot().project().findAsset(imageAsset_);
         const auto* controller = session_->assetController();
-        if (!asset || !asset->manifest.gaps.empty() ||
+        if (!asset || asset->manifest.hasGaps() ||
             (controller && controller->missing(imageAsset_))) {
             const auto warning =
                 kit::iconPixmap(kit::IconId::Warning, kit::Size::IconSmall, kit::Color::Warn);

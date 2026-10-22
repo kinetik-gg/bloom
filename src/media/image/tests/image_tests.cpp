@@ -19,6 +19,7 @@
 #include <cstring>
 #include <fstream>
 #include <future>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -472,6 +473,16 @@ int main() {
                          sequence.value->gaps == std::vector<std::int64_t>{2} &&
                          sequence.value->padding == 4,
                      "sequence form detects members, padding and gap");
+    }
+    {
+        png(scratch.file("sparse.0.png"));
+        png(scratch.file("sparse.9223372036854775807.png"));
+        const auto sequence = media::scanSequence(scratch.file("sparse.0.png"));
+        check.expect(
+            sequence.value.has_value() && sequence.value->members.size() == 2 &&
+                sequence.value->last == std::numeric_limits<std::int64_t>::max() &&
+                sequence.value->gaps.empty() && sequence.value->hasGaps(),
+            "sparse sequence span is represented by adjacent members without gap allocation");
     }
     {
         exr(scratch.file("plates.0001.exr"), false, Imf::HALF);

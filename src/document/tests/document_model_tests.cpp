@@ -1,6 +1,7 @@
 #include <bloom/core/color.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/asset.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/graph.hpp>
@@ -89,6 +90,29 @@ class ExpectationContext final {
   private:
     std::size_t failures_ = 0;
 };
+
+void testSparseSequenceManifest(ExpectationContext& expectations) {
+    using namespace bloom::document;
+    AssetRecord asset;
+    asset.id = AssetId::fromRaw(1);
+    asset.kind = AssetKind::Sequence;
+    asset.locator.path = "sparse.0.png";
+    asset.locator.relinkHint = "file:///sparse.0.png";
+    asset.width = 1;
+    asset.height = 1;
+    asset.manifest.pattern = "sparse.#.png";
+    asset.manifest.padding = 1;
+    asset.manifest.first = 0;
+    asset.manifest.last = std::numeric_limits<std::int64_t>::max();
+    asset.manifest.members.push_back({0, asset.locator, {}});
+    auto lastLocator = asset.locator;
+    lastLocator.path = "sparse.9223372036854775807.png";
+    asset.manifest.members.push_back({asset.manifest.last, lastLocator, {}});
+    expectations.expect(asset.manifest.hasGaps() && asset.validate().ok(),
+                        "sparse sequence validates without enumerating missing frames");
+    asset.manifest.gaps.push_back(1);
+    expectations.expect(!asset.validate().ok(), "partial legacy gap enumeration is refused");
+}
 
 template <typename Id> [[nodiscard]] constexpr Id id(const std::uint64_t value) noexcept {
     return Id::fromRaw(value);
@@ -833,6 +857,7 @@ void testLayerParenting(ExpectationContext& expectations) {
 
 int main() try {
     ExpectationContext expectations;
+    testSparseSequenceManifest(expectations);
     testLayerParenting(expectations);
     testMultipleMerges(expectations);
     testRationalTime(expectations);

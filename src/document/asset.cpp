@@ -147,14 +147,13 @@ ValidationResult AssetRecord::validate() const {
                        "A single media file has no sequence manifest");
     } else if (kind == AssetKind::Sequence) {
         if (manifest.members.size() < 2 || manifest.members.size() > 100000 || manifest.first < 0 ||
-            manifest.last < manifest.first || manifest.last - manifest.first >= 100000 ||
-            manifest.padding == 0 || manifest.padding > 255 || manifest.pattern.size() > 4096 ||
-            manifest.pattern.empty()) {
+            manifest.last < manifest.first || manifest.padding == 0 || manifest.padding > 255 ||
+            manifest.pattern.size() > 4096 || manifest.pattern.empty()) {
             result.add(ValidationCode::InvalidValue, "manifest", "Invalid sequence range");
             return result;
         }
         std::int64_t previous = manifest.first - 1;
-        std::vector<std::int64_t> gaps;
+        std::size_t gapIndex = 0;
         for (const auto& member : manifest.members) {
             if (member.frame <= previous || member.frame > manifest.last ||
                 !validLocator(member.locator)) {
@@ -162,12 +161,33 @@ ValidationResult AssetRecord::validate() const {
                            "Invalid sequence member order or locator");
                 return result;
             }
-            for (auto frame = previous + 1; frame < member.frame; ++frame)
-                gaps.push_back(frame);
+            if (!manifest.gaps.empty()) {
+                const auto missing = static_cast<std::uint64_t>(member.frame) -
+                                     static_cast<std::uint64_t>(previous) - 1;
+                if (missing > manifest.gaps.size() - gapIndex) {
+                    result.add(ValidationCode::InvalidValue, "manifest.gaps",
+                               "Sequence gaps disagree with members");
+                    return result;
+                }
+                for (std::uint64_t index = 0; index < missing; ++index)
+                    if (manifest.gaps[gapIndex++] !=
+                        previous + 1 + static_cast<std::int64_t>(index)) {
+                        result.add(ValidationCode::InvalidValue, "manifest.gaps",
+                                   "Sequence gaps disagree with members");
+                        return result;
+                    }
+            }
             previous = member.frame;
         }
+        if (manifest.gaps.empty() && manifest.hasGaps() &&
+            static_cast<std::uint64_t>(manifest.last) - static_cast<std::uint64_t>(manifest.first) <
+                100000) {
+            result.add(ValidationCode::InvalidValue, "manifest.gaps",
+                       "Sequence gaps disagree with members");
+            return result;
+        }
         if (manifest.members.front().frame != manifest.first || previous != manifest.last ||
-            gaps != manifest.gaps)
+            gapIndex != manifest.gaps.size())
             result.add(ValidationCode::InvalidValue, "manifest.gaps",
                        "Sequence gaps disagree with members");
     } else if (kind == AssetKind::Audio) {
