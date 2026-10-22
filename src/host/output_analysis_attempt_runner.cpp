@@ -521,7 +521,12 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                      .target = resolved->target,
                      .display = resolved->color.display,
                      .gpuDisplay = std::move(gpuDisplay),
-                     .processingPolicy = processingPolicy},
+                     .processingPolicy = processingPolicy,
+                     .capacityRefresh =
+                         [provider = gpuProvider](const runtime::CancellationToken& cancellation) {
+                             if (provider)
+                                 provider->refreshProcessingCapacity(cancellation);
+                         }},
                     *ledger);
                 if (!buildResult) {
                     return runtime::TaskResult<BuildOutcomeV1>::succeeded(
