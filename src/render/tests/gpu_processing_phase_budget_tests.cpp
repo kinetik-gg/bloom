@@ -149,7 +149,7 @@ void sizingAndLifetime() {
             "held device claims refuse a second phase that would overcommit");
     first.lease.reset();
     held = concurrent.reserve(fitting);
-    require(held.lease, "retired claims restore paired admission");
+    require(held.lease != nullptr, "retired claims restore paired admission");
     held.lease.reset();
     const auto max = std::numeric_limits<std::uint64_t>::max();
     budget.setHostCapacity(max, true);

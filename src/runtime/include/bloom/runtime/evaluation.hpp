@@ -112,7 +112,7 @@ struct EvaluationRequest final {
     // Optional final-output ownership for a CPU export. Intermediate reference images keep their
     // normal allocation path; only the completed process image is copied into this rooted phase
     // before publication. It affects storage ownership, never pixel or cache identity.
-    std::shared_ptr<render::GpuProcessingPhaseLease> finalOutputPhase;
+    std::shared_ptr<render::GpuProcessingPhaseLease> finalOutputPhase = nullptr;
 };
 
 // This deliberately retains the complete immutable plan. Exact deep equality is the conservative

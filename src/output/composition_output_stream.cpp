@@ -113,18 +113,20 @@ struct CompositionOutputStreamV1::State {
                                 *frames <= std::numeric_limits<std::uint64_t>::max() /
                                                stream->channelLayout.size(),
                             "Audio source sample count is not representable", Error::Oversized);
-                    const auto samples = *frames * stream->channelLayout.size();
-                    require(samples <= std::numeric_limits<std::size_t>::max() / sizeof(float),
+                    const auto decodedSampleCount = *frames * stream->channelLayout.size();
+                    require(decodedSampleCount <=
+                                std::numeric_limits<std::size_t>::max() / sizeof(float),
                             "Audio source exceeds addressable sample storage", Error::Oversized);
                     const auto metadata = sizeof(media::audio::AudioBuffer) +
                                           stream->channelLayout.size() * sizeof(std::vector<float>);
-                    require(samples <= (std::numeric_limits<std::uint64_t>::max() - metadata) /
-                                           sizeof(float),
+                    require(decodedSampleCount <=
+                                (std::numeric_limits<std::uint64_t>::max() - metadata) /
+                                    sizeof(float),
                             "Audio source byte count overflows", Error::Oversized);
                     const auto scratchSamples =
                         std::min<std::uint64_t>(*frames, media::provider::Limits::audioSamples) *
                         stream->channelLayout.size();
-                    const auto retained = samples * sizeof(float) + metadata;
+                    const auto retained = decodedSampleCount * sizeof(float) + metadata;
                     require(scratchSamples <=
                                 (std::numeric_limits<std::uint64_t>::max() - retained) /
                                     sizeof(float),
@@ -136,8 +138,8 @@ struct CompositionOutputStreamV1::State {
                     require(queueReservation->expand(queueReservation->chargedBytes() + total) ==
                                 output::ExportResourceAdmissionStatusV1::Reserved,
                             "Audio decode ledger reservation refused", Error::Oversized);
-                    auto buffer =
-                        checked(media::video::decodeAudioClip(decoder, probe, samples, cancel));
+                    auto buffer = checked(
+                        media::video::decodeAudioClip(decoder, probe, decodedSampleCount, cancel));
                     found = audioBuffers
                                 .emplace(description.assetId,
                                          std::make_shared<const media::audio::AudioBuffer>(
