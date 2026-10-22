@@ -1,6 +1,5 @@
 #include "zip_container_preflight.hpp"
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -35,15 +34,6 @@ constexpr std::string_view kDocumentName = "document.json";
         return false;
     }
     result = left + right;
-    return true;
-}
-
-[[nodiscard]] constexpr bool checkedMul(const std::uint64_t left, const std::uint64_t right,
-                                        std::uint64_t& result) noexcept {
-    if (left != 0 && right > std::numeric_limits<std::uint64_t>::max() / left) {
-        return false;
-    }
-    result = left * right;
     return true;
 }
 
@@ -102,8 +92,7 @@ class Scanner final {
   private:
     [[nodiscard]] bool limitsAreValid() const noexcept {
         return limits_.maxArchiveBytes != 0 && limits_.maxManifestBytes != 0 &&
-               limits_.maxDocumentBytes != 0 && limits_.maxTotalExpandedBytes != 0 &&
-               limits_.maxExpansionRatio != 0;
+               limits_.maxDocumentBytes != 0 && limits_.maxTotalExpandedBytes != 0;
     }
 
     [[nodiscard]] std::uint16_t readU16(const std::uint64_t offset) const noexcept {
@@ -168,7 +157,6 @@ class Scanner final {
     [[nodiscard]] bool checkAgreement(const LocalHeader& local, const CentralEntry& central,
                                       std::uint64_t expectedLocalOffset) noexcept;
     [[nodiscard]] bool checkAttributes(const CentralEntry& central) noexcept;
-    [[nodiscard]] bool checkRatio(const ZipContainerPreflightEntry& entry) noexcept;
     [[nodiscard]] bool checkLimits(const ZipContainerPreflightEntry& manifest,
                                    const ZipContainerPreflightEntry& document) noexcept;
 
@@ -452,20 +440,6 @@ bool Scanner::checkAttributes(const CentralEntry& central) noexcept {
     return true;
 }
 
-bool Scanner::checkRatio(const ZipContainerPreflightEntry& entry) noexcept {
-    const auto denominator = std::max<std::uint64_t>(1, entry.compressedSize);
-    std::uint64_t allowedMaximum = 0;
-    if (!checkedMul(limits_.maxExpansionRatio, denominator, allowedMaximum)) {
-        setError(ZipContainerPreflightError::SizeOverflow, entry.localHeaderOffset);
-        return false;
-    }
-    if (entry.uncompressedSize > allowedMaximum) {
-        setError(ZipContainerPreflightError::ExpansionRatioExceeded, entry.localHeaderOffset);
-        return false;
-    }
-    return true;
-}
-
 bool Scanner::checkLimits(const ZipContainerPreflightEntry& manifest,
                           const ZipContainerPreflightEntry& document) noexcept {
     if (manifest.uncompressedSize > limits_.maxManifestBytes) {
@@ -483,12 +457,6 @@ bool Scanner::checkLimits(const ZipContainerPreflightEntry& manifest,
     }
     if (total > limits_.maxTotalExpandedBytes) {
         setError(ZipContainerPreflightError::ExpandedSizeLimitExceeded, 0);
-        return false;
-    }
-    if (!checkRatio(manifest)) {
-        return false;
-    }
-    if (!checkRatio(document)) {
         return false;
     }
     return true;

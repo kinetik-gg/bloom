@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
-#include <limits>
 #include <source_location>
 #include <span>
 #include <string>
@@ -522,6 +521,17 @@ void testLimitsExceeded(Expectations& expectations) {
                             "a per-entry manifest size above its limit is rejected");
     }
     {
+        auto manifest = makeDeflateEntry("manifest.json", toBytes(std::string(10, 'a')));
+        manifest.localUncompressedSize = manifest.centralUncompressedSize = 1'048'577;
+        const auto archive = buildConformingArchive(manifest, documentEntry());
+        const auto result = run(archive);
+        expectations.expect(!result.succeeded() &&
+                                result.error ==
+                                    ZipContainerPreflightError::ExpandedSizeLimitExceeded,
+                            "a tiny deflate stream declaring more than the manifest cap is "
+                            "rejected before extraction");
+    }
+    {
         ZipContainerPreflightLimits limits{};
         limits.maxDocumentBytes = 3;
         const auto archive = buildConformingArchive(manifestEntry(), documentEntry("{\"d\":1}"));
@@ -542,31 +552,16 @@ void testLimitsExceeded(Expectations& expectations) {
                 result.error == ZipContainerPreflightError::ExpandedSizeLimitExceeded,
             "a total expanded size above its limit is rejected even when each entry alone fits");
     }
-    {
-        // A tiny deflate payload whose declared (but not actually inflated -- preflight never
-        // decompresses) uncompressed size claims far more than maxExpansionRatio permits for its
-        // real compressed size.
-        auto manifest = makeDeflateEntry("manifest.json", toBytes(std::string(10, 'a')));
-        manifest.localUncompressedSize = manifest.centralUncompressedSize = 1'000'000;
-        const ZipContainerPreflightLimits limits{};
-        const auto archive = buildConformingArchive(manifest, documentEntry());
-        const auto result = run(archive, limits);
-        expectations.expect(!result.succeeded() &&
-                                result.error == ZipContainerPreflightError::ExpansionRatioExceeded,
-                            "an expansion ratio above its limit is rejected");
-    }
 }
 
-void testSizeOverflow(Expectations& expectations) {
-    ZipContainerPreflightLimits limits{};
-    limits.maxExpansionRatio = std::numeric_limits<std::uint64_t>::max();
-    auto manifest = manifestEntry("{\"m\":1}"); // compressed size 7, so ratio*7 overflows uint64.
+void testHighCompressionIsStructurallyAccepted(Expectations& expectations) {
+    const auto manifest = makeDeflateEntry("manifest.json", toBytes(std::string(1'000'000, 'a')));
     const auto archive = buildConformingArchive(manifest, documentEntry());
-    const auto result = run(archive, limits);
+    const auto result = run(archive);
     expectations.expect(
-        !result.succeeded() && result.error == ZipContainerPreflightError::SizeOverflow,
-        "an expansion-ratio multiply that overflows uint64 is reported as size overflow, "
-        "never a wrapped smaller number");
+        result.succeeded() && result.manifest.method == 8 &&
+            result.manifest.compressedSize * 1000ULL < result.manifest.uncompressedSize,
+        "a high-ratio method-8 entry within its expanded-size cap passes preflight");
 }
 
 } // namespace
@@ -593,7 +588,7 @@ int main() {
         testAttributes(expectations);
         testStoredSizeMismatch(expectations);
         testLimitsExceeded(expectations);
-        testSizeOverflow(expectations);
+        testHighCompressionIsStructurallyAccepted(expectations);
     } catch (const std::exception& error) {
         std::cerr << "FAILED: test fixture exception: " << error.what() << '\n';
         return 1;

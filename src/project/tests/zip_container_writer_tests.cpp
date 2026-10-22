@@ -282,8 +282,7 @@ void testRoundTripStored(Expectations& expectations) {
 }
 
 void testRoundTripDeflate(Expectations& expectations) {
-    // Moderately compressible JSON-shaped text: deflate shrinks it well under the 1000:1 ceiling,
-    // so this exercises the ordinary (non-fallback) deflate path.
+    // Moderately compressible JSON-shaped text exercises the deflate path.
     std::string payload;
     payload.reserve(6000);
     for (int index = 0; index < 200; ++index) {
@@ -364,24 +363,43 @@ void testStoredFallbackIncompressiblePayload(Expectations& expectations) {
         "the incompressible-manifest archive is accepted by the reader");
 }
 
-void testStoredFallbackHyperCompressiblePayload(Expectations& expectations) {
-    // Trigger (b): 2 MiB of one repeated byte deflates far below the 1000:1 ceiling, so the
-    // document entry stores instead even though deflate would shrink it. Placed in the document
-    // entry because the default manifest cap (1 MiB) is smaller than this payload.
+void testHighCompressionRoundTrip(Expectations& expectations) {
+    // The document cap permits a payload large enough to shrink by far more than 1000:1.
     const std::string manifest = "{}";
     const std::vector<std::byte> document(2ULL * 1024 * 1024, std::byte{'A'});
-    expectStoredFallback(
-        expectations, toBytes(manifest), asSpan(document), /*expectManifestStored=*/false,
-        /*expectDocumentStored=*/true,
-        "an archive with a hyper-compressible document payload is written",
-        "the hyper-compressible document chose stored (method 0) because deflate would exceed "
-        "the expansion-ratio ceiling",
-        "the hyper-compressible-document archive is accepted by the reader");
+    auto writeResult = writeZipContainer(toBytes(manifest), asSpan(document), ZipContainerLimits{},
+                                         makeOperation());
+    expectations.expect(static_cast<bool>(writeResult),
+                        "a highly compressible document archive is written");
+    if (!writeResult || writeResult.archive() == nullptr) {
+        return;
+    }
+    const auto archiveBytes = writeResult.archive()->bytes();
+    const auto preflight = preflightZipContainer(archiveBytes, ZipContainerPreflightLimits{});
+    expectations.expect(preflight.succeeded() && preflight.document.method == 8 &&
+                            preflight.document.compressedSize * 1000ULL < document.size(),
+                        "the writer uses method 8 with compressed bytes far below the original");
+    auto readResult = readZipContainer(archiveBytes, ZipContainerLimits{}, makeOperation());
+    expectations.expect(static_cast<bool>(readResult) && readResult.document() != nullptr,
+                        "the high-ratio archive is accepted by the reader");
+    if (readResult && readResult.document() != nullptr) {
+        const auto expanded = readResult.document()->documentBytes();
+        expectations.expect(
+            std::equal(expanded.begin(), expanded.end(), document.begin(), document.end()),
+            "the highly compressible document round-trips byte-exact");
+    }
+    const auto constrainedOperation = makeOperation(5ULL << 20U);
+    auto refusedRead = readZipContainer(archiveBytes, ZipContainerLimits{}, constrainedOperation);
+    expectations.expect(
+        !refusedRead && refusedRead.error() == bloom::project::ZipContainerError::ResourceExhausted,
+        "the expanded buffer of a high-ratio entry still needs a charged allocation");
+    expectations.expect(constrainedOperation.snapshot().currentBytes == 0,
+                        "allocation refusal releases the high-ratio read operation's charges");
 }
 
 void testRefusalInvalidLimits(Expectations& expectations) {
     ZipContainerLimits limits{};
-    limits.maxExpansionRatio = 0;
+    limits.maxTotalExpandedBytes = 0;
     auto result = writeZipContainer(toBytes("{}"), toBytes("{}"), limits, makeOperation());
     expectations.expect(!result && result.error() == ZipContainerWriteError::InvalidLimits,
                         "a zeroed limit field is rejected before any work begins");
@@ -490,7 +508,7 @@ int main() {
         testRoundTripMixed(expectations);
         testRoundTripEmptyPayload(expectations);
         testStoredFallbackIncompressiblePayload(expectations);
-        testStoredFallbackHyperCompressiblePayload(expectations);
+        testHighCompressionRoundTrip(expectations);
         testRefusalInvalidLimits(expectations);
         testRefusalEntrySizeLimitExceeded(expectations);
         testRefusalTotalExpandedLimitExceeded(expectations);

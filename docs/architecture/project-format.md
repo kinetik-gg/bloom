@@ -172,8 +172,10 @@ The accepted reader profile is deliberately smaller than general ZIP:
 
 The writer emits no comments, descriptors, extra fields, encryption, ZIP64, or platform-dependent
 paths. It writes manifest then document, uses the DOS epoch `1980-01-01 00:00:00`, declares regular
-mode `0644` without executable bits, and uses deflate level 6. If deflate would not reduce an entry
-or would exceed the permitted expansion ratio, the writer stores that entry instead. Exact whole
+mode `0644` without executable bits, and uses deflate level 6. If deflate would not reduce an entry,
+the writer stores that entry instead. Older Bloom readers that enforce the former `1000:1` expansion
+ratio may reject newly written, highly compressible projects and need an update. Existing stored and
+deflated projects remain readable by the current reader. Exact whole
 archive bytes are not a compatibility promise because a qualified compression implementation may
 change; decoded semantics and the uncompressed JSON bytes are deterministic.
 
@@ -190,7 +192,6 @@ and during streaming otherwise.
 | expanded `manifest.json` | 1 MiB (`1048576` bytes) |
 | expanded `document.json` | 256 MiB (`268435456` bytes) |
 | total expanded bytes | 257 MiB (`269484032` bytes) |
-| expanded/compressed ratio per entry | `1000:1`, using `max(1, compressedSize)` |
 | JSON nesting depth, root included | `128` |
 | JSON values across both entries | `4000000` |
 | elements in one array or members in one object | `1000000` |

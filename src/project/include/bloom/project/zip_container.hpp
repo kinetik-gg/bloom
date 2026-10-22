@@ -36,7 +36,6 @@ struct ZipContainerLimits final {
     std::uint64_t maxManifestBytes = 1048576;        // 1 MiB expanded
     std::uint64_t maxDocumentBytes = 268435456;      // 256 MiB expanded
     std::uint64_t maxTotalExpandedBytes = 269484032; // 257 MiB expanded total
-    std::uint64_t maxExpansionRatio = 1000;          // per entry, max(1, compressedSize)
 };
 
 enum class ZipContainerError : std::uint8_t {
@@ -61,7 +60,6 @@ enum class ZipContainerError : std::uint8_t {
     NonRegularEntry,
     ExecutableEntry,
     ExpandedSizeLimitExceeded,
-    ExpansionRatioExceeded,
     StoredSizeMismatch,
     // The fully expanded byte count of an entry, measured while streaming it out of the qualified
     // reader, did not equal its declared uncompressed size -- including a stream that keeps

@@ -89,20 +89,11 @@ constexpr std::uint64_t kQualifiedWriterWorkingReservationBytes = 4ULL << 20U;
     return true;
 }
 
-[[nodiscard]] constexpr bool checkedMul(const std::uint64_t left, const std::uint64_t right,
-                                        std::uint64_t& result) noexcept {
-    if (left != 0 && right > std::numeric_limits<std::uint64_t>::max() / left) {
-        return false;
-    }
-    result = left * right;
-    return true;
-}
-
 [[nodiscard]] std::span<const std::byte> nameBytes(const std::string_view name) noexcept {
     return {reinterpret_cast<const std::byte*>(name.data()), name.size()};
 }
 
-// One entry's fully resolved on-disk representation: the method the stored-fallback rule chose,
+// One entry's fully resolved on-disk representation: the chosen compression method,
 // the payload's CRC-32 and true uncompressed size, and the exact bytes to write after the local
 // header (the compressed stream, or the stored payload copy). `data` is also this function's
 // intermediate deflate-attempt buffer: encodeEntry() first sizes it as the deflate destination,
@@ -282,14 +273,12 @@ class ZipContainerWriteBuilder final {
     // Not noexcept: resizing/assigning the PMR-backed intermediate and final buffers is ordinary
     // std::pmr::vector work bound to ProjectIoMemoryResource's throwing memory_resource surface.
     // A budget rejection here must propagate as std::bad_alloc to write()'s try/catch.
-    [[nodiscard]] static bool encodeEntry(std::span<const std::byte> payload,
-                                          std::uint64_t maxExpansionRatio, EncodedEntry& out,
+    [[nodiscard]] static bool encodeEntry(std::span<const std::byte> payload, EncodedEntry& out,
                                           ZipContainerWriteError& error);
 };
 
 bool ZipContainerWriteBuilder::encodeEntry(const std::span<const std::byte> payload,
-                                           const std::uint64_t maxExpansionRatio, EncodedEntry& out,
-                                           ZipContainerWriteError& error) {
+                                           EncodedEntry& out, ZipContainerWriteError& error) {
     out.uncompressedSize = static_cast<std::uint32_t>(payload.size());
     out.crc32Value = static_cast<std::uint32_t>(
         crc32_z(0L, reinterpret_cast<const Bytef*>(payload.data()), payload.size()));
@@ -319,26 +308,9 @@ bool ZipContainerWriteBuilder::encodeEntry(const std::span<const std::byte> payl
     }
     const auto producedBytes = static_cast<std::uint64_t>(out.data.size() - stream.avail_out);
 
-    // Stored fallback rule (docs/architecture/project-format.md, "Constrained ZIP Profile"):
-    // store this entry instead of the deflate stream just produced when either
-    //   (a) deflate did not reduce it (produced byte count >= payload byte count), or
-    //   (b) the deflated form would exceed the reader's permitted expansion ratio
-    //       (payloadSize > maxExpansionRatio * max(1, deflateSize)) -- the default reader would
-    //       reject that entry outright (e.g. megabytes of a single repeated byte).
-    // A stored entry always satisfies the reader: its ratio is exactly 1.
-    bool useStore = producedBytes >= payload.size();
-    if (!useStore) {
-        const auto denominator = std::max<std::uint64_t>(1, producedBytes);
-        std::uint64_t allowedMaximum = 0;
-        if (checkedMul(maxExpansionRatio, denominator, allowedMaximum) &&
-            payload.size() > allowedMaximum) {
-            useStore = true;
-        }
-        // A checkedMul overflow leaves allowedMaximum conceptually unbounded for any payload this
-        // writer can ever hold under the Resource Limits table, so deflate stays legal.
-    }
-
-    if (useStore) {
+    // Store only when deflate does not reduce the entry. The reader bounds expanded bytes
+    // directly, so highly compressible data needs no special fallback.
+    if (producedBytes >= payload.size()) {
         out.method = kMethodStored;
         out.data.assign(payload.begin(), payload.end());
     } else {
@@ -352,8 +324,7 @@ ZipContainerWriteResult ZipContainerWriteBuilder::write(
     const std::span<const std::byte> manifest, const std::span<const std::byte> document,
     const ZipContainerLimits& limits, ProjectIoOperationMemory operation) noexcept {
     if (limits.maxArchiveBytes == 0 || limits.maxManifestBytes == 0 ||
-        limits.maxDocumentBytes == 0 || limits.maxTotalExpandedBytes == 0 ||
-        limits.maxExpansionRatio == 0) {
+        limits.maxDocumentBytes == 0 || limits.maxTotalExpandedBytes == 0) {
         return makeFailure(ZipContainerWriteError::InvalidLimits);
     }
 
@@ -402,11 +373,11 @@ ZipContainerWriteResult ZipContainerWriteBuilder::write(
 
         ZipContainerWriteError entryError = ZipContainerWriteError::None;
         EncodedEntry manifestEntry(resource.get());
-        if (!encodeEntry(manifest, limits.maxExpansionRatio, manifestEntry, entryError)) {
+        if (!encodeEntry(manifest, manifestEntry, entryError)) {
             return makeFailure(entryError);
         }
         EncodedEntry documentEntry(resource.get());
-        if (!encodeEntry(document, limits.maxExpansionRatio, documentEntry, entryError)) {
+        if (!encodeEntry(document, documentEntry, entryError)) {
             return makeFailure(entryError);
         }
 

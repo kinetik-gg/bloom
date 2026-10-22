@@ -14,7 +14,6 @@ struct ZipContainerPreflightLimits final {
     std::uint64_t maxManifestBytes = 1048576;
     std::uint64_t maxDocumentBytes = 268435456;
     std::uint64_t maxTotalExpandedBytes = 269484032;
-    std::uint64_t maxExpansionRatio = 1000;
 };
 
 // A strict subset of bloom::project::ZipContainerError: every value here has a exact translation
@@ -43,7 +42,6 @@ enum class ZipContainerPreflightError : std::uint8_t {
     NonRegularEntry,
     ExecutableEntry,
     ExpandedSizeLimitExceeded,
-    ExpansionRatioExceeded,
     StoredSizeMismatch,
     SizeOverflow,
 };

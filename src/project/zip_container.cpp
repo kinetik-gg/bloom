@@ -75,8 +75,6 @@ translatePreflightError(const ZipContainerPreflightError error) noexcept {
         return ZipContainerError::ExecutableEntry;
     case ZipContainerPreflightError::ExpandedSizeLimitExceeded:
         return ZipContainerError::ExpandedSizeLimitExceeded;
-    case ZipContainerPreflightError::ExpansionRatioExceeded:
-        return ZipContainerError::ExpansionRatioExceeded;
     case ZipContainerPreflightError::StoredSizeMismatch:
         return ZipContainerError::StoredSizeMismatch;
     case ZipContainerPreflightError::SizeOverflow:
@@ -208,8 +206,7 @@ ZipContainerReadResult ZipContainerBuilder::read(const std::span<const std::byte
                                                  const ZipContainerLimits& limits,
                                                  ProjectIoOperationMemory operation) noexcept {
     if (limits.maxArchiveBytes == 0 || limits.maxManifestBytes == 0 ||
-        limits.maxDocumentBytes == 0 || limits.maxTotalExpandedBytes == 0 ||
-        limits.maxExpansionRatio == 0) {
+        limits.maxDocumentBytes == 0 || limits.maxTotalExpandedBytes == 0) {
         return makeFailure(ZipContainerError::InvalidLimits, 0);
     }
 
@@ -218,7 +215,6 @@ ZipContainerReadResult ZipContainerBuilder::read(const std::span<const std::byte
         .maxManifestBytes = limits.maxManifestBytes,
         .maxDocumentBytes = limits.maxDocumentBytes,
         .maxTotalExpandedBytes = limits.maxTotalExpandedBytes,
-        .maxExpansionRatio = limits.maxExpansionRatio,
     };
     const auto preflight = preflightZipContainer(archive, preflightLimits);
     if (!preflight.succeeded()) {

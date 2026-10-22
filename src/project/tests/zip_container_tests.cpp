@@ -167,7 +167,7 @@ void testPreflightRejectionPropagates(Expectations& expectations) {
 
 void testInvalidLimits(Expectations& expectations) {
     ZipContainerLimits limits{};
-    limits.maxExpansionRatio = 0;
+    limits.maxTotalExpandedBytes = 0;
     const auto archive = buildConformingArchive(manifestEntry(), documentEntry());
     const auto result = readZipContainer(asSpan(archive), limits, makeOperation());
     expectations.expect(!result && result.error() == ZipContainerError::InvalidLimits,
@@ -194,9 +194,8 @@ void testExpandedSizeMismatchOnBomb(Expectations& expectations) {
 
 void testUnderProductionMismatch(Expectations& expectations) {
     // The mirror of the bomb case: a genuinely valid raw-deflate stream that inflates to FEWER
-    // bytes than declared. The preflight cannot see this (it never decompresses); the ratio check
-    // stays legal (200 declared / a handful of compressed bytes is far under the default 1000:1
-    // ceiling); local and central headers agree; CRC names the real 100 produced bytes.
+    // bytes than declared. The preflight cannot see this (it never decompresses); local and
+    // central headers agree, and CRC names the real 100 produced bytes.
     // Empirically observed: libzip's zip_fread() for the main exact-size read returns the true
     // available byte count (100) rather than the requested 200, which this code reports as a
     // short read -- ExpandedSizeMismatch, deterministically, before any independent CRC check
@@ -216,7 +215,7 @@ void testUnderProductionMismatch(Expectations& expectations) {
 void testQualifiedReaderDisagreementOnInvalidDeflateStream(Expectations& expectations) {
     // A method-8 entry whose "compressed" bytes are not a valid raw-deflate stream at all. The
     // preflight only inspects header fields (name/flags/method/sizes/CRC), never entry payload
-    // bytes, so a self-consistent local/central header pair with a legal declared ratio passes it
+    // bytes, so a self-consistent local/central header pair passes it
     // cleanly; the corruption can only be discovered once the qualified reader actually attempts
     // to decompress. Empirically observed: libzip's zip_fread() for the main exact-size read
     // returns -1 (a genuine read error, not a short read) because the garbage bytes cannot be
@@ -234,8 +233,7 @@ void testQualifiedReaderDisagreementOnInvalidDeflateStream(Expectations& expecta
     }
     manifest.data = garbage;
     manifest.localCompressedSize = manifest.centralCompressedSize = 64;
-    // Declared uncompressed size passes the default 1000:1 ratio ceiling (100 / 64 is nowhere
-    // close) and both header limits comfortably.
+    // Declared uncompressed size passes both header limits comfortably.
     manifest.localUncompressedSize = manifest.centralUncompressedSize = 100;
     manifest.localCrc = manifest.centralCrc = 0xDEADBEEFU;
     const auto archive = buildConformingArchive(manifest, documentEntry());

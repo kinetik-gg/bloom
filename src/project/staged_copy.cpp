@@ -69,8 +69,6 @@ translatePreflightError(const detail::ZipContainerPreflightError error) noexcept
         return ZipContainerError::ExecutableEntry;
     case detail::ZipContainerPreflightError::ExpandedSizeLimitExceeded:
         return ZipContainerError::ExpandedSizeLimitExceeded;
-    case detail::ZipContainerPreflightError::ExpansionRatioExceeded:
-        return ZipContainerError::ExpansionRatioExceeded;
     case detail::ZipContainerPreflightError::StoredSizeMismatch:
         return ZipContainerError::StoredSizeMismatch;
     case detail::ZipContainerPreflightError::SizeOverflow:
@@ -191,7 +189,6 @@ StagedCopyResult stageCopyArchive(platform::StagedArtifactLease& lease,
             .maxManifestBytes = limits.maxManifestBytes,
             .maxDocumentBytes = limits.maxDocumentBytes,
             .maxTotalExpandedBytes = limits.maxTotalExpandedBytes,
-            .maxExpansionRatio = limits.maxExpansionRatio,
         };
         const auto preflight = detail::preflightZipContainer(readBackBytes, preflightLimits);
         if (!preflight.succeeded()) {

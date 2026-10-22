@@ -110,7 +110,7 @@ class [[nodiscard]] ZipContainerWriteResult final {
 // one outside `limits` (checked arithmetic throughout; overflow is SizeOverflow, never a wrapped
 // smaller value) so every returned archive is accepted by readZipContainer() with default limits.
 // Per entry, deflate (level 6) is attempted first; the entry falls back to stored (method 0) when
-// deflate would not reduce it or would exceed the permitted expansion ratio. Charges the output
+// deflate would not reduce it. Charges the output
 // archive buffer, any intermediate deflate buffer, and a documented worst-case reservation for
 // zlib's internal deflate working memory through `operation`. Budget rejection is reported as
 // ResourceExhausted rather than throwing or falling back to unmetered heap allocation. Never
