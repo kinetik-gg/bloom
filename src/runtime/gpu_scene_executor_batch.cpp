@@ -32,7 +32,11 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
                 return std::nullopt;
             operations.emplace_back(*step.gradient);
         } else if (step.kind == GpuSceneExecutorStepKind::Solid) {
-            if (!step.solidDataWindow || !step.solidDisplayWindow || step.checker)
+            // A checker has its own native path. Keep any eligible prefix, including
+            // a required singleton gradient, instead of abandoning that source dispatch.
+            if (step.checker)
+                break;
+            if (!step.solidDataWindow || !step.solidDisplayWindow)
                 return std::nullopt;
             operations.emplace_back(
                 render::GpuBatchSolid{{step.solidPixel, *step.solidDataWindow,
@@ -83,7 +87,21 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
         queueTimingStarted = queueTimingSample.status == render::GpuQueueTimingStatus::Active;
     }
     const auto started = std::chrono::steady_clock::now();
-    const auto native = operationBatch->begin(operations, requestBudget - liveBytes);
+    auto native = operationBatch->begin(operations, requestBudget - liveBytes);
+    if (requiredGradient && operations.size() > 1 &&
+        (native.code == render::GpuOperationBatchCode::OverBudget ||
+         native.code == render::GpuOperationBatchCode::AllocationFailed ||
+         native.code == render::GpuOperationBatchCode::Unsupported ||
+         native.code == render::GpuOperationBatchCode::InvalidRequest) &&
+        !operationBatch->hasUnretiredSubmission() &&
+        operationBatch->statistics().submissions == 0) {
+        // begin() destroyed all pre-submit backing and restored the exact consumed
+        // reservation prefix. Retry only the required source within the same headroom;
+        // optional downstream operations retain their ordinary native paths.
+        ++counters.nativeBatchFallbacks;
+        operations.erase(operations.begin() + 1, operations.end());
+        native = operationBatch->begin(operations, requestBudget - liveBytes);
+    }
     const auto stats = operationBatch->statistics();
     if (stats.submissions != 0 && (native.code == render::GpuOperationBatchCode::None ||
                                    (native.code == render::GpuOperationBatchCode::Unproven &&
