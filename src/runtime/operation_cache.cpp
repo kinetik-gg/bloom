@@ -508,7 +508,7 @@ void OperationCache::promoteCandidateLocked() {
     // The candidate's own charge is already included in these totals. Pending victims donate
     // capacity only after their worker has deleted them and folded their charges back.
     if (accounting_->bytes > accounting_->budget || accounting_->preparedPayload > cap ||
-        accounting_->preparedCount - accounting_->pendingCount > accounting_->entryCap)
+        accounting_->preparedCount > accounting_->entryCap)
         return;
     auto candidate = std::move(preparedCandidate_);
     accounting_->bytes -= candidate->bytes;

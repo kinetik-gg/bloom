@@ -227,7 +227,7 @@ inline void addWindowBytes(std::uint64_t& total, const render::ImageWindow windo
     std::unordered_set<const void*> countedCoverage;
     for (const auto& command : scene.commands()) {
         std::visit(
-            [&total, &countedCoverage](const auto& item) {
+            [&total, &countedCoverage, includeUploads](const auto& item) {
                 using T = std::decay_t<decltype(item)>;
                 if constexpr (std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
                     const void* identity = item.coverageIdentity();

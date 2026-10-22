@@ -418,6 +418,35 @@ void testHeldRetirementConservation(Expectations& checks) {
                   "late registered candidate retires through the closing owner");
 }
 
+void testCountOnlyCandidateWaitsForActualRetirement(Expectations& checks) {
+    RetirementScope scope;
+    scope.blocked = true;
+    bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
+    auto pool = std::make_shared<bloom::runtime::OperationCache>(1U << 20U, ledger);
+    GpuPreparedUploadCache prepared(pool, scope.owner, 1U << 20U, 1);
+    const auto image = makeImage(4, 4);
+    prepared.store("old", image);
+    prepared.store("new", image);
+    checks.expect(until([&] {
+                      const std::lock_guard lock(scope.mutex);
+                      return scope.entered;
+                  }),
+                  "count-only replacement reaches held retirement");
+    for (int i = 0; i < 32; ++i) {
+        checks.expect(!prepared.find("new"),
+                      "entry capacity cannot borrow pending retirement credit");
+        prepared.store("overflow-" + std::to_string(i), image);
+    }
+    checks.expect(prepared.entryCount() == 0 && prepared.retainedBytes() == 512 &&
+                      scope.owner->snapshot().allocations == 2,
+                  "nonbinding byte caps still retain only old allocation and one candidate");
+    scope.release();
+    checks.expect(until([&] { return prepared.find("new") == image; }) &&
+                      prepared.entryCount() == 1 && prepared.retainedBytes() == 256,
+                  "count-only candidate promotes after physical old retirement");
+    prepared.clear();
+}
+
 void testCandidatePressureAndClose(Expectations& checks) {
     RetirementScope scope;
     scope.blocked = true;
@@ -771,6 +800,7 @@ int main() {
         testOrdinaryGraceIsPreserved(expectations);
         testHeldRetirementConservation(expectations);
         testCandidatePressureAndClose(expectations);
+        testCountOnlyCandidateWaitsForActualRetirement(expectations);
         testOrdinaryPayloadWorkerRetirement(expectations);
         testSourceRevisionWorkerRetirement(expectations);
         testSameLedgerFreshnessAndShrink(expectations);
