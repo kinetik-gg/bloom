@@ -883,6 +883,33 @@ void testEscapedAuthoredGraphPointersStayOutsideSnapshots(ExpectationContext& ex
                         "a pointer escaped before adding a composition cannot mutate publication");
 }
 
+void testRestoreReusesValidatedSnapshot(ExpectationContext& expectations) {
+    Document document(makeProject(compositionIds(1, 1'000)));
+    const auto original = document.snapshot();
+    auto draft = document.draft(original);
+    draft.project().setName("Edited");
+    const auto edited = document.commit(original.revision(), std::move(draft));
+    if (!expectations.expect(edited.committed() && edited.snapshot.has_value(),
+                             "edited document publishes before restore"))
+        return;
+    const auto validationsBefore = Project::validationCount();
+    const auto workBefore = document.work();
+    const auto restored = document.restore(edited.snapshot->revision(), original);
+    expectations.expect(restored.committed() && restored.snapshot &&
+                            restored.snapshot->project().name() == original.project().name() &&
+                            Project::validationCount() == validationsBefore &&
+                            document.work().validations == workBefore.validations &&
+                            document.work().restores == workBefore.restores + 1,
+                        "restore republishes trusted history without a full project validation");
+    if (restored.snapshot) {
+        const auto redone = document.restore(restored.snapshot->revision(), *edited.snapshot);
+        expectations.expect(redone.committed() && redone.snapshot &&
+                                redone.snapshot->project().name() == "Edited" &&
+                                Project::validationCount() == validationsBefore,
+                            "redo also reuses a previously validated immutable snapshot");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -895,6 +922,7 @@ int main() {
         testAllocatorExhaustionSurvivesRestore(expectations);
         testCompositionContentSharesUnrelatedSnapshots(expectations);
         testEscapedAuthoredGraphPointersStayOutsideSnapshots(expectations);
+        testRestoreReusesValidatedSnapshot(expectations);
         return expectations.ok() ? EXIT_SUCCESS : EXIT_FAILURE;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';

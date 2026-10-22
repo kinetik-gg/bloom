@@ -964,10 +964,12 @@ viewer to empty instead of leaving the previous frame on screen. Its audio input
 every other required node input remains strict.
 
 `AddNode` enforces it and refuses with the type it refused, so every Add surface -- keyboard, menu,
-search -- inherits one rule instead of keeping its own copy. The Add search reads the refusal back
-from a dry run of the same operation and lists the type as a disabled result carrying that message;
-it does not reimplement the check. Cardinality constrains authoring only: it is not a validation rule,
-and a document that already holds more than one is neither rejected nor repaired by it.
+search -- inherits one rule instead of keeping its own copy. The Add menu and search preflight the
+immutable snapshot through the command's read-only eligibility check; search also checks compatible
+sockets for an armed connection. A refused type stays listed as a disabled result with the reason.
+Submission still runs the command against the current revision. Cardinality constrains authoring
+only: it is not a validation rule, and a document that already holds more than one is neither
+rejected nor repaired by it.
 
 ### Application Integration Limit
 

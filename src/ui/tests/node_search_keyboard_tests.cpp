@@ -1,3 +1,4 @@
+#include "../node_editor_add.hpp"
 #include "node_interaction_test_support.hpp"
 #include <QAbstractItemModel>
 #include <QAction>
@@ -53,6 +54,44 @@ bool triggerNodeMenuAction(Fixture& f, const char* name) {
     return true;
 }
 } // namespace
+void testReadOnlyAddEligibility() {
+    Fixture f;
+    const auto layer = f.add(document::kLayerOutputNodeType, {100, 100});
+    const auto solid = f.add(document::kSolidSourceNodeType, {300, 100});
+    const auto snapshot = f.document.snapshot();
+    for (const auto& definition : document::builtInNodeDefinitions().definitions()) {
+        for (const int connection : {0, 1, 2}) {
+            std::optional<document::InputPortRef> input;
+            std::optional<document::OutputPortRef> output;
+            if (connection == 1)
+                input = document::NodeInputRef{layer, "image"};
+            if (connection == 2)
+                output = document::OutputPortRef{solid, "image"};
+            const auto preflight = node_editor::checkAddEditorNodeEligibility(
+                snapshot, f.session.compositionId(), definition.key.typeId, {200, 200}, input,
+                output);
+            auto draft = f.document.draft(snapshot);
+            const auto executed =
+                node_editor::AddEditorNode(f.session.compositionId(), definition.key.typeId,
+                                           {200, 200}, input, output)
+                    .apply(draft);
+            expect((preflight.status == commands::OperationStatus::Rejected) ==
+                       (executed.status == commands::OperationStatus::Rejected),
+                   "read-only Add eligibility agrees with command execution for every node type");
+            if (!preflight.issues.empty() && !executed.issues.empty())
+                expect(preflight.issues.front().message == executed.issues.front().message,
+                       "read-only Add refusal uses the command's reason");
+        }
+    }
+    const auto validationsBefore = document::Project::validationCount();
+    f.editor.openAddSearch({500, 500}, QCursor::pos(), document::NodeInputRef{layer, "image"});
+    expect(document::Project::validationCount() == validationsBefore,
+           "building armed Add search does not validate the whole project per candidate");
+    std::unique_ptr<QMenu> menu(f.editor.contextMenuForTest());
+    expect(document::Project::validationCount() == validationsBefore,
+           "building the Add menu does not validate the whole project per candidate");
+}
+
 void testSearchKeyboardAndMenus() {
     Fixture f;
     const auto a = f.add(document::kSolidSourceNodeType, {100, 100});

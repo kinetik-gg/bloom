@@ -176,6 +176,9 @@ changed. It never silently discards the edit and never freezes the authoring UI 
 No-op and rejected commands retain the revision and therefore do not spuriously invalidate Open.
 Undo and redo issue newer monotonic revisions, so returning to artistically identical content never
 revives an intent captured against an older state.
+Restore accepts only immutable snapshots minted by the same Document after validated construction
+or commit. It preserves revision, provenance, and allocator guards without scanning historical
+project content again.
 
 Failure, cancellation, supersession, malformed input, unavailable memory, or an unsupported major
 version leaves the active document, command history, path, selection, time, preview, and dirty state

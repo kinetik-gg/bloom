@@ -15,37 +15,61 @@ bool canApplyNodeOperation(const document::Snapshot& snapshot, const Operation& 
     return operation.apply(draft).status != OperationStatus::Rejected && draft.validate().ok();
 }
 
-std::string_view AddNode::typeId() const noexcept { return "bloom.node.add"; }
-OperationResult AddNode::apply(document::Draft& draft) const {
-    auto* composition = draft.project().findComposition(compositionId_);
+OperationResult checkAddNodeEligibility(const document::Project& project,
+                                        const document::IdAllocator& ids,
+                                        const document::CompositionId compositionId,
+                                        const std::string_view nodeTypeId,
+                                        const document::Vec2d layoutPosition,
+                                        const document::NodeDefinitionRegistry& registry) {
+    const auto* composition = project.findComposition(compositionId);
     if (!composition)
         return detail::invalidTarget();
-    if (!detail::finite(layoutPosition_))
+    if (!detail::finite(layoutPosition))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Node position must be finite");
-    if (!registry_.isFrozen())
+    if (!registry.isFrozen())
         return OperationResult::rejected(OperationIssueCode::Unsupported,
                                          "Node authoring requires a frozen definition registry");
+    const document::NodeDefinition* definition = nullptr;
+    for (const auto& candidate : registry.definitions()) {
+        if (candidate.key.typeId == nodeTypeId &&
+            (!definition || candidate.key.schemaVersion > definition->key.schemaVersion))
+            definition = &candidate;
+    }
+    if (!definition)
+        return OperationResult::rejected(OperationIssueCode::Unsupported,
+                                         "Node type is not registered: " + std::string(nodeTypeId));
+    if (definition->cardinality == document::NodeCardinality::OnePerComposition &&
+        std::ranges::any_of(composition->graph().nodes(), [nodeTypeId](const auto& existing) {
+            return existing.typeId == nodeTypeId;
+        }))
+        return OperationResult::rejected(OperationIssueCode::Unsupported,
+                                         "Only one " + std::string(nodeTypeId) +
+                                             " node is allowed per composition");
+    auto available = ids;
+    if (!available.allocateNode())
+        return detail::exhaustedIds();
+    for (std::size_t index = 0; index < definition->parameters.size(); ++index)
+        if (!available.allocateParameter())
+            return detail::exhaustedIds();
+    if (nodeTypeId == document::kLayerOutputNodeType && !available.allocateLayer())
+        return detail::exhaustedIds();
+    return OperationResult::applied();
+}
+
+std::string_view AddNode::typeId() const noexcept { return "bloom.node.add"; }
+OperationResult AddNode::apply(document::Draft& draft) const {
+    if (auto eligibility = checkAddNodeEligibility(draft.project(), draft.ids(), compositionId_,
+                                                   nodeTypeId_, layoutPosition_, registry_);
+        eligibility.status == OperationStatus::Rejected)
+        return eligibility;
+    auto* composition = draft.project().findComposition(compositionId_);
     const document::NodeDefinition* definition = nullptr;
     for (const auto& candidate : registry_.definitions()) {
         if (candidate.key.typeId == nodeTypeId_ &&
             (!definition || candidate.key.schemaVersion > definition->key.schemaVersion))
             definition = &candidate;
     }
-    if (!definition)
-        return OperationResult::rejected(OperationIssueCode::Unsupported,
-                                         "Node type is not registered: " + nodeTypeId_);
-    // Cardinality (task S1, item 5). Checked here rather than in each surface that offers an Add,
-    // so the keyboard, the menu and the search popup cannot disagree about whether a second one is
-    // allowed -- and so the search popup can read the refusal back from a dry run of this very
-    // operation instead of keeping its own copy of the rule.
-    if (definition->cardinality == document::NodeCardinality::OnePerComposition &&
-        std::ranges::any_of(composition->graph().nodes(), [this](const auto& existing) {
-            return existing.typeId == nodeTypeId_;
-        }))
-        return OperationResult::rejected(OperationIssueCode::Unsupported,
-                                         "Only one " + nodeTypeId_ +
-                                             " node is allowed per composition");
     const auto nodeId = draft.ids().allocateNode();
     if (!nodeId)
         return detail::exhaustedIds();

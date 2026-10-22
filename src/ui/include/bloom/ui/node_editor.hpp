@@ -386,7 +386,8 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     // The one place Add's own refusal text is computed, from a private draft exactly like a dry
     // run of the command itself -- shared by populateAddMenu() (a fresh menu's initial state) and
     // refreshAddMenuState() (the persistent header menu's state, refreshed on every aboutToShow).
-    [[nodiscard]] QString addNodeRefusal(const std::string& typeId) const;
+    [[nodiscard]] QString addNodeRefusal(const document::Snapshot& snapshot,
+                                         const std::string& typeId) const;
     void refreshViewMenuState();
     void refreshSelectMenuState();
     void refreshNodeMenuState();

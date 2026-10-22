@@ -40,6 +40,7 @@ namespace {
 std::atomic<std::uint64_t> draftContentDetaches{0};
 std::atomic<std::uint64_t> editableContentCopies{0};
 std::atomic<std::uint64_t> contentChargeWalks{0};
+std::atomic<std::uint64_t> projectValidations{0};
 
 void charge(std::size_t& total, const std::size_t bytes) noexcept {
     total = bytes > std::numeric_limits<std::size_t>::max() - total
@@ -573,7 +574,12 @@ ValidationResult Project::validateCompositionNesting() const {
     return result;
 }
 
+std::uint64_t Project::validationCount() noexcept {
+    return projectValidations.load(std::memory_order_relaxed);
+}
+
 ValidationResult Project::validate() const {
+    projectValidations.fetch_add(1, std::memory_order_relaxed);
     ValidationResult result;
     std::unordered_set<AssetId> assetIds;
     for (const auto& asset : assets_) {

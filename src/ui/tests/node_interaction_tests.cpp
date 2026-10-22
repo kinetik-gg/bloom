@@ -323,6 +323,7 @@ int main(int argc, char** argv) {
         bloom::ui::test::testLayoutSelectionAndSockets();
         bloom::ui::test::testConnectionsCutAndInsertion();
         bloom::ui::test::testMergeAudioPill();
+        bloom::ui::test::testReadOnlyAddEligibility();
         bloom::ui::test::testSearchKeyboardAndMenus();
         bloom::ui::test::testHeaderMenusGridSnappingLinkStyleAndFooter();
     } catch (const std::exception& error) {

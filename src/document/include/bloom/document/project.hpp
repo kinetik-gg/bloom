@@ -172,6 +172,8 @@ class Project final {
 
     [[nodiscard]] ValidationResult validate() const;
     [[nodiscard]] ValidationResult validateCompositionNesting() const;
+    // Diagnostic work counter for detecting accidental whole-project validation on UI paths.
+    [[nodiscard]] static std::uint64_t validationCount() noexcept;
     [[nodiscard]] std::size_t rootByteCharge() const;
 
   private:

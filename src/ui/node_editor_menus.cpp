@@ -472,21 +472,17 @@ void NodeGraphEditor::selectLinkedDownstream() {
 // category order, same sort, same objectNames -- rather than a second opinion about what is
 // addable. `recordInto`, given only by the header's call, collects each leaf action with its type
 // id for refreshAddMenuState() to re-read afterward.
-QString NodeGraphEditor::addNodeRefusal(const std::string& typeId) const {
-    if (session_.composition() == nullptr)
-        return tr("No active composition");
-    document::Document isolated(session_.snapshot().project(),
-                                session_.snapshot().ids().highWater());
-    auto draft = isolated.draft(isolated.snapshot());
-    const auto result =
-        AddEditorNode(session_.compositionId(), typeId, {addPosition_.x(), addPosition_.y()})
-            .apply(draft);
+QString NodeGraphEditor::addNodeRefusal(const document::Snapshot& snapshot,
+                                        const std::string& typeId) const {
+    const auto result = checkAddEditorNodeEligibility(snapshot, session_.compositionId(), typeId,
+                                                      {addPosition_.x(), addPosition_.y()});
     return result.issues.empty() ? QString{}
                                  : QString::fromStdString(result.issues.front().message);
 }
 
 void NodeGraphEditor::populateAddMenu(QMenu* menu,
                                       std::vector<std::pair<QAction*, std::string>>* recordInto) {
+    const auto snapshot = session_.snapshot();
     for (const auto& category : nodeCategoryOrder()) {
         std::vector<const document::NodeDefinition*> section;
         for (const auto& definition : document::builtInNodeDefinitions().definitions())
@@ -534,10 +530,7 @@ void NodeGraphEditor::populateAddMenu(QMenu* menu,
             auto* item = sectionMenu->addAction(nodeTypeDisplayName(candidate->key.typeId));
             item->setObjectName(addActionName(candidate->key.typeId));
             if (scene_->canSubmit()) {
-                // Cardinality and every other refusal, read back from the command itself rather
-                // than restated here: a singleton already in the composition is listed and
-                // disabled, with the command's own words in its tooltip.
-                const auto refusal = addNodeRefusal(candidate->key.typeId);
+                const auto refusal = addNodeRefusal(snapshot, candidate->key.typeId);
                 item->setToolTip(refusal);
                 item->setEnabled(refusal.isEmpty());
             } else {
@@ -560,10 +553,11 @@ void NodeGraphEditor::populateAddMenu(QMenu* menu,
 // the persistent header Add menu never leaks a submenu (see populateAddMenu()'s own header
 // comment). Connected to headerAddMenu_'s aboutToShow.
 void NodeGraphEditor::refreshAddMenuState() {
-    addRevision_ = session_.snapshot().revision();
+    const auto snapshot = session_.snapshot();
+    addRevision_ = snapshot.revision();
     for (const auto& [item, typeId] : addMenuItems_) {
         if (scene_->canSubmit()) {
-            const auto refusal = addNodeRefusal(typeId);
+            const auto refusal = addNodeRefusal(snapshot, typeId);
             item->setToolTip(refusal);
             item->setEnabled(refusal.isEmpty());
         } else {
@@ -829,7 +823,8 @@ void NodeGraphEditor::openAddSearch(const QPointF scenePosition, const QPoint sc
     addPosition_ = scenePosition;
     addInput_ = std::move(input);
     addOutput_ = std::move(output);
-    addRevision_ = session_.snapshot().revision();
+    const auto snapshot = session_.snapshot();
+    addRevision_ = snapshot.revision();
     if (!search_) {
         search_ = new kit::KSearchPopup(this);
         connect(search_, &kit::KSearchPopup::entryChosen, this, &NodeGraphEditor::addNode);
@@ -859,14 +854,9 @@ void NodeGraphEditor::openAddSearch(const QPointF scenePosition, const QPoint sc
         for (const auto& port : definition.outputs)
             keywords += ' ' + socketKindName(port.valueKind);
         QString refusal;
-        // Read the actual refusal, including text's portable-font message, from a private draft.
-        document::Document isolated(session_.snapshot().project(),
-                                    session_.snapshot().ids().highWater());
-        auto draft = isolated.draft(isolated.snapshot());
-        const auto result =
-            AddEditorNode(session_.compositionId(), definition.key.typeId,
-                          {scenePosition.x(), scenePosition.y()}, addInput_, addOutput_)
-                .apply(draft);
+        const auto result = checkAddEditorNodeEligibility(
+            snapshot, session_.compositionId(), definition.key.typeId,
+            {scenePosition.x(), scenePosition.y()}, addInput_, addOutput_);
         if (!result.issues.empty())
             refusal = QString::fromStdString(result.issues.front().message);
         else if (!scene_->canSubmit() && definition.key.typeId != document::kSolidSourceNodeType &&

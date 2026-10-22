@@ -16,6 +16,14 @@ namespace bloom::commands {
 [[nodiscard]] bool canApplyNodeOperation(const document::Snapshot& snapshot,
                                          const Operation& operation);
 
+// Cheap, read-only preflight for Add surfaces. Execution remains authoritative because a
+// submission may race a later revision or fail a full draft validation.
+[[nodiscard]] OperationResult checkAddNodeEligibility(
+    const document::Project& project, const document::IdAllocator& ids,
+    document::CompositionId compositionId, std::string_view nodeTypeId,
+    document::Vec2d layoutPosition,
+    const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions());
+
 inline constexpr std::string_view kAddNodeOutput = "node";
 inline constexpr std::string_view kGroupNodesOutput = "nodeGroup";
 inline constexpr std::string_view kDefaultNodeGroupName = "Group";

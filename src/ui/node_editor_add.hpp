@@ -2,6 +2,13 @@
 #include <bloom/commands/operations.hpp>
 
 namespace bloom::ui::node_editor {
+// Read-only Add-surface preflight over one immutable snapshot. A successful result is only an
+// invitation to submit; AddEditorNode::apply remains the authoritative command path.
+[[nodiscard]] commands::OperationResult checkAddEditorNodeEligibility(
+    const document::Snapshot& snapshot, document::CompositionId composition, std::string_view type,
+    document::Vec2d position, const std::optional<document::InputPortRef>& input = {},
+    const std::optional<document::OutputPortRef>& output = {});
+
 // Resolves freshly allocated IDs inside one command operation, delegating every durable write to
 // N1/N2 commands. This keeps add + cursor layout + optional connection in one undo entry.
 class AddCompositionSource final : public commands::Operation {

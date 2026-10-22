@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <bloom/commands/layer_operations.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <limits>
 #include <type_traits>
@@ -55,6 +56,49 @@ void placeConnectedNode(document::Composition& composition, const document::Node
     composition.nodeLayout()[node] = record;
 }
 } // namespace
+
+commands::OperationResult
+checkAddEditorNodeEligibility(const document::Snapshot& snapshot,
+                              const document::CompositionId compositionId,
+                              const std::string_view type, const document::Vec2d position,
+                              const std::optional<document::InputPortRef>& input,
+                              const std::optional<document::OutputPortRef>& output) {
+    const auto* composition = snapshot.project().findComposition(compositionId);
+    if (!composition)
+        return commands::OperationResult::rejected(commands::OperationIssueCode::InvalidTarget,
+                                                   "No active composition");
+    auto eligibility = commands::checkAddNodeEligibility(snapshot.project(), snapshot.ids(),
+                                                         compositionId, type, position);
+    if (eligibility.status == commands::OperationStatus::Rejected)
+        return eligibility;
+    if (!input && !output)
+        return eligibility;
+    const document::NodeDefinition* definition = nullptr;
+    for (const auto& candidate : document::builtInNodeDefinitions().definitions())
+        if (candidate.key.typeId == type &&
+            (!definition || candidate.key.schemaVersion > definition->key.schemaVersion))
+            definition = &candidate;
+    if (!definition)
+        return eligibility;
+    const auto& graph = composition->graph();
+    if (input) {
+        if (const auto kind = graph.inputKind(*input); kind)
+            for (const auto& port : definition->outputs)
+                if (port.valueKind == *kind)
+                    return eligibility;
+    }
+    if (output) {
+        if (const auto kind = graph.outputKind(*output); kind) {
+            if (definition->layerSlotInput && *kind == definition->layerSlotInput->valueKind)
+                return eligibility;
+            for (const auto& port : definition->inputs)
+                if (*kind == port.valueKind)
+                    return eligibility;
+        }
+    }
+    return commands::OperationResult::rejected(commands::OperationIssueCode::Unsupported,
+                                               "Node has no compatible socket");
+}
 
 commands::OperationResult AddCompositionSource::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);

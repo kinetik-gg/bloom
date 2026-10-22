@@ -377,11 +377,8 @@ CommitResult Document::restore(const Revision expectedRevision,
                        "Historical snapshot has no document state");
         return reject({CommitStatus::InvalidDraft, std::nullopt, std::move(validation)});
     }
-    validations_.fetch_add(1, std::memory_order_relaxed);
-    const auto validation = historicalSnapshot.project().validate();
-    if (!validation.ok()) {
-        return reject({CommitStatus::InvalidDraft, std::nullopt, validation});
-    }
+    // Only Document mints Snapshots, from validated construction or a validated commit.
+    // Their frozen state cannot change after publication, so undo/redo need no second project scan.
 
     std::unique_lock lock(mutex_);
     if (expectedRevision != revision_) {
