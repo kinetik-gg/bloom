@@ -5,6 +5,7 @@
 #include <array>
 #include <chrono>
 #include <limits>
+#include <random>
 #include <thread>
 
 namespace bloom::mcp {
@@ -79,6 +80,8 @@ bool Server::interceptCancellation(const std::string_view message) {
 
 Server::Server(std::unique_ptr<scripting::Session> session)
     : session_(std::move(session)), facade_(*session_) {
+    std::random_device random;
+    sessionToken_ = (std::uint64_t{random()} << 32U) | random();
     // One server-lifetime GPU final-render provider, bootstrapped once on the server scheduler's
     // worker and reused by every render request; no per-request device bootstrap, no singleton.
     // The packaged GPU shader tools are composed from THIS executable's own definitions (never

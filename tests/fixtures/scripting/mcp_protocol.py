@@ -16,7 +16,7 @@ def request(id, method, params=None):
     result = {'jsonrpc': '2.0', 'id': id, 'method': method}
     if params is not None:
         result['params'] = params
-    return json.dumps(result)
+    return json.dumps(result, ensure_ascii=False)
 
 
 def tool(id, name, arguments):
@@ -38,6 +38,113 @@ def exchange(lines, project=None):
 
 
 class Protocol(unittest.TestCase):
+    def test_large_transaction_array(self):
+        operations = [{'op': 'bloom.project.set-name', 'args': {'name': 'Many'}}] * 5000
+        transaction = tool(2, 'transact', {'expectedRevision': 0, 'operations': operations})
+        self.assertLess(len(transaction.encode()), 1024 * 1024)
+        responses = exchange([INIT, READY, transaction, tool(3, 'query', {'kind': 'project'})])
+        self.assertTrue(responses[1]['result']['structuredContent']['succeeded'])
+        self.assertEqual(responses[2]['result']['structuredContent']['revision'], 1)
+        self.assertEqual(responses[2]['result']['structuredContent']['project']['name'], 'Many')
+
+    def test_parameter_cursor_cannot_cross_sessions(self):
+        add = tool(2, 'transact', {'expectedRevision': 0, 'operations': [
+            {'op': 'bloom.layer.add-solid', 'args': {'composition': 1, 'name': 'One',
+                                                   'color': [1, 0, 0, 1]}}]})
+        first = exchange([INIT, READY, add,
+                          tool(3, 'query', {'kind': 'parameters', 'composition': 1,
+                                             'pageSize': 1})])
+        cursor = first[-1]['result']['structuredContent']['nextCursor']
+        self.assertIsNotNone(cursor)
+        second = exchange([INIT, READY, add,
+                           tool(4, 'query', {'kind': 'parameters', 'composition': 1,
+                                              'cursor': cursor})])
+        self.assertIn('error', second[-1])
+
+    def test_large_parameters_paged_and_revision_bound(self):
+        text = 'é' * 380000  # 760,000 UTF-8 bytes per value; three exceed 2 MiB together.
+        process = subprocess.Popen([MCP], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE)
+
+        def call(line):
+            process.stdin.write((line + '\n').encode())
+            process.stdin.flush()
+            response = process.stdout.readline()
+            if not response:
+                raise AssertionError(process.stderr.read().decode(errors='replace'))
+            return json.loads(response)
+
+        try:
+            self.assertEqual(call(INIT)['id'], 1)
+            process.stdin.write((READY + '\n').encode())
+            process.stdin.flush()
+            for index in range(3):
+                response = call(tool(10 + index, 'transact', {
+                    'expectedRevision': index,
+                    'operations': [{'op': 'bloom.layer.add-text',
+                                    'args': {'composition': 1, 'name': f'Text {index}',
+                                             'text': text}}]}))
+                self.assertTrue(response['result']['structuredContent']['succeeded'], response)
+
+            page = call(tool(20, 'query', {'kind': 'parameters', 'composition': 1,
+                                          'pageSize': 1}))['result']['structuredContent']
+            self.assertEqual(page['revision'], 3)
+            self.assertIsNotNone(page['nextCursor'])
+            cursor = page['nextCursor']
+            first_cursor = cursor
+            rows = list(page['records'])
+            while cursor is not None:
+                page = call(tool(21, 'query', {'kind': 'parameters', 'composition': 1,
+                                              'pageSize': 64, 'cursor': cursor}))['result']['structuredContent']
+                rows.extend(page['records'])
+                cursor = page['nextCursor']
+            large = [row for row in rows if row['schemaKey'] == 'bloom.text.content']
+            self.assertEqual(len(large), 3)
+            self.assertTrue(all(row['valueOmitted'] and row['valueBytes'] == len(text.encode())
+                                for row in large))
+            oversized = call(tool(28, 'query', {'kind': 'parameters', 'composition': 1}))
+            self.assertIn('error', oversized)  # Legacy full projection reports its response cap.
+
+            parameter = large[0]['id']
+            record = call(tool(22, 'query', {'kind': 'parameter', 'composition': 1,
+                                            'parameter': parameter, 'expectedRevision': 3}))['result']['structuredContent']['record']
+            self.assertTrue(record['valueOmitted'])
+            chunks = []
+            offset = 0
+            while True:
+                content = call(tool(23, 'query', {'kind': 'parameter-value', 'composition': 1,
+                                                 'parameter': parameter, 'expectedRevision': 3,
+                                                 'offset': offset, 'limit': 131071}))['result']['structuredContent']
+                self.assertEqual(content['offset'], offset)
+                self.assertEqual(content['totalBytes'], len(text.encode()))
+                chunks.append(content['chunk'])
+                offset = content['nextOffset']
+                if content['complete']:
+                    break
+            self.assertEqual(''.join(chunks), text)
+            self.assertEqual(offset, len(text.encode()))
+            invalid_boundary = call(tool(29, 'query', {'kind': 'parameter-value',
+                                                       'composition': 1, 'parameter': parameter,
+                                                       'expectedRevision': 3, 'offset': 1}))
+            self.assertIn('error', invalid_boundary)
+
+            for malformed in ('bad', first_cursor + ':1'):
+                response = call(tool(24, 'query', {'kind': 'parameters', 'composition': 1,
+                                                   'cursor': malformed}))
+                self.assertIn('error', response)
+            response = call(tool(25, 'transact', {'expectedRevision': 3, 'operations': [
+                {'op': 'bloom.project.set-name', 'args': {'name': 'Changed'}}]}))
+            self.assertTrue(response['result']['structuredContent']['succeeded'])
+            stale = call(tool(26, 'query', {'kind': 'parameters', 'composition': 1,
+                                            'cursor': first_cursor}))
+            self.assertIn('error', stale)
+            stale_value = call(tool(27, 'query', {'kind': 'parameter-value', 'composition': 1,
+                                                  'parameter': parameter, 'expectedRevision': 3}))
+            self.assertIn('error', stale_value)
+        finally:
+            process.stdin.close()
+            self.assertEqual(process.wait(timeout=30), 0)
+
     def test_parameter_projection(self):
         color = [0.2, 0.3, 0.4, 1.0]
         responses = exchange([INIT, READY, tool(2, 'transact', {

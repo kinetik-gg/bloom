@@ -30,7 +30,7 @@ Use `tools/call` with `name` and `arguments`:
 
 | Tool | Arguments and result |
 | --- | --- |
-| `query` | `kind`: project, compositions, nodes, parameters, assets or operations; nodes/parameters also need `composition`. Returns a revision and read projection, including constant parameter values, curve/driver references, or registry descriptors. An operations record carries every argument's `kind`, `required`, `contextual`, `context` and `summary`, plus a pasteable `example` call. |
+| `query` | `kind`: project, compositions, nodes, parameters, parameter, parameter-value, assets or operations; nodes and parameter kinds also need `composition`. The legacy `parameters` query returns full records. `parameters` with `pageSize` (1–64) and optional `cursor` returns bounded summaries and `nextCursor`; constant values are explicitly marked `valueOmitted`. `parameter` with `parameter` ID reads one full record, except a string over 128 KiB returns a summary. `parameter-value` with `parameter` ID and `expectedRevision` reads UTF-8 string chunks using optional byte `offset` and `limit` (4–131072). An operations record carries every argument's `kind`, `required`, `contextual`, `context` and `summary`, plus a pasteable `example` call. |
 | `transact` | `expectedRevision`, an `operations` array of `{op,args}`, and optional `label`. Returns one atomic command result, created IDs and structured diagnostics. Arguments the descriptor marks `contextual` may be omitted and are filled from the session. |
 | `render` | `composition`, `frame` or inclusive `first`/`last`, `preset`, `destination`. Returns published frame count, preservation report, paths and SHA-256 file digests. |
 | `export` | Render arguments plus optional `profile`, `audio` and `sampleRate`. Uses the existing MEDIA-4 composition runner for ProRes preview, DNxHR and PCM output. |
@@ -50,6 +50,17 @@ the document unchanged. Tool results include both `structuredContent` and a JSON
 `isError` distinguishes failed operations from successful tools. Invalid JSON-RPC or tool arguments
 produce protocol errors with the request ID where valid.
 
+For a large parameter set, start with `{"kind":"parameters","composition":1,"pageSize":64}`.
+Repeat with its `nextCursor` until it is `null`. Each page includes `revision` and `totalRecords`;
+the cursor binds the server session, project, composition, revision and next record index. A
+malformed cursor or any intervening edit is an error, so restart at the first page after an edit.
+Summaries identify omitted constants with `valueOmitted`; string summaries also report
+`valueBytes`. Read one parameter with `{"kind":"parameter","composition":1,"parameter":42,
+"expectedRevision":3}`. For an oversized constant string, use `kind:"parameter-value"` with
+the same IDs and revision, starting at `offset:0` and advancing to each `nextOffset` until
+`complete:true`. Chunks report `totalBytes` and always end on a UTF-8 boundary; no value is
+silently shortened. An `expectedRevision` mismatch is an error.
+
 ## Output and cancellation
 
 Still presets are `PngRgba8SrgbV1`, `FlatExrRgba32fLinRec709SceneV1` and `TiffRgba16SrgbV1`. MEDIA-4
@@ -64,8 +75,8 @@ Completed image-sequence frames remain published; media publication retains the 
 verification and cancellation behavior. Export uses the requested preset and approves the resulting
 host analysis digest; the returned report preserves implementation notes.
 
-Each request is at most 1 MiB, each response at most 4 MiB, arrays at most 4096 items, and JSON depth
-at most 32. Parsing and writing use fixed 32 MiB allocation arenas. The pending request queue holds
+Each request is at most 1 MiB, each response at most 4 MiB, at most 65,536 JSON values, and JSON depth
+at most 32. Arrays have no separate item cap. Parsing and writing use fixed 32 MiB allocation arenas. The pending request queue holds
 at most 16 messages. Duplicate decoded keys, malformed Unicode, non-finite JSON numbers, invalid ID
 types and unknown schema members are rejected. A render request is limited to 10,000 frames; event
 history retains 1024 records. Clients should advance `afterSequence` and re-query the snapshot when

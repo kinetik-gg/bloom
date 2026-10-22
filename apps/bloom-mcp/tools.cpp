@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <limits>
 
@@ -9,6 +10,46 @@ namespace bloom::mcp {
 namespace {
 constexpr std::array<std::string_view, 6> kContextSources{"",     "project", "composition",
                                                           "time", "layer",   "selection"};
+constexpr std::size_t kParameterPageSize = 64;
+// Even a control-heavy string expands by at most 6x in JSON and 2x in the MCP text copy.
+// 128 KiB therefore stays below the 4 MiB response cap with both representations present.
+constexpr std::size_t kParameterStringChunkBytes = 128U * 1024U;
+
+std::string parameterCursor(const std::uint64_t session, const std::uint64_t project,
+                            const std::uint64_t composition, const std::uint64_t revision,
+                            const std::size_t offset) {
+    return "p1:" + std::to_string(session) + ':' + std::to_string(project) + ':' +
+           std::to_string(composition) + ':' + std::to_string(revision) + ':' +
+           std::to_string(offset);
+}
+
+std::size_t parseParameterCursor(const std::string_view cursor, const std::uint64_t session,
+                                 const std::uint64_t project, const std::uint64_t composition,
+                                 const std::uint64_t revision, const std::size_t count) {
+    if (!cursor.starts_with("p1:"))
+        throw InvalidInput("Malformed parameter cursor");
+    std::array<std::uint64_t, 5> values{};
+    auto remaining = cursor.substr(3);
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        const auto separator = remaining.find(':');
+        if ((index == values.size() - 1) != (separator == std::string_view::npos))
+            throw InvalidInput("Malformed parameter cursor");
+        const auto part = remaining.substr(0, separator);
+        if (part.empty() || (part.size() > 1 && part.front() == '0'))
+            throw InvalidInput("Malformed parameter cursor");
+        const auto parsed = std::from_chars(part.data(), part.data() + part.size(), values[index]);
+        if (parsed.ec != std::errc{} || parsed.ptr != part.data() + part.size())
+            throw InvalidInput("Malformed parameter cursor");
+        if (index < values.size() - 1)
+            remaining.remove_prefix(separator + 1);
+    }
+    if (values[0] != session || values[1] != project || values[2] != composition ||
+        values[3] != revision)
+        throw InvalidInput("Stale parameter cursor");
+    if (values[4] >= count)
+        throw InvalidInput("Parameter cursor is out of range");
+    return static_cast<std::size_t>(values[4]);
+}
 
 scripting::Value value(yyjson_val* item, const std::size_t depth = 0) {
     if (depth > 16)
@@ -182,10 +223,25 @@ yyjson_mut_val* Server::transact(Json& out, yyjson_val* arguments) {
 }
 
 yyjson_mut_val* Server::query(Json& out, yyjson_val* arguments) {
-    members(arguments, {"kind", "composition"}, {"kind"});
+    members(arguments,
+            {"kind", "composition", "pageSize", "cursor", "parameter", "expectedRevision", "offset",
+             "limit"},
+            {"kind"});
     const auto kind = string(member(arguments, "kind"), 32);
-    if (member(arguments, "composition") && kind != "nodes" && kind != "parameters")
+    const bool parameterPage =
+        kind == "parameters" && (member(arguments, "pageSize") || member(arguments, "cursor"));
+    const bool individualParameter = kind == "parameter" || kind == "parameter-value";
+    if (member(arguments, "composition") && kind != "nodes" && kind != "parameters" &&
+        !individualParameter)
         throw InvalidInput("This query kind does not accept a composition");
+    if ((member(arguments, "pageSize") || member(arguments, "cursor")) && kind != "parameters")
+        throw InvalidInput("Paging applies only to parameters");
+    if (member(arguments, "parameter") != nullptr && !individualParameter)
+        throw InvalidInput("A parameter ID requires an individual parameter query");
+    if ((member(arguments, "expectedRevision") || member(arguments, "offset") ||
+         member(arguments, "limit")) &&
+        !individualParameter)
+        throw InvalidInput("Unexpected parameter fetch option");
     const auto snapshot = facade_.query.snapshot();
     auto* result = out.object();
     out.set(result, "revision", out.number(snapshot.revision().value()));
@@ -194,6 +250,62 @@ yyjson_mut_val* Server::query(Json& out, yyjson_val* arguments) {
         out.set(project, "id", out.number(snapshot.project().id().value()));
         out.set(project, "name", out.text(snapshot.project().name()));
         out.set(result, "project", project);
+        return result;
+    }
+    if (individualParameter &&
+        (!member(arguments, "composition") || !member(arguments, "parameter")))
+        throw InvalidInput("Individual parameter queries require composition and parameter IDs");
+    if (individualParameter && member(arguments, "expectedRevision") &&
+        integer(member(arguments, "expectedRevision")) != snapshot.revision().value())
+        throw InvalidInput("Stale parameter revision");
+    if (kind == "parameter-value" && !member(arguments, "expectedRevision"))
+        throw InvalidInput("String chunks require expectedRevision");
+    if (kind == "parameter" && (member(arguments, "offset") || member(arguments, "limit")))
+        throw InvalidInput("String chunk options require parameter-value");
+    if (individualParameter) {
+        const auto compositionId = integer(member(arguments, "composition"));
+        const auto* composition =
+            snapshot.project().findComposition(document::CompositionId::fromRaw(compositionId));
+        if (!composition)
+            throw InvalidInput("Stale composition ID at revision " +
+                               std::to_string(snapshot.revision().value()));
+        const auto parameterId = integer(member(arguments, "parameter"));
+        const auto* parameter =
+            composition->parameters().find(document::ParameterId::fromRaw(parameterId));
+        if (!parameter)
+            throw InvalidInput("Stale parameter ID at revision " +
+                               std::to_string(snapshot.revision().value()));
+        out.set(result, "composition", out.number(compositionId));
+        out.set(result, "parameter", out.number(parameterId));
+        if (kind == "parameter") {
+            const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source);
+            const auto* text = constant ? std::get_if<std::string>(&constant->value) : nullptr;
+            out.set(result, "record",
+                    text && text->size() > kParameterStringChunkBytes
+                        ? parameterSummary(out, *parameter)
+                        : parameterRecord(out, *parameter));
+            return result;
+        }
+        const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source);
+        const auto* text = constant ? std::get_if<std::string>(&constant->value) : nullptr;
+        if (!text)
+            throw InvalidInput("Parameter is not a constant string");
+        const auto offset = member(arguments, "offset") ? integer(member(arguments, "offset")) : 0;
+        const auto limit = member(arguments, "limit") ? integer(member(arguments, "limit"))
+                                                      : kParameterStringChunkBytes;
+        if (limit < 4 || limit > kParameterStringChunkBytes || offset > text->size() ||
+            (offset < text->size() &&
+             (static_cast<unsigned char>((*text)[offset]) & 0xc0U) == 0x80U))
+            throw InvalidInput("Invalid UTF-8 string chunk range");
+        auto end = static_cast<std::size_t>(offset) +
+                   std::min<std::size_t>(static_cast<std::size_t>(limit), text->size() - offset);
+        while (end < text->size() && (static_cast<unsigned char>((*text)[end]) & 0xc0U) == 0x80U)
+            --end;
+        out.set(result, "offset", out.number(offset));
+        out.set(result, "nextOffset", out.number(end));
+        out.set(result, "totalBytes", out.number(text->size()));
+        out.set(result, "complete", out.boolean(end == text->size()));
+        out.set(result, "chunk", out.text(std::string_view(*text).substr(offset, end - offset)));
         return result;
     }
     auto* records = out.array();
@@ -262,6 +374,30 @@ yyjson_mut_val* Server::query(Json& out, yyjson_val* arguments) {
                 out.set(record, "parameters", parameters);
                 out.append(records, record);
             }
+        } else if (parameterPage) {
+            // A summary only carries bounded structural strings (at most 256 bytes each),
+            // never a value. Even worst-case JSON escaping and the MCP text copy fit 4 MiB.
+            const auto pageSize = member(arguments, "pageSize")
+                                      ? integer(member(arguments, "pageSize"))
+                                      : kParameterPageSize;
+            if (pageSize == 0 || pageSize > kParameterPageSize)
+                throw InvalidInput("Parameter pageSize must be in 1..64");
+            const auto parameters = composition->parameters().records();
+            const auto offset =
+                member(arguments, "cursor")
+                    ? parseParameterCursor(string(member(arguments, "cursor"), 160), sessionToken_,
+                                           snapshot.project().id().value(), id,
+                                           snapshot.revision().value(), parameters.size())
+                    : 0;
+            const auto end = offset + std::min<std::size_t>(pageSize, parameters.size() - offset);
+            for (auto index = offset; index < end; ++index)
+                out.append(records, parameterSummary(out, parameters[index]));
+            out.set(result, "nextCursor",
+                    end < parameters.size()
+                        ? out.text(parameterCursor(sessionToken_, snapshot.project().id().value(),
+                                                   id, snapshot.revision().value(), end))
+                        : out.null());
+            out.set(result, "totalRecords", out.number(parameters.size()));
         } else {
             for (const auto& parameter : composition->parameters().records()) {
                 out.append(records, parameterRecord(out, parameter));

@@ -45,6 +45,7 @@ class Server final {
     std::shared_ptr<host::GpuExportProvider> gpuExportProvider_;
     std::deque<std::pair<std::uint64_t, commands::CommandEvent>> events_;
     std::uint64_t sequence_ = 0;
+    std::uint64_t sessionToken_ = 0;
     scripting::Subscription subscription_;
     bool initialized_ = false;
     bool ready_ = false;
@@ -52,6 +53,7 @@ class Server final {
 
 [[nodiscard]] yyjson_mut_val* commandResult(Json& out, const commands::CommandResult& result);
 [[nodiscard]] yyjson_mut_val* parameterRecord(Json& out, const document::ParameterRecord& value);
+[[nodiscard]] yyjson_mut_val* parameterSummary(Json& out, const document::ParameterRecord& value);
 [[nodiscard]] std::string digestFile(const std::filesystem::path& path);
 
 } // namespace bloom::mcp

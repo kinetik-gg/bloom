@@ -81,4 +81,33 @@ yyjson_mut_val* parameterRecord(Json& out, const document::ParameterRecord& valu
         value.source);
     return record;
 }
+
+yyjson_mut_val* parameterSummary(Json& out, const document::ParameterRecord& value) {
+    auto* record = out.object();
+    out.set(record, "id", out.number(value.id.value()));
+    out.set(record, "schemaKey", out.text(value.schemaKey));
+    std::visit(
+        [&](const auto& source) {
+            using T = std::decay_t<decltype(source)>;
+            if constexpr (std::is_same_v<T, document::ConstantValueSource>) {
+                out.set(record, "source", out.text("constant"));
+                out.set(record, "valueOmitted", out.boolean(true));
+                if (const auto* text = std::get_if<std::string>(&source.value)) {
+                    out.set(record, "valueType", out.text("string"));
+                    out.set(record, "valueBytes", out.number(text->size()));
+                } else {
+                    out.set(record, "valueType", out.text("other"));
+                }
+            } else if constexpr (std::is_same_v<T, document::AnimationCurveSource>) {
+                out.set(record, "source", out.text("curve"));
+                out.set(record, "curveId", out.number(source.curveId.value()));
+            } else {
+                out.set(record, "source", out.text("driver"));
+                out.set(record, "nodeId", out.number(source.sourceNodeId.value()));
+                out.set(record, "port", out.text(source.outputPort));
+            }
+        },
+        value.source);
+    return record;
+}
 } // namespace bloom::mcp

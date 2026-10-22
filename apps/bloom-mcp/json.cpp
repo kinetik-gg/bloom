@@ -20,9 +20,6 @@ void validate(yyjson_val* value, const std::size_t depth, std::size_t& count) {
         throw InvalidInput("JSON exceeds depth or value limits");
     }
     if (yyjson_is_arr(value)) {
-        if (yyjson_arr_size(value) > 4096) {
-            throw InvalidInput("Array exceeds 4096 items");
-        }
         yyjson_arr_iter iterator = yyjson_arr_iter_with(value);
         while (auto* child = yyjson_arr_iter_next(&iterator)) {
             validate(child, depth + 1, count);
