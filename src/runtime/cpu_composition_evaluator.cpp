@@ -1619,6 +1619,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 nestedRequest.roi.reset();
                 nestedRequest.bypassOperationCache = cache == nullptr;
                 nestedRequest.pixelStorageByteLimit = remainingPixelBudget();
+                // A nested composition is an intermediate input, not the final export product.
+                nestedRequest.finalOutputPhase.reset();
                 if (std::holds_alternative<ProxyResolution>(request.resolution)) {
                     const auto extent = render::ImageExtent::create(
                         static_cast<std::uint64_t>(std::max(
@@ -3110,6 +3112,54 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                        : EvaluationResult::failed(
                              diagnostic(EvaluationDiagnosticCode::InternalInvariant,
                                         "Composition Output did not publish a process image"));
+        }
+        if (request.finalOutputPhase) {
+            const auto* descriptor = processImage->descriptor();
+            if (!descriptor) {
+                return EvaluationResult::failed(
+                    diagnostic(EvaluationDiagnosticCode::InternalInvariant,
+                               "Composition Output has no process image descriptor"));
+            }
+            auto rooted = render::Rgba32fImageBuilder::create(
+                *descriptor, request.pixelStorageByteLimit, request.finalOutputPhase);
+            if (!rooted) {
+                return EvaluationResult::failed(imageDiagnostic(
+                    *rooted.error(), {}, "Final process image ownership could not be allocated"));
+            }
+            const auto source = processImage->pixels();
+            if (source.size() != descriptor->layout().pixelCount) {
+                return EvaluationResult::failed(diagnostic(
+                    EvaluationDiagnosticCode::InternalInvariant,
+                    "Composition Output pixel storage does not match its descriptor"));
+            }
+            const auto window = descriptor->dataWindow();
+            for (std::int64_t y = window.originY(); y < window.maxYExclusive(); ++y) {
+                if (cancellation.isCancellationRequested())
+                    return EvaluationResult::cancelled();
+                auto destination = rooted.value()->row(y);
+                if (!destination) {
+                    return EvaluationResult::failed(imageDiagnostic(
+                        *destination.error(), {}, "Final process image row is unavailable"));
+                }
+                const auto offset = static_cast<std::size_t>(y - window.originY()) *
+                                    static_cast<std::size_t>(window.extent().width());
+                std::copy_n(source.data() + offset, destination.value()->size(),
+                            destination.value()->data());
+            }
+            auto frozen = std::move(*rooted.value()).freeze();
+            if (!frozen) {
+                return EvaluationResult::failed(imageDiagnostic(
+                    *frozen.error(), {}, "Final process image could not be published"));
+            }
+            auto owned = std::make_shared<const render::Rgba32fImage>(
+                std::move(*frozen.value()));
+            if (!render::PackedHostStorageAuthority::promoteFinalProduct(
+                    owned->storageAuthority(), {})) {
+                return EvaluationResult::failed(diagnostic(
+                    EvaluationDiagnosticCode::InternalInvariant,
+                    "Final process image ownership could not be published"));
+            }
+            processImage = std::move(owned);
         }
         const auto animationSamplingSemanticsVersion = plan->animationSamplingSemanticsVersion();
         ProcessFrameIdentity identity{

@@ -106,9 +106,51 @@ void testProcessingAdmissionBeforeCpuFallback(Expectations& expectations) {
     refused(run(shared), runtime::GpuProcessFrameDiagnosticCode::BudgetRefused);
     held.lease.reset();
     auto recovered = run(shared);
-    expectations.expect(recovered && static_cast<bool>(*recovered) &&
-                            shared->snapshot().reservations.admittedPhases == 0,
-                        "shared root release enables later CPU attempt and returns phase quota");
+    expectations.expect(recovered && static_cast<bool>(*recovered),
+                        "shared root release enables a later CPU attempt");
+    if (recovered && static_cast<bool>(*recovered)) {
+        const auto& image = (*recovered).attempt()->frame()->processImage();
+        const auto authority = image.storageAuthority();
+        expectations.expect(authority && authority->snapshot().published &&
+                                authority->snapshot().bytes == image.pixelStorageByteCost() &&
+                                shared->snapshot().reservations.ownedFinalProcessHostBytes ==
+                                    image.pixelStorageByteCost(),
+                            "CPU fallback publishes an actual rooted final backing under its "
+                            "evaluation phase");
+    }
+    recovered.reset();
+    const auto recoveredRetired = std::chrono::steady_clock::now() + 5s;
+    while (shared->snapshot().reservations.ownedFinalProcessHostBytes != 0 &&
+           std::chrono::steady_clock::now() < recoveredRetired)
+        std::this_thread::sleep_for(1ms);
+    expectations.expect(shared->snapshot().reservations.ownedFinalProcessHostBytes == 0,
+                        "CPU final backing retires when the retained attempt is released");
+
+    constexpr std::uint64_t mib = 1024ULL * 1024;
+    constexpr std::uint64_t gib = 1024ULL * mib;
+    auto constrained = fixturePhasePolicy(1, 8 * gib - 50 * mib);
+    auto nearCapacity = run(constrained);
+    expectations.expect(nearCapacity && static_cast<bool>(*nearCapacity) &&
+                            constrained->snapshot().reservations.ownedFinalProcessHostBytes ==
+                                4 * sizeof(bloom::render::Rgba32f),
+                        "near-capacity CPU final retains exactly its allocated process pixels");
+    nearCapacity.reset();
+    const auto constrainedRetired = std::chrono::steady_clock::now() + 5s;
+    while (constrained->snapshot().reservations.ownedFinalProcessHostBytes != 0 &&
+           std::chrono::steady_clock::now() < constrainedRetired)
+        std::this_thread::sleep_for(1ms);
+    expectations.expect(constrained->snapshot().reservations.ownedFinalProcessHostBytes == 0,
+                        "near-capacity CPU final backing retires without a held claim");
+    auto ownerless = fixturePhasePolicy(1, 6 * gib, false);
+    auto unrootedRefusal = run(ownerless);
+    const auto* unrootedFailure = unrootedRefusal ? unrootedRefusal->failure() : nullptr;
+    expectations.expect(unrootedFailure &&
+                            unrootedFailure->payloadAs<runtime::EvaluationDiagnosticCode>() &&
+                            *unrootedFailure->payloadAs<runtime::EvaluationDiagnosticCode>() ==
+                                runtime::EvaluationDiagnosticCode::InternalInvariant &&
+                            ownerless->snapshot().reservations.ownedFinalProcessHostBytes == 0,
+                        "CPU final refuses an ownerless root instead of publishing untracked "
+                        "process pixels");
     auto automatic = requestFor(directory.path() / "root-capacity.exr");
     automatic.processingPhasePolicy = shared;
     automatic.evaluation.pixelStorageByteLimit = 0;
@@ -120,8 +162,7 @@ void testProcessingAdmissionBeforeCpuFallback(Expectations& expectations) {
     if (automaticBegin) {
         auto runner = std::move(automaticBegin).takeHandle();
         auto outcome = pumpUntilComplete(runner);
-        expectations.expect(outcome && static_cast<bool>(*outcome) &&
-                                shared->snapshot().reservations.admittedPhases == 0,
+        expectations.expect(outcome && static_cast<bool>(*outcome),
                             "worker resolves omitted pixel limit from the shared sampled root");
     }
     disabled->beginShutdown();

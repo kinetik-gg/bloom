@@ -108,8 +108,24 @@ constexpr auto kBlendModeParameterId = document::ParameterId::fromRaw(0x1010);
 
 [[nodiscard]] std::shared_ptr<runtime::GpuProcessingPhasePolicy>
 fixturePhasePolicy(const std::size_t capacity = 32,
-                   const std::uint64_t usedBytes = 6ULL * 1024 * 1024 * 1024) {
-        auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(capacity);
+                   const std::uint64_t usedBytes = 6ULL * 1024 * 1024 * 1024,
+                   const bool withRetirement = true) {
+        struct RetirementFixture final {
+            std::shared_ptr<bloom::render::PackedHostRetirementOwner> owner =
+                bloom::render::PackedHostRetirementOwner::create();
+            ~RetirementFixture() {
+                owner->beginShutdown();
+                const auto deadline = std::chrono::steady_clock::now() + 5s;
+                while (!owner->exitAcknowledged() && std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::sleep_for(1ms);
+                if (!owner->collect())
+                    std::abort();
+            }
+        };
+        static RetirementFixture retirement;
+        auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(
+            capacity, withRetirement ? retirement.owner
+                                     : std::shared_ptr<bloom::render::PackedHostRetirementOwner>{});
         constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
         runtime::MemoryBudgetState sample;
         sample.machine.availableBytes = 60 * gib;

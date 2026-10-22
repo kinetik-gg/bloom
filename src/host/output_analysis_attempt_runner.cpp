@@ -406,6 +406,7 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                     cpuEvaluation.requireVerifiedMediaSources = true;
                     cpuEvaluation.pixelStorageByteLimit =
                         static_cast<std::size_t>(hostPhase->sourceByteLimit());
+                    cpuEvaluation.finalOutputPhase = hostPhase;
                     const runtime::CpuCompositionEvaluator evaluator;
                     evaluator.setAssetBaseDirectory(assetBaseDirectory);
                     auto evalResult =
@@ -425,6 +426,10 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                     }
                     evaluatedFrame = evalResult.frame();
                 }
+                // The published final image retains its own rooted backing. Drop the evaluation
+                // phase's remaining source/overlap claim after its temporary evaluator/cache has
+                // gone out of scope, before admitting retained attempt metadata.
+                hostPhase.reset();
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
                 }
@@ -499,6 +504,14 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                 // pairing, so a cross-frame payload can never be retained.
                 if (gpuDisplay.isPresent()) {
                     gpuDisplay.processPixelDigest = identityResult.identity()->processPixelDigest();
+                }
+
+                if (gpuProvider) {
+                    // Analysis and identity preparation can outlive the sampled root's freshness
+                    // window. Refresh on this CPU worker before the attempt's retained claim.
+                    gpuProvider->refreshProcessingCapacity(context.cancellation());
+                    if (context.isCancellationRequested())
+                        return runtime::TaskResult<BuildOutcomeV1>::cancelled();
                 }
 
                 auto buildResult = output::buildOutputAnalysisAttemptV1(
