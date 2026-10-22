@@ -241,9 +241,13 @@ void NodeGraphicsScene::refreshValues() {
     if (composition == nullptr) {
         return;
     }
+    std::map<document::NodeId, const document::NodeRecord*> nodes;
+    for (const auto& node : composition->graph().nodes())
+        nodes.emplace(node.id, &node);
     for (auto* item : items()) {
         auto* card = dynamic_cast<NodeItem*>(item);
-        const auto* node = card == nullptr ? nullptr : composition->graph().findNode(card->id());
+        const auto found = card == nullptr ? nodes.end() : nodes.find(card->id());
+        const auto* node = found == nodes.end() ? nullptr : found->second;
         if (node != nullptr) {
             card->refreshCurrentValues(*node, *composition);
         }
@@ -416,8 +420,11 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
     view_ = new NodeGraphicsView(this);
     view_->setScene(scene_);
     installAssetDropTarget(*view_->viewport(), session_, view_);
-    if (auto* controller = session_.assetController())
+    if (auto* controller = session_.assetController()) {
         connect(controller, &AssetController::changed, this, [this] { scene_->update(); });
+        connect(controller, &AssetController::nodeThumbnailsChanged, this,
+                [this] { scene_->update(); });
+    }
     layout->addWidget(view_);
 
     connect(&session_, &CompositionSession::snapshotChanged, this, &NodeGraphEditor::rebuild);

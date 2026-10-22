@@ -1,4 +1,5 @@
 #include <bloom/runtime/animation_sampling.hpp>
+#include <bloom/runtime/curve_compilation.hpp>
 
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_interval.hpp>
@@ -87,6 +88,67 @@ class RoundingModeGuard final {
               runtime::CompiledKeyframeInterpolation::EaseInOut},
              {document::KeyframeId::fromRaw(71), time(1), 1.0,
               runtime::CompiledKeyframeInterpolation::Linear}}};
+}
+
+void testBorrowedDocumentSampling(Expectations& expectations) {
+    document::ScalarAnimationCurve curve{document::AnimationCurveId::fromRaw(91),
+                                         {{document::KeyframeId::fromRaw(1), time(0), -0.0},
+                                          {document::KeyframeId::fromRaw(2), time(2), 8.0}}};
+    for (const auto mode :
+         {document::KeyframeInterpolation::Hold, document::KeyframeInterpolation::Linear,
+          document::KeyframeInterpolation::EaseInOut}) {
+        curve.keyframes.front().outgoingInterpolation = mode;
+        for (const bool customHandles : {false, true}) {
+            curve.keyframes.front().outgoingHandle =
+                customHandles ? document::KeyframeHandle{0.2, 3.0} : document::KeyframeHandle{};
+            const auto compiled = runtime::compileAnimationCurve(curve);
+            for (int numerator = -1; numerator <= 7; ++numerator) {
+                const auto at = time(numerator, 3);
+                const auto borrowed = runtime::sampleAnimationCurve(curve, at);
+                const auto prepared = runtime::sampleAnimationCurve(compiled, at);
+                expectations.expect(
+                    borrowed && prepared && borrowed.segmentStart == prepared.segmentStart &&
+                        std::bit_cast<std::uint64_t>(*borrowed.value) ==
+                            std::bit_cast<std::uint64_t>(*prepared.value),
+                    "borrowed keys preserve compiled endpoint, hold, linear, and Bezier bits");
+            }
+        }
+    }
+    document::Vec2AnimationCurve vec2{curve.id};
+    vec2.components[0].keyframes = curve.keyframes;
+    auto compiled2 = runtime::compileAnimationCurve(vec2);
+    compiled2.defaultValue = {5.0, -0.0};
+    const auto sample2 = runtime::sampleAnimationCurve(vec2, time(1), compiled2.defaultValue);
+    const auto expected2 = runtime::sampleAnimationCurve(compiled2, time(1));
+    expectations.expect(sample2 && expected2 && sample2.value == expected2.value &&
+                            std::signbit(sample2.value->y),
+                        "borrowed Vec2 preserves independent fallback including signed zero");
+    document::Vec3AnimationCurve vec3{curve.id};
+    vec3.components[2].keyframes = curve.keyframes;
+    auto compiled3 = runtime::compileAnimationCurve(vec3);
+    compiled3.defaultValue = {5.0, 7.0, 9.0};
+    expectations.expect(
+        runtime::sampleAnimationCurve(vec3, time(1), compiled3.defaultValue).value ==
+            runtime::sampleAnimationCurve(compiled3, time(1)).value,
+        "borrowed Vec3 preserves defaults on unanimated components");
+    document::Color4AnimationCurve color{curve.id};
+    color.components[1].keyframes = curve.keyframes;
+    auto compiledColor = runtime::compileAnimationCurve(color);
+    compiledColor.defaultValue = {0.1, 0.2, 0.3, 0.4};
+    expectations.expect(
+        runtime::sampleAnimationCurve(color, time(1), compiledColor.defaultValue).value ==
+            runtime::sampleAnimationCurve(compiledColor, time(1)).value,
+        "borrowed colour preserves independent component defaults");
+    curve.keyframes.back().time = curve.keyframes.front().time;
+    expectations.expect(runtime::sampleAnimationCurve(curve, time(1)).error ==
+                            runtime::AnimationSamplingError::InvalidCurve,
+                        "borrowed tables retain ordering validation");
+    curve.keyframes.back().time = time(2);
+    curve.keyframes.front().outgoingInterpolation =
+        static_cast<document::KeyframeInterpolation>(255);
+    expectations.expect(runtime::sampleAnimationCurve(curve, time(1)).error ==
+                            runtime::AnimationSamplingError::UnsupportedInterpolation,
+                        "borrowed tables reject unknown interpolation");
 }
 
 void testEaseInOutAtExactThirds(Expectations& expectations) {
@@ -440,6 +502,7 @@ int main() {
     expectations.expect(runtime::kAnimationSamplingSemanticsVersion == 2,
                         "animation sampling semantics are explicitly versioned");
     testSampling(expectations);
+    testBorrowedDocumentSampling(expectations);
     testVec2AndExtremeTime(expectations);
     testIndependentComponentSampling(expectations);
     testEaseInOutAtExactThirds(expectations);

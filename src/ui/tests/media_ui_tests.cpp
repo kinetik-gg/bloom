@@ -9,6 +9,8 @@
 #include <QFile>
 #include <QGraphicsView>
 #include <QImage>
+#include <QPersistentModelIndex>
+#include <QSignalSpy>
 #include <QStyleOptionGraphicsItem>
 #include <QTemporaryDir>
 #include <QTest>
@@ -273,8 +275,10 @@ void run() {
     const auto waitThumbnail = [&] {
         QElapsedTimer wait;
         wait.start();
-        while (controller.nodeThumbnail(source).isNull() && wait.elapsed() < 15000)
+        while ((controller.thumbnailsPending() || controller.nodeThumbnail(source).isNull()) &&
+               wait.elapsed() < 15000)
             QTest::qWait(10);
+        require(!controller.thumbnailsPending(), "latest thumbnail request completes");
         require(!controller.nodeThumbnail(source).isNull(), "node worker thumbnail arrives");
     };
     const auto renderCard = [&] {
@@ -314,6 +318,8 @@ void run() {
     const auto* range = properties.findChild<ui::kit::KLabel*>("propertiesImageRange");
     require(range && range->text() == cardRange->text(), "Properties and card range agree");
     const auto firstFrame = controller.nodeThumbnail(source);
+    const QPersistentModelIndex stableAssetRow(tree->model()->index(0, 0));
+    QSignalSpy assetChanges(&controller, &ui::AssetController::changed);
     const auto nextFrame = core::RationalTime::create(1, 24);
     require(nextFrame && session.setCurrentTime(*nextFrame), "advance sequence time");
     waitThumbnail();
@@ -324,6 +330,14 @@ void run() {
     waitThumbnail();
     require(controller.nodeThumbnail(source).cacheKey() == firstFrame.cacheKey(),
             "returning to a frame reuses the content and frame proxy cache");
+    for (int i = 0; i < 100; ++i)
+        static_cast<void>(session.setCurrentTime(i % 2 ? core::RationalTime{} : *nextFrame));
+    require(session.setCurrentTime(*nextFrame), "latest burst time");
+    waitThumbnail();
+    require(controller.nodeThumbnail(source).pixelColor(0, 0).lightness() < 75,
+            "time bursts converge to the newest sequence frame");
+    require(assetChanges.empty() && stableAssetRow.isValid(),
+            "time-only node previews preserve Assets rows and emit no asset change");
     const auto setSource = [&](std::string_view role, document::ParameterValue value) {
         const auto* parameter = ui::node_editor::parameterForRole(
             *session.composition()->graph().findNode(source), *session.composition(), role);

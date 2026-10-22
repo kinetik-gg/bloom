@@ -262,12 +262,23 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
                                  media::cache::MediaDiskCache* mediaDiskCache, QObject* parent)
     : QObject(parent), session_(session), host_(host), scheduler_(scheduler), bridge_(bridge),
       mediaDiskCache_(mediaDiskCache) {
+    // Source freshness is independent of the playhead frequency. A burst of time changes
+    // requests one delayed check, without cancelling active work or rebuilding unchanged rows.
+    freshnessTimer_.setSingleShot(true);
+    freshnessTimer_.setInterval(1000);
+    connect(&freshnessTimer_, &QTimer::timeout, this, [this] {
+        assetsDirty_ = true;
+        previewDirty_ = true;
+        if (!previewPending_)
+            startThumbnails();
+    });
     auto& ledger = runtime::processMemoryBudgetLedger();
     ledger.registerCache(
         &proxyCacheBytes_, kProxyCacheByteCapacity, [this] { return proxyCacheBytes_; },
         [this, previous = kProxyCacheByteCapacity](const std::size_t bytes) mutable {
             if (bytes < previous && previewPending_) {
                 previewDirty_ = true;
+                assetsDirty_ = assetsDirty_ || previewIncludesAssets_;
                 preview_.cancel();
             }
             previous = bytes;
@@ -282,6 +293,7 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
             [this, previous = kDecodedAudioByteCapacity](const std::size_t bytes) mutable {
                 if (bytes < previous && previewPending_) {
                     previewDirty_ = true;
+                    assetsDirty_ = assetsDirty_ || previewIncludesAssets_;
                     preview_.cancel();
                 }
                 previous = bytes;
@@ -298,7 +310,9 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
     session_.setAssetController(this);
     connect(&bridge_, &TaskUiBridge::resultsAvailable, this, &AssetController::poll);
     connect(&session_, &CompositionSession::snapshotChanged, this, &AssetController::refresh);
-    connect(&session_, &CompositionSession::currentTimeChanged, this, &AssetController::refresh);
+    connect(&session_, &CompositionSession::currentTimeChanged, this,
+            &AssetController::refreshNodeThumbnails);
+    connect(&session_, &CompositionSession::compositionChanged, this, &AssetController::refresh);
     connect(&host_, &ProjectHost::sessionReplaced, this, [this] {
         dragToken_ = QUuid::createUuid().toByteArray();
         cancel();
@@ -323,6 +337,8 @@ AssetController::~AssetController() {
 }
 bool AssetController::acceptsEdits() const { return host_.canSave(); }
 void AssetController::cancel() {
+    freshnessTimer_.stop();
+    previewDirty_ = false;
     if (busy_)
         import_.cancel();
     if (previewPending_)
@@ -476,22 +492,44 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
     emit activityChanged();
 }
 void AssetController::refresh() {
+    freshnessTimer_.stop();
+    ++contentGeneration_;
+    assetsDirty_ = true;
+    previewDirty_ = true;
+    nodePreviews_.clear();
+    emit nodeThumbnailsChanged();
+    if (previewPending_) {
+        preview_.cancel();
+        return;
+    }
+    startThumbnails();
+}
+
+void AssetController::refreshNodeThumbnails() {
+    if (!freshnessTimer_.isActive())
+        freshnessTimer_.start();
+    // Preserve the visible picture while one bounded job finishes. Time changes replace a single
+    // newest request; they neither cancel useful asset preparation nor rebuild Assets rows.
+    if (!timeDependentNodes_ && !assetsDirty_ && !previewPending_)
+        return;
+    previewDirty_ = true;
+    if (!previewPending_)
+        startThumbnails();
+}
+
+void AssetController::startThumbnails() {
     // A preserved-read-only install retires the document behind CompositionSession. Its hidden
     // projection must not be read until the application rebinds it to decoded content again.
     if (!host_.liveDocumentAndStack().first) {
         if (previewPending_)
             preview_.cancel();
         previewPending_ = false;
+        previewDirty_ = false;
         return;
     }
-    nodePreviews_.clear();
-    emit changed();
-    if (previewPending_) {
-        previewDirty_ = true;
-        preview_.cancel();
+    if (previewPending_)
         return;
-    }
-    previewDirty_ = false;
+    const bool includeAssets = assetsDirty_;
     const auto snapshot = session_.snapshot();
     const auto directory = baseDirectory();
     const auto time = session_.currentTime();
@@ -501,56 +539,70 @@ void AssetController::refresh() {
         return;
     }
     const auto& colorIntent = *capturedColor;
-    const auto* composition = session_.composition();
-    const auto rate =
-        composition ? composition->format().frameRate() : document::FrameRate::framesPerSecond24();
-    std::vector<runtime::CompiledImageSource> sources;
-    if (composition)
-        for (const auto& node : composition->graph().nodes()) {
-            if (node.typeId != "bloom.image-source" && node.typeId != "bloom.video-source")
-                continue;
-            runtime::CompiledImageSource source;
-            source.sourceNodeId = node.id;
-            for (const auto& binding : node.parameters) {
-                const auto* parameter = composition->parameters().find(binding.parameterId);
-                const auto* constant =
-                    parameter ? std::get_if<document::ConstantValueSource>(&parameter->source)
-                              : nullptr;
-                if (!constant)
-                    continue;
-                if (binding.role == "asset") {
-                    if (const auto* id = std::get_if<std::string>(&constant->value))
-                        if (const auto* asset =
-                                snapshot.project().findAsset(document::AssetId::fromRaw(
-                                    QString::fromStdString(*id).toULongLong())))
-                            source.asset = *asset;
-                } else if (const auto* integer = std::get_if<std::int64_t>(&constant->value)) {
-                    if (binding.role == "startFrame")
-                        source.startFrame = *integer;
-                    if (binding.role == "loopMode")
-                        source.loopMode = *integer;
-                    if (binding.role == "colorSpace")
-                        source.colorSpace = *integer;
-                } else if (binding.role == "inputColorSpaceId") {
-                    if (const auto* value = std::get_if<std::string>(&constant->value))
-                        source.inputColorSpaceId = *value;
-                } else if (binding.role == "premultiply") {
-                    if (const auto* value = std::get_if<bool>(&constant->value))
-                        source.premultiply = *value;
-                }
-            }
-            sources.push_back(std::move(source));
-        }
+    const auto* currentComposition = session_.composition();
+    const auto rate = currentComposition ? currentComposition->format().frameRate()
+                                         : document::FrameRate::framesPerSecond24();
     auto submission = scheduler_.submit<std::shared_ptr<Thumbnails>>(
         runtime::TaskRequest(
             "Media thumbnails",
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Background, runtime::TaskExecutor::BlockingIo),
-        [snapshot, directory, time, rate, colorIntent, sources = std::move(sources),
-         cached = thumbnailCache_, cachedAudio = audioBuffers_, cachedWaveforms = waveforms_,
-         cachedPreviews = previews_, diskCache = mediaDiskCache_, proxyOwner = &proxyCacheBytes_,
+        [snapshot, directory, time, rate, colorIntent, includeAssets,
+         compositionId = session_.compositionId(), cached = thumbnailCache_,
+         cachedNodes = nodePreviews_, cachedAudio = includeAssets ? audioBuffers_ : AudioBuffers{},
+         cachedWaveforms = includeAssets ? waveforms_ : Waveforms{},
+         cachedPreviews = includeAssets ? previews_ : Previews{}, diskCache = mediaDiskCache_,
+         proxyOwner = &proxyCacheBytes_,
          audioOwner = &decodedAudioBytes_](runtime::TaskContext& context) mutable {
+            const auto* composition = snapshot.project().findComposition(compositionId);
+            std::vector<runtime::CompiledImageSource> sources;
+            if (composition)
+                for (const auto& node : composition->graph().nodes()) {
+                    if (context.isCancellationRequested())
+                        return runtime::TaskResult<std::shared_ptr<Thumbnails>>::cancelled();
+                    if (node.typeId != "bloom.image-source" && node.typeId != "bloom.video-source")
+                        continue;
+                    runtime::CompiledImageSource source;
+                    source.sourceNodeId = node.id;
+                    for (const auto& binding : node.parameters) {
+                        const auto* parameter = composition->parameters().find(binding.parameterId);
+                        const auto* constant =
+                            parameter
+                                ? std::get_if<document::ConstantValueSource>(&parameter->source)
+                                : nullptr;
+                        if (!constant)
+                            continue;
+                        if (binding.role == "asset") {
+                            if (const auto* id = std::get_if<std::string>(&constant->value))
+                                if (const auto* asset =
+                                        snapshot.project().findAsset(document::AssetId::fromRaw(
+                                            QString::fromStdString(*id).toULongLong())))
+                                    source.asset = *asset;
+                        } else if (const auto* integer =
+                                       std::get_if<std::int64_t>(&constant->value)) {
+                            if (binding.role == "startFrame")
+                                source.startFrame = *integer;
+                            if (binding.role == "loopMode")
+                                source.loopMode = *integer;
+                            if (binding.role == "colorSpace")
+                                source.colorSpace = *integer;
+                        } else if (binding.role == "inputColorSpaceId") {
+                            if (const auto* value = std::get_if<std::string>(&constant->value))
+                                source.inputColorSpaceId = *value;
+                        } else if (binding.role == "premultiply") {
+                            if (const auto* value = std::get_if<bool>(&constant->value))
+                                source.premultiply = *value;
+                        }
+                    }
+                    if (includeAssets ||
+                        (source.asset && source.asset->kind == document::AssetKind::Sequence))
+                        sources.push_back(std::move(source));
+                }
             auto results = std::make_shared<Thumbnails>();
+            results->timeDependentNodes = std::ranges::any_of(sources, [](const auto& source) {
+                return source.asset && source.asset->kind == document::AssetKind::Sequence;
+            });
+            results->nodes = std::move(cachedNodes);
             results->cache = std::move(cached);
             // The proxy cache carries over from the previous run, so its byte account has to carry
             // over with it: starting from zero here would let the map grow past the capacity by
@@ -581,9 +633,10 @@ void AssetController::refresh() {
                 results->proxyBytes =
                     trimProxyStorage(results->cache, results->assets, results->nodes, limit);
             };
-            const auto decode = [&](const runtime::CompiledImageSource& source) {
+            const auto decode = [&](const runtime::CompiledImageSource& source,
+                                    const core::RationalTime sampleTime) {
                 Preview preview;
-                const auto selected = selectThumbnail(source, time, rate, directory,
+                const auto selected = selectThumbnail(source, sampleTime, rate, directory,
                                                       context.cancellation(), colorIntent);
                 preview.key = selected.cacheKey;
                 preview.inputColorSpaceName = selected.inputColorSpaceName;
@@ -649,216 +702,228 @@ void AssetController::refresh() {
                     {.phase = "Media thumbnails",
                      .subphase = "Decoding proxies",
                      .completed = ++completed,
-                     .total = snapshot.project().assets().size() + sources.size()});
+                     .total = (includeAssets ? snapshot.project().assets().size() : 0) +
+                              sources.size()});
             };
-            for (const auto& asset : snapshot.project().assets()) {
-                if (context.isCancellationRequested())
-                    return runtime::TaskResult<std::shared_ptr<Thumbnails>>::cancelled();
-                if (asset.kind == document::AssetKind::Video) {
-                    Preview preview;
-                    preview.missing = true;
-                    const auto digest = asset.contentDigest.toLowercaseHex();
-                    const auto path = media::resolveImagePath(asset.locator.path,
-                                                              asset.locator.relinkHint, directory);
-                    media::video::VideoDecodeSession video(path);
-                    const auto probe = runtime::video::probeMetadata(asset);
-                    const bool available = !video.verifySource(
-                        asset.contentDigest, [&] { return context.isCancellationRequested(); });
-                    const auto stream =
-                        std::ranges::find(probe.streams, media::provider::MediaKind::Video,
-                                          &media::provider::StreamDescriptor::kind);
-                    std::shared_ptr<const color::CpuColorSpaceProcessor> inputProcessor;
-                    std::string inputId;
-                    std::string workingId;
-                    core::Sha256Digest configRevision;
-                    bool automatic = false;
-                    bool colorAvailable = false;
-                    if (stream != probe.streams.end()) {
-                        const auto config = runtime::detail::resolveInputColorConfig(colorIntent);
-                        if (config) {
-                            const media::provider::ColourTags tags{
-                                stream->colour.primaries, stream->colour.transfer,
-                                stream->colour.matrix, stream->colour.range};
-                            const auto resolution = media::video::resolveVideoInputColorSpace(
-                                *config, tags,
-                                static_cast<std::uint32_t>(asset.interpretation.colorSpace),
-                                asset.interpretation.inputColorSpaceId);
-                            inputId = resolution.id;
-                            workingId = std::string(config->processColorSpaceId());
-                            configRevision = config->expectedRevision();
-                            automatic = resolution.automatic;
-                            preview.inputColorSpaceName = resolution.name;
-                            preview.inputColorSpaceWarning = resolution.warning;
-                            if (resolution.noConversion) {
-                                colorAvailable = true;
-                            } else if (!resolution.id.empty()) {
-                                std::string diagnostic;
-                                inputProcessor = runtime::detail::prepareInputColorProcessor(
-                                    *config,
-                                    runtime::detail::InputColorSpaceResolution{
-                                        resolution.id, resolution.name, resolution.warning,
-                                        resolution.noConversion, resolution.automatic},
-                                    diagnostic);
-                                if (!resolution.noConversion && !inputProcessor) {
-                                    preview.inputColorSpaceWarning = std::move(diagnostic);
-                                    inputId.clear();
-                                } else
+            if (includeAssets)
+                for (const auto& asset : snapshot.project().assets()) {
+                    if (context.isCancellationRequested())
+                        return runtime::TaskResult<std::shared_ptr<Thumbnails>>::cancelled();
+                    if (asset.kind == document::AssetKind::Video) {
+                        Preview preview;
+                        preview.missing = true;
+                        const auto digest = asset.contentDigest.toLowercaseHex();
+                        const auto path = media::resolveImagePath(
+                            asset.locator.path, asset.locator.relinkHint, directory);
+                        media::video::VideoDecodeSession video(path);
+                        const auto probe = runtime::video::probeMetadata(asset);
+                        const bool available = !video.verifySource(
+                            asset.contentDigest, [&] { return context.isCancellationRequested(); });
+                        const auto stream =
+                            std::ranges::find(probe.streams, media::provider::MediaKind::Video,
+                                              &media::provider::StreamDescriptor::kind);
+                        std::shared_ptr<const color::CpuColorSpaceProcessor> inputProcessor;
+                        std::string inputId;
+                        std::string workingId;
+                        core::Sha256Digest configRevision;
+                        bool automatic = false;
+                        bool colorAvailable = false;
+                        if (stream != probe.streams.end()) {
+                            const auto config =
+                                runtime::detail::resolveInputColorConfig(colorIntent);
+                            if (config) {
+                                const media::provider::ColourTags tags{
+                                    stream->colour.primaries, stream->colour.transfer,
+                                    stream->colour.matrix, stream->colour.range};
+                                const auto resolution = media::video::resolveVideoInputColorSpace(
+                                    *config, tags,
+                                    static_cast<std::uint32_t>(asset.interpretation.colorSpace),
+                                    asset.interpretation.inputColorSpaceId);
+                                inputId = resolution.id;
+                                workingId = std::string(config->processColorSpaceId());
+                                configRevision = config->expectedRevision();
+                                automatic = resolution.automatic;
+                                preview.inputColorSpaceName = resolution.name;
+                                preview.inputColorSpaceWarning = resolution.warning;
+                                if (resolution.noConversion) {
                                     colorAvailable = true;
+                                } else if (!resolution.id.empty()) {
+                                    std::string diagnostic;
+                                    inputProcessor = runtime::detail::prepareInputColorProcessor(
+                                        *config,
+                                        runtime::detail::InputColorSpaceResolution{
+                                            resolution.id, resolution.name, resolution.warning,
+                                            resolution.noConversion, resolution.automatic},
+                                        diagnostic);
+                                    if (!resolution.noConversion && !inputProcessor) {
+                                        preview.inputColorSpaceWarning = std::move(diagnostic);
+                                        inputId.clear();
+                                    } else
+                                        colorAvailable = true;
+                                }
+                            } else {
+                                preview.inputColorSpaceWarning =
+                                    "The selected OCIO input configuration is unavailable";
                             }
-                        } else {
-                            preview.inputColorSpaceWarning =
-                                "The selected OCIO input configuration is unavailable";
                         }
-                    }
-                    preview.inputColorSpaceAutomatic = automatic;
-                    const auto revision = configRevision.toLowercaseHex();
-                    preview.key = std::string(digest.begin(), digest.end());
-                    preview.key += ":video:";
-                    preview.key +=
-                        std::to_string(static_cast<unsigned>(asset.interpretation.colorSpace));
-                    preview.key += ':';
-                    preview.key += inputId;
-                    preview.key += ':';
-                    preview.key += workingId;
-                    preview.key += ':';
-                    preview.key.append(revision.begin(), revision.end());
-                    const auto cachedPreview = results->cache.find(preview.key);
-                    if (available && colorAvailable && cachedPreview != results->cache.end()) {
-                        preview.image = cachedPreview->second;
-                        preview.missing = false;
-                    }
-                    if (available && colorAvailable && preview.image.isNull() &&
-                        stream != probe.streams.end()) {
-                        const auto frame = video.frame(
-                            probe, stream->id, 0, 0, nullptr, inputId, workingId, configRevision,
-                            [&] { return context.isCancellationRequested(); });
-                        if (const auto* product =
-                                std::get_if<std::shared_ptr<const media::provider::FrameProduct>>(
-                                    &frame)) {
-                            const auto window =
-                                render::ImageWindow::create(0, 0, asset.width, asset.height);
-                            if (window) {
-                                const auto descriptor = render::Rgba32fImageDescriptor::create(
-                                    *window.value(), *window.value(),
-                                    core::PixelAspectRatio::square());
-                                if (descriptor) {
-                                    const auto scale =
-                                        std::min(1.0, 64.0 / static_cast<double>(std::max(
-                                                                 asset.width, asset.height)));
-                                    const auto pixels = media::video::videoToSceneLinear(
-                                        **product,
-                                        static_cast<std::uint32_t>(asset.interpretation.colorSpace),
-                                        inputId, inputProcessor, *descriptor.value(), scale, scale,
-                                        65536, [&] { return context.isCancellationRequested(); });
-                                    if (const auto* image =
-                                            std::get_if<render::Rgba32fImage>(&pixels)) {
-                                        const auto extent =
-                                            image->descriptor()->dataWindow().extent();
-                                        preview.image = QImage(static_cast<int>(extent.width()),
-                                                               static_cast<int>(extent.height()),
-                                                               QImage::Format_RGBA8888);
-                                        for (std::uint32_t y = 0; y < extent.height(); ++y)
-                                            for (std::uint32_t x = 0; x < extent.width(); ++x) {
-                                                const auto& pixel =
-                                                    image->pixels()[static_cast<std::size_t>(y) *
-                                                                        extent.width() +
-                                                                    x];
-                                                const auto alpha = pixel.alpha();
-                                                auto* output =
-                                                    preview.image.scanLine(static_cast<int>(y)) +
-                                                    static_cast<std::ptrdiff_t>(x) * 4;
-                                                output[0] =
-                                                    srgb(alpha > 0 ? pixel.red() / alpha : 0);
-                                                output[1] =
-                                                    srgb(alpha > 0 ? pixel.green() / alpha : 0);
-                                                output[2] =
-                                                    srgb(alpha > 0 ? pixel.blue() / alpha : 0);
-                                                output[3] = static_cast<unsigned char>(
-                                                    std::lround(alpha * 255.0F));
-                                            }
-                                        preview.missing = false;
+                        preview.inputColorSpaceAutomatic = automatic;
+                        const auto revision = configRevision.toLowercaseHex();
+                        preview.key = std::string(digest.begin(), digest.end());
+                        preview.key += ":video:";
+                        preview.key +=
+                            std::to_string(static_cast<unsigned>(asset.interpretation.colorSpace));
+                        preview.key += ':';
+                        preview.key += inputId;
+                        preview.key += ':';
+                        preview.key += workingId;
+                        preview.key += ':';
+                        preview.key.append(revision.begin(), revision.end());
+                        const auto cachedPreview = results->cache.find(preview.key);
+                        if (available && colorAvailable && cachedPreview != results->cache.end()) {
+                            preview.image = cachedPreview->second;
+                            preview.missing = false;
+                        }
+                        if (available && colorAvailable && preview.image.isNull() &&
+                            stream != probe.streams.end()) {
+                            const auto frame = video.frame(
+                                probe, stream->id, 0, 0, nullptr, inputId, workingId,
+                                configRevision, [&] { return context.isCancellationRequested(); });
+                            if (const auto* product = std::get_if<
+                                    std::shared_ptr<const media::provider::FrameProduct>>(&frame)) {
+                                const auto window =
+                                    render::ImageWindow::create(0, 0, asset.width, asset.height);
+                                if (window) {
+                                    const auto descriptor = render::Rgba32fImageDescriptor::create(
+                                        *window.value(), *window.value(),
+                                        core::PixelAspectRatio::square());
+                                    if (descriptor) {
+                                        const auto scale =
+                                            std::min(1.0, 64.0 / static_cast<double>(std::max(
+                                                                     asset.width, asset.height)));
+                                        const auto pixels = media::video::videoToSceneLinear(
+                                            **product,
+                                            static_cast<std::uint32_t>(
+                                                asset.interpretation.colorSpace),
+                                            inputId, inputProcessor, *descriptor.value(), scale,
+                                            scale, 65536,
+                                            [&] { return context.isCancellationRequested(); });
+                                        if (const auto* image =
+                                                std::get_if<render::Rgba32fImage>(&pixels)) {
+                                            const auto extent =
+                                                image->descriptor()->dataWindow().extent();
+                                            preview.image =
+                                                QImage(static_cast<int>(extent.width()),
+                                                       static_cast<int>(extent.height()),
+                                                       QImage::Format_RGBA8888);
+                                            for (std::uint32_t y = 0; y < extent.height(); ++y)
+                                                for (std::uint32_t x = 0; x < extent.width(); ++x) {
+                                                    const auto& pixel =
+                                                        image
+                                                            ->pixels()[static_cast<std::size_t>(y) *
+                                                                           extent.width() +
+                                                                       x];
+                                                    const auto alpha = pixel.alpha();
+                                                    auto* output =
+                                                        preview.image.scanLine(
+                                                            static_cast<int>(y)) +
+                                                        static_cast<std::ptrdiff_t>(x) * 4;
+                                                    output[0] =
+                                                        srgb(alpha > 0 ? pixel.red() / alpha : 0);
+                                                    output[1] =
+                                                        srgb(alpha > 0 ? pixel.green() / alpha : 0);
+                                                    output[2] =
+                                                        srgb(alpha > 0 ? pixel.blue() / alpha : 0);
+                                                    output[3] = static_cast<unsigned char>(
+                                                        std::lround(alpha * 255.0F));
+                                                }
+                                            preview.missing = false;
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                    if (!preview.image.isNull()) {
-                        keepProxy(preview.key, preview.image);
-                    }
-                    const auto previous = cachedPreviews.find(asset.id);
-                    const auto cachedBuffer = cachedAudio.find(asset.id);
-                    const auto waveform = cachedWaveforms.find(asset.id);
-                    if (available && previous != cachedPreviews.end() &&
-                        previous->second.key == preview.key && cachedBuffer != cachedAudio.end() &&
-                        waveform != cachedWaveforms.end()) {
-                        keepAudio(asset.id, cachedBuffer->second);
-                        results->waveforms.emplace(asset.id, waveform->second);
-                    } else if (available && asset.channels > 0) {
-                        auto decoded = media::video::decodeAudioClip(
-                            video, probe, [&] { return context.isCancellationRequested(); });
-                        if (auto* audio = std::get_if<media::audio::AudioBuffer>(&decoded)) {
-                            const auto summary = media::audio::waveformSummary(*audio, 256);
-                            if (summary.value())
+                        if (!preview.image.isNull()) {
+                            keepProxy(preview.key, preview.image);
+                        }
+                        const auto previous = cachedPreviews.find(asset.id);
+                        const auto cachedBuffer = cachedAudio.find(asset.id);
+                        const auto waveform = cachedWaveforms.find(asset.id);
+                        if (available && previous != cachedPreviews.end() &&
+                            previous->second.key == preview.key &&
+                            cachedBuffer != cachedAudio.end() &&
+                            waveform != cachedWaveforms.end()) {
+                            keepAudio(asset.id, cachedBuffer->second);
+                            results->waveforms.emplace(asset.id, waveform->second);
+                        } else if (available && asset.channels > 0) {
+                            auto decoded = media::video::decodeAudioClip(
+                                video, probe, [&] { return context.isCancellationRequested(); });
+                            if (auto* audio = std::get_if<media::audio::AudioBuffer>(&decoded)) {
+                                const auto summary = media::audio::waveformSummary(*audio, 256);
+                                if (summary.value())
+                                    results->waveforms.emplace(
+                                        asset.id,
+                                        std::make_shared<const media::audio::WaveformSummary>(
+                                            *summary.value()));
+                                keepAudio(asset.id,
+                                          std::make_shared<const media::audio::AudioBuffer>(
+                                              std::move(*audio)));
+                            }
+                        }
+                        results->assets.emplace(asset.id, std::move(preview));
+                    } else if (asset.kind == document::AssetKind::Audio) {
+                        Preview preview;
+                        preview.missing = true;
+                        auto path = directory / asset.locator.path;
+                        if (!std::filesystem::exists(path) && !asset.locator.relinkHint.empty())
+                            path = nativePath(QString::fromStdString(asset.locator.relinkHint));
+                        auto decoded = media::audio::decodeAudio(path);
+                        if (decoded.value() != nullptr) {
+                            const auto summary =
+                                media::audio::waveformSummary(*decoded.value(), 256);
+                            if (summary.value() != nullptr) {
+                                preview.missing = false;
                                 results->waveforms.emplace(
                                     asset.id, std::make_shared<const media::audio::WaveformSummary>(
                                                   *summary.value()));
-                            keepAudio(asset.id, std::make_shared<const media::audio::AudioBuffer>(
-                                                    std::move(*audio)));
+                                keepAudio(asset.id,
+                                          std::make_shared<const media::audio::AudioBuffer>(
+                                              std::move(*decoded.value())));
+                            }
                         }
+                        results->assets.emplace(asset.id, std::move(preview));
+                    } else if (asset.kind == document::AssetKind::Lut) {
+                        Preview preview;
+                        const auto path = media::resolveImagePath(
+                            asset.locator.path, asset.locator.relinkHint, directory);
+                        const auto lut = color::readLutFile(
+                            path, [&context] { return context.isCancellationRequested(); });
+                        preview.missing =
+                            lut.error != color::LutError::None || lut.digest != asset.contentDigest;
+                        results->assets.emplace(asset.id, std::move(preview));
+                    } else if (asset.kind == document::AssetKind::Font) {
+                        Preview preview;
+                        preview.missing = !fontFileMatches(asset);
+                        results->assets.emplace(asset.id, std::move(preview));
+                    } else {
+                        runtime::CompiledImageSource source;
+                        source.asset = asset;
+                        source.premultiply = asset.interpretation.alphaAssociation ==
+                                             document::AssetAlphaAssociation::Straight;
+                        results->assets.emplace(asset.id, decode(source, core::RationalTime{}));
                     }
-                    results->assets.emplace(asset.id, std::move(preview));
-                } else if (asset.kind == document::AssetKind::Audio) {
-                    Preview preview;
-                    preview.missing = true;
-                    auto path = directory / asset.locator.path;
-                    if (!std::filesystem::exists(path) && !asset.locator.relinkHint.empty())
-                        path = nativePath(QString::fromStdString(asset.locator.relinkHint));
-                    auto decoded = media::audio::decodeAudio(path);
-                    if (decoded.value() != nullptr) {
-                        const auto summary = media::audio::waveformSummary(*decoded.value(), 256);
-                        if (summary.value() != nullptr) {
-                            preview.missing = false;
-                            results->waveforms.emplace(
-                                asset.id, std::make_shared<const media::audio::WaveformSummary>(
-                                              *summary.value()));
-                            keepAudio(asset.id, std::make_shared<const media::audio::AudioBuffer>(
-                                                    std::move(*decoded.value())));
-                        }
-                    }
-                    results->assets.emplace(asset.id, std::move(preview));
-                } else if (asset.kind == document::AssetKind::Lut) {
-                    Preview preview;
-                    const auto path = media::resolveImagePath(asset.locator.path,
-                                                              asset.locator.relinkHint, directory);
-                    const auto lut = color::readLutFile(
-                        path, [&context] { return context.isCancellationRequested(); });
-                    preview.missing =
-                        lut.error != color::LutError::None || lut.digest != asset.contentDigest;
-                    results->assets.emplace(asset.id, std::move(preview));
-                } else if (asset.kind == document::AssetKind::Font) {
-                    Preview preview;
-                    preview.missing = !fontFileMatches(asset);
-                    results->assets.emplace(asset.id, std::move(preview));
-                } else {
-                    runtime::CompiledImageSource source;
-                    source.asset = asset;
-                    source.premultiply = asset.interpretation.alphaAssociation ==
-                                         document::AssetAlphaAssociation::Straight;
-                    results->assets.emplace(asset.id, decode(source));
+                    results->proxyBytes = trimProxyStorage(results->cache, results->assets,
+                                                           results->nodes, proxyLimit());
+                    progress();
                 }
-                results->proxyBytes =
-                    trimProxyStorage(results->cache, results->assets, results->nodes, proxyLimit());
-                progress();
-            }
             for (const auto& source : sources) {
                 if (context.isCancellationRequested())
                     return runtime::TaskResult<std::shared_ptr<Thumbnails>>::cancelled();
                 if (source.asset && source.asset->kind == document::AssetKind::Video) {
                     const auto asset = results->assets.find(source.asset->id);
                     if (asset != results->assets.end())
-                        results->nodes.emplace(source.sourceNodeId, asset->second);
+                        results->nodes.insert_or_assign(source.sourceNodeId, asset->second);
                 } else
-                    results->nodes.emplace(source.sourceNodeId, decode(source));
+                    results->nodes.insert_or_assign(source.sourceNodeId, decode(source, time));
                 results->proxyBytes =
                     trimProxyStorage(results->cache, results->assets, results->nodes, proxyLimit());
                 progress();
@@ -868,6 +933,10 @@ void AssetController::refresh() {
     if (submission.accepted()) {
         preview_ = std::move(submission.handle);
         previewPending_ = true;
+        previewDirty_ = false;
+        assetsDirty_ = false;
+        previewIncludesAssets_ = includeAssets;
+        previewContentGeneration_ = contentGeneration_;
         bridge_.wake();
     }
 }
@@ -899,23 +968,46 @@ void AssetController::poll() {
         auto result = preview_.tryTakeResult();
         if (result) {
             previewPending_ = false;
-            if (previewDirty_) {
-                refresh();
-                return;
-            }
-            if (result->value().has_value() && *result->value()) {
-                previews_ = std::move((*result->value())->assets);
+            const bool currentContent = previewContentGeneration_ == contentGeneration_;
+            if (currentContent && result->value().has_value() && *result->value()) {
+                timeDependentNodes_ = (*result->value())->timeDependentNodes;
+                const auto samePreview = [](const auto& left, const auto& right) {
+                    return left.first == right.first && left.second.key == right.second.key &&
+                           left.second.image.cacheKey() == right.second.image.cacheKey() &&
+                           left.second.missing == right.second.missing &&
+                           left.second.inputColorSpaceName == right.second.inputColorSpaceName &&
+                           left.second.inputColorSpaceWarning ==
+                               right.second.inputColorSpaceWarning &&
+                           left.second.inputColorSpaceAutomatic ==
+                               right.second.inputColorSpaceAutomatic;
+                };
+                const auto& prepared = **result->value();
+                const bool assetsChanged =
+                    previewIncludesAssets_ &&
+                    (previews_.size() != prepared.assets.size() ||
+                     !std::equal(previews_.begin(), previews_.end(), prepared.assets.begin(),
+                                 samePreview) ||
+                     waveforms_ != prepared.waveforms || audioBuffers_ != prepared.audioBuffers);
+                if (previewIncludesAssets_) {
+                    previews_ = std::move((*result->value())->assets);
+                    waveforms_ = std::move((*result->value())->waveforms);
+                    audioBuffers_ = std::move((*result->value())->audioBuffers);
+                }
                 nodePreviews_ = std::move((*result->value())->nodes);
                 thumbnailCache_ = std::move((*result->value())->cache);
-                waveforms_ = std::move((*result->value())->waveforms);
-                audioBuffers_ = std::move((*result->value())->audioBuffers);
                 auto& ledger = runtime::processMemoryBudgetLedger();
                 proxyCacheBytes_ = trimProxyStorage(thumbnailCache_, previews_, nodePreviews_,
                                                     ledger.cacheByteBudget(&proxyCacheBytes_));
                 decodedAudioBytes_ =
                     trimAudioStorage(audioBuffers_, ledger.cacheByteBudget(&decodedAudioBytes_));
-                emit changed();
+                if (assetsChanged)
+                    emit changed();
+                emit nodeThumbnailsChanged();
             }
+            if (previewDirty_ && !assetsDirty_ && !timeDependentNodes_)
+                previewDirty_ = false;
+            if (previewDirty_)
+                startThumbnails();
         }
     }
 }

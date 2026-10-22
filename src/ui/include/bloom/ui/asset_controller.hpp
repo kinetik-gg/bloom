@@ -3,6 +3,7 @@
 #include <QImage>
 #include <QObject>
 #include <QStringList>
+#include <QTimer>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/media/audio/audio.hpp>
@@ -50,11 +51,15 @@ class AssetController final : public QObject {
     // but "small" has to be a measured claim, not an assumption in a comment.
     [[nodiscard]] std::size_t proxyCacheBytes() const noexcept { return proxyCacheBytes_; }
     [[nodiscard]] std::size_t decodedAudioBytes() const noexcept { return decodedAudioBytes_; }
+    [[nodiscard]] bool thumbnailsPending() const noexcept {
+        return previewPending_ || previewDirty_;
+    }
     void cancel();
     [[nodiscard]] bool acceptsEdits() const;
     [[nodiscard]] QByteArray dragToken() const { return dragToken_; }
   signals:
     void changed();
+    void nodeThumbnailsChanged();
     void activityChanged();
     void diagnostic(QString message);
 
@@ -83,9 +88,12 @@ class AssetController final : public QObject {
         // so the controller can report it without walking every entry on the interface thread.
         std::size_t proxyBytes = 0;
         std::size_t audioBytes = 0;
+        bool timeDependentNodes = false;
     };
     void prepare(const QStringList& paths, document::AssetId relinkId = {});
     void refresh();
+    void refreshNodeThumbnails();
+    void startThumbnails();
     void poll();
     CompositionSession& session_;
     ProjectHost& host_;
@@ -103,8 +111,14 @@ class AssetController final : public QObject {
     std::size_t proxyCacheBytes_ = 0;
     std::size_t decodedAudioBytes_ = 0;
     QByteArray dragToken_;
+    QTimer freshnessTimer_;
     bool busy_ = false;
     bool previewPending_ = false;
     bool previewDirty_ = false;
+    bool assetsDirty_ = true;
+    bool previewIncludesAssets_ = false;
+    bool timeDependentNodes_ = true;
+    std::uint64_t contentGeneration_ = 0;
+    std::uint64_t previewContentGeneration_ = 0;
 };
 } // namespace bloom::ui

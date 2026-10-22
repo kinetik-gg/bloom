@@ -23,6 +23,28 @@ using bloom::runtime::CompiledKeyframeInterpolation;
     return cancellation != nullptr && cancellation->isCancellationRequested();
 }
 
+[[nodiscard]] CompiledKeyframeInterpolation
+interpolationMode(CompiledKeyframeInterpolation mode) noexcept {
+    return mode;
+}
+[[nodiscard]] CompiledKeyframeInterpolation
+interpolationMode(bloom::document::KeyframeInterpolation mode) noexcept {
+    switch (mode) {
+    case bloom::document::KeyframeInterpolation::Hold:
+        return CompiledKeyframeInterpolation::Hold;
+    case bloom::document::KeyframeInterpolation::Linear:
+        return CompiledKeyframeInterpolation::Linear;
+    case bloom::document::KeyframeInterpolation::EaseInOut:
+        return CompiledKeyframeInterpolation::EaseInOut;
+    }
+    return static_cast<CompiledKeyframeInterpolation>(255);
+}
+
+template <typename Keyframes> struct ScalarCurveView {
+    bloom::document::AnimationCurveId id;
+    const Keyframes& keyframes;
+};
+
 [[nodiscard]] bool supportedInterpolation(const CompiledKeyframeInterpolation mode) noexcept {
     return mode == CompiledKeyframeInterpolation::Hold ||
            mode == CompiledKeyframeInterpolation::Linear ||
@@ -31,8 +53,9 @@ using bloom::runtime::CompiledKeyframeInterpolation;
 
 // Every compiled curve a sampler validates is a SCALAR table: a vector or colour parameter is
 // sampled component by component, and a component is a scalar curve.
+template <typename Curve>
 [[nodiscard]] AnimationSamplingError
-validateForSampling(const bloom::runtime::CompiledScalarCurve& curve,
+validateForSampling(const Curve& curve,
                     const bloom::runtime::CancellationToken* cancellation) noexcept {
     if (!curve.id.isValid() || curve.keyframes.empty()) {
         return AnimationSamplingError::InvalidCurve;
@@ -61,11 +84,12 @@ validateForSampling(const bloom::runtime::CompiledScalarCurve& curve,
         if (cancelled(cancellation)) {
             return AnimationSamplingError::Cancelled;
         }
-        if (!supportedInterpolation(keyframe.outgoingInterpolation)) {
+        if (!supportedInterpolation(interpolationMode(keyframe.outgoingInterpolation))) {
             return AnimationSamplingError::UnsupportedInterpolation;
         }
     }
-    return curve.keyframes.back().outgoingInterpolation == CompiledKeyframeInterpolation::Linear
+    return interpolationMode(curve.keyframes.back().outgoingInterpolation) ==
+                   CompiledKeyframeInterpolation::Linear
                ? AnimationSamplingError::None
                : AnimationSamplingError::UnsupportedInterpolation;
 }
@@ -164,10 +188,10 @@ validateForSampling(const bloom::runtime::CompiledScalarCurve& curve,
 // incoming one, with handle times measured as fractions of the segment. When both handle TIMES are
 // bitwise default the x cubic is the identity (control points 0, 1/3, 2/3, 1) and the interval
 // factor is already the curve parameter, so the inversion is skipped entirely.
-[[nodiscard]] AnimationSamplingError
-sampleBezierSegment(const bloom::runtime::CompiledScalarKeyframe& left,
-                    const bloom::runtime::CompiledScalarKeyframe& right, const double factor,
-                    double& out) noexcept {
+template <typename Keyframe>
+[[nodiscard]] AnimationSamplingError sampleBezierSegment(const Keyframe& left,
+                                                         const Keyframe& right, const double factor,
+                                                         double& out) noexcept {
     const double outgoingTime = left.outgoingHandle.time;
     const double incomingTime = right.incomingHandle.time;
     const double parameter =
@@ -183,8 +207,8 @@ sampleBezierSegment(const bloom::runtime::CompiledScalarKeyframe& left,
     return AnimationSamplingError::None;
 }
 
-[[nodiscard]] auto interval(const bloom::runtime::CompiledScalarCurve& curve,
-                            const RationalTime time) noexcept {
+template <typename Curve>
+[[nodiscard]] auto interval(const Curve& curve, const RationalTime time) noexcept {
     return std::upper_bound(curve.keyframes.begin(), curve.keyframes.end(), time,
                             [](const auto requestedTime, const auto& keyframe) {
                                 return requestedTime < keyframe.time;
@@ -206,8 +230,8 @@ namespace {
 // parameter's own, and each component of a vector or colour parameter, which is what composes the
 // typed value the caller asked for. The rules -- extrapolation, Hold, Linear, the eased factor and
 // the Bezier segment -- are unchanged and remain sampling semantics version 2.
-AnimationSampleResult<double> sampleCurve(const CompiledScalarCurve& curve,
-                                          const core::RationalTime time,
+template <typename Curve>
+AnimationSampleResult<double> sampleCurve(const Curve& curve, const core::RationalTime time,
                                           const CancellationToken* cancellation) noexcept {
     if (const auto error = validateForSampling(curve, cancellation);
         error != AnimationSamplingError::None) {
@@ -224,13 +248,14 @@ AnimationSampleResult<double> sampleCurve(const CompiledScalarCurve& curve,
 
     const auto right = interval(curve, time);
     const auto& leftKeyframe = *(right - 1);
-    if (time == leftKeyframe.time ||
-        leftKeyframe.outgoingInterpolation == CompiledKeyframeInterpolation::Hold) {
+    if (time == leftKeyframe.time || interpolationMode(leftKeyframe.outgoingInterpolation) ==
+                                         CompiledKeyframeInterpolation::Hold) {
         return endpoint(leftKeyframe.value, leftKeyframe.id);
     }
-    const bool eased =
-        leftKeyframe.outgoingInterpolation == CompiledKeyframeInterpolation::EaseInOut;
-    if (!eased && leftKeyframe.outgoingInterpolation != CompiledKeyframeInterpolation::Linear) {
+    const bool eased = interpolationMode(leftKeyframe.outgoingInterpolation) ==
+                       CompiledKeyframeInterpolation::EaseInOut;
+    if (!eased && interpolationMode(leftKeyframe.outgoingInterpolation) !=
+                      CompiledKeyframeInterpolation::Linear) {
         return {std::nullopt, AnimationSamplingError::UnsupportedInterpolation, leftKeyframe.id};
     }
 
@@ -266,179 +291,171 @@ AnimationSampleResult<double> sampleCurve(const CompiledScalarCurve& curve,
     return {mixed, AnimationSamplingError::None, leftKeyframe.id};
 }
 
+template <typename Keyframes>
+AnimationSampleResult<double>
+sampleComponent(document::AnimationCurveId curveId, const Keyframes& keyframes, double fallback,
+                core::RationalTime time, const CancellationToken* cancellation) noexcept {
+    if (keyframes.empty()) {
+        if (cancelled(cancellation))
+            return {std::nullopt, AnimationSamplingError::Cancelled, std::nullopt};
+        if (!core::supportsReferenceFloatingPointEnvironment<double>())
+            return {std::nullopt, AnimationSamplingError::UnsupportedFloatingPointEnvironment,
+                    std::nullopt};
+        if (!std::isfinite(fallback))
+            return {std::nullopt, AnimationSamplingError::NonFiniteResult, std::nullopt};
+        return {fallback, AnimationSamplingError::None, std::nullopt};
+    }
+    return sampleCurve(ScalarCurveView{curveId, keyframes}, time, cancellation);
+}
+
+template <typename Value, std::size_t Size> struct ComponentCurveView {
+    document::AnimationCurveId id;
+    std::array<std::span<const document::ScalarKeyframe>, Size> components;
+    Value defaultValue;
+};
+template <typename Curve, typename Value>
+auto componentView(const Curve& curve, Value fallback) noexcept {
+    ComponentCurveView<Value, std::tuple_size_v<decltype(curve.components)>> view{
+        curve.id, {}, fallback};
+    for (std::size_t i = 0; i < view.components.size(); ++i)
+        view.components[i] = curve.components[i].keyframes;
+    return view;
+}
+
+template <typename Curve>
+AnimationSampleResult<document::Vec2d> sampleVec2(const Curve& curve, core::RationalTime time,
+                                                  const CancellationToken* cancellation) noexcept {
+    const auto x =
+        sampleComponent(curve.id, curve.components[0], curve.defaultValue.x, time, cancellation);
+    const auto y =
+        sampleComponent(curve.id, curve.components[1], curve.defaultValue.y, time, cancellation);
+    if (!x || !y)
+        return {std::nullopt, !x ? x.error : y.error, !x ? x.segmentStart : y.segmentStart};
+    return {document::Vec2d{x.value.value_or(0.0), y.value.value_or(0.0)},
+            AnimationSamplingError::None,
+            x.segmentStart.has_value() ? x.segmentStart : y.segmentStart};
+}
+
+template <typename Curve>
+AnimationSampleResult<document::Vec3d> sampleVec3(const Curve& curve, core::RationalTime time,
+                                                  const CancellationToken* cancellation) noexcept {
+    const auto x =
+        sampleComponent(curve.id, curve.components[0], curve.defaultValue.x, time, cancellation);
+    const auto y =
+        sampleComponent(curve.id, curve.components[1], curve.defaultValue.y, time, cancellation);
+    const auto z =
+        sampleComponent(curve.id, curve.components[2], curve.defaultValue.z, time, cancellation);
+    if (!x || !y || !z)
+        return {std::nullopt,
+                !x   ? x.error
+                : !y ? y.error
+                     : z.error,
+                !x   ? x.segmentStart
+                : !y ? y.segmentStart
+                     : z.segmentStart};
+    return {document::Vec3d{x.value.value_or(0.0), y.value.value_or(0.0), z.value.value_or(0.0)},
+            AnimationSamplingError::None,
+            x.segmentStart.has_value()   ? x.segmentStart
+            : y.segmentStart.has_value() ? y.segmentStart
+                                         : z.segmentStart};
+}
+
+template <typename Curve>
+AnimationSampleResult<core::Color4d> sampleColor4(const Curve& curve, core::RationalTime time,
+                                                  const CancellationToken* cancellation) noexcept {
+    const auto red =
+        sampleComponent(curve.id, curve.components[0], curve.defaultValue.red, time, cancellation);
+    const auto green = sampleComponent(curve.id, curve.components[1], curve.defaultValue.green,
+                                       time, cancellation);
+    const auto blue =
+        sampleComponent(curve.id, curve.components[2], curve.defaultValue.blue, time, cancellation);
+    const auto alpha = sampleComponent(curve.id, curve.components[3], curve.defaultValue.alpha,
+                                       time, cancellation);
+    if (!red || !green || !blue || !alpha)
+        return {std::nullopt,
+                !red     ? red.error
+                : !green ? green.error
+                : !blue  ? blue.error
+                         : alpha.error,
+                !red     ? red.segmentStart
+                : !green ? green.segmentStart
+                : !blue  ? blue.segmentStart
+                         : alpha.segmentStart};
+    return {core::Color4d{red.value.value_or(0.0), green.value.value_or(0.0),
+                          blue.value.value_or(0.0), alpha.value.value_or(0.0)},
+            AnimationSamplingError::None, red.segmentStart};
+}
+
 } // namespace
 
 AnimationSampleResult<double> sampleAnimationCurve(const CompiledScalarCurve& curve,
-                                                   const core::RationalTime time) noexcept {
+                                                   core::RationalTime time) noexcept {
     return sampleCurve(curve, time, nullptr);
 }
-
 AnimationSampleResult<double> sampleAnimationCurve(const CompiledScalarCurve& curve,
-                                                   const core::RationalTime time,
+                                                   core::RationalTime time,
                                                    const CancellationToken& cancellation) noexcept {
     return sampleCurve(curve, time, &cancellation);
 }
-
-AnimationSampleResult<double>
-sampleAnimationComponentCurve(const document::AnimationCurveId curveId,
-                              const std::span<const CompiledScalarKeyframe> keyframes,
-                              const double fallback, const core::RationalTime time) noexcept {
-    if (keyframes.empty()) {
-        if (!bloom::core::supportsReferenceFloatingPointEnvironment<double>())
-            return {std::nullopt, AnimationSamplingError::UnsupportedFloatingPointEnvironment,
-                    std::nullopt};
-        if (!std::isfinite(fallback))
-            return {std::nullopt, AnimationSamplingError::NonFiniteResult, std::nullopt};
-        return {fallback, AnimationSamplingError::None, std::nullopt};
-    }
-    CompiledScalarCurve curve{
-        curveId, std::vector<CompiledScalarKeyframe>(keyframes.begin(), keyframes.end())};
+AnimationSampleResult<double> sampleAnimationCurve(const document::ScalarAnimationCurve& curve,
+                                                   core::RationalTime time) noexcept {
     return sampleCurve(curve, time, nullptr);
 }
-
 AnimationSampleResult<double>
-sampleAnimationComponentCurve(const document::AnimationCurveId curveId,
-                              const std::span<const CompiledScalarKeyframe> keyframes,
-                              const double fallback, const core::RationalTime time,
-                              const CancellationToken& cancellation) noexcept {
-    if (keyframes.empty()) {
-        if (cancellation.isCancellationRequested())
-            return {std::nullopt, AnimationSamplingError::Cancelled, std::nullopt};
-        if (!bloom::core::supportsReferenceFloatingPointEnvironment<double>())
-            return {std::nullopt, AnimationSamplingError::UnsupportedFloatingPointEnvironment,
-                    std::nullopt};
-        if (!std::isfinite(fallback))
-            return {std::nullopt, AnimationSamplingError::NonFiniteResult, std::nullopt};
-        return {fallback, AnimationSamplingError::None, std::nullopt};
-    }
-    CompiledScalarCurve curve{
-        curveId, std::vector<CompiledScalarKeyframe>(keyframes.begin(), keyframes.end())};
-    return sampleCurve(curve, time, &cancellation);
+sampleAnimationComponentCurve(document::AnimationCurveId curveId,
+                              std::span<const CompiledScalarKeyframe> keyframes, double fallback,
+                              core::RationalTime time) noexcept {
+    return sampleComponent(curveId, keyframes, fallback, time, nullptr);
+}
+AnimationSampleResult<double> sampleAnimationComponentCurve(
+    document::AnimationCurveId curveId, std::span<const CompiledScalarKeyframe> keyframes,
+    double fallback, core::RationalTime time, const CancellationToken& cancellation) noexcept {
+    return sampleComponent(curveId, keyframes, fallback, time, &cancellation);
 }
 
+AnimationSampleResult<document::Vec2d> sampleAnimationCurve(const CompiledVec2Curve& curve,
+                                                            core::RationalTime time) noexcept {
+    return sampleVec2(curve, time, nullptr);
+}
 AnimationSampleResult<document::Vec2d>
-sampleAnimationCurve(const CompiledVec2Curve& curve, const core::RationalTime time) noexcept {
-    const auto x =
-        sampleAnimationComponentCurve(curve.id, curve.components[0], curve.defaultValue.x, time);
-    const auto y =
-        sampleAnimationComponentCurve(curve.id, curve.components[1], curve.defaultValue.y, time);
-    if (!x || !y)
-        return {std::nullopt, !x ? x.error : y.error, !x ? x.segmentStart : y.segmentStart};
-    return {document::Vec2d{x.value.value_or(0.0), y.value.value_or(0.0)},
-            AnimationSamplingError::None,
-            x.segmentStart.has_value() ? x.segmentStart : y.segmentStart};
+sampleAnimationCurve(const CompiledVec2Curve& curve, core::RationalTime time,
+                     const CancellationToken& cancellation) noexcept {
+    return sampleVec2(curve, time, &cancellation);
 }
-
 AnimationSampleResult<document::Vec2d>
-sampleAnimationCurve(const CompiledVec2Curve& curve, const core::RationalTime time,
-                     const CancellationToken& cancellation) noexcept {
-    const auto x = sampleAnimationComponentCurve(curve.id, curve.components[0],
-                                                 curve.defaultValue.x, time, cancellation);
-    const auto y = sampleAnimationComponentCurve(curve.id, curve.components[1],
-                                                 curve.defaultValue.y, time, cancellation);
-    if (!x || !y)
-        return {std::nullopt, !x ? x.error : y.error, !x ? x.segmentStart : y.segmentStart};
-    return {document::Vec2d{x.value.value_or(0.0), y.value.value_or(0.0)},
-            AnimationSamplingError::None,
-            x.segmentStart.has_value() ? x.segmentStart : y.segmentStart};
+sampleAnimationCurve(const document::Vec2AnimationCurve& curve, core::RationalTime time,
+                     document::Vec2d fallback) noexcept {
+    return sampleVec2(componentView(curve, fallback), time, nullptr);
 }
 
-AnimationSampleResult<document::Vec3d>
-sampleAnimationCurve(const CompiledVec3Curve& curve, const core::RationalTime time) noexcept {
-    const auto x =
-        sampleAnimationComponentCurve(curve.id, curve.components[0], curve.defaultValue.x, time);
-    const auto y =
-        sampleAnimationComponentCurve(curve.id, curve.components[1], curve.defaultValue.y, time);
-    const auto z =
-        sampleAnimationComponentCurve(curve.id, curve.components[2], curve.defaultValue.z, time);
-    if (!x || !y || !z)
-        return {std::nullopt,
-                !x   ? x.error
-                : !y ? y.error
-                     : z.error,
-                !x   ? x.segmentStart
-                : !y ? y.segmentStart
-                     : z.segmentStart};
-    return {document::Vec3d{x.value.value_or(0.0), y.value.value_or(0.0), z.value.value_or(0.0)},
-            AnimationSamplingError::None,
-            x.segmentStart.has_value()   ? x.segmentStart
-            : y.segmentStart.has_value() ? y.segmentStart
-                                         : z.segmentStart};
+AnimationSampleResult<document::Vec3d> sampleAnimationCurve(const CompiledVec3Curve& curve,
+                                                            core::RationalTime time) noexcept {
+    return sampleVec3(curve, time, nullptr);
 }
-
 AnimationSampleResult<document::Vec3d>
-sampleAnimationCurve(const CompiledVec3Curve& curve, const core::RationalTime time,
+sampleAnimationCurve(const CompiledVec3Curve& curve, core::RationalTime time,
                      const CancellationToken& cancellation) noexcept {
-    const auto x = sampleAnimationComponentCurve(curve.id, curve.components[0],
-                                                 curve.defaultValue.x, time, cancellation);
-    const auto y = sampleAnimationComponentCurve(curve.id, curve.components[1],
-                                                 curve.defaultValue.y, time, cancellation);
-    const auto z = sampleAnimationComponentCurve(curve.id, curve.components[2],
-                                                 curve.defaultValue.z, time, cancellation);
-    if (!x || !y || !z)
-        return {std::nullopt,
-                !x   ? x.error
-                : !y ? y.error
-                     : z.error,
-                !x   ? x.segmentStart
-                : !y ? y.segmentStart
-                     : z.segmentStart};
-    return {document::Vec3d{x.value.value_or(0.0), y.value.value_or(0.0), z.value.value_or(0.0)},
-            AnimationSamplingError::None,
-            x.segmentStart.has_value()   ? x.segmentStart
-            : y.segmentStart.has_value() ? y.segmentStart
-                                         : z.segmentStart};
+    return sampleVec3(curve, time, &cancellation);
+}
+AnimationSampleResult<document::Vec3d>
+sampleAnimationCurve(const document::Vec3AnimationCurve& curve, core::RationalTime time,
+                     document::Vec3d fallback) noexcept {
+    return sampleVec3(componentView(curve, fallback), time, nullptr);
 }
 
 AnimationSampleResult<core::Color4d> sampleAnimationCurve(const CompiledColor4Curve& curve,
-                                                          const core::RationalTime time) noexcept {
-    const auto red =
-        sampleAnimationComponentCurve(curve.id, curve.components[0], curve.defaultValue.red, time);
-    const auto green = sampleAnimationComponentCurve(curve.id, curve.components[1],
-                                                     curve.defaultValue.green, time);
-    const auto blue =
-        sampleAnimationComponentCurve(curve.id, curve.components[2], curve.defaultValue.blue, time);
-    const auto alpha = sampleAnimationComponentCurve(curve.id, curve.components[3],
-                                                     curve.defaultValue.alpha, time);
-    if (!red || !green || !blue || !alpha)
-        return {std::nullopt,
-                !red     ? red.error
-                : !green ? green.error
-                : !blue  ? blue.error
-                         : alpha.error,
-                !red     ? red.segmentStart
-                : !green ? green.segmentStart
-                : !blue  ? blue.segmentStart
-                         : alpha.segmentStart};
-    return {core::Color4d{red.value.value_or(0.0), green.value.value_or(0.0),
-                          blue.value.value_or(0.0), alpha.value.value_or(0.0)},
-            AnimationSamplingError::None, red.segmentStart};
+                                                          core::RationalTime time) noexcept {
+    return sampleColor4(curve, time, nullptr);
 }
-
 AnimationSampleResult<core::Color4d>
-sampleAnimationCurve(const CompiledColor4Curve& curve, const core::RationalTime time,
+sampleAnimationCurve(const CompiledColor4Curve& curve, core::RationalTime time,
                      const CancellationToken& cancellation) noexcept {
-    const auto red = sampleAnimationComponentCurve(curve.id, curve.components[0],
-                                                   curve.defaultValue.red, time, cancellation);
-    const auto green = sampleAnimationComponentCurve(curve.id, curve.components[1],
-                                                     curve.defaultValue.green, time, cancellation);
-    const auto blue = sampleAnimationComponentCurve(curve.id, curve.components[2],
-                                                    curve.defaultValue.blue, time, cancellation);
-    const auto alpha = sampleAnimationComponentCurve(curve.id, curve.components[3],
-                                                     curve.defaultValue.alpha, time, cancellation);
-    if (!red || !green || !blue || !alpha)
-        return {std::nullopt,
-                !red     ? red.error
-                : !green ? green.error
-                : !blue  ? blue.error
-                         : alpha.error,
-                !red     ? red.segmentStart
-                : !green ? green.segmentStart
-                : !blue  ? blue.segmentStart
-                         : alpha.segmentStart};
-    return {core::Color4d{red.value.value_or(0.0), green.value.value_or(0.0),
-                          blue.value.value_or(0.0), alpha.value.value_or(0.0)},
-            AnimationSamplingError::None, red.segmentStart};
+    return sampleColor4(curve, time, &cancellation);
+}
+AnimationSampleResult<core::Color4d>
+sampleAnimationCurve(const document::Color4AnimationCurve& curve, core::RationalTime time,
+                     core::Color4d fallback) noexcept {
+    return sampleColor4(componentView(curve, fallback), time, nullptr);
 }
 
 } // namespace bloom::runtime

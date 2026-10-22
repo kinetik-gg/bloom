@@ -2111,44 +2111,43 @@ CompositionSession::sampleParameterValue(const document::ParameterRecord& parame
         return std::nullopt;
     }
     if (const auto* scalarCurve = current->animationCurves().findScalar(source->curveId)) {
-        const auto sample =
-            runtime::sampleAnimationCurve(runtime::compileAnimationCurve(*scalarCurve), time);
+        const auto sample = runtime::sampleAnimationCurve(*scalarCurve, time);
         if (!sample || !sample.value.has_value()) {
             return std::nullopt;
         }
         return ParameterSample(*sample.value);
     }
     if (const auto* vec2Curve = current->animationCurves().findVec2(source->curveId)) {
-        auto compiled = runtime::compileAnimationCurve(*vec2Curve);
+        document::Vec2d fallback{};
         if (source->defaultValue.has_value()) {
             if (const auto* value = std::get_if<document::Vec2d>(&*source->defaultValue))
-                compiled.defaultValue = *value;
+                fallback = *value;
         }
-        const auto sample = runtime::sampleAnimationCurve(compiled, time);
+        const auto sample = runtime::sampleAnimationCurve(*vec2Curve, time, fallback);
         if (!sample || !sample.value.has_value()) {
             return std::nullopt;
         }
         return ParameterSample(*sample.value);
     }
     if (const auto* vec3Curve = current->animationCurves().findVec3(source->curveId)) {
-        auto compiled = runtime::compileAnimationCurve(*vec3Curve);
+        document::Vec3d fallback{};
         if (source->defaultValue.has_value()) {
             if (const auto* value = std::get_if<document::Vec3d>(&*source->defaultValue))
-                compiled.defaultValue = *value;
+                fallback = *value;
         }
-        const auto sample = runtime::sampleAnimationCurve(compiled, time);
+        const auto sample = runtime::sampleAnimationCurve(*vec3Curve, time, fallback);
         if (!sample || !sample.value.has_value()) {
             return std::nullopt;
         }
         return ParameterSample(*sample.value);
     }
     if (const auto* colorCurve = current->animationCurves().findColor4(source->curveId)) {
-        auto compiled = runtime::compileAnimationCurve(*colorCurve);
+        core::Color4d fallback{};
         if (source->defaultValue.has_value()) {
             if (const auto* value = std::get_if<core::Color4d>(&*source->defaultValue))
-                compiled.defaultValue = *value;
+                fallback = *value;
         }
-        const auto sample = runtime::sampleAnimationCurve(compiled, time);
+        const auto sample = runtime::sampleAnimationCurve(*colorCurve, time, fallback);
         if (!sample || !sample.value.has_value()) {
             return std::nullopt;
         }

@@ -61,4 +61,18 @@ sampleAnimationCurve(const CompiledColor4Curve& curve, core::RationalTime time) 
 sampleAnimationCurve(const CompiledColor4Curve& curve, core::RationalTime time,
                      const CancellationToken& cancellation) noexcept;
 
+// Borrow immutable document tables for UI readouts; sampling has the same validation and
+// interpolation rules as compiled curves and allocates no keyframe storage.
+[[nodiscard]] AnimationSampleResult<double>
+sampleAnimationCurve(const document::ScalarAnimationCurve& curve, core::RationalTime time) noexcept;
+[[nodiscard]] AnimationSampleResult<document::Vec2d>
+sampleAnimationCurve(const document::Vec2AnimationCurve& curve, core::RationalTime time,
+                     document::Vec2d fallback = {}) noexcept;
+[[nodiscard]] AnimationSampleResult<document::Vec3d>
+sampleAnimationCurve(const document::Vec3AnimationCurve& curve, core::RationalTime time,
+                     document::Vec3d fallback = {}) noexcept;
+[[nodiscard]] AnimationSampleResult<core::Color4d>
+sampleAnimationCurve(const document::Color4AnimationCurve& curve, core::RationalTime time,
+                     core::Color4d fallback = {}) noexcept;
+
 } // namespace bloom::runtime
