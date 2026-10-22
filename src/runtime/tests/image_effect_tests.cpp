@@ -542,6 +542,48 @@ void testBlurEvaluation() {
     }
 }
 
+void testSpatialEffectBudgets() {
+    const auto check = [](const runtime::ImageEffectKernel& kernel, const std::size_t peak) {
+        auto definition = planWith({kernel})->copyDefinition();
+        definition.operations.resize(2);
+        definition.operations.emplace_back(runtime::CompiledMerge{
+            document::NodeId::fromRaw(101),
+            {{document::LayerSlotId::fromRaw(1), {}, runtime::OperationIndex::fromRaw(1)}}});
+        definition.operations.emplace_back(runtime::CompiledCompositionOutput{
+            document::NodeId::fromRaw(102), runtime::OperationIndex::fromRaw(2)});
+        definition.output = runtime::OperationIndex::fromRaw(3);
+        const auto plan = std::make_shared<const runtime::CompiledCompositionPlan>(
+            std::move(definition));
+        auto request = requestFor(*plan);
+        request.bypassOperationCache = true;
+        request.pixelStorageByteLimit = peak;
+        runtime::CpuCompositionEvaluator evaluator;
+        const auto accepted = evaluator.evaluate(plan, request, {});
+        expect(accepted.frame() != nullptr,
+               "spatial effect admits its exact live input plus output/intermediate budget");
+        --request.pixelStorageByteLimit;
+        const auto refused = evaluator.evaluate(plan, request, {});
+        expect(!refused.frame() &&
+                   std::ranges::any_of(refused.diagnostics(), [](const auto& diagnostic) {
+                       return diagnostic.code ==
+                              runtime::EvaluationDiagnosticCode::PixelStorageBudgetExceeded;
+                   }),
+               "spatial effect refuses one byte below its actual allocation peak");
+    };
+    // 4x2 RGBA32F source: 128 bytes. Fit needs one equal-sized destination.
+    check(runtime::ResizeFitKernel{4, 2, 1, 1, 0, 1}, 256);
+    for (const auto kind :
+         {runtime::SeparableBlurKind::Gaussian, runtime::SeparableBlurKind::Box}) {
+        // Clamp: two 128-byte buffers. Transparent: two 6x4x16-byte halo buffers.
+        check(runtime::SeparableBlurKernel{
+                  kind, {document::ParameterId::fromRaw(90), 1.0}, runtime::BlurEdgeMode::Clamp},
+              384);
+        check(runtime::SeparableBlurKernel{kind, {document::ParameterId::fromRaw(90), 1.0},
+                                           runtime::BlurEdgeMode::Transparent},
+              896);
+    }
+}
+
 void testCst() {
     runtime::CpuCompositionEvaluator evaluator;
     const auto source = planWith({});
@@ -890,6 +932,7 @@ int main(const int argc, char** argv) {
     try {
         if (argc == 2 && std::string_view(argv[1]) == "--blur-only") {
             testBlurEvaluation();
+            testSpatialEffectBudgets();
             return failures == 0 ? 0 : 1;
         }
         if (argc == 2 && std::string_view(argv[1]) == "--discrete-only") {
@@ -905,6 +948,7 @@ int main(const int argc, char** argv) {
         testDiscreteImages();
         testUnaryImageEffectInputArity();
         testBlurEvaluation();
+        testSpatialEffectBudgets();
         testLookBypass();
         testFileTransform();
         testMultiplyAndInvert();

@@ -2514,6 +2514,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             produced.emplace(std::move(pixels));
                         },
                         [&](const CompiledImageEffect& effect) {
+                            // The destination initially aliases the input. That publication adds
+                            // no pixel storage and must not reduce the effect's allocation budget.
+                            const auto effectPixelBudget = remainingPixelBudget();
                             slots[index] = slots[effect.input.value()];
                             bounds[index].local = bounds[effect.input.value()].output;
                             bounds[index].output = bounds[index].local;
@@ -2523,7 +2526,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     effect.secondaryInput && slots[effect.secondaryInput->value()]
                                         ? slots[effect.secondaryInput->value()].get()
                                         : nullptr,
-                                    remainingPixelBudget(), cancellation, operationIndex, progress,
+                                    effectPixelBudget, cancellation, operationIndex, progress,
                                     resolved.horizontalScale, resolved.verticalScale);
                                 if (result.cancelled) {
                                     operationCancelled = true;
