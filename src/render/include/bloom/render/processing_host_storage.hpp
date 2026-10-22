@@ -65,31 +65,37 @@ class ProcessingHostBackingToken final {
     ~ProcessingHostBackingToken();
     [[nodiscard]] static std::optional<ProcessingHostBackingToken>
     transfer(const std::shared_ptr<GpuProcessingPhaseLease>& phase,
-             std::uint64_t measuredBytes) noexcept;
+             std::uint64_t allocatedBytes, std::uint64_t initializedBytes) noexcept;
     void retireBeforeFree() noexcept;
     void releaseAfterFree() noexcept;
 
   private:
     ProcessingHostBackingToken(std::shared_ptr<GpuProcessingPhaseLease> phase,
-                               std::uint64_t measuredBytes) noexcept;
+                               std::uint64_t allocatedBytes,
+                               std::uint64_t initializedBytes) noexcept;
     std::shared_ptr<GpuProcessingPhaseLease> phase_;
-    std::uint64_t bytes_ = 0;
+    std::uint64_t allocatedBytes_ = 0;
+    std::uint64_t initializedBytes_ = 0;
     bool materialized_ = false;
 };
 } // namespace detail
 
 // Adopt only an already initialized, uniquely owned allocation whose measured object and
-// nested backing bytes fit the phase's existing fixed-host claim. No new capacity is granted.
+// nested allocated bytes fit the phase's existing fixed-host claim. Only initialized bytes
+// may offset a live physical-memory sample; unused vector capacity remains claimed but uncredited.
+// No new capacity is granted.
 // A failed adoption consumes and destroys the unique backing while its phase claim remains held.
 template <class T>
 [[nodiscard]] std::shared_ptr<const T>
 adoptProcessingHostBacking(std::unique_ptr<T> backing,
                            const std::shared_ptr<GpuProcessingPhaseLease>& phase,
-                           const std::uint64_t measuredBytes) noexcept {
+                           const std::uint64_t allocatedBytes,
+                           const std::uint64_t initializedBytes) noexcept {
     static_assert(std::is_nothrow_destructible_v<T>);
-    if (!backing || measuredBytes < sizeof(T))
+    if (!backing || initializedBytes < sizeof(T) || initializedBytes > allocatedBytes)
         return {};
-    auto transferred = detail::ProcessingHostBackingToken::transfer(phase, measuredBytes);
+    auto transferred =
+        detail::ProcessingHostBackingToken::transfer(phase, allocatedBytes, initializedBytes);
     if (!transferred)
         return {};
     auto deleter = [token = std::move(*transferred)](const T* pointer) mutable noexcept {

@@ -124,7 +124,7 @@ void adoptedBackingRetiresBeforeDelete() {
     backing->sawRetirementBeforeDelete = &retiredBeforeDelete;
     backing->expectedCapacity = bytes;
     backing->expectedOwnedBytes = bytes;
-    auto retained = adoptProcessingHostBacking(std::move(backing), result.lease, bytes);
+    auto retained = adoptProcessingHostBacking(std::move(backing), result.lease, bytes, bytes);
     require(retained && budget.rootedHostBackingSnapshot().materializedBytes == bytes,
             "only completed unique backing becomes exact rooted sample credit");
     const auto owned = budget.snapshot();
@@ -155,20 +155,24 @@ void failedAdoptionCannotCreateCredit() {
     oversized->budget = &budget;
     oversized->sawRetirementBeforeDelete = &deletedWhileClaimHeld;
     oversized->expectedCapacity = 4 * bytes;
-    require(!adoptProcessingHostBacking(std::move(oversized), result.lease, bytes + 1),
+    require(!adoptProcessingHostBacking(std::move(oversized), result.lease, bytes + 1, bytes),
             "actual backing beyond fixed phase claim refuses transfer");
     require(deletedWhileClaimHeld &&
                 budget.rootedHostBackingSnapshot().materializedBytes == 0 &&
                 budget.snapshot().totalHostClaimBytes == bytes,
             "failed adoption destroys backing before phase can release its original claim");
-    require(!adoptProcessingHostBacking(std::make_unique<ObservedBacking>(), result.lease, 1),
+    require(!adoptProcessingHostBacking(std::make_unique<ObservedBacking>(), result.lease, 1, 1),
             "adoption cannot claim less than the owned object itself");
+    require(!adoptProcessingHostBacking(std::make_unique<ObservedBacking>(), result.lease,
+                                        bytes, bytes + 1),
+            "initialized bytes cannot exceed the allocation claim");
     result.lease->markUnproven();
-    require(!adoptProcessingHostBacking(std::make_unique<ObservedBacking>(), result.lease, bytes),
+    require(!adoptProcessingHostBacking(std::make_unique<ObservedBacking>(), result.lease,
+                                        bytes, bytes),
             "unproven phase cannot turn a completed backing into sampled credit");
     std::unique_ptr<ObservedBacking> cancelled = std::make_unique<ObservedBacking>();
     cancelled.reset();
-    require(!adoptProcessingHostBacking(std::move(cancelled), result.lease, bytes) &&
+    require(!adoptProcessingHostBacking(std::move(cancelled), result.lease, bytes, bytes) &&
                 budget.rootedHostBackingSnapshot().materializedBytes == 0,
             "cancelled backing cannot become a materialized claim");
     result.lease.reset();

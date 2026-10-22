@@ -15,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace {
 using namespace bloom::runtime;
@@ -453,7 +454,7 @@ void adoptedHostBackingCreditsOnlyMaterializedBytes() {
     auto first = rooted.reserve(firstRequest, start);
     require(first.lease && first.lease->hostBytes() == 80,
             "first zero-source host phase reserves the full retained allocation");
-    auto held = adoptProcessingHostBacking(std::make_unique<Backing>(), first.lease, 80);
+    auto held = adoptProcessingHostBacking(std::make_unique<Backing>(), first.lease, 80, 80);
     require(held && rooted.snapshot().reservations.totalHostClaimBytes == 80,
             "adoption materializes the existing claim without increasing it");
     first.lease.reset();
@@ -496,6 +497,46 @@ void adoptedHostBackingCreditsOnlyMaterializedBytes() {
                     GpuProcessingPhaseAdmission::BudgetRefused,
             "a bare fixed-host promise cannot receive materialized-backing sample credit");
     promise.lease.reset();
+
+    auto spareBacking = std::make_unique<std::vector<std::byte>>();
+    spareBacking->reserve(80);
+    spareBacking->resize(40);
+    const auto allocated = sizeof(*spareBacking) + spareBacking->capacity();
+    const auto initialized = sizeof(*spareBacking) + spareBacking->size();
+    GpuProcessingPhasePolicy spare(2);
+    delivered.machine.availableBytes = 3 * allocated;
+    delivered.process.sampledAt = start;
+    delivered.sampleSerial = 1;
+    spare.applyHostSample(delivered, 3 * allocated, start);
+    auto sparePhase = spare.reserve({.pixels = 1,
+                                     .metadataBytes = allocated - 8,
+                                     .sourceFree = true,
+                                     .native = false},
+                                    start);
+    require(sparePhase.lease && sparePhase.lease->hostBytes() == allocated,
+            "fixed phase claims both initialized elements and unused vector capacity");
+    auto spareHeld = adoptProcessingHostBacking(std::move(spareBacking), sparePhase.lease,
+                                               allocated, initialized);
+    require(spareHeld &&
+                spare.snapshot().reservations.ownedProcessingHostBytes == allocated &&
+                spare.snapshot().reservations.totalHostClaimBytes == allocated &&
+                sparePhase.lease->hostBytes() == allocated,
+            "adoption retains the entire allocated capacity inside the original claim");
+    sparePhase.lease.reset();
+    scriptedSampleAt = start + std::chrono::seconds(2);
+    static_cast<void>(spare.sampleHostMemory({}, scriptedHostSample));
+    delivered.machine.availableBytes = 60;
+    delivered.process.sampledAt = scriptedSampleAt;
+    ++delivered.sampleSerial;
+    spare.applyHostSample(delivered, 3 * allocated, scriptedSampleAt);
+    require(spare.snapshot().reservations.hostCapacityBytes == 60 + initialized &&
+                spare.reserve(secondRequest, scriptedSampleAt).status ==
+                    GpuProcessingPhaseAdmission::BudgetRefused,
+            "unused reserved capacity does not manufacture reusable sampled headroom");
+    spareHeld.reset();
+    require(spare.snapshot().reservations.hostCapacityBytes == 60 &&
+                spare.snapshot().reservations.totalHostClaimBytes == 0,
+            "retirement revokes only initialized credit and releases the entire allocation");
 }
 void newBackingCannotInflateAnOlderFiniteLimit() {
     HostRetirement retirement;

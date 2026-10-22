@@ -61,10 +61,14 @@ GpuProcessingPhaseLease::~GpuProcessingPhaseLease() {
 
 namespace detail {
 ProcessingHostBackingToken::ProcessingHostBackingToken(
-    std::shared_ptr<GpuProcessingPhaseLease> phase, const std::uint64_t measuredBytes) noexcept
-    : phase_(std::move(phase)), bytes_(measuredBytes), materialized_(true) {}
+    std::shared_ptr<GpuProcessingPhaseLease> phase, const std::uint64_t allocatedBytes,
+    const std::uint64_t initializedBytes) noexcept
+    : phase_(std::move(phase)), allocatedBytes_(allocatedBytes),
+      initializedBytes_(initializedBytes), materialized_(true) {}
 ProcessingHostBackingToken::ProcessingHostBackingToken(ProcessingHostBackingToken&& other) noexcept
-    : phase_(std::move(other.phase_)), bytes_(std::exchange(other.bytes_, 0)),
+    : phase_(std::move(other.phase_)),
+      allocatedBytes_(std::exchange(other.allocatedBytes_, 0)),
+      initializedBytes_(std::exchange(other.initializedBytes_, 0)),
       materialized_(std::exchange(other.materialized_, false)) {}
 ProcessingHostBackingToken::~ProcessingHostBackingToken() {
     retireBeforeFree();
@@ -72,31 +76,32 @@ ProcessingHostBackingToken::~ProcessingHostBackingToken() {
 }
 std::optional<ProcessingHostBackingToken> ProcessingHostBackingToken::transfer(
     const std::shared_ptr<GpuProcessingPhaseLease>& phase,
-    const std::uint64_t measuredBytes) noexcept {
-    if (!phase || measuredBytes == 0)
+    const std::uint64_t allocatedBytes, const std::uint64_t initializedBytes) noexcept {
+    if (!phase || initializedBytes == 0 || initializedBytes > allocatedBytes)
         return {};
     const std::lock_guard lock(phase->state_->mutex);
     auto& state = *phase->state_;
     auto& counters = state.counters;
     if (phase->id_ == 0 || phase->unproven_ ||
-        measuredBytes > phase->remainingOutputHostBytes_ ||
-        measuredBytes > phase->remainingHostBytes_)
+        allocatedBytes > phase->remainingOutputHostBytes_ ||
+        allocatedBytes > phase->remainingHostBytes_)
         return {};
-    // The measured allocation was constructed while the fixed phase claim was held. This
-    // atomic transfer changes ownership, never the total host claim or admission capacity.
-    phase->remainingOutputHostBytes_ -= measuredBytes;
-    phase->remainingHostBytes_ -= measuredBytes;
-    counters.hostReservedBytes -= measuredBytes;
-    counters.ownedProcessingHostBytes += measuredBytes;
+    // The allocation was constructed while the fixed phase claim was held. The full allocated
+    // capacity stays claimed; only initialized bytes can offset a later physical sample.
+    // This atomic transfer changes ownership, never the total claim or admission capacity.
+    phase->remainingOutputHostBytes_ -= allocatedBytes;
+    phase->remainingHostBytes_ -= allocatedBytes;
+    counters.hostReservedBytes -= allocatedBytes;
+    counters.ownedProcessingHostBytes += allocatedBytes;
     ++counters.ownedProcessingHostAllocations;
-    state.rootedHostBacking.materializedBytes += measuredBytes;
-    return ProcessingHostBackingToken(phase, measuredBytes);
+    state.rootedHostBacking.materializedBytes += initializedBytes;
+    return ProcessingHostBackingToken(phase, allocatedBytes, initializedBytes);
 }
 void ProcessingHostBackingToken::retireBeforeFree() noexcept {
     if (!phase_ || !materialized_)
         return;
     const std::lock_guard lock(phase_->state_->mutex);
-    retireHostBackingLocked(*phase_->state_, bytes_);
+    retireHostBackingLocked(*phase_->state_, initializedBytes_);
     materialized_ = false;
 }
 void ProcessingHostBackingToken::releaseAfterFree() noexcept {
@@ -106,13 +111,14 @@ void ProcessingHostBackingToken::releaseAfterFree() noexcept {
     {
         const std::lock_guard lock(phase_->state_->mutex);
         auto& counters = phase_->state_->counters;
-        counters.ownedProcessingHostBytes -= bytes_;
+        counters.ownedProcessingHostBytes -= allocatedBytes_;
         --counters.ownedProcessingHostAllocations;
-        phase_->remainingOutputHostBytes_ += bytes_;
-        phase_->remainingHostBytes_ += bytes_;
-        counters.hostReservedBytes += bytes_;
+        phase_->remainingOutputHostBytes_ += allocatedBytes_;
+        phase_->remainingHostBytes_ += allocatedBytes_;
+        counters.hostReservedBytes += allocatedBytes_;
         releasedPhase = std::move(phase_);
-        bytes_ = 0;
+        allocatedBytes_ = 0;
+        initializedBytes_ = 0;
     }
     releasedPhase.reset();
 }
