@@ -420,21 +420,27 @@ PreparedPreviewFrame::residentFrame() const& noexcept {
     return *std::get_if<ResidentPtr>(&displayFrame_);
 }
 
-std::optional<PreviewPreparationResult>
-PreviewPreparationResult::prepared(std::shared_ptr<const PreparedPreviewFrame> frame) noexcept {
+std::optional<PreviewPreparationResult> PreviewPreparationResult::prepared(
+    std::shared_ptr<const PreparedPreviewFrame> frame,
+    std::optional<std::shared_ptr<const PreparedPreviewFrame>> cacheFrame) noexcept {
     if (frame == nullptr) {
         return std::nullopt;
     }
-    return PreviewPreparationResult(PreviewPreparationStatus::Prepared, std::move(frame));
+    if (cacheFrame && *cacheFrame &&
+        ((*cacheFrame)->desiredIdentity() != frame->desiredIdentity() ||
+         (*cacheFrame)->hasProcessFrame() || !(*cacheFrame)->isDisplayValid()))
+        return std::nullopt;
+    return PreviewPreparationResult(PreviewPreparationStatus::Prepared, std::move(frame),
+                                    std::move(cacheFrame));
 }
 
 PreviewPreparationResult PreviewPreparationResult::unsupported() noexcept {
-    return PreviewPreparationResult(PreviewPreparationStatus::Unsupported, {});
+    return PreviewPreparationResult(PreviewPreparationStatus::Unsupported, {}, std::nullopt);
 }
 
 PreviewPreparationResult::PreviewPreparationResult(
-    const PreviewPreparationStatus status,
-    std::shared_ptr<const PreparedPreviewFrame> frame) noexcept
-    : status_(status), frame_(std::move(frame)) {}
+    const PreviewPreparationStatus status, std::shared_ptr<const PreparedPreviewFrame> frame,
+    std::optional<std::shared_ptr<const PreparedPreviewFrame>> cacheFrame) noexcept
+    : status_(status), frame_(std::move(frame)), cacheFrame_(std::move(cacheFrame)) {}
 
 } // namespace bloom::runtime

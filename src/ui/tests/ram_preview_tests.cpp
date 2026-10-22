@@ -346,6 +346,9 @@ void testCacheHitPublishesWithoutEvaluating(Expectations& expectations) {
     expectations.expect(freshFrame != nullptr && freshFrame->hasProcessFrame() &&
                             freshView.has_value() && !freshView->pixels.empty(),
                         "the freshly evaluated frame carries its process frame and its pixels");
+    expectations.expect(
+        fixture.controller.frameCache().statistics().uiPixelCopies == 0,
+        "Full CPU retention arrives pre-stripped from the worker without a UI pixel copy");
     const bool freshQualified = freshView.has_value() && freshView->isOcioQualified;
     const std::vector<render::Rgba8> freshPixels =
         freshView.has_value()
@@ -611,6 +614,10 @@ void testRamPreviewCachesTheRangeThenPlaysEveryFrame(Expectations& expectations)
                         "every frame of the range reached the cache");
     expectations.expect(fixture.controller.frameCache().size() >= 24,
                         "the cache holds at least the twenty-four frames of the range");
+    expectations.expect(
+        ramPreview.metadataWork().deltaUpdates <= 24 &&
+            ramPreview.metadataWork().requalifiedEntries <= 48,
+        "fill coverage uses per-entry deltas rather than sorting every retained frame");
     expectations.expect(fixture.controller.ramPreviewProgress() == std::nullopt,
                         "the footer's progress readout goes silent when the run ends");
 
@@ -643,12 +650,21 @@ void testRamPreviewCachesTheRangeThenPlaysEveryFrame(Expectations& expectations)
 
     // A second RAM preview of an unedited range renders nothing at all.
     const auto beforeSecondRun = fixture.preparationCount.load();
+    ramPreview.resetMetadataWorkForTesting();
+    fixture.controller.frameCache().resetMetadataWorkForTesting();
     ramPreview.start();
     expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }),
                         "the second RAM preview finishes");
     expectations.expect(ramPreview.cachedFrameCount() == 24 &&
                             fixture.preparationCount.load() == beforeSecondRun,
                         "a RAM preview of an already cached range evaluates nothing");
+    expectations.expect(ramPreview.metadataWork().fullRequalifications == 1 &&
+                            ramPreview.metadataWork().requalifiedEntries == 24 &&
+                            ramPreview.metadataWork().deltaUpdates == 0 &&
+                            fixture.controller.frameCache().metadataWork().rangeEntriesVisited ==
+                                24 &&
+                            fixture.controller.frameCache().metadataWork().exactProbes <= 48,
+                        "warm RAM metadata work stays linear in cached range size");
 
     finishFixture(fixture, expectations);
 }
@@ -691,6 +707,45 @@ void testRamPreviewStopsWhenTheRangeOutgrowsTheBudget(Expectations& expectations
     expectations.expect(finishedCompleted,
                         "a budget-limited run reports partial completion without autoplay");
 
+    finishFixture(fixture, expectations);
+}
+
+void testRamPreviewExactKeyReplacementKeepsCoverage(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM Exact Replacement", time(3, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the replacement fixture renders its first frame");
+    const auto key = fixture.controller.cacheKeyForTime(time(0));
+    expectations.expect(key && fixture.frameCache->contains(*key),
+                        "the exact key to replace is initially retained");
+    if (!key) {
+        finishFixture(fixture, expectations);
+        return;
+    }
+
+    fixture.gateAtCall = fixture.preparationCount.load();
+    ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
+                                 fixture.bridge, fixture.countingPipeline());
+    ram.start();
+    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }) &&
+                            ram.cachedFrameCount() == 1,
+                        "the run counts the retained first frame while its next frame waits");
+
+    // An expired resident entry can emit this exact remove/retain pair inside one cache insert.
+    // Replay the synchronous cache signals while the key remains present: the RAM observer must
+    // judge net post-insert coverage, rather than treating the transient removal as a failure.
+    fixture.frameCache->entryRemoved(*key);
+    fixture.frameCache->entryRetained(*key);
+    expectations.expect(ram.isCaching() && ram.cachedFrameCount() == 1 &&
+                            fixture.frameCache->contains(*key),
+                        "replacement of the same exact key leaves coverage intact");
+
+    fixture.gate.release();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
+                            ram.lastCompletion() ==
+                                ui::RamPreviewController::Completion::Complete &&
+                            ram.cachedFrameCount() == 3,
+                        "the replacement does not turn a complete RAM run into a failure");
+    ram.beginShutdown();
     finishFixture(fixture, expectations);
 }
 
@@ -768,6 +823,9 @@ void testRamPreviewSharesResolutionAndCachesByPolicy(Expectations& expectations)
     expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
                             ramPreview.cachedFrameCount() == 3,
                         "RAM preview fills the separate Half range");
+    expectations.expect(
+        fixture.controller.frameCache().statistics().uiPixelCopies == 0,
+        "Half CPU retention inserts worker-prepared display buffers without UI copying");
     const auto halfCount = fixture.preparationCount.load();
     ramPreview.start();
     expectations.expect(!ramPreview.isCaching() && fixture.preparationCount.load() == halfCount,
@@ -1372,6 +1430,30 @@ void testCachePurgeGateCancelsRamPreviewAndBackground(Expectations& expectations
     finishFixture(fixture, expectations);
 }
 
+void testLargeIndexedCoverageMetadata(Expectations& expectations) {
+    for (const std::uint64_t frameCount : {1'000ULL, 10'000ULL, 50'000ULL}) {
+        ui::RamPreviewCoverageIndex coverage;
+        // Out-of-order completion: evens first form isolated islands, then odds bridge them.
+        for (std::uint64_t index = 0; index < frameCount; index += 2)
+            expectations.expect(coverage.add(index), "a new even frame enters coverage");
+        for (std::uint64_t index = 1; index < frameCount; index += 2)
+            expectations.expect(coverage.add(index), "a new odd frame enters coverage");
+        expectations.expect(coverage.size() == frameCount &&
+                                coverage.longest() ==
+                                    std::pair<std::uint64_t, std::uint64_t>{0, frameCount} &&
+                                coverage.work().mutations == frameCount &&
+                                coverage.work().neighborIntervalsVisited <= frameCount * 2,
+                            "1k/10k/50k coverage fill touches only adjacent intervals");
+        const auto middle = frameCount / 2;
+        expectations.expect(
+            coverage.remove(middle) &&
+                coverage.longest() == std::pair<std::uint64_t, std::uint64_t>{0, middle} &&
+                coverage.add(middle) &&
+                coverage.longest() == std::pair<std::uint64_t, std::uint64_t>{0, frameCount},
+            "removal splits a large span and re-insertion rejoins it exactly");
+    }
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
@@ -1394,7 +1476,9 @@ int main(int argc, char** argv) {
         testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(expectations);
         testRamPreviewWorkArea(expectations);
         testRamPreviewCachesTheRangeThenPlaysEveryFrame(expectations);
+        testLargeIndexedCoverageMetadata(expectations);
         testRamPreviewStopsWhenTheRangeOutgrowsTheBudget(expectations);
+        testRamPreviewExactKeyReplacementKeepsCoverage(expectations);
         testRamPreviewCancellationKeepsWhatItCached(expectations);
         testLayoutEditRetainsTheRamRun(expectations);
         testPixelEditCancelsTheRamRun(expectations);

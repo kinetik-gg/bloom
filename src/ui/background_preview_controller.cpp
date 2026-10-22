@@ -280,7 +280,11 @@ void BackgroundPreviewController::consumeReadyResult() {
     }
     previewController_.recordPreparationDuration(*activeIdentity_,
                                                  std::chrono::steady_clock::now() - submittedAt_);
-    previewController_.frameCache().insert((*value)->frame());
+    if (!(*value)->cacheFrame()) {
+        exhausted_ = true;
+        return;
+    }
+    previewController_.frameCache().insert((*value)->cacheFrame());
     fillNextFrame();
 }
 

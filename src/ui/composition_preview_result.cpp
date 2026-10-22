@@ -90,7 +90,8 @@ void CompositionPreviewController::consumeReadyResult() {
     if (validPlayback && prepared && !isCurrent(completed)) {
         // This immutable product keeps its own exact time/revision. Never restamp it as a newer
         // pending time; late but valid pixels can warm the loop and describe useful stale output.
-        frameCache_->insert((*prepared)->frame());
+        if ((*prepared)->cacheFrame())
+            frameCache_->insert((*prepared)->cacheFrame());
         if (generation_ != deliveryGeneration || shuttingDown_ || cachePurgeGate_)
             return;
         if (playbackActive_ && !isCurrent(completed) && state_.desiredIdentity &&
@@ -189,7 +190,8 @@ void CompositionPreviewController::consumeReadyResult() {
             // frame rendered under an interactive override is the exception: its pixels belong to a
             // gesture, and its identity cannot say so.
             if (!completed.carriedInteractionOverride && next.diagnostics.empty()) {
-                frameCache_->insert(frame);
+                if ((*prepared)->cacheFrame())
+                    frameCache_->insert((*prepared)->cacheFrame());
             }
             break;
         }

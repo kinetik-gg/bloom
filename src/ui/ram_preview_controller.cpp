@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <new>
 #include <utility>
 
 namespace bloom::ui {
@@ -73,14 +74,22 @@ RamPreviewController::RamPreviewController(CompositionSession& session,
             &RamPreviewController::cancel);
     connect(&previewController_.frameCache(), &PreviewFrameCache::contentsChanged, this,
             [this] { refreshCoverage(); });
+    connect(&previewController_.frameCache(), &PreviewFrameCache::entryRetained, this,
+            &RamPreviewController::onEntryRetained);
+    connect(&previewController_.frameCache(), &PreviewFrameCache::entryRemoved, this,
+            &RamPreviewController::onEntryRemoved);
+    connect(&previewController_.frameCache(), &PreviewFrameCache::entriesCleared, this,
+            &RamPreviewController::onEntriesCleared);
     connect(&session_, &CompositionSession::compositionChanged, this,
-            [this] { refreshCoverage(); });
-    connect(&session_, &CompositionSession::evaluationChanged, this, [this] { refreshCoverage(); });
+            [this] { refreshCoverage(true, true); });
+    connect(&session_, &CompositionSession::evaluationChanged, this,
+            [this] { refreshCoverage(true, true); });
     connect(&session_, &CompositionSession::documentEvaluationChanged, this,
-            [this] { refreshCoverage(); });
-    connect(&session_, &CompositionSession::workAreaChanged, this, [this] { refreshCoverage(); });
+            [this] { refreshCoverage(true, true); });
+    connect(&session_, &CompositionSession::workAreaChanged, this,
+            [this] { refreshCoverage(true, true); });
     connect(&previewController_, &CompositionPreviewController::resolutionChanged, this,
-            [this] { refreshCoverage(); });
+            [this] { refreshCoverage(true, true); });
 }
 
 RamPreviewController::~RamPreviewController() { cancelAndDetachActive(); }
@@ -106,6 +115,7 @@ void RamPreviewController::start() {
     retainedFrameIndices_.clear();
     playableSpan_.reset();
     retentionLoss_.reset();
+    pendingRetentionLoss_.clear();
     lastCompletion_.reset();
     caching_ = true;
     rangeDirty_ = false;
@@ -148,8 +158,9 @@ void RamPreviewController::rebaseRange() {
     firstFrameIndex_ = mapping->nearestFrameIndex(range.start);
     totalFrameCount_ = endMapping.value()->maximumFrameIndex() - firstFrameIndex_ + 1;
     nextFrameIndex_ = 0;
-    refreshCoverage(false);
+    refreshCoverage(false, true);
     retentionLoss_.reset();
+    pendingRetentionLoss_.clear();
     // A range edit rebases the budget baseline too: the run's own range management must never look
     // like the eviction that ends a run.
     evictionsAtStart_ = previewController_.frameCache().statistics().evictions;
@@ -244,6 +255,7 @@ void RamPreviewController::advance() {
         }
     }
 
+    resolvePendingRetentionLoss();
     if (retentionLoss_) {
         finish(*retentionLoss_);
         return;
@@ -384,6 +396,7 @@ bool RamPreviewController::drainResults() {
         }
         ++preparedFrameCount_;
         const auto& frame = (*value)->frame();
+        const auto& cacheFrame = (*value)->cacheFrame();
         // Validate the out-of-order result against the CURRENT per-time evaluation snapshot and
         // frame key before it can be retained or counted. A frame whose time now resolves to a
         // different revision is a late result from an evaluation the session has left; the cache
@@ -393,13 +406,17 @@ bool RamPreviewController::drainResults() {
             finish(Completion::Failed);
             return false;
         }
+        if (!cacheFrame) {
+            finish(Completion::Failed);
+            return false;
+        }
         const auto identityKey = PreviewFrameCacheKey::forIdentity(frame->desiredIdentity());
         if (rangeDirty_ || !resultIsCurrent(identityKey, ready.identity)) {
-            previewController_.frameCache().insert(frame);
+            previewController_.frameCache().insert(cacheFrame);
             rangeDirty_ = true;
             continue;
         }
-        const auto inserted = previewController_.frameCache().insert(frame);
+        const auto inserted = previewController_.frameCache().insert(cacheFrame);
         publishProgress();
         if (!caching_ || serial != runSerial_)
             return false;
@@ -461,6 +478,7 @@ void RamPreviewController::finish(const Completion outcome) {
     pipeline_.cancelAllAndDetach();
     caching_ = false;
     rangeDirty_ = false;
+    pendingRetentionLoss_.clear();
     nextFrameIndex_ = 0;
     refreshCoverage(false);
     lastCompletion_ = outcome;
@@ -478,17 +496,238 @@ void RamPreviewController::finish(const Completion outcome) {
 
 void RamPreviewController::cancelAndDetachActive() noexcept { pipeline_.cancelAllAndDetach(); }
 
-void RamPreviewController::refreshCoverage(const bool notify) {
-    previewController_.frameCache().refreshResidentEntries();
-    std::vector<std::uint64_t> indices;
-    std::optional<PlayableSpan> span;
+std::optional<std::uint64_t>
+RamPreviewController::acceptedFrameIndex(const PreviewFrameCacheKey& key) const {
     const auto* composition = session_.composition();
-    const auto probe = previewController_.cacheKeyForTime(session_.workArea().start);
+    if (composition == nullptr || key.projectId != projectId_ ||
+        key.compositionId != compositionId_ || session_.compositionId() != compositionId_)
+        return std::nullopt;
+    const auto range = session_.workArea();
+    if (key.time < range.start || key.time >= range.end)
+        return std::nullopt;
+    const auto current = previewController_.cacheKeyForTime(key.time);
+    if (!current || *current != key)
+        return std::nullopt;
+    const auto mapping = mappingForComposition(*composition);
+    if (!mapping)
+        return std::nullopt;
+    const auto index = mapping->nearestFrameIndex(key.time);
+    const auto exact = mapping->timeForFrame(index);
+    return exact && *exact.value() == key.time ? std::optional(index) : std::nullopt;
+}
+
+bool RamPreviewCoverageIndex::add(const std::uint64_t index) {
+    if (!indices_.insert(index).second)
+        return false;
+    ++work_.mutations;
+    auto right = spans_.upper_bound(index);
+    auto left = right == spans_.begin() ? spans_.end() : std::prev(right);
+    auto begin = index;
+    auto end = index + 1;
+    if (left != spans_.end())
+        ++work_.neighborIntervalsVisited;
+    if (left != spans_.end() && left->second == index) {
+        begin = left->first;
+        ranked_.erase({left->second - left->first, left->first});
+        spans_.erase(left);
+    }
+    if (right != spans_.end())
+        ++work_.neighborIntervalsVisited;
+    if (right != spans_.end() && right->first == end) {
+        end = right->second;
+        ranked_.erase({right->second - right->first, right->first});
+        spans_.erase(right);
+    }
+    spans_.emplace(begin, end);
+    ranked_.emplace(end - begin, begin);
+    return true;
+}
+
+bool RamPreviewCoverageIndex::remove(const std::uint64_t index) {
+    if (indices_.erase(index) == 0)
+        return false;
+    ++work_.mutations;
+    auto position = spans_.upper_bound(index);
+    if (position == spans_.begin())
+        return true;
+    --position;
+    ++work_.neighborIntervalsVisited;
+    const auto begin = position->first;
+    const auto end = position->second;
+    ranked_.erase({end - begin, begin});
+    spans_.erase(position);
+    if (begin < index) {
+        spans_.emplace(begin, index);
+        ranked_.emplace(index - begin, begin);
+    }
+    if (index + 1 < end) {
+        spans_.emplace(index + 1, end);
+        ranked_.emplace(end - index - 1, index + 1);
+    }
+    return true;
+}
+
+void RamPreviewCoverageIndex::clear() noexcept {
+    indices_.clear();
+    spans_.clear();
+    ranked_.clear();
+}
+
+std::optional<std::pair<std::uint64_t, std::uint64_t>>
+RamPreviewCoverageIndex::longest() const noexcept {
+    if (ranked_.empty())
+        return std::nullopt;
+    const auto [count, begin] = *ranked_.begin();
+    return std::pair(begin, begin + count);
+}
+
+void RamPreviewController::addRetainedIndex(const std::uint64_t index) {
+    if (coverageIndex_.add(index))
+        retainedIndicesDirty_ = true;
+}
+
+void RamPreviewController::removeRetainedIndex(const std::uint64_t index) {
+    if (coverageIndex_.remove(index))
+        retainedIndicesDirty_ = true;
+}
+
+void RamPreviewController::updatePlayableSpan() {
+    cachedFrameCount_ = coverageIndex_.size();
+    playableSpan_.reset();
+    const auto longest = coverageIndex_.longest();
+    if (!longest)
+        return;
+    const auto* composition = session_.composition();
+    if (composition == nullptr)
+        return;
+    const auto mapping = mappingForComposition(*composition);
+    if (!mapping)
+        return;
+    const auto [begin, end] = *longest;
+    const auto count = end - begin;
+    const auto start = mapping->timeForFrame(begin);
+    const auto after = mapping->timeForFrame(end);
+    if (start)
+        playableSpan_ =
+            PlayableSpan{*start.value(), after ? *after.value() : composition->duration(), count};
+}
+
+void RamPreviewController::onEntryRetained(const PreviewFrameCacheKey& key) {
+    try {
+        const auto index = acceptedFrameIndex(key);
+        if (!index)
+            return;
+        pendingRetentionLoss_.erase(*index);
+        if (coverageIndex_.contains(*index))
+            return;
+        ++metadataWork_.deltaUpdates;
+        addRetainedIndex(*index);
+        updatePlayableSpan();
+        if (!caching_)
+            emit stateChanged();
+    } catch (const std::bad_alloc&) {
+        // A coverage-index allocation must never unwind through an already committed cache
+        // insert and misreport it as an insertion allocation failure.
+        coverageIndex_.clear();
+        retainedIndicesDirty_ = true;
+        coverageProbe_.reset();
+        updatePlayableSpan();
+        if (caching_)
+            retentionLoss_ = Completion::Failed;
+    }
+}
+
+void RamPreviewController::onEntryRemoved(const PreviewFrameCacheKey& key) {
+    std::optional<std::uint64_t> index;
+    try {
+        index = acceptedFrameIndex(key);
+    } catch (const std::bad_alloc&) {
+        coverageProbe_.reset();
+        if (caching_)
+            retentionLoss_ = Completion::Failed;
+        return;
+    }
+    const auto statistics = previewController_.frameCache().statistics();
+    if (index && coverageIndex_.contains(*index) && caching_ && !rangeDirty_) {
+        const auto reason = statistics.staleDrops == staleDropsObserved_ &&
+                                    (statistics.evictions != evictionsAtStart_ ||
+                                     statistics.pressureDrops != pressureDropsObserved_)
+                                ? Completion::PartialBudget
+                                : Completion::Failed;
+        try {
+            pendingRetentionLoss_.insert_or_assign(*index, reason);
+        } catch (const std::bad_alloc&) {
+            retentionLoss_ = Completion::Failed;
+        }
+    }
+    evictionsAtStart_ = statistics.evictions;
+    pressureDropsObserved_ = statistics.pressureDrops;
+    staleDropsObserved_ = statistics.staleDrops;
+    if (!index || !coverageIndex_.contains(*index))
+        return;
+    try {
+        ++metadataWork_.deltaUpdates;
+        removeRetainedIndex(*index);
+        updatePlayableSpan();
+        if (!caching_)
+            emit stateChanged();
+    } catch (const std::bad_alloc&) {
+        coverageIndex_.clear();
+        retainedIndicesDirty_ = true;
+        coverageProbe_.reset();
+        updatePlayableSpan();
+        if (caching_)
+            retentionLoss_ = Completion::Failed;
+    }
+}
+
+void RamPreviewController::onEntriesCleared() {
+    if (caching_ && !rangeDirty_ && coverageIndex_.size() != 0)
+        retentionLoss_ = Completion::Failed;
+    coverageIndex_.clear();
+    pendingRetentionLoss_.clear();
+    retainedIndicesDirty_ = true;
+    const auto statistics = previewController_.frameCache().statistics();
+    evictionsAtStart_ = statistics.evictions;
+    pressureDropsObserved_ = statistics.pressureDrops;
+    staleDropsObserved_ = statistics.staleDrops;
+    updatePlayableSpan();
+    if (!caching_)
+        emit stateChanged();
+}
+
+void RamPreviewController::resolvePendingRetentionLoss() noexcept {
+    // Only a removal still absent after the cache mutation is a loss. In particular, an expired
+    // exact-key resident entry may be removed and replaced in the same insert transaction.
+    for (const auto& [index, reason] : pendingRetentionLoss_) {
+        if (coverageIndex_.contains(index))
+            continue;
+        if (reason == Completion::Failed || !retentionLoss_)
+            retentionLoss_ = reason;
+    }
+    pendingRetentionLoss_.clear();
+}
+
+void RamPreviewController::refreshCoverage(const bool notify, const bool force) {
+    const auto range = session_.workArea();
+    const auto probe = previewController_.cacheKeyForTime(range.start);
+    if (!force && probe == coverageProbe_ && range.start == coverageStart_ &&
+        range.end == coverageEnd_) {
+        resolvePendingRetentionLoss();
+        return;
+    }
+    ++metadataWork_.fullRequalifications;
+    const auto previous = coverageIndex_.indices();
+    coverageProbe_ = probe;
+    coverageStart_ = range.start;
+    coverageEnd_ = range.end;
+    coverageIndex_.clear();
+    retainedIndicesDirty_ = true;
+    const auto* composition = session_.composition();
     if (composition != nullptr && probe && probe->projectId == projectId_ &&
         session_.compositionId() == compositionId_) {
         const auto mapping = mappingForComposition(*composition);
         if (mapping) {
-            const auto range = session_.workArea();
             const auto rate = composition->format().frameRate();
             const auto endMapping =
                 core::FrameTimeMapping::create(range.end, rate.numerator(), rate.denominator());
@@ -496,35 +735,22 @@ void RamPreviewController::refreshCoverage(const bool notify) {
                 firstFrameIndex_ = mapping->nearestFrameIndex(range.start);
                 totalFrameCount_ = endMapping.value()->maximumFrameIndex() - firstFrameIndex_ + 1;
             }
-            for (const auto time : previewController_.frameCache().timesFor(*probe)) {
-                if (time < range.start || time >= range.end)
+            for (const auto time :
+                 previewController_.frameCache().timesForRange(*probe, range.start, range.end)) {
+                ++metadataWork_.requalifiedEntries;
+                const auto key = previewController_.cacheKeyForTime(time);
+                if (!key)
                     continue;
-                const auto index = mapping->nearestFrameIndex(time);
-                const auto exact = mapping->timeForFrame(index);
-                if (exact && *exact.value() == time)
-                    indices.push_back(index);
-            }
-            std::ranges::sort(indices);
-            indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
-            for (std::size_t begin = 0; begin < indices.size();) {
-                auto end = begin + 1;
-                while (end < indices.size() && indices[end] == indices[end - 1] + 1)
-                    ++end;
-                const auto count = static_cast<std::uint64_t>(end - begin);
-                if (!span || count > span->frameCount) {
-                    const auto start = mapping->timeForFrame(indices[begin]);
-                    const auto after = mapping->timeForFrame(indices[end - 1] + 1);
-                    span = PlayableSpan{*start.value(),
-                                        after ? *after.value() : composition->duration(), count};
-                }
-                begin = end;
+                const auto index = acceptedFrameIndex(*key);
+                if (index)
+                    addRetainedIndex(*index);
             }
         }
     }
+    updatePlayableSpan();
     const auto statistics = previewController_.frameCache().statistics();
-    if (caching_ && !rangeDirty_ &&
-        std::ranges::any_of(retainedFrameIndices_, [&](const auto index) {
-            return !std::binary_search(indices.begin(), indices.end(), index);
+    if (caching_ && !rangeDirty_ && std::ranges::any_of(previous, [&](const auto index) {
+            return !coverageIndex_.contains(index);
         })) {
         retentionLoss_ = statistics.staleDrops == staleDropsObserved_ &&
                                  (statistics.evictions != evictionsAtStart_ ||
@@ -532,18 +758,14 @@ void RamPreviewController::refreshCoverage(const bool notify) {
                              ? Completion::PartialBudget
                              : Completion::Failed;
     }
+    resolvePendingRetentionLoss();
     evictionsAtStart_ = statistics.evictions;
     pressureDropsObserved_ = statistics.pressureDrops;
     staleDropsObserved_ = statistics.staleDrops;
-    if (indices == retainedFrameIndices_ && span == playableSpan_)
-        return;
-    retainedFrameIndices_ = std::move(indices);
-    playableSpan_ = span;
-    cachedFrameCount_ = retainedFrameIndices_.size();
     if (caching_)
         previewController_.setRamPreviewProgress(cachedFrameCount_, preparedFrameCount_,
-                                                 span ? span->frameCount : 0);
-    if (notify)
+                                                 playableSpan_ ? playableSpan_->frameCount : 0);
+    if (notify && previous != coverageIndex_.indices())
         emit stateChanged();
 }
 

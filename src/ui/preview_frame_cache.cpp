@@ -6,11 +6,15 @@
 #include <QVariant>
 
 #include <algorithm>
+#include <functional>
 #include <limits>
+#include <list>
+#include <map>
 #include <memory>
 #include <new>
 #include <optional>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 
 namespace bloom::ui {
@@ -19,9 +23,9 @@ namespace {
 constexpr auto ramPreviewByteBudgetKey = "playback/ram-preview-memory-bytes";
 
 // What the cache retains for one frame: the packed display buffer and the identity, never the
-// Float32 process image (task PERF1, FORMAL AMENDMENT 1). The pixels are copied once, on the way
-// in; the process image the source frame holds is simply not carried over, so it is freed as soon
-// as the last live reference to that frame goes.
+// Float32 process image (task PERF1, FORMAL AMENDMENT 1). Production CPU preparation supplies an
+// already-stripped product from its worker. A legacy direct CPU insertion still copies here; the
+// process image the source frame holds is never carried into the cache.
 [[nodiscard]] std::shared_ptr<const runtime::PreviewDisplayOnlyFrame>
 retainable(const runtime::PreparedPreviewFrame& frame) {
     if (!frame.hasProcessFrame()) {
@@ -51,6 +55,49 @@ restamp(const std::shared_ptr<const runtime::PreviewDisplayOnlyFrame>& frame,
 }
 
 } // namespace
+
+std::size_t PreviewFrameCache::KeyHash::operator()(const PreviewFrameCacheKey& key) const noexcept {
+    std::size_t hash = 0;
+    const auto add = [&hash]<typename T>(const T& value) {
+        hash ^= std::hash<T>{}(value) + 0x9e3779b9U + (hash << 6U) + (hash >> 2U);
+    };
+    add(key.projectId.value());
+    add(key.compositionId.value());
+    add(key.sourceRevision.value());
+    add(key.time.numerator());
+    add(key.time.denominator());
+    add(static_cast<std::uint8_t>(key.output));
+    add(key.resolution.index());
+    if (const auto* proxy = std::get_if<runtime::ProxyResolution>(&key.resolution)) {
+        add(proxy->extent.width());
+        add(proxy->extent.height());
+    }
+    add(static_cast<std::uint8_t>(key.quality));
+    add(static_cast<std::uint8_t>(key.colorIntent));
+    add(static_cast<std::uint8_t>(key.resolutionPolicy));
+    add(key.roi.has_value());
+    if (key.roi) {
+        add(key.roi->originX());
+        add(key.roi->originY());
+        add(key.roi->extent().width());
+        add(key.roi->extent().height());
+    }
+    add(key.viewAdjust.exposure);
+    add(key.viewAdjust.gamma);
+    add(key.displayName);
+    add(key.viewName);
+    add(key.showLook);
+    return hash;
+}
+
+bool PreviewFrameCache::RangeLess::operator()(const RangeKey& left,
+                                              const RangeKey& right) const noexcept {
+    if (left.projectId != right.projectId)
+        return left.projectId.value() < right.projectId.value();
+    if (left.compositionId != right.compositionId)
+        return left.compositionId.value() < right.compositionId.value();
+    return left.time < right.time;
+}
 
 PreviewFrameCacheKey
 PreviewFrameCacheKey::forIdentity(const runtime::PreviewRequestIdentity& identity) {
@@ -128,18 +175,18 @@ std::size_t PreviewFrameCache::frameByteCost(const runtime::PreparedPreviewFrame
 PreparedPreviewFrameHandle
 PreviewFrameCache::take(const runtime::PreviewRequestIdentity& identity) {
     const auto key = PreviewFrameCacheKey::forIdentity(identity);
-    const auto position =
-        std::ranges::find_if(entries_, [&key](const Entry& entry) { return entry.key == key; });
-    if (position == entries_.end() || !entryIsLive(*position)) {
+    ++metadataWork_.exactProbes;
+    const auto found = exactIndex_.find(key);
+    if (found == exactIndex_.end() || !entryIsLive(*found->second)) {
         // A dead resident entry (invalidated lease) is a miss, never a hit: it can never be served.
-        if (position != entries_.end()) {
-            removeAt(static_cast<std::size_t>(position - entries_.begin()));
-        }
+        if (found != exactIndex_.end())
+            removeAt(found->second);
         ++statistics_.misses;
         if (trace_)
             trace_->record(identity, PreviewTraceStage::CacheLookup, PreviewTraceOutcome::Miss);
         return nullptr;
     }
+    const auto position = found->second;
     PreparedPreviewFrameHandle frame;
     if (position->resident != nullptr) {
         // Resident re-stamp: share the same opaque lease, copy no pixels and no native allocation.
@@ -155,13 +202,15 @@ PreviewFrameCache::take(const runtime::PreviewRequestIdentity& identity) {
         // The key matched but the rebuilt envelope does not answer this request exactly. Nothing
         // here can be served honestly, so the entry is dropped rather than published under an
         // identity it does not have.
-        removeAt(static_cast<std::size_t>(position - entries_.begin()));
+        removeAt(position);
         ++statistics_.misses;
         if (trace_)
             trace_->record(identity, PreviewTraceStage::CacheLookup, PreviewTraceOutcome::Invalid);
         return nullptr;
     }
-    std::rotate(entries_.begin(), position, position + 1);
+    entries_.splice(entries_.begin(), entries_, position);
+    if (position->residentPosition)
+        residentOrder_.splice(residentOrder_.begin(), residentOrder_, *position->residentPosition);
     ++statistics_.hits;
     if (trace_)
         trace_->record(*frame, PreviewTraceStage::CacheLookup, PreviewTraceOutcome::Hit);
@@ -203,11 +252,14 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
         }
         const bool qualificationChanged =
             displayQualified_.has_value() && *displayQualified_ != frame->isOcioQualified();
-        const auto existing = std::ranges::find_if(entries_, [&key](const Entry& entry) {
-            return entry.key == key && entryIsLive(entry);
-        });
-        if (!qualificationChanged && existing != entries_.end()) {
-            std::rotate(entries_.begin(), existing, existing + 1);
+        ++metadataWork_.exactProbes;
+        const auto existing = exactIndex_.find(key);
+        if (!qualificationChanged && existing != exactIndex_.end() &&
+            entryIsLive(*existing->second)) {
+            entries_.splice(entries_.begin(), entries_, existing->second);
+            if (existing->second->residentPosition)
+                residentOrder_.splice(residentOrder_.begin(), residentOrder_,
+                                      *existing->second->residentPosition);
             return report(InsertOutcome::AlreadyPresent, PreviewTraceOutcome::Reused);
         }
         const auto bytes = frameByteCost(*frame);
@@ -230,28 +282,67 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
             ++statistics_.allocationFailures;
             return report(InsertOutcome::AllocationFailure, PreviewTraceOutcome::AllocationFailure);
         }
+        if (!resident && frame->hasProcessFrame())
+            ++statistics_.uiPixelCopies;
+        // Stage every allocation (stable owner, exact key, range key, resident order) before any
+        // qualification or revision pruning. Node handles and list splices commit without copying
+        // a frame or allocating after the semantic mutation begins.
+        Entries staged;
+        staged.push_back(std::move(incoming));
+        std::unordered_map<PreviewFrameCacheKey, EntryIterator, KeyHash> stagedExact;
+        stagedExact.emplace(staged.front().key, staged.begin());
+        RangeIndex stagedRange;
+        stagedRange.emplace(RangeKey{staged.front().key.projectId, staged.front().key.compositionId,
+                                     staged.front().key.time},
+                            staged.begin());
+        std::list<EntryIterator> stagedResident;
+        if (resident)
+            stagedResident.push_front(staged.begin());
+        std::unordered_map<std::uint64_t, std::uint64_t> stagedRevision;
+        if (!hasProvenancePolicy() &&
+            (qualificationChanged ||
+             !uniformProjectRevision_.contains(staged.front().key.projectId.value()))) {
+            stagedRevision.emplace(staged.front().key.projectId.value(),
+                                   staged.front().key.sourceRevision.value());
+        }
         allocationCheckpoint(InsertAllocation::Capacity);
-        entries_.reserve(entries_.size() + 1);
-        static_assert(std::is_nothrow_move_constructible_v<Entry>);
-        static_assert(std::is_nothrow_move_assignable_v<Entry>);
-        // From here the entry-vector transaction cannot allocate.
+        exactIndex_.reserve(exactIndex_.size() + 1);
+        if (!hasProvenancePolicy())
+            uniformProjectRevision_.reserve(uniformProjectRevision_.size() + 1);
         if (qualificationChanged)
             clear();
         displayQualified_ = frame->isOcioQualified();
-        if (!hasProvenancePolicy())
-            dropStaleRevisions(incoming.key);
-        for (std::size_t index = entries_.size(); index > 0; --index) {
-            if (entries_[index - 1].key == incoming.key)
-                removeAt(index - 1);
+        if (!hasProvenancePolicy()) {
+            const auto project = staged.front().key.projectId.value();
+            const auto revision = staged.front().key.sourceRevision.value();
+            const auto known = uniformProjectRevision_.find(project);
+            if (known == uniformProjectRevision_.end() || known->second != revision)
+                dropStaleRevisions(staged.front().key);
+            if (known == uniformProjectRevision_.end())
+                uniformProjectRevision_.insert(stagedRevision.extract(stagedRevision.begin()));
+            else
+                known->second = revision;
         }
+        ++metadataWork_.exactProbes;
+        if (const auto duplicate = exactIndex_.find(staged.front().key);
+            duplicate != exactIndex_.end())
+            removeAt(duplicate->second);
         const auto evictionsBefore = statistics_.evictions;
-        entries_.insert(entries_.begin(), std::move(incoming));
+        entries_.splice(entries_.begin(), staged, staged.begin());
+        const auto inserted = entries_.begin();
+        inserted->self = inserted;
+        exactIndex_.insert(stagedExact.extract(stagedExact.begin()));
+        inserted->rangePosition = rangeIndex_.insert(stagedRange.extract(stagedRange.begin()));
+        if (resident) {
+            residentOrder_.splice(residentOrder_.begin(), stagedResident, stagedResident.begin());
+            inserted->residentPosition = residentOrder_.begin();
+        }
         // Sum only after bounding the old retained set, avoiding size_t overflow at extreme caps.
         while (residentBytes_ > byteBudget_ - bytes && entries_.size() > 1) {
             ++statistics_.evictions;
             if (!entryIsLive(entries_.back()))
                 ++statistics_.staleDrops;
-            removeAt(entries_.size() - 1);
+            removeAt(std::prev(entries_.end()));
         }
         residentBytes_ += bytes;
         if (resident) {
@@ -267,6 +358,8 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
             evictGpuResidentToLimits();
         // MRU admission fits both individual limits, but lease validity can change concurrently.
         const bool live = !entries_.empty() && entryIsLive(entries_.front());
+        if (live)
+            emit entryRetained(entries_.front().key);
         return report(live ? InsertOutcome::Retained : InsertOutcome::RejectedStale,
                       live ? PreviewTraceOutcome::Retained : PreviewTraceOutcome::Invalid,
                       statistics_.evictions - evictionsBefore);
@@ -277,10 +370,11 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
 }
 
 void PreviewFrameCache::refreshResidentEntries() {
-    for (std::size_t index = entries_.size(); index > 0; --index) {
-        if (!entryIsLive(entries_[index - 1])) {
+    for (auto position = residentOrder_.begin(); position != residentOrder_.end();) {
+        const auto entry = *position++;
+        if (!entryIsLive(*entry)) {
             ++statistics_.staleDrops;
-            removeAt(index - 1);
+            removeAt(entry);
         }
     }
     if (gpuResidentEntries_ == 0)
@@ -296,7 +390,7 @@ void PreviewFrameCache::trimToBytes(const std::size_t bytes) {
         ++statistics_.pressureDrops;
         if (!entryIsLive(entries_.back()))
             ++statistics_.staleDrops;
-        removeAt(entries_.size() - 1);
+        removeAt(std::prev(entries_.end()));
     }
 }
 
@@ -305,19 +399,49 @@ bool PreviewFrameCache::entryIsLive(const Entry& entry) noexcept {
 }
 
 bool PreviewFrameCache::contains(const PreviewFrameCacheKey& key) const {
-    return std::ranges::any_of(
-        entries_, [&key](const Entry& entry) { return entry.key == key && entryIsLive(entry); });
+    ++metadataWork_.exactProbes;
+    const auto found = exactIndex_.find(key);
+    return found != exactIndex_.end() && entryIsLive(*found->second);
 }
 
 std::vector<core::RationalTime>
 PreviewFrameCache::timesFor(const PreviewFrameCacheKey& probe) const {
+    const auto lastTime = core::RationalTime::fromInteger(std::numeric_limits<std::int64_t>::max());
+    auto times = timesForRange(
+        probe, core::RationalTime::fromInteger(std::numeric_limits<std::int64_t>::min()), lastTime);
+    // The all-times overload includes the largest representable integer time; the range overload
+    // is deliberately half-open and excludes its end.
+    const auto [begin, end] =
+        rangeIndex_.equal_range({probe.projectId, probe.compositionId, lastTime});
+    for (auto position = begin; position != end; ++position) {
+        ++metadataWork_.rangeEntriesVisited;
+        const auto& entry = *position->second;
+        if (!entryIsLive(entry) || !retains(entry.key))
+            continue;
+        auto key = probe;
+        key.time = entry.key.time;
+        if (hasProvenancePolicy())
+            key.sourceRevision = entry.key.sourceRevision;
+        if (key == entry.key)
+            times.push_back(entry.key.time);
+    }
+    return times;
+}
+
+std::vector<core::RationalTime>
+PreviewFrameCache::timesForRange(const PreviewFrameCacheKey& probe, const core::RationalTime start,
+                                 const core::RationalTime end) const {
     // TEMPORAL-2B: a probe names ONE revision, but after finite clip-range edits the retained
     // timeline legitimately spans several genuine revisions. Cached markers are therefore matched
     // on everything that decides pixels EXCEPT the source revision, so a sub-range captured at an
     // older retained revision still paints its "cached" bar.
     std::vector<core::RationalTime> times;
     auto key = probe;
-    for (const auto& entry : entries_) {
+    const auto begin = rangeIndex_.lower_bound({probe.projectId, probe.compositionId, start});
+    const auto finish = rangeIndex_.lower_bound({probe.projectId, probe.compositionId, end});
+    for (auto position = begin; position != finish; ++position) {
+        ++metadataWork_.rangeEntriesVisited;
+        const auto& entry = *position->second;
         if (!entryIsLive(entry) || !retains(entry.key)) {
             continue;
         }
@@ -339,6 +463,10 @@ void PreviewFrameCache::releaseForShutdown() noexcept {
     notificationTimer_.stop();
     residentRefreshTimer_.stop();
     entries_.clear();
+    exactIndex_.clear();
+    rangeIndex_.clear();
+    residentOrder_.clear();
+    uniformProjectRevision_.clear();
     residentBytes_ = 0;
     gpuResidentBytes_ = 0;
     gpuResidentEntries_ = 0;
@@ -347,14 +475,21 @@ void PreviewFrameCache::releaseForShutdown() noexcept {
 }
 
 void PreviewFrameCache::clear() {
-    if (!entries_.empty()) {
+    const bool hadEntries = !entries_.empty();
+    if (hadEntries) {
         scheduleNotification();
     }
     entries_.clear();
+    exactIndex_.clear();
+    rangeIndex_.clear();
+    residentOrder_.clear();
+    uniformProjectRevision_.clear();
     residentBytes_ = 0;
     gpuResidentBytes_ = 0;
     gpuResidentEntries_ = 0;
     residentRefreshTimer_.stop();
+    if (hadEntries)
+        emit entriesCleared();
 }
 
 bool PreviewFrameCache::workAreaAllows(const PreviewFrameCacheKey& key) const noexcept {
@@ -389,33 +524,34 @@ bool PreviewFrameCache::retains(const PreviewFrameCacheKey& key) const noexcept 
 }
 
 void PreviewFrameCache::pruneUnaccepted() {
-    for (std::size_t index = entries_.size(); index > 0; --index) {
-        const auto& entry = entries_[index - 1];
-        if (!workAreaAllows(entry.key)) {
+    for (auto position = entries_.begin(); position != entries_.end();) {
+        const auto entry = position++;
+        if (!workAreaAllows(entry->key)) {
             ++statistics_.rangeDrops;
-            removeAt(index - 1);
+            removeAt(entry);
             continue;
         }
-        if (!provenanceAllows(entry.key)) {
+        if (!provenanceAllows(entry->key)) {
             ++statistics_.staleDrops;
-            removeAt(index - 1);
+            removeAt(entry);
         }
     }
 }
 
 void PreviewFrameCache::dropStaleRevisions(const PreviewFrameCacheKey& current) {
-    for (std::size_t index = entries_.size(); index > 0; --index) {
-        const auto& entry = entries_[index - 1];
-        if (entry.key.projectId != current.projectId) {
+    for (auto position = entries_.begin(); position != entries_.end();) {
+        ++metadataWork_.revisionEntriesVisited;
+        const auto entry = position++;
+        if (entry->key.projectId != current.projectId) {
             // CACHEFIX-3. A different project is not this revision's concern; its entries stay
             // retained (the cache key and the retention policy both carry project identity).
             continue;
         }
-        if (entry.key.sourceRevision == current.sourceRevision) {
+        if (entry->key.sourceRevision == current.sourceRevision) {
             continue;
         }
         ++statistics_.staleDrops;
-        removeAt(index - 1);
+        removeAt(entry);
     }
 }
 
@@ -423,21 +559,20 @@ void PreviewFrameCache::setRetentionSnapshots(std::vector<RetentionSnapshot> sna
     if (retentionSnapshots_ == snapshots)
         return;
     retentionSnapshots_ = std::move(snapshots);
+    uniformProjectRevision_.clear();
     pruneUnaccepted();
 }
 
 std::size_t PreviewFrameCache::pruneToRange(const RetentionRange& range) {
     std::size_t dropped = 0;
-    for (std::size_t index = entries_.size(); index > 0; --index) {
-        const auto& entry = entries_[index - 1];
-        if (entry.key.projectId != range.projectId ||
-            entry.key.compositionId != range.compositionId) {
-            continue;
-        }
-        if (entry.key.time >= range.start && entry.key.time < range.end)
+    for (auto position = entries_.begin(); position != entries_.end();) {
+        const auto entry = position++;
+        if (entry->key.projectId != range.projectId ||
+            entry->key.compositionId != range.compositionId ||
+            (entry->key.time >= range.start && entry->key.time < range.end))
             continue;
         ++statistics_.rangeDrops;
-        removeAt(index - 1);
+        removeAt(entry);
         ++dropped;
     }
     return dropped;
@@ -456,13 +591,13 @@ void PreviewFrameCache::evictToBudget() {
         ++statistics_.evictions;
         if (!entryIsLive(entries_.back()))
             ++statistics_.staleDrops;
-        removeAt(entries_.size() - 1);
+        removeAt(std::prev(entries_.end()));
     }
 }
 
-void PreviewFrameCache::removeAt(const std::size_t index) {
+void PreviewFrameCache::removeAt(const EntryIterator position) {
     scheduleNotification();
-    const Entry& entry = entries_[index];
+    const Entry& entry = *position;
     if (trace_) {
         const auto& identity =
             entry.resident ? entry.resident->desiredIdentity() : entry.frame->desiredIdentity();
@@ -478,7 +613,13 @@ void PreviewFrameCache::removeAt(const std::size_t index) {
         if (gpuResidentEntries_ == 0)
             residentRefreshTimer_.stop();
     }
-    entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(index));
+    exactIndex_.erase(entry.key);
+    rangeIndex_.erase(entry.rangePosition);
+    if (entry.residentPosition)
+        residentOrder_.erase(*entry.residentPosition);
+    auto removedKey = std::move(position->key);
+    entries_.erase(position);
+    emit entryRemoved(removedKey);
 }
 
 void PreviewFrameCache::setGpuResidentLimits(const std::size_t maxBytes,
@@ -496,23 +637,17 @@ void PreviewFrameCache::evictGpuResidentToLimits() {
     while ((gpuResidentEntries_ > gpuResidentEntryLimit_ ||
             gpuResidentBytes_ > gpuResidentByteLimit_) &&
            gpuResidentEntries_ > 0) {
-        std::size_t victim = entries_.size();
-        for (std::size_t index = entries_.size(); index > 0; --index) {
-            if (entries_[index - 1].resident != nullptr) {
-                victim = index - 1;
-                break;
-            }
-        }
-        if (victim == entries_.size()) {
+        if (residentOrder_.empty()) {
             break;
         }
+        const auto victim = residentOrder_.back();
         // The same boundary event is both a GPU-resident eviction and, for the RAM preview
         // controller, a budget eviction: the controller only watches `evictions` to stop a run that
         // has outgrown memory, so a GPU sublimit hit must advance that signal or the run would keep
         // churning every frame against the cap instead of stopping at the prefix that fits.
         ++statistics_.gpuResidentEvictions;
         ++statistics_.evictions;
-        if (!entryIsLive(entries_[victim]))
+        if (!entryIsLive(*victim))
             ++statistics_.staleDrops;
         removeAt(victim);
     }

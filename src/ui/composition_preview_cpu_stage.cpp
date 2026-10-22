@@ -14,6 +14,7 @@
 
 #include <iterator>
 #include <memory>
+#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -324,8 +325,29 @@ runtime::PreviewCpuDisplayFallback makeCompositionPreviewCpuDisplayFallback(
             return Result::failed(std::move(diagnostics));
         }
 
+        // The cache's display-only copy is prepared on this worker, beside the CPU display
+        // preparation that already touched every pixel. The published foreground frame still
+        // owns its process pixels for inspection; cache insertion on the UI thread only moves a
+        // shared immutable handle and never copies Full/Half packed pixels.
+        std::shared_ptr<const runtime::PreparedPreviewFrame> cacheFrame;
+        if (auto stripped =
+                runtime::PreviewDisplayOnlyFrame::create(*prepared, pixelStorageByteLimit)) {
+            try {
+                auto displayOnly =
+                    std::make_shared<const runtime::PreviewDisplayOnlyFrame>(std::move(*stripped));
+                auto envelope = runtime::PreparedPreviewFrame::createDisplayOnly(
+                    desiredIdentity.requestGeneration, std::move(displayOnly));
+                if (envelope && envelope->desiredIdentity() == desiredIdentity)
+                    cacheFrame =
+                        std::make_shared<const runtime::PreparedPreviewFrame>(std::move(*envelope));
+            } catch (const std::bad_alloc&) {
+                // Foreground publication remains valid; an engaged null cache handle below
+                // prevents an expensive fallback copy on the interface thread.
+            }
+        }
         auto frame = std::make_shared<const runtime::PreparedPreviewFrame>(std::move(*prepared));
-        auto preparedResult = runtime::PreviewPreparationResult::prepared(std::move(frame));
+        auto preparedResult = runtime::PreviewPreparationResult::prepared(
+            std::move(frame), std::optional(std::move(cacheFrame)));
         if (!preparedResult.has_value()) {
             diagnostics.push_back(
                 missingResultDiagnostic("The preview result rejected its prepared frame"));

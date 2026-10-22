@@ -9,13 +9,52 @@
 #include <QObject>
 
 #include <cstdint>
+#include <map>
 #include <optional>
+#include <set>
+#include <utility>
 #include <vector>
 
 namespace bloom::ui {
 
 class CompositionSession;
 class TaskUiBridge;
+
+// Exact frame-grid coverage independent of pixel payloads. Each insertion/removal touches its
+// neighboring intervals; callers may enumerate all indices only at an explicit requalification
+// boundary. Exposed as a small metadata object so large-range work can be tested deterministically
+// without manufacturing thousands of rendered frames.
+class RamPreviewCoverageIndex final {
+  public:
+    struct Work final {
+        std::uint64_t mutations = 0;
+        std::uint64_t neighborIntervalsVisited = 0;
+    };
+    [[nodiscard]] bool add(std::uint64_t index);
+    [[nodiscard]] bool remove(std::uint64_t index);
+    void clear() noexcept;
+    [[nodiscard]] bool contains(std::uint64_t index) const { return indices_.contains(index); }
+    [[nodiscard]] std::size_t size() const noexcept { return indices_.size(); }
+    [[nodiscard]] const std::set<std::uint64_t>& indices() const noexcept { return indices_; }
+    // Half-open [first,second) longest span, earliest start on ties.
+    [[nodiscard]] std::optional<std::pair<std::uint64_t, std::uint64_t>> longest() const noexcept;
+    [[nodiscard]] Work work() const noexcept { return work_; }
+    void resetWorkForTesting() noexcept { work_ = {}; }
+
+  private:
+    struct RankLess final {
+        bool operator()(const std::pair<std::uint64_t, std::uint64_t>& left,
+                        const std::pair<std::uint64_t, std::uint64_t>& right) const noexcept {
+            if (left.first != right.first)
+                return left.first > right.first;
+            return left.second < right.second;
+        }
+    };
+    std::set<std::uint64_t> indices_;
+    std::map<std::uint64_t, std::uint64_t> spans_;
+    std::set<std::pair<std::uint64_t, std::uint64_t>, RankLess> ranked_;
+    Work work_;
+};
 
 // "RAM Preview": pre-render a composition's whole frame range into the RAM preview cache, then play
 // it back from there (docs/architecture/animation-and-time.md, "RAM preview").
@@ -53,7 +92,12 @@ class RamPreviewController final : public QObject {
     // Historical successful preparations this run; includes results later evicted or made stale.
     [[nodiscard]] std::uint64_t preparedFrameCount() const noexcept { return preparedFrameCount_; }
     // Current accepted frame-grid intersection, without cache-hit/LRU side effects.
-    [[nodiscard]] const std::vector<std::uint64_t>& retainedFrameIndices() const noexcept {
+    [[nodiscard]] const std::vector<std::uint64_t>& retainedFrameIndices() const {
+        if (retainedIndicesDirty_) {
+            retainedFrameIndices_.assign(coverageIndex_.indices().begin(),
+                                         coverageIndex_.indices().end());
+            retainedIndicesDirty_ = false;
+        }
         return retainedFrameIndices_;
     }
     [[nodiscard]] const std::optional<PlayableSpan>& playableSpan() const noexcept {
@@ -79,6 +123,13 @@ class RamPreviewController final : public QObject {
     [[nodiscard]] std::uint64_t cachedFrameCount() const noexcept { return cachedFrameCount_; }
     [[nodiscard]] std::uint64_t totalFrameCount() const noexcept { return totalFrameCount_; }
     [[nodiscard]] bool isShuttingDown() const noexcept { return shuttingDown_; }
+    struct MetadataWork final {
+        std::uint64_t fullRequalifications = 0;
+        std::uint64_t requalifiedEntries = 0;
+        std::uint64_t deltaUpdates = 0;
+    };
+    [[nodiscard]] MetadataWork metadataWork() const noexcept { return metadataWork_; }
+    void resetMetadataWorkForTesting() noexcept { metadataWork_ = {}; }
     // The high-water mark of frames ever preparing at once for this controller (across its runs).
     // Never exceeds kMaxInFlight; exposed so a test can pin the bound without racing the workers.
     [[nodiscard]] std::uint32_t peakInFlightFrames() const noexcept {
@@ -122,7 +173,16 @@ class RamPreviewController final : public QObject {
                                                               const document::Snapshot& snapshot);
     void consumeReadyResult();
     void finish(Completion outcome);
-    void refreshCoverage(bool notify = true);
+    void refreshCoverage(bool notify = true, bool force = false);
+    void onEntryRetained(const PreviewFrameCacheKey& key);
+    void onEntryRemoved(const PreviewFrameCacheKey& key);
+    void onEntriesCleared();
+    void resolvePendingRetentionLoss() noexcept;
+    [[nodiscard]] std::optional<std::uint64_t>
+    acceptedFrameIndex(const PreviewFrameCacheKey& key) const;
+    void addRetainedIndex(std::uint64_t index);
+    void removeRetainedIndex(std::uint64_t index);
+    void updatePlayableSpan();
     void cancelAndDetachActive() noexcept;
     void publishProgress();
     // WORKAREA-1: adapt a run in progress to the live work area. A frame in flight is allowed to
@@ -155,13 +215,21 @@ class RamPreviewController final : public QObject {
     std::uint64_t cachedFrameCount_ = 0;
     std::uint64_t preparedFrameCount_ = 0;
     document::ProjectId projectId_;
-    std::vector<std::uint64_t> retainedFrameIndices_;
+    mutable std::vector<std::uint64_t> retainedFrameIndices_;
+    mutable bool retainedIndicesDirty_ = false;
+    RamPreviewCoverageIndex coverageIndex_;
+    std::optional<PreviewFrameCacheKey> coverageProbe_;
+    core::RationalTime coverageStart_;
+    core::RationalTime coverageEnd_;
     std::optional<PlayableSpan> playableSpan_;
     std::optional<Completion> lastCompletion_;
     std::uint64_t totalFrameCount_ = 0;
     std::uint64_t generation_ = 0;
     std::uint64_t runSerial_ = 0;
     std::optional<Completion> retentionLoss_;
+    // A cache insert can remove an expired entry and retain its exact replacement before it
+    // returns. Judge removals after that transaction, when the final coverage is known.
+    std::map<std::uint64_t, Completion> pendingRetentionLoss_;
     std::uint64_t pressureDropsObserved_ = 0;
     std::uint64_t staleDropsObserved_ = 0;
     std::optional<PreviewFrameCacheKey> completedProbe_;
@@ -176,6 +244,7 @@ class RamPreviewController final : public QObject {
     // has, rebases once the pipeline is empty, and then resubmits only the still-missing frames, so
     // no frame of the new range is skipped or submitted twice.
     bool rangeDirty_ = false;
+    MetadataWork metadataWork_;
 };
 
 } // namespace bloom::ui

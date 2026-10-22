@@ -447,20 +447,31 @@ enum class PreviewPreparationStatus : std::uint8_t {
 class PreviewPreparationResult final {
   public:
     [[nodiscard]] static std::optional<PreviewPreparationResult>
-    prepared(std::shared_ptr<const PreparedPreviewFrame> frame) noexcept;
+    prepared(std::shared_ptr<const PreparedPreviewFrame> frame,
+             std::optional<std::shared_ptr<const PreparedPreviewFrame>> cacheFrame =
+                 std::nullopt) noexcept;
     [[nodiscard]] static PreviewPreparationResult unsupported() noexcept;
 
     [[nodiscard]] PreviewPreparationStatus status() const noexcept { return status_; }
     [[nodiscard]] const std::shared_ptr<const PreparedPreviewFrame>& frame() const noexcept {
         return frame_;
     }
+    // A CPU worker can hand back a separately stripped, immutable packed product for retention
+    // while the foreground frame still owns its process pixels for inspection. An engaged null
+    // value means worker retention failed and UI insertion must be skipped, not retried by copying
+    // a full frame on the interface thread. Absent means a legacy/other caller's frame is used.
+    [[nodiscard]] const std::shared_ptr<const PreparedPreviewFrame>& cacheFrame() const noexcept {
+        return cacheFrame_.has_value() ? *cacheFrame_ : frame_;
+    }
 
   private:
-    PreviewPreparationResult(PreviewPreparationStatus status,
-                             std::shared_ptr<const PreparedPreviewFrame> frame) noexcept;
+    PreviewPreparationResult(
+        PreviewPreparationStatus status, std::shared_ptr<const PreparedPreviewFrame> frame,
+        std::optional<std::shared_ptr<const PreparedPreviewFrame>> cacheFrame) noexcept;
 
     PreviewPreparationStatus status_ = PreviewPreparationStatus::Unsupported;
     std::shared_ptr<const PreparedPreviewFrame> frame_;
+    std::optional<std::shared_ptr<const PreparedPreviewFrame>> cacheFrame_;
 };
 
 using PreviewPreparationResultHandle = std::shared_ptr<const PreviewPreparationResult>;

@@ -11,9 +11,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <list>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class QSettings;
@@ -131,8 +134,16 @@ class PreviewFrameCache final : public QObject {
         // Counted apart from the overall-budget evictions because the two mean different things:
         // this one says the bounded resident set is the limit, the other says the whole cache is.
         std::uint64_t gpuResidentEvictions = 0;
+        // Legacy direct CPU insertions that copied packed pixels on the owner thread. Production
+        // worker-prepared results must leave this at zero, even at Full/Half resolution.
+        std::uint64_t uiPixelCopies = 0;
 
         friend bool operator==(const Statistics&, const Statistics&) = default;
+    };
+    struct MetadataWork final {
+        std::uint64_t exactProbes = 0;
+        std::uint64_t rangeEntriesVisited = 0;
+        std::uint64_t revisionEntriesVisited = 0;
     };
 
     // The half-open time range [start, end) this cache is scoped to for one composition, taken from
@@ -188,6 +199,11 @@ class PreviewFrameCache final : public QObject {
     // Cached times for exactly this project/composition/revision/resolution/display policy.
     // The probe time is ignored. UI consumers do not scan the composition's entire duration.
     [[nodiscard]] std::vector<core::RationalTime> timesFor(const PreviewFrameCacheKey& probe) const;
+    // Enumerates only retained entries in this composition's half-open time interval. This is a
+    // requalification boundary, not a per-frame progress query.
+    [[nodiscard]] std::vector<core::RationalTime> timesForRange(const PreviewFrameCacheKey& probe,
+                                                                core::RationalTime start,
+                                                                core::RationalTime end) const;
     // Non-blocking owner-thread validity refresh; no native ownership crosses the boundary.
     // Also runs every 250ms only while resident entries exist, with coalesced 50ms notifications.
     void refreshResidentEntries();
@@ -201,6 +217,8 @@ class PreviewFrameCache final : public QObject {
     [[nodiscard]] std::size_t residentBytes() const noexcept { return residentBytes_; }
     [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }
     [[nodiscard]] Statistics statistics() const noexcept { return statistics_; }
+    [[nodiscard]] MetadataWork metadataWork() const noexcept { return metadataWork_; }
+    void resetMetadataWorkForTesting() noexcept { metadataWork_ = {}; }
     void clear();
     // Terminal pin release after producers/native retirement; emits no cache notification.
     void releaseForShutdown() noexcept;
@@ -249,10 +267,29 @@ class PreviewFrameCache final : public QObject {
     // Cache mutations coalesce for 50ms; a burst produces one ruler repaint notification.
     void contentsChanged();
     void byteBudgetChanged();
+    // Exact retention deltas are delivered synchronously to the RAM coverage index. The existing
+    // coalesced contentsChanged signal remains the paint notification.
+    void entryRetained(const PreviewFrameCacheKey& key);
+    void entryRemoved(const PreviewFrameCacheKey& key);
+    void entriesCleared();
 
   private:
     std::shared_ptr<PreviewFrameTrace> trace_;
     struct Entry;
+    struct KeyHash final {
+        [[nodiscard]] std::size_t operator()(const PreviewFrameCacheKey& key) const noexcept;
+    };
+    struct RangeKey final {
+        document::ProjectId projectId;
+        document::CompositionId compositionId;
+        core::RationalTime time;
+    };
+    struct RangeLess final {
+        [[nodiscard]] bool operator()(const RangeKey& left, const RangeKey& right) const noexcept;
+    };
+    using Entries = std::list<Entry>;
+    using EntryIterator = Entries::iterator;
+    using RangeIndex = std::multimap<RangeKey, EntryIterator, RangeLess>;
     void scheduleNotification();
     // A resident entry is live exactly while its lease is; a CPU entry is always live. An
     // invalidated resident lease is never a hit and is never listed by contains()/timesFor().
@@ -272,6 +309,9 @@ class PreviewFrameCache final : public QObject {
         // live only while its lease is; an invalidated lease is never a hit and never listed.
         std::shared_ptr<const runtime::PreviewResidentDisplayFrame> resident;
         std::size_t bytes = 0;
+        EntryIterator self;
+        RangeIndex::iterator rangePosition;
+        std::optional<std::list<EntryIterator>::iterator> residentPosition;
     };
 
     void dropStaleRevisions(const PreviewFrameCacheKey& current);
@@ -280,7 +320,7 @@ class PreviewFrameCache final : public QObject {
     // GPU-resident limit is exceeded. It only drops the cache's reference; it never invalidates a
     // lease and never removes a CPU entry.
     void evictGpuResidentToLimits();
-    void removeAt(std::size_t index);
+    void removeAt(EntryIterator position);
     // Drops every entry whose time is no longer accepted under the current work-area range or
     // provenance spans, counting rangeDrops for a work-area exclusion and staleDrops for a
     // provenance mismatch. Retained segments are never touched wholesale.
@@ -296,8 +336,15 @@ class PreviewFrameCache final : public QObject {
     acceptedRevision(const PreviewFrameCacheKey& key) const noexcept;
     [[nodiscard]] bool hasProvenancePolicy() const noexcept { return !retentionSnapshots_.empty(); }
 
-    // Most-recently-used first.
-    std::vector<Entry> entries_;
+    // Stable MRU ownership plus exact and composition/time indexes. All index nodes for an insert
+    // are staged before any qualification, revision, or budget mutation.
+    Entries entries_;
+    std::unordered_map<PreviewFrameCacheKey, EntryIterator, KeyHash> exactIndex_;
+    RangeIndex rangeIndex_;
+    std::list<EntryIterator> residentOrder_;
+    // With no time-indexed provenance, a project has one retained revision. Remember the last
+    // revision reconciled for each project so ordinary same-revision fill never rescans the LRU.
+    std::unordered_map<std::uint64_t, std::uint64_t> uniformProjectRevision_;
     runtime::MemoryBudgetLedger& ledger_;
     std::size_t byteBudget_ = defaultPreviewFrameCacheByteBudget();
     std::size_t residentBytes_ = 0;
@@ -310,6 +357,7 @@ class PreviewFrameCache final : public QObject {
     std::optional<RetentionRange> retentionRange_;
     std::vector<RetentionSnapshot> retentionSnapshots_;
     Statistics statistics_;
+    mutable MetadataWork metadataWork_;
 };
 
 using PreviewFrameCacheHandle = std::shared_ptr<PreviewFrameCache>;
