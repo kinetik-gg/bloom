@@ -13,7 +13,7 @@ constexpr std::array<std::string_view, 6> kContextSources{"",     "project", "co
 constexpr std::size_t kParameterPageSize = 64;
 // Even a control-heavy string expands by at most 6x in JSON and 2x in the MCP text copy.
 // 128 KiB therefore stays below the 4 MiB response cap with both representations present.
-constexpr std::size_t kParameterStringChunkBytes = 128U * 1024U;
+constexpr std::size_t kParameterStringChunkBytes = std::size_t{128} * 1024;
 
 std::string parameterCursor(const std::uint64_t session, const std::uint64_t project,
                             const std::uint64_t composition, const std::uint64_t revision,
