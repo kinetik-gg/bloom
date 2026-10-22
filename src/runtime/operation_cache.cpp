@@ -209,17 +209,15 @@ void OperationCache::store(std::string content, const document::Revision revisio
     for (const auto& item : entry->value.values)
         if (const auto* string = std::get_if<std::string>(&item))
             entry->bytes = addCharge(entry->bytes, string->capacity());
-    // Worker-side stores register every ordinary payload when this pool has an explicit host
-    // owner. Source revisions still require that owner for their encoded backing; derived
-    // image/value payloads then use the same admission-independent retirement lane.
+    // Worker-side stores register every payload when this pool has an explicit host owner.
+    // Standalone CPU pools preserve their synchronous ownership; rooted image/value and source
+    // payloads all use the same admission-independent retirement lane.
     {
         const std::lock_guard lock(accounting_->mutex);
         if (accounting_->preparedClosed)
             return;
         entry->retirement = accounting_->retirement;
     }
-    if (entry->value.sourceRevision && !entry->retirement)
-        return;
     if (entry->retirement) {
         if (!render::detail::preparePackedHostRetirement(entry->retirement) ||
             !render::detail::registerPackedHostAllocation(entry->retirement))

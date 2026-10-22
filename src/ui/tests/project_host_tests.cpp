@@ -421,21 +421,26 @@ void testConcurrentRecoveryOwnersAndExplicitDiscard(Expectations& expectations) 
         return;
     }
     const auto firstPath = firstOffer->recoveryPath;
+    const auto artifactCount = [&] {
+        std::error_code code;
+        if (!std::filesystem::exists(recoveryDirectory, code) || code) {
+            return std::size_t{0};
+        }
+        std::size_t files = 0;
+        for (const auto& entry : std::filesystem::directory_iterator(recoveryDirectory, code)) {
+            files += entry.path().extension() == ".bloom" ? 1U : 0U;
+        }
+        return code ? std::size_t{0} : files;
+    };
 
     second.writeRecoverySnapshot();
-    expectations.expect(waitUntil([&] {
-                            std::error_code code;
-                            return std::filesystem::exists(recoveryDirectory, code) &&
-                                   std::distance(
-                                       std::filesystem::directory_iterator(recoveryDirectory, code),
-                                       std::filesystem::directory_iterator{}) >= 2;
-                        }),
-                        "recovery owners: second asynchronous snapshot completes");
-    expectations.expect(std::filesystem::exists(firstPath),
+    expectations.expect(std::filesystem::exists(firstPath) && artifactCount() == 1,
                         "recovery owners: a concurrent clean host cannot remove the first file");
     expectations.expect(executeRename(second, "Second unsaved"),
                         "recovery owners: the second host becomes dirty");
     second.writeRecoverySnapshot();
+    expectations.expect(waitUntil([&] { return artifactCount() == 2; }),
+                        "recovery owners: second asynchronous snapshot completes");
     std::vector<std::filesystem::path> paths;
     for (const auto& entry : std::filesystem::directory_iterator(recoveryDirectory)) {
         if (entry.path().extension() == ".bloom") {

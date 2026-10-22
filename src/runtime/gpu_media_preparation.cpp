@@ -216,6 +216,11 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
         }
         ++statistics.uploadCacheMisses;
     }
+    if (pixelBudget == 0) {
+        outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
+        outcome.failure = "A new image backing exceeds the remaining source allowance";
+        return outcome;
+    }
     auto* const memoryCache = explicitBypass ? nullptr : context.operationCache.get();
     const auto memoryAccess = explicitBypass
                                   ? ImageSourceMemoryCacheAccess::Disabled
@@ -355,7 +360,7 @@ prepareImageUpload(const CompiledImageSource& source, const EvaluationRequest& r
         (explicitBypass || request.requireVerifiedMediaSources)
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
-        byteBudget(pixelBudget), !planBypass);
+        byteBudget(request.pixelStorageByteLimit), !planBypass);
     recordSourceRevisionWork(selection, statistics);
     if (selection.cancelled) {
         MediaUploadOutcome outcome;
@@ -364,6 +369,8 @@ prepareImageUpload(const CompiledImageSource& source, const EvaluationRequest& r
     }
     if (!selection.available) {
         MediaUploadOutcome outcome;
+        if (pixelBudget == 0)
+            outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
         outcome.failure =
             selection.warning.empty() ? "Image source is unavailable" : selection.warning;
         return outcome;
@@ -419,7 +426,7 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
         (explicitBypass || request.requireVerifiedMediaSources)
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
-        byteBudget(pixelBudget), !planBypass);
+        byteBudget(request.pixelStorageByteLimit), !planBypass);
     recordSourceRevisionWork(selection, statistics);
     if (selection.cancelled) {
         ++statistics.imageSources;
@@ -430,6 +437,8 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
     if (!selection.available) {
         ++statistics.imageSources;
         MediaUploadOutcome outcome;
+        if (pixelBudget == 0)
+            outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
         outcome.failure =
             selection.warning.empty() ? "Image source is unavailable" : selection.warning;
         return outcome;
@@ -478,6 +487,11 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
         }
     }
     if (outcome.image == nullptr) {
+        if (pixelBudget == 0) {
+            outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
+            outcome.failure = "A new raw image backing exceeds the remaining source allowance";
+            return outcome;
+        }
         // RAW decode: no processor, no implicit conversion, no resample. File decode stays host
         // preparation; the OCIO colour pass is the GPU command prepared below.
         media::ImageDecodeStatistics decodeStatistics;

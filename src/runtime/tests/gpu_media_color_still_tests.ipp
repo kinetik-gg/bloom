@@ -237,6 +237,7 @@ void testRawBackingAcrossRequestGeometry(Expectations& expectations,
                               std::pair{square, full}, std::pair{wide, changedPar}};
     const Rgba32fImage* sourceBacking = nullptr;
     std::string squareUploadKey;
+    std::string proxyUploadKey;
     for (std::size_t index = 0; index < requests.size(); ++index) {
         const auto& [plan, request] = requests[index];
         const auto prepared = builder.build(plan, request);
@@ -252,13 +253,20 @@ void testRawBackingAcrossRequestGeometry(Expectations& expectations,
                                     prepared.scene->mediaStatistics().uploadCacheHits == 1,
                                 "raw geometry: all requests share one decoded allocation");
         }
+        if (index == 1) {
+            proxyUploadKey = upload->semanticKey;
+            expectations.expect(proxyUploadKey != squareUploadKey,
+                                "raw geometry: proxy display/PAR changes resident identity");
+        }
         expectations.expect(upload->descriptor.displayWindow() ==
                                     prepared.scene->outputDescriptor().displayWindow() &&
                                 upload->descriptor.pixelAspect() ==
                                     prepared.scene->outputDescriptor().pixelAspect(),
                             "raw geometry: upload uses the current display window and PAR");
-        expectations.expect((index == 3) ? upload->semanticKey != squareUploadKey
-                                         : upload->semanticKey == squareUploadKey,
+        expectations.expect((index == 1) ? upload->semanticKey == proxyUploadKey
+                            : (index == 3) ? upload->semanticKey != squareUploadKey &&
+                                                 upload->semanticKey != proxyUploadKey
+                                           : upload->semanticKey == squareUploadKey,
                             "raw geometry: resident identity follows request descriptor");
         auto oracle = request;
         oracle.bypassOperationCache = true;

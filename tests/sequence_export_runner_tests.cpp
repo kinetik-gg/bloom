@@ -574,21 +574,34 @@ void testRejectedRetirementWithLiveEncoder(Fixture& f, const std::filesystem::pa
         f.scheduler, f.compiler, f.publications, f.artifacts, f.ledger, std::move(request),
         *retirement);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-    while (!(runner->encodedFrames() >= 8 &&
+    // One approved frame opens the encoder and retains its queue reservation. Waiting for eight
+    // CPU-fallback analyses added unrelated rendering latency to this shutdown ownership test.
+    while (!(runner->encodedFrames() >= 1 &&
              runner->stage() == host::SequenceExportStageV1::AwaitingApproval) &&
            std::chrono::steady_clock::now() < deadline) {
         runner->poll();
         if (runner->stage() == host::SequenceExportStageV1::AwaitingApproval &&
-            runner->encodedFrames() < 8) {
+            runner->encodedFrames() < 1) {
             const auto* analysis = runner->analysis();
             check(analysis != nullptr, "rejected retirement analysis");
             check(runner->approve(analysis->digest, need(runner->frameApprovalDigest())),
                   "rejected retirement approval");
         }
+        if (runner->result())
+            break;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    if (runner->stage() != host::SequenceExportStageV1::AwaitingApproval ||
+        runner->encodedFrames() < 1 || pid.load() <= 0 || f.ledger.chargedBytes() == 0) {
+        std::cerr << "Held encoder fixture: stage=" << static_cast<int>(runner->stage())
+                  << " encoded=" << runner->encodedFrames() << " pid=" << pid.load()
+                  << " charged=" << f.ledger.chargedBytes();
+        if (runner->result() && runner->result()->failure)
+            std::cerr << " failure=" << runner->result()->failure->detail;
+        std::cerr << '\n';
+    }
     check(runner->stage() == host::SequenceExportStageV1::AwaitingApproval &&
-              runner->encodedFrames() >= 8 && pid.load() > 0 && f.ledger.chargedBytes() > 0,
+              runner->encodedFrames() >= 1 && pid.load() > 0 && f.ledger.chargedBytes() > 0,
           "held encoder and ledger reservation before shutdown");
     f.scheduler.beginShutdown();
     std::vector<std::unique_ptr<host::SequenceExportRunnerV1>> rejected;

@@ -75,6 +75,7 @@ struct MediaUploadOutcome final {
     bool cancelled = false;
     bool cacheHit = false;
     bool converted = false;
+    PreparedGpuSceneDiagnosticCode failureCode = PreparedGpuSceneDiagnosticCode::MediaUnavailable;
     std::string failure;
 };
 

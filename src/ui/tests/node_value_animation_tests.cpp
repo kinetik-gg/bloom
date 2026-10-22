@@ -45,18 +45,27 @@ void testVector3DrivenReadout() {
         return;
     auto* vectorOutput = fixture.outputSocket(vector);
     auto* vectorInput = fixture.namedSocket(separate, QStringLiteral("vector"), true);
+    expect(vectorOutput && vectorInput,
+           "the Vector 3 driver sockets are available");
+    if (!(vectorOutput && vectorInput))
+        return;
+    fixture.drag(vectorOutput->scenePos(), vectorInput->scenePos());
+    QCoreApplication::processEvents();
+    expect(driverFor(fixture, separate, document::kVectorPortName) != nullptr,
+           "Vector 3 drives Separate XYZ");
+    // The first connection rebuilds the cards; reacquire sockets from the current scene.
     auto* xOutput = fixture.namedSocket(separate, QStringLiteral("x"), false);
     auto* opacityInput =
         fixture.namedSocket(*layer, QString::fromUtf8(document::kOpacityParameterRole), true);
-    expect(vectorOutput && vectorInput && xOutput && opacityInput,
-           "the Vector 3 driver sockets are available");
-    if (!(vectorOutput && vectorInput && xOutput && opacityInput))
+    expect(xOutput && opacityInput, "Separate XYZ and opacity sockets are available");
+    if (!(xOutput && opacityInput))
         return;
-    fixture.drag(vectorOutput->scenePos(), vectorInput->scenePos());
     fixture.drag(xOutput->scenePos(), opacityInput->scenePos());
+    QCoreApplication::processEvents();
     expect(driverFor(fixture, *layer, document::kOpacityParameterRole) != nullptr,
            "Separate XYZ drives layer opacity");
-    expect(fixture.session.setCurrentTime(frame(0)), "Vector 3 starts at frame zero");
+    (void)fixture.session.setCurrentTime(frame(0));
+    expect(fixture.session.currentTime() == frame(0), "Vector 3 starts at frame zero");
     expect(fixture.session.setParameterValue(valueId, document::Vec3d{0.2, 0.3, 0.4},
                                              QStringLiteral("Set Vector 3")),
            "the first Vector 3 value is authored");

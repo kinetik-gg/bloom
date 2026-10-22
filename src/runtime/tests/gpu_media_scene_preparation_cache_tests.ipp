@@ -287,6 +287,19 @@ void testImmutableSourceRevisionReuse(Expectations& expectations, const MediaFix
     const auto heldPath = fixture.directory / "held_revision.exr";
     std::filesystem::rename(fixture.path, heldPath);
     const auto warm = builder.build(planB, requestB);
+    if (!warm) {
+        std::cerr << "warm revision preparation: " << static_cast<int>(warm.diagnostic.code)
+                  << ' ' << warm.diagnostic.message << '\n';
+    } else {
+        const auto& work = warm.scene->mediaStatistics();
+        if (work.sourceRevisionCacheHits != 1 || work.sourceRevisionCaptures != 0 ||
+            work.imageDecodeNanoseconds != 0 || work.imageConversions != 0) {
+            std::cerr << "warm revision work: hits=" << work.sourceRevisionCacheHits
+                      << " captures=" << work.sourceRevisionCaptures
+                      << " decode-ns=" << work.imageDecodeNanoseconds
+                      << " conversions=" << work.imageConversions << '\n';
+        }
+    }
     expectations.expect(warm && warm.scene->mediaStatistics().sourceRevisionCacheHits == 1 &&
                             warm.scene->mediaStatistics().sourceRevisionCaptures == 0 &&
                             warm.scene->mediaStatistics().sourceRevisionBytesHashed == 0 &&
@@ -399,6 +412,16 @@ void testGestureSourceRevisionIsReadOnly(Expectations& checks, const MediaFixtur
     const auto warmed = builder.build(ordinary, ordinaryRequest);
     const auto bytes = context.operationCache->retainedBytes();
     const auto reused = builder.build(gesture, request);
+    if (!reused) {
+        std::cerr << "warm gesture preparation: " << static_cast<int>(reused.diagnostic.code)
+                  << ' ' << reused.diagnostic.message << '\n';
+    } else {
+        const auto& work = reused.scene->mediaStatistics();
+        if (work.sourceRevisionCacheHits != 1 || work.sourceRevisionCaptures != 0) {
+            std::cerr << "warm gesture work: hits=" << work.sourceRevisionCacheHits
+                      << " captures=" << work.sourceRevisionCaptures << '\n';
+        }
+    }
     checks.expect(warmed && bytes > 0 && reused &&
                       reused.scene->mediaStatistics().sourceRevisionCacheHits == 1 &&
                       reused.scene->mediaStatistics().sourceRevisionCaptures == 0 &&

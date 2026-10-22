@@ -844,6 +844,7 @@ void testResolutionChangeCancelsAnActiveRamPreview(Expectations& expectations) {
     ramPreview.start();
     expectations.expect(waitUntil([&] { return fixture.gate.entered(); }),
                         "a RAM preview proxy is in flight");
+    const auto cancelledAutoKey = fixture.controller.cacheKeyForTime(time(1, 25));
     bool cancelled = false;
     QObject::connect(&ramPreview, &ui::RamPreviewController::cachingFinished, &fixture.bridge,
                      [&cancelled](const ui::RamPreviewController::Completion outcome) {
@@ -856,8 +857,13 @@ void testResolutionChangeCancelsAnActiveRamPreview(Expectations& expectations) {
     fixture.gate.release();
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "the new Half preview reaches ready");
-    expectations.expect(ramPreview.cachedFrameCount() == 0,
-                        "the cancelled old factor does not count or publish its in-flight frame");
+    const auto halfKey = fixture.controller.cacheKeyForTime(time(0));
+    expectations.expect(cancelledAutoKey && halfKey &&
+                            !fixture.controller.frameCache().contains(*cancelledAutoKey) &&
+                            fixture.controller.frameCache().contains(*halfKey) &&
+                            ramPreview.cachedFrameCount() == 1,
+                        "the cancelled old factor does not publish its in-flight frame; the new "
+                        "foreground Half frame alone counts");
     ramPreview.start();
     expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
                             ramPreview.cachedFrameCount() == 3,

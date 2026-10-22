@@ -828,6 +828,8 @@ class CompilePass final {
                   std::holds_alternative<document::ScalarAnimationCurve>(*curve)) ||
                  (definition.valueKind == runtime::ParameterValueKind::Vec2d &&
                   std::holds_alternative<document::Vec2AnimationCurve>(*curve)) ||
+                 (definition.valueKind == runtime::ParameterValueKind::Vec3d &&
+                  std::holds_alternative<document::Vec3AnimationCurve>(*curve)) ||
                  // Task S5, item 1: the third curve kind. A Color4d-valued parameter demands a
                  // colour curve, exactly as a Float64 one demands a scalar.
                  (definition.valueKind == runtime::ParameterValueKind::Color4d &&

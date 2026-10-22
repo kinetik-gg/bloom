@@ -25,7 +25,7 @@ finishUploadLeaf(const MediaUploadOutcome& outcome, GpuSceneUploadLeafResult& re
     }
     if (!outcome.failure.empty() || outcome.image == nullptr ||
         outcome.image->descriptor() == nullptr) {
-        return GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::MediaUnavailable,
+        return GpuSceneLeafFailure{outcome.failureCode,
                                    outcome.failure.empty() ? "Media source could not be prepared"
                                                            : outcome.failure};
     }

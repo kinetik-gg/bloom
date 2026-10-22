@@ -62,9 +62,18 @@ void testSharedSourceBackingCharge(Expectations& expectations,
     const auto firstAsset = imageAsset(firstPath, "shared-a", 53000);
     const auto secondAsset = imageAsset(secondPath, "shared-b", 53001);
     const CpuGpuSceneBuilder builder(nullptr, legacyPreparedMediaContext(evaluator));
+    // Derive the immutable source once with enough room for EXR bytes, decoder staging and the
+    // output. The narrow request below tests retained backing accounting, not decode workspace.
+    const auto warmPlan = sharedSourcePlan({firstAsset}, 53500);
+    const auto warm = builder.build(warmPlan, requestFor(*warmPlan));
+    expectations.expect(warm.hasValue(), "source backing warms within the ordinary work budget");
+    if (!warm) {
+        return;
+    }
     const auto aliases = sharedSourcePlan({firstAsset, firstAsset, firstAsset}, 54000);
     auto request = requestFor(*aliases);
     request.pixelStorageByteLimit = oneSourceBytes;
+    request.mediaSourceRevisionPolicy = bloom::runtime::MediaSourceRevisionPolicy::Retained;
     const auto shared = builder.build(aliases, request);
     expectations.expect(shared.hasValue(), "three source aliases fit one backing charge");
     if (shared) {
@@ -86,6 +95,7 @@ void testSharedSourceBackingCharge(Expectations& expectations,
     const auto distinct = sharedSourcePlan({firstAsset, secondAsset}, 55000);
     request = requestFor(*distinct);
     request.pixelStorageByteLimit = oneSourceBytes;
+    request.mediaSourceRevisionPolicy = bloom::runtime::MediaSourceRevisionPolicy::Retained;
     const auto refused = builder.build(distinct, request);
     expectations.expect(
         !refused && refused.diagnostic.code ==
@@ -124,6 +134,7 @@ void testSharedSourceBackingCharge(Expectations& expectations,
     const auto parent = publish(std::move(parentDefinition));
     request = requestFor(*parent);
     request.pixelStorageByteLimit = oneSourceBytes;
+    request.mediaSourceRevisionPolicy = bloom::runtime::MediaSourceRevisionPolicy::Retained;
     const auto nested = builder.build(parent, request);
     expectations.expect(nested.hasValue(),
                         "parent and nested child share one source backing charge");
