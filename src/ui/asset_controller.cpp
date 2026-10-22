@@ -58,7 +58,7 @@ measuredAudioBufferBytes(const media::audio::AudioBuffer& buffer) noexcept {
     constexpr auto max = std::numeric_limits<std::uint64_t>::max();
     AudioBufferBackingBytes bytes{sizeof(media::audio::AudioBuffer),
                                   sizeof(media::audio::AudioBuffer)};
-    const auto add = [max](const std::size_t count, const std::size_t width, std::uint64_t& total) {
+    const auto add = [](const std::size_t count, const std::size_t width, std::uint64_t& total) {
         if (count > (max - total) / width)
             return false;
         total += static_cast<std::uint64_t>(count) * static_cast<std::uint64_t>(width);
