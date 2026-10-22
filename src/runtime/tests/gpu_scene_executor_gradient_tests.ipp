@@ -47,6 +47,21 @@ void testGradientProduction(Expectations& expectations, GpuDevice& device,
     expectParity(expectations, *executor.executor, oracle, degenerate, requestFor(*degenerate),
                  "radial gradient zero-length geometry");
 
+    // A later checker uses the standalone solid pipeline. Its presence must not
+    // discard the earlier gradient's required native prefix on a cold request.
+    {
+        auto mixedDefinition = gradientPlan(false)->copyDefinition();
+        const auto old = std::get<bloom::runtime::CompiledSolid>(mixedDefinition.operations[2]);
+        mixedDefinition.operations[2] = bloom::runtime::CompiledChecker{
+            old.sourceNodeId, old.color,
+            {bloom::document::ParameterId::fromRaw(180999), Color4d{0.8, 0.1, 0.2, 0.6}},
+            2, 1, 4, 3};
+        const auto mixed = publish(std::move(mixedDefinition));
+        cache.cache->clear();
+        expectParity(expectations, *executor.executor, oracle, mixed, requestFor(*mixed),
+                     "gradient followed by checker retains its native prefix");
+    }
+
     // A completed executor may remain alive while another executor uses the same device.
     // Keeping the first facade must not retain exclusive native batch ownership.
     {
