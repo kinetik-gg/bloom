@@ -49,7 +49,7 @@ runtime::detail::ImageEffectResult run(const runtime::ResizeFitKernel& kernel,
                                        const runtime::CancellationToken cancellation = {}) {
     runtime::detail::PreparedImageEffect effect;
     effect.resizeFit = kernel;
-    return runtime::detail::applyImageEffect(effect, input, budget, cancellation,
+    return runtime::detail::applyImageEffect(effect, input, nullptr, budget, cancellation,
                                              runtime::OperationIndex::fromRaw(1), {});
 }
 
@@ -138,8 +138,8 @@ void testKernel() {
             runtime::detail::PreparedImageEffect effect;
             effect.resizeFit = runtime::ResizeFitKernel{8, 8};
             const auto stopped =
-                runtime::detail::applyImageEffect(effect, input, 1U << 20U, context.cancellation(),
-                                                  runtime::OperationIndex::fromRaw(1),
+                runtime::detail::applyImageEffect(effect, input, nullptr, 1U << 20U,
+                                                  context.cancellation(), runtime::OperationIndex::fromRaw(1),
                                                   [&group](const auto&) { group.handle.cancel(); });
             observedCancellation.store(stopped.cancelled && !stopped.image);
             return stopped.cancelled && !stopped.image ? runtime::TaskResult<void>::cancelled()
