@@ -15,6 +15,7 @@ std::atomic_bool failWatchedAllocation{false};
 std::atomic<void*> watchedBlock{nullptr};
 GpuProcessingPhaseBudget* deletionBudget = nullptr;
 std::atomic_bool freedWhileCharged{false};
+std::atomic_bool holdWatchedDelete{false}, enteredWatchedDelete{false}, releaseWatchedDelete{false};
 int failures = 0;
 void expect(const bool value, const char* message) {
     if (!value) {
@@ -68,6 +69,8 @@ void clearObservation() {
     watchedBlock = nullptr;
     deletionBudget = nullptr;
     failWatchedAllocation = false;
+    holdWatchedDelete = false;
+    releaseWatchedDelete = true;
 }
 void allocatorFailureAndBounds() {
     RetirementFixture retirement;
@@ -284,6 +287,41 @@ void publicationLifetimeAndOrdering() {
            "neutral allocation owner survives root shutdown with immutable pixels intact");
     retained.value()->reset();
 }
+void retirementRevokesCreditBeforeBackingFree() {
+    RetirementFixture retirement;
+    GpuProcessingPhaseBudget budget(2, retirement.owner);
+    budget.setHostCapacity(512, true);
+    auto phase = grant(budget, 512);
+    observeAllocation(128);
+    auto storage = PackedRgba8Storage::create(32, phase, 128);
+    expect(storage && storage.value()->promote(), "real packed backing publishes for credit test");
+    if (!storage) {
+        clearObservation();
+        return;
+    }
+    // Keep the exact allocation identity; unrelated later allocations cannot replace it.
+    watchedSize = 0;
+    phase.reset();
+    const auto credit = 128 + detail::packedHostAllocationMetadataBytes();
+    const auto baseline = budget.rootedHostBackingSnapshot().retiredMaterializedBytes;
+    budget.setSampledHostCapacity(credit + 64, true,
+                                  std::chrono::steady_clock::time_point::max(), credit, baseline);
+    deletionBudget = &budget;
+    holdWatchedDelete = true;
+    enteredWatchedDelete = false;
+    releaseWatchedDelete = false;
+    storage.value()->reset();
+    const bool entered = wait([&] { return enteredWatchedDelete.load(); });
+    expect(entered && budget.snapshot().hostCapacityBytes == 64 &&
+               budget.snapshot().totalHostClaimBytes == credit &&
+               budget.rootedHostBackingSnapshot().materializedBytes == 0,
+           "credit is revoked before free while the exact published charge remains held");
+    releaseWatchedDelete = true;
+    expect(wait([&] { return budget.snapshot().totalHostClaimBytes == 0; }) &&
+               budget.snapshot().hostCapacityBytes == 64 && freedWhileCharged,
+           "completed free releases the claim without restoring unsampled OS headroom");
+    clearObservation();
+}
 void capacityFailureWatermark() {
     for (const int releaseOrder : {0, 1, 2}) {
         RetirementFixture retirement;
@@ -335,6 +373,11 @@ void* operator new(const std::size_t bytes) {
 }
 void operator delete(void* const block) noexcept {
     const bool watched = block && block == watchedBlock.load();
+    if (watched && holdWatchedDelete) {
+        enteredWatchedDelete = true;
+        while (!releaseWatchedDelete.load())
+            std::this_thread::yield();
+    }
     std::free(block);
     if (watched && deletionBudget) {
         const auto snapshot = deletionBudget->snapshot();
@@ -348,6 +391,7 @@ int main() {
     moveAdoptPublishAndCopy();
     moveAssignmentAndEmptyStorage();
     publicationLifetimeAndOrdering();
+    retirementRevokesCreditBeforeBackingFree();
     capacityFailureWatermark();
     std::cout << "packed-host core checks failures=" << failures << '\n';
     return failures == 0 ? 0 : 1;

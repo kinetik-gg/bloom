@@ -1852,9 +1852,12 @@ same finite process reading; new backing may not have existed when that ceiling 
 Aliases and cache-held byte totals provide no credit. Provisional backed vectors are eligible
 after construction; failed allocation, reserve-before-allocation, legacy vectors, source/coverage
 estimates, transient processing claims and opaque native host backing are not. Published storage
-queued for off-UI retirement remains materialized and charged until its actual free. A later free
-removes its claim without invalidating the completed sample's credit, because the OS then gains the
-same headroom. Measured zero, stale or incomplete delivery, cancellation and unproven retirement
+queued for off-UI retirement remains materialized and charged until its worker starts the actual
+free. At that boundary, the root revokes the sample's remaining credit before deallocation while
+the charge stays held through the completed free. Retirement between sampling and delivery is
+deducted atomically when the capacity is applied; a fresh OS sample is needed to restore capacity
+afterward because allocator page retention need not raise measured free space. Measured zero, stale
+or incomplete delivery, cancellation and unproven retirement
 retain their existing fail-closed behavior. This reconciliation does not measure allocator overhead,
 whole-process RSS or GPU driver commitment.
 

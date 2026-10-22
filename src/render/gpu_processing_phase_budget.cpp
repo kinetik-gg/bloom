@@ -13,6 +13,29 @@
 namespace bloom::render {
 using detail::incrementSaturating;
 using detail::remaining;
+namespace {
+void retireHostBackingLocked(detail::GpuProcessingPhaseBudgetState& state,
+                             const std::uint64_t total) noexcept {
+    auto& backing = state.rootedHostBacking;
+    backing.materializedBytes -= total;
+    if (total > std::numeric_limits<std::uint64_t>::max() - backing.retiredMaterializedBytes) {
+        backing.retiredMaterializedBytes = std::numeric_limits<std::uint64_t>::max();
+        backing.retiredBytesSaturated = true;
+    } else {
+        backing.retiredMaterializedBytes += total;
+    }
+    const auto revoked = std::min(total, state.hostBackingCreditRemaining);
+    state.hostBackingCreditRemaining -= revoked;
+    if (revoked != 0 && state.counters.hostCapacityBytes) {
+        auto& capacity = *state.counters.hostCapacityBytes;
+        const auto reduced = capacity > revoked ? capacity - revoked : 0;
+        if (reduced != capacity) {
+            capacity = reduced;
+            incrementSaturating(state.counters.admissionRevision);
+        }
+    }
+}
+} // namespace
 
 GpuProcessingPhaseLease::GpuProcessingPhaseLease(
     std::shared_ptr<detail::GpuProcessingPhaseBudgetState> state) noexcept
@@ -90,6 +113,12 @@ void PackedHostStorageToken::markMaterialized() noexcept {
         materialized_ = true;
     }
 }
+void PackedHostStorageToken::retireBeforeFree() noexcept {
+    if (authority_ && materialized_) {
+        authority_->retireMaterialized(bytes_, metadataBytes_);
+        materialized_ = false;
+    }
+}
 PackedHostStorageAuthority::PackedHostStorageAuthority(
     const std::shared_ptr<GpuProcessingPhaseLease>& phase, const std::uint64_t limit,
     const HostPixelStorageDomain domain) noexcept
@@ -152,18 +181,8 @@ void PackedHostStorageAuthority::release(const std::uint64_t bytes,
     std::shared_ptr<GpuProcessingPhaseLease> releasedOrigin;
     {
         const std::lock_guard lock(state_->mutex);
-        if (materialized) {
-            const auto total = bytes + metadataBytes;
-            auto& backing = state_->rootedHostBacking;
-            backing.materializedBytes -= total;
-            if (total >
-                std::numeric_limits<std::uint64_t>::max() - backing.retiredMaterializedBytes) {
-                backing.retiredMaterializedBytes = std::numeric_limits<std::uint64_t>::max();
-                backing.retiredBytesSaturated = true;
-            } else {
-                backing.retiredMaterializedBytes += total;
-            }
-        }
+        if (materialized)
+            retireHostBackingLocked(*state_, bytes + metadataBytes);
         bytes_ -= bytes;
         metadataBytes_ -= metadataBytes;
         if (domain_ == HostPixelStorageDomain::PackedPreview) {
@@ -198,6 +217,11 @@ void PackedHostStorageAuthority::materialize(const std::uint64_t bytes,
     const std::lock_guard lock(state_->mutex);
     // These bytes already belong to the bounded total claim; this is only a sampling proof.
     state_->rootedHostBacking.materializedBytes += bytes + metadataBytes;
+}
+void PackedHostStorageAuthority::retireMaterialized(const std::uint64_t bytes,
+                                                    const std::uint64_t metadataBytes) noexcept {
+    const std::lock_guard lock(state_->mutex);
+    retireHostBackingLocked(*state_, bytes + metadataBytes);
 }
 bool PackedHostStorageAuthority::promote() noexcept {
     std::shared_ptr<GpuProcessingPhaseLease> releasedOrigin;
@@ -269,6 +293,29 @@ void GpuProcessingPhaseBudget::setHostCapacity(
     const bool beforeReady = state_->counters.hostReady;
     if (bytes) {
         state_->counters.hostCapacityBytes = bytes;
+    }
+    state_->counters.hostReady = ready && bytes.has_value();
+    state_->hostValidUntil = validUntil;
+    if (beforeBytes != state_->counters.hostCapacityBytes ||
+        beforeReady != state_->counters.hostReady)
+        incrementSaturating(state_->counters.admissionRevision);
+}
+void GpuProcessingPhaseBudget::setSampledHostCapacity(
+    const std::optional<std::uint64_t> bytes, const bool ready,
+    const std::chrono::steady_clock::time_point validUntil, const std::uint64_t creditBytes,
+    const std::uint64_t retiredBytesAtSample) noexcept {
+    const std::lock_guard lock(state_->mutex);
+    const auto beforeBytes = state_->counters.hostCapacityBytes;
+    const bool beforeReady = state_->counters.hostReady;
+    const auto& backing = state_->rootedHostBacking;
+    const auto retired = backing.retiredBytesSaturated ||
+                                 backing.retiredMaterializedBytes < retiredBytesAtSample
+                             ? creditBytes
+                             : std::min(creditBytes,
+                                        backing.retiredMaterializedBytes - retiredBytesAtSample);
+    state_->hostBackingCreditRemaining = creditBytes - retired;
+    if (bytes) {
+        state_->counters.hostCapacityBytes = *bytes > retired ? *bytes - retired : 0;
     }
     state_->counters.hostReady = ready && bytes.has_value();
     state_->hostValidUntil = validUntil;

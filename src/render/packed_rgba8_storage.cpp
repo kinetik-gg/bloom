@@ -17,6 +17,9 @@ static_assert(alignof(Rgba32f) <= alignof(AllocationHeader));
 static_assert(alignof(AllocationHeader) <= alignof(std::max_align_t));
 void destroyAllocation(detail::PackedHostRetirementNode* const node) noexcept {
     auto* header = static_cast<AllocationHeader*>(node);
+    // Revoke sampled credit while this backing is still charged. The OS may not immediately
+    // regain malloc pages, and sampling can race the interval before token release.
+    detail::retireHostPixelsBeforeFree(header + 1);
     auto token = std::move(header->token);
     header->~AllocationHeader();
     ::operator delete(header);
@@ -86,6 +89,12 @@ void detail::markHostPixelsMaterialized(void* const pixels) noexcept {
     if (pixels) {
         auto* header = reinterpret_cast<AllocationHeader*>(pixels) - 1;
         header->token.markMaterialized();
+    }
+}
+void detail::retireHostPixelsBeforeFree(void* const pixels) noexcept {
+    if (pixels) {
+        auto* header = reinterpret_cast<AllocationHeader*>(pixels) - 1;
+        header->token.retireBeforeFree();
     }
 }
 

@@ -299,9 +299,24 @@ void rootedBackingReconcilesSampledHostHeadroom() {
         std::this_thread::yield();
     require(policy.snapshot().reservations.totalHostClaimBytes == 0,
             "published charge clears only after worker frees its backing");
+    require(policy.snapshot().reservations.hostCapacityBytes == 70 &&
+                policy.reserve({.pixels = 20, .sourceFree = true, .native = false},
+                               scriptedSampleAt)
+                        .status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "retired backing revokes old sample credit even when allocator pages stay resident");
+    policy.applyHostSample(delivered, 4096, scriptedSampleAt);
+    require(policy.snapshot().reservations.hostCapacityBytes == 70,
+            "duplicate delivery cannot restore credit revoked by backing retirement");
+    scriptedSampleAt += std::chrono::milliseconds(1);
+    static_cast<void>(policy.sampleHostMemory({}, scriptedHostSample));
+    delivered.machine.availableBytes = owned + 70;
+    delivered.process.domains[0].currentBytes = 0;
+    delivered.process.sampledAt = scriptedSampleAt;
+    ++delivered.sampleSerial;
+    policy.applyHostSample(delivered, 4096, scriptedSampleAt);
     require(policy.reserve({.pixels = 20, .sourceFree = true, .native = false}, scriptedSampleAt)
                     .lease != nullptr,
-            "sample credit remains valid when its charged backing is subsequently freed");
+            "a genuinely new OS sample restores capacity after rooted backing retirement");
 
     // A reservation and an allocation created after sampling cannot be credited against that
     // sample's free-space observation, even if the exact owned counter changes before delivery.
@@ -426,7 +441,21 @@ void newBackingCannotInflateAnOlderFiniteLimit() {
                                scriptedSampleAt)
                         .status == GpuProcessingPhaseAdmission::BudgetRefused,
             "current backing credit cannot enlarge older finite headroom that never counted it");
+    scriptedSampleAt = start + std::chrono::seconds(2);
+    static_cast<void>(policy.sampleHostMemory({}, scriptedHostSample));
     backing.value()->reset();
+    const auto deadline = GpuProcessingPhasePolicy::Clock::now() + std::chrono::seconds(2);
+    while (policy.snapshot().reservations.totalHostClaimBytes != 0 &&
+           GpuProcessingPhasePolicy::Clock::now() < deadline)
+        std::this_thread::yield();
+    require(policy.snapshot().reservations.totalHostClaimBytes == 0,
+            "actual packed backing retires between sample and delivery");
+    delivered.machine.availableBytes = 32;
+    delivered.process.sampledAt = scriptedSampleAt;
+    ++delivered.sampleSerial;
+    policy.applyHostSample(delivered, 4096, scriptedSampleAt);
+    require(policy.snapshot().reservations.hostCapacityBytes == 32,
+            "retirement after the probe cannot revive a stale rooted credit at delivery");
 }
 void policy() {
     const auto now = GpuProcessingPhasePolicy::Clock::now();

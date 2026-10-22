@@ -11,6 +11,7 @@ namespace detail {
 struct GpuProcessingPhaseBudgetState;
 struct PackedHostRetirementState;
 void markHostPixelsMaterialized(void*) noexcept;
+void retireHostPixelsBeforeFree(void*) noexcept;
 } // namespace detail
 class PackedHostRetirementOwner;
 class NativeImageStorageToken;
@@ -108,9 +109,9 @@ struct GpuProcessingPhaseSnapshot final {
     std::uint64_t admissionRevision = 0;
 };
 
-// Exact rooted host allocations that completed construction, and the cumulative bytes freed
-// after construction. A sampler can conservatively identify backing alive across its entire OS
-// measurement interval without crediting a reservation or an allocation made during that interval.
+// Exact rooted host allocations that completed construction, and cumulative bytes whose actual
+// free has begun. Retirement is recorded before deallocation so a sampler never credits bytes
+// already in that operation's free gap. Reservations and new allocations stay uncredited.
 struct RootedHostBackingSnapshot final {
     std::uint64_t materializedBytes = 0;
     std::uint64_t retiredMaterializedBytes = 0;
@@ -182,8 +183,10 @@ class PackedHostStorageToken final {
   private:
     friend class PackedHostStorageAuthority;
     friend void detail::markHostPixelsMaterialized(void*) noexcept;
+    friend void detail::retireHostPixelsBeforeFree(void*) noexcept;
     // Called only after the typed vector has constructed/touched its complete allocation.
     void markMaterialized() noexcept;
+    void retireBeforeFree() noexcept;
     PackedHostStorageToken(std::shared_ptr<PackedHostStorageAuthority>, std::uint64_t,
                            std::uint64_t) noexcept;
     void reset() noexcept;
@@ -226,6 +229,7 @@ class PackedHostStorageAuthority final
                                HostPixelStorageDomain) noexcept;
     void release(std::uint64_t bytes, std::uint64_t metadataBytes, bool materialized) noexcept;
     void materialize(std::uint64_t bytes, std::uint64_t metadataBytes) noexcept;
+    void retireMaterialized(std::uint64_t bytes, std::uint64_t metadataBytes) noexcept;
     std::shared_ptr<detail::GpuProcessingPhaseBudgetState> state_;
     std::weak_ptr<GpuProcessingPhaseLease> origin_;
     std::shared_ptr<GpuProcessingPhaseLease> retainedOrigin_;
@@ -256,6 +260,12 @@ class GpuProcessingPhaseBudget final {
     void setHostCapacity(std::optional<std::uint64_t> bytes, bool ready,
                          std::chrono::steady_clock::time_point validUntil =
                              std::chrono::steady_clock::time_point::max()) noexcept;
+    // Apply one measured sample and its exact initial credit atomically with retirements that
+    // occurred after the sampling bracket. Subsequent retirement revokes the remaining credit.
+    void setSampledHostCapacity(std::optional<std::uint64_t> bytes, bool ready,
+                                std::chrono::steady_clock::time_point validUntil,
+                                std::uint64_t creditBytes,
+                                std::uint64_t retiredBytesAtSample) noexcept;
     void setDeviceCapacity(std::optional<std::uint64_t> bytes, bool ready) noexcept;
     [[nodiscard]] GpuProcessingPhaseSnapshot snapshot() const noexcept;
     [[nodiscard]] RootedHostBackingSnapshot rootedHostBackingSnapshot() const noexcept;

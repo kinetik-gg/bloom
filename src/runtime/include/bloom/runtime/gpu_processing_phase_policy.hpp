@@ -107,6 +107,7 @@ class GpuProcessingPhasePolicy final {
         std::uint64_t bytes = 0;
         std::optional<std::uint64_t> finiteHeadroom;
         std::uint64_t sampleSerial = 0;
+        std::uint64_t retiredBytesAtSample = 0;
     };
     std::optional<HostSampleBackingCredit> pendingHostBackingCredit_;
     std::optional<HostSampleBackingCredit> appliedHostBackingCredit_;

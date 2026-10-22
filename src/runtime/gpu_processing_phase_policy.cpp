@@ -98,7 +98,8 @@ GpuProcessingPhasePolicy::sampleHostMemory(const CancellationToken& cancellation
         if (!pendingHostBackingCredit_ ||
             sample.process.sampledAt >= pendingHostBackingCredit_->sampledAt)
             pendingHostBackingCredit_ =
-                HostSampleBackingCredit{sample.process.sampledAt, credit, std::nullopt, 0};
+                HostSampleBackingCredit{sample.process.sampledAt, credit, std::nullopt, 0,
+                                        after.retiredMaterializedBytes};
     }
     return sample;
 }
@@ -159,10 +160,12 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
                 pendingHostBackingCredit_->sampledAt == sample.process.sampledAt
             ? pendingHostBackingCredit_->bytes
             : 0;
+    const auto retiredBytesAtSample =
+        backingCredit != 0 ? pendingHostBackingCredit_->retiredBytesAtSample : 0;
     if (fresh) {
         appliedHostBackingCredit_ =
             HostSampleBackingCredit{sample.process.sampledAt, backingCredit, finite,
-                                    sample.sampleSerial};
+                                    sample.sampleSerial, retiredBytesAtSample};
         pendingHostBackingCredit_.reset();
     }
     processConstraintHistory_.recordFinite(
@@ -204,9 +207,13 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
     if (fresh) {
         hostSampleAt_ = sample.process.sampledAt;
     }
-    budget_.setHostCapacity(allowance, ready,
-                            hostSampleAt_.value_or(Clock::time_point::min()) +
-                                std::chrono::seconds(10));
+    const auto validUntil =
+        hostSampleAt_.value_or(Clock::time_point::min()) + std::chrono::seconds(10);
+    if (fresh)
+        budget_.setSampledHostCapacity(allowance, ready, validUntil, backingCredit,
+                                       retiredBytesAtSample);
+    else
+        budget_.setHostCapacity(allowance, ready, validUntil);
 }
 void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
                                                const std::size_t physicalBytes,

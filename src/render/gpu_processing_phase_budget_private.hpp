@@ -10,6 +10,9 @@ struct GpuProcessingPhaseBudgetState final {
     mutable std::mutex mutex;
     GpuProcessingPhaseSnapshot counters;
     RootedHostBackingSnapshot rootedHostBacking;
+    // The current host-capacity sample may include this much rooted backing credit. It is
+    // revoked before an eligible allocation begins freeing, even if malloc retains its pages.
+    std::uint64_t hostBackingCreditRemaining = 0;
     std::uint64_t nextId = 1;
     std::shared_ptr<PackedHostRetirementState> retirement;
     std::chrono::steady_clock::time_point hostValidUntil =

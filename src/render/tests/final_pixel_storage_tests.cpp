@@ -216,6 +216,10 @@ void atomicPublicationAndWorkerLifetime() {
                 published.totalHostClaimBytes ==
                     160 + 2 * detail::packedHostAllocationMetadataBytes(),
             "published host products retain exact payload/header without strong phase");
+    const auto credited = published.totalHostClaimBytes;
+    budget.setSampledHostCapacity(4096, true, std::chrono::steady_clock::time_point::max(),
+                                  credited,
+                                  budget.rootedHostBackingSnapshot().retiredMaterializedBytes);
     auto output = std::make_shared<const FinalRgba32fStorage>(std::move(*process.value()));
     std::vector<std::shared_ptr<const FinalRgba32fStorage>> aliases(256, output);
     output.reset();
@@ -227,14 +231,17 @@ void atomicPublicationAndWorkerLifetime() {
     dropping.join();
     require(wait([&] { return gate.entered.load(); }) &&
                 budget.snapshot().ownedFinalProcessHostBytes == 128 &&
+                budget.snapshot().hostCapacityBytes == 4096 &&
                 owner.owner->snapshot().allocations == 2 && !owner.owner->exitAcknowledged(),
-            "foreign last alias only enqueues; actual free is held while charge remains");
+            "queued final backing retains its credit and charge until actual free begins");
     encoded.value()->reset();
     gate.release = true;
     require(wait([&] { return owner.owner->exitAcknowledged(); }) &&
                 budget.snapshot().ownedFinalHostAllocations == 0 &&
-                budget.snapshot().totalHostClaimBytes == 0 && freedWhileCharged.load(),
-            "same host worker actually frees both domains before credit and exit");
+                budget.snapshot().totalHostClaimBytes == 0 &&
+                budget.snapshot().hostCapacityBytes == 4096 - credited &&
+                freedWhileCharged.load(),
+            "same host worker revokes both credits and frees backing before claim release");
     observedBudget = nullptr;
     watchedBlock = nullptr;
 }
