@@ -1,4 +1,5 @@
 #include "image_effect.hpp"
+#include "gpu_scene_effect_emission.hpp"
 #include "resize_fit_geometry.hpp"
 
 #include <bloom/render/image.hpp>
@@ -20,6 +21,22 @@ void expect(const bool condition, const char* message) {
         ++failures;
         std::cerr << message << '\n';
     }
+}
+
+void testProxyInputDescriptor() {
+    const auto full = render::ImageWindow::create(-4, 2, 8, 6);
+    const auto proxy = render::ImageWindow::create(-2, 1, 4, 3);
+    const auto display = render::ImageWindow::create(0, 0, 6, 4);
+    const auto aspect = core::PixelAspectRatio::create(2, 1);
+    std::vector<runtime::GpuSceneCommand> commands;
+    commands.emplace_back(runtime::GpuScenePointResampleCommand{
+        .inputKey = "proxy-source", .sourceWindow = *full.value(), .outputWindow = *proxy.value(),
+        .displayWindow = *display.value(), .horizontalScale = 0.5, .verticalScale = 0.5,
+        .pixelAspect = *aspect, .semanticKey = "proxy-output"});
+    const auto result = runtime::detail::gpuSceneCommandDescriptorOf(commands, 0, 0);
+    expect(result && result->data == *proxy.value() && result->display == *display.value() &&
+               result->pixelAspect == *aspect,
+           "Fit resolves proxy media data, display and pixel aspect without a colour effect");
 }
 
 render::Rgba32fImage
@@ -138,8 +155,8 @@ void testKernel() {
             runtime::detail::PreparedImageEffect effect;
             effect.resizeFit = runtime::ResizeFitKernel{8, 8};
             const auto stopped =
-                runtime::detail::applyImageEffect(effect, input, nullptr, 1U << 20U,
-                                                  context.cancellation(), runtime::OperationIndex::fromRaw(1),
+                runtime::detail::applyImageEffect(effect, input, nullptr, 1U << 20U, context.cancellation(),
+                                                  runtime::OperationIndex::fromRaw(1),
                                                   [&group](const auto&) { group.handle.cancel(); });
             observedCancellation.store(stopped.cancelled && !stopped.image);
             return stopped.cancelled && !stopped.image ? runtime::TaskResult<void>::cancelled()
@@ -160,6 +177,7 @@ void testKernel() {
 
 int main() {
     try {
+        testProxyInputDescriptor();
         testKernel();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

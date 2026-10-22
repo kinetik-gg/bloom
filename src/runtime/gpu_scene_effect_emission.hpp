@@ -113,6 +113,7 @@ gpuSceneCommandDescriptorOf(const std::vector<GpuSceneCommand>& commands,
                 return GpuSceneCommandDescriptor{item.outputWindow, backdrop->display,
                                                  backdrop->pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuSceneOcioEffectCommand> ||
+                                 std::is_same_v<T, GpuScenePointResampleCommand> ||
                                  std::is_same_v<T, GpuSceneMergeCommand> ||
                                  std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
                 return GpuSceneCommandDescriptor{item.outputWindow, item.displayWindow,
