@@ -267,7 +267,8 @@ AudioResult<AudioBuffer> openWindowedAudio(const std::filesystem::path& path,
     if (!probe)
         return AudioResult<AudioBuffer>::failure(*probe.error());
     if (probe.value()->channels == 0 ||
-        windowFrames > std::numeric_limits<std::size_t>::max() / probe.value()->channels ||
+        windowFrames >
+            std::numeric_limits<std::size_t>::max() / sizeof(float) / probe.value()->channels ||
         windowFrames > limits.sampleBudget / probe.value()->channels)
         return AudioResult<AudioBuffer>::failure(
             AudioError::limited(AudioErrorCode::SampleBudgetExceeded,

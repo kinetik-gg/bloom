@@ -140,9 +140,10 @@ audioStorageClaim(const media::audio::AudioProbe& probe,
 windowedAudioStorageClaim(const media::audio::AudioProbe& probe) noexcept {
     constexpr auto window = media::audio::AudioStream::kWindowFrames;
     constexpr std::uint64_t decoderAllowance = 256U * 1024U;
-    if (probe.frames == 0 || probe.channels == 0 ||
-        probe.channels > std::numeric_limits<std::size_t>::max() / window ||
-        probe.channels > std::numeric_limits<std::uint64_t>::max() / (window * sizeof(float)))
+    const auto channels = static_cast<std::uint64_t>(probe.channels);
+    if (probe.frames == 0 || channels == 0 ||
+        channels > std::numeric_limits<std::size_t>::max() / (window * sizeof(float)) ||
+        channels > std::numeric_limits<std::uint64_t>::max() / (window * sizeof(float)))
         return {};
     const auto samples = static_cast<std::uint64_t>(window) * probe.channels;
     const auto retained = sizeof(media::audio::AudioBuffer) + sizeof(media::audio::AudioStream) +

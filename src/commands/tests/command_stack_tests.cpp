@@ -771,7 +771,7 @@ void testBoundedUndoHistoryAndByteAccounting(TestContext& test) {
 void testSharedPayloadRetentionAndReplacementPressure(TestContext& test) {
     constexpr std::size_t largeBytes = 2 * 1024 * 1024;
     auto project = makeProject();
-    const document::OpaqueExtensionPayload originalPayload(std::vector<std::byte>(largeBytes));
+    const document::OpaqueExtensionPayload originalPayload{std::vector<std::byte>(largeBytes)};
     const auto added =
         project.addExtensionRecord({.id = document::ExtensionRecordId::fromRaw(1),
                                     .ownerId = "vendor.module",
