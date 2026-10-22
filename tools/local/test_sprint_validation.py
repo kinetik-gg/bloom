@@ -122,12 +122,13 @@ class SprintValidationTests(unittest.TestCase):
             prefix = root / "prefix"
             prefix.mkdir()
             args = Namespace(dependency_mode="qualified", generator="Ninja", config="RelWithDebInfo",
-                             level="native")
+                             level="native", python_executable=sys.executable)
             command = runner.configure_command(args, root, root / "build", prefix, "ccache")
             self.assertIn("-DFETCHCONTENT_FULLY_DISCONNECTED=ON", command)
             self.assertIn("-DBLOOM_RENDER_ENABLE_VULKAN=ON", command)
             self.assertIn("-DBLOOM_DEPENDENCY_PREFIX=" + str(prefix), command)
             self.assertIn("-DCMAKE_CXX_COMPILER_LAUNCHER=ccache", command)
+            self.assertIn("-DPython3_EXECUTABLE=" + str(Path(sys.executable).resolve()), command)
             self.assertNotIn("--parallel", command)
 
     def test_command_failure_and_timeout_are_recorded(self):

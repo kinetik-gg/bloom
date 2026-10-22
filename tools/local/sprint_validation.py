@@ -175,6 +175,8 @@ def configure_command(args: argparse.Namespace, root: Path, build_dir: Path,
         command.append("-DBLOOM_RENDER_ENABLE_VULKAN=ON")
     if prefix:
         command += ["-DBLOOM_DEPENDENCY_PREFIX=" + str(prefix), "-DCMAKE_PREFIX_PATH=" + str(prefix)]
+    if args.python_executable:
+        command.append("-DPython3_EXECUTABLE=" + str(Path(args.python_executable).resolve()))
     if ccache:
         command += ["-DCMAKE_C_COMPILER_LAUNCHER=" + ccache,
                     "-DCMAKE_CXX_COMPILER_LAUNCHER=" + ccache]
@@ -461,6 +463,8 @@ def parser() -> argparse.ArgumentParser:
     milestone.add_argument("--configure", action="store_true", help="Explicitly configure this build directory")
     milestone.add_argument("--dependency-mode", choices=("qualified", "developer-system"), default="qualified")
     milestone.add_argument("--generator", default="Ninja")
+    milestone.add_argument("--python-executable", default=os.environ.get("BLOOM_LOCAL_PYTHON"),
+                           help="Interpreter matching the qualified dependency prefix ABI")
     milestone.add_argument("--ccache", default=os.environ.get("BLOOM_LOCAL_CCACHE"))
     milestone.add_argument("--no-ccache", action="store_true")
     milestone.add_argument("--configure-timeout-seconds", type=int, default=600)
