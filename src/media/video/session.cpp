@@ -214,8 +214,8 @@ WorkerReply VideoDecodeSession::call(Role role, const ProbeResult* source, std::
         request.width = source->streams[stream].width;
         request.height = source->streams[stream].height;
     }
-    return state_->pool.call(std::get<MediaAttempt>(attempt), 0, std::move(request),
-                             std::move(snapshot), cancel, retainWorker);
+    return state_->pool.call(std::get<MediaAttempt>(attempt), 0, std::move(request), snapshot,
+                             cancel, retainWorker);
 }
 namespace {
 struct SnapshotRetirement final : render::detail::PackedHostRetirementNode {
@@ -408,7 +408,7 @@ VideoDecodeSession::frame(const ProbeResult& source, std::uint32_t stream, std::
     } catch (const std::bad_alloc&) {
         std::get<Unavailable>(flight->result).reason = Error::Oversized;
     } catch (const std::exception&) {
-        // The preconstructed I/O fallback is already publishable to every follower.
+        std::get<Unavailable>(flight->result).reason = Error::Io;
     }
     return flight->result;
 }

@@ -260,7 +260,7 @@ class ProjectHost final : public QObject {
     void scheduleRecoveryWork();
     void pollRecoveryWork();
     void pollRecoveryScan();
-    void handleRecoveryOffer(host::SessionRecoveryOffer offer);
+    void handleRecoveryOffer(const host::SessionRecoveryOffer& offer);
     [[nodiscard]] std::filesystem::path currentRecoveryPath() const;
 
     runtime::TaskScheduler& scheduler_;

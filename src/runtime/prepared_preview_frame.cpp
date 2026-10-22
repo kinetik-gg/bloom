@@ -426,10 +426,17 @@ std::optional<PreviewPreparationResult> PreviewPreparationResult::prepared(
     if (frame == nullptr) {
         return std::nullopt;
     }
-    if (cacheFrame && *cacheFrame &&
-        ((*cacheFrame)->desiredIdentity() != frame->desiredIdentity() ||
-         (*cacheFrame)->hasProcessFrame() || !(*cacheFrame)->isDisplayValid()))
-        return std::nullopt;
+    if (cacheFrame && *cacheFrame) {
+        // The identities are borrowed, but their field comparisons must not let an exception
+        // escape this noexcept factory. A failed validation declines the result.
+        try {
+            if ((*cacheFrame)->desiredIdentity() != frame->desiredIdentity() ||
+                (*cacheFrame)->hasProcessFrame() || !(*cacheFrame)->isDisplayValid())
+                return std::nullopt;
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
     return PreviewPreparationResult(PreviewPreparationStatus::Prepared, std::move(frame),
                                     std::move(cacheFrame));
 }

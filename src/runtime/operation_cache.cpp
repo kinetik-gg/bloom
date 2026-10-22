@@ -513,19 +513,24 @@ void OperationCache::promoteCandidateLocked() {
     accounting_->preparedBytes -= candidate->bytes;
     accounting_->preparedPayload -= payload;
     --accounting_->preparedCount;
-    try {
-        insertLocked(candidate);
-    } catch (...) {
-        // A failed map insertion preserves the Entry for a later lookup. A public cache find is
-        // noexcept at its facade, so never let an exceptional allocation escape here.
-    }
-    if (candidate) {
+    const auto restoreCandidate = [&] {
+        if (!candidate)
+            return;
         accounting_->bytes += candidate->bytes;
         accounting_->preparedBytes += candidate->bytes;
         accounting_->preparedPayload += payload;
         ++accounting_->preparedCount;
         preparedCandidate_ = std::move(candidate);
+    };
+    try {
+        insertLocked(candidate);
+    } catch (...) {
+        // An exceptional insertion returns the Entry to candidate. Restore its exact charge and
+        // ownership so a later lookup can retry; the cache facade must not expose the failure.
+        restoreCandidate();
+        return;
     }
+    restoreCandidate();
 }
 void OperationCache::storePreparedUpload(std::string content,
                                          std::shared_ptr<const render::Rgba32fImage> image) {

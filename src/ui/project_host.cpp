@@ -428,11 +428,11 @@ void ProjectHost::pollRecoveryScan() {
     recoveryScanState_.reset();
     emit recoveryScanActivityChanged(false);
     if (offer.has_value()) {
-        handleRecoveryOffer(std::move(*offer));
+        handleRecoveryOffer(*offer);
     }
 }
 
-void ProjectHost::handleRecoveryOffer(host::SessionRecoveryOffer offer) {
+void ProjectHost::handleRecoveryOffer(const host::SessionRecoveryOffer& offer) {
     if (!recoveryDecisionProvider_) {
         return;
     }

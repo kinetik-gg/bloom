@@ -191,9 +191,9 @@ IdAllocator& Draft::ids() noexcept { return state_->ids; }
 std::size_t Draft::rootByteCharge() const { return state_->project.rootByteCharge(); }
 ValidationResult Draft::validate() const { return state_->project.validate(); }
 
+// Consume moved input; copy the publication shell to isolate escaped authored pointers.
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
 Document::Document(Project initialProject) {
-    // Copy the publication shell even for an initial project: callers may have retained a
-    // mutable pointer before moving their Project into this constructor.
     auto initialState = std::make_shared<detail::DocumentState>(initialProject);
     initialState->project.freezeCompositionContent();
     const auto validation = initialState->project.validate();
@@ -204,6 +204,8 @@ Document::Document(Project initialProject) {
     state_ = std::move(initialState);
 }
 
+// Consume moved input; copy the publication shell to isolate escaped authored pointers.
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
 Document::Document(Project initialProject, const IdAllocatorHighWater persistedHighWater) {
     auto initialState = std::make_shared<detail::DocumentState>(initialProject, persistedHighWater);
     initialState->project.freezeCompositionContent();

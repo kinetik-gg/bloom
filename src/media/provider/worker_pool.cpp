@@ -219,11 +219,10 @@ void MediaWorkerPool::releaseRetained() {
     state_->retained.reset();
 }
 
-WorkerReply MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step,
-                                  CallRequest request,
-                                  std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot,
-                                  const platform::ProcessCancellation& cancel,
-                                  const bool retainWorker) {
+WorkerReply
+MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallRequest request,
+                      const std::shared_ptr<const platform::ReadOnlyFileSnapshot>& snapshot,
+                      const platform::ProcessCancellation& cancel, const bool retainWorker) {
     if (request.snapshotBytes != 0 || state_->options.process.inputSnapshot)
         return Unavailable{Error::IdentityMismatch,
                            "Snapshot authority must be supplied by its owning host capability"};

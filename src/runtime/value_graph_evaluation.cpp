@@ -977,10 +977,10 @@ void Evaluator::evaluateRandom(const runtime::CompiledValueOperation& operation,
 void Evaluator::evaluatePromotion(const runtime::CompiledValueOperation& operation,
                                   const runtime::CompiledValuePromotion& kernel) {
     const auto* value = operandOf(kernel.value);
-    const auto reject = [&](CompiledValue fallback) {
+    const auto reject = [&](const CompiledValue& fallback) {
         fail(operation, kernel.value.id, "Promotion operand has the wrong kind",
              "A promotion widens exactly one kind into exactly one other.");
-        write(operation, 0, std::move(fallback));
+        write(operation, 0, fallback);
     };
     switch (kernel.promotion) {
     case runtime::ValuePromotion::IntegerToScalar: {

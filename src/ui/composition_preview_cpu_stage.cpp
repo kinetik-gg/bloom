@@ -343,6 +343,7 @@ runtime::PreviewCpuDisplayFallback makeCompositionPreviewCpuDisplayFallback(
             } catch (const std::bad_alloc&) {
                 // Foreground publication remains valid; an engaged null cache handle below
                 // prevents an expensive fallback copy on the interface thread.
+                cacheFrame.reset();
             }
         }
         auto frame = std::make_shared<const runtime::PreparedPreviewFrame>(std::move(*prepared));

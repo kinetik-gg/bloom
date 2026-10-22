@@ -369,7 +369,7 @@ AsyncSessionOpenResult beginSessionOpen(ProjectSession& session, runtime::TaskSc
                     shared->notOpenedReason = SessionOpenNotOpenedReason::PathUnavailable;
                     return runtime::TaskResult<void>::succeeded();
                 }
-                constexpr std::size_t kReadChunkBytes = 1024 * 1024;
+                constexpr std::size_t kReadChunkBytes = std::size_t{1024} * 1024;
                 for (std::size_t offset = 0; offset < archive->bytes.size();) {
                     if (cancelled()) {
                         shared->cancelledBeforeOpening = true;

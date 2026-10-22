@@ -41,11 +41,10 @@ class MediaWorkerPool final {
            std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot = {});
     // Synchronous execution on the caller's existing BlockingIo task. This does not create a
     // private scheduler or poll another task; cancellation is propagated to the supervisor.
-    [[nodiscard]] WorkerReply call(const MediaAttempt& attempt, std::size_t step,
-                                   CallRequest request,
-                                   std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot,
-                                   const platform::ProcessCancellation& cancel = {},
-                                   bool retainWorker = false);
+    [[nodiscard]] WorkerReply
+    call(const MediaAttempt& attempt, std::size_t step, CallRequest request,
+         const std::shared_ptr<const platform::ReadOnlyFileSnapshot>& snapshot,
+         const platform::ProcessCancellation& cancel = {}, bool retainWorker = false);
     // Drop a pinned worker before capturing a fresh source revision. The caller runs off UI.
     void releaseRetained();
     void shutdown();

@@ -31,8 +31,8 @@ namespace bloom::runtime {
 // No library node declares more than four outputs (Separate HSV's four channels), so the outcome
 // carries its values inline rather than allocating one vector per operation per frame.
 inline constexpr std::size_t kMaximumValueUtilityOutputs = 4;
-inline constexpr std::size_t kDefaultValueStringBytes = 1024U * 1024U;
-inline constexpr std::size_t kDefaultValueStringScratchBytes = 16U * 1024U * 1024U;
+inline constexpr std::size_t kDefaultValueStringBytes = std::size_t{1024} * 1024;
+inline constexpr std::size_t kDefaultValueStringScratchBytes = std::size_t{16} * 1024 * 1024;
 
 struct ValueUtilityLimits final {
     // The per-value limit also applies to input strings. availableStringBytes is the remaining
