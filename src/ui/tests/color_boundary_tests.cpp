@@ -295,6 +295,29 @@ void shapeColorPin() {
     }
 }
 
+void relativeArchiveIntentPin() {
+    auto initial =
+        document::makeNewProject("Relative Colour", "Main", core::RationalTime::fromInteger(10));
+    const auto compositionId = initial.initialCompositionId;
+    document::Document authored(std::move(initial.project));
+    commands::CommandStack stack(authored);
+    ui::CompositionSession session(authored, stack, compositionId);
+    auto settings = session.colorSettings();
+    settings.ocioConfig.locator = document::ProjectRelativeOciozLocator{"color/config.ocioz"};
+    settings.ocioConfig.portability = document::OcioConfigPortability::ProjectRelative;
+    settings.ocioConfig.expectedRevision.digest = {};
+    expect(settings.validate().ok(), "zero-digest relative OCIO reference is valid project data");
+    session.setColorSettings(settings);
+    const auto intent = session.colorIntent();
+    expect(intent.ocioConfigUri == "color/config.ocioz" &&
+               intent.ocioConfigRevision == core::Sha256Digest{},
+           "desktop captures the relative OCIO locator instead of an empty Neutral intent");
+    const auto resolution =
+        color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn, intent.ocioConfigUri,
+                                  intent.ocioConfigRevision, intent.workingColorSpaceId);
+    expect(!resolution.ready(), "unsupported relative OCIO archive cannot resolve as Neutral");
+}
+
 void workingSpaceConverterPin() {
     const auto format = document::CompositionFormat::create(4, 4);
     if (!format)
@@ -461,6 +484,7 @@ int main(int argc, char** argv) try {
     boundaryPins();
     shapeColorPin();
     workingSpaceConverterPin();
+    relativeArchiveIntentPin();
     migrationPin();
     return failures == 0 ? 0 : 1;
 } catch (const std::exception& error) {

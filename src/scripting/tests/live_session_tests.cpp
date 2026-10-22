@@ -181,6 +181,29 @@ void savedColorIntent() {
     require(inherited.has_value() && inherited->workingColorSpaceId == "Linear P3-D65" &&
                 inherited->ocioConfigRevision == *revision,
             "Headless export uses project working space after override removal");
+
+    auto relative = *reopened->hostSession()->colorSettings();
+    relative.ocioConfig.locator = document::ProjectRelativeOciozLocator{"color/config.ocioz"};
+    relative.ocioConfig.portability = document::OcioConfigPortability::ProjectRelative;
+    relative.ocioConfig.expectedRevision.digest = {};
+    require(relative.validate().ok(), "Zero-digest relative OCIO reference is valid");
+    require(reopened->hostSession()->setColorSettings(relative) ==
+                host::ProjectSessionColorSettingsStatus::Updated,
+            "Set relative OCIO archive on headless project");
+    const auto relativeSource = reopened->renderSourceSnapshot();
+    const auto* relativeComposition =
+        relativeSource.snapshot.project().findComposition(compositionId);
+    require(relativeComposition != nullptr, "Relative OCIO composition exists");
+    const auto relativeIntent =
+        scripting::captureRenderColorIntent(relativeSource, *relativeComposition);
+    require(relativeIntent.has_value() && relativeIntent->ocioConfigUri == "color/config.ocioz" &&
+                relativeIntent->ocioConfigRevision == core::Sha256Digest{},
+            "Headless capture preserves relative OCIO locator instead of empty Neutral intent");
+    const auto relativeResolution = color::resolveOcioBuiltIn(
+        color::OcioConfigLocatorKind::BloomBuiltIn, relativeIntent->ocioConfigUri,
+        relativeIntent->ocioConfigRevision, relativeIntent->workingColorSpaceId);
+    require(!relativeResolution.ready(),
+            "Unsupported relative OCIO archive cannot resolve as Neutral");
 }
 } // namespace
 int main() {

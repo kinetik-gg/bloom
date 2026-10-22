@@ -297,6 +297,9 @@ captureRenderColorIntent(const SessionRenderSourceSnapshot& source,
     if (const auto* builtIn =
             std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator))
         uri = builtIn->uri;
+    else if (const auto* relativeArchive =
+                 std::get_if<document::ProjectRelativeOciozLocator>(&settings.ocioConfig.locator))
+        uri = relativeArchive->path;
     else if (const auto* externalArchive =
                  std::get_if<document::ExternalOciozLocator>(&settings.ocioConfig.locator))
         uri = externalArchive->uri;

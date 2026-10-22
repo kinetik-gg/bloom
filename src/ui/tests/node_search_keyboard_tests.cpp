@@ -6,6 +6,7 @@
 #include <QRegion>
 #include <QShortcut>
 #include <QStringList>
+#include <limits>
 #include <memory>
 
 namespace bloom::ui::test {
@@ -90,6 +91,43 @@ void testReadOnlyAddEligibility() {
     std::unique_ptr<QMenu> menu(f.editor.contextMenuForTest());
     expect(document::Project::validationCount() == validationsBefore,
            "building the Add menu does not validate the whole project per candidate");
+
+    auto initial =
+        document::makeNewProject("ID boundary", "Main", core::RationalTime::fromInteger(10));
+    const auto compositionId = initial.initialCompositionId;
+    document::Document baseline(std::move(initial.project));
+    const auto base = baseline.snapshot();
+    const auto merge = base.project().findComposition(compositionId)->graph().outputMergeId();
+    expect(merge.has_value(), "ID boundary fixture has an output Merge");
+    if (!merge)
+        return;
+    const document::InputPortRef destination = document::LayerStackInputRef{
+        *merge, {}, std::string(document::kLayerStackContentInputRole)};
+    for (const bool exhaustSlot : {false, true}) {
+        auto highWater = base.ids().highWater();
+        if (exhaustSlot)
+            highWater.layerSlot = std::numeric_limits<std::uint64_t>::max();
+        else
+            highWater.edge = std::numeric_limits<std::uint64_t>::max();
+        document::Document atLimit(base.project(), highWater);
+        const auto current = atLimit.snapshot();
+        const auto preflight = node_editor::checkAddEditorNodeEligibility(
+            current, compositionId, document::kLayerOutputNodeType, {}, destination);
+        auto draft = atLimit.draft(current);
+        const auto executed =
+            node_editor::AddEditorNode(compositionId, std::string(document::kLayerOutputNodeType),
+                                       {}, destination)
+                .apply(draft);
+        expect(preflight.status == commands::OperationStatus::Rejected &&
+                   executed.status == commands::OperationStatus::Rejected &&
+                   !preflight.issues.empty() && !executed.issues.empty() &&
+                   preflight.issues.front().message == executed.issues.front().message,
+               "connected Add preflight matches edge and Merge slot ID exhaustion");
+        const auto unconnected = node_editor::checkAddEditorNodeEligibility(
+            current, compositionId, document::kLayerOutputNodeType, {});
+        expect(unconnected.status == commands::OperationStatus::Applied,
+               "unconnected Add remains eligible when connection IDs are exhausted");
+    }
 }
 
 void testSearchKeyboardAndMenus() {

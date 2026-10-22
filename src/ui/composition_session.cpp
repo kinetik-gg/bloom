@@ -171,6 +171,9 @@ runtime::EvaluationColorIntent CompositionSession::colorIntent() const noexcept 
     if (const auto* builtIn =
             std::get_if<document::BuiltInOcioConfigLocator>(&colorSettings_.ocioConfig.locator))
         ocioConfigUri = builtIn->uri;
+    else if (const auto* relativeArchive = std::get_if<document::ProjectRelativeOciozLocator>(
+                 &colorSettings_.ocioConfig.locator))
+        ocioConfigUri = relativeArchive->path;
     else if (const auto* externalArchive =
                  std::get_if<document::ExternalOciozLocator>(&colorSettings_.ocioConfig.locator))
         ocioConfigUri = externalArchive->uri;

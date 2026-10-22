@@ -81,19 +81,45 @@ checkAddEditorNodeEligibility(const document::Snapshot& snapshot,
     if (!definition)
         return eligibility;
     const auto& graph = composition->graph();
+    auto available = snapshot.ids();
+    const auto checkConnectionIds = [&](const bool needsSlot, const bool needsEdge) {
+        if ((needsSlot && !available.allocateLayerSlot()) ||
+            (needsEdge && !available.allocateEdge()))
+            return commands::OperationResult::rejected(commands::OperationIssueCode::Unsupported,
+                                                       "Document ID space is exhausted");
+        return eligibility;
+    };
     if (input) {
         if (const auto kind = graph.inputKind(*input); kind)
             for (const auto& port : definition->outputs)
-                if (port.valueKind == *kind)
-                    return eligibility;
+                if (port.valueKind == *kind) {
+                    const auto* fixed = std::get_if<document::NodeInputRef>(&*input);
+                    const auto* target = fixed ? graph.findNode(fixed->nodeId) : nullptr;
+                    const bool parameter =
+                        fixed && target &&
+                        std::ranges::any_of(target->parameters, [&](const auto& binding) {
+                            return binding.role == fixed->port;
+                        });
+                    const auto* slot = std::get_if<document::LayerStackInputRef>(&*input);
+                    const bool freshSlot = slot && !slot->slotId.isValid();
+                    const bool replacingEdge =
+                        std::ranges::any_of(graph.edges(), [&](const auto& edge) {
+                            return edge.destination == *input;
+                        });
+                    return checkConnectionIds(freshSlot, !parameter && !replacingEdge);
+                }
     }
     if (output) {
         if (const auto kind = graph.outputKind(*output); kind) {
             if (definition->layerSlotInput && *kind == definition->layerSlotInput->valueKind)
-                return eligibility;
+                return checkConnectionIds(true, true);
             for (const auto& port : definition->inputs)
                 if (*kind == port.valueKind)
-                    return eligibility;
+                    return checkConnectionIds(
+                        false,
+                        std::ranges::none_of(definition->parameters, [&](const auto& parameter) {
+                            return parameter.role == port.name;
+                        }));
         }
     }
     return commands::OperationResult::rejected(commands::OperationIssueCode::Unsupported,
