@@ -56,6 +56,12 @@ class GpuProcessingPhasePolicy final {
         std::size_t requestCapacity = 32,
         const std::shared_ptr<render::PackedHostRetirementOwner>& retirementOwner = {},
         std::shared_ptr<TaskBudgetView> budgetView = {});
+    // Worker-only OS sample bracketed by this root's exact completed host allocations. The
+    // resulting credit is consumed only by this policy on a matching fresh delivery.
+    using HostMemorySampler = MemoryBudgetSample (*)(const CancellationToken&) noexcept;
+    [[nodiscard]] MemoryBudgetSample
+    sampleHostMemory(const CancellationToken& = {},
+                     HostMemorySampler sampler = memoryBudgetSample) noexcept;
     void applyHostSample(const MemoryBudgetState&, std::size_t physicalBytes,
                          Clock::time_point now = Clock::now()) noexcept;
     // Explicit root delivery: allocation reflects the owner's configured cache split/overrides.
@@ -96,6 +102,13 @@ class GpuProcessingPhasePolicy final {
     std::optional<std::uint64_t> finiteProcessCeiling_;
     ProcessMemoryConstraintHistory processConstraintHistory_;
     std::optional<Clock::time_point> hostSampleAt_;
+    struct HostSampleBackingCredit final {
+        Clock::time_point sampledAt{};
+        std::uint64_t bytes = 0;
+        std::optional<std::uint64_t> finiteHeadroom;
+    };
+    std::optional<HostSampleBackingCredit> pendingHostBackingCredit_;
+    std::optional<HostSampleBackingCredit> appliedHostBackingCredit_;
     std::array<DeviceReport, 32> devices_{};
     std::size_t deviceCount_ = 0;
     void applyDeviceReportsLocked() noexcept;

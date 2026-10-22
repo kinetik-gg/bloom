@@ -84,6 +84,10 @@ headroom, device capability and already-held work. A small retention cache does 
 a frame is too large to render. Requests can wait or fail with a diagnostic when actual capacity
 cannot cover their allocations; live pixels and active reservations remain valid. Separate GPU
 owner partitions and final-export limits are still being audited.
+For rooted RAM-preview and final pixel storage, Bloom reconciles the exact completed backing that
+the OS has already counted in its free-space reading. This prevents a retained frame from reducing
+available memory and being subtracted again as an owned allocation. A cache's held-byte display is
+not used as memory credit, and unfinished allocation promises remain charged.
 
 There is no automatic 25%/10% cache-trimming ladder or slow percentage recovery. Increasing swap
 usage is reported as activity, without secretly changing your targets. The cache tooltip retains

@@ -200,7 +200,10 @@ int main(int argc, char* argv[]) try {
     const auto processingPhasePolicy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(
         32, packedHostRetirement, taskBudgetView);
     bloom::ui::MemoryBudgetController memoryBudgetController(
-        taskScheduler, taskUiBridge, bloom::runtime::processMemoryBudgetLedger());
+        taskScheduler, taskUiBridge, bloom::runtime::processMemoryBudgetLedger(),
+        [processingPhasePolicy](const bloom::runtime::CancellationToken& cancellation) {
+            return processingPhasePolicy->sampleHostMemory(cancellation);
+        });
     QObject::connect(
         &memoryBudgetController, &bloom::ui::MemoryBudgetController::sampleApplied, &application,
         [processingPhasePolicy, &playbackSettings] {

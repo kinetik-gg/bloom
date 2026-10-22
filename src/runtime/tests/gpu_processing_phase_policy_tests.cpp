@@ -1,18 +1,43 @@
 #include <bloom/render/native_image_storage.hpp>
+#include <bloom/render/packed_host_retirement.hpp>
+#include <bloom/render/packed_rgba8_storage.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 
 namespace {
 using namespace bloom::runtime;
 using namespace bloom::render;
 constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
+GpuProcessingPhasePolicy::Clock::time_point scriptedSampleAt{};
+void (*scriptedAction)() noexcept = nullptr;
+PackedRgba8Storage* scriptedStorageToRetire = nullptr;
+MemoryBudgetSample scriptedHostSample(const CancellationToken&) noexcept {
+    MemoryBudgetSample reading;
+    reading.process.sampledAt = scriptedSampleAt;
+    if (scriptedAction)
+        scriptedAction();
+    return reading;
+}
+struct HostRetirement final {
+    std::shared_ptr<PackedHostRetirementOwner> owner = PackedHostRetirementOwner::create();
+    ~HostRetirement() {
+        owner->beginShutdown();
+        const auto deadline = GpuProcessingPhasePolicy::Clock::now() + std::chrono::seconds(2);
+        while (!owner->exitAcknowledged() && GpuProcessingPhasePolicy::Clock::now() < deadline)
+            std::this_thread::yield();
+        if (!owner->exitAcknowledged() || !owner->collect())
+            std::terminate();
+    }
+};
 void require(const bool value, const char* message) {
     if (!value) {
         throw std::runtime_error(message);
@@ -214,6 +239,154 @@ void liveHeadroomDuringCachePressure() {
                 !policy.snapshot().reservations.hostReady,
             "regressed host-only timestamp cannot recover capacity despite a fresh label");
 }
+void rootedBackingReconcilesSampledHostHeadroom() {
+    HostRetirement retirement;
+    require(retirement.owner->prepare(), "rooted host retirement worker is ready");
+    GpuProcessingPhasePolicy policy(3, retirement.owner);
+    const auto start = GpuProcessingPhasePolicy::Clock::now();
+    MemoryBudgetState delivered;
+    delivered.machine.availableBytes = 4096;
+    delivered.process.source = ProcessMemorySource::OtherHostOnly;
+    delivered.process.status = ProcessMemoryStatus::Unsupported;
+    delivered.process.sampledAt = start;
+    delivered.processSampleFresh = true;
+    delivered.sampleSerial = 1;
+    policy.applyHostSample(delivered, 4096, start);
+    const auto header = detail::packedHostAllocationMetadataBytes();
+    auto phase = policy.reserve(
+        {.pixels = 32, .metadataBytes = header, .sourceFree = true, .native = false}, start);
+    require(phase.lease != nullptr, "real preview envelope admits rooted backing");
+    auto backing = PackedRgba8Storage::create(32, phase.lease, 128);
+    require(backing && backing.value()->promote(), "one completed packed backing publishes");
+    const auto owned = 128 + header;
+    require(policy.snapshot().reservations.totalHostClaimBytes >= owned,
+            "published backing remains in the exact root claim");
+    phase.lease.reset();
+    scriptedSampleAt = start + std::chrono::seconds(1);
+    const auto sampled = policy.sampleHostMemory({}, scriptedHostSample);
+    delivered.machine.availableBytes = 70;
+    delivered.process.source = ProcessMemorySource::LinuxCgroupV2;
+    delivered.process.status = ProcessMemoryStatus::Finite;
+    delivered.process.domains = {{.path = "/own",
+                                  .kind = ProcessMemoryLimitKind::Finite,
+                                  .limitBytes = owned + 70,
+                                  .currentBytes = owned}};
+    delivered.process.sampledAt = sampled.process.sampledAt;
+    ++delivered.sampleSerial;
+    policy.applyHostSample(delivered, 4096, scriptedSampleAt);
+    require(policy.snapshot().reservations.hostCapacityBytes == owned + 70 &&
+                policy.snapshot().reservations.totalHostClaimBytes == owned,
+            "only sampled exact live backing is reconciled with machine and finite free space");
+    policy.applyHostSample(delivered, 4096, scriptedSampleAt);
+    require(policy.snapshot().reservations.hostCapacityBytes == owned + 70,
+            "a duplicate finite delivery does not erase the exact sample's backing credit");
+    GpuProcessingPhasePolicy foreign(1, retirement.owner);
+    foreign.applyHostSample(delivered, 4096, scriptedSampleAt);
+    require(foreign.snapshot().reservations.hostCapacityBytes == 70,
+            "a matching OS timestamp cannot transfer backing credit to another root");
+    auto next =
+        policy.reserve({.pixels = 8, .sourceFree = true, .native = false}, scriptedSampleAt);
+    require(next.lease && next.lease->hostBytes() == 64,
+            "new work uses measured free headroom after retained packing");
+    require(policy.reserve({.pixels = 1, .sourceFree = true, .native = false}, scriptedSampleAt)
+                    .status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "held phase claims still consume measured free headroom");
+    next.lease.reset();
+    backing.value()->reset();
+    const auto deadline = GpuProcessingPhasePolicy::Clock::now() + std::chrono::seconds(2);
+    while (policy.snapshot().reservations.totalHostClaimBytes != 0 &&
+           GpuProcessingPhasePolicy::Clock::now() < deadline)
+        std::this_thread::yield();
+    require(policy.snapshot().reservations.totalHostClaimBytes == 0,
+            "published charge clears only after worker frees its backing");
+    require(policy.reserve({.pixels = 20, .sourceFree = true, .native = false}, scriptedSampleAt)
+                    .lease != nullptr,
+            "sample credit remains valid when its charged backing is subsequently freed");
+
+    // A reservation and an allocation created after sampling cannot be credited against that
+    // sample's free-space observation, even if the exact owned counter changes before delivery.
+    delivered.machine.availableBytes = 4096;
+    delivered.process.domains[0].limitBytes = 4096;
+    delivered.process.domains[0].currentBytes = 0;
+    delivered.process.sampledAt = start + std::chrono::seconds(2);
+    ++delivered.sampleSerial;
+    policy.applyHostSample(delivered, 4096, delivered.process.sampledAt);
+    auto promisePhase =
+        policy.reserve({.pixels = 32, .metadataBytes = header, .sourceFree = true, .native = false},
+                       delivered.process.sampledAt);
+    require(promisePhase.lease != nullptr, "second phase admits while prior free is available");
+    auto authority = PackedHostStorageAuthority::create(promisePhase.lease, 128);
+    auto promise = authority->reserve(64, header);
+    require(promise && policy.snapshot().reservations.ownedPackedHostBytes == 64,
+            "reserve moves a promise into the owned ledger before any allocation");
+    scriptedSampleAt = start + std::chrono::seconds(3);
+    static_cast<void>(policy.sampleHostMemory({}, scriptedHostSample));
+    promise.reset();
+    auto late = PackedRgba8Storage::create(16, promisePhase.lease, 64);
+    require(late && late.value()->promote(), "backing materializes only after the sample");
+    promisePhase.lease.reset();
+    delivered.process.status = ProcessMemoryStatus::Unsupported;
+    delivered.process.source = ProcessMemorySource::OtherHostOnly;
+    delivered.process.domains.clear();
+    delivered.machine.availableBytes = 32;
+    delivered.process.sampledAt = scriptedSampleAt;
+    ++delivered.sampleSerial;
+    policy.applyHostSample(delivered, 4096, scriptedSampleAt);
+    require(policy.snapshot().reservations.hostCapacityBytes == 32 &&
+                policy.reserve({.pixels = 1, .sourceFree = true, .native = false}, scriptedSampleAt)
+                        .status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "late backing and reserve promises never inflate an older OS sample");
+    late.value()->reset();
+    const auto lateDeadline = GpuProcessingPhasePolicy::Clock::now() + std::chrono::seconds(2);
+    while (policy.snapshot().reservations.totalHostClaimBytes != 0 &&
+           GpuProcessingPhasePolicy::Clock::now() < lateDeadline)
+        std::this_thread::yield();
+    require(policy.snapshot().reservations.totalHostClaimBytes == 0,
+            "late published backing retires before the next sample interval");
+    delivered.machine.availableBytes = 4096;
+    delivered.process.sampledAt = start + std::chrono::seconds(4);
+    ++delivered.sampleSerial;
+    policy.applyHostSample(delivered, 4096, delivered.process.sampledAt);
+    auto transientPhase =
+        policy.reserve({.pixels = 16, .metadataBytes = header, .sourceFree = true, .native = false},
+                       delivered.process.sampledAt);
+    require(transientPhase.lease != nullptr, "transient materialized host phase admits");
+    auto transient = PackedRgba8Storage::create(16, transientPhase.lease, 64);
+    require(transient && policy.snapshot().reservations.ownedPackedHostBytes == 64,
+            "provisional vector has real backing before sampling");
+    scriptedStorageToRetire = transient.value();
+    scriptedAction = +[]() noexcept { scriptedStorageToRetire->reset(); };
+    scriptedSampleAt = start + std::chrono::seconds(5);
+    static_cast<void>(policy.sampleHostMemory({}, scriptedHostSample));
+    scriptedAction = nullptr;
+    scriptedStorageToRetire = nullptr;
+    transientPhase.lease.reset();
+    delivered.machine.availableBytes = 32;
+    delivered.process.sampledAt = scriptedSampleAt;
+    ++delivered.sampleSerial;
+    policy.applyHostSample(delivered, 4096, scriptedSampleAt);
+    require(policy.snapshot().reservations.hostCapacityBytes == 32 &&
+                policy.reserve({.pixels = 5, .sourceFree = true, .native = false}, scriptedSampleAt)
+                        .status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "backing freed during an OS sample receives no continuous-lifetime credit");
+    ++delivered.sampleSerial;
+    delivered.processSampleFresh = false;
+    delivered.machine.availableBytes = 4096;
+    policy.applyHostSample(delivered, 4096, scriptedSampleAt);
+    require(!policy.snapshot().reservations.hostReady &&
+                policy.snapshot().reservations.hostCapacityBytes == 32,
+            "stale delivery cannot promote a previous backing credit into fresh capacity");
+    ++delivered.sampleSerial;
+    delivered.processSampleFresh = true;
+    delivered.process.sampledAt = start + std::chrono::seconds(6);
+    delivered.machine.availableBytes = 0;
+    policy.applyHostSample(delivered, 4096, delivered.process.sampledAt);
+    require(policy.snapshot().reservations.hostCapacityBytes == 0 &&
+                policy.reserve({.pixels = 1, .sourceFree = true, .native = false},
+                               delivered.process.sampledAt)
+                        .status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "measured zero never gains a floor from previously retired backing");
+}
 void policy() {
     const auto now = GpuProcessingPhasePolicy::Clock::now();
     GpuProcessingPhasePolicy policy;
@@ -402,7 +575,7 @@ void monotonicRecoveryAndSlots() {
     const auto now = GpuProcessingPhasePolicy::Clock::now();
     GpuProcessingPhasePolicy policy;
     auto lower = sample(now + std::chrono::seconds(5));
-    lower.process.domains[0].currentBytes = 7 * gib - 256ULL * 1024 * 1024;
+    lower.process.domains[0].currentBytes = 8 * gib - 256ULL * 1024 * 1024;
     lower.sampleSerial = 2;
     policy.applyHostSample(lower, 60 * gib, now + std::chrono::seconds(5));
     require(policy.snapshot().reservations.hostCapacityBytes == 256ULL * 1024 * 1024,
@@ -717,6 +890,7 @@ int main(int argc, char** argv) {
             return liveConstraintRemoval();
         lowMemoryHostFinalAdmission();
         liveHeadroomDuringCachePressure();
+        rootedBackingReconcilesSampledHostHeadroom();
         policy();
         deviceReportRecoversAfterPressure();
         liveDeviceReportCreditsOnlyOwnedNativeBacking();

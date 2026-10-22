@@ -9,6 +9,7 @@ namespace bloom::render::detail {
 struct GpuProcessingPhaseBudgetState final {
     mutable std::mutex mutex;
     GpuProcessingPhaseSnapshot counters;
+    RootedHostBackingSnapshot rootedHostBacking;
     std::uint64_t nextId = 1;
     std::shared_ptr<PackedHostRetirementState> retirement;
     std::chrono::steady_clock::time_point hostValidUntil =

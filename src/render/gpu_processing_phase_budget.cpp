@@ -59,27 +59,36 @@ PackedHostStorageToken::PackedHostStorageToken(
     : authority_(std::move(authority)), bytes_(bytes), metadataBytes_(metadataBytes) {}
 PackedHostStorageToken::PackedHostStorageToken(PackedHostStorageToken&& other) noexcept
     : authority_(std::move(other.authority_)), bytes_(std::exchange(other.bytes_, 0)),
-      metadataBytes_(std::exchange(other.metadataBytes_, 0)) {}
+      metadataBytes_(std::exchange(other.metadataBytes_, 0)),
+      materialized_(std::exchange(other.materialized_, false)) {}
 PackedHostStorageToken& PackedHostStorageToken::operator=(PackedHostStorageToken&& other) noexcept {
     if (this != &other) {
         reset();
         authority_ = std::move(other.authority_);
         bytes_ = std::exchange(other.bytes_, 0);
         metadataBytes_ = std::exchange(other.metadataBytes_, 0);
+        materialized_ = std::exchange(other.materialized_, false);
     }
     return *this;
 }
 PackedHostStorageToken::~PackedHostStorageToken() { reset(); }
 void PackedHostStorageToken::reset() noexcept {
     if (authority_) {
-        authority_->release(bytes_, metadataBytes_);
+        authority_->release(bytes_, metadataBytes_, materialized_);
         authority_.reset();
         bytes_ = 0;
         metadataBytes_ = 0;
+        materialized_ = false;
     }
 }
 bool PackedHostStorageToken::published() const noexcept {
     return authority_ && authority_->snapshot().published;
+}
+void PackedHostStorageToken::markMaterialized() noexcept {
+    if (authority_ && !materialized_) {
+        authority_->materialize(bytes_, metadataBytes_);
+        materialized_ = true;
+    }
 }
 PackedHostStorageAuthority::PackedHostStorageAuthority(
     const std::shared_ptr<GpuProcessingPhaseLease>& phase, const std::uint64_t limit,
@@ -138,10 +147,23 @@ PackedHostStorageAuthority::retirementState() const noexcept {
     return state_->retirement;
 }
 void PackedHostStorageAuthority::release(const std::uint64_t bytes,
-                                         const std::uint64_t metadataBytes) noexcept {
+                                         const std::uint64_t metadataBytes,
+                                         const bool materialized) noexcept {
     std::shared_ptr<GpuProcessingPhaseLease> releasedOrigin;
     {
         const std::lock_guard lock(state_->mutex);
+        if (materialized) {
+            const auto total = bytes + metadataBytes;
+            auto& backing = state_->rootedHostBacking;
+            backing.materializedBytes -= total;
+            if (total >
+                std::numeric_limits<std::uint64_t>::max() - backing.retiredMaterializedBytes) {
+                backing.retiredMaterializedBytes = std::numeric_limits<std::uint64_t>::max();
+                backing.retiredBytesSaturated = true;
+            } else {
+                backing.retiredMaterializedBytes += total;
+            }
+        }
         bytes_ -= bytes;
         metadataBytes_ -= metadataBytes;
         if (domain_ == HostPixelStorageDomain::PackedPreview) {
@@ -170,6 +192,12 @@ void PackedHostStorageAuthority::release(const std::uint64_t bytes,
     }
     // The final phase alias can run its destructor, which takes the same mutex.
     releasedOrigin.reset();
+}
+void PackedHostStorageAuthority::materialize(const std::uint64_t bytes,
+                                             const std::uint64_t metadataBytes) noexcept {
+    const std::lock_guard lock(state_->mutex);
+    // These bytes already belong to the bounded total claim; this is only a sampling proof.
+    state_->rootedHostBacking.materializedBytes += bytes + metadataBytes;
 }
 bool PackedHostStorageAuthority::promote() noexcept {
     std::shared_ptr<GpuProcessingPhaseLease> releasedOrigin;
@@ -264,6 +292,10 @@ void GpuProcessingPhaseBudget::setDeviceCapacity(const std::optional<std::uint64
 GpuProcessingPhaseSnapshot GpuProcessingPhaseBudget::snapshot() const noexcept {
     const std::lock_guard lock(state_->mutex);
     return state_->counters;
+}
+RootedHostBackingSnapshot GpuProcessingPhaseBudget::rootedHostBackingSnapshot() const noexcept {
+    const std::lock_guard lock(state_->mutex);
+    return state_->rootedHostBacking;
 }
 
 GpuProcessingPhaseGrant

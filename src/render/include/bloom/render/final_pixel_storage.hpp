@@ -95,6 +95,7 @@ template <class T> class FinalPixelStorage final {
         try {
             auto authority = PackedHostStorageAuthority::create(phase, byteLimit, domain);
             OwnedVector pixels(count, clear, detail::FinalPixelAllocator<T>(std::move(authority)));
+            detail::markHostPixelsMaterialized(pixels.data());
             return ImageResult<FinalPixelStorage>::success(FinalPixelStorage(std::move(pixels)));
         } catch (const detail::PackedHostCapacityError&) {
             return ImageResult<FinalPixelStorage>::failure(

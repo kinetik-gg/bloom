@@ -85,6 +85,8 @@ void allocatorFailureAndBounds() {
     expect(folded.hostReservedBytes == 512 && folded.ownedPackedHostBytes == 0 &&
                folded.totalHostClaimBytes == 512 && folded.admissionRevision + 1 == revision,
            "allocation failure atomically folds bytes back without advancing revision");
+    expect(budget.rootedHostBackingSnapshot().materializedBytes == 0,
+           "failed backing never gains measured-headroom credit");
     clearObservation();
 
     auto authority = PackedHostStorageAuthority::create(phase, 128);
@@ -102,6 +104,8 @@ void allocatorFailureAndBounds() {
                budget.snapshot().ownedPackedHostAllocations == 2 &&
                budget.snapshot().totalHostClaimBytes == 512,
            "simultaneous old/new allocation requests are both charged");
+    expect(budget.rootedHostBackingSnapshot().materializedBytes == 0,
+           "allocator promises remain uncredited until typed storage is fully constructed");
     observeAllocation(4);
     bool refused = false;
     try {
@@ -259,11 +263,15 @@ void publicationLifetimeAndOrdering() {
         return;
     }
     expect(storage.value()->promote(), "lifetime storage promotes");
+    expect(budget->rootedHostBackingSnapshot().materializedBytes ==
+               128 + detail::packedHostAllocationMetadataBytes(),
+           "completed rooted vector and exact header become one sample-eligible backing");
     phase.reset();
     deletionBudget = budget.get();
     storage.value()->reset();
     expect(wait([&] { return budget->snapshot().ownedPackedHostBytes == 0; }) &&
-               freedWhileCharged && budget->snapshot().totalHostClaimBytes == 0,
+               freedWhileCharged && budget->snapshot().totalHostClaimBytes == 0 &&
+               budget->rootedHostBackingSnapshot().materializedBytes == 0,
            "backing allocation is freed before its published token releases bytes");
     clearObservation();
     phase = grant(*budget, 256);

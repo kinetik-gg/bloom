@@ -11,6 +11,11 @@ std::optional<std::uint64_t> add(const std::uint64_t left, const std::uint64_t r
     }
     return left + right;
 }
+std::uint64_t addSaturating(const std::uint64_t left, const std::uint64_t right) noexcept {
+    return right > std::numeric_limits<std::uint64_t>::max() - left
+               ? std::numeric_limits<std::uint64_t>::max()
+               : left + right;
+}
 std::optional<std::uint64_t> multiply(const std::uint64_t value,
                                       const std::uint64_t factor) noexcept {
     if (value > std::numeric_limits<std::uint64_t>::max() / factor) {
@@ -74,17 +79,46 @@ GpuProcessingPhasePolicy::GpuProcessingPhasePolicy(
     const std::shared_ptr<render::PackedHostRetirementOwner>& retirementOwner,
     std::shared_ptr<TaskBudgetView> budgetView)
     : budget_(requestCapacity, retirementOwner), budgetView_(std::move(budgetView)) {}
+MemoryBudgetSample
+GpuProcessingPhasePolicy::sampleHostMemory(const CancellationToken& cancellation,
+                                           const HostMemorySampler sampler) noexcept {
+    const auto before = budget_.rootedHostBackingSnapshot();
+    auto sample = sampler ? sampler(cancellation) : MemoryBudgetSample{};
+    const auto after = budget_.rootedHostBackingSnapshot();
+    // Subtract every materialized retirement during the measurement, including newly allocated
+    // backing that retires in that interval. That can under-credit but cannot over-credit.
+    std::uint64_t credit = 0;
+    if (!before.retiredBytesSaturated && !after.retiredBytesSaturated &&
+        after.retiredMaterializedBytes >= before.retiredMaterializedBytes) {
+        const auto retired = after.retiredMaterializedBytes - before.retiredMaterializedBytes;
+        credit = before.materializedBytes > retired ? before.materializedBytes - retired : 0;
+    }
+    if (!cancellation.isCancellationRequested()) {
+        const std::lock_guard lock(mutex_);
+        if (!pendingHostBackingCredit_ ||
+            sample.process.sampledAt >= pendingHostBackingCredit_->sampledAt)
+            pendingHostBackingCredit_ =
+                HostSampleBackingCredit{sample.process.sampledAt, credit, std::nullopt};
+    }
+    return sample;
+}
 void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
                                                const std::size_t physicalBytes,
                                                const Clock::time_point now) noexcept {
     const std::lock_guard lock(mutex_);
     const bool newerDelivery = sample.sampleSerial > sampleSerial_;
+    const auto finite = processHeadroom(sample.process);
+    const auto duplicateCredit =
+        appliedHostBackingCredit_ &&
+                appliedHostBackingCredit_->sampledAt == sample.process.sampledAt &&
+                appliedHostBackingCredit_->finiteHeadroom == finite
+            ? appliedHostBackingCredit_->bytes
+            : 0;
     if (newerDelivery) {
         processSource_ = sample.process.source;
         processStatus_ = sample.process.status;
         sampleSerial_ = sample.sampleSerial;
     }
-    const auto finite = processHeadroom(sample.process);
     if (!newerDelivery) {
         // Multiple composition roots may replay the same already-delivered neutral snapshot.
         // A duplicate never closes/reopens readiness or authorizes growth; reliable tighter
@@ -95,8 +129,9 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
                                         ? std::min<std::uint64_t>(*finiteProcessCeiling_, *finite)
                                         : *finite;
             const auto current = budget_.snapshot();
-            if (current.hostCapacityBytes && *finite < *current.hostCapacityBytes) {
-                budget_.setHostCapacity(finite, current.hostReady,
+            const auto compensated = addSaturating(*finite, duplicateCredit);
+            if (current.hostCapacityBytes && compensated < *current.hostCapacityBytes) {
+                budget_.setHostCapacity(compensated, current.hostReady,
                                         hostSampleAt_.value_or(Clock::time_point::min()) +
                                             std::chrono::seconds(10));
             }
@@ -118,6 +153,16 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
     const bool recent = age >= 0 && age <= 10;
     const bool fresh = newerDelivery && sample.processSampleFresh && recent &&
                        (!hostSampleAt_ || sample.process.sampledAt > *hostSampleAt_);
+    const auto backingCredit =
+        fresh && pendingHostBackingCredit_ &&
+                pendingHostBackingCredit_->sampledAt == sample.process.sampledAt
+            ? pendingHostBackingCredit_->bytes
+            : 0;
+    if (fresh) {
+        appliedHostBackingCredit_ =
+            HostSampleBackingCredit{sample.process.sampledAt, backingCredit, finite};
+        pendingHostBackingCredit_.reset();
+    }
     processConstraintHistory_.recordFinite(
         sample.process, complete && fresh && sample.process.status == ProcessMemoryStatus::Finite);
     if (complete && fresh && processConstraintHistory_.verifiesRemoval(sample.process)) {
@@ -131,14 +176,15 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
     if (sample.machine.availableBytes) {
         // Measured headroom bounds new work. Cache preferences and arbitrary reserve percentages
         // do not limit whether a frame can render; typed phase claims still bound its live peak.
-        allowance = *sample.machine.availableBytes;
+        allowance.emplace(addSaturating(*sample.machine.availableBytes, backingCredit));
         if (physicalBytes != 0)
-            allowance = std::min<std::uint64_t>(*allowance, physicalBytes);
+            allowance.emplace(std::min<std::uint64_t>(*allowance, physicalBytes));
         if (finiteProcessCeiling_) {
-            allowance.emplace(std::min(*allowance, *finiteProcessCeiling_));
+            allowance.emplace(
+                std::min(*allowance, addSaturating(*finiteProcessCeiling_, backingCredit)));
         }
     } else if (finiteProcessCeiling_ && *finiteProcessCeiling_ == 0) {
-        allowance = 0;
+        allowance.emplace(0);
     }
     if (allowance && *allowance != 0 && (!complete || !fresh || sample.awaitingProcessSample)) {
         const auto current = budget_.snapshot().hostCapacityBytes;

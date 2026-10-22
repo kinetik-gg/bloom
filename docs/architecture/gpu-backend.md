@@ -1828,6 +1828,34 @@ diagnostics or repair reruns. The reliability plan preserves exact split-run his
 No native allocation accounting, width-two, aggregate OOM or sustained/platform qualification is
 adopted here.
 
+### Measured host headroom and rooted backing
+
+The processing policy samples machine availability and each visible finite process domain off the
+UI thread. Those free-space readings already reflect completed rooted packed-preview and final
+process/encoded pixel allocations. The root still charges those exact payloads and intrusive
+headers until their backing is actually freed. Subtracting the full root claim from raw measured
+free space would therefore charge retained frames a second time and could stop RAM-preview refill
+while the OS still reports enough room for another frame.
+
+The allocator keeps admission promises separate from completed backing. Only after the typed vector
+finishes constructing and touching its pixel allocation does its token mark exact payload plus
+header bytes as materialized. A worker captures that amount before the machine/process probe and
+the cumulative materialized retirement amount after it. At most the initial amount less every
+retirement during the probe is credited; allocations made during the probe receive no credit.
+The sample credit belongs to that policy root and exact sample timestamp. Only a fresh matching
+delivery can add it to measured machine and finite-process headroom, with saturation and the
+physical-capacity ceiling. Ordinary admission continues to subtract the entire live root claim,
+including unallocated phase estimates, host promises and held phases.
+
+Aliases and cache-held byte totals provide no credit. Provisional backed vectors are eligible
+after construction; failed allocation, reserve-before-allocation, legacy vectors, source/coverage
+estimates, transient processing claims and opaque native host backing are not. Published storage
+queued for off-UI retirement remains materialized and charged until its actual free. A later free
+removes its claim without invalidating the completed sample's credit, because the OS then gains the
+same headroom. Measured zero, stale or incomplete delivery, cancellation and unproven retirement
+retain their existing fail-closed behavior. This reconciliation does not measure allocator overhead,
+whole-process RSS or GPU driver commitment.
+
 ### Resident request cancellation and failure retirement (G2E)
 
 Independently requested cancellation or supersession discards publication, while the admitted stage,

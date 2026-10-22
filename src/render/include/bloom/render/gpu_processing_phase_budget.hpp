@@ -10,6 +10,7 @@ namespace bloom::render {
 namespace detail {
 struct GpuProcessingPhaseBudgetState;
 struct PackedHostRetirementState;
+void markHostPixelsMaterialized(void*) noexcept;
 } // namespace detail
 class PackedHostRetirementOwner;
 class NativeImageStorageToken;
@@ -107,6 +108,15 @@ struct GpuProcessingPhaseSnapshot final {
     std::uint64_t admissionRevision = 0;
 };
 
+// Exact rooted host allocations that completed construction, and the cumulative bytes freed
+// after construction. A sampler can conservatively identify backing alive across its entire OS
+// measurement interval without crediting a reservation or an allocation made during that interval.
+struct RootedHostBackingSnapshot final {
+    std::uint64_t materializedBytes = 0;
+    std::uint64_t retiredMaterializedBytes = 0;
+    bool retiredBytesSaturated = false;
+};
+
 // Shared aliases refer to one admission. Destruction releases its byte/count reservation once;
 // the neutral state outlives the composition root if a native quarantine still owns this lease.
 class GpuProcessingPhaseLease final {
@@ -171,12 +181,16 @@ class PackedHostStorageToken final {
 
   private:
     friend class PackedHostStorageAuthority;
+    friend void detail::markHostPixelsMaterialized(void*) noexcept;
+    // Called only after the typed vector has constructed/touched its complete allocation.
+    void markMaterialized() noexcept;
     PackedHostStorageToken(std::shared_ptr<PackedHostStorageAuthority>, std::uint64_t,
                            std::uint64_t) noexcept;
     void reset() noexcept;
     std::shared_ptr<PackedHostStorageAuthority> authority_;
     std::uint64_t bytes_ = 0;
     std::uint64_t metadataBytes_ = 0;
+    bool materialized_ = false;
 };
 
 struct PackedHostStorageSnapshot final {
@@ -210,7 +224,8 @@ class PackedHostStorageAuthority final
     friend class PackedHostStorageToken;
     PackedHostStorageAuthority(const std::shared_ptr<GpuProcessingPhaseLease>&, std::uint64_t,
                                HostPixelStorageDomain) noexcept;
-    void release(std::uint64_t bytes, std::uint64_t metadataBytes) noexcept;
+    void release(std::uint64_t bytes, std::uint64_t metadataBytes, bool materialized) noexcept;
+    void materialize(std::uint64_t bytes, std::uint64_t metadataBytes) noexcept;
     std::shared_ptr<detail::GpuProcessingPhaseBudgetState> state_;
     std::weak_ptr<GpuProcessingPhaseLease> origin_;
     std::shared_ptr<GpuProcessingPhaseLease> retainedOrigin_;
@@ -243,6 +258,7 @@ class GpuProcessingPhaseBudget final {
                              std::chrono::steady_clock::time_point::max()) noexcept;
     void setDeviceCapacity(std::optional<std::uint64_t> bytes, bool ready) noexcept;
     [[nodiscard]] GpuProcessingPhaseSnapshot snapshot() const noexcept;
+    [[nodiscard]] RootedHostBackingSnapshot rootedHostBackingSnapshot() const noexcept;
     [[nodiscard]] GpuProcessingRootIdentity rootIdentity() const noexcept { return state_; }
     [[nodiscard]] GpuProcessingPhaseGrant reserve(const GpuProcessingPhaseRequest&) noexcept;
 

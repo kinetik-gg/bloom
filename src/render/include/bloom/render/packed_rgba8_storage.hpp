@@ -27,6 +27,7 @@ void deallocatePackedRgba8(Rgba8*) noexcept;
 [[nodiscard]] void* allocateHostPixels(const std::shared_ptr<PackedHostStorageAuthority>&,
                                        std::size_t count, std::size_t elementBytes);
 void deallocateHostPixels(void*) noexcept;
+void markHostPixelsMaterialized(void*) noexcept;
 [[nodiscard]] std::size_t packedHostAllocationMetadataBytes() noexcept;
 
 template <class T> class PackedStorageAllocator {

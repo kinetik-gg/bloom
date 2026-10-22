@@ -89,6 +89,8 @@ void boundsAndOverlap() {
     auto builder = FinalRgba32fStorage::create(8, phase, 128, HostPixelStorageDomain::FinalProcess);
     auto encoded = FinalRgba8Storage::create(8, phase, 32, HostPixelStorageDomain::FinalEncoded);
     require(process && builder && encoded, "three distinct final overlap allocations exist");
+    require(budget.rootedHostBackingSnapshot().materializedBytes == 128 + 128 + 32 + 3 * header,
+            "all completed final process and encoded vectors are eligible exact backing");
     const auto overlap = budget.snapshot();
     require(overlap.ownedFinalProcessHostBytes ==
                     process.value()->byteCost() + builder.value()->byteCost() &&
@@ -110,6 +112,7 @@ void boundsAndOverlap() {
     encoded.value()->reset();
     moved.reset();
     require(budget.snapshot().totalHostClaimBytes == 0 &&
+                budget.rootedHostBackingSnapshot().materializedBytes == 0 &&
                 budget.snapshot().admissionRevision == ownRevision,
             "provisional overlap cleanup folds all debits before sole phase release");
 }

@@ -82,6 +82,12 @@ void detail::deallocateHostPixels(void* const pixels) noexcept {
         releasePackedHostRegistration(retirement);
     }
 }
+void detail::markHostPixelsMaterialized(void* const pixels) noexcept {
+    if (pixels) {
+        auto* header = reinterpret_cast<AllocationHeader*>(pixels) - 1;
+        header->token.markMaterialized();
+    }
+}
 
 Rgba8* detail::allocatePackedRgba8(const std::shared_ptr<PackedHostStorageAuthority>& authority,
                                    const std::size_t count) {
@@ -131,6 +137,7 @@ PackedRgba8Storage::create(const std::size_t pixelCount,
     try {
         auto authority = PackedHostStorageAuthority::create(phase, byteLimit);
         OwnedVector pixels(pixelCount, Rgba8{}, detail::PackedRgba8Allocator(std::move(authority)));
+        detail::markHostPixelsMaterialized(pixels.data());
         return ImageResult<PackedRgba8Storage>::success(PackedRgba8Storage(std::move(pixels)));
     } catch (const detail::PackedHostCapacityError&) {
         return ImageResult<PackedRgba8Storage>::failure(

@@ -288,7 +288,7 @@ void mixedAndNestedQuotas() {
     const std::size_t headroom = fixedHeadroom + 3 * sourceAllowance;
     sample.process.domains.push_back({.path = "/own",
                                       .kind = ProcessMemoryLimitKind::Finite,
-                                      .limitBytes = 16ULL * 1024 * 1024 + headroom,
+                                      .limitBytes = headroom,
                                       .currentBytes = 0});
     sample.processSampleFresh = true;
     sample.sampleSerial = 1;
@@ -310,7 +310,7 @@ void mixedAndNestedQuotas() {
         auto lowPlan = bloom::gpu_coverage_fixtures::publish(std::move(lowDefinition));
         auto lowRequest = bloom::gpu_coverage_fixtures::requestFor(*lowPlan);
         lowRequest.pixelStorageByteLimit = gib;
-        sample.process.domains[0].limitBytes = 16ULL * 1024 * 1024 + fixedHeadroom + 3ULL * 96;
+        sample.process.domains[0].limitBytes = fixedHeadroom + 3ULL * 96;
         sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
         ++sample.sampleSerial;
         policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
@@ -322,7 +322,7 @@ void mixedAndNestedQuotas() {
                     policy->snapshot().reservations.admittedPhases == 0,
                 "former decoded-only96B envelope refuses encoded revision and decode without "
                 "borrowing coverage");
-        sample.process.domains[0].limitBytes = 16ULL * 1024 * 1024 + headroom;
+        sample.process.domains[0].limitBytes = headroom;
         sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
         ++sample.sampleSerial;
         policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
@@ -382,8 +382,7 @@ void mixedAndNestedQuotas() {
                                            {}, zeroCoverage);
     sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
     sample.sampleSerial = 4;
-    sample.process.domains[0].limitBytes =
-        16ULL * 1024 * 1024 + 120ULL * 8 + 1024 + 3 * sourceAllowance;
+    sample.process.domains[0].limitBytes = 120ULL * 8 + 1024 + 3 * sourceAllowance;
     policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
     {
         auto sourceRequest = bloom::gpu_coverage_fixtures::requestFor(*sourceParent);
@@ -399,7 +398,7 @@ void mixedAndNestedQuotas() {
     auto solidParent = bloom::gpu_coverage_plans::nestedParentPlan(solidOnly, 898000, 779);
     sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
     sample.sampleSerial = 5;
-    sample.process.domains[0].limitBytes = 16ULL * 1024 * 1024 + 120ULL * 8 + 1024 + 3;
+    sample.process.domains[0].limitBytes = 120ULL * 8 + 1024 + 3;
     policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
     {
         auto solidRequest = bloom::gpu_coverage_fixtures::requestFor(*solidParent);
@@ -411,7 +410,7 @@ void mixedAndNestedQuotas() {
     }
     sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
     sample.sampleSerial = 6;
-    sample.process.domains[0].limitBytes = 16ULL * 1024 * 1024 + headroom;
+    sample.process.domains[0].limitBytes = headroom;
     policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
     std::uint64_t oneTextCoverage = 0;
     auto textDefinition = base->copyDefinition();
