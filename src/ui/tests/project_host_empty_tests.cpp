@@ -35,7 +35,6 @@
 #include <QAction>
 #include <QApplication>
 #include <QDialog>
-#include <QDoubleSpinBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -364,18 +363,18 @@ void testDurationDefaultsToTenSecondsInFrames(Expectations& expectations) {
     const auto id = runNewCompositionDialog(
         *session,
         [](QDialog& dialog, Expectations& expect) {
-            auto* duration =
-                dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsDurationField"));
+            auto* duration = dialog.findChild<QLineEdit*>(QStringLiteral("assetsDurationField"));
             auto* unit =
                 dialog.findChild<ui::kit::KDropdown*>(QStringLiteral("assetsDurationUnitDropdown"));
             auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
             expect.expect(duration != nullptr && unit != nullptr && ok != nullptr,
                           "default duration: controls exist");
             if (duration != nullptr) {
-                expect.expect(std::abs(duration->value() - 240.0) < 0.001,
+                expect.expect(duration->text() == QStringLiteral("240"),
                               "default duration: 10 s at 24 fps is 240 "
                               "frames, never 10 frames");
-                expect.expect(duration->decimals() == 0, "default duration: Frames are integer");
+                expect.expect(!duration->text().contains(QLatin1Char('.')),
+                              "default duration: Frames are integer");
             }
             if (unit != nullptr) {
                 expect.expect(unit->currentIndex() == 0, "default duration: Frames is the default");
@@ -408,18 +407,17 @@ void testFramesAtTwentyFiveAndThirtyFps(Expectations& expectations) {
         const auto id = runNewCompositionDialog(
             *session,
             [fps](QDialog& dialog, Expectations& expect) {
-                auto* rate =
-                    dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsFrameRateField"));
+                auto* rate = dialog.findChild<QLineEdit*>(QStringLiteral("assetsFrameRateField"));
                 auto* duration =
-                    dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsDurationField"));
+                    dialog.findChild<QLineEdit*>(QStringLiteral("assetsDurationField"));
                 auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
                 if (rate == nullptr || duration == nullptr || ok == nullptr) {
                     expect.expect(false, "fps duration: controls exist");
                     dialog.reject();
                     return;
                 }
-                rate->setValue(static_cast<int>(fps));
-                duration->setValue(240.0);
+                rate->setText(QString::number(fps));
+                duration->setText(QStringLiteral("240"));
                 ok->click();
             },
             expectations);
@@ -446,9 +444,8 @@ void testFractionalSeconds(Expectations& expectations) {
         [](QDialog& dialog, Expectations& expect) {
             auto* unit =
                 dialog.findChild<ui::kit::KDropdown*>(QStringLiteral("assetsDurationUnitDropdown"));
-            auto* duration =
-                dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsDurationField"));
-            auto* rate = dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsFrameRateField"));
+            auto* duration = dialog.findChild<QLineEdit*>(QStringLiteral("assetsDurationField"));
+            auto* rate = dialog.findChild<QLineEdit*>(QStringLiteral("assetsFrameRateField"));
             auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
             if (unit == nullptr || duration == nullptr || rate == nullptr || ok == nullptr) {
                 expect.expect(false, "fractional seconds: controls exist");
@@ -456,9 +453,8 @@ void testFractionalSeconds(Expectations& expectations) {
                 return;
             }
             unit->setCurrentIndex(1);
-            expect.expect(duration->decimals() > 0, "fractional seconds: Seconds accept fractions");
-            duration->setValue(10.5);
-            rate->setValue(25);
+            duration->setText(QStringLiteral("10.5"));
+            rate->setText(QStringLiteral("25"));
             ok->click();
         },
         expectations);
@@ -484,21 +480,20 @@ void testSwitchUnitsPreservesDuration(Expectations& expectations) {
         [](QDialog& dialog, Expectations& expect) {
             auto* unit =
                 dialog.findChild<ui::kit::KDropdown*>(QStringLiteral("assetsDurationUnitDropdown"));
-            auto* duration =
-                dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsDurationField"));
+            auto* duration = dialog.findChild<QLineEdit*>(QStringLiteral("assetsDurationField"));
             auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
             if (unit == nullptr || duration == nullptr || ok == nullptr) {
                 expect.expect(false, "switch units: controls exist");
                 dialog.reject();
                 return;
             }
-            expect.expect(std::abs(duration->value() - 240.0) < 0.001,
+            expect.expect(duration->text() == QStringLiteral("240"),
                           "switch units: starts at 240 frames");
             unit->setCurrentIndex(1);
-            expect.expect(std::abs(duration->value() - 10.0) < 0.000001,
+            expect.expect(duration->text() == QStringLiteral("10"),
                           "switch units: Frames -> Seconds shows 10 s");
             unit->setCurrentIndex(0);
-            expect.expect(std::abs(duration->value() - 240.0) < 0.001,
+            expect.expect(duration->text() == QStringLiteral("240"),
                           "switch units: Seconds -> Frames restores 240 "
                           "frames, same length");
             ok->click();
@@ -526,18 +521,17 @@ void testFpsChangeKeepsEnteredUnit(Expectations& expectations) {
         const auto id = runNewCompositionDialog(
             *session,
             [](QDialog& dialog, Expectations& expect) {
-                auto* rate =
-                    dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsFrameRateField"));
+                auto* rate = dialog.findChild<QLineEdit*>(QStringLiteral("assetsFrameRateField"));
                 auto* duration =
-                    dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsDurationField"));
+                    dialog.findChild<QLineEdit*>(QStringLiteral("assetsDurationField"));
                 auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
                 if (rate == nullptr || duration == nullptr || ok == nullptr) {
                     expect.expect(false, "fps frames: controls exist");
                     dialog.reject();
                     return;
                 }
-                rate->setValue(30);
-                expect.expect(std::abs(duration->value() - 240.0) < 0.001,
+                rate->setText(QStringLiteral("30"));
+                expect.expect(duration->text() == QStringLiteral("240"),
                               "fps frames: the frame count is unchanged");
                 ok->click();
             },
@@ -562,9 +556,8 @@ void testFpsChangeKeepsEnteredUnit(Expectations& expectations) {
                 auto* unit = dialog.findChild<ui::kit::KDropdown*>(
                     QStringLiteral("assetsDurationUnitDropdown"));
                 auto* duration =
-                    dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsDurationField"));
-                auto* rate =
-                    dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsFrameRateField"));
+                    dialog.findChild<QLineEdit*>(QStringLiteral("assetsDurationField"));
+                auto* rate = dialog.findChild<QLineEdit*>(QStringLiteral("assetsFrameRateField"));
                 auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
                 if (unit == nullptr || duration == nullptr || rate == nullptr || ok == nullptr) {
                     expect.expect(false, "fps seconds: controls exist");
@@ -572,9 +565,9 @@ void testFpsChangeKeepsEnteredUnit(Expectations& expectations) {
                     return;
                 }
                 unit->setCurrentIndex(1);
-                duration->setValue(10.0);
-                rate->setValue(30);
-                expect.expect(std::abs(duration->value() - 10.0) < 0.000001,
+                duration->setText(QStringLiteral("10"));
+                rate->setText(QStringLiteral("30"));
+                expect.expect(duration->text() == QStringLiteral("10"),
                               "fps seconds: the seconds value is unchanged");
                 ok->click();
             },
@@ -588,7 +581,7 @@ void testFpsChangeKeepsEnteredUnit(Expectations& expectations) {
     }
 }
 
-void testInvalidValuesAreClamped(Expectations& expectations) {
+void testInvalidValuesRemainVisible(Expectations& expectations) {
     BlankSession fixture;
     auto* session = seededSession(fixture, expectations);
     if (session == nullptr) {
@@ -597,8 +590,7 @@ void testInvalidValuesAreClamped(Expectations& expectations) {
     const auto id = runNewCompositionDialog(
         *session,
         [](QDialog& dialog, Expectations& expect) {
-            auto* duration =
-                dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsDurationField"));
+            auto* duration = dialog.findChild<QLineEdit*>(QStringLiteral("assetsDurationField"));
             auto* unit =
                 dialog.findChild<ui::kit::KDropdown*>(QStringLiteral("assetsDurationUnitDropdown"));
             auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
@@ -607,19 +599,22 @@ void testInvalidValuesAreClamped(Expectations& expectations) {
                 dialog.reject();
                 return;
             }
-            duration->setValue(-5.0);
-            expect.expect(duration->value() >= 1.0, "invalid values: Frames clamp at a positive "
-                                                    "integer, never zero or negative");
+            duration->setText(QStringLiteral("-5"));
+            expect.expect(duration->text() == QStringLiteral("-5") && !ok->isEnabled(),
+                          "invalid frames stay visible and cannot be committed");
             unit->setCurrentIndex(1);
-            duration->setValue(0.0);
-            expect.expect(duration->value() > 0.0, "invalid values: Seconds clamp above zero");
+            expect.expect(duration->text() == QStringLiteral("-5") && !ok->isEnabled(),
+                          "switching units does not silently restore the last valid duration");
+            duration->setText(QStringLiteral("0"));
+            expect.expect(duration->text() == QStringLiteral("0") && !ok->isEnabled(),
+                          "zero seconds stay visible and cannot be committed");
             unit->setCurrentIndex(0);
-            expect.expect(ok->isEnabled(), "invalid values: OK stays live because the field "
-                                           "cannot hold an invalid duration");
-            ok->click();
+            expect.expect(duration->text() == QStringLiteral("0") && !ok->isEnabled(),
+                          "invalid duration remains invalid after another unit switch");
+            dialog.reject();
         },
         expectations);
-    expectations.expect(id.has_value(), "invalid values: a clamped valid duration still commits");
+    expectations.expect(!id.has_value(), "invalid values: no replacement duration is committed");
 }
 
 void testCancelAddsNothing(Expectations& expectations) {
@@ -660,18 +655,18 @@ void testInheritsCurrentCompositionDuration(Expectations& expectations) {
     const auto id = runNewCompositionDialog(
         *session,
         [](QDialog& dialog, Expectations& expect) {
-            auto* duration =
-                dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsDurationField"));
-            auto* rate = dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsFrameRateField"));
+            auto* duration = dialog.findChild<QLineEdit*>(QStringLiteral("assetsDurationField"));
+            auto* rate = dialog.findChild<QLineEdit*>(QStringLiteral("assetsFrameRateField"));
             auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
             if (duration == nullptr || rate == nullptr || ok == nullptr) {
                 expect.expect(false, "inherit duration: controls exist");
                 dialog.reject();
                 return;
             }
-            expect.expect(rate->value() == 25, "inherit duration: fps inherits the current "
-                                               "composition");
-            expect.expect(std::abs(duration->value() - 125.0) < 0.001,
+            expect.expect(rate->text() == QStringLiteral("25"),
+                          "inherit duration: fps inherits the current "
+                          "composition");
+            expect.expect(duration->text() == QStringLiteral("125"),
                           "inherit duration: 5 s at 25 fps shows as 125 "
                           "frames");
             ok->click();
@@ -701,7 +696,7 @@ int main(int argc, char** argv) {
     testFractionalSeconds(expectations);
     testSwitchUnitsPreservesDuration(expectations);
     testFpsChangeKeepsEnteredUnit(expectations);
-    testInvalidValuesAreClamped(expectations);
+    testInvalidValuesRemainVisible(expectations);
     testCancelAddsNothing(expectations);
     testInheritsCurrentCompositionDuration(expectations);
 

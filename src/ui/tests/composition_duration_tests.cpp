@@ -476,6 +476,38 @@ void testPresetAndCustomRationalRates(Expectations& expectations) {
     }
 }
 
+void testDecimalRateStaysDistinctFromNtscPreset(Expectations& expectations) {
+    SeededSession fixture(core::RationalTime::fromInteger(10),
+                          squareFormat(document::FrameRate::framesPerSecond24()));
+    auto* session = seededSession(fixture, expectations);
+    if (!session)
+        return;
+    const auto id = runDialog(
+        *session,
+        [](QDialog& dialog, Expectations& expect) {
+            auto* rate = frameRateControl(dialog);
+            auto* duration = durationControl(dialog);
+            auto* ok = okControl(dialog);
+            if (!rate || !duration || !ok) {
+                expect.expect(false, "decimal rate controls exist");
+                dialog.reject();
+                return;
+            }
+            duration->setText(QStringLiteral("2997"));
+            rate->setText(QStringLiteral("29.97"));
+            expect.expect(ok->isEnabled(), "decimal fps is accepted without rounding to a preset");
+            ok->click();
+        },
+        expectations);
+    const auto* composition =
+        id ? fixture.document.snapshot().project().findComposition(*id) : nullptr;
+    const auto expectedRate = document::FrameRate::create(2997, 100);
+    expectations.expect(composition && expectedRate &&
+                            composition->format().frameRate() == *expectedRate &&
+                            composition->duration() == core::RationalTime::fromInteger(100),
+                        "2997 frames at typed 29.97 fps stores exactly 100 seconds");
+}
+
 void testLongAndPreciseSeconds(Expectations& expectations) {
     SeededSession fixture(core::RationalTime::fromInteger(10),
                           squareFormat(document::FrameRate::framesPerSecond24()));
@@ -589,6 +621,7 @@ int main(int argc, char** argv) {
     testExtremeInheritedDurationStaysExact(expectations);
     testLongFrameCountAndExactRate(expectations);
     testPresetAndCustomRationalRates(expectations);
+    testDecimalRateStaysDistinctFromNtscPreset(expectations);
     testLongAndPreciseSeconds(expectations);
     testOverflowValidation(expectations);
 
