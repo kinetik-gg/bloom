@@ -162,6 +162,15 @@ void testFormatting(ExpectationContext& expectations) {
         core::formatScalar(std::numeric_limits<double>::infinity(), 2, false, 0).empty() &&
             core::formatScalar(std::numeric_limits<double>::quiet_NaN(), 2, false, 0).empty(),
         "a non-finite value has no decimal spelling and formats as empty");
+    expectations.expect(
+        core::formatScalar(1e-18, std::int64_t{18}, false, std::int64_t{0}, 32, 32) ==
+                std::optional<std::string>{"0.000000000000000001"} &&
+            core::formatScalar(2.5, std::int64_t{1000}, true, std::int64_t{0}, 3, 1024) ==
+                std::optional<std::string>{"2.5"} &&
+            !core::formatScalar(1.0, std::numeric_limits<std::int64_t>::max(), false,
+                                std::int64_t{0}, 32, 32),
+        "checked scalar formatting honours representable precision and rejects "
+        "unbounded requests before allocation");
 
     struct IntegerCase final {
         std::int64_t value;
@@ -180,6 +189,10 @@ void testFormatting(ExpectationContext& expectations) {
     expectations.expect(core::formatInteger(std::numeric_limits<std::int64_t>::min(), 10, 0) ==
                             "-9223372036854775808",
                         "the most negative integer formats without overflowing its own negation");
+    expectations.expect(core::formatInteger(-7, 10, std::int64_t{4}, 4) ==
+                                std::optional<std::string>{"-007"} &&
+                            !core::formatInteger(-7, 10, std::int64_t{5}, 4),
+                        "checked integer padding retains the sign and obeys the byte allowance");
 
     expectations.expect(core::formatHexColor(1.0, 0.0, 0.5, 1.0, false, false) == "#ff0080",
                         "a colour formats as #RRGGBB by default");

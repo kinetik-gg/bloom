@@ -90,23 +90,27 @@ using bloom::core::kMinimumRadix;
     return radix < kMinimumRadix || radix > kMaximumRadix ? kDefaultRadix : radix;
 }
 
-[[nodiscard]] std::int32_t clampWidth(const std::int32_t width) noexcept {
-    return std::clamp(width, std::int32_t{0}, bloom::core::kMaximumFormattedWidth);
-}
-
 // Zero padding with the sign kept leftmost, which is what every `%0*d` an artist has ever typed
 // does. Applied to an already-formatted body so one rule serves the scalar and the integer
 // formatter alike.
-[[nodiscard]] std::string padWithZeros(std::string body, const std::int32_t width) {
-    const auto target = static_cast<std::size_t>(clampWidth(width));
+[[nodiscard]] std::optional<std::string> padWithZeros(std::string body, const std::int64_t width,
+                                                      const std::size_t maxOutputBytes) {
+    const auto target = width > 0 ? static_cast<std::uint64_t>(width) : std::uint64_t{0};
+    if (target > maxOutputBytes || body.size() > maxOutputBytes) {
+        return std::nullopt;
+    }
     if (body.size() >= target) {
         return body;
     }
     const bool signed_ = !body.empty() && (body.front() == '-' || body.front() == '+');
     const std::size_t offset = signed_ ? 1 : 0;
-    body.insert(offset, std::string(target - body.size(), '0'));
+    body.insert(offset, static_cast<std::size_t>(target) - body.size(), '0');
     return body;
 }
+
+// Direct core/timecode callers use small fixed requests. Node callers supply their actual byte
+// allowance to the checked overloads instead of relying on this convenience ceiling.
+constexpr std::size_t kConvenienceFormatBytes = std::size_t{1024} * 1024;
 
 [[nodiscard]] std::uint8_t hexChannel(const double value) noexcept {
     const double clamped = std::isfinite(value) ? std::clamp(value, 0.0, 1.0) : 0.0;
@@ -238,21 +242,37 @@ std::optional<ParsedColorChannels> parseHexColor(const std::string_view text) no
     return ParsedColorChannels{channels[0], channels[1], channels[2], channels[3]};
 }
 
-std::string formatScalar(const double value, const std::int32_t decimals,
-                         const bool trimTrailingZeros, const std::int32_t padWidth) {
+std::optional<std::string> formatScalar(const double value, const std::int64_t decimals,
+                                        const bool trimTrailingZeros, const std::int64_t padWidth,
+                                        const std::size_t maxOutputBytes,
+                                        const std::size_t maxScratchBytes) {
     if (!std::isfinite(value)) {
-        return {};
+        return std::string{};
     }
-    const auto precision = std::clamp(decimals, std::int32_t{0}, kMaximumFormattedDecimals);
-    // Wide enough for binary64's longest fixed spelling (309 integer digits) plus a sign, a point
-    // and the widest precision this contract admits.
-    std::array<char, 512> buffer{};
-    const auto written = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value,
+    if (maxOutputBytes == 0) {
+        return std::nullopt;
+    }
+    const auto requested = std::max(decimals, std::int64_t{0});
+    const auto temporaryLimit = trimTrailingZeros ? maxScratchBytes : maxOutputBytes;
+    if (static_cast<std::uint64_t>(requested) > temporaryLimit ||
+        requested > std::numeric_limits<int>::max() ||
+        (padWidth > 0 && static_cast<std::uint64_t>(padWidth) > maxOutputBytes)) {
+        return std::nullopt;
+    }
+    const auto precision = static_cast<int>(requested);
+    // A binary64 fixed spelling needs at most 309 integer digits, sign, point and fraction.
+    // Limit the buffer before allocating; to_chars reports a too-small output allowance.
+    const auto capacity = std::min(temporaryLimit, static_cast<std::size_t>(precision) + 312);
+    if (capacity == 0) {
+        return std::nullopt;
+    }
+    std::string body(capacity, '\0');
+    const auto written = std::to_chars(body.data(), body.data() + body.size(), value,
                                        std::chars_format::fixed, precision);
     if (written.ec != std::errc{}) {
-        return {};
+        return std::nullopt;
     }
-    std::string body(buffer.data(), static_cast<std::size_t>(written.ptr - buffer.data()));
+    body.resize(static_cast<std::size_t>(written.ptr - body.data()));
     if (trimTrailingZeros && body.find('.') != std::string::npos) {
         while (!body.empty() && body.back() == '0') {
             body.pop_back();
@@ -266,11 +286,20 @@ std::string formatScalar(const double value, const std::int32_t decimals,
             body = "0";
         }
     }
-    return padWithZeros(std::move(body), padWidth);
+    return padWithZeros(std::move(body), padWidth, maxOutputBytes);
 }
 
-std::string formatInteger(const std::int64_t value, const std::int32_t radix,
-                          const std::int32_t padWidth) {
+std::string formatScalar(const double value, const std::int32_t decimals,
+                         const bool trimTrailingZeros, const std::int32_t padWidth) {
+    return formatScalar(value, static_cast<std::int64_t>(decimals), trimTrailingZeros,
+                        static_cast<std::int64_t>(padWidth), kConvenienceFormatBytes,
+                        kConvenienceFormatBytes)
+        .value_or(std::string{});
+}
+
+std::optional<std::string> formatInteger(const std::int64_t value, const std::int32_t radix,
+                                         const std::int64_t padWidth,
+                                         const std::size_t maxOutputBytes) {
     const auto base = static_cast<std::uint64_t>(clampRadix(radix));
     const bool negative = value < 0;
     // The magnitude as an unsigned value, so the most negative std::int64_t has one rather than
@@ -287,7 +316,13 @@ std::string formatInteger(const std::int64_t value, const std::int32_t radix,
         digits.push_back('-');
     }
     std::ranges::reverse(digits);
-    return padWithZeros(std::move(digits), padWidth);
+    return padWithZeros(std::move(digits), padWidth, maxOutputBytes);
+}
+
+std::string formatInteger(const std::int64_t value, const std::int32_t radix,
+                          const std::int32_t padWidth) {
+    return formatInteger(value, radix, static_cast<std::int64_t>(padWidth), kConvenienceFormatBytes)
+        .value_or(std::string{});
 }
 
 std::string formatHexColor(const double red, const double green, const double blue,

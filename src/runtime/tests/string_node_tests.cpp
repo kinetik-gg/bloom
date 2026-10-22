@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <source_location>
@@ -327,12 +328,15 @@ void testEditingOperations(Expectations& expectations) {
                                   std::string(item.result)),
                             "Repeat writes its count of copies");
     }
-    // The count is CLAMPED at 1024, which is a contract rather than a guard: a count an artist can
-    // drive from a graph must not be able to ask for a gigabyte of text.
-    const auto clamped = run(Kernel::StringRepeat, {text("xy"), std::int64_t{1'000'000}});
-    const auto* grown = std::get_if<std::string>(&clamped.outputs[0]);
-    expectations.expect(grown != nullptr && grown->size() == 2048,
-                        "Repeat clamps its count at 1024 copies");
+    const auto grown = run(Kernel::StringRepeat, {text("xy"), std::int64_t{1025}});
+    const auto* repeated = std::get_if<std::string>(&grown.outputs[0]);
+    expectations.expect(!grown.failed && repeated != nullptr && repeated->size() == 2050 &&
+                            repeated->substr(2048) == "xy",
+                        "Repeat honours counts above the former clamp");
+    const auto empty =
+        run(Kernel::StringRepeat, {text(""), std::numeric_limits<std::int64_t>::max()});
+    expectations.expect(!empty.failed && holds(empty, 0, std::string{}),
+                        "Repeating empty text short-circuits even for a huge count");
 }
 
 void testPredicates(Expectations& expectations) {
@@ -389,6 +393,21 @@ void testAmplificationBudgets(Expectations& expectations) {
     expectations.expect(repeat.failed && !repeat.cancelled && holds(repeat, 0, std::string{}) &&
                             repeat.summary == "Value utility string budget exceeded",
                         "Repeat refuses an output beyond the remaining graph allowance");
+    const auto huge = run(Kernel::StringRepeat,
+                          {text("ab"), std::numeric_limits<std::int64_t>::max()}, {}, limits);
+    expectations.expect(huge.failed && holds(huge, 0, std::string{}),
+                        "Repeat diagnoses huge counts before multiplication or allocation");
+    limits.availableStringBytes = 8;
+    const auto padded =
+        run(Kernel::StringPad, {text("é"), std::int64_t{4}, text("🌸")}, {}, limits);
+    expectations.expect(padded.failed && holds(padded, 0, std::string{}),
+                        "Pad checks multibyte fill growth against byte allowance");
+    const auto wide = run(Kernel::StringPad, {text("x"), std::int64_t{257}, text("0")});
+    const auto* widened = std::get_if<std::string>(&wide.outputs[0]);
+    expectations.expect(!wide.failed && widened != nullptr && widened->size() == 257 &&
+                            widened->back() == 'x',
+                        "Pad honours widths above the former clamp");
+    limits.availableStringBytes = 7;
     const auto replace =
         run(Kernel::StringReplace, {text("aaaa"), text("a"), text("bb")}, {}, limits);
     expectations.expect(replace.failed && holds(replace, 0, std::string{}),

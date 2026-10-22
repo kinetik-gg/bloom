@@ -2,9 +2,11 @@
 
 #include <bloom/core/safe_parse.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -20,12 +22,6 @@ using runtime::detail::shapedOutcome;
 using runtime::detail::ValueUtilityReader;
 
 using Kernel = document::ValueUtilityKernel;
-
-// The widest decimal count and the widest pad a conversion's operands may ask for. Both are already
-// clamped by core::formatScalar(); clamping here as well keeps the number that reaches the
-// formatter the same number a test can predict from the operand.
-constexpr std::int32_t kMaximumDecimals = core::kMaximumFormattedDecimals;
-constexpr std::int32_t kMaximumPadWidth = core::kMaximumFormattedWidth;
 
 // A Scalar as an exact integer under the chosen rounding, SATURATING at the signed range rather
 // than wrapping. A double past 2^63 names no std::int64_t at all, and the nearest one it does name
@@ -65,15 +61,22 @@ constexpr std::int32_t kMaximumPadWidth = core::kMaximumFormattedWidth;
     return !std::isnan(value) && value != 0.0;
 }
 
-[[nodiscard]] std::string joinComponents(const std::span<const double> components,
-                                         const std::string_view separator,
-                                         const std::int32_t decimals) {
+[[nodiscard]] std::optional<std::string> joinComponents(const std::span<const double> components,
+                                                        const std::string_view separator,
+                                                        const std::int64_t decimals,
+                                                        const std::size_t limit) {
     std::string text;
     for (std::size_t index = 0; index < components.size(); ++index) {
         if (index != 0) {
+            if (separator.size() > limit - text.size())
+                return std::nullopt;
             text.append(separator);
         }
-        text.append(core::formatScalar(components[index], decimals, false, 0));
+        const auto part = core::formatScalar(components[index], decimals, false, 0,
+                                             limit - text.size(), limit - text.size());
+        if (!part)
+            return std::nullopt;
+        text.append(*part);
     }
     return text;
 }
@@ -85,6 +88,14 @@ namespace bloom::runtime::detail {
 ValueUtilityOutcome evaluateValueConversion(const ValueUtilityInvocation& invocation) {
     auto outcome = shapedOutcome(invocation.operation);
     ValueUtilityReader reader(invocation);
+    const auto stringLimit =
+        std::min(invocation.limits.maxStringBytes, invocation.limits.availableStringBytes);
+    const auto formatFailure = [&outcome](const std::size_t operand) {
+        outcome.failed = true;
+        outcome.failedOperand = operand;
+        outcome.summary = "Value utility string budget exceeded";
+        outcome.detail = "Requested formatting exceeds the output byte limit or precision range.";
+    };
     // `valid` on a parsing node: written by the parse, never by the operand read. A malformed plan
     // is a separate failure the outcome reports on its own.
     const auto parsed = [&outcome](CompiledValue value, const bool valid) {
@@ -94,24 +105,63 @@ ValueUtilityOutcome evaluateValueConversion(const ValueUtilityInvocation& invoca
     switch (invocation.operation) {
     case Kernel::ScalarToString: {
         const auto value = reader.scalar(0);
-        const auto decimals = reader.bounded(1, 0, kMaximumDecimals);
+        const auto decimals = reader.integer(1);
         const auto trim = reader.boolean(2);
-        const auto padWidth = reader.bounded(3, 0, kMaximumPadWidth);
+        const auto padWidth = reader.integer(3);
         const auto prefix = reader.text(4);
         const auto suffix = reader.text(5);
+        if (prefix.size() > stringLimit) {
+            formatFailure(4);
+            break;
+        }
+        if (suffix.size() > stringLimit - prefix.size()) {
+            formatFailure(5);
+            break;
+        }
+        const auto numberLimit = stringLimit - prefix.size() - suffix.size();
+        if (std::isfinite(value) && padWidth > 0 &&
+            static_cast<std::uint64_t>(padWidth) > numberLimit) {
+            formatFailure(3);
+            break;
+        }
+        const auto number = core::formatScalar(value, decimals, trim, padWidth, numberLimit,
+                                               invocation.limits.maxScratchBytes);
+        if (!number) {
+            formatFailure(1);
+            break;
+        }
         std::string text(prefix);
-        text.append(core::formatScalar(value, decimals, trim, padWidth));
+        text.append(*number);
         text.append(suffix);
         outcome.outputs[0] = std::move(text);
         break;
     }
     case Kernel::IntegerToString: {
         const auto value = reader.integer(0);
-        const auto padWidth = reader.bounded(1, 0, kMaximumPadWidth);
+        const auto padWidth = reader.integer(1);
         const auto prefix = reader.text(2);
         const auto suffix = reader.text(3);
+        if (prefix.size() > stringLimit) {
+            formatFailure(2);
+            break;
+        }
+        if (suffix.size() > stringLimit - prefix.size()) {
+            formatFailure(3);
+            break;
+        }
+        const auto numberLimit = stringLimit - prefix.size() - suffix.size();
+        if (padWidth > 0 && static_cast<std::uint64_t>(padWidth) > numberLimit) {
+            formatFailure(1);
+            break;
+        }
+        const auto number =
+            core::formatInteger(value, radixAt(invocation, 0), padWidth, numberLimit);
+        if (!number) {
+            formatFailure(1);
+            break;
+        }
         std::string text(prefix);
-        text.append(core::formatInteger(value, radixAt(invocation, 0), padWidth));
+        text.append(*number);
         text.append(suffix);
         outcome.outputs[0] = std::move(text);
         break;
@@ -130,17 +180,25 @@ ValueUtilityOutcome evaluateValueConversion(const ValueUtilityInvocation& invoca
     case Kernel::Vector2ToString: {
         const auto vector = reader.vector2(0);
         const auto separator = reader.text(1);
-        const auto decimals = reader.bounded(2, 0, kMaximumDecimals);
+        const auto decimals = reader.integer(2);
         const std::array<double, 2> components{vector.x, vector.y};
-        outcome.outputs[0] = joinComponents(components, separator, decimals);
+        const auto result = joinComponents(components, separator, decimals, stringLimit);
+        if (result)
+            outcome.outputs[0] = *result;
+        else
+            formatFailure(2);
         break;
     }
     case Kernel::Vector3ToString: {
         const auto vector = reader.vector3(0);
         const auto separator = reader.text(1);
-        const auto decimals = reader.bounded(2, 0, kMaximumDecimals);
+        const auto decimals = reader.integer(2);
         const std::array<double, 3> components{vector.x, vector.y, vector.z};
-        outcome.outputs[0] = joinComponents(components, separator, decimals);
+        const auto result = joinComponents(components, separator, decimals, stringLimit);
+        if (result)
+            outcome.outputs[0] = *result;
+        else
+            formatFailure(2);
         break;
     }
     case Kernel::StringToScalar: {

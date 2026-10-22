@@ -86,9 +86,10 @@ with defaults, never implied.
 
 - Output is deterministic and independent of the process locale. `.` is the decimal separator
   whatever `LC_NUMERIC` says.
-- `decimals` and `padWidth` are CLAMPED into their supported ranges rather than refused: a formatter
-  has no failure an artist could act on, and a clamped precision still prints the number they asked
-  about.
+- Negative `decimals` and `padWidth` mean zero. Nonnegative requests are honoured when their
+  spelling fits the per-value and retained-output byte allowances. An unrepresentable precision or
+  exhausted allowance produces the typed empty-string fallback and a node-scoped diagnostic;
+  formatting never reports a shorter, successful answer.
 - Zero padding applies to the number INCLUDING its sign, the way `printf`'s `%0*d` does: the sign
   stays leftmost and the zeros follow it. `-7` at width 4 is `-007`.
 - Trimming trailing zeros removes the fractional zeros and then a bare trailing point, and keeps the
@@ -239,7 +240,7 @@ Category `String`.
 | Trim | `text` String | `result` String | ASCII whitespace, both ends |
 | Case | `text` String; selector `mode` (Upper) | `result` String | Upper, Lower, Title. ASCII only |
 | Pad | `text` String, `width` Integer (0), `fill` String (space); selector `side` (Start) | `result` String | Width in scalars. The fill contributes its FIRST scalar only; an empty fill pads nothing |
-| Repeat | `text` String, `count` Integer (1) | `result` String | Count clamped into [0, 1024] |
+| Repeat | `text` String, `count` Integer (1) | `result` String | Negative counts mean zero; positive counts are honoured within the byte allowance. Empty text returns empty even for a huge count |
 | Contains | `text` String, `search` String, `caseSensitive` Boolean (true) | `result` Boolean | An empty search is contained |
 | Starts With | `text` String, `search` String, `caseSensitive` Boolean (true) | `result` Boolean | An empty search matches |
 | Ends With | `text` String, `search` String, `caseSensitive` Boolean (true) | `result` Boolean | An empty search matches |

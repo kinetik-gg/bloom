@@ -171,6 +171,27 @@ class StringBuilder final {
     bool cancelled_ = false;
 };
 
+// Repeated text can fill the 1 MiB value allowance. Batch small units into bounded runs so a
+// million-character request does not make a million separate append/cancellation calls.
+void appendCopies(StringBuilder& result, const std::string_view unit, std::uint64_t count) {
+    if (count == 0 || unit.empty())
+        return;
+    const auto copiesPerRun = std::max(std::size_t{1}, std::size_t{4096} / unit.size());
+    const auto runCopies = static_cast<std::size_t>(std::min<std::uint64_t>(count, copiesPerRun));
+    std::string run;
+    run.reserve(runCopies * unit.size());
+    for (std::size_t index = 0; index < runCopies; ++index)
+        run.append(unit);
+    while (count >= runCopies) {
+        if (!result.append(run))
+            return;
+        count -= runCopies;
+    }
+    if (count != 0)
+        (void)result.append(
+            std::string_view(run).substr(0, static_cast<std::size_t>(count) * unit.size()));
+}
+
 void finishString(ValueUtilityOutcome& outcome, StringBuilder& builder) {
     if (builder.wasCancelled()) {
         outcome.cancelled = true;
@@ -263,10 +284,6 @@ void replaceAll(const std::string_view text, const std::string_view search,
     }
     return result;
 }
-
-// The widest a Repeat may grow. Named rather than inlined because it is a CONTRACT: a count an
-// artist can drive from a graph must not be able to ask for a gigabyte of text.
-constexpr std::int64_t kMaximumRepeatCount = 1024;
 
 } // namespace
 
@@ -462,8 +479,7 @@ ValueUtilityOutcome evaluateValueString(const ValueUtilityInvocation& invocation
             selectorAt(invocation, 0, document::kStringPadSides, document::kDefaultStringPadSide);
         const auto boundaries = unitBoundaries(text);
         const auto count = static_cast<std::int64_t>(unitCount(boundaries));
-        const auto target = std::clamp(width, std::int64_t{0},
-                                       static_cast<std::int64_t>(core::kMaximumFormattedWidth));
+        const auto target = std::max(width, std::int64_t{0});
         // The fill is one UNIT, taken from the front of the operand: a multi-character fill would
         // make the padded width depend on how the fill divides into the gap. An empty fill pads
         // with nothing, which is the same as not padding.
@@ -473,15 +489,22 @@ ValueUtilityOutcome evaluateValueString(const ValueUtilityInvocation& invocation
             (void)copyText(text);
             break;
         }
+        const auto limit =
+            std::min(invocation.limits.maxStringBytes, invocation.limits.availableStringBytes);
+        const auto gap = static_cast<std::uint64_t>(target - count);
+        if (text.size() > limit || gap > (limit - text.size()) / fillUnit.size()) {
+            outcome.failed = true;
+            outcome.failedOperand = 1;
+            outcome.summary = "Value utility string budget exceeded";
+            outcome.detail = "Pad would exceed the per-value or retained-output byte limit.";
+            break;
+        }
         StringBuilder result(invocation.limits);
         if (side == document::StringPadSide::End && !result.append(text)) {
             finishString(outcome, result);
             break;
         }
-        for (std::int64_t written = count; written < target; ++written) {
-            if (!result.append(fillUnit))
-                break;
-        }
+        appendCopies(result, fillUnit, gap);
         if (side == document::StringPadSide::Start && !result.exceeded() && !result.wasCancelled())
             (void)result.append(text);
         finishString(outcome, result);
@@ -489,21 +512,22 @@ ValueUtilityOutcome evaluateValueString(const ValueUtilityInvocation& invocation
     }
     case Kernel::StringRepeat: {
         const auto text = reader.text(0);
-        const auto count = std::clamp(reader.integer(1), std::int64_t{0}, kMaximumRepeatCount);
+        const auto count = std::max(reader.integer(1), std::int64_t{0});
         StringBuilder result(invocation.limits);
         const auto limit =
             std::min(invocation.limits.maxStringBytes, invocation.limits.availableStringBytes);
-        if (count != 0 && text.size() > limit / static_cast<std::size_t>(count)) {
+        if (count == 0 || text.empty()) {
+            finishString(outcome, result);
+            break;
+        }
+        if (static_cast<std::uint64_t>(count) > limit / text.size()) {
             outcome.failed = true;
             outcome.failedOperand = 1;
             outcome.summary = "Value utility string budget exceeded";
             outcome.detail = "Repeat would exceed the per-value or retained-output byte limit.";
             break;
         }
-        for (std::int64_t repeat = 0; repeat < count; ++repeat) {
-            if (!result.append(text))
-                break;
-        }
+        appendCopies(result, text, static_cast<std::uint64_t>(count));
         finishString(outcome, result);
         break;
     }

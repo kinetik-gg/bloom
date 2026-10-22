@@ -44,19 +44,21 @@ class Expectations final {
 // bookkeeping is the Evaluator's, and every operation here is a pure function of its operands.
 [[nodiscard]] ValueUtilityOutcome runAt(const document::FrameRate rate, const Kernel kernel,
                                         const std::vector<CompiledValue>& values,
-                                        const std::vector<std::int64_t>& selectors = {}) {
+                                        const std::vector<std::int64_t>& selectors = {},
+                                        const runtime::ValueUtilityLimits limits = {}) {
     std::vector<const CompiledValue*> operands;
     operands.reserve(values.size());
     for (const auto& value : values) {
         operands.push_back(&value);
     }
     return runtime::evaluateValueUtility(
-        {kernel, operands, selectors, core::RationalTime::fromInteger(0), rate});
+        {kernel, operands, selectors, core::RationalTime::fromInteger(0), rate, nullptr, limits});
 }
 
 [[nodiscard]] ValueUtilityOutcome run(const Kernel kernel, const std::vector<CompiledValue>& values,
-                                      const std::vector<std::int64_t>& selectors = {}) {
-    return runAt(document::FrameRate::framesPerSecond24(), kernel, values, selectors);
+                                      const std::vector<std::int64_t>& selectors = {},
+                                      const runtime::ValueUtilityLimits limits = {}) {
+    return runAt(document::FrameRate::framesPerSecond24(), kernel, values, selectors, limits);
 }
 
 template <typename Value>
@@ -123,8 +125,7 @@ void testScalarAndIntegerToString(Expectations& expectations) {
         {12.0, 0, false, 5, "", "", "00012"},
         {-3.25, 2, false, 0, "x = ", " px", "x = -3.25 px"},
         {0.0, 3, true, 0, "", "", "0"},
-        // A negative decimal count and an absurd one are clamped rather than refused: a formatter
-        // has no failure the artist could act on.
+        // Negative precision means zero; high precision is retained before trailing zeros trim.
         {2.5, -4, false, 0, "", "", "2"},
         {2.5, 1000, true, 0, "", "", "2.5"},
         // Non-finite operands have no decimal spelling, so the number part is empty and the
@@ -139,6 +140,37 @@ void testScalarAndIntegerToString(Expectations& expectations) {
         expectations.expect(!outcome.failed && holds(outcome, 0, std::string(item.text)),
                             "Scalar To String writes its documented spelling");
     }
+    const auto small = run(Kernel::ScalarToString, {1e-18, std::int64_t{18}, false, std::int64_t{0},
+                                                    std::string{}, std::string{}});
+    expectations.expect(!small.failed && holds(small, 0, std::string("0.000000000000000001")),
+                        "18 decimal places preserve a representable small scalar");
+    const auto wide = run(Kernel::IntegerToString,
+                          {std::int64_t{7}, std::int64_t{257}, std::string{}, std::string{}});
+    const auto* wideText = std::get_if<std::string>(&wide.outputs[0]);
+    expectations.expect(!wide.failed && wideText != nullptr && wideText->size() == 257 &&
+                            wideText->back() == '7',
+                        "integer formatting honours width beyond 256");
+    const auto wideScalar =
+        run(Kernel::ScalarToString,
+            {7.0, std::int64_t{0}, false, std::int64_t{257}, std::string{}, std::string{}});
+    const auto* scalarText = std::get_if<std::string>(&wideScalar.outputs[0]);
+    expectations.expect(!wideScalar.failed && scalarText != nullptr && scalarText->size() == 257 &&
+                            scalarText->back() == '7',
+                        "scalar formatting honours width beyond 256");
+    runtime::ValueUtilityLimits tiny;
+    tiny.maxStringBytes = 32;
+    tiny.availableStringBytes = 8;
+    const auto exhausted = run(
+        Kernel::ScalarToString,
+        {1.0, std::int64_t{18}, false, std::int64_t{0}, std::string{}, std::string{}}, {}, tiny);
+    expectations.expect(exhausted.failed && holds(exhausted, 0, std::string{}) &&
+                            exhausted.summary == "Value utility string budget exceeded",
+                        "precision beyond the output allowance reports a diagnostic");
+    const auto trimmed = run(
+        Kernel::ScalarToString,
+        {2.5, std::int64_t{1000}, true, std::int64_t{0}, std::string{}, std::string{}}, {}, tiny);
+    expectations.expect(!trimmed.failed && holds(trimmed, 0, std::string("2.5")),
+                        "trimmed high precision uses scratch allowance and fits final output");
 
     struct IntegerCase final {
         std::int64_t value;

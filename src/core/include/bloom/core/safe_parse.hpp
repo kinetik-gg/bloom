@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -88,11 +89,12 @@ struct ParsedColorChannels final {
 
 [[nodiscard]] std::optional<ParsedColorChannels> parseHexColor(std::string_view text) noexcept;
 
-// The deterministic formatters. `decimals` is clamped into [0, kMaximumFormattedDecimals] and
-// `padWidth` into [0, kMaximumFormattedWidth] rather than refused: a formatter has no failure the
-// artist could act on, and a clamped precision still prints the number they asked about.
-inline constexpr std::int32_t kMaximumFormattedDecimals = 17;
-inline constexpr std::int32_t kMaximumFormattedWidth = 256;
+// Checked formatting honours nonnegative precision and width up to the supplied byte allowances.
+// Trimming may need a larger temporary fixed spelling than the final output, so scalar formatting
+// accepts a separate scratch allowance. A request that cannot fit (or whose precision cannot be
+// passed to to_chars) returns nullopt; callers must diagnose it instead of publishing a shortened
+// answer. Negative operands still mean zero precision/width. The four/three-argument forms remain
+// for small direct callers such as timecode formatting and use this same implementation.
 
 // Fixed-point decimal, `decimals` digits after the point, `.` whatever the locale says.
 // `trimTrailingZeros` removes trailing fractional zeros and then a bare trailing point, so 2.50
@@ -108,12 +110,18 @@ inline constexpr std::int32_t kMaximumFormattedWidth = 256;
 // direction.
 [[nodiscard]] std::string formatScalar(double value, std::int32_t decimals, bool trimTrailingZeros,
                                        std::int32_t padWidth);
+[[nodiscard]] std::optional<std::string> formatScalar(double value, std::int64_t decimals,
+                                                      bool trimTrailingZeros, std::int64_t padWidth,
+                                                      std::size_t maxOutputBytes,
+                                                      std::size_t maxScratchBytes);
 
 // `value` in `radix`, lowercase above 9, zero-padded to `padWidth` with the sign kept leftmost. An
-// out-of-range radix formats in base ten rather than refusing, for the same reason the clamps
-// above exist.
+// out-of-range radix formats in base ten, preserving the existing radix fallback.
 [[nodiscard]] std::string formatInteger(std::int64_t value, std::int32_t radix,
                                         std::int32_t padWidth);
+[[nodiscard]] std::optional<std::string> formatInteger(std::int64_t value, std::int32_t radix,
+                                                       std::int64_t padWidth,
+                                                       std::size_t maxOutputBytes);
 
 // `#RRGGBB`, or `#RRGGBBAA` when `includeAlpha`. Each channel is clamped into [0, 1] and rounded
 // to nearest, ties away from zero, so 1.0 is `ff` and 0.5 is `80`.
