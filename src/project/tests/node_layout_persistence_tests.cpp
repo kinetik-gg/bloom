@@ -213,10 +213,14 @@ void blurNodeReopen() {
     for (const auto id : nodes) {
         const auto* oldNode = oldComposition->graph().findNode(id);
         const auto* newNode = newComposition->graph().findNode(id);
-        expect(oldNode && newNode && *oldNode == *newNode,
-               "blur typed node and bindings survive reopen");
-        if (!oldNode)
+        expect(oldNode && newNode, "blur typed nodes survive reopen");
+        if (!oldNode || !newNode)
             continue;
+        auto canonicalNode = *oldNode;
+        // The archive canonicalizes binding order by role; the binding identities and values
+        // remain exact even when the registry declares radius before edge.
+        std::ranges::sort(canonicalNode.parameters, {}, &document::ParameterBinding::role);
+        expect(canonicalNode == *newNode, "blur typed node and bindings survive reopen");
         for (const auto& binding : oldNode->parameters) {
             const auto* oldParameter = oldComposition->parameters().find(binding.parameterId);
             const auto* newParameter = newComposition->parameters().find(binding.parameterId);
