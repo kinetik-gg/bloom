@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <source_location>
 #include <string_view>
@@ -56,6 +57,30 @@ buildAttempt(output::ExportResourceLedgerV1& ledger, support::Fixture fixture) {
         std::abort();
     }
     return result.attempt();
+}
+
+void testCodecWorkspaceAdmission(Expectations& expectations) {
+    using output::FlatExrCompressionV1;
+    const auto normal = output::flatExrCodecWorkspaceBytesV1(1920, 1080, FlatExrCompressionV1::Zip);
+    const auto wide = output::flatExrCodecWorkspaceBytesV1(131072, 1, FlatExrCompressionV1::Piz);
+    const auto taller = output::flatExrCodecWorkspaceBytesV1(1920, 2160, FlatExrCompressionV1::Zip);
+    expectations.expect(normal && wide && taller,
+                        "representable codec shapes have admission estimates");
+    if (normal && wide && taller) {
+        expectations.expect(*wide > 64ULL * 1024 * 1024,
+                            "wide PIZ scratch must not be hidden behind a fixed 64 MiB estimate");
+        expectations.expect(*taller > *normal, "scanline tables account for image height");
+    }
+    expectations.expect(!output::flatExrCodecWorkspaceBytesV1(0, 1, FlatExrCompressionV1::Zip),
+                        "zero image shape is invalid");
+    expectations.expect(
+        !output::flatExrCodecWorkspaceBytesV1(std::numeric_limits<std::uint64_t>::max(), 1,
+                                              FlatExrCompressionV1::Piz),
+        "codec chunk arithmetic rejects unrepresentable width before allocation");
+    expectations.expect(
+        !output::flatExrCodecWorkspaceBytesV1(1, std::numeric_limits<std::uint64_t>::max(),
+                                              FlatExrCompressionV1::Zip),
+        "scanline table arithmetic cannot wrap");
 }
 
 void testOutputOptions(Expectations& expectations) {
@@ -168,6 +193,7 @@ void testCancellationBeforeWritingProducesNoArtifact(Expectations& expectations)
 
 int main() {
     Expectations expectations;
+    testCodecWorkspaceAdmission(expectations);
     testOutputOptions(expectations);
     testWrittenAndIndependentlyVerifiable(expectations);
     testCancellationBeforeWritingProducesNoArtifact(expectations);

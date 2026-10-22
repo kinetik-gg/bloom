@@ -3,6 +3,9 @@
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/runtime/evaluation.hpp>
 
+#include <cstdint>
+#include <optional>
+
 namespace bloom::output {
 // Portable serializer values, independent of OpenEXR's enum.
 enum class FlatExrCompressionV1 : std::uint8_t { Zip = 1, Piz = 2, Zips = 3, None = 4 };
@@ -31,5 +34,11 @@ class PreparedFlatExrOutputV1 final {
     core::Sha256Digest sourceRevision_;
     std::shared_ptr<const color::CpuColorSpaceProcessor> processor_;
 };
+// Admission estimate for codec-owned scanline buffers and tables, independent of the
+// retained image and verifier's full component buffer. Both codec endpoints use one thread.
+// Returns no value when the codec's scanline representation cannot hold the requested shape.
+[[nodiscard]] std::optional<std::uint64_t>
+flatExrCodecWorkspaceBytesV1(std::uint64_t width, std::uint64_t height,
+                             FlatExrCompressionV1 compression) noexcept;
 [[nodiscard]] std::string_view flatExrCompressionNameV1(FlatExrCompressionV1) noexcept;
 } // namespace bloom::output

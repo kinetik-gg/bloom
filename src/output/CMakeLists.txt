@@ -91,7 +91,7 @@ bloom_enable_warnings(bloom_output)
 # find_dependency calls) carries OpenEXRConfig.cmake's find_dependency(Threads/Imath/libdeflate)
 # chain with no changes needed here.
 bloom_find_dependency(OpenEXR)
-target_link_libraries(bloom_output PRIVATE OpenEXR::OpenEXR)
+target_link_libraries(bloom_output PRIVATE OpenEXR::OpenEXR OpenEXR::OpenEXRCore)
 
 # issue #107 (PNG codec + strict chunk-profile verification): the PNG format layer is Bloom-owned
 # over the qualified zlib (design decision 1) -- no OIIO, no libpng anywhere. bloom_find_dependency

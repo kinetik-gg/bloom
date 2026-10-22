@@ -1,8 +1,49 @@
 #include "flat_exr_preset_contract.hpp"
+#include <OpenEXR/openexr_compression.h>
 #include <bloom/output/flat_exr_options.hpp>
+
 #include <cmath>
+#include <limits>
 
 namespace bloom::output {
+std::optional<std::uint64_t>
+flatExrCodecWorkspaceBytesV1(const std::uint64_t width, const std::uint64_t height,
+                             const FlatExrCompressionV1 compression) noexcept {
+    std::uint64_t rows = 0;
+    switch (compression) {
+    case FlatExrCompressionV1::Zip:
+        rows = 16;
+        break;
+    case FlatExrCompressionV1::Piz:
+        rows = 32;
+        break;
+    case FlatExrCompressionV1::Zips:
+    case FlatExrCompressionV1::None:
+        rows = 1;
+        break;
+    }
+    if (rows == 0 || width == 0 || height == 0 ||
+        width > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) / (16 * rows))
+        return std::nullopt;
+    const auto block = static_cast<std::size_t>(16 * width * rows);
+    const auto bound = static_cast<std::uint64_t>(exr_compress_max_buffer_size(block));
+    // OpenEXR 3.4.15: OutputFile owns two line buffers at numThreads=1. Each
+    // owns input, compressed output and ZIP/PIZ scratch. The public bound includes
+    // Huffman spare storage; eight bounds cover both codec pipelines and allocator
+    // objects. PIZ also owns bitmap/LUT tables (8192 + 65536*2 bytes per pipeline).
+    // The writer owns bytesPerLine/offset tables and chunk offsets (at most 24H).
+    // InputFile(numThreads=1) reuses one decoder, so its workspace fits this envelope.
+    // This is a geometry-derived admission estimate, not physical-allocation telemetry.
+    constexpr std::uint64_t tableBytes = 2 * (8192 + 65536 * 2);
+    constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+    if (bound < block || bound > (maximum - tableBytes) / 8)
+        return std::nullopt;
+    const auto buffers = 8 * bound + tableBytes;
+    if (height > (maximum - buffers) / 24)
+        return std::nullopt;
+    return buffers + 24 * height;
+}
+
 std::string_view flatExrCompressionNameV1(FlatExrCompressionV1 compression) noexcept {
     switch (compression) {
     case FlatExrCompressionV1::Zip:

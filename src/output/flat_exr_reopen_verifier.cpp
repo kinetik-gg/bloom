@@ -318,7 +318,8 @@ FlatExrVerifyResultV1 FlatExrRgba32fLinRec709SceneReopenVerifierV1::verify(
     }
 
     try {
-        Imf::InputFile input(stagedPath.string().c_str());
+        // Match the writer's one-thread codec envelope used at export admission.
+        Imf::InputFile input(stagedPath.string().c_str(), 1);
         const auto& header = input.header();
 
         if (const auto allowlistDiag = ::checkAttributeAllowlist(header)) {
