@@ -137,7 +137,7 @@ enum class AudioSourceCheck { Matches, MissingOrChanged, Cancelled };
     if (!input)
         return AudioSourceCheck::MissingOrChanged;
     core::Sha256Hasher hasher;
-    std::array<std::byte, 64 * 1024> chunk{};
+    std::array<std::byte, std::size_t{64} * 1024U> chunk{};
     while (input) {
         if (cancellation.isCancellationRequested())
             return AudioSourceCheck::Cancelled;
@@ -1454,15 +1454,15 @@ void AssetController::poll() {
     if (inputColorCatalogPending_) {
         if (auto result = inputColorCatalogTask_.tryTakeResult()) {
             inputColorCatalogPending_ = false;
-            if (result->state() == runtime::TaskState::Succeeded && result->value().has_value() &&
-                *result->value() && host_.colorSettings() &&
-                (*result->value())->settings == *host_.colorSettings() &&
-                (*result->value())->workingColorSpaceId ==
-                    session_.colorIntent().workingColorSpaceId)
-                inputColorCatalog_ = *result->value();
-            else if (result->state() == runtime::TaskState::Failed &&
-                     inputColorCatalogRequestedSettings_ && host_.colorSettings() &&
-                     *inputColorCatalogRequestedSettings_ == *host_.colorSettings()) {
+            if (result->state() == runtime::TaskState::Succeeded) {
+                auto catalog = result->value().value_or(nullptr);
+                if (catalog && host_.colorSettings() &&
+                    catalog->settings == *host_.colorSettings() &&
+                    catalog->workingColorSpaceId == session_.colorIntent().workingColorSpaceId)
+                    inputColorCatalog_ = std::move(catalog);
+            } else if (result->state() == runtime::TaskState::Failed &&
+                       inputColorCatalogRequestedSettings_ && host_.colorSettings() &&
+                       *inputColorCatalogRequestedSettings_ == *host_.colorSettings()) {
                 inputColorCatalog_ = std::make_shared<InputColorCatalog>();
                 inputColorCatalog_->settings = *inputColorCatalogRequestedSettings_;
                 inputColorCatalog_->workingColorSpaceId = inputColorCatalogRequestedWorking_;

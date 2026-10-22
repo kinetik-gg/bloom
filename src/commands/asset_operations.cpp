@@ -124,7 +124,7 @@ media::audio::AudioResult<core::Sha256Digest> digestFile(const std::filesystem::
         return media::audio::AudioResult<core::Sha256Digest>::failure(
             media::audio::AudioError::codeOnly(media::audio::AudioErrorCode::FileReadFailed));
     auto digest = hasher.finalize();
-    return media::audio::AudioResult<core::Sha256Digest>::success(std::move(digest));
+    return media::audio::AudioResult<core::Sha256Digest>::success(digest);
 }
 } // namespace
 OperationResult RelinkFontAsset::apply(document::Draft& draft) const {

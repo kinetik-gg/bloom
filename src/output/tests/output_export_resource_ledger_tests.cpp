@@ -1,5 +1,6 @@
 #include <bloom/output/output_analysis_attempt.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
+#include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/render/processing_host_storage.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
@@ -48,8 +49,9 @@ class Expectations final {
 };
 
 [[nodiscard]] std::shared_ptr<runtime::GpuProcessingPhasePolicy>
-sampledRoot(const std::uint64_t availableBytes) {
-    auto root = std::make_shared<runtime::GpuProcessingPhasePolicy>();
+sampledRoot(const std::uint64_t availableBytes,
+            const std::shared_ptr<render::PackedHostRetirementOwner>& owner = {}) {
+    auto root = std::make_shared<runtime::GpuProcessingPhasePolicy>(32, owner);
     runtime::MemoryBudgetState delivered;
     delivered.machine.availableBytes = availableBytes;
     delivered.process.source = runtime::ProcessMemorySource::MacOsHostOnly;
@@ -461,7 +463,20 @@ void ownedAudioBackingHonorsExplicitServiceCap(Expectations& checks) {
 }
 
 void attemptDeductsOnlyPublishedSameRootBacking(Expectations& checks) {
-    auto root = sampledRoot(8 * gib);
+    struct RetirementOwner final {
+        std::shared_ptr<render::PackedHostRetirementOwner> owner =
+            render::PackedHostRetirementOwner::create();
+        ~RetirementOwner() {
+            owner->beginShutdown();
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (!owner->exitAcknowledged() && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            if (!owner->collect())
+                std::terminate();
+        }
+    } retirement;
+    checks.expect(retirement.owner->prepare(), "rooted fixture retirement owner prepares");
+    auto root = sampledRoot(8 * gib, retirement.owner);
     auto fixture = support::roundTripFixture();
     const auto descriptor = *fixture.processImage.descriptor();
     const auto oldPixels = fixture.processImage.pixels();
@@ -491,6 +506,9 @@ void attemptDeductsOnlyPublishedSameRootBacking(Expectations& checks) {
     checks.expect(static_cast<bool>(image), "rooted fixture image publishes");
     if (!image)
         return;
+    checks.expect(
+        render::PackedHostStorageAuthority::promoteFinalProduct(image.value()->storageAuthority()),
+        "rooted fixture backing promotes before publication");
     fixture.processImage = std::move(*image.value());
     auto source = support::prepareSource(std::move(fixture));
     const auto authority = source.frame->processImage().storageAuthority();

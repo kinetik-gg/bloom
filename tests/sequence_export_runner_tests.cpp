@@ -417,7 +417,7 @@ void verify(const host::SequenceExportResultV1& r, const std::filesystem::path& 
           "no unsupported authority claims");
     media::video::VideoDecodeSession decoder(path);
     const auto probe = need(decoder.probe());
-    const auto decoded = need(media::video::decodeAudioClip(decoder, probe, {}));
+    const auto decoded = need(media::video::decodeAudioClip(decoder, probe, qc.audioSamples * 2));
     check(decoded.frames == 96000 && decoded.channels == 2, "published audio layout");
     for (std::size_t i = 0; i < 96000; ++i)
         for (unsigned c = 0; c < 2; ++c)

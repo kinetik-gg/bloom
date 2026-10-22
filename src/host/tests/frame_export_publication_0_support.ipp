@@ -119,7 +119,24 @@ constexpr auto kBlendModeParameterId = document::ParameterId::fromRaw(0x2010);
 }
 
 [[nodiscard]] std::shared_ptr<runtime::GpuProcessingPhasePolicy> publicationPhasePolicy() {
-    auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(1);
+    struct HostRetirement final {
+        std::shared_ptr<bloom::render::PackedHostRetirementOwner> owner =
+            bloom::render::PackedHostRetirementOwner::create();
+        HostRetirement() {
+            if (!owner->prepare())
+                throw std::runtime_error("publication fixture host retirement could not prepare");
+        }
+        ~HostRetirement() {
+            owner->beginShutdown();
+            const auto deadline = std::chrono::steady_clock::now() + 2s;
+            while (!owner->exitAcknowledged() && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(1ms);
+            if (!owner->exitAcknowledged() || !owner->collect())
+                std::terminate();
+        }
+    };
+    static HostRetirement retirement;
+    auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(1, retirement.owner);
     constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
     runtime::MemoryBudgetState sample;
     sample.machine.availableBytes = 60 * gib;
@@ -228,6 +245,16 @@ class ExportFixture final {
             continue;
         }
         const auto& outcomeValue = *outcome; // NOLINT(bugprone-unchecked-optional-access)
+        if (!outcomeValue && outcomeValue.failure())
+            std::cerr << "attempt fixture failure stage="
+                      << static_cast<int>(outcomeValue.failure()->stage())
+                      << " payload=" << outcomeValue.failure()->payload().index()
+                      << " evaluationCode="
+                      << (outcomeValue.failure()->payloadAs<runtime::EvaluationDiagnosticCode>()
+                              ? static_cast<int>(*outcomeValue.failure()
+                                                      ->payloadAs<runtime::EvaluationDiagnosticCode>())
+                              : -1)
+                      << '\n';
         expectations.expect(static_cast<bool>(outcomeValue),
                             "attempt fixture: the attempt completes");
         return static_cast<bool>(outcomeValue) ? outcomeValue.attempt() : nullptr;

@@ -34,7 +34,7 @@ flatExrCodecWorkspaceBytesV1(const std::uint64_t width, const std::uint64_t heig
     // The writer owns bytesPerLine/offset tables and chunk offsets (at most 24H).
     // InputFile(numThreads=1) reuses one decoder, so its workspace fits this envelope.
     // This is a geometry-derived admission estimate, not physical-allocation telemetry.
-    constexpr std::uint64_t tableBytes = 2 * (8192 + 65536 * 2);
+    constexpr std::uint64_t tableBytes = 2ULL * (8192ULL + 65536ULL * 2ULL);
     constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
     if (bound < block || bound > (maximum - tableBytes) / 8)
         return std::nullopt;

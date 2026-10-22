@@ -429,7 +429,8 @@ RootedHostBackingSnapshot GpuProcessingPhaseBudget::rootedHostBackingSnapshot() 
 
 GpuProcessingPhaseGrant
 GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noexcept {
-    if (request.minimumSourceBytes > request.requestedSourceBytes ||
+    if (request.processingHostScratchBytes > request.fixedHostBytes ||
+        request.minimumSourceBytes > request.requestedSourceBytes ||
         request.minimumExecutorBytes > request.requestedExecutorBytes ||
         (request.sourceFree && request.minimumSourceBytes != 0) ||
         (!request.native &&
@@ -508,7 +509,8 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
     // Division/subtraction bounds above prove these additions cannot overflow capacity.
     lease->hostBytes_ = request.fixedHostBytes + 3 * sourceBytes;
     lease->remainingHostBytes_ = lease->hostBytes_;
-    lease->remainingOutputHostBytes_ = request.fixedHostBytes;
+    lease->remainingOutputHostBytes_ = request.fixedHostBytes - request.processingHostScratchBytes;
+    lease->remainingProcessingHostScratchBytes_ = request.processingHostScratchBytes;
     lease->remainingUploadBytes_ = sourceBytes;
     lease->deviceBytes_ = request.native ? request.deviceWorkingBytes + executorBytes : 0;
     lease->remainingDeviceBytes_ = lease->deviceBytes_;

@@ -280,7 +280,7 @@ FrameExportPublicationResultV1 executeExportPublicationImpl(
     constexpr std::uint64_t chunk = output::kOutputAdapterMaximumStreamingChunkBytesV1;
     // zlib's default deflate tables/hash state are below 320 KiB; inflate is below 40 KiB.
     // One MiB covers their state and small codec objects in either sequential stage.
-    constexpr std::uint64_t pngCodecStateEstimate = 1024U * 1024U;
+    constexpr std::uint64_t pngCodecStateEstimate = 1024ULL * 1024ULL;
     std::optional<std::uint64_t> additional;
     std::uint64_t preparedBytes = 0;
     if (isPng) {
@@ -300,7 +300,7 @@ FrameExportPublicationResultV1 executeExportPublicationImpl(
         const auto decoded = row ? multiplyChecked(*row, height) : std::nullopt;
         // The writer streams row spans directly; it owns a 16 MiB pending IDAT block and a
         // 64 KiB drain buffer, with no full-row copy.
-        constexpr std::uint64_t writer = chunk + 64U * 1024U;
+        constexpr std::uint64_t writer = chunk + 64ULL * 1024ULL;
         const auto verifier =
             decoded ? addChecked(*decoded, std::max(preparedBytes, chunk)) : std::nullopt;
         const auto scratch = verifier

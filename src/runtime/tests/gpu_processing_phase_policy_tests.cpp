@@ -609,7 +609,7 @@ void policy() {
     auto grant = policy.reserve(preview(), now);
     require(grant.lease && policy.snapshot().reservations.hostCapacityBytes == 2 * gib,
             "paired 8GiB/6GiB process counters expose the actual2GiB remaining");
-    require(grant.lease->hostBytes() == 1920ULL * 1080 * 8 + 4096,
+    require(grant.lease->hostBytes() == 1920ULL * 1080 * 8 + 2 * 4096,
             "source-free1080 minimum admits under previous1GiB cap");
     grant.lease.reset();
     auto pressure = sample(now + std::chrono::seconds(1));
@@ -1013,14 +1013,21 @@ void deliveredNumericView() {
 void envelope() {
     auto input = preview();
     auto packed = processingPhaseRequest(input);
-    require(packed && packed->fixedHostBytes == 2 * input.pixels * 4 + input.metadataBytes,
-            "packed envelope includes staging and immutable output overlap");
+    require(packed && packed->fixedHostBytes == 2 * input.pixels * 4 + 2 * input.metadataBytes &&
+                packed->processingHostScratchBytes == input.metadataBytes,
+            "native packed envelope separates output metadata and processing scratch");
     input.output = GpuProcessingPhaseOutput::FloatFinal;
     input.encodedBytes = input.pixels * 4;
     auto final = processingPhaseRequest(input);
     require(final && final->fixedHostBytes ==
-                         3 * input.pixels * 16 + 2 * input.encodedBytes + input.metadataBytes,
+                         3 * input.pixels * 16 + 2 * input.encodedBytes + 2 * input.metadataBytes,
             "final envelope includes readback vectors and adoption/encoding overlap");
+    const auto outputHeader = bloom::render::detail::packedHostAllocationMetadataBytes();
+    const auto tinyPacked = processingPhaseRequest(
+        {.pixels = 1, .metadataBytes = outputHeader, .sourceFree = true, .native = false});
+    require(tinyPacked && tinyPacked->fixedHostBytes == 8 + outputHeader &&
+                tinyPacked->processingHostScratchBytes == 0,
+            "one-pixel CPU output retains its real allocation header allowance");
     input.pixels = std::numeric_limits<std::uint64_t>::max();
     require(!processingPhaseRequest(input), "overflow refuses before any preparation");
     input.pixels = 1;
@@ -1029,10 +1036,11 @@ void envelope() {
     input.encodedBytes = 0;
     input.pixels = 0;
     require(!processingPhaseRequest(input), "empty output is not a processing phase");
-    input.output = GpuProcessingPhaseOutput::FloatFinal;
-    input.metadataBytes = 48'000 * 2 * sizeof(float);
-    input.sourceFree = true;
-    input.native = false;
+    input = GpuProcessingPhaseEnvelope{.output = GpuProcessingPhaseOutput::FloatFinal,
+                                       .pixels = 0,
+                                       .metadataBytes = 48'000 * 2 * sizeof(float),
+                                       .sourceFree = true,
+                                       .native = false};
     const auto audioHost = processingPhaseRequest(input);
     require(audioHost && audioHost->fixedHostBytes == input.metadataBytes &&
                 audioHost->deviceWorkingBytes == 0,

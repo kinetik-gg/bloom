@@ -58,7 +58,13 @@ processingPhaseRequest(const GpuProcessingPhaseEnvelope& envelope) noexcept {
     if (!coverageOverlap) {
         return {};
     }
+    // Native processing scratch and output allocator headers have separate live owners. Reserve
+    // one metadata allowance for each so later scratch can transfer an existing phase claim even
+    // when the source estimate consumes all remaining measured headroom.
+    const auto scratchBytes = envelope.native ? envelope.metadataBytes : 0;
     auto fixed = add(*outputs, envelope.metadataBytes);
+    if (fixed)
+        fixed = add(*fixed, scratchBytes);
     if (!fixed) {
         return {};
     }
@@ -73,6 +79,7 @@ processingPhaseRequest(const GpuProcessingPhaseEnvelope& envelope) noexcept {
         }
     }
     return render::GpuProcessingPhaseRequest{.fixedHostBytes = *fixed,
+                                             .processingHostScratchBytes = scratchBytes,
                                              .requestedSourceBytes = envelope.requestedSourceBytes,
                                              .minimumSourceBytes = envelope.minimumSourceBytes,
                                              .deviceWorkingBytes = envelope.deviceWorkingBytes,
@@ -163,7 +170,7 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
     std::uint64_t backingCredit = 0;
     std::uint64_t retiredBytesAtSample = 0;
     if (fresh && pendingHostBackingCredit_.has_value()) {
-        const auto& pending = pendingHostBackingCredit_.value();
+        const auto& pending = *pendingHostBackingCredit_;
         if (pending.sampledAt == sample.process.sampledAt) {
             backingCredit = pending.bytes;
             if (backingCredit != 0)

@@ -720,7 +720,9 @@ earlier batch outputs or Ready images from the exact device generation; every GP
 validated before outputs leave the native batch owner.
 
 All image and buffer backings reserve and reconcile against the existing phase. Translation-axis
-scratch uses fresh additive host admission in both serial and batched native paths. Oversized or
+scratch first transfers the native phase's separately reserved processing-metadata allowance in
+both serial and batched paths. Scratch beyond that allowance requires fresh additive host admission;
+it cannot consume output metadata or source/upload promises. Oversized or
 failed pre-submit preparation may fall back to serial native execution only after actual backing
 destruction and same-origin prefix restoration. An uncertain attempted submission retains the exact
 cancelled owner and all inputs until real fence/loss proof; later proof discards its outputs.

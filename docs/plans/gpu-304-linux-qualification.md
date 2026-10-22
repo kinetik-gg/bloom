@@ -175,8 +175,9 @@ suites pass after the switch. Reproduce with `bloom_runtime_gpu_scene_executor_t
 translation, affine and source-over kernels record into one command buffer, with write/read
 barriers and one completion fence. Other required kernels delimit runs and retain their native
 paths. Every actual image, status/metadata/staging buffer and translation-axis host allocation is
-covered before use. Axis scratch has fresh additive host admission through the same tracked
-allocator in both batch and serial native paths; batch refusal cannot bypass that admission.
+covered before use. Axis scratch transfers a separately reserved native processing-metadata claim
+through the same tracked allocator in both batch and serial paths. Any excess still needs fresh
+additive host admission; batch refusal cannot bypass either check.
 
 The comparison uses one compiled integer-grid raster merge, a fractional rotated affine placement,
 and its composited output through the same production executor. Both modes retain same-turn

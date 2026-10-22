@@ -17,6 +17,12 @@ struct ProcessingHostStorageRefusal final {
     GpuProcessingPhaseDomain domain = GpuProcessingPhaseDomain::None;
     std::uint64_t phaseId = 0;
     std::uint64_t revisionAfterOwnRelease = 0;
+    std::uint64_t requestedBytes = 0;
+    std::uint64_t hostCapacityBytes = 0;
+    std::uint64_t totalHostClaimBytes = 0;
+    bool hostReady = false;
+    bool sampleExpired = false;
+    bool phaseUnproven = false;
 };
 
 // Scratch never publishes. Exact allocator-requested payload/header bytes require fresh additive
@@ -38,18 +44,25 @@ class ProcessingHostStorageToken final {
 
   private:
     ProcessingHostStorageToken(std::shared_ptr<GpuProcessingPhaseLease>, std::uint64_t,
-                               std::uint64_t) noexcept;
+                               std::uint64_t, bool reservedScratch) noexcept;
     void reset() noexcept;
     std::shared_ptr<detail::GpuProcessingPhaseBudgetState> state_;
     std::shared_ptr<GpuProcessingPhaseLease> origin_;
     std::uint64_t bytes_ = 0;
     std::uint64_t metadataBytes_ = 0;
+    bool reservedScratch_ = false;
 };
 struct ProcessingHostStorageGrant final {
     GpuProcessingPhaseAdmission status = GpuProcessingPhaseAdmission::InvalidRequest;
     GpuProcessingPhaseDomain domain = GpuProcessingPhaseDomain::None;
     std::optional<ProcessingHostStorageToken> token;
     std::uint64_t revisionAfterOwnRelease = 0;
+    std::uint64_t requestedBytes = 0;
+    std::uint64_t hostCapacityBytes = 0;
+    std::uint64_t totalHostClaimBytes = 0;
+    bool hostReady = false;
+    bool sampleExpired = false;
+    bool phaseUnproven = false;
 };
 
 namespace detail {
@@ -147,8 +160,16 @@ template <class T> class ProcessingHostAllocator {
             auto grant = ProcessingHostStorageToken::reserve(phase_, payload, sizeof(Header));
             if (!grant.token) {
                 if (failure_)
-                    *failure_ = {grant.status, grant.domain, phase_->id(),
-                                 grant.revisionAfterOwnRelease};
+                    *failure_ = {grant.status,
+                                 grant.domain,
+                                 phase_->id(),
+                                 grant.revisionAfterOwnRelease,
+                                 grant.requestedBytes,
+                                 grant.hostCapacityBytes,
+                                 grant.totalHostClaimBytes,
+                                 grant.hostReady,
+                                 grant.sampleExpired,
+                                 grant.phaseUnproven};
                 throw std::bad_alloc();
             }
             token = std::move(*grant.token);

@@ -5,12 +5,14 @@
 namespace bloom::render {
 ProcessingHostStorageToken::ProcessingHostStorageToken(
     std::shared_ptr<GpuProcessingPhaseLease> phase, const std::uint64_t bytes,
-    const std::uint64_t metadata) noexcept
-    : state_(phase->state_), origin_(std::move(phase)), bytes_(bytes), metadataBytes_(metadata) {}
+    const std::uint64_t metadata, const bool reservedScratch) noexcept
+    : state_(phase->state_), origin_(std::move(phase)), bytes_(bytes), metadataBytes_(metadata),
+      reservedScratch_(reservedScratch) {}
 ProcessingHostStorageToken::ProcessingHostStorageToken(ProcessingHostStorageToken&& other) noexcept
     : state_(std::move(other.state_)), origin_(std::move(other.origin_)),
       bytes_(std::exchange(other.bytes_, 0)),
-      metadataBytes_(std::exchange(other.metadataBytes_, 0)) {}
+      metadataBytes_(std::exchange(other.metadataBytes_, 0)),
+      reservedScratch_(std::exchange(other.reservedScratch_, false)) {}
 ProcessingHostStorageToken&
 ProcessingHostStorageToken::operator=(ProcessingHostStorageToken&& other) noexcept {
     if (this != &other) {
@@ -19,6 +21,7 @@ ProcessingHostStorageToken::operator=(ProcessingHostStorageToken&& other) noexce
         origin_ = std::move(other.origin_);
         bytes_ = std::exchange(other.bytes_, 0);
         metadataBytes_ = std::exchange(other.metadataBytes_, 0);
+        reservedScratch_ = std::exchange(other.reservedScratch_, false);
     }
     return *this;
 }
@@ -32,26 +35,43 @@ ProcessingHostStorageToken::reserve(const std::shared_ptr<GpuProcessingPhaseLeas
     const std::lock_guard lock(phase->state_->mutex);
     auto& state = *phase->state_;
     auto& counters = state.counters;
-    if (phase->id_ == 0 || phase->unproven_)
-        return {};
     const auto refuse = [&](const GpuProcessingPhaseAdmission status) {
         if (status == GpuProcessingPhaseAdmission::BudgetRefused)
             detail::incrementSaturating(counters.budgetRefusals);
-        return ProcessingHostStorageGrant{.status = status,
-                                          .domain = GpuProcessingPhaseDomain::Host,
-                                          .token = {},
-                                          .revisionAfterOwnRelease =
-                                              counters.admissionRevision == UINT64_MAX
-                                                  ? counters.admissionRevision
-                                                  : counters.admissionRevision + 1};
+        return ProcessingHostStorageGrant{
+            .status = status,
+            .domain = GpuProcessingPhaseDomain::Host,
+            .token = {},
+            .revisionAfterOwnRelease = counters.admissionRevision == UINT64_MAX
+                                           ? counters.admissionRevision
+                                           : counters.admissionRevision + 1,
+            .requestedBytes = bytes + metadata,
+            .hostCapacityBytes = counters.hostCapacityBytes.value_or(0),
+            .totalHostClaimBytes = counters.totalHostClaimBytes,
+            .hostReady = counters.hostReady,
+            .sampleExpired = now > state.hostValidUntil,
+            .phaseUnproven = phase->unproven_};
     };
+    if (phase->id_ == 0 || phase->unproven_)
+        return refuse(GpuProcessingPhaseAdmission::InvalidRequest);
+    const auto total = bytes + metadata;
+    if (total <= phase->remainingProcessingHostScratchBytes_) {
+        phase->remainingProcessingHostScratchBytes_ -= total;
+        phase->remainingHostBytes_ -= total;
+        counters.hostReservedBytes -= total;
+        counters.ownedProcessingHostBytes += bytes;
+        counters.ownedProcessingHostMetadataBytes += metadata;
+        ++counters.ownedProcessingHostAllocations;
+        return {.status = GpuProcessingPhaseAdmission::Accepted,
+                .domain = GpuProcessingPhaseDomain::None,
+                .token = ProcessingHostStorageToken(phase, bytes, metadata, true)};
+    }
     if (counters.hostReady && now > state.hostValidUntil) {
         counters.hostReady = false;
         detail::incrementSaturating(counters.admissionRevision);
     }
     if (!counters.hostReady || !counters.hostCapacityBytes || now > state.hostValidUntil)
         return refuse(GpuProcessingPhaseAdmission::AwaitingCapacity);
-    const auto total = bytes + metadata;
     if (total > detail::remaining(*counters.hostCapacityBytes, counters.totalHostClaimBytes))
         return refuse(GpuProcessingPhaseAdmission::BudgetRefused);
     counters.ownedProcessingHostBytes += bytes;
@@ -60,7 +80,7 @@ ProcessingHostStorageToken::reserve(const std::shared_ptr<GpuProcessingPhaseLeas
     counters.totalHostClaimBytes += total;
     return {.status = GpuProcessingPhaseAdmission::Accepted,
             .domain = GpuProcessingPhaseDomain::None,
-            .token = ProcessingHostStorageToken(phase, bytes, metadata)};
+            .token = ProcessingHostStorageToken(phase, bytes, metadata, false)};
 }
 void ProcessingHostStorageToken::reset() noexcept {
     if (!state_)
@@ -72,9 +92,17 @@ void ProcessingHostStorageToken::reset() noexcept {
         counters.ownedProcessingHostBytes -= bytes_;
         counters.ownedProcessingHostMetadataBytes -= metadataBytes_;
         --counters.ownedProcessingHostAllocations;
-        counters.totalHostClaimBytes -= bytes_ + metadataBytes_;
+        if (reservedScratch_) {
+            const auto total = bytes_ + metadataBytes_;
+            origin_->remainingProcessingHostScratchBytes_ += total;
+            origin_->remainingHostBytes_ += total;
+            counters.hostReservedBytes += total;
+        } else {
+            counters.totalHostClaimBytes -= bytes_ + metadataBytes_;
+        }
         bytes_ = 0;
         metadataBytes_ = 0;
+        reservedScratch_ = false;
         releasedOrigin = std::move(origin_);
     }
     releasedOrigin.reset();

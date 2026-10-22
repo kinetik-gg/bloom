@@ -339,9 +339,22 @@ GpuCompositeDiagnostic GpuComposite::beginTranslation(const GpuTranslationParame
             outputHeight, sourceHeight, parameters.translationY, impl.control->processingPhase,
             &axisRefusal);
     } catch (const std::bad_alloc&) {
+        std::string detail = "translation axis host scratch was refused";
+        if (axisRefusal) {
+            detail += " [admission=" + std::to_string(static_cast<int>(axisRefusal->status)) +
+                      ", domain=" + std::to_string(static_cast<int>(axisRefusal->domain)) +
+                      ", phase=" + std::to_string(axisRefusal->phaseId) +
+                      ", releaseRevision=" + std::to_string(axisRefusal->revisionAfterOwnRelease) +
+                      ", requested=" + std::to_string(axisRefusal->requestedBytes) +
+                      ", capacity=" + std::to_string(axisRefusal->hostCapacityBytes) +
+                      ", claimed=" + std::to_string(axisRefusal->totalHostClaimBytes) +
+                      ", ready=" + std::to_string(axisRefusal->hostReady) +
+                      ", expired=" + std::to_string(axisRefusal->sampleExpired) +
+                      ", unproven=" + std::to_string(axisRefusal->phaseUnproven) + "]";
+        }
         return makeDiagnostic(axisRefusal ? GpuCompositeDiagnosticCode::OverBudget
                                           : GpuCompositeDiagnosticCode::AllocationFailed,
-                              "translation axis host scratch was refused");
+                              std::move(detail));
     }
     if (!createCompositeBuffer(impl.control, axisX.size() * sizeof(CompositeAxisSampleGpu), false,
                                axisX.data(), impl.axisX) ||

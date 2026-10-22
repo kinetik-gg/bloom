@@ -28,6 +28,8 @@ using GpuProcessingRootIdentity = std::shared_ptr<const detail::GpuProcessingPha
 // Runtime owns process/device sampling and injects resolved capacity; this class performs no I/O.
 struct GpuProcessingPhaseRequest final {
     std::uint64_t fixedHostBytes = 0;
+    // Subset of fixedHostBytes reserved for allocator-backed processing metadata.
+    std::uint64_t processingHostScratchBytes = 0;
     std::uint64_t requestedSourceBytes = 0;
     std::uint64_t minimumSourceBytes = 0;
     std::uint64_t deviceWorkingBytes = 0;
@@ -155,6 +157,7 @@ class GpuProcessingPhaseLease final {
     std::uint64_t remainingHostBytes_ = 0;
     // Ordinary owned output uses fixed F only; S/C estimates never become spare output credit.
     std::uint64_t remainingOutputHostBytes_ = 0;
+    std::uint64_t remainingProcessingHostScratchBytes_ = 0;
     // Logical occupancy applies even to device-local/BAR upload staging.
     std::uint64_t remainingUploadBytes_ = 0;
     std::uint64_t deviceBytes_ = 0;

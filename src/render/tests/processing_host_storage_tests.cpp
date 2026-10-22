@@ -96,6 +96,38 @@ void freshnessAndLifetime() {
     require(budget.snapshot().ownedProcessingHostAllocations == 0,
             "explicit null-phase compatibility remains visibly unrooted");
 }
+void reservedScratchSurvivesSaturatedCapacity() {
+    GpuProcessingPhaseBudget budget;
+    const auto now = std::chrono::steady_clock::now();
+    budget.setHostCapacity(1000, true, now);
+    auto admitted = budget.reserve({.fixedHostBytes = 80,
+                                    .processingHostScratchBytes = 64,
+                                    .requestedSourceBytes = 1000,
+                                    .sourceFree = false,
+                                    .native = false});
+    require(admitted.lease != nullptr,
+            "saturated source estimate admits a fixed scratch allowance");
+    const auto before = budget.snapshot();
+    require(before.totalHostClaimBytes == 998 && before.hostReservedBytes == 998,
+            "source estimate consumes all but rounding remainder");
+    auto scratch =
+        ProcessingHostStorageToken::reserve(admitted.lease, 24, 8, now + std::chrono::seconds(1));
+    require(scratch.token && budget.snapshot().totalHostClaimBytes == before.totalHostClaimBytes &&
+                budget.snapshot().hostReservedBytes == before.hostReservedBytes - 32 &&
+                budget.snapshot().ownedProcessingHostBytes == 24,
+            "preclaimed scratch transfers ownership without fresh headroom or sample");
+    auto excess =
+        ProcessingHostStorageToken::reserve(admitted.lease, 40, 0, now + std::chrono::seconds(1));
+    require(!excess.token && excess.status == GpuProcessingPhaseAdmission::AwaitingCapacity,
+            "scratch beyond the fixed allowance still requires fresh additive capacity");
+    scratch.token.reset();
+    require(budget.snapshot().hostReservedBytes == before.hostReservedBytes &&
+                budget.snapshot().ownedProcessingHostBytes == 0,
+            "scratch backing retirement returns its fixed reservation");
+    admitted.lease.reset();
+    require(budget.snapshot().totalHostClaimBytes == 0,
+            "phase retirement releases the complete saturated claim");
+}
 struct ObservedBacking final {
     GpuProcessingPhaseBudget* budget = nullptr;
     bool* sawRetirementBeforeDelete = nullptr;
@@ -184,6 +216,7 @@ int main() {
     try {
         allocatorBacking();
         freshnessAndLifetime();
+        reservedScratchSurvivesSaturatedCapacity();
         adoptedBackingRetiresBeforeDelete();
         failedAdoptionCannotCreateCredit();
         std::cout << "PASS: transient processing host allocator ownership\n";

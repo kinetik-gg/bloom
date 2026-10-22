@@ -406,6 +406,17 @@ GpuProofOutcome testGpuCompositedExportParity(Expectations& expectations, const 
                 continue;
             }
             if (!*outcome) {
+                if (outcome->failure())
+                    std::cerr << "gpu parity attempt failure stage="
+                              << static_cast<int>(outcome->failure()->stage())
+                              << " payload=" << outcome->failure()->payload().index()
+                              << " evaluationCode="
+                              << (outcome->failure()
+                                          ->payloadAs<runtime::EvaluationDiagnosticCode>()
+                                      ? static_cast<int>(*outcome->failure()
+                                                              ->payloadAs<runtime::EvaluationDiagnosticCode>())
+                                      : -1)
+                              << '\n';
                 return false;
             }
             attempt = outcome->attempt();
@@ -419,14 +430,25 @@ GpuProofOutcome testGpuCompositedExportParity(Expectations& expectations, const 
         auto approval = host::approveFrameExportV1(fixture.coordinator(), attempt,
                                                    requireDigest(attempt, expectations));
         if (!approval) {
+            std::cerr << "gpu parity publication approval refused: " << target << '\n';
             return false;
         }
         auto run = beginExportRun(fixture.scheduler(), fixture.artifacts(),
                                   std::move(approval).takeRequest(), fixture.path());
         if (!run.has_value()) {
+            std::cerr << "gpu parity publication run refused: " << target << '\n';
             return false;
         }
         auto resultOpt = awaitExportRun(*run);
+        if (!resultOpt || !*resultOpt)
+            std::cerr << "gpu parity publication result failed: " << target
+                      << " stage=" << (resultOpt && resultOpt->failure()
+                                         ? static_cast<int>(resultOpt->failure()->stage())
+                                         : -1)
+                      << " payload=" << (resultOpt && resultOpt->failure()
+                                           ? static_cast<int>(resultOpt->failure()->payload().index())
+                                           : -1)
+                      << '\n';
         return resultOpt.has_value() && static_cast<bool>(*resultOpt) &&
                resultOpt->publication() != nullptr &&
                resultOpt->publication()->outcome ==

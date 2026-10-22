@@ -167,7 +167,7 @@ std::optional<std::filesystem::path> absolutePathFromFileUri(const std::string_v
     if (decoded.size() >= 3 && decoded[0] == '/' && alpha(decoded[1]) && decoded[2] == ':')
         decoded.erase(0, 1);
 #endif
-    const auto path = std::filesystem::path(
+    auto path = std::filesystem::path(
         std::u8string(reinterpret_cast<const char8_t*>(decoded.data()), decoded.size()));
     if (!path.is_absolute())
         return std::nullopt;

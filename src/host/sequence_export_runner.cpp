@@ -72,6 +72,8 @@ std::shared_ptr<output::ExportResourceReservationV1> detail::reserveSequenceExpo
 
 struct detail::SequenceExportWorkV1 {
     SequenceExportRequestV1 request;
+    // Only the provider synthesized for a CPU-only sequence belongs to this runner.
+    bool ownsDefaultGpuProvider = false;
     // UI controllers can retire while an admitted task still runs. Its ledger facade must remain
     // alive until that task or the independent cleanup lane releases the last reservation.
     std::shared_ptr<output::ExportResourceLedgerV1> ledgerLifetime;
@@ -387,6 +389,13 @@ SequenceExportRetirementOwnerV1::SequenceExportRetirementOwnerV1(TestGate gate)
                 ticket->work->ownershipReady.wait(lock, [&] { return !ticket->work->active; });
             }
             ticket->work->clean();
+            if (ticket->work->ownsDefaultGpuProvider) {
+                auto provider = std::move(ticket->work->request.gpuProvider);
+                // This neutral retirement lane may wait; the authoring thread cannot. Keep the
+                // provider and its host owner alive until both workers have really exited.
+                while (provider && !provider->shutdownAndWait(std::chrono::seconds(1))) {
+                }
+            }
             ticket->work.reset();
             {
                 const std::lock_guard lock(state->mutex);
@@ -655,6 +664,7 @@ SequenceExportRunnerV1::SequenceExportRunnerV1(
         runtime::GpuProcessFrameEvaluatorOptions options;
         options.enabled = false;
         state_->work->request.gpuProvider = GpuExportProvider::create(std::move(options));
+        state_->work->ownsDefaultGpuProvider = true;
         state_->work->request.gpuProvider->prepare(scheduler);
     }
     state_->submit(Stage::Compiling,
