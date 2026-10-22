@@ -106,6 +106,13 @@ void referenceTests() {
                         wrapper.source.find("vec4 p = bloom_separable_blur(c)") !=
                             std::string::npos,
                     "GPU wrapper performs resident neighborhood reads and associated-RGBA writes");
+                const auto validation = wrapper.source.find("if (any(isnan(p))");
+                const auto canonicalization =
+                    wrapper.source.find("if (p.a == 0.0) { p = vec4(0.0); }");
+                const auto store = wrapper.source.find("imageStore(bloom_ocio_output, c, p)");
+                require(validation < canonicalization && canonicalization < store,
+                        "GPU neighborhood passes validate then canonicalize zero coverage "
+                        "before storing, matching the CPU intermediate");
             }
         }
     }
@@ -120,6 +127,28 @@ void referenceTests() {
     const auto proxy = runtime::detail::prepareSeparableBlur(k, 3.0, 0.5, 2.0);
     require(proxy->horizontal.size() == 5 && proxy->vertical.size() == 13,
             "proxy radii and halos scale independently per axis");
+}
+void subnormalCoverageTest() {
+    const auto window = render::ImageWindow::create(0, 0, 1, 1);
+    const auto descriptor = render::Rgba32fImageDescriptor::create(
+        *window.value(), *window.value(), core::PixelAspectRatio::square());
+    auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), 4096);
+    const auto pixel = render::Rgba32f::fromPremultiplied(
+        1.0F, 0.0F, 0.0F, std::numeric_limits<float>::denorm_min());
+    require(pixel.hasValue(), "subnormal coverage is valid input");
+    require(!builder.value()->write(0, 0, *pixel.value()), "subnormal input writes");
+    auto image = std::move(*builder.value()).freeze();
+    for (const auto kind :
+         {runtime::SeparableBlurKind::Gaussian, runtime::SeparableBlurKind::Box}) {
+        const auto blur = runtime::detail::prepareSeparableBlur(
+            kernel(kind, runtime::BlurEdgeMode::Transparent), 1.0, 1.0, 1.0);
+        const auto result = runtime::detail::applySeparableBlur(
+            *blur, *image.value(), 65536, {}, runtime::OperationIndex::fromRaw(0), {});
+        require(result.image != nullptr, "subnormal blur evaluates");
+        const auto side = result.image->read(-1, 0);
+        require(side && side.value()->alpha() == 0.0F && side.value()->red() == 0.0F,
+                "underflowed coverage canonicalizes RGB after each blur pass");
+    }
 }
 void cancellationTest() {
     const auto input = source();
@@ -158,6 +187,7 @@ void cancellationTest() {
 int main() {
     try {
         referenceTests();
+        subnormalCoverageTest();
         cancellationTest();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

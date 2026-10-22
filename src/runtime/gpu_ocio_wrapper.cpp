@@ -196,6 +196,9 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
             out << "  vec4 p = " << program.functionName << "(c);\n";
             out << "  if (any(isnan(p)) || any(isinf(p)) || p.a < 0.0 || p.a > 1.0) { "
                    "bloom_ocio_status.flags[0] = 1u; return; }\n";
+            // Match Rgba32f::fromPremultiplied after each CPU neighborhood pass, including
+            // coverage that underflows to zero. Validate first so invalid HDR still fails.
+            out << "  if (p.a == 0.0) { p = vec4(0.0); }\n";
             out << "  imageStore(bloom_ocio_output, c, p);\n";
         } else {
             out << "  vec4 p = imageLoad(bloom_ocio_input, c);\n";
