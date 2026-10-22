@@ -6,10 +6,10 @@
 //
 // This is deliberately narrow. It creates no service, scheduler, frame product, or UI activation,
 // and it never relabels GpuDevice's bootstrap capability report. It is the one blocking step a
-// future GPU service runs on the device/pipeline owner thread to decide whether the full resident
-// preview route is eligible for a bounded interactive pixel interval. It deliberately does NOT
-// reuse the older PACKED READBACK display qualification (GpuNeutralDisplay): that report covers a
-// different, non-resident operation and cannot qualify this route.
+// future GPU service runs on the device/pipeline owner thread to qualify the bounded resident
+// preview route by real native execution and parity. Measured speed is advisory. It deliberately
+// does NOT reuse the older PACKED READBACK display qualification (GpuNeutralDisplay): that report
+// covers a different, non-resident operation and cannot qualify this route.
 //
 // A Ready device or a constructed pipeline is NOT qualification. Only the private report factory
 // inside qualifyResidentPreview() may produce a report, so later code cannot fabricate success.
@@ -111,11 +111,11 @@ gpuResidentPreviewProcessorIsEligible(const color::PreparedCpuDisplayProcessorHa
 
 enum class GpuResidentPreviewOutcome : std::uint8_t {
     // Any required operation failed parity, a native call failed, the identity/device/budget/
-    // deadline/cancellation gate refused, or (with parity holding) no faster interval was measured.
+    // deadline/cancellation gate refused.
     Unavailable,
-    // Every required operation passed parity within the documented contract. Final output is
-    // unchanged and stays on CPU; the eligible interval is populated only when the timing gate also
-    // passed. There is intentionally no ReferenceParity arm.
+    // Every required operation passed parity within the documented contract. This is a preview
+    // qualification; the timing samples are advisory and final output remains on its own route.
+    // There is intentionally no ReferenceParity arm.
     PreviewOnly,
 };
 
@@ -177,10 +177,10 @@ struct GpuResidentPreviewTimingSample final {
                            const GpuResidentPreviewTimingSample&) = default;
 };
 
-// The conservative pixel interval for which this profile measured the resident route faster: from
+// The advisory pixel interval for which this profile measured the resident route faster: from
 // the lowest measured size of the contiguous faster suffix at the largest measured size through 4K.
-// Empty when the largest measured size is not faster. Set from measured timings only; no vendor
-// threshold, and never inherited from the packed-display upload/readback break-even.
+// Empty when the largest measured size is not faster. It does not decide whether a parity-qualified
+// GPU scene may run: the measurement omits the actual scene graph and varies with transient load.
 struct GpuResidentPreviewEligibleInterval final {
     std::uint64_t min_pixels = 0;
     std::uint64_t max_pixels = 0;
@@ -210,7 +210,7 @@ class [[nodiscard]] GpuResidentPreviewQualificationReport final {
 
     [[nodiscard]] GpuResidentPreviewOutcome outcome() const noexcept { return outcome_; }
     [[nodiscard]] bool eligible() const noexcept {
-        return outcome_ == GpuResidentPreviewOutcome::PreviewOnly && eligibleInterval_.has_value();
+        return outcome_ == GpuResidentPreviewOutcome::PreviewOnly;
     }
     [[nodiscard]] const GpuResidentPreviewDiagnostic& diagnostic() const& noexcept {
         return diagnostic_;

@@ -379,11 +379,8 @@ bool residentStageIsEligible(const std::shared_ptr<PreviewDisplayServiceCore>& c
         return false;
     }
     const std::uint64_t pixels = width * height;
-    const auto& interval = core->residentQualification->eligibleInterval();
-    if (!interval.has_value() || pixels < interval->min_pixels || pixels > interval->max_pixels) {
-        reason = "the request area is outside the measured resident eligible interval";
-        return false;
-    }
+    // Startup upload/display timings are advisory. They do not measure this compiled GPU scene
+    // against its CPU counterpart and must not refuse a parity-qualified request.
     if (pixels > kGpuResidentDisplayMaxPixels) {
         reason = "the request area exceeds the 4K resident ceiling";
         return false;

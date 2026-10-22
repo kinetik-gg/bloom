@@ -2,7 +2,7 @@
 // product.
 //
 // On a real Vulkan device it builds the actual device + typed pipelines + canonical CPU OCIO
-// processor, runs the REAL qualifyResidentPreview() (whose parity/timing pass is the only way to
+// processor, runs the REAL qualifyResidentPreview() (whose parity pass is the only way to
 // obtain an eligible report), produces a real resident process image with GpuSolid, feeds it to the
 // real GpuResidentDisplay, publishes the resulting native display image into an owner-bound
 // GpuResidentFrameLeaseRegistry, and then validates the product factory. It asserts the accepted
@@ -14,9 +14,9 @@
 // Geometry is validated from the TRUSTED expected descriptor the request carries (the actual
 // prepared-scene output / CPU process descriptor), not from the full composition format and not
 // from the returned image: full-format resolution, explicit ProxyResolution, Half/Quarter policies,
-// non-square pixel aspect, and a nonzero-origin ROI are all accepted inside the measured eligible
-// interval, while a full-format descriptor under a proxy request and a one-pixel mismatch are
-// rejected.
+// non-square pixel aspect, and a nonzero-origin ROI are accepted independent of the advisory
+// timing interval, while a full-format descriptor under a proxy request and a one-pixel mismatch
+// are rejected.
 //
 // Native readback exists only inside the qualification and is never part of this product path.
 
@@ -258,20 +258,10 @@ oneSolidPlan(const bloom::document::CompositionFormat compositionFormat) {
 }
 
 [[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>>
-chooseEligibleSize(const GpuResidentPreviewQualificationReport& report) {
-    const auto& interval = report.eligibleInterval();
-    if (!interval.has_value()) {
-        return std::nullopt;
-    }
-    static constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 5> kCandidates{
-        {{256, 144}, {960, 540}, {1280, 720}, {1920, 1080}, {3840, 2160}}};
-    for (const auto& [width, height] : kCandidates) {
-        const auto pixels = static_cast<std::uint64_t>(width) * height;
-        if (pixels >= interval->min_pixels && pixels <= interval->max_pixels) {
-            return std::make_pair(width, height);
-        }
-    }
-    return std::nullopt;
+residentTestSize(const GpuResidentPreviewQualificationReport& report) {
+    // The product tests exercise geometry and ownership, independent of timing observations.
+    static_cast<void>(report);
+    return std::make_pair(960U, 540U);
 }
 
 struct PipelineSet final {
@@ -344,8 +334,7 @@ int main(int argc, char** argv) {
         // The real qualification is the only source of an eligible report.
         GpuResidentPreviewQualificationReport report = bloom::runtime::qualifyResidentPreview(
             *sharedProcessor, *device.device, pipelines.view());
-        expectations.expect(report.eligible(),
-                            "the real resident qualification measured an eligible interval");
+        expectations.expect(report.eligible(), "the real resident qualification passed parity");
         if (!report.eligible()) {
             std::cerr << "FAIL: resident qualification not eligible: "
                       << report.diagnostic().message << '\n';
@@ -353,25 +342,19 @@ int main(int argc, char** argv) {
         }
         auto reportHandle =
             std::make_shared<const GpuResidentPreviewQualificationReport>(std::move(report));
-        const auto size = chooseEligibleSize(*reportHandle);
-        expectations.expect(size.has_value(), "a measured eligible size exists");
+        const auto size = residentTestSize(*reportHandle);
+        expectations.expect(size.has_value(), "a bounded resident test size exists");
         if (!size.has_value()) {
             return 1;
         }
         constexpr std::size_t kBudget = std::size_t{1} << 28;
-        const auto interval = reportHandle->eligibleInterval();
-        expectations.expect(interval.has_value(), "the eligible report exposes an interval");
-        if (!interval.has_value()) {
-            return 1;
-        }
-
         auto registry = GpuResidentFrameLeaseRegistry::create(*device.device);
         expectations.expect(registry != nullptr, "the owner-bound lease registry is created");
         if (registry == nullptr) {
             return 1;
         }
 
-        // --- Accepted geometry cases inside the measured eligible interval -----------------------
+        // --- Accepted geometry cases under the parity-qualified resident profile -----------------
         const std::uint32_t fullWidth = size->first;
         const std::uint32_t fullHeight = size->second;
         const auto fullDataWindow = window(0, 0, fullWidth, fullHeight);
@@ -387,6 +370,21 @@ int main(int argc, char** argv) {
                                  .dataWindow = *fullDataWindow,
                                  .displayWindow = *fullDataWindow},
                         "full-format", kBudget);
+
+        // One pixel is below every sampled timing size. Genuine native publication still works
+        // because the timing comparison is not an admission or parity bound.
+        const auto tinyWindow = window(0, 0, 1, 1);
+        expectations.expect(tinyWindow.has_value(), "the one-pixel window builds");
+        if (tinyWindow.has_value()) {
+            runAcceptedCase(expectations, *device.device, pipelines, *registry, *sharedProcessor,
+                            reportHandle,
+                            CaseSpec{.compositionFormat = format(1, 1),
+                                     .resolution = CompositionFormatResolution{},
+                                     .policy = PreviewResolutionPolicy::Full,
+                                     .dataWindow = *tinyWindow,
+                                     .displayWindow = *tinyWindow},
+                            "one-pixel-below-timing-samples", kBudget);
+        }
 
         // Explicit ProxyResolution at the same eligible extent. The composition is twice the size,
         // so a reduced-resolution request is the only reason this geometry is expected; the trusted
@@ -409,22 +407,14 @@ int main(int argc, char** argv) {
                                  .dataWindow = *fullDataWindow,
                                  .displayWindow = *fullDataWindow},
                         "half-policy", kBudget);
-        {
-            const auto pixels = static_cast<std::uint64_t>(fullWidth) * fullHeight;
-            if (pixels >= interval->min_pixels && pixels <= interval->max_pixels) {
-                runAcceptedCase(expectations, *device.device, pipelines, *registry,
-                                *sharedProcessor, reportHandle,
-                                CaseSpec{.compositionFormat = format(4 * fullWidth, 4 * fullHeight),
-                                         .resolution = ProxyResolution{fullDataWindow->extent()},
-                                         .policy = PreviewResolutionPolicy::Quarter,
-                                         .dataWindow = *fullDataWindow,
-                                         .displayWindow = *fullDataWindow},
-                                "quarter-policy", kBudget);
-            } else {
-                std::cout << "NOTE: quarter-policy area is outside the measured interval; gate "
-                             "not exercised\n";
-            }
-        }
+        runAcceptedCase(expectations, *device.device, pipelines, *registry, *sharedProcessor,
+                        reportHandle,
+                        CaseSpec{.compositionFormat = format(4 * fullWidth, 4 * fullHeight),
+                                 .resolution = ProxyResolution{fullDataWindow->extent()},
+                                 .policy = PreviewResolutionPolicy::Quarter,
+                                 .dataWindow = *fullDataWindow,
+                                 .displayWindow = *fullDataWindow},
+                        "quarter-policy", kBudget);
 
         // Non-square format pixel aspect at full resolution.
         {
@@ -468,23 +458,15 @@ int main(int argc, char** argv) {
             expectations.expect(roi.has_value() && roiDisplay.has_value(),
                                 "the nonzero-origin ROI geometry builds");
             if (roi.has_value() && roiDisplay.has_value()) {
-                const auto pixels =
-                    static_cast<std::uint64_t>(roi->extent().width()) * roi->extent().height();
-                if (pixels >= interval->min_pixels && pixels <= interval->max_pixels) {
-                    runAcceptedCase(
-                        expectations, *device.device, pipelines, *registry, *sharedProcessor,
-                        reportHandle,
-                        CaseSpec{.compositionFormat = format(2 * fullWidth, 2 * fullHeight),
-                                 .resolution = CompositionFormatResolution{},
-                                 .policy = PreviewResolutionPolicy::Full,
-                                 .dataWindow = *roi,
-                                 .displayWindow = *roiDisplay,
-                                 .roi = roi},
-                        "nonzero-origin-roi", kBudget);
-                } else {
-                    std::cout << "NOTE: ROI area is outside the measured interval; gate not "
-                                 "exercised\n";
-                }
+                runAcceptedCase(expectations, *device.device, pipelines, *registry,
+                                *sharedProcessor, reportHandle,
+                                CaseSpec{.compositionFormat = format(2 * fullWidth, 2 * fullHeight),
+                                         .resolution = CompositionFormatResolution{},
+                                         .policy = PreviewResolutionPolicy::Full,
+                                         .dataWindow = *roi,
+                                         .displayWindow = *roiDisplay,
+                                         .roi = roi},
+                                "nonzero-origin-roi", kBudget);
             }
         }
 

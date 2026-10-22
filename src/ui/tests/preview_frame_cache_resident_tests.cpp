@@ -197,20 +197,10 @@ oneSolidPlan(const bloom::document::CompositionFormat compositionFormat,
 }
 
 [[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>>
-chooseEligibleSize(const GpuResidentPreviewQualificationReport& report) {
-    const auto& interval = report.eligibleInterval();
-    if (!interval.has_value()) {
-        return std::nullopt;
-    }
-    static constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 5> kCandidates{
-        {{256, 144}, {960, 540}, {1280, 720}, {1920, 1080}, {3840, 2160}}};
-    for (const auto& [width, height] : kCandidates) {
-        const auto pixels = static_cast<std::uint64_t>(width) * height;
-        if (pixels >= interval->min_pixels && pixels <= interval->max_pixels) {
-            return std::make_pair(width, height);
-        }
-    }
-    return std::nullopt;
+residentTestSize(const GpuResidentPreviewQualificationReport& report) {
+    // Cache behavior is independent of the advisory startup timing interval.
+    static_cast<void>(report);
+    return std::make_pair(960U, 540U);
 }
 
 struct PipelineSet final {
@@ -342,7 +332,7 @@ int main(int argc, char** argv) {
         }
         auto reportHandle =
             std::make_shared<const GpuResidentPreviewQualificationReport>(std::move(report));
-        const auto size = chooseEligibleSize(*reportHandle);
+        const auto size = residentTestSize(*reportHandle);
         expectations.expect(size.has_value(), "an eligible size exists");
         if (!size.has_value()) {
             return 1;

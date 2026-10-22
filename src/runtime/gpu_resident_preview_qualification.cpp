@@ -143,7 +143,7 @@ GpuResidentPreviewQualificationReport& GpuResidentPreviewQualificationReport::op
 
 bool GpuResidentPreviewQualificationReport::eligibleFor(
     const GpuDevice& device, const PreparedCpuDisplayProcessorHandle& processor) const noexcept {
-    if (outcome_ != GpuResidentPreviewOutcome::PreviewOnly || !eligibleInterval_.has_value()) {
+    if (outcome_ != GpuResidentPreviewOutcome::PreviewOnly) {
         return false;
     }
     if (device.state() != GpuDeviceState::Ready) {
@@ -288,15 +288,11 @@ qualifyResidentPreview(const PreparedCpuDisplayProcessorHandle& processor, GpuDe
         report.subnormalFrameRejected_ = subnormalRejected;
         report.outcome_ = GpuResidentPreviewOutcome::PreviewOnly;
         report.eligibleInterval_ = deriveEligibleInterval(report.timings_);
-        report.diagnostic_ =
+        report.diagnostic_ = makeDiagnostic(
+            GpuResidentPreviewDiagnosticCode::None,
             report.eligibleInterval_.has_value()
-                ? makeDiagnostic(GpuResidentPreviewDiagnosticCode::None,
-                                 "every resident operation passed parity and a contiguous faster "
-                                 "suffix was measured")
-                : makeDiagnostic(
-                      GpuResidentPreviewDiagnosticCode::TimingNotImproved,
-                      "every resident operation passed parity but the largest measured size was "
-                      "not faster; CPU-only");
+                ? "every resident operation passed parity; a faster measured suffix was observed"
+                : "every resident operation passed parity; no faster measured suffix was observed");
         return report;
     } catch (...) {
         return fail(GpuResidentPreviewDiagnosticCode::InternalInvariant);

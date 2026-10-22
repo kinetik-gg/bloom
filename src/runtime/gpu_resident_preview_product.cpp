@@ -242,12 +242,6 @@ bool gpuResidentDisplayProductIsEligible(render::GpuDevice& device,
             reason = "the display area is empty or exceeds the supported 4K ceiling";
             return false;
         }
-        const auto& interval = report.eligibleInterval();
-        if (!interval.has_value() || pixelCount < interval->min_pixels ||
-            pixelCount > interval->max_pixels) {
-            reason = "the display area is outside the measured eligible interval";
-            return false;
-        }
         const auto allocationBytes = display->allocationBytes();
         if (allocationBytes == 0) {
             reason = "the resident display reports no native allocation bytes";

@@ -87,10 +87,10 @@ accelerationStatusFromServiceStatus(const rt::GpuPreviewDisplayServiceStatus& st
     out.presentationStatus = presentationText(status);
 
     if (residentEligible) {
+        out.operationStatus << QStringLiteral("Bloom Neutral v1 (PreviewOnly): parity qualified");
         if (const auto& interval = resident->eligibleInterval(); interval.has_value()) {
             out.operationStatus << QStringLiteral(
-                                       "Bloom Neutral v1 (PreviewOnly): eligible for previews "
-                                       "of %1-%2 pixels")
+                                       "Startup upload/display faster at %1-%2 pixels (advisory)")
                                        .arg(interval->min_pixels)
                                        .arg(interval->max_pixels);
         }

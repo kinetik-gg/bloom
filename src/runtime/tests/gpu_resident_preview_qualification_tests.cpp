@@ -226,7 +226,7 @@ void printReport(const GpuResidentPreviewQualificationReport& report) {
         std::cout << "eligibleInterval=[" << report.eligibleInterval()->min_pixels << ", "
                   << report.eligibleInterval()->max_pixels << "] pixels\n";
     } else {
-        std::cout << "eligibleInterval=none (CPU-only at the measured sizes)\n";
+        std::cout << "fasterMeasuredInterval=none (GPU remains parity-qualified)\n";
     }
 }
 
@@ -305,10 +305,8 @@ int main(int argc, char** argv) {
         expectations.expect(report.subnormalFrameRejected(),
                             "a nonzero subnormal resident frame was rejected whole-frame");
 
-        // The eligible interval and the measured timings must be mutually consistent. A correct GPU
-        // that is slower than the CPU oracle stays PreviewOnly (all-pixel parity held) but measures
-        // no faster interval: that is a truthful CPU fallback, not a test failure. Only the opt-in
-        // --require-acceleration gate turns "no faster interval" into a failure.
+        // Parity qualifies the resident route. Startup upload/display timings remain truthful
+        // observations, but cannot veto a compiled GPU scene whose workload they did not measure.
         const auto& timings = report.timings();
         const auto interval = report.eligibleInterval();
         if (timings.empty()) {
@@ -317,8 +315,10 @@ int main(int argc, char** argv) {
             // expect() records and does not abort, so keep every later access behind this check.
             expectations.expect(false, "the report measured the resident interval");
         } else {
-            expectations.expect(report.eligible() == interval.has_value(),
-                                "eligibility is consistent with the measured eligible interval");
+            expectations.expect(
+                report.eligible() && report.eligibleFor(*device.device, *processor) &&
+                    report.diagnostic().code == GpuResidentPreviewDiagnosticCode::None,
+                "parity qualifies the device independently of measured speed");
             if (interval.has_value()) {
                 // Derive the expected contiguous faster suffix from the actual timings, exactly as
                 // the qualification does, and require the report to match it.
@@ -332,23 +332,14 @@ int main(int argc, char** argv) {
                 expectations.expect(interval->min_pixels == timings[lowest].pixel_count &&
                                         interval->max_pixels == timings.back().pixel_count,
                                     "the eligible interval matches the measured faster suffix");
-                expectations.expect(report.diagnostic().code ==
-                                        GpuResidentPreviewDiagnosticCode::None,
-                                    "an eligible report carries no timing diagnostic");
-                expectations.expect(report.eligibleFor(*device.device, *processor),
-                                    "an eligible report qualifies the actual device and processor");
-                std::cout << "ELIGIBLE interval min_pixels=" << interval->min_pixels
+                std::cout << "FASTER measured interval min_pixels=" << interval->min_pixels
                           << " max_pixels=" << interval->max_pixels << '\n';
             } else {
                 expectations.expect(
                     !timings.back().native_improved,
-                    "a CPU-only outcome requires the largest measured size not to improve");
-                expectations.expect(
-                    report.diagnostic().code == GpuResidentPreviewDiagnosticCode::TimingNotImproved,
-                    "a CPU-only parity-preserving outcome reports TimingNotImproved");
-                expectations.expect(!report.eligibleFor(*device.device, *processor),
-                                    "an ineligible report grants no device/processor eligibility");
-                std::cout << "CPU-ONLY outcome: parity held but no faster resident interval\n";
+                    "an absent faster interval means the largest measured size did not improve");
+                std::cout << "NO FASTER measured interval; parity-qualified GPU route remains "
+                             "available\n";
             }
         }
         if (options.require_acceleration) {

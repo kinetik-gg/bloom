@@ -13,8 +13,8 @@
 // The factory runs on the device OWNER thread, with the ACTUAL device, the ACTUAL registry bound to
 // it, the ACTUAL selected CPU processor, and a GENUINE immutable qualification report from
 // qualifyResidentPreview(). It validates the report against that exact device and processor, the
-// request/process identity, the native dimensions/window/pixel aspect, and the measured eligible
-// area and byte budget, then publishes the image into the registry. A successful lease plus the
+// request/process identity, the native dimensions/window/pixel aspect, and the supported area and
+// byte budget, then publishes the image into the registry. A successful lease plus the
 // registry's own pin validation is what proves the token actually belongs to and is bound to the
 // registry; a construction-time success in this factory is never accepted as a qualification and
 // no report can be fabricated here.
@@ -43,9 +43,8 @@ namespace bloom::runtime {
 class PreviewCpuStage;
 class PreparedGpuScene;
 
-// The largest display area the fixed resident operation is admitted for. The report's measured
-// eligible interval is always the real authority; this is only the 4K ceiling that interval can
-// never exceed. Never a 720p floor: eligibility comes from the measured interval.
+// The largest display area in the currently qualified resident profile. Native resource checks
+// may impose a lower bound for an individual request; timing measurements impose no size floor.
 inline constexpr std::uint64_t kGpuResidentDisplayMaxPixels = 3840ULL * 2160ULL;
 
 // One resident display product request. `bounds` is the evaluated operation geometry the retained
@@ -78,8 +77,8 @@ struct GpuResidentDisplayProductRequest final {
 // on the owner thread; the request identity is neutral and matches the process identity and plan;
 // the trusted expected descriptor (from the actual prepared scene output / CPU process image) is
 // consistent with the request's resolved resolution and ROI; the native display image matches that
-// trusted descriptor exactly (dimensions, data/display window, pixel aspect); the area is inside
-// the measured eligible interval and at or below 4K; and the actual native allocation fits the
+// trusted descriptor exactly (dimensions, data/display window, pixel aspect); the area is at or
+// below the qualified 4K profile ceiling; and the actual native allocation fits the
 // request byte budget. `reason` is set on failure. Used by the caller before dispatch and rechecked
 // by the factory.
 [[nodiscard]] bool gpuResidentDisplayProductIsEligible(
@@ -91,8 +90,8 @@ struct GpuResidentDisplayProductRequest final {
 // Wraps a successful resident display into the fourth PreparedPreviewFrame arm. Returns
 // std::nullopt, publishing nothing, on any of: a null or ineligible report; a foreign device,
 // registry or thread; a mismatch between the report, the request identity and the process
-// identity/plan; a native dimension/window/pixel-aspect mismatch; an area outside the measured
-// interval or over the byte budget; or a registry publish refusal (budget, foreign device,
+// identity/plan; a native dimension/window/pixel-aspect mismatch; an area above the qualified
+// profile ceiling or over the byte budget; or a registry publish refusal (budget, foreign device,
 // invalid image).
 //
 // On success the registry owns the native image, the returned frame retains only the opaque lease,
