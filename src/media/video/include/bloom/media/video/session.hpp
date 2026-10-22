@@ -90,11 +90,11 @@ class VideoDecodeSession final {
     [[nodiscard]] static std::string defaultWorker();
 
   private:
-    provider::WorkerReply call(provider::Role role, const provider::ProbeResult* source,
-                               std::uint32_t stream, std::uint64_t position, std::uint32_t count,
-                               const Cancel& cancel,
-                               std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot = {},
-                               bool retainWorker = false);
+    provider::WorkerReply
+    call(provider::Role role, const provider::ProbeResult* source, std::uint32_t stream,
+         std::uint64_t position, std::uint32_t count, const Cancel& cancel,
+         const std::shared_ptr<const platform::ReadOnlyFileSnapshot>& snapshot = {},
+         bool retainWorker = false);
     [[nodiscard]] provider::Result<std::shared_ptr<const platform::ReadOnlyFileSnapshot>>
     sourceRevision(std::optional<provider::Digest> expected, const Cancel& cancel,
                    const SourceRevisionAccess& access) const;

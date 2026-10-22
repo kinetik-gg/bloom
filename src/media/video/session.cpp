@@ -182,11 +182,11 @@ std::string VideoDecodeSession::defaultWorker() {
     return {};
 #endif
 }
-WorkerReply VideoDecodeSession::call(Role role, const ProbeResult* source, std::uint32_t stream,
-                                     std::uint64_t position, std::uint32_t count,
-                                     const Cancel& cancel,
-                                     std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot,
-                                     const bool retainWorker) {
+WorkerReply
+VideoDecodeSession::call(Role role, const ProbeResult* source, std::uint32_t stream,
+                         std::uint64_t position, std::uint32_t count, const Cancel& cancel,
+                         const std::shared_ptr<const platform::ReadOnlyFileSnapshot>& snapshot,
+                         const bool retainWorker) {
     std::unique_lock lock(state_->mutex, std::try_to_lock);
     if (!lock.owns_lock())
         return Unavailable{Error::Busy, "Video session has an active request"};
@@ -390,7 +390,7 @@ VideoDecodeSession::frame(const ProbeResult& source, std::uint32_t stream, std::
     State::FrameCompletion completion{*state_, *flight};
     try {
         auto decoded = product<FrameProduct>(
-            call(Role::VideoDecode, &source, stream, index, 1, cancel, std::move(snapshot),
+            call(Role::VideoDecode, &source, stream, index, 1, cancel, snapshot,
                  revisionAccess.policy == SourceRevisionPolicy::Retained &&
                      revisionAccess.allowRetention));
         if (const auto* error = std::get_if<Unavailable>(&decoded)) {
