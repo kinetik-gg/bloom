@@ -9,7 +9,9 @@
 #include <bloom/output/png_output_adapter.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <condition_variable>
 #include <cstdlib>
 #include <mutex>
@@ -126,6 +128,36 @@ void testWideShortImageBeyondFormerDimensionCap(support::Expectations& expectati
                                 decoded.rgba.size() == pixels.size() * 4U,
                             "the wide short PNG independently decodes at its full width");
     }
+}
+
+void testIdatChunkingWithoutWholeCompressedImage(support::Expectations& expectations) {
+    const support::ScratchDirectory scratch("idat-streaming");
+    constexpr std::uint32_t width = 4'200;
+    constexpr std::uint32_t height = 1'000;
+    std::vector<render::Rgba8> pixels(std::size_t{width} * height);
+    std::uint32_t state = 0x913EC72BU;
+    for (auto& pixel : pixels) {
+        auto next = [&state] {
+            state ^= state << 13U;
+            state ^= state >> 17U;
+            state ^= state << 5U;
+            return static_cast<std::uint8_t>(state);
+        };
+        pixel = {next(), next(), next(), next()};
+    }
+    const auto destination = scratch.file("multi-idat.png");
+    const output::PngRgba8SrgbWriterV1 writer;
+    const auto written = writer.write(preparedStream(pixels, width, height), destination, {});
+    expectations.expect(written.status() == output::PngWriteStatusV1::Written,
+                        "an incompressible prepared stream writes with bounded IDAT storage");
+    if (written.status() != output::PngWriteStatusV1::Written)
+        return;
+    const auto decoded = support::independentlyDecodePng(destination);
+    const auto idatCount = std::count(decoded.chunkTypesInOrder.begin(),
+                                      decoded.chunkTypesInOrder.end(), "IDAT");
+    expectations.expect(decoded.ok && decoded.everyCrcValid && idatCount >= 2 &&
+                            decoded.rgba.size() == pixels.size() * 4U,
+                        "multiple bounded IDAT chunks independently decode to the full image");
 }
 
 void testResourceLimitExceededRejected(support::Expectations& expectations) {
@@ -257,6 +289,7 @@ int main() {
     testChunkConformanceAndIndependentDecode(expectations);
     testInvalidPreparedStreamRejected(expectations);
     testWideShortImageBeyondFormerDimensionCap(expectations);
+    testIdatChunkingWithoutWholeCompressedImage(expectations);
     testResourceLimitExceededRejected(expectations);
     testCancellationMidWrite(expectations);
     testScratchDirectoryIsolation(expectations);

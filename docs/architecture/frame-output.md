@@ -664,6 +664,8 @@ has length 1 and rendering intent byte 0 (perceptual). Every chunk length and CR
 The concatenated `IDAT` payload is one zlib stream with compression method 8 and 32 KiB window; after
 decompression every scanline begins with filter byte `0`. The exact compressed bytes and `IDAT`
 chunk boundaries remain execution-provenance evidence, not portable semantic identity.
+The writer emits full 16 MiB `IDAT` chunks as deflate produces them and retains only one pending
+compressed chunk; it does not hold the complete compressed image in memory.
 
 Every other chunk is forbidden in v1, including `PLTE`, `gAMA`, `cHRM`, `iCCP`, `cICP`, `sBIT`,
 `bKGD`, `hIST`, `tRNS`, `pHYs`, `sPLT`, `eXIf`, `tIME`, `tEXt`, `zTXt`, and `iTXt`. In particular,

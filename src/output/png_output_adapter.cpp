@@ -243,8 +243,10 @@ PngRgba8SrgbWriterV1::write(const PngRgba8SrgbPreparedStreamV1& prepared,
         }
         ::DeflateStreamGuard guard{&stream};
 
-        std::vector<std::byte> compressed;
-        compressed.reserve(deflateBound(&stream, static_cast<uLong>(geometry->totalOutputBytes)));
+        // IDAT boundaries depend only on the compressed byte stream, not on deflate's drain
+        // cadence. Keep at most one chunk instead of retaining the complete encoded image.
+        std::vector<std::byte> compressedChunk;
+        compressedChunk.reserve(kOutputAdapterMaximumStreamingChunkBytesV1);
 
         const auto rowsPerChunk =
             std::max<std::uint64_t>(1, kOutputAdapterMaximumStreamingChunkBytesV1 /
@@ -257,6 +259,7 @@ PngRgba8SrgbWriterV1::write(const PngRgba8SrgbPreparedStreamV1& prepared,
         std::uint64_t completedRows = 0;
         ::reportProgress(progress, {0, geometry->height});
         bool compressorFailed = false;
+        bool writeFailed = false;
         while (rowsRemaining > 0) {
             if (cancellation.isCancellationRequested()) {
                 return PngWriteResultV1::cancelled(::removeDestinationBestEffort(destination));
@@ -289,11 +292,27 @@ PngRgba8SrgbWriterV1::write(const PngRgba8SrgbPreparedStreamV1& prepared,
                     break;
                 }
                 const auto produced = drainBuffer.size() - stream.avail_out;
-                compressed.insert(compressed.end(), drainBuffer.begin(),
-                                  drainBuffer.begin() + static_cast<std::ptrdiff_t>(produced));
-            } while (!compressorFailed &&
+                std::size_t consumed = 0;
+                while (consumed < produced) {
+                    const auto remaining = kOutputAdapterMaximumStreamingChunkBytesV1 -
+                                           compressedChunk.size();
+                    const auto count = std::min(remaining, produced - consumed);
+                    compressedChunk.insert(compressedChunk.end(), drainBuffer.begin() +
+                                              static_cast<std::ptrdiff_t>(consumed),
+                                           drainBuffer.begin() +
+                                              static_cast<std::ptrdiff_t>(consumed + count));
+                    consumed += count;
+                    if (compressedChunk.size() == kOutputAdapterMaximumStreamingChunkBytesV1) {
+                        if (!::writeChunk(file, detail::kPngChunkTypeIdatV1, compressedChunk)) {
+                            writeFailed = true;
+                            break;
+                        }
+                        compressedChunk.clear();
+                    }
+                }
+            } while (!compressorFailed && !writeFailed &&
                      (stream.avail_out == 0 || (isLastChunk && deflateStatus != Z_STREAM_END)));
-            if (compressorFailed) {
+            if (compressorFailed || writeFailed) {
                 break;
             }
 
@@ -304,24 +323,17 @@ PngRgba8SrgbWriterV1::write(const PngRgba8SrgbPreparedStreamV1& prepared,
         if (compressorFailed) {
             return ::fail(PngWriteErrorCodeV1::CompressorFailure, destination, destinationCreated);
         }
+        if (writeFailed) {
+            return ::fail(PngWriteErrorCodeV1::IoFailure, destination, destinationCreated);
+        }
 
-        // Deterministic fixed-size IDAT splits (png_preset_contract.hpp): one chunk unless the
-        // compressed stream exceeds kOutputAdapterMaximumStreamingChunkBytesV1, in which case
-        // every chunk but the last is exactly that size.
-        std::size_t offset = 0;
-        do {
-            if (cancellation.isCancellationRequested()) {
-                return PngWriteResultV1::cancelled(::removeDestinationBestEffort(destination));
-            }
-            const auto remaining = compressed.size() - offset;
-            const auto thisChunkBytes =
-                std::min<std::size_t>(remaining, kOutputAdapterMaximumStreamingChunkBytesV1);
-            const std::span<const std::byte> chunkData(compressed.data() + offset, thisChunkBytes);
-            if (!::writeChunk(file, detail::kPngChunkTypeIdatV1, chunkData)) {
-                return ::fail(PngWriteErrorCodeV1::IoFailure, destination, destinationCreated);
-            }
-            offset += thisChunkBytes;
-        } while (offset < compressed.size());
+        if (cancellation.isCancellationRequested()) {
+            return PngWriteResultV1::cancelled(::removeDestinationBestEffort(destination));
+        }
+        if (!compressedChunk.empty() &&
+            !::writeChunk(file, detail::kPngChunkTypeIdatV1, compressedChunk)) {
+            return ::fail(PngWriteErrorCodeV1::IoFailure, destination, destinationCreated);
+        }
 
         if (!::writeChunk(file, detail::kPngChunkTypeIendV1, {})) {
             return ::fail(PngWriteErrorCodeV1::IoFailure, destination, destinationCreated);

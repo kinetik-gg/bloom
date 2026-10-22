@@ -699,21 +699,25 @@ void testHardResourceLimitTruth(Expectations& expectations) {
                         "other unavailable dependency codes remain valid within resource bounds");
 
     constexpr std::string_view excessivePngPixels =
-        "height=u:1;packing=id:rgba;sample-type=id:uint8;width=u:32769";
+        "height=u:8193;packing=id:rgba;sample-type=id:uint8;width=u:8192";
+    constexpr std::string_view excessivePngSourcePixels =
+        "height=u:8193;packing=id:rgba;sample-type=id:binary32;width=u:8192";
+    constexpr std::string_view excessivePngWindow =
+        "height=u:8193;origin-x=i:0;origin-y=i:0;width=u:8192";
     auto png = makePngReport();
-    png[0].sourceDescriptor = excessiveDimensionPixels;
+    png[0].sourceDescriptor = excessivePngSourcePixels;
     png[0].targetDescriptor = excessivePngPixels;
-    png[5].sourceDescriptor = excessiveDimensionWindow;
-    png[5].targetDescriptor = excessiveDimensionWindow;
-    png[6].sourceDescriptor = excessiveDimensionWindow;
-    png[6].targetDescriptor = excessiveDimensionWindow;
+    png[5].sourceDescriptor = excessivePngWindow;
+    png[5].targetDescriptor = excessivePngWindow;
+    png[6].sourceDescriptor = excessivePngWindow;
+    png[6].targetDescriptor = excessivePngWindow;
     expectations.expect(validate(Preset::PngRgba8SrgbV1, png).issue().code ==
                             Error::DescriptorRelationshipMismatch,
-                        "an oversized PNG cannot retain its nominal external-reference code");
+                        "a PNG above the aggregate pixel cap cannot retain its nominal dependency code");
     setResourceLimitExceeded(png);
     const auto blockedPng = validate(Preset::PngRgba8SrgbV1, png);
     expectations.expect(blockedPng && !blockedPng.approvable(),
-                        "an oversized PNG report is valid only with resource.limit-exceeded");
+                        "a PNG above the aggregate pixel cap requires resource.limit-exceeded");
 }
 
 } // namespace
