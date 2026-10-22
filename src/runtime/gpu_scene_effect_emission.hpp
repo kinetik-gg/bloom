@@ -296,7 +296,10 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
             baseDescriptor->pixelAspect, std::string(render::gpuImageCombineShaderIdentity()),
             parameters);
         result.window = outputWindow;
-        result.local = bounds[inputValue].output;
+        // Mix can add pixels where only the second image has content; Set Alpha can assign
+        // coverage to a transparent base pixel. Use the whole base data window as conservative
+        // content bounds so downstream ROI never silently drops those pixels.
+        result.local = boundsForWindow(outputWindow, ctx.hScale, ctx.vScale);
         result.output = result.local;
         return std::nullopt;
     }

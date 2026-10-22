@@ -53,6 +53,16 @@ Depends on #332.
 
 Implement explicit image/mask alignment, channel-to-coverage extraction, factor policy and output windows. Flat RGBA masking first; do not require arbitrary AOV infrastructure.
 
+The first flat-RGBA slice uses two-image Image Mix with an animated unit factor, and Set Alpha
+with a second matte image and an Alpha/Red/Green/Blue/Luma selector. The first image owns the
+output data and display windows and pixel aspect. The second image is sampled at the same
+composition-space integer pixel coordinate, with transparent black outside its data window.
+Mix interpolates premultiplied RGBA by its factor. Set Alpha replaces coverage while preserving
+the first image's straight RGB; a zero-alpha first pixel has zero RGB even if the matte gives it
+positive coverage. RGB matte channels and scene-linear Rec. 709 luma are unpremultiplied,
+then clamped to [0,1]; a zero-alpha matte gives zero coverage. A separate per-pixel mask input
+for Mix remains part of the later Matte integration rather than this two-image slice.
+
 Depends on #332.
 
 

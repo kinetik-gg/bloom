@@ -3,6 +3,7 @@
 #include <OpenColorIO/OpenColorIO.h>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/render/image_coverage.hpp>
 
 #include <algorithm>
 #include <array>
@@ -80,6 +81,80 @@ bool samePixels(const runtime::EvaluationResult& a, const runtime::EvaluationRes
     return a.frame() && b.frame() &&
            std::ranges::equal(a.frame()->processImage().pixels(),
                               b.frame()->processImage().pixels());
+}
+
+void testImageCombineWindows() {
+    const auto make = [](const std::int64_t x, const std::int64_t y,
+                         const std::uint32_t width, const std::uint32_t height,
+                         const std::vector<render::Rgba32f>& pixels) {
+        const auto window = render::ImageWindow::create(x, y, width, height);
+        if (!window)
+            throw std::logic_error("invalid image combine window");
+        const auto descriptor = render::Rgba32fImageDescriptor::create(
+            *window.value(), *window.value(), core::PixelAspectRatio::square());
+        if (!descriptor)
+            throw std::logic_error("invalid image combine descriptor");
+        auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), 1U << 20U);
+        if (!builder)
+            throw std::logic_error("image combine builder refused fixture");
+        for (std::uint32_t row = 0; row < height; ++row) {
+            auto span = builder.value()->row(y + row);
+            if (!span)
+                throw std::logic_error("image combine fixture row missing");
+            for (std::uint32_t column = 0; column < width; ++column)
+                (*span.value())[column] = pixels[static_cast<std::size_t>(row) * width + column];
+        }
+        auto frozen = std::move(*builder.value()).freeze();
+        if (!frozen)
+            throw std::logic_error("image combine fixture did not freeze");
+        return std::move(*frozen.value());
+    };
+    const auto rgba = [](const float r, const float g, const float b, const float a) {
+        const auto pixel = render::Rgba32f::fromPremultiplied(r, g, b, a);
+        if (!pixel)
+            throw std::logic_error("invalid image combine pixel");
+        return *pixel.value();
+    };
+    const std::vector basePixels{rgba(-0.5F, 1.0F, 2.0F, 0.5F),
+                                 rgba(0.0F, 0.0F, 0.0F, 0.0F),
+                                 rgba(0.25F, 0.5F, 0.75F, 1.0F)};
+    const std::vector mattePixels{rgba(0.25F, -0.25F, 1.0F, 0.5F)};
+    const auto base = make(-2, 3, 3, 1, basePixels);
+    const auto matte = make(-1, 3, 1, 1, mattePixels);
+    runtime::detail::PreparedImageEffect mix;
+    mix.combine = {runtime::ImageCombineMode::Mix, 0.25F,
+                   render::ImageCoverageChannel::Alpha};
+    const auto operation = runtime::OperationIndex::fromRaw(1);
+    const auto mixed = runtime::detail::applyImageEffect(mix, base, &matte, 1U << 20U, {},
+                                                          operation, {});
+    expect(mixed.image && !mixed.diagnostic, "offset Image Mix CPU evaluation succeeds");
+    if (mixed.image) {
+        expect(mixed.image->descriptor()->dataWindow() == base.descriptor()->dataWindow(),
+               "Image Mix output follows the base image window");
+        const auto expected = rgba(-0.375F, 0.75F, 1.5F, 0.375F);
+        expect(mixed.image->pixels()[0] == expected,
+               "Image Mix treats out-of-window second pixels as transparent");
+        expect(mixed.image->pixels()[1] == rgba(0.0625F, -0.0625F, 0.25F, 0.125F),
+               "Image Mix uses composition-space offset for the second image");
+    }
+    runtime::detail::PreparedImageEffect set;
+    set.combine = {runtime::ImageCombineMode::SetAlpha, 1.0F,
+                   render::ImageCoverageChannel::Luma};
+    const auto replaced = runtime::detail::applyImageEffect(set, base, &matte, 1U << 20U, {},
+                                                             operation, {});
+    expect(replaced.image && !replaced.diagnostic, "Set Alpha CPU evaluation succeeds");
+    if (replaced.image) {
+        expect(replaced.image->pixels()[0] == render::Rgba32f::transparent(),
+               "Set Alpha clears base pixels outside matte window");
+        expect(replaced.image->pixels()[1] == render::Rgba32f::transparent(),
+               "Set Alpha keeps zero-straight-RGB base black");
+        expect(replaced.image->pixels()[2] == render::Rgba32f::transparent(),
+               "Set Alpha clears base pixels after matte extent");
+    }
+    const auto budgetRefusal = runtime::detail::applyImageEffect(mix, base, &matte, 1, {},
+                                                                 operation, {});
+    expect(!budgetRefusal.image && budgetRefusal.diagnostic,
+           "Image Mix refuses insufficient pixel budget");
 }
 
 void testExposureAndOffset() {
@@ -558,6 +633,7 @@ int main() {
         testCst();
         testExposureAndOffset();
         testCanvasEffects();
+        testImageCombineWindows();
         testLookBypass();
         testFileTransform();
         testMultiplyAndInvert();

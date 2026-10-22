@@ -61,4 +61,7 @@ void runBlendBenchmark(Expectations& expectations, GpuDevice& device);
 // driver.
 void runPortableBlendTests(Expectations& expectations, GpuDevice& device);
 
+// Actual resident image-combine execution and numeric CPU parity, including mismatched windows.
+void runImageCombineTests(Expectations& expectations, GpuDevice& device);
+
 } // namespace bloom::render::blend_proof

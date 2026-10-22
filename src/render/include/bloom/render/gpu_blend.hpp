@@ -29,6 +29,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace bloom::render {
 
@@ -72,6 +73,13 @@ struct GpuImageCombineParameters final {
 };
 
 struct GpuBlendParameters final {
+    GpuBlendParameters(std::shared_ptr<const GpuImage> sourceImage,
+                       std::shared_ptr<const GpuImage> destinationImage,
+                       const core::BlendMode blendMode,
+                       std::optional<GpuImageCombineParameters> combine = {})
+        : source(std::move(sourceImage)), destination(std::move(destinationImage)),
+          mode(blendMode), imageCombine(combine) {}
+
     std::shared_ptr<const GpuImage> source;
     std::shared_ptr<const GpuImage> destination;
     core::BlendMode mode = core::BlendMode::Normal;

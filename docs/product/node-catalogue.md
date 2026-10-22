@@ -91,6 +91,12 @@ level's dependencies.
 | `V1` | Deep Merge, Deep Holdout, Deep To Image | Optional deep-image path; never implied by flat RGBA support |
 | `V1` | Depth Composite | Explicit depth units, ordering, invalid-data behavior, and antialiasing policy |
 
+The initial flat-RGBA Image Mix node interpolates two images by an animated unit factor. Its
+base input owns the output window; the second input is aligned in composition space and is
+transparent outside its data window. Set Alpha reads a second image as coverage, with an
+Alpha/Red/Green/Blue/Luma selector. A dedicated per-pixel Mix mask is reserved for the
+separate Matte node and integration step.
+
 ## Color And Grade
 
 Color nodes never treat RGBA as an unlabelled four-component vector. Each operation declares its

@@ -2243,11 +2243,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 }
                                 if (result.diagnostic) {
                                     result.diagnostic->subject = operationSubject;
-                                    if (std::holds_alternative<PointwiseImageKernel>(
-                                            effect.kernel)) {
+                                    if (std::holds_alternative<PointwiseImageKernel>(effect.kernel) ||
+                                        std::holds_alternative<ImageCombineKernel>(effect.kernel) ||
+                                        std::holds_alternative<CanvasImageKernel>(effect.kernel)) {
                                         operationFailure =
                                             diagnostic(result.diagnostic->code,
-                                                       "Pointwise image effect cannot be evaluated",
+                                                       "Image effect cannot be evaluated",
                                                        result.diagnostic->detail, operationSubject);
                                         return;
                                     }

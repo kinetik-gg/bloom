@@ -39,6 +39,7 @@ using bloom::render::GpuBlendPollResult;
 using bloom::render::blend_proof::blendPixels;
 using bloom::render::blend_proof::runBlendBenchmark;
 using bloom::render::blend_proof::runPortableBlendTests;
+using bloom::render::blend_proof::runImageCombineTests;
 
 void runMode(Expectations& expectations, GpuBlend& blend, GpuImageUpload& uploader,
              const BlendMode mode, const std::string& name, const std::uint32_t width,
@@ -611,6 +612,7 @@ int main(int argc, char** argv) {
         testChainedBlend(expectations, *device.device);
         testRejections(expectations, *device.device);
         testForeignInputs(expectations, *device.device);
+        runImageCombineTests(expectations, *device.device);
         runPortableBlendTests(expectations, *device.device);
         runBlendBenchmark(expectations, *device.device);
         if (expectations.failures() != 0) {
