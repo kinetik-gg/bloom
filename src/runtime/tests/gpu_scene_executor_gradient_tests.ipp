@@ -62,6 +62,51 @@ void testGradientProduction(Expectations& expectations, GpuDevice& device,
                      "gradient followed by checker retains its native prefix");
     }
 
+
+    // Measure the genuinely sufficient serial live peak, then give the batched
+    // executor only that allowance. A wide pre-submit refusal must keep the source usable.
+    {
+        const auto plan = gradientPlan(false);
+        const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+        auto tinyCache = GpuSceneCache::create(device, GpuSceneCacheBudgets{1});
+        expectations.expect(prepared.hasValue() && tinyCache.hasValue(),
+                            "gradient budget: scene and nonretaining cache create");
+        if (prepared && tinyCache) {
+            GpuSceneExecutorBudgets serialBudgets;
+            serialBudgets.enableNativeBatches = false;
+            auto serial = GpuSceneExecutor::create(device, *tinyCache.cache, serialBudgets);
+            auto batched = GpuSceneExecutor::create(device, *tinyCache.cache);
+            expectations.expect(serial.hasValue() && batched.hasValue(),
+                                "gradient budget: both native executors create");
+            if (serial && batched) {
+                auto measured = runScene(*serial.executor, prepared.scene, kSceneBudget);
+                expectations.expect(measured.ready,
+                                    "gradient budget: serial native reference completes");
+                if (measured.ready) {
+                    const auto peak = measured.countersAtReady.peakLiveImageBytes;
+                    expectations.expect(measured.countersAtReady.cumulativeProducedImageBytes > peak,
+                                        "gradient budget: full batch exceeds sufficient live peak");
+                    measured.image.reset();
+                    const auto tight = runScene(*batched.executor, prepared.scene, peak);
+                    expectations.expect(tight.ready &&
+                                            tight.countersAtReady.nativeBatchFallbacks > 0 &&
+                                            tight.countersAtReady.peakLiveImageBytes <= peak,
+                                        "gradient budget: bounded singleton retry reaches Ready");
+                    if (tight.ready && tight.image) {
+                        const auto reference = oracle.evaluate(plan, requestFor(*plan), {});
+                        const auto pixels = readbackResidentImage(*tight.image, kReadbackBudget);
+                        expectations.expect(reference.frame() != nullptr && pixels.hasValue() &&
+                                                pixelsClose(pixels.pixels,
+                                                    reference.frame()->processImage().pixels()),
+                                            "gradient budget: retry pixels match CPU reference");
+                        expectations.expect(descriptorMatchesScene(*tight.image, *prepared.scene),
+                                            "gradient budget: retry preserves output descriptor");
+                    }
+                }
+            }
+        }
+    }
+
     // A completed executor may remain alive while another executor uses the same device.
     // Keeping the first facade must not retain exclusive native batch ownership.
     {
