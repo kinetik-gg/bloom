@@ -494,6 +494,26 @@ OcioGpuSamplingGlsl ocioGpuSamplingGlslFor(const render::OcioGpuProgramDesc& pro
     } else if ((cpuParity && (hasGamma || hasLog || hasMatrix)) ||
                (hasMatrix && program.semanticsId == kOcioGpuPointwiseAffineSemanticsId)) {
         BodySpecialization specialized = specializeOcioShaderBody(program.shaderText);
+        if (program.semanticsId == kOcioGpuPointwiseAffineSemanticsId) {
+            // OCIO's matrix emitter can append a decimal point after an exponent (e.g.
+            // 3.0e+38.), which GLSL rejects. Repair that spelling in our adapter only;
+            // retain the extracted shader and its content identity unchanged.
+            auto& body = specialized.body;
+            const auto digit = [](const char c) { return c >= '0' && c <= '9'; };
+            for (std::size_t i = 1; i < body.size(); ++i) {
+                if ((body[i] != 'e' && body[i] != 'E') || !digit(body[i - 1]))
+                    continue;
+                std::size_t end = i + 1;
+                if (end < body.size() && (body[end] == '+' || body[end] == '-'))
+                    ++end;
+                const auto begin = end;
+                while (end < body.size() && digit(body[end]))
+                    ++end;
+                if (end > begin && end + 1 < body.size() && body[end] == '.' &&
+                    (body[end + 1] == ',' || body[end + 1] == ')' || body[end + 1] == ' '))
+                    body.erase(end, 1);
+            }
+        }
         declarations += std::string(kCpuHelperDeclarations);
         definitions += std::string(kCpuHelperDefinitions);
         result.shaderBody = std::move(specialized.body);
