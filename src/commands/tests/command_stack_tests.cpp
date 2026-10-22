@@ -690,6 +690,7 @@ void testBoundedUndoHistoryAndByteAccounting(TestContext& test) {
              .ownerId = "vendor.module",
              .typeId = "vendor.module.record-type",
              .schemaVersion = document::SchemaVersion{1, 0},
+             .subject = std::nullopt,
              .mediaType = "application/octet-stream",
              .referencePolicy = document::NoExtensionReferences{},
              .payload = sharedPayload});
