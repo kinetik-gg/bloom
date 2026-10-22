@@ -186,8 +186,10 @@ void run(GpuDevice& device) {
             }
         } hook{composite_detail::mappedMemoryHook.exchange(observeAxes)};
         scratchRoot = &root;
+        const auto translatedDisplay = ImageWindow::create(-2, -1, 17, 13);
         const std::array<GpuBatchOperation, 2> translation{
-            base, GpuBatchTranslation{{nullptr, 0}, window, 0.25, -0.3, 0.75F}};
+            base, GpuBatchTranslation{{nullptr, 0}, window, 0.25, -0.3, 0.75F,
+                                      *translatedDisplay.value()}};
         require(batch->begin(translation, capacity).code == GpuOperationBatchCode::None &&
                     observedAxes && root.snapshot().ownedProcessingHostBytes == 0 &&
                     root.snapshot().ownedProcessingHostMetadataBytes == 0 &&
@@ -196,6 +198,10 @@ void run(GpuDevice& device) {
                 "frees before GPU publication");
         auto translated = batch->takeImages();
         require(translated.size() == 2, "tracked-axis native batch retires actual outputs");
+        require(translated[0].displayWindow() == window &&
+                    translated[1].displayWindow() == *translatedDisplay.value() &&
+                    translated[1].dataWindow() == window,
+                "translation batch preserves its display override without changing source geometry");
     }
     for (int cycle = 0; cycle < 10; ++cycle) {
         require(batch->begin(ops, capacity).code == GpuOperationBatchCode::None,

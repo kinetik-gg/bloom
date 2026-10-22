@@ -445,7 +445,8 @@ void runCanvas(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                 continue;
             const auto cold = runScene(*executor.executor, prepared.scene);
             expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready,
-                                "canvas native: cold GPU run completes");
+                                "canvas native: cold GPU run completes: " +
+                                    executor.executor->diagnostic().message);
             if (cold.pollResult != GpuSceneExecutorPollResult::Ready)
                 continue;
             std::string detail;
@@ -458,9 +459,10 @@ void runCanvas(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                                     cold.pixelAspect == descriptor.pixelAspect(),
                                 "canvas native: final descriptor matches CPU");
             const auto coldCounters = executor.executor->counters();
-            expectations.expect(coldCounters.translationDispatches > 0 &&
+            expectations.expect(coldCounters.nativeBatches > 0 &&
+                                    coldCounters.translationDispatches > 0 &&
                                     coldCounters.readbacks == 0,
-                                "canvas native: pixels execute resident with no intermediate readback");
+                                "canvas native: pixels execute in a resident batch without readback");
             const auto warm = runScene(*executor.executor, prepared.scene);
             expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
                                     parity(warm.pixels, oracle.frame()->processImage().pixels(),

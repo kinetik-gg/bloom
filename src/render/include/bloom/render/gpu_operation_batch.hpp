@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <array>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <variant>
@@ -47,6 +48,7 @@ struct GpuBatchTranslation final {
     double translationX;
     double translationY;
     float opacity;
+    std::optional<ImageWindow> outputDisplayWindow{};
 };
 struct GpuBatchAffine final {
     GpuBatchImageRef source;

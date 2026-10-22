@@ -43,7 +43,8 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
                 return std::nullopt;
             operations.emplace_back(
                 render::GpuBatchTranslation{*source, *step.outputWindow, step.translationX,
-                                            step.translationY, step.translationOpacity});
+                                            step.translationY, step.translationOpacity,
+                                            step.outputDisplayWindow});
         } else if (step.kind == GpuSceneExecutorStepKind::Affine) {
             const auto source = ref(step.input);
             if (!source || !step.outputWindow)

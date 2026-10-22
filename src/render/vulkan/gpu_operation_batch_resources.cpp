@@ -234,6 +234,9 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
                 display = job.source->displayWindow;
                 aspect = job.source->pixelAspect;
             }
+            if (const auto* translation = std::get_if<GpuBatchTranslation>(&operations[index]);
+                translation && translation->outputDisplayWindow)
+                display = translation->outputDisplayWindow;
             if (const auto* affine = std::get_if<GpuBatchAffine>(&operations[index]);
                 affine && affine->outputDescriptor) {
                 if (affine->outputDescriptor->dataWindow() != *window) {
