@@ -6,9 +6,11 @@
 
 namespace bloom::media::audio::detail {
 
-[[nodiscard]] AudioResult<AudioProbe> probeWavFile(const std::filesystem::path& path) noexcept;
+[[nodiscard]] AudioResult<AudioProbe> probeWavFile(const std::filesystem::path& path,
+                                                   const CancelAudioWork& cancel) noexcept;
 
 [[nodiscard]] AudioResult<AudioBuffer> decodeWavFile(const std::filesystem::path& path,
-                                                     const AudioDecodeLimits& limits) noexcept;
+                                                     const AudioDecodeLimits& limits,
+                                                     const CancelAudioWork& cancel) noexcept;
 
 } // namespace bloom::media::audio::detail

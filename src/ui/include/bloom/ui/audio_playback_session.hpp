@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/document/document.hpp>
+#include <bloom/media/audio/audio.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -8,18 +9,23 @@
 
 #include <QObject>
 
+#include <map>
+#include <memory>
 #include <optional>
 
 namespace bloom::ui {
 
 class CompositionSession;
 class TaskUiBridge;
+class AssetController;
 
 // UI-side projection of the live composition's audio mix. The mix is derived from the LIVE
 // document revision through the shared compiled-plan cache -- never from whatever frame the
 // preview happens to be showing, because a preview frame can legitimately lag the document (a
 // layout-only edit re-uses its pixels; an unsupported edit keeps the previous frame on screen) and
-// audio must not fall silent for either. It never owns decoded samples or a device.
+// audio must not fall silent for either. It pins buffers used by the current mix after the asset
+// worker's admission, so cache retention cannot discard them before playback adoption. It owns
+// no device.
 class AudioPlaybackSession final : public QObject {
     Q_OBJECT
 
@@ -35,6 +41,9 @@ class AudioPlaybackSession final : public QObject {
     [[nodiscard]] const std::optional<runtime::AudioMixDescription>& mix() const noexcept {
         return mix_;
     }
+    void setAudioBufferSource(AssetController& source);
+    [[nodiscard]] std::shared_ptr<const media::audio::AudioBuffer>
+    audioBuffer(document::AssetId id) const;
 
     // Requests a worker evaluation for the live snapshot/time. At most one task runs and one
     // newest request waits. A static direct mix skips subsequent time ticks at the same revision.
@@ -49,6 +58,7 @@ class AudioPlaybackSession final : public QObject {
     void consumeReady();
     void submitPending();
     void setMix(std::optional<runtime::AudioMixDescription> mix);
+    void refreshPins(bool notify);
 
     struct Preparation;
     using ResultHandle = std::shared_ptr<const Preparation>;
@@ -71,6 +81,8 @@ class AudioPlaybackSession final : public QObject {
     const runtime::CpuCompositionEvaluator& evaluator_;
     document::Revision revision_;
     std::optional<runtime::AudioMixDescription> mix_;
+    AssetController* audioSource_ = nullptr;
+    std::map<document::AssetId, std::shared_ptr<const media::audio::AudioBuffer>> pinnedAudio_;
     std::optional<Active> active_;
     std::optional<Request> pending_;
     std::uint64_t generation_ = 0;

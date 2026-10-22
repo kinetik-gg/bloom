@@ -349,12 +349,22 @@ previews, while broader audio editing is a separate concern.
   float32 plane per channel and rejects partial reads.
 - Probe and decode read WAV/MP3 from file-backed decoder callbacks; neither retains the whole
   encoded file. Decode deinterleaves in 4,096-frame chunks. There is no default encoded-file cap;
-  callers may set an explicit `fileSizeCap`. The default whole-buffer admission remains 48,000,000
-  interleaved samples because playback currently retains a planar float32 buffer. The size and
-  sample limits are checked before decoded storage allocation. Wrong magic, truncated input,
-  malformed headers, invalid formats, and budget violations return typed errors without publishing
-  a partial buffer. Import reports the typed reason; a rejected audio preview shows it in the
-  asset tooltip instead of claiming the source file is missing.
+  callers may set an explicit `fileSizeCap`. Whole-buffer decode has no implicit sample ceiling:
+  its caller must supply a sample allowance. The asset worker probes first, checks planar output
+  and chunk scratch arithmetic, and reserves those bytes from the shared processing host policy
+  before allocation. Its retained lease follows the decoded buffer through preview and playback;
+  the audio cache's 2 GiB target governs retention, not decode admission. A buffer larger than the
+  cache target crosses a temporary controller delivery slot into the current audio mix's playback
+  pin, and that pin releases when the mix stops or is replaced. Cancellation is checked
+  during probe, file callbacks, and chunked decode. Wrong magic, truncated input, malformed
+  headers, changed source content, invalid formats, and budget violations report typed or exact
+  diagnostics without publishing a partial buffer. Import reports the typed reason; a rejected
+  audio preview shows it in the asset tooltip instead of claiming the source file is missing.
+- The processing lease covers known requested planar storage and one decode chunk. The planes
+  still use ordinary vectors, so a later physical-memory sample can conservatively count both
+  their resident bytes and the live lease near capacity. Rooted sample backing and live-sample
+  reconciliation remain part of #304; provider/decoder internal allocations are not credited as
+  owned audio storage.
 - `waveformSummary(buffer, bucketCount)` derives per-bucket minimum and maximum values per channel
   from the immutable buffer. Waveforms are derived runtime state, never document truth.
 
@@ -414,8 +424,10 @@ run only on the blocking-I/O worker. The UI publishes a bounded waveform summary
 timeline bar and the audio source node card. Painting reads the immutable summary and never opens or
 decodes a file.
 
-The UI/audio boundary maps a compiled clip's stable asset ID to a published planar `AudioBuffer`
-before calling `AudioEngine::replaceClips`. Audio asset records, source parameters, layer flags and
+The UI/audio boundary maps a compiled clip's stable asset ID to a published planar `AudioBuffer`.
+`AudioPlaybackSession` pins the current mix's buffers before calling `AudioEngine::replaceClips`;
+the controller can then release an above-cache-target delivery buffer. Audio asset records,
+source parameters, layer flags and
 graph edges are project truth; decoded buffers, waveform summaries and device state are disposable
 runtime state. WAV/MP3 availability and the fallback behavior are the same on Linux, macOS and
 Windows; a missing or unreadable file shows an explicit warning and contributes no samples.

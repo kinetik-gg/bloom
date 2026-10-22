@@ -19,8 +19,19 @@ using bloom::media::audio::AudioDecodeLimits;
 using bloom::media::audio::AudioError;
 using bloom::media::audio::AudioErrorCode;
 using bloom::media::audio::AudioResult;
+using bloom::media::audio::CancelAudioWork;
 
 enum class AudioKind : std::uint8_t { Wav, Mp3 };
+
+[[nodiscard]] bool cancelled(const CancelAudioWork& cancel) noexcept {
+    if (!cancel)
+        return false;
+    try {
+        return cancel();
+    } catch (...) {
+        return true;
+    }
+}
 
 [[nodiscard]] bool hasBytes(const std::span<const std::byte> bytes,
                             const char (&text)[5]) noexcept {
@@ -57,10 +68,13 @@ enum class AudioKind : std::uint8_t { Wav, Mp3 };
 }
 
 [[nodiscard]] AudioResult<AudioKind> readKind(const std::filesystem::path& path,
-                                              const AudioDecodeLimits& limits) noexcept {
+                                              const AudioDecodeLimits& limits, const bool decoding,
+                                              const CancelAudioWork& cancel) noexcept {
+    if (cancelled(cancel))
+        return AudioResult<AudioKind>::failure(AudioError::codeOnly(AudioErrorCode::Cancelled));
     if (path.empty())
         return AudioResult<AudioKind>::failure(AudioError::codeOnly(AudioErrorCode::InvalidPath));
-    if (limits.fileSizeCap == 0 || limits.sampleBudget == 0)
+    if (limits.fileSizeCap == 0 || (decoding && limits.sampleBudget == 0))
         return AudioResult<AudioKind>::failure(
             AudioError::codeOnly(AudioErrorCode::InvalidAudioFormat));
     std::error_code status;
@@ -78,6 +92,8 @@ enum class AudioKind : std::uint8_t { Wav, Mp3 };
         std::array<std::byte, 12> header{};
         input.read(reinterpret_cast<char*>(header.data()),
                    static_cast<std::streamsize>(header.size()));
+        if (cancelled(cancel))
+            return AudioResult<AudioKind>::failure(AudioError::codeOnly(AudioErrorCode::Cancelled));
         if (input.bad())
             return AudioResult<AudioKind>::failure(
                 AudioError::codeOnly(AudioErrorCode::FileReadFailed));
@@ -134,26 +150,30 @@ std::string describeAudioError(const AudioError& error) {
         return "Audio backend could not start";
     case AudioErrorCode::InvalidState:
         return "Audio backend state is invalid";
+    case AudioErrorCode::Cancelled:
+        return "Audio operation was cancelled";
     }
     return "Audio error";
 }
 
 AudioResult<AudioProbe> probeAudio(const std::filesystem::path& path,
-                                   const AudioDecodeLimits limits) noexcept {
-    const auto kind = readKind(path, limits);
+                                   const AudioDecodeLimits limits,
+                                   const CancelAudioWork& cancel) noexcept {
+    const auto kind = readKind(path, limits, false, cancel);
     if (!kind)
         return AudioResult<AudioProbe>::failure(*kind.error());
-    return *kind.value() == AudioKind::Wav ? detail::probeWavFile(path)
-                                           : detail::probeMp3File(path);
+    return *kind.value() == AudioKind::Wav ? detail::probeWavFile(path, cancel)
+                                           : detail::probeMp3File(path, cancel);
 }
 
 AudioResult<AudioBuffer> decodeAudio(const std::filesystem::path& path,
-                                     const AudioDecodeLimits limits) noexcept {
-    const auto kind = readKind(path, limits);
+                                     const AudioDecodeLimits limits,
+                                     const CancelAudioWork& cancel) noexcept {
+    const auto kind = readKind(path, limits, true, cancel);
     if (!kind)
         return AudioResult<AudioBuffer>::failure(*kind.error());
-    return *kind.value() == AudioKind::Wav ? detail::decodeWavFile(path, limits)
-                                           : detail::decodeMp3File(path, limits);
+    return *kind.value() == AudioKind::Wav ? detail::decodeWavFile(path, limits, cancel)
+                                           : detail::decodeMp3File(path, limits, cancel);
 }
 
 AudioResult<WaveformSummary> waveformSummary(const AudioBuffer& buffer,

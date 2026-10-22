@@ -270,7 +270,7 @@ void AssetsEditor::rebuild() {
         const auto* controller = session_.assetController();
         const bool missing = controller && controller->missing(asset.id);
         const auto audioError =
-            audio && controller ? controller->audioDiagnostic(asset.id) : QString{};
+            (audio || video) && controller ? controller->audioDiagnostic(asset.id) : QString{};
         QString tooltip;
         if (!audioError.isEmpty())
             tooltip = tr("Audio preview unavailable: %1").arg(audioError);

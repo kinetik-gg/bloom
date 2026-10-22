@@ -221,7 +221,10 @@ int main(int argc, char* argv[]) try {
                                   ? nullptr
                                   : std::make_shared<bloom::ui::PreviewFrameTrace>();
     bloom::ui::AssetController assetController(compositionSession, projectHost, taskScheduler,
-                                               taskUiBridge, mediaDiskCache.get());
+                                               taskUiBridge, mediaDiskCache.get(), nullptr,
+                                               {.policy = processingPhasePolicy});
+    QObject::connect(&memoryBudgetController, &bloom::ui::MemoryBudgetController::sampleApplied,
+                     &assetController, &bloom::ui::AssetController::retryAudioAfterCapacitySample);
     const auto updateMediaDirectory = [&] {
         const auto path = projectHost.displayPath();
         cpuEvaluator.setAssetBaseDirectory(path ? path->parent_path() : std::filesystem::path{});
@@ -504,9 +507,10 @@ int main(int argc, char* argv[]) try {
     application.setQuitOnLastWindowClosed(false);
     QSettings settings;
     auto& playback = previewController.playbackController();
-    bloom::ui::AudioPlaybackSession audioPlaybackSession(compositionSession, taskScheduler,
-                                                         taskUiBridge, snapshotCompiler,
-                                                         compiledPlanCache, cpuEvaluator);
+    bloom::ui::AudioPlaybackSession audioPlaybackSession(
+        compositionSession, taskScheduler, taskUiBridge, snapshotCompiler, compiledPlanCache,
+        cpuEvaluator);
+    audioPlaybackSession.setAudioBufferSource(assetController);
     playback.setAudioDeviceControl(&audioDeviceControl);
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
@@ -522,7 +526,7 @@ int main(int argc, char* argv[]) try {
         std::vector<bloom::media::audio::playback::AudioClip> clips;
         clips.reserve(mix->clips.size());
         for (const auto& description : mix->clips) {
-            const auto buffer = assetController.audioBuffer(description.assetId);
+            const auto buffer = audioPlaybackSession.audioBuffer(description.assetId);
             if (buffer == nullptr)
                 continue;
             clips.push_back({.buffer = buffer,
@@ -539,8 +543,6 @@ int main(int argc, char* argv[]) try {
         playback.setAudioMix(*mix, std::move(clips));
     };
     QObject::connect(&audioPlaybackSession, &bloom::ui::AudioPlaybackSession::mixChanged, &playback,
-                     applyAudioMix);
-    QObject::connect(&assetController, &bloom::ui::AssetController::changed, &playback,
                      applyAudioMix);
     (void)audioPlaybackSession.refresh();
     applyAudioMix();

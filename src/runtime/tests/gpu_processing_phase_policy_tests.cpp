@@ -921,6 +921,17 @@ void envelope() {
     input.encodedBytes = 0;
     input.pixels = 0;
     require(!processingPhaseRequest(input), "empty output is not a processing phase");
+    input.output = GpuProcessingPhaseOutput::FloatFinal;
+    input.metadataBytes = 48'000 * 2 * sizeof(float);
+    input.sourceFree = true;
+    input.native = false;
+    const auto audioHost = processingPhaseRequest(input);
+    require(audioHost && audioHost->fixedHostBytes == input.metadataBytes &&
+                audioHost->deviceWorkingBytes == 0,
+            "host-only audio storage has an exact non-pixel processing claim");
+    input.native = true;
+    require(!processingPhaseRequest(input),
+            "zero-pixel native work cannot use the host-only audio exemption");
 }
 int liveConstraintRemoval() {
 #if defined(__linux__)

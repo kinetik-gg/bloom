@@ -74,28 +74,34 @@ int run(int argc, char** argv) {
     require(directory.isValid(), "fixture directory");
     writeTone(directory.filePath("Tone.wav"));
 
-    ui::test::WindowFixture fixture([&](auto& target) {
-        commands::Transaction setup("Audio composition", target.session.snapshot().revision());
-        setup.emplace<commands::SetCompositionDuration>(target.session.compositionId(),
-                                                        core::RationalTime::fromInteger(2));
-        require(target.session.executeTransaction(std::move(setup)).succeeded(), "setup");
-        target.assets->importFiles({directory.filePath("Tone.wav")});
-        QElapsedTimer timer;
-        timer.start();
-        while (target.assets->busy() && timer.elapsed() < 15000)
-            QTest::qWait(10);
-        require(target.session.snapshot().project().assets().size() == 1, "WAV import");
-        const auto asset = target.session.snapshot().project().assets().front();
-        commands::Transaction add("Place audio", target.session.snapshot().revision());
-        add.emplace<commands::AddAudioLayer>(target.session.compositionId(), asset.id);
-        require(target.session.executeTransaction(std::move(add)).succeeded(), "audio layer");
-    });
+    ui::test::WindowFixture fixture(
+        [&](auto& target) {
+            commands::Transaction setup("Audio composition", target.session.snapshot().revision());
+            setup.emplace<commands::SetCompositionDuration>(target.session.compositionId(),
+                                                            core::RationalTime::fromInteger(2));
+            require(target.session.executeTransaction(std::move(setup)).succeeded(), "setup");
+            target.assets->importFiles({directory.filePath("Tone.wav")});
+            QElapsedTimer timer;
+            timer.start();
+            while (target.assets->busy() && timer.elapsed() < 15000)
+                QTest::qWait(10);
+            require(target.session.snapshot().project().assets().size() == 1, "WAV import");
+            const auto asset = target.session.snapshot().project().assets().front();
+            commands::Transaction add("Place audio", target.session.snapshot().revision());
+            add.emplace<commands::AddAudioLayer>(target.session.compositionId(), asset.id);
+            require(target.session.executeTransaction(std::move(add)).succeeded(), "audio layer");
+        },
+        128);
     const auto assetId = fixture.session.snapshot().project().assets().front().id;
     QElapsedTimer wait;
     wait.start();
     while (fixture.assets->audioBuffer(assetId) == nullptr && wait.elapsed() < 15000)
         QTest::qWait(10);
     require(fixture.assets->audioBuffer(assetId) != nullptr, "stage 1: decoded audio buffer");
+    require(fixture.assets->decodedAudioBytes() == 0,
+            "oversized-for-cache buffer stays in playback delivery, not retention cache");
+    const std::weak_ptr<const media::audio::AudioBuffer> delivered =
+        fixture.assets->audioBuffer(assetId);
     std::cout << "stage 1 ok: buffer frames " << fixture.assets->audioBuffer(assetId)->frames
               << '\n';
 
@@ -113,6 +119,7 @@ int run(int argc, char** argv) {
     ui::AudioPlaybackSession audioPlaybackSession(
         fixture.session, fixture.scheduler, fixture.bridge, fixture.compiler,
         std::make_shared<ui::CompiledPlanCache>(), fixture.evaluator);
+    audioPlaybackSession.setAudioBufferSource(*fixture.assets);
     const auto awaitMix = [&] {
         QElapsedTimer timer;
         timer.start();
@@ -132,7 +139,7 @@ int run(int argc, char** argv) {
         }
         std::vector<media::audio::playback::AudioClip> clips;
         for (const auto& description : mix->clips) {
-            const auto buffer = fixture.assets->audioBuffer(description.assetId);
+            const auto buffer = audioPlaybackSession.audioBuffer(description.assetId);
             if (buffer == nullptr)
                 continue;
             clips.push_back({.buffer = buffer,
@@ -147,7 +154,6 @@ int run(int argc, char** argv) {
     };
     QObject::connect(&audioPlaybackSession, &ui::AudioPlaybackSession::mixChanged, &playback,
                      applyAudioMix);
-    QObject::connect(fixture.assets.get(), &ui::AssetController::changed, &playback, applyAudioMix);
     require(audioPlaybackSession.refresh(), "stage 2: mix derived from the live revision");
     require(awaitMix(), "stage 2: worker-published live mix");
     const auto& mix = audioPlaybackSession.mix();
@@ -157,6 +163,9 @@ int run(int argc, char** argv) {
               << '\n';
     require(!mix->clips.empty(), "stage 3: mix has clips");
     require(appliedClips == 1, "stage 4: clip applied to the engine");
+    require(fixture.assets->audioBuffer(assetId) == nullptr &&
+                audioPlaybackSession.audioBuffer(assetId) != nullptr,
+            "active mix pins admitted audio after controller releases delivery");
 
     (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(0));
     playback.play();
@@ -330,6 +339,8 @@ int run(int argc, char** argv) {
         QTest::qWait(10);
     require(audioDeviceControl.retirementComplete(), "audio device retired before bridge close");
     audioDeviceControl.drainAfterEventLoop();
+    require(audioPlaybackSession.audioBuffer(assetId) == nullptr && delivered.expired(),
+            "stopping the session and device releases the playback audio lease");
     std::cout << "audio transport ok\n";
     return 0;
 }

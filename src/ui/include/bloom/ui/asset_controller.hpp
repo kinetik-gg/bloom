@@ -9,16 +9,29 @@
 #include <bloom/document/document.hpp>
 #include <bloom/media/audio/audio.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <cstddef>
+#include <cstdint>
 #include <map>
+#include <memory>
 
 class QWidget;
 namespace bloom::media::cache {
 class MediaDiskCache;
 } // namespace bloom::media::cache
+namespace bloom::runtime {
+class GpuProcessingPhasePolicy;
+}
 namespace bloom::ui {
 class CompositionSession;
 class ProjectHost;
 class TaskUiBridge;
+struct AudioProcessingAdmission final {
+    std::shared_ptr<runtime::GpuProcessingPhasePolicy> policy;
+    // Explicit allowance for standalone hosts/tests without a sampled processing root.
+    std::uint64_t standaloneByteAllowance = 0;
+    // Retention target. A larger admitted buffer can still cross the playback handoff.
+    std::size_t cacheByteCapacity = std::size_t{2} * 1024 * 1024 * 1024;
+};
 class AssetController final : public QObject {
     Q_OBJECT
   public:
@@ -30,7 +43,8 @@ class AssetController final : public QObject {
     AssetController(CompositionSession& session, ProjectHost& host,
                     runtime::TaskScheduler& scheduler, TaskUiBridge& bridge,
                     media::cache::MediaDiskCache* mediaDiskCache = nullptr,
-                    QObject* parent = nullptr);
+                    QObject* parent = nullptr,
+                    AudioProcessingAdmission audioAdmission = AudioProcessingAdmission{});
     ~AssetController() override;
     void requestImport(QWidget* parent = nullptr);
     void importFiles(const QStringList& paths);
@@ -50,6 +64,9 @@ class AssetController final : public QObject {
     waveform(document::AssetId id) const;
     [[nodiscard]] std::shared_ptr<const media::audio::AudioBuffer>
     audioBuffer(document::AssetId id) const;
+    // Called by the playback session after it has adopted the active mix's buffers.
+    void releaseAudioDelivery();
+    void retryAudioAfterCapacitySample();
     [[nodiscard]] std::filesystem::path baseDirectory() const;
     // CACHEFIX-1 accounting counters (no UI): the bytes this controller's two in-memory caches
     // hold. Both are hard-capped rather than budgeted -- they are small next to the frame caches,
@@ -93,10 +110,12 @@ class AssetController final : public QObject {
         std::map<std::string, QImage> cache;
         Waveforms waveforms;
         AudioBuffers audioBuffers;
+        AudioBuffers audioDeliveryBuffers;
         // CACHEFIX-1 accounting: what these two maps actually hold, carried back from the worker
         // so the controller can report it without walking every entry on the interface thread.
         std::size_t proxyBytes = 0;
         std::size_t audioBytes = 0;
+        bool retryAudioAfterCapacitySample = false;
         bool timeDependentNodes = false;
     };
     struct InputColorCatalog {
@@ -115,6 +134,7 @@ class AssetController final : public QObject {
     runtime::TaskScheduler& scheduler_;
     TaskUiBridge& bridge_;
     media::cache::MediaDiskCache* mediaDiskCache_ = nullptr;
+    AudioProcessingAdmission audioAdmission_;
     runtime::TaskHandle<OperationHandle> import_;
     runtime::TaskHandle<std::shared_ptr<Thumbnails>> preview_;
     runtime::TaskHandle<std::shared_ptr<InputColorCatalog>> inputColorCatalogTask_;
@@ -128,6 +148,9 @@ class AssetController final : public QObject {
     std::map<std::string, QImage> thumbnailCache_;
     Waveforms waveforms_;
     AudioBuffers audioBuffers_;
+    AudioBuffers audioDeliveryBuffers_;
+    std::map<document::AssetId, std::weak_ptr<const media::audio::AudioBuffer>>
+        adoptedAudioBuffers_;
     std::size_t proxyCacheBytes_ = 0;
     std::size_t decodedAudioBytes_ = 0;
     QByteArray dragToken_;
@@ -136,6 +159,7 @@ class AssetController final : public QObject {
     bool previewPending_ = false;
     bool previewDirty_ = false;
     bool cachePurgeGate_ = false;
+    bool retryAudioAfterCapacitySample_ = false;
     bool assetsDirty_ = true;
     bool previewIncludesAssets_ = false;
     bool timeDependentNodes_ = true;

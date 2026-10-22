@@ -100,6 +100,13 @@ project-schema, graph, timeline, or UI behavior; AUDIO-2 owns those connections.
 device callback consumes a lock-free bounded queue, and its frame-written count is the audio master
 clock while playing; the synchronized transport follows that clock rather than an independent
 wall-clock timer.
+
+**2026-10-23 resource amendment:** The original 64 MiB encoded-file and 48,000,000-sample
+ceilings above describe the accepted v0 implementation, not the current admission rule. The
+WAV/MP3 adapters now stream encoded input with cancellation; whole-buffer playback admission is
+checked from the requested sample count against the shared processing host quota, with its lease
+retained by playback. Explicit caller limits still apply. See [media I/O](../architecture/media-io.md)
+for the current ownership and diagnostics contract.
 ## Accepted v0 amendment: PNG and JPEG images (2026-09-15)
 
 The narrow v0 image pipeline may parse user PNG/JPEG files in process through the pinned,

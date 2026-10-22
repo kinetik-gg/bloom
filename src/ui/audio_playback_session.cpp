@@ -1,6 +1,7 @@
 #include <bloom/ui/audio_playback_session.hpp>
 
 #include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
@@ -41,6 +42,20 @@ AudioPlaybackSession::AudioPlaybackSession(CompositionSession& session,
 }
 
 AudioPlaybackSession::~AudioPlaybackSession() { beginShutdown(); }
+
+void AudioPlaybackSession::setAudioBufferSource(AssetController& source) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    Q_ASSERT(audioSource_ == nullptr);
+    audioSource_ = &source;
+    connect(&source, &AssetController::changed, this, [this] { refreshPins(true); });
+    refreshPins(true);
+}
+
+std::shared_ptr<const media::audio::AudioBuffer>
+AudioPlaybackSession::audioBuffer(const document::AssetId id) const {
+    const auto found = pinnedAudio_.find(id);
+    return found == pinnedAudio_.end() ? nullptr : found->second;
+}
 
 bool AudioPlaybackSession::refresh() {
     Q_ASSERT(QThread::currentThread() == thread());
@@ -180,10 +195,40 @@ void AudioPlaybackSession::consumeReady() {
 }
 
 void AudioPlaybackSession::setMix(std::optional<runtime::AudioMixDescription> mix) {
-    if (mix_ == mix)
+    if (mix_ == mix) {
+        if (shuttingDown_) {
+            pinnedAudio_.clear();
+        }
+        if (audioSource_ && (shuttingDown_ || (!active_ && !pending_)))
+            audioSource_->releaseAudioDelivery();
         return;
+    }
     mix_ = std::move(mix);
+    refreshPins(false);
     emit mixChanged();
+}
+
+void AudioPlaybackSession::refreshPins(const bool notify) {
+    if (!audioSource_)
+        return;
+    decltype(pinnedAudio_) next;
+    if (mix_ && !shuttingDown_)
+        for (const auto& clip : mix_->clips) {
+            auto buffer = audioSource_->audioBuffer(clip.assetId);
+            if (!buffer && !audioSource_->missing(clip.assetId)) {
+                const auto old = pinnedAudio_.find(clip.assetId);
+                if (old != pinnedAudio_.end())
+                    buffer = old->second;
+            }
+            if (buffer)
+                next.insert_or_assign(clip.assetId, std::move(buffer));
+        }
+    const bool changed = next != pinnedAudio_;
+    pinnedAudio_ = std::move(next);
+    if (mix_ || shuttingDown_ || (!active_ && !pending_ && session_.composition() == nullptr))
+        audioSource_->releaseAudioDelivery();
+    if (notify && changed)
+        emit mixChanged();
 }
 
 } // namespace bloom::ui

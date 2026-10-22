@@ -1,10 +1,12 @@
 #include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/media/video/audio.hpp>
 #include <bloom/media/video/colour.hpp>
 #include <bloom/media/video/session.hpp>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 namespace {
 void check(bool value, const char* message) {
@@ -13,6 +15,15 @@ void check(bool value, const char* message) {
 }
 void run(const std::filesystem::path& directory) {
     using namespace bloom::media;
+    provider::StreamDescriptor fractionalAudio;
+    fractionalAudio.sampleRate = 48'000;
+    fractionalAudio.channelLayout = {"L", "R"};
+    fractionalAudio.duration = {1001, 48'000'000};
+    check(video::audioClipFrameCount(fractionalAudio) == 2,
+          "fractional final audio sample is included in the admitted range");
+    fractionalAudio.duration = {std::numeric_limits<std::int64_t>::max(), 1};
+    check(!video::audioClipFrameCount(fractionalAudio),
+          "unrepresentable audio sample count refuses before allocation");
     video::VideoDecodeSession session(directory / "numbered-h264.mp4");
     const auto probe = std::get<provider::ProbeResult>(session.probe());
     video::DecodedVideoCache cache(4608);

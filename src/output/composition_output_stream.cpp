@@ -10,6 +10,7 @@
 #include <bloom/output/composition_output_stream.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <numeric>
 
@@ -107,21 +108,36 @@ struct CompositionOutputStreamV1::State {
                         std::ranges::find(probe.streams, MediaKind::Audio, &StreamDescriptor::kind);
                     require(stream != probe.streams.end() && stream->duration.denominator > 0,
                             "Audio stream unavailable", Error::Unavailable);
-                    const double count = std::ceil(
-                        static_cast<double>(stream->duration.numerator) /
-                        static_cast<double>(stream->duration.denominator) * stream->sampleRate);
-                    require(std::isfinite(count) && count > 0 && !stream->channelLayout.empty() &&
-                                count <=
-                                    static_cast<double>(
-                                        media::audio::AudioDecodeLimits::kDefaultSampleBudget) /
-                                        static_cast<double>(stream->channelLayout.size()),
-                            "Audio source exceeds export budget", Error::Oversized);
-                    const auto retained = static_cast<std::uint64_t>(count) *
-                                          stream->channelLayout.size() * sizeof(float);
-                    require(queueReservation->expand(queueReservation->chargedBytes() + retained) ==
+                    const auto frames = media::video::audioClipFrameCount(*stream);
+                    require(frames.has_value() &&
+                                *frames <= std::numeric_limits<std::uint64_t>::max() /
+                                               stream->channelLayout.size(),
+                            "Audio source sample count is not representable", Error::Oversized);
+                    const auto samples = *frames * stream->channelLayout.size();
+                    require(samples <= std::numeric_limits<std::size_t>::max() / sizeof(float),
+                            "Audio source exceeds addressable sample storage", Error::Oversized);
+                    const auto metadata = sizeof(media::audio::AudioBuffer) +
+                                          stream->channelLayout.size() * sizeof(std::vector<float>);
+                    require(samples <= (std::numeric_limits<std::uint64_t>::max() - metadata) /
+                                           sizeof(float),
+                            "Audio source byte count overflows", Error::Oversized);
+                    const auto scratchSamples =
+                        std::min<std::uint64_t>(*frames, media::provider::Limits::audioSamples) *
+                        stream->channelLayout.size();
+                    const auto retained = samples * sizeof(float) + metadata;
+                    require(scratchSamples <=
+                                (std::numeric_limits<std::uint64_t>::max() - retained) /
+                                    sizeof(float),
+                            "Audio decode scratch byte count overflows", Error::Oversized);
+                    const auto total = retained + scratchSamples * sizeof(float);
+                    require(total <= std::numeric_limits<std::uint64_t>::max() -
+                                         queueReservation->chargedBytes(),
+                            "Audio export reservation overflows", Error::Oversized);
+                    require(queueReservation->expand(queueReservation->chargedBytes() + total) ==
                                 output::ExportResourceAdmissionStatusV1::Reserved,
                             "Audio decode ledger reservation refused", Error::Oversized);
-                    auto buffer = checked(media::video::decodeAudioClip(decoder, probe, cancel));
+                    auto buffer =
+                        checked(media::video::decodeAudioClip(decoder, probe, samples, cancel));
                     found = audioBuffers
                                 .emplace(description.assetId,
                                          std::make_shared<const media::audio::AudioBuffer>(

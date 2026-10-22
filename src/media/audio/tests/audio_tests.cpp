@@ -141,7 +141,8 @@ void testWavRoundTripAndWaveform(Expectations& expectations) {
                             probe.value()->duration == *expectedDuration,
                         "generated WAV probe reports exact stereo 48 kHz one-second metadata");
 
-    const auto decoded = bloom::media::audio::decodeAudio(file.path());
+    const auto decoded = bloom::media::audio::decodeAudio(
+        file.path(), AudioDecodeLimits{.sampleBudget = 48'000U * 2U});
     expectations.expect(decoded && decoded.value()->planes.size() == 2 &&
                             decoded.value()->frames == expected.left.size(),
                         "generated WAV decodes into two complete planar channels");
@@ -179,7 +180,9 @@ void testMp3Fixture(Expectations& expectations) {
                             probe.value()->rate == 48'000 && probe.value()->channels == 2 &&
                             probe.value()->frames > 0,
                         "checked-in MP3 fixture probes as a non-empty stereo 48 kHz stream");
-    const auto decoded = bloom::media::audio::decodeAudio(path);
+    const auto decoded = bloom::media::audio::decodeAudio(
+        path, AudioDecodeLimits{.sampleBudget =
+                                    probe ? probe.value()->frames * probe.value()->channels : 0});
     expectations.expect(decoded && decoded.value()->frames > 0 &&
                             decoded.value()->planes.size() == 2,
                         "checked-in MP3 fixture decodes into planar samples");
@@ -195,7 +198,8 @@ void testHostileInputsAndLimits(Expectations& expectations) {
     std::ofstream truncatedOutput(truncated.path(), std::ios::binary);
     truncatedOutput.write(source.data(), 24);
     truncatedOutput.close();
-    const auto truncatedResult = bloom::media::audio::decodeAudio(truncated.path());
+    const auto truncatedResult = bloom::media::audio::decodeAudio(
+        truncated.path(), AudioDecodeLimits{.sampleBudget = 48'000U * 2U});
     expectations.expect(!truncatedResult &&
                             truncatedResult.error()->code == AudioErrorCode::MalformedFile,
                         "truncated WAV fails cleanly without a partial buffer");
@@ -216,8 +220,19 @@ void testHostileInputsAndLimits(Expectations& expectations) {
                             budgetResult.error()->code == AudioErrorCode::SampleBudgetExceeded,
                         "sample budget rejects an interleaved sample count above the limit");
 
+    const auto unadmitted = bloom::media::audio::decodeAudio(wav.path(), {});
+    expectations.expect(!unadmitted &&
+                            unadmitted.error()->code == AudioErrorCode::InvalidAudioFormat,
+                        "whole-buffer decode requires caller-owned sample admission");
+    const auto cancelled = bloom::media::audio::decodeAudio(
+        wav.path(), AudioDecodeLimits{.sampleBudget = expected.left.size() * 2U},
+        [] { return true; });
+    expectations.expect(!cancelled && cancelled.error()->code == AudioErrorCode::Cancelled,
+                        "cancelled audio work returns a typed cancellation result");
+
     AudioDecodeLimits fileLimit;
     fileLimit.fileSizeCap = 16;
+    fileLimit.sampleBudget = expected.left.size() * 2U;
     const auto fileResult = bloom::media::audio::decodeAudio(wav.path(), fileLimit);
     expectations.expect(!fileResult && fileResult.error()->code == AudioErrorCode::FileTooLarge,
                         "file-size cap rejects input before it is read");
@@ -245,11 +260,20 @@ void testHostileInputsAndLimits(Expectations& expectations) {
     const auto largeProbe = bloom::media::audio::probeAudio(large.path());
     expectations.expect(largeProbe && largeProbe.value()->frames == largeDataBytes / 8,
                         "WAV metadata probe streams a file larger than the former 64 MiB cap");
-    const auto largeDecode = bloom::media::audio::decodeAudio(large.path());
+    const auto largeDecode = bloom::media::audio::decodeAudio(
+        large.path(), AudioDecodeLimits{.sampleBudget = largeDataBytes / 4U});
     expectations.expect(largeDecode && largeDecode.value()->frames == largeDataBytes / 8,
                         "WAV decode streams a file larger than the former 64 MiB cap");
+    std::size_t cancellationChecks = 0;
+    const auto interrupted = bloom::media::audio::decodeAudio(
+        large.path(), AudioDecodeLimits{.sampleBudget = largeDataBytes / 4U},
+        [&] { return ++cancellationChecks > 100; });
+    expectations.expect(!interrupted && interrupted.error()->code == AudioErrorCode::Cancelled &&
+                            cancellationChecks > 100,
+                        "chunked decode stops after cancellation without publishing audio");
     AudioDecodeLimits explicitFileLimit;
     explicitFileLimit.fileSizeCap = 64U * 1024U * 1024U;
+    explicitFileLimit.sampleBudget = largeDataBytes / 4U;
     const auto explicitRefusal = bloom::media::audio::decodeAudio(large.path(), explicitFileLimit);
     expectations.expect(!explicitRefusal &&
                             explicitRefusal.error()->code == AudioErrorCode::FileTooLarge &&

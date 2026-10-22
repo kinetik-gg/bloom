@@ -54,7 +54,9 @@ struct WindowFixture {
     std::unique_ptr<MainWindow> window;
 
     // NOLINTBEGIN(clang-analyzer-cplusplus.NewDeleteLeaks) -- QApplication owns its style.
-    explicit WindowFixture(const std::function<void(WindowFixture&)>& author = {}) {
+    explicit WindowFixture(const std::function<void(WindowFixture&)>& author = {},
+                           const std::size_t audioCacheCapacity = std::size_t{2} * 1024 * 1024 *
+                                                                  1024) {
         QCoreApplication::setApplicationVersion("0.1.0");
         // Match apps/bloom/main.cpp: the application installs this proxy after the theme.
         QApplication::setStyle(new kit::AltUnderlineProxyStyle());
@@ -84,7 +86,10 @@ struct WindowFixture {
             if (!seededId.has_value() || !session.setComposition(*seededId))
                 throw std::runtime_error("Fixture composition seed failed");
         }
-        assets = std::make_unique<AssetController>(session, projectHost, scheduler, bridge);
+        assets = std::make_unique<AssetController>(
+            session, projectHost, scheduler, bridge, nullptr, nullptr,
+            AudioProcessingAdmission{.standaloneByteAllowance = 16 * 1024 * 1024,
+                                     .cacheByteCapacity = audioCacheCapacity});
         if (author)
             author(*this);
         else if (!session.addSolidLayer("Background", {0.035, 0.045, 0.075, 1.0}) ||

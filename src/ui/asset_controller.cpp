@@ -6,6 +6,7 @@
 #include <QUrl>
 #include <QUuid>
 #include <algorithm>
+#include <array>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
@@ -17,7 +18,9 @@
 #include <bloom/media/video/colour.hpp>
 #include <bloom/media/video/session.hpp>
 #include <bloom/platform/font_catalog.hpp>
+#include <bloom/render/processing_host_storage.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/input_color_context.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
@@ -30,6 +33,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <span>
 
 namespace bloom::ui {
@@ -38,7 +42,6 @@ namespace {
 // byte bound that bound only ever implied; the audio cache gets the aggregate bound it never had.
 constexpr std::size_t kProxyCacheEntryLimit = 512;
 constexpr std::size_t kProxyCacheByteCapacity = std::size_t{8} * 1024U * 1024U;
-constexpr std::size_t kDecodedAudioByteCapacity = std::size_t{2} * 1024U * 1024U * 1024U;
 
 [[nodiscard]] std::size_t proxyByteCost(const QImage& image) {
     // sizeInBytes() is the allocation QImage actually holds, stride padding included.
@@ -47,9 +50,66 @@ constexpr std::size_t kDecodedAudioByteCapacity = std::size_t{2} * 1024U * 1024U
 
 [[nodiscard]] std::size_t audioBufferByteCost(const media::audio::AudioBuffer& buffer) {
     std::size_t bytes = sizeof(media::audio::AudioBuffer);
+    bytes += buffer.planes.capacity() * sizeof(std::vector<float>);
     for (const auto& plane : buffer.planes)
         bytes += plane.capacity() * sizeof(float);
     return bytes;
+}
+
+struct AudioStorageClaim final {
+    std::uint64_t samples = 0;
+    std::uint64_t retainedBytes = 0;
+    std::uint64_t scratchBytes = 0;
+};
+
+[[nodiscard]] std::optional<AudioStorageClaim>
+audioStorageClaim(const media::audio::AudioProbe& probe,
+                  const std::uint64_t chunkFrames = 4096) noexcept {
+    constexpr auto max = std::numeric_limits<std::uint64_t>::max();
+    if (probe.frames == 0 || probe.channels == 0 || probe.frames > max / probe.channels ||
+        probe.frames > std::numeric_limits<std::size_t>::max())
+        return {};
+    const auto samples = probe.frames * probe.channels;
+    if (samples > std::numeric_limits<std::size_t>::max() / sizeof(float) ||
+        samples > max / sizeof(float))
+        return {};
+    const auto planes = static_cast<std::uint64_t>(probe.channels) * sizeof(std::vector<float>);
+    const auto payload = samples * sizeof(float);
+    if (payload > max - sizeof(media::audio::AudioBuffer) ||
+        planes > max - sizeof(media::audio::AudioBuffer) - payload)
+        return {};
+    const auto scratchSamples = std::min(chunkFrames, probe.frames) * probe.channels;
+    const auto retained = sizeof(media::audio::AudioBuffer) + planes + payload;
+    if (scratchSamples > (max - retained) / sizeof(float))
+        return {};
+    if (retained > std::numeric_limits<std::size_t>::max() - scratchSamples * sizeof(float))
+        return {};
+    return AudioStorageClaim{samples, retained, scratchSamples * sizeof(float)};
+}
+
+enum class AudioSourceCheck { Matches, MissingOrChanged, Cancelled };
+
+[[nodiscard]] AudioSourceCheck verifyAudioSource(const std::filesystem::path& path,
+                                                 const core::Sha256Digest& expected,
+                                                 const runtime::CancellationToken& cancellation) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+        return AudioSourceCheck::MissingOrChanged;
+    core::Sha256Hasher hasher;
+    std::array<std::byte, 64 * 1024> chunk{};
+    while (input) {
+        if (cancellation.isCancellationRequested())
+            return AudioSourceCheck::Cancelled;
+        input.read(reinterpret_cast<char*>(chunk.data()),
+                   static_cast<std::streamsize>(chunk.size()));
+        const auto count = input.gcount();
+        if (count > 0 && !hasher.update(std::span<const std::byte>{chunk}.first(
+                             static_cast<std::size_t>(count))))
+            return AudioSourceCheck::MissingOrChanged;
+    }
+    return input.bad()                     ? AudioSourceCheck::MissingOrChanged
+           : hasher.finalize() == expected ? AudioSourceCheck::Matches
+                                           : AudioSourceCheck::MissingOrChanged;
 }
 
 // Prune aliasing preview images too: erasing a map entry alone does not release its pixels.
@@ -257,9 +317,10 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
 } // namespace
 AssetController::AssetController(CompositionSession& session, ProjectHost& host,
                                  runtime::TaskScheduler& scheduler, TaskUiBridge& bridge,
-                                 media::cache::MediaDiskCache* mediaDiskCache, QObject* parent)
+                                 media::cache::MediaDiskCache* mediaDiskCache, QObject* parent,
+                                 AudioProcessingAdmission audioAdmission)
     : QObject(parent), session_(session), host_(host), scheduler_(scheduler), bridge_(bridge),
-      mediaDiskCache_(mediaDiskCache) {
+      mediaDiskCache_(mediaDiskCache), audioAdmission_(std::move(audioAdmission)) {
     // Source freshness is independent of the playhead frequency. A burst of time changes
     // requests one delayed check, without cancelling active work or rebuilding unchanged rows.
     freshnessTimer_.setSingleShot(true);
@@ -287,8 +348,9 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
         });
     try {
         ledger.registerCache(
-            &decodedAudioBytes_, kDecodedAudioByteCapacity, [this] { return decodedAudioBytes_; },
-            [this, previous = kDecodedAudioByteCapacity](const std::size_t bytes) mutable {
+            &decodedAudioBytes_, audioAdmission_.cacheByteCapacity,
+            [this] { return decodedAudioBytes_; },
+            [this, previous = audioAdmission_.cacheByteCapacity](const std::size_t bytes) mutable {
                 if (bytes < previous && previewPending_) {
                     previewDirty_ = true;
                     assetsDirty_ = assetsDirty_ || previewIncludesAssets_;
@@ -320,6 +382,9 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
         thumbnailCache_.clear();
         waveforms_.clear();
         audioBuffers_.clear();
+        audioDeliveryBuffers_.clear();
+        adoptedAudioBuffers_.clear();
+        retryAudioAfterCapacitySample_ = false;
         proxyCacheBytes_ = 0;
         decodedAudioBytes_ = 0;
         refresh();
@@ -512,8 +577,35 @@ AssetController::waveform(const document::AssetId id) const {
 }
 std::shared_ptr<const media::audio::AudioBuffer>
 AssetController::audioBuffer(const document::AssetId id) const {
+    const auto* asset = session_.snapshot().project().findAsset(id);
+    const auto preview = previews_.find(id);
+    if (!asset || preview == previews_.end() || preview->second.missing)
+        return nullptr;
+    const auto digest = asset->contentDigest.toLowercaseHex();
+    if (preview->second.key.compare(0, digest.size(), digest.data(), digest.size()) != 0)
+        return nullptr;
     const auto found = audioBuffers_.find(id);
-    return found == audioBuffers_.end() ? nullptr : found->second;
+    if (found != audioBuffers_.end())
+        return found->second;
+    const auto delivery = audioDeliveryBuffers_.find(id);
+    if (delivery != audioDeliveryBuffers_.end())
+        return delivery->second;
+    const auto adopted = adoptedAudioBuffers_.find(id);
+    return adopted == adoptedAudioBuffers_.end() ? nullptr : adopted->second.lock();
+}
+void AssetController::releaseAudioDelivery() {
+    for (const auto& [id, buffer] : audioDeliveryBuffers_)
+        adoptedAudioBuffers_.insert_or_assign(id, buffer);
+    audioDeliveryBuffers_.clear();
+}
+void AssetController::retryAudioAfterCapacitySample() {
+    if (!retryAudioAfterCapacitySample_)
+        return;
+    retryAudioAfterCapacitySample_ = false;
+    assetsDirty_ = true;
+    previewDirty_ = true;
+    if (!previewPending_)
+        startThumbnails();
 }
 void AssetController::requestImport(QWidget* parent) {
     if (!host_.canSave())
@@ -713,11 +805,20 @@ void AssetController::startThumbnails() {
         std::move(request),
         [snapshot, directory, time, rate, colorIntent, includeAssets,
          compositionId = session_.compositionId(), cached = thumbnailCache_,
-         cachedNodes = nodePreviews_, cachedAudio = includeAssets ? audioBuffers_ : AudioBuffers{},
+         cachedNodes = nodePreviews_,
+         cachedAudio = includeAssets ? [this] {
+             auto buffers = audioBuffers_;
+             buffers.insert(audioDeliveryBuffers_.begin(), audioDeliveryBuffers_.end());
+             for (const auto& [id, weak] : adoptedAudioBuffers_)
+                 if (const auto held = weak.lock())
+                     buffers.emplace(id, held);
+             return buffers;
+         }() : AudioBuffers{},
          cachedWaveforms = includeAssets ? waveforms_ : Waveforms{},
          cachedPreviews = includeAssets ? previews_ : Previews{}, diskCache = mediaDiskCache_,
          proxyOwner = &proxyCacheBytes_,
-         audioOwner = &decodedAudioBytes_](runtime::TaskContext& context) mutable {
+         audioOwner = &decodedAudioBytes_,
+         audioAdmission = audioAdmission_](runtime::TaskContext& context) mutable {
             const auto* composition = snapshot.project().findComposition(compositionId);
             std::vector<runtime::CompiledImageSource> sources;
             if (composition)
@@ -802,7 +903,8 @@ void AssetController::startThumbnails() {
                     if (cost <= limit - std::min(results->audioBytes, limit)) {
                         results->audioBuffers.emplace(id, buffer);
                         results->audioBytes += cost;
-                    }
+                    } else
+                        results->audioDeliveryBuffers.emplace(id, buffer);
                 };
             const auto keepProxy = [&](const std::string& key, const QImage& image) {
                 const auto limit = proxyLimit();
@@ -1064,18 +1166,77 @@ void AssetController::startThumbnails() {
                             keepAudio(asset.id, cachedBuffer->second);
                             results->waveforms.emplace(asset.id, waveform->second);
                         } else if (available && asset.channels > 0) {
-                            auto decoded = media::video::decodeAudioClip(
-                                video, probe, [&] { return context.isCancellationRequested(); });
-                            if (auto* audio = std::get_if<media::audio::AudioBuffer>(&decoded)) {
-                                const auto summary = media::audio::waveformSummary(*audio, 256);
-                                if (summary.value())
-                                    results->waveforms.emplace(
-                                        asset.id,
-                                        std::make_shared<const media::audio::WaveformSummary>(
-                                            *summary.value()));
-                                keepAudio(asset.id,
-                                          std::make_shared<const media::audio::AudioBuffer>(
-                                              std::move(*audio)));
+                            const auto audioStream = std::ranges::find(
+                                probe.streams, media::provider::MediaKind::Audio,
+                                &media::provider::StreamDescriptor::kind);
+                            const auto frames = audioStream == probe.streams.end()
+                                                    ? std::nullopt
+                                                    : media::video::audioClipFrameCount(*audioStream);
+                            const auto claim = frames
+                                                   ? audioStorageClaim(
+                                                         {.rate = audioStream->sampleRate,
+                                                          .channels = static_cast<std::uint32_t>(
+                                                              audioStream->channelLayout.size()),
+                                                          .frames = *frames},
+                                                         media::provider::Limits::audioSamples)
+                                                   : std::nullopt;
+                            if (claim) {
+                                std::shared_ptr<render::GpuProcessingPhaseLease> phase;
+                                std::optional<render::ProcessingHostStorageToken> scratch;
+                                if (audioAdmission.policy) {
+                                    auto granted = audioAdmission.policy->reserve(
+                                        {.output = runtime::GpuProcessingPhaseOutput::FloatFinal,
+                                         .pixels = 0,
+                                         .metadataBytes = claim->retainedBytes,
+                                         .sourceFree = true,
+                                         .native = false});
+                                    if (granted.status ==
+                                        render::GpuProcessingPhaseAdmission::AwaitingCapacity)
+                                        results->retryAudioAfterCapacitySample = true;
+                                    if (granted.lease) {
+                                        phase = std::move(granted.lease);
+                                        auto scratchGrant = render::ProcessingHostStorageToken::reserve(
+                                            phase, claim->scratchBytes);
+                                        scratch = std::move(scratchGrant.token);
+                                    }
+                                }
+                                const auto enoughStandalone = !audioAdmission.policy &&
+                                    claim->retainedBytes + claim->scratchBytes <=
+                                        audioAdmission.standaloneByteAllowance;
+                                if ((phase && scratch) || enoughStandalone) {
+                                    auto decoded = media::video::decodeAudioClip(
+                                        video, probe, claim->samples,
+                                        [&] { return context.isCancellationRequested(); });
+                                    if (auto* audio = std::get_if<media::audio::AudioBuffer>(&decoded)) {
+                                        const auto summary = media::audio::waveformSummary(*audio, 256);
+                                        if (summary.value())
+                                            results->waveforms.emplace(
+                                                asset.id,
+                                                std::make_shared<const media::audio::WaveformSummary>(
+                                                    *summary.value()));
+                                        else
+                                            preview.audioDiagnostic = media::audio::describeAudioError(
+                                                *summary.error());
+                                        keepAudio(asset.id,
+                                                  std::shared_ptr<const media::audio::AudioBuffer>(
+                                                      new media::audio::AudioBuffer(std::move(*audio)),
+                                                      [phase = std::move(phase)](
+                                                          const media::audio::AudioBuffer* owned) {
+                                                          delete owned;
+                                                          (void)phase;
+                                                      }));
+                                    } else
+                                        preview.audioDiagnostic =
+                                            std::get<media::provider::Unavailable>(decoded).detail;
+                                } else {
+                                    preview.audioDiagnostic =
+                                        "Video audio requests " +
+                                        std::to_string(claim->retainedBytes + claim->scratchBytes) +
+                                        " processing bytes; admission was refused";
+                                }
+                            } else {
+                                preview.audioDiagnostic =
+                                    "Video audio sample count exceeds addressable storage";
                             }
                         }
                         results->assets.emplace(asset.id, std::move(preview));
@@ -1084,24 +1245,122 @@ void AssetController::startThumbnails() {
                         preview.missing = true;
                         const auto path = media::resolveImagePath(
                             asset.locator.path, asset.locator.relinkHint, directory);
-                        auto decoded = media::audio::decodeAudio(path);
-                        if (!decoded)
-                            preview.audioDiagnostic =
-                                media::audio::describeAudioError(*decoded.error());
-                        if (decoded.value() != nullptr) {
-                            const auto summary =
-                                media::audio::waveformSummary(*decoded.value(), 256);
-                            if (summary.value() != nullptr) {
+                        const auto source = verifyAudioSource(path, asset.contentDigest,
+                                                              context.cancellation());
+                        if (source == AudioSourceCheck::Cancelled)
+                            return runtime::TaskResult<std::shared_ptr<Thumbnails>>::cancelled();
+                        if (source != AudioSourceCheck::Matches) {
+                            preview.audioDiagnostic = "Audio source is unavailable or has changed";
+                        } else {
+                            const auto digest = asset.contentDigest.toLowercaseHex();
+                            preview.key.assign(digest.begin(), digest.end());
+                            const auto oldPreview = cachedPreviews.find(asset.id);
+                            const auto oldBuffer = cachedAudio.find(asset.id);
+                            const auto oldWaveform = cachedWaveforms.find(asset.id);
+                            if (oldPreview != cachedPreviews.end() &&
+                                oldPreview->second.key == preview.key &&
+                                oldBuffer != cachedAudio.end() &&
+                                oldWaveform != cachedWaveforms.end()) {
+                                keepAudio(asset.id, oldBuffer->second);
+                                results->waveforms.emplace(asset.id, oldWaveform->second);
                                 preview.missing = false;
-                                results->waveforms.emplace(
-                                    asset.id, std::make_shared<const media::audio::WaveformSummary>(
-                                                  *summary.value()));
-                                keepAudio(asset.id,
-                                          std::make_shared<const media::audio::AudioBuffer>(
-                                              std::move(*decoded.value())));
-                            } else
-                                preview.audioDiagnostic =
-                                    media::audio::describeAudioError(*summary.error());
+                            } else {
+                                const auto cancelAudio = [&context] {
+                                    return context.isCancellationRequested();
+                                };
+                                const auto probe = media::audio::probeAudio(path, {}, cancelAudio);
+                                if (!probe) {
+                                    preview.audioDiagnostic =
+                                        media::audio::describeAudioError(*probe.error());
+                                } else if (const auto claim = audioStorageClaim(*probe.value())) {
+                                    std::shared_ptr<render::GpuProcessingPhaseLease> phase;
+                                    std::optional<render::ProcessingHostStorageToken> scratch;
+                                    if (audioAdmission.policy) {
+                                        auto granted = audioAdmission.policy->reserve(
+                                            {.output = runtime::GpuProcessingPhaseOutput::FloatFinal,
+                                             .pixels = 0,
+                                             .metadataBytes = claim->retainedBytes,
+                                             .sourceFree = true,
+                                             .native = false});
+                                        if (granted.status ==
+                                            render::GpuProcessingPhaseAdmission::AwaitingCapacity)
+                                            results->retryAudioAfterCapacitySample = true;
+                                        if (granted.lease) {
+                                            phase = std::move(granted.lease);
+                                            auto scratchGrant = render::ProcessingHostStorageToken::reserve(
+                                                phase, claim->scratchBytes);
+                                            scratch = std::move(scratchGrant.token);
+                                        }
+                                        if (!phase || !scratch) {
+                                            const auto reservation =
+                                                audioAdmission.policy->snapshot().reservations;
+                                            const auto capacity = reservation.hostCapacityBytes;
+                                            preview.audioDiagnostic =
+                                                "Audio decode requests " +
+                                                std::to_string(claim->retainedBytes +
+                                                               claim->scratchBytes) +
+                                                " bytes; processing host capacity is " +
+                                                (capacity ? std::to_string(*capacity) :
+                                                            std::string("unavailable")) +
+                                                ", reserved " +
+                                                std::to_string(reservation.hostReservedBytes) +
+                                                " bytes";
+                                        }
+                                    } else if (claim->retainedBytes + claim->scratchBytes >
+                                               audioAdmission.standaloneByteAllowance) {
+                                        preview.audioDiagnostic =
+                                            "Audio decode requests " +
+                                            std::to_string(claim->retainedBytes +
+                                                           claim->scratchBytes) +
+                                            " bytes; standalone processing allowance is " +
+                                            std::to_string(audioAdmission.standaloneByteAllowance);
+                                    }
+                                    if (preview.audioDiagnostic.empty()) {
+                                        media::audio::AudioDecodeLimits limits;
+                                        limits.sampleBudget = claim->samples;
+                                        auto decoded = media::audio::decodeAudio(path, limits,
+                                                                                 cancelAudio);
+                                        if (!decoded) {
+                                            preview.audioDiagnostic =
+                                                media::audio::describeAudioError(*decoded.error());
+                                        } else {
+                                            const auto verified = verifyAudioSource(
+                                                path, asset.contentDigest, context.cancellation());
+                                            if (verified == AudioSourceCheck::Cancelled)
+                                                return runtime::TaskResult<std::shared_ptr<Thumbnails>>::cancelled();
+                                            if (verified != AudioSourceCheck::Matches) {
+                                                preview.audioDiagnostic =
+                                                    "Audio source changed during decode";
+                                            } else {
+                                                auto summary = media::audio::waveformSummary(
+                                                    *decoded.value(), 256);
+                                                if (!summary) {
+                                                    preview.audioDiagnostic =
+                                                        media::audio::describeAudioError(*summary.error());
+                                                } else {
+                                                    auto buffer = std::shared_ptr<const media::audio::AudioBuffer>(
+                                                        new media::audio::AudioBuffer(
+                                                            std::move(*decoded.value())),
+                                                        [phase = std::move(phase)](
+                                                            const media::audio::AudioBuffer* owned) {
+                                                            delete owned;
+                                                            (void)phase;
+                                                        });
+                                                    results->waveforms.emplace(
+                                                        asset.id,
+                                                        std::make_shared<const media::audio::WaveformSummary>(
+                                                            std::move(*summary.value())));
+                                                    keepAudio(asset.id, buffer);
+                                                    preview.missing = false;
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    preview.audioDiagnostic =
+                                        "Audio frame count exceeds addressable sample storage";
+                                }
+                            }
                         }
                         results->assets.emplace(asset.id, std::move(preview));
                     } else if (asset.kind == document::AssetKind::Lut) {
@@ -1223,11 +1482,14 @@ void AssetController::poll() {
                     (previews_.size() != prepared.assets.size() ||
                      !std::equal(previews_.begin(), previews_.end(), prepared.assets.begin(),
                                  samePreview) ||
-                     waveforms_ != prepared.waveforms || audioBuffers_ != prepared.audioBuffers);
+                     waveforms_ != prepared.waveforms || audioBuffers_ != prepared.audioBuffers ||
+                     audioDeliveryBuffers_ != prepared.audioDeliveryBuffers);
                 if (previewIncludesAssets_) {
+                    retryAudioAfterCapacitySample_ = prepared.retryAudioAfterCapacitySample;
                     previews_ = std::move((*result->value())->assets);
                     waveforms_ = std::move((*result->value())->waveforms);
                     audioBuffers_ = std::move((*result->value())->audioBuffers);
+                    audioDeliveryBuffers_ = std::move((*result->value())->audioDeliveryBuffers);
                 }
                 nodePreviews_ = std::move((*result->value())->nodes);
                 thumbnailCache_ = std::move((*result->value())->cache);

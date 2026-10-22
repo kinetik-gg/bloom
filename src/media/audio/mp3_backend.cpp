@@ -22,6 +22,24 @@ using bloom::media::audio::AudioError;
 using bloom::media::audio::AudioErrorCode;
 using bloom::media::audio::AudioProbe;
 using bloom::media::audio::AudioResult;
+using bloom::media::audio::CancelAudioWork;
+
+struct FileReader {
+    std::ifstream& input;
+    const CancelAudioWork& cancel;
+    bool cancelled = false;
+};
+
+bool cancelled(FileReader& reader) noexcept {
+    if (reader.cancelled || !reader.cancel)
+        return reader.cancelled;
+    try {
+        reader.cancelled = reader.cancel();
+    } catch (...) {
+        reader.cancelled = true;
+    }
+    return reader.cancelled;
+}
 
 [[nodiscard]] RationalTime duration(const std::uint64_t frames, const int rate) noexcept {
     const auto result = RationalTime::create(static_cast<std::int64_t>(frames), rate);
@@ -46,7 +64,10 @@ using bloom::media::audio::AudioResult;
 }
 
 size_t readFile(void* buffer, size_t bytes, void* user) {
-    auto& stream = *static_cast<std::ifstream*>(user);
+    auto& reader = *static_cast<FileReader*>(user);
+    if (cancelled(reader))
+        return 0;
+    auto& stream = reader.input;
     const auto count = static_cast<std::streamsize>(
         std::min(bytes, static_cast<std::size_t>(std::numeric_limits<std::streamsize>::max())));
     stream.read(static_cast<char*>(buffer), count);
@@ -56,23 +77,26 @@ size_t readFile(void* buffer, size_t bytes, void* user) {
 int seekFile(std::uint64_t position, void* user) {
     if (position > static_cast<std::uint64_t>(std::numeric_limits<std::streamoff>::max()))
         return -1;
-    auto& stream = *static_cast<std::ifstream*>(user);
+    auto& reader = *static_cast<FileReader*>(user);
+    if (cancelled(reader))
+        return -1;
+    auto& stream = reader.input;
     stream.clear();
     stream.seekg(static_cast<std::streamoff>(position), std::ios::beg);
     return stream.good() ? 0 : -1;
 }
 
-[[nodiscard]] mp3dec_io_t fileIo(std::ifstream& input) noexcept {
+[[nodiscard]] mp3dec_io_t fileIo(FileReader& reader) noexcept {
     mp3dec_io_t io{};
     io.read = readFile;
-    io.read_data = &input;
+    io.read_data = &reader;
     io.seek = seekFile;
-    io.seek_data = &input;
+    io.seek_data = &reader;
     return io;
 }
 
-[[nodiscard]] AudioResult<AudioBuffer> decodeOpened(mp3dec_ex_t& decoder,
-                                                    const AudioDecodeLimits& limits) noexcept {
+[[nodiscard]] AudioResult<AudioBuffer>
+decodeOpened(mp3dec_ex_t& decoder, const AudioDecodeLimits& limits, FileReader& reader) noexcept {
     if (decoder.info.channels <= 0 || decoder.info.hz <= 0 || decoder.samples == 0 ||
         decoder.samples > std::numeric_limits<std::size_t>::max())
         return AudioResult<AudioBuffer>::failure(
@@ -98,11 +122,14 @@ int seekFile(std::uint64_t position, void* user) {
         constexpr std::size_t kFramesPerChunk = 4096;
         auto interleaved = std::vector<float>(std::min(kFramesPerChunk, frames) * channels);
         for (std::size_t start = 0; start < frames;) {
+            if (cancelled(reader))
+                return AudioResult<AudioBuffer>::failure(
+                    AudioError::codeOnly(AudioErrorCode::Cancelled));
             const auto count = std::min(kFramesPerChunk, frames - start);
             const auto chunkSamples = count * channels;
             if (mp3dec_ex_read(&decoder, interleaved.data(), chunkSamples) != chunkSamples)
-                return AudioResult<AudioBuffer>::failure(
-                    AudioError::codeOnly(AudioErrorCode::DecoderFailure));
+                return AudioResult<AudioBuffer>::failure(AudioError::codeOnly(
+                    reader.cancelled ? AudioErrorCode::Cancelled : AudioErrorCode::DecoderFailure));
             for (std::size_t frame = 0; frame < count; ++frame)
                 for (std::size_t channel = 0; channel < channels; ++channel)
                     buffer.planes[channel][start + frame] = interleaved[frame * channels + channel];
@@ -119,23 +146,29 @@ int seekFile(std::uint64_t position, void* user) {
 
 namespace bloom::media::audio::detail {
 
-AudioResult<AudioProbe> probeMp3File(const std::filesystem::path& path) noexcept {
+AudioResult<AudioProbe> probeMp3File(const std::filesystem::path& path,
+                                     const CancelAudioWork& cancel) noexcept {
     try {
         std::ifstream input(path, std::ios::binary);
         if (!input)
             return AudioResult<AudioProbe>::failure(
                 AudioError::codeOnly(AudioErrorCode::FileReadFailed));
-        auto io = fileIo(input);
+        FileReader reader{input, cancel};
+        auto io = fileIo(reader);
         mp3dec_ex_t decoder{};
         const auto status = mp3dec_ex_open_cb(&decoder, &io, 0);
         if (status != 0) {
             mp3dec_ex_close(&decoder);
             return AudioResult<AudioProbe>::failure(
-                AudioError::codeOnly(status == MP3D_E_MEMORY ? AudioErrorCode::AllocationFailure
-                                                             : AudioErrorCode::MalformedFile));
+                AudioError::codeOnly(reader.cancelled          ? AudioErrorCode::Cancelled
+                                     : status == MP3D_E_MEMORY ? AudioErrorCode::AllocationFailure
+                                                               : AudioErrorCode::MalformedFile));
         }
         auto result = probeOpened(decoder);
         mp3dec_ex_close(&decoder);
+        if (reader.cancelled)
+            return AudioResult<AudioProbe>::failure(
+                AudioError::codeOnly(AudioErrorCode::Cancelled));
         return result;
     } catch (const std::bad_alloc&) {
         return AudioResult<AudioProbe>::failure(
@@ -144,23 +177,29 @@ AudioResult<AudioProbe> probeMp3File(const std::filesystem::path& path) noexcept
 }
 
 AudioResult<AudioBuffer> decodeMp3File(const std::filesystem::path& path,
-                                       const AudioDecodeLimits& limits) noexcept {
+                                       const AudioDecodeLimits& limits,
+                                       const CancelAudioWork& cancel) noexcept {
     try {
         std::ifstream input(path, std::ios::binary);
         if (!input)
             return AudioResult<AudioBuffer>::failure(
                 AudioError::codeOnly(AudioErrorCode::FileReadFailed));
-        auto io = fileIo(input);
+        FileReader reader{input, cancel};
+        auto io = fileIo(reader);
         mp3dec_ex_t decoder{};
         const auto status = mp3dec_ex_open_cb(&decoder, &io, 0);
         if (status != 0) {
             mp3dec_ex_close(&decoder);
             return AudioResult<AudioBuffer>::failure(
-                AudioError::codeOnly(status == MP3D_E_MEMORY ? AudioErrorCode::AllocationFailure
-                                                             : AudioErrorCode::MalformedFile));
+                AudioError::codeOnly(reader.cancelled          ? AudioErrorCode::Cancelled
+                                     : status == MP3D_E_MEMORY ? AudioErrorCode::AllocationFailure
+                                                               : AudioErrorCode::MalformedFile));
         }
-        auto result = decodeOpened(decoder, limits);
+        auto result = decodeOpened(decoder, limits, reader);
         mp3dec_ex_close(&decoder);
+        if (reader.cancelled)
+            return AudioResult<AudioBuffer>::failure(
+                AudioError::codeOnly(AudioErrorCode::Cancelled));
         return result;
     } catch (const std::bad_alloc&) {
         return AudioResult<AudioBuffer>::failure(

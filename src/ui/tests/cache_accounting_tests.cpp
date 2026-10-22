@@ -468,13 +468,10 @@ void testProxyCacheBoundIsMeasuredRatherThanAssumed(Expectations& check) {
                  "512 proxies of 64x64 RGBA8 are exactly the 8 MiB the byte capacity allows");
 }
 
-// Decoded audio was the other pool with no aggregate bound: AudioDecodeLimits caps ONE buffer at
-// 48M samples (about 192 MB), and the controller kept one per audio asset with no total.
+// Decoded audio is admitted by a processing lease independently of the retention cache.
 void testDecodedAudioAggregateIsBounded(Expectations& check) {
     constexpr std::size_t kCapacity = std::size_t{2} * 1024U * kMebibyte;
-    const auto perAsset =
-        static_cast<std::size_t>(bloom::media::audio::AudioDecodeLimits::kDefaultSampleBudget) *
-        sizeof(float);
+    constexpr auto perAsset = 128U * kMebibyte;
     check.expect(perAsset > 100 * kMebibyte,
                  "one decoded audio buffer is already a substantial allocation");
     std::size_t held = 0;
@@ -531,7 +528,8 @@ void testAssetProxyAndAudioParticipation(Expectations& check) {
                                           *host.liveDocumentAndStack().second,
                                           host.lowestCompositionId());
     bloom::ui::TaskUiBridge bridge(scheduler);
-    bloom::ui::AssetController assets(session, host, scheduler, bridge);
+    bloom::ui::AssetController assets(session, host, scheduler, bridge, nullptr, nullptr,
+                                      {.standaloneByteAllowance = 16 * 1024 * 1024});
     assets.importFiles({directory.filePath("proxy.png"), audioPath});
     QElapsedTimer timer;
     timer.start();

@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <span>
 #include <string>
@@ -37,6 +38,7 @@ enum class AudioErrorCode : std::uint8_t {
     BackendUnavailable,
     BackendStartFailed,
     InvalidState,
+    Cancelled,
 };
 
 struct AudioError final {
@@ -95,11 +97,11 @@ template <typename T> class [[nodiscard]] AudioResult final {
 struct AudioDecodeLimits final {
     // Streaming decoders need no encoded-file cap. Callers may still set one explicitly.
     static constexpr std::uint64_t kDefaultFileSizeCap = std::numeric_limits<std::uint64_t>::max();
-    static constexpr std::uint64_t kDefaultSampleBudget = 48'000'000U;
-
     std::uint64_t fileSizeCap = kDefaultFileSizeCap;
-    std::uint64_t sampleBudget = kDefaultSampleBudget;
+    // A decoder caller owns this admission. Zero refuses decode; probe needs no sample storage.
+    std::uint64_t sampleBudget = 0;
 };
+using CancelAudioWork = std::function<bool()>;
 
 struct AudioProbe final {
     AudioContainer container = AudioContainer::Wav;
@@ -130,13 +132,13 @@ struct WaveformSummary final {
     std::vector<std::vector<WaveformRange>> buckets;
 };
 
-[[nodiscard]] AudioResult<AudioProbe>
-probeAudio(const std::filesystem::path& path,
-           AudioDecodeLimits limits = AudioDecodeLimits{}) noexcept;
+[[nodiscard]] AudioResult<AudioProbe> probeAudio(const std::filesystem::path& path,
+                                                 AudioDecodeLimits limits = AudioDecodeLimits{},
+                                                 const CancelAudioWork& cancel = {}) noexcept;
 
-[[nodiscard]] AudioResult<AudioBuffer>
-decodeAudio(const std::filesystem::path& path,
-            AudioDecodeLimits limits = AudioDecodeLimits{}) noexcept;
+[[nodiscard]] AudioResult<AudioBuffer> decodeAudio(const std::filesystem::path& path,
+                                                   AudioDecodeLimits limits,
+                                                   const CancelAudioWork& cancel = {}) noexcept;
 
 [[nodiscard]] AudioResult<WaveformSummary> waveformSummary(const AudioBuffer& buffer,
                                                            std::size_t bucketCount) noexcept;

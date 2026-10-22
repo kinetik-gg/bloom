@@ -1,26 +1,41 @@
 #include <algorithm>
 #include <bloom/media/video/audio.hpp>
 #include <cmath>
+#include <limits>
 namespace bloom::media::video {
+std::optional<std::uint64_t>
+audioClipFrameCount(const provider::StreamDescriptor& stream) noexcept {
+    if (stream.duration.numerator <= 0 || stream.duration.denominator <= 0 ||
+        stream.sampleRate == 0 || stream.channelLayout.empty() ||
+        stream.channelLayout.size() > provider::Limits::channels)
+        return {};
+    const auto samples = static_cast<long double>(stream.duration.numerator) /
+                         static_cast<long double>(stream.duration.denominator) * stream.sampleRate;
+    const auto ceiling = static_cast<long double>(std::min<std::uint64_t>(
+        std::numeric_limits<std::int64_t>::max(), std::numeric_limits<std::size_t>::max()));
+    if (!std::isfinite(samples) || samples <= 0.0L || samples >= ceiling)
+        return {};
+    // A positive fractional tail is still an audible frame in range/export playback.
+    return static_cast<std::uint64_t>(std::ceil(samples));
+}
 provider::Result<audio::AudioBuffer> decodeAudioClip(VideoDecodeSession& session,
                                                      const provider::ProbeResult& probe,
+                                                     const std::uint64_t admittedSamples,
                                                      const Cancel& cancel) {
     const auto stream = std::ranges::find(probe.streams, provider::MediaKind::Audio,
                                           &provider::StreamDescriptor::kind);
     if (stream == probe.streams.end())
         return provider::Unavailable{provider::Error::Unavailable, "Video has no audio stream"};
-    const auto samples = static_cast<double>(stream->duration.numerator) /
-                         static_cast<double>(stream->duration.denominator) * stream->sampleRate;
-    if (!std::isfinite(samples) || samples <= 0 || stream->channelLayout.empty() ||
-        stream->channelLayout.size() > 32 ||
-        samples > static_cast<double>(audio::AudioDecodeLimits::kDefaultSampleBudget) /
-                      static_cast<double>(stream->channelLayout.size()))
+    const auto frames = audioClipFrameCount(*stream);
+    if (!frames || *frames > admittedSamples / stream->channelLayout.size() ||
+        *frames > std::numeric_limits<std::size_t>::max() /
+                      (stream->channelLayout.size() * sizeof(float)))
         return provider::Unavailable{provider::Error::Oversized,
-                                     "Video audio exceeds the preview sample budget"};
+                                     "Video audio exceeds its admitted sample storage"};
     audio::AudioBuffer buffer;
     buffer.rate = stream->sampleRate;
     buffer.channels = static_cast<std::uint32_t>(stream->channelLayout.size());
-    buffer.frames = static_cast<std::uint64_t>(std::llround(samples));
+    buffer.frames = *frames;
     buffer.planes.resize(buffer.channels);
     for (auto& channel : buffer.planes)
         channel.reserve(static_cast<std::size_t>(buffer.frames));
