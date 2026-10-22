@@ -663,9 +663,18 @@ void monotonicRecoveryAndSlots() {
     auto fresh = sample(now + std::chrono::seconds(7));
     fresh.sampleSerial = 4;
     policy.applyHostSample(fresh, 60 * gib, now + std::chrono::seconds(7));
-    require(policy.snapshot().reservations.hostCapacityBytes == gib &&
+    require(policy.snapshot().reservations.hostCapacityBytes == 2 * gib &&
                 policy.snapshot().reservations.hostReady,
-            "only a fresh monotonic complete sample permits recovery");
+            "only a fresh monotonic complete sample restores the full measured 2GiB headroom");
+    auto recovered = policy.reserve({.output = GpuProcessingPhaseOutput::FloatFinal,
+                                     .pixels = 1,
+                                     .metadataBytes = gib,
+                                     .sourceFree = true,
+                                     .native = false},
+                                    fresh.process.sampledAt);
+    require(recovered.lease && recovered.lease->hostBytes() > gib,
+            "fresh recovery admits actual work above the former half-headroom gate");
+    recovered.lease.reset();
     const GpuAllocationBudget native{.source = GpuAllocationBudgetSource::MemoryBudget,
                                      .device_local_bytes = gib,
                                      .available_bytes = gib};

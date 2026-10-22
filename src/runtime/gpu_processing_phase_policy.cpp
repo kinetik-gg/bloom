@@ -152,13 +152,16 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
     const bool recent = age >= 0 && age <= 10;
     const bool fresh = newerDelivery && sample.processSampleFresh && recent &&
                        (!hostSampleAt_ || sample.process.sampledAt > *hostSampleAt_);
-    const auto backingCredit =
-        fresh && pendingHostBackingCredit_ &&
-                pendingHostBackingCredit_->sampledAt == sample.process.sampledAt
-            ? pendingHostBackingCredit_->bytes
-            : 0;
-    const auto retiredBytesAtSample =
-        backingCredit != 0 ? pendingHostBackingCredit_->retiredBytesAtSample : 0;
+    std::uint64_t backingCredit = 0;
+    std::uint64_t retiredBytesAtSample = 0;
+    if (fresh && pendingHostBackingCredit_.has_value()) {
+        const auto& pending = pendingHostBackingCredit_.value();
+        if (pending.sampledAt == sample.process.sampledAt) {
+            backingCredit = pending.bytes;
+            if (backingCredit != 0)
+                retiredBytesAtSample = pending.retiredBytesAtSample;
+        }
+    }
     if (fresh) {
         appliedHostBackingCredit_ =
             HostSampleBackingCredit{sample.process.sampledAt, backingCredit, finite,
