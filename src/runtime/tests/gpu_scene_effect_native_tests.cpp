@@ -25,6 +25,7 @@
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -85,6 +86,8 @@ using bloom::runtime::GpuSceneExecutorPollResult;
 using bloom::runtime::GpuSceneMediaContext;
 using bloom::runtime::GpuSceneOcioContext;
 using bloom::runtime::OperationIndex;
+using bloom::runtime::PointwiseImageEffect;
+using bloom::runtime::PointwiseImageKernel;
 
 // The whole fixture/runner section prepares real OCIO programs from BLOOM_GPUSHADER_TOOLS_DIR, so
 // it is compiled only when the shader tools are packaged. Without them main() reports an honest
@@ -106,7 +109,7 @@ constexpr std::uint64_t kSceneBudget = 64ULL * 1024ULL * 1024ULL;
 // A solid -> OCIO effect -> layer -> Normal merge -> output plan. The solid is negative-HDR with a
 // translucent alpha so the effect's HDR and alpha handling are genuinely exercised.
 [[nodiscard]] std::shared_ptr<const CompiledCompositionPlan>
-effectPlan(const std::variant<CstKernel, FileTransformKernel>& kernel, const std::uint64_t idBase,
+effectPlan(const bloom::runtime::ImageEffectKernel& kernel, const std::uint64_t idBase,
            const std::optional<AssetRecord>& lutAsset = std::nullopt,
            const Color4d color = Color4d{-0.25, 1.75, 0.5, 0.625}) {
     constexpr std::uint64_t layerRaw = 1;
@@ -115,16 +118,15 @@ effectPlan(const std::variant<CstKernel, FileTransformKernel>& kernel, const std
                                           {ParameterId::fromRaw(idBase + 2), color},
                                           {ParameterId::fromRaw(idBase + 3), 12.0},
                                           {ParameterId::fromRaw(idBase + 4), 10.0}});
-    if (const auto* cst = std::get_if<CstKernel>(&kernel)) {
-        operations.emplace_back(CompiledImageEffect{
-            NodeId::fromRaw(idBase + 5), OperationIndex::fromRaw(0), *cst, false, false});
-    } else {
-        const auto* file = std::get_if<FileTransformKernel>(&kernel);
+    if (const auto* file = std::get_if<FileTransformKernel>(&kernel)) {
         FileTransformKernel copy = *file;
         copy.asset = lutAsset;
         operations.emplace_back(CompiledImageEffect{NodeId::fromRaw(idBase + 5),
                                                     OperationIndex::fromRaw(0), std::move(copy),
                                                     false, false});
+    } else {
+        operations.emplace_back(CompiledImageEffect{
+            NodeId::fromRaw(idBase + 5), OperationIndex::fromRaw(0), kernel, false, false});
     }
     operations.emplace_back(CompiledLayerOutput{
         NodeId::fromRaw(idBase + 6), LayerId::fromRaw(layerRaw), OperationIndex::fromRaw(1),
@@ -325,6 +327,71 @@ void runCst(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
     }
 }
 
+void runPointwise(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    const CpuCompositionEvaluator evaluator;
+    const std::array cases{
+        PointwiseImageKernel{PointwiseImageEffect::Exposure,
+                             CompiledScalarParameter{ParameterId::fromRaw(900), 1.25}},
+        PointwiseImageKernel{PointwiseImageEffect::Offset,
+                             CompiledScalarParameter{ParameterId::fromRaw(900), -0.35}},
+        PointwiseImageKernel{PointwiseImageEffect::Multiply,
+                             CompiledScalarParameter{ParameterId::fromRaw(900), -2.0}},
+        PointwiseImageKernel{PointwiseImageEffect::Invert, {}}};
+    std::uint64_t idBase = 10000;
+    for (const auto& kernel : cases) {
+        const auto plan = effectPlan(kernel, idBase);
+        idBase += 1000;
+        const auto request = requestFor(*plan);
+        const auto prepared = builder.build(plan, request);
+        const auto oracle = evaluator.evaluate(plan, request, {});
+        expectations.expect(prepared.hasValue() && oracle.frame(),
+                            "pointwise: production GPU preparation and CPU evaluation succeed");
+        if (!prepared || !oracle.frame())
+            continue;
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), "pointwise: native executor creates");
+        if (!executor)
+            continue;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        std::string detail;
+        expectations.expect(
+            cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail),
+            "pointwise: native signed HDR and alpha match CPU: " + detail);
+        const auto counters = executor.executor->counters();
+        expectations.expect(counters.ocioEffectDispatches == 1 && counters.readbacks == 0,
+                            "pointwise: one resident effect with no per-node CPU readback");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(
+            warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                parity(warm.pixels, oracle.frame()->processImage().pixels(), detail) &&
+                executor.executor->counters().ocioEffectDispatches == counters.ocioEffectDispatches,
+            "pointwise: warm native pixels reuse the cached effect");
+        if (kernel.amount) {
+            auto changedKernel = kernel;
+            std::get<double>(changedKernel.amount->source) += 0.5;
+            const auto changedPlan = effectPlan(changedKernel, idBase - 1000);
+            const auto changedRequest = requestFor(*changedPlan);
+            const auto changed = builder.build(changedPlan, changedRequest);
+            const auto changedOracle = evaluator.evaluate(changedPlan, changedRequest, {});
+            expectations.expect(changed.hasValue() && changedOracle.frame(),
+                                "pointwise: changed amount prepares and evaluates");
+            if (changed && changedOracle.frame()) {
+                const auto result = runScene(*executor.executor, changed.scene);
+                expectations.expect(
+                    result.pollResult == GpuSceneExecutorPollResult::Ready &&
+                        parity(result.pixels, changedOracle.frame()->processImage().pixels(),
+                               detail) &&
+                        executor.executor->counters().ocioEffectDispatches ==
+                            counters.ocioEffectDispatches + 1 &&
+                        executor.executor->counters().solidDispatches == counters.solidDispatches,
+                    "pointwise: changing amount invalidates the effect while retaining its input");
+            }
+        }
+    }
+}
+
 #if defined(__linux__)
 void runFileTransform(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                       const std::string& working, const std::string& process) {
@@ -403,6 +470,7 @@ void runFileTransform(Expectations& expectations, GpuDevice& device, GpuSceneCac
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                const std::string& from, const std::string& to) {
     runCst(expectations, device, cache, from, to);
+    runPointwise(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
 #endif

@@ -1665,16 +1665,21 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     if (sampled)
                         pointwiseAmount = sampled->value;
                 }
-                preparedEffect = request.bypassLookNodes && effect->look
-                                     ? detail::PreparedImageEffect{}
-                                     : imageEffectContext()->prepare(*effect, request.colorIntent,
-                                                                     mediaBase, cancellation,
-                                                                     pointwiseAmount);
+                preparedEffect =
+                    request.bypassLookNodes && effect->look
+                        ? detail::PreparedImageEffect{}
+                        : imageEffectContext()->prepare(*effect, request.colorIntent, mediaBase,
+                                                        cancellation, pointwiseAmount);
                 if (preparedEffect->cancelled)
                     return EvaluationResult::cancelled();
                 if (preparedEffect->diagnostic) {
                     auto warning = *preparedEffect->diagnostic;
                     warning.subject = operationSubject;
+                    if (std::holds_alternative<PointwiseImageKernel>(effect->kernel)) {
+                        return EvaluationResult::failed(
+                            diagnostic(warning.code, "Pointwise image effect cannot be evaluated",
+                                       warning.detail, operationSubject));
+                    }
                     imageWarnings.push_back(std::move(warning));
                 }
             }
@@ -2174,6 +2179,14 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 }
                                 if (result.diagnostic) {
                                     result.diagnostic->subject = operationSubject;
+                                    if (std::holds_alternative<PointwiseImageKernel>(
+                                            effect.kernel)) {
+                                        operationFailure =
+                                            diagnostic(result.diagnostic->code,
+                                                       "Pointwise image effect cannot be evaluated",
+                                                       result.diagnostic->detail, operationSubject);
+                                        return;
+                                    }
                                     imageWarnings.push_back(std::move(*result.diagnostic));
                                     effectApplicationFailed = true;
                                     contentHashes[index] += ":effect-failed";
@@ -3152,9 +3165,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             }
             const auto source = processImage->pixels();
             if (source.size() != descriptor->layout().pixelCount) {
-                return EvaluationResult::failed(diagnostic(
-                    EvaluationDiagnosticCode::InternalInvariant,
-                    "Composition Output pixel storage does not match its descriptor"));
+                return EvaluationResult::failed(
+                    diagnostic(EvaluationDiagnosticCode::InternalInvariant,
+                               "Composition Output pixel storage does not match its descriptor"));
             }
             const auto window = descriptor->dataWindow();
             for (std::int64_t y = window.originY(); y < window.maxYExclusive(); ++y) {
@@ -3175,13 +3188,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 return EvaluationResult::failed(imageDiagnostic(
                     *frozen.error(), {}, "Final process image could not be published"));
             }
-            auto owned = std::make_shared<const render::Rgba32fImage>(
-                std::move(*frozen.value()));
-            if (!render::PackedHostStorageAuthority::promoteFinalProduct(
-                    owned->storageAuthority(), {})) {
-                return EvaluationResult::failed(diagnostic(
-                    EvaluationDiagnosticCode::InternalInvariant,
-                    "Final process image ownership could not be published"));
+            auto owned = std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
+            if (!render::PackedHostStorageAuthority::promoteFinalProduct(owned->storageAuthority(),
+                                                                         {})) {
+                return EvaluationResult::failed(
+                    diagnostic(EvaluationDiagnosticCode::InternalInvariant,
+                               "Final process image ownership could not be published"));
             }
             processImage = std::move(owned);
         }

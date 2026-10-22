@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -89,8 +90,8 @@ void testExposureAndOffset() {
         return runtime::PointwiseImageKernel{
             kind, runtime::CompiledScalarParameter{document::ParameterId::fromRaw(90), value}};
     };
-    for (const auto kind : {runtime::PointwiseImageEffect::Exposure,
-                            runtime::PointwiseImageEffect::Offset}) {
+    for (const auto kind :
+         {runtime::PointwiseImageEffect::Exposure, runtime::PointwiseImageEffect::Offset}) {
         const auto neutral = planWith({amount(kind, 0.0)});
         const auto result = evaluator.evaluate(neutral, requestFor(*neutral), {});
         expect(samePixels(result, baselineResult), "neutral pointwise effects preserve pixels");
@@ -113,18 +114,15 @@ void testExposureAndOffset() {
                 continue;
             }
             foundContent = true;
-            expect(pixel.alpha() == 0.5F &&
-                       std::abs(pixel.red() - expected[0]) < 1e-6F &&
+            expect(pixel.alpha() == 0.5F && std::abs(pixel.red() - expected[0]) < 1e-6F &&
                        std::abs(pixel.green() - expected[1]) < 1e-6F &&
                        std::abs(pixel.blue() - expected[2]) < 1e-6F,
                    "pointwise effect preserves signed HDR straight-RGB and alpha semantics");
         }
         expect(foundContent, "pointwise fixture has visible content");
     };
-    check(runtime::PointwiseImageEffect::Exposure, 1.0,
-          {-0.125F, 0.18F, 2.0F});
-    check(runtime::PointwiseImageEffect::Offset, -0.25,
-          {-0.1875F, -0.035F, 0.875F});
+    check(runtime::PointwiseImageEffect::Exposure, 1.0, {-0.125F, 0.18F, 2.0F});
+    check(runtime::PointwiseImageEffect::Offset, -0.25, {-0.1875F, -0.035F, 0.875F});
 }
 
 void testCst() {
@@ -356,11 +354,12 @@ void testMultiplyAndInvert() {
     using runtime::PointwiseImageEffect;
     using runtime::PointwiseImageKernel;
     const auto multiply = [](const double factor) -> runtime::ImageEffectKernel {
-        return PointwiseImageKernel{PointwiseImageEffect::Multiply,
-                                    CompiledScalarParameter{document::ParameterId::fromRaw(30),
-                                                            factor}};
+        return PointwiseImageKernel{
+            PointwiseImageEffect::Multiply,
+            CompiledScalarParameter{document::ParameterId::fromRaw(30), factor}};
     };
-    const runtime::ImageEffectKernel invert = PointwiseImageKernel{PointwiseImageEffect::Invert, {}};
+    const runtime::ImageEffectKernel invert =
+        PointwiseImageKernel{PointwiseImageEffect::Invert, {}};
     const auto color = core::Color4d{-0.125, 0.18, 2.0, 0.5};
     runtime::CpuCompositionEvaluator evaluator;
     const auto source = planWith({}, color);
@@ -376,8 +375,7 @@ void testMultiplyAndInvert() {
            "negative Multiply factor evaluates without a display clamp");
     if (multiplied.frame()) {
         const auto pixel = multiplied.frame()->processImage().pixels().front();
-        expect(std::abs(pixel.red() - 0.125F) < 1e-6F &&
-                   std::abs(pixel.green() + 0.18F) < 1e-6F &&
+        expect(std::abs(pixel.red() - 0.125F) < 1e-6F && std::abs(pixel.green() + 0.18F) < 1e-6F &&
                    std::abs(pixel.blue() + 2.0F) < 1e-6F && pixel.alpha() == 0.5F,
                "Multiply scales straight scene-linear RGB then restores original association");
     }
@@ -392,8 +390,7 @@ void testMultiplyAndInvert() {
     expect(inverted.frame() && inverted.diagnostics().empty(), "color Invert evaluates");
     if (inverted.frame()) {
         const auto pixel = inverted.frame()->processImage().pixels().front();
-        expect(std::abs(pixel.red() - 0.5625F) < 1e-6F &&
-                   std::abs(pixel.green() - 0.41F) < 1e-6F &&
+        expect(std::abs(pixel.red() - 0.5625F) < 1e-6F && std::abs(pixel.green() - 0.41F) < 1e-6F &&
                    std::abs(pixel.blue() + 0.5F) < 1e-6F && pixel.alpha() == 0.5F,
                "Invert computes one minus straight RGB, preserving HDR, negative and alpha");
     }
@@ -420,6 +417,54 @@ void testMultiplyAndInvert() {
            "Multiply and Invert keep zero-alpha process pixels transparent black");
 }
 
+void testPointwiseFailureAndTimeDependence() {
+    using runtime::CompiledScalarParameter;
+    using runtime::PointwiseImageEffect;
+    using runtime::PointwiseImageKernel;
+    const auto parameterId = document::ParameterId::fromRaw(90);
+    runtime::CpuCompositionEvaluator evaluator;
+    for (const auto kernel :
+         {PointwiseImageKernel{PointwiseImageEffect::Exposure,
+                               CompiledScalarParameter{parameterId, 1024.0}},
+          PointwiseImageKernel{
+              PointwiseImageEffect::Offset,
+              CompiledScalarParameter{parameterId, std::numeric_limits<double>::max()}},
+          PointwiseImageKernel{
+              PointwiseImageEffect::Multiply,
+              CompiledScalarParameter{parameterId,
+                                      static_cast<double>(std::numeric_limits<float>::max())}}}) {
+        const auto plan = planWith({kernel});
+        const auto result = evaluator.evaluate(plan, requestFor(*plan), {});
+        expect(!result.frame() && !result.diagnostics().empty(),
+               "unrepresentable pointwise parameters and pixels fail instead of bypassing");
+    }
+    const auto base = planWith({PointwiseImageKernel{PointwiseImageEffect::Exposure,
+                                                     CompiledScalarParameter{parameterId, 1.0}}});
+    expect(!base->operationTimeDependent(base->output()),
+           "constant pointwise amounts retain static-frame reuse");
+    auto definition = base->copyDefinition();
+    definition.duration = core::RationalTime::fromInteger(10);
+    definition.valueOperations = {{document::NodeId::fromRaw(200),
+                                   runtime::ValueOutputIndex::fromRaw(0), 2,
+                                   runtime::CompiledValueTime{}}};
+    definition.valueOutputCount = 2;
+    auto& effect = std::get<runtime::CompiledImageEffect>(definition.operations[1]);
+    std::get<PointwiseImageKernel>(effect.kernel).amount->source =
+        runtime::ValueOutputIndex::fromRaw(0);
+    const auto animated =
+        std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
+    expect(!animated->operationTimeDependent(runtime::OperationIndex::fromRaw(0)) &&
+               animated->operationTimeDependent(runtime::OperationIndex::fromRaw(1)) &&
+               animated->operationTimeDependent(animated->output()),
+           "a driven pointwise amount marks its effect and downstream output time dependent");
+    auto request = requestFor(*animated);
+    const auto first = evaluator.evaluate(animated, request, {});
+    request.time = core::RationalTime::fromInteger(1);
+    const auto next = evaluator.evaluate(animated, request, {});
+    expect(first.frame() && next.frame() && !samePixels(first, next),
+           "a Time-driven pointwise amount changes the cached image at a new time");
+}
+
 } // namespace
 
 int main() {
@@ -429,6 +474,7 @@ int main() {
         testLookBypass();
         testFileTransform();
         testMultiplyAndInvert();
+        testPointwiseFailureAndTimeDependence();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
