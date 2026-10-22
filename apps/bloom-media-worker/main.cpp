@@ -10,14 +10,17 @@
 #endif
 #include "worker_io.hpp"
 #include <bloom/platform/process_supervisor.hpp>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <memory>
 #include <string_view>
 
 int main(int argc, char** argv) {
     using namespace bloom::media;
     if (!bloom::platform::processWorkerBootstrap())
         return 2;
+    bool retainedVideo = false;
 #ifdef BLOOM_FAKE_WORKER
     (void)argc;
     (void)argv;
@@ -35,6 +38,8 @@ int main(int argc, char** argv) {
         const auto argument = std::string_view(argv[i]);
         if (argument == "--vaapi")
             hardware = true;
+        else if (argument == "--retained-video")
+            retainedVideo = true;
         else if (argument == "--openh264-dir" && i + 1 < argc)
             openh264Directory = argv[++i];
         else if (argument == "--openh264-sha256" && i + 1 < argc)
@@ -59,12 +64,16 @@ int main(int argc, char** argv) {
     const auto handshake = provider::ffmpegHandshake(
         hardware, openh264, provider::OpenH264Runtime::version(), openh264Digest);
     ffmpeg::Encoder encoder(hardware);
+    std::unique_ptr<ffmpeg::DecodeSession> decoder;
+    if (retainedVideo)
+        decoder = std::make_unique<ffmpeg::DecodeSession>(hardware);
 #endif
     try {
         std::uint64_t session = 0, sequence = 0;
         bool ready = false;
         while (true) {
-            auto incoming = worker::read();
+            auto incoming = worker::read(retainedVideo && ready ? std::chrono::seconds(45)
+                                                                : std::chrono::milliseconds{0});
             const auto* message = std::get_if<provider::Message>(&incoming);
             if (!message)
                 return 3;
@@ -107,7 +116,9 @@ int main(int argc, char** argv) {
 #else
             auto payload =
                 message->kind == provider::MessageKind::Call
-                    ? ffmpeg::call(std::get<provider::CallRequest>(message->payload), hardware)
+                    ? (decoder ? decoder->call(std::get<provider::CallRequest>(message->payload))
+                               : ffmpeg::call(std::get<provider::CallRequest>(message->payload),
+                                              hardware))
                     : encoder.call(message->kind, message->payload);
 #endif
             auto kind = provider::MessageKind::Failure;

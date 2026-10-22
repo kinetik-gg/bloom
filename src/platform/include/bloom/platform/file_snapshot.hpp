@@ -66,7 +66,9 @@ class WorkerSnapshotInput final {
     [[nodiscard]] std::uint64_t size() const { return size_; }
 
   private:
-    explicit WorkerSnapshotInput(std::uint64_t size) : size_(size) {}
+    WorkerSnapshotInput(std::uint64_t size, int descriptor)
+        : size_(size), descriptor_(descriptor) {}
     std::uint64_t size_ = 0;
+    int descriptor_ = -1;
 };
 } // namespace bloom::platform

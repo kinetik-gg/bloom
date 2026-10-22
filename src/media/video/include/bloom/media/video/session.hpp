@@ -56,15 +56,16 @@ class DecodedVideoCache final {
     std::list<Entry> entries_;
     std::size_t budget_ = 0, resident_ = 0;
 };
-// Blocking off-UI facade. One bounded in-flight request per asset; excess calls return Busy.
-// The private scheduler prevents deadlock when import/evaluation itself runs on BlockingIo.
+// Blocking off-UI facade. One bounded in-flight request per asset; identical frame requests
+// share its result. The caller's shared task owns admission and completion.
 class VideoDecodeSession final {
   public:
     explicit VideoDecodeSession(
         std::filesystem::path source, std::string worker = defaultWorker(),
         std::shared_ptr<platform::FileSnapshotQuota> quota = {},
         std::filesystem::path spoolDirectory = {},
-        std::shared_ptr<render::detail::PackedHostRetirementState> retirement = {});
+        std::shared_ptr<render::detail::PackedHostRetirementState> retirement = {},
+        std::function<void(std::int64_t)> launched = {});
     ~VideoDecodeSession();
     VideoDecodeSession(const VideoDecodeSession&) = delete;
     VideoDecodeSession& operator=(const VideoDecodeSession&) = delete;
@@ -83,15 +84,17 @@ class VideoDecodeSession final {
     [[nodiscard]] provider::Result<provider::AudioBlock>
     audio(const provider::ProbeResult& source, std::uint32_t stream, std::uint64_t sample,
           std::uint32_t count, const Cancel& cancel = {});
-    [[nodiscard]] provider::Result<provider::DemuxIndex> index(const provider::ProbeResult& source,
-                                                               const Cancel& cancel = {});
+    [[nodiscard]] provider::Result<provider::DemuxIndex>
+    index(const provider::ProbeResult& source, const Cancel& cancel = {},
+          const SourceRevisionAccess& revision = {});
     [[nodiscard]] static std::string defaultWorker();
 
   private:
     provider::WorkerReply call(provider::Role role, const provider::ProbeResult* source,
                                std::uint32_t stream, std::uint64_t position, std::uint32_t count,
                                const Cancel& cancel,
-                               std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot = {});
+                               std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot = {},
+                               bool retainWorker = false);
     [[nodiscard]] provider::Result<std::shared_ptr<const platform::ReadOnlyFileSnapshot>>
     sourceRevision(std::optional<provider::Digest> expected, const Cancel& cancel,
                    const SourceRevisionAccess& access) const;

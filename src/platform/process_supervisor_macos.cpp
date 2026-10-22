@@ -340,6 +340,10 @@ bool processWorkerBootstrap() {
         n = ::read(3, &ready, 1);
     } while (n < 0 && errno == EINTR);
     ::close(3);
-    return n == 1 && ready == 'R';
+    if (n != 1 || ready != 'R')
+        return false;
+    const int flags = ::fcntl(4, F_GETFD);
+    return (flags < 0 && errno == EBADF) ||
+           (flags >= 0 && ::fcntl(4, F_SETFD, flags | FD_CLOEXEC) == 0);
 }
 } // namespace bloom::platform

@@ -9,8 +9,10 @@
 #include <bloom/media/video/session.hpp>
 #include <bloom/platform/cache_directory.hpp>
 #include <cctype>
+#include <condition_variable>
 #include <fstream>
-#include <thread>
+#include <new>
+#include <type_traits>
 namespace bloom::media::video {
 bool isVideoExtension(const std::filesystem::path& path) {
     auto extension = path.extension().string();
@@ -38,13 +40,6 @@ PipelineQualificationV1 providerPipeline(const ProviderDeclaration& declaration)
 #else
     return ffmpegPipeline(declaration);
 #endif
-}
-runtime::TaskSchedulerConfig schedulerConfig() {
-    runtime::TaskSchedulerConfig c;
-    c.cpuWorkerCount = 1;
-    c.blockingIoWorkerCount = 1;
-    c.rowBandWorkerCount = runtime::kSerialRowBandWorkers;
-    return c;
 }
 [[maybe_unused]] Result<Digest> digestFile(const std::filesystem::path& path,
                                            const Cancel& cancel) {
@@ -84,22 +79,47 @@ template <typename T> Result<T> product(WorkerReply reply) {
 }
 } // namespace
 struct VideoDecodeSession::State {
+    using FrameOutcome = Result<std::shared_ptr<const FrameProduct>>;
+    static_assert(std::is_nothrow_move_assignable_v<FrameOutcome>);
+    struct InFlightFrame final {
+        explicit InFlightFrame(FrameKey value) : key(std::move(value)) {}
+        FrameKey key;
+        bool done = false;
+        // Construct the terminal fallback before this flight is visible to another caller.
+        FrameOutcome result = Unavailable{Error::Io, "Video frame failed"};
+        std::condition_variable completed;
+    };
     std::filesystem::path path;
     Handshake hello = providerHandshake();
     CapabilityRegistry registry;
-    runtime::TaskScheduler scheduler{schedulerConfig()};
     MediaWorkerPool pool;
     std::mutex mutex;
+    std::mutex frameMutex;
+    std::shared_ptr<InFlightFrame> inFlightFrame;
     std::mutex revisionMutex;
     std::shared_ptr<const platform::ReadOnlyFileSnapshot> revision;
     std::shared_ptr<platform::FileSnapshotQuota> quota;
     std::filesystem::path spoolDirectory;
     std::shared_ptr<render::detail::PackedHostRetirementState> retirement;
+    struct FrameCompletion final {
+        State& state;
+        InFlightFrame& flight;
+        ~FrameCompletion() noexcept {
+            {
+                const std::lock_guard lock(state.frameMutex);
+                flight.done = true;
+                state.inFlightFrame.reset();
+            }
+            flight.completed.notify_all();
+        }
+    };
     State(std::filesystem::path source, std::string worker,
           std::shared_ptr<platform::FileSnapshotQuota> limits, std::filesystem::path directory,
-          std::shared_ptr<render::detail::PackedHostRetirementState> owner)
-        : path(std::move(source)), pool(options(std::move(worker))), quota(std::move(limits)),
-          spoolDirectory(std::move(directory)), retirement(std::move(owner)) {
+          std::shared_ptr<render::detail::PackedHostRetirementState> owner,
+          std::function<void(std::int64_t)> launched)
+        : path(std::move(source)), pool(options(std::move(worker), std::move(launched))),
+          quota(std::move(limits)), spoolDirectory(std::move(directory)),
+          retirement(std::move(owner)) {
         if (!quota)
             quota = std::make_shared<platform::FileSnapshotQuota>(32ULL * 1024 * 1024 * 1024, 8);
         if (spoolDirectory.empty()) {
@@ -111,22 +131,28 @@ struct VideoDecodeSession::State {
             (void)registry.qualifyPipeline(providerPipeline(declaration));
         }
     }
-    WorkerPoolOptions options(std::string executable) {
+    WorkerPoolOptions options(std::string executable, std::function<void(std::int64_t)> launched) {
         WorkerPoolOptions options;
         options.process.executable = std::move(executable);
         configureFfmpegWorkerEnvironment(options.process, options.process.executable);
         options.expected = hello;
         options.capacity = 1;
         options.timeout = std::chrono::seconds(30);
+        options.launched = std::move(launched);
+#if defined(__linux__)
+        options.retainedVideo = true;
+#endif
         return options;
     }
 };
 VideoDecodeSession::VideoDecodeSession(
     std::filesystem::path source, std::string worker,
     std::shared_ptr<platform::FileSnapshotQuota> quota, std::filesystem::path spoolDirectory,
-    std::shared_ptr<render::detail::PackedHostRetirementState> retirement)
+    std::shared_ptr<render::detail::PackedHostRetirementState> retirement,
+    std::function<void(std::int64_t)> launched)
     : state_(std::make_unique<State>(std::move(source), std::move(worker), std::move(quota),
-                                     std::move(spoolDirectory), std::move(retirement))) {}
+                                     std::move(spoolDirectory), std::move(retirement),
+                                     std::move(launched))) {}
 VideoDecodeSession::~VideoDecodeSession() = default;
 std::string VideoDecodeSession::defaultWorker() {
 #if defined(__linux__)
@@ -156,10 +182,11 @@ std::string VideoDecodeSession::defaultWorker() {
     return {};
 #endif
 }
-WorkerReply
-VideoDecodeSession::call(Role role, const ProbeResult* source, std::uint32_t stream,
-                         std::uint64_t position, std::uint32_t count, const Cancel& cancel,
-                         std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot) {
+WorkerReply VideoDecodeSession::call(Role role, const ProbeResult* source, std::uint32_t stream,
+                                     std::uint64_t position, std::uint32_t count,
+                                     const Cancel& cancel,
+                                     std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot,
+                                     const bool retainWorker) {
     std::unique_lock lock(state_->mutex, std::try_to_lock);
     if (!lock.owns_lock())
         return Unavailable{Error::Busy, "Video session has an active request"};
@@ -187,25 +214,8 @@ VideoDecodeSession::call(Role role, const ProbeResult* source, std::uint32_t str
         request.width = source->streams[stream].width;
         request.height = source->streams[stream].height;
     }
-    auto ticket = state_->pool.submit(
-        state_->scheduler,
-        {runtime::TaskOwnerKind::Application, runtime::TaskOwnerId::fromRaw(914)},
-        std::get<MediaAttempt>(attempt), 0, std::move(request), std::move(snapshot));
-    if (!ticket.submission.accepted()) {
-        if (const auto reply = ticket.result())
-            return *reply;
-        return Unavailable{Error::Busy, "Video worker queue is full"};
-    }
-    while (!ticket.submission.handle.tryTakeResult()) {
-        if (cancel && cancel())
-            ticket.submission.handle.cancel();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    if (cancel && cancel())
-        return Unavailable{Error::Cancelled, "Video request cancelled"};
-    if (auto reply = ticket.result())
-        return *reply;
-    return Unavailable{Error::Cancelled, "Video request ended without a product"};
+    return state_->pool.call(std::get<MediaAttempt>(attempt), 0, std::move(request),
+                             std::move(snapshot), cancel, retainWorker);
 }
 namespace {
 struct SnapshotRetirement final : render::detail::PackedHostRetirementNode {
@@ -235,7 +245,10 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
             *access.retained = true;
         return state_->revision;
     }
-    if (access.policy == SourceRevisionPolicy::Revalidate && access.allowRetention)
+    // A prior worker keeps the old anonymous source handle alive. Retire it before a new
+    // capture so a one-file quota can admit revalidation or a read-only gesture.
+    state_->pool.releaseRetained();
+    if (access.allowRetention)
         state_->revision.reset();
     if (access.hostByteBudget <= sizeof(SnapshotRetirement))
         return Unavailable{Error::Oversized, "Video source capture exceeds host working allowance"};
@@ -288,7 +301,7 @@ Result<ProbeResult> VideoDecodeSession::probe(const Cancel& cancel) {
         return *error;
     return product<ProbeResult>(
         call(Role::Probe, nullptr, 0, 0, 1, cancel,
-             std::get<std::shared_ptr<const platform::ReadOnlyFileSnapshot>>(captured)));
+             std::get<std::shared_ptr<const platform::ReadOnlyFileSnapshot>>(captured), true));
 #else
     return product<ProbeResult>(call(Role::Probe, nullptr, 0, 0, 1, cancel));
 #endif
@@ -347,14 +360,57 @@ VideoDecodeSession::frame(const ProbeResult& source, std::uint32_t stream, std::
     if (cache)
         if (auto cached = cache->find(key))
             return cached;
-    auto decoded = product<FrameProduct>(
-        call(Role::VideoDecode, &source, stream, index, 1, cancel, std::move(snapshot)));
-    if (const auto* error = std::get_if<Unavailable>(&decoded))
-        return *error;
-    auto result = std::make_shared<const FrameProduct>(std::get<FrameProduct>(std::move(decoded)));
-    if (cache && revisionAccess.allowRetention)
-        cache->store(key, result);
-    return result;
+    std::shared_ptr<State::InFlightFrame> flight;
+    bool leader = false;
+    {
+        std::lock_guard lock(state_->frameMutex);
+        if (state_->inFlightFrame) {
+            if (state_->inFlightFrame->key != key)
+                return Unavailable{Error::Busy, "Video session has an active frame request"};
+            flight = state_->inFlightFrame;
+        } else {
+            flight = std::make_shared<State::InFlightFrame>(key);
+            state_->inFlightFrame = flight;
+            leader = true;
+        }
+    }
+    if (!leader) {
+        std::unique_lock lock(state_->frameMutex);
+        while (!flight->done) {
+            if (cancel && cancel())
+                return Unavailable{Error::Cancelled, "Video frame wait cancelled"};
+            flight->completed.wait_for(lock, std::chrono::milliseconds(20));
+        }
+        if (cancel && cancel())
+            return Unavailable{Error::Cancelled, "Video frame wait cancelled"};
+        return flight->result;
+    }
+    // Everything after admission is covered, including worker callbacks, cache insertion and
+    // copying the leader's return value. Completion never allocates or copies an outcome.
+    State::FrameCompletion completion{*state_, *flight};
+    try {
+        auto decoded = product<FrameProduct>(
+            call(Role::VideoDecode, &source, stream, index, 1, cancel, std::move(snapshot),
+                 revisionAccess.policy == SourceRevisionPolicy::Retained &&
+                     revisionAccess.allowRetention));
+        if (const auto* error = std::get_if<Unavailable>(&decoded)) {
+            auto failure = *error;
+            State::FrameOutcome outcome{std::move(failure)};
+            flight->result = std::move(outcome);
+        } else {
+            auto frame =
+                std::make_shared<const FrameProduct>(std::get<FrameProduct>(std::move(decoded)));
+            if (cache && revisionAccess.allowRetention)
+                cache->store(key, frame);
+            State::FrameOutcome outcome{std::move(frame)};
+            flight->result = std::move(outcome);
+        }
+    } catch (const std::bad_alloc&) {
+        std::get<Unavailable>(flight->result).reason = Error::Oversized;
+    } catch (const std::exception&) {
+        // The preconstructed I/O fallback is already publishable to every follower.
+    }
+    return flight->result;
 }
 Result<AudioBlock> VideoDecodeSession::audio(const ProbeResult& source, std::uint32_t stream,
                                              std::uint64_t sample, std::uint32_t count,
@@ -370,15 +426,18 @@ Result<AudioBlock> VideoDecodeSession::audio(const ProbeResult& source, std::uin
     return product<AudioBlock>(call(Role::AudioDecode, &source, stream, sample, count, cancel));
 #endif
 }
-Result<DemuxIndex> VideoDecodeSession::index(const ProbeResult& source, const Cancel& cancel) {
+Result<DemuxIndex> VideoDecodeSession::index(const ProbeResult& source, const Cancel& cancel,
+                                             const SourceRevisionAccess& access) {
 #if defined(__linux__)
-    const auto captured = sourceRevision(source.sourceDigest, cancel, {});
+    const auto captured = sourceRevision(source.sourceDigest, cancel, access);
     if (const auto* error = std::get_if<Unavailable>(&captured))
         return *error;
     return product<DemuxIndex>(
         call(Role::DemuxIndex, &source, 0, 0, 1, cancel,
-             std::get<std::shared_ptr<const platform::ReadOnlyFileSnapshot>>(captured)));
+             std::get<std::shared_ptr<const platform::ReadOnlyFileSnapshot>>(captured),
+             access.policy == SourceRevisionPolicy::Retained && access.allowRetention));
 #else
+    (void)access;
     return product<DemuxIndex>(call(Role::DemuxIndex, &source, 0, 0, 1, cancel));
 #endif
 }

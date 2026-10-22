@@ -1,15 +1,23 @@
 #include "packed_host_retirement_private.hpp"
 #include <array>
+#include <atomic>
 #include <bloom/media/video/session.hpp>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <mutex>
+#include <new>
+#include <numeric>
 #include <stdexcept>
 #include <thread>
+#if defined(__linux__)
+#include <sys/wait.h>
+#endif
 
 namespace {
 using namespace bloom::media;
@@ -211,6 +219,170 @@ void sessionRevisions(const std::filesystem::path& source, const std::filesystem
               "cold read-only gesture inserts neither source nor decoded frame");
     }
 }
+#if defined(__linux__)
+void reaped(const std::int64_t process) {
+    check(process > 0, "retained worker launched");
+    int status = 0;
+    errno = 0;
+    check(::waitpid(static_cast<pid_t>(process), &status, WNOHANG) == -1 && errno == ECHILD,
+          "retained worker was reaped");
+}
+void retainedWorker(const std::filesystem::path& source, const std::filesystem::path& scratch) {
+    const auto size = std::filesystem::file_size(source);
+    auto quota = std::make_shared<Quota>(size, 1);
+    std::vector<std::int64_t> launches;
+    {
+        video::VideoDecodeSession session(
+            source, video::VideoDecodeSession::defaultWorker(), quota, scratch / "reuse-spool", {},
+            [&](const std::int64_t process) { launches.push_back(process); });
+        const auto probe = product(session.probe());
+        const video::SourceRevisionAccess retained{video::SourceRevisionPolicy::Retained};
+        const auto index = product(session.index(probe, {}, retained));
+        check(index.keyframes.size() == 4 && launches.size() == 1,
+              "probe and index reopen the same anonymous input in one worker");
+        for (unsigned request = 0; request < 100; ++request) {
+            const auto ordinal = request % 48U;
+            const auto divisor = std::gcd(ordinal, 24U);
+            const auto frame =
+                product(session.frame(probe, 0, ordinal, 0, nullptr, {}, {}, {}, {}, retained));
+            check(frame->pts == provider::Rational{ordinal / divisor, 24U / divisor} &&
+                      std::to_integer<unsigned>(frame->planes.front().bytes.front()) ==
+                          16U + ordinal * 3U,
+                  "retained sequential decode preserves the exact frame oracle");
+        }
+        for (const auto ordinal : {47U, 0U, 36U, 1U, 35U, 12U}) {
+            const auto frame =
+                product(session.frame(probe, 0, ordinal, 0, nullptr, {}, {}, {}, {}, retained));
+            check(std::to_integer<unsigned>(frame->planes.front().bytes.front()) ==
+                      16U + ordinal * 3U,
+                  "retained random seeks return the requested frame");
+        }
+        check(launches.size() == 1 && quota->residentBytes() == size && quota->residentFiles() == 1,
+              "100 frame requests amortize one worker and one indexed source within quota");
+        for (unsigned ordinal = 0; ordinal < 20; ++ordinal)
+            (void)product(session.frame(probe, 0, ordinal, 0, nullptr, {}, {}, {}, {}, retained));
+        (void)product(session.frame(probe, 0, 20, 0, nullptr, {}, {}, {}, {}, retained));
+        check(launches.size() == 2, "bounded retained worker rotates after its 128-call lifetime");
+        reaped(launches.front());
+
+        int cancelChecks = 0;
+        const auto cancelled = session.frame(
+            probe, 0, 7, 0, nullptr, {}, {}, {}, [&] { return ++cancelChecks >= 4; }, retained);
+        check(std::get<provider::Unavailable>(cancelled).reason == provider::Error::Cancelled,
+              "in-flight retained call observes cancellation");
+        reaped(launches[1]);
+        const auto restarted =
+            product(session.frame(probe, 0, 7, 0, nullptr, {}, {}, {}, {}, retained));
+        check(launches.size() == 3 &&
+                  std::to_integer<unsigned>(restarted->planes.front().bytes.front()) == 37U,
+              "cancelled retained worker is replaced without losing immutable source authority");
+    }
+    reaped(launches.back());
+    check(quota->residentBytes() == 0 && quota->residentFiles() == 0,
+          "session teardown releases retained worker and source charge");
+}
+void failedLeaderCompletesFollowers(const std::filesystem::path& source,
+                                    const std::filesystem::path& scratch) {
+    video::VideoDecodeSession session(source, video::VideoDecodeSession::defaultWorker(), {},
+                                      scratch / "failed-flight-spool");
+    const auto probe = product(session.probe());
+    const video::SourceRevisionAccess retained{video::SourceRevisionPolicy::Retained};
+    for (unsigned failure = 0; failure < 2; ++failure) {
+        const auto ordinal = 9U + failure;
+        std::atomic<bool> leaderAdmitted{false}, followerWaiting{false};
+        std::atomic<unsigned> leaderChecks{0}, followerChecks{0};
+        auto leader = std::async(std::launch::async, [&] {
+            return session.frame(
+                probe, 0, ordinal, 0, nullptr, {}, {}, {},
+                [&] {
+                    if (++leaderChecks == 2) {
+                        leaderAdmitted = true;
+                        const auto deadline =
+                            std::chrono::steady_clock::now() + std::chrono::seconds(3);
+                        while (!followerWaiting && std::chrono::steady_clock::now() < deadline)
+                            std::this_thread::yield();
+                        if (failure == 0)
+                            throw std::bad_alloc{};
+                        throw 316; // An uncaught non-standard exception must still finish flight.
+                    }
+                    return false;
+                },
+                retained);
+        });
+        const auto admissionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (!leaderAdmitted && std::chrono::steady_clock::now() < admissionDeadline)
+            std::this_thread::yield();
+        check(leaderAdmitted, "leader reached the admitted frame flight");
+        auto follower = std::async(std::launch::async, [&] {
+            return session.frame(
+                probe, 0, ordinal, 0, nullptr, {}, {}, {},
+                [&] {
+                    if (++followerChecks == 2)
+                        followerWaiting = true;
+                    return false;
+                },
+                retained);
+        });
+        check(leader.wait_for(std::chrono::seconds(3)) == std::future_status::ready &&
+                  follower.wait_for(std::chrono::seconds(3)) == std::future_status::ready &&
+                  followerWaiting,
+              "failure after admission terminates leader and attached follower");
+        const auto followerResult = follower.get();
+        if (failure == 0) {
+            const auto leaderResult = leader.get();
+            check(std::get<provider::Unavailable>(leaderResult).reason ==
+                          provider::Error::Oversized &&
+                      std::get<provider::Unavailable>(followerResult).reason ==
+                          provider::Error::Oversized,
+                  "allocation failure publishes one terminal outcome to both callers");
+        } else {
+            bool markerCaught = false;
+            try {
+                (void)leader.get();
+            } catch (const int marker) {
+                markerCaught = marker == 316;
+            }
+            check(markerCaught &&
+                      std::get<provider::Unavailable>(followerResult).reason == provider::Error::Io,
+                  "uncaught leader unwind publishes prebuilt fallback to follower");
+        }
+        (void)product(session.frame(probe, 0, ordinal, 0, nullptr, {}, {}, {}, {}, retained));
+    }
+}
+void retainedGenerationReplacement(const std::filesystem::path& source,
+                                   const std::filesystem::path& scratch) {
+    const auto copy = scratch / "retained-generation.mp4";
+    std::filesystem::copy_file(source, copy);
+    const auto size = std::filesystem::file_size(copy);
+    auto quota = std::make_shared<Quota>(size + 16, 1);
+    std::vector<std::int64_t> launches;
+    {
+        video::VideoDecodeSession session(
+            copy, video::VideoDecodeSession::defaultWorker(), quota, scratch / "generation-spool",
+            {}, [&](const std::int64_t process) { launches.push_back(process); });
+        const auto old = product(session.probe());
+        const video::SourceRevisionAccess retained{video::SourceRevisionPolicy::Retained};
+        (void)product(session.frame(old, 0, 3, 0, nullptr, {}, {}, {}, {}, retained));
+        {
+            std::ofstream changed(copy, std::ios::binary | std::ios::app);
+            changed << "changed";
+        }
+        (void)product(session.frame(old, 0, 4, 0, nullptr, {}, {}, {}, {}, retained));
+        check(launches.size() == 1, "retained generation is immutable across path replacement");
+        const auto stale = session.frame(old, 0, 4, 0, nullptr);
+        check(std::get<provider::Unavailable>(stale).reason == provider::Error::SourceChanged,
+              "default revalidation rejects the changed source before publication");
+        reaped(launches.front());
+        const auto fresh = product(session.probe());
+        check(fresh.sourceDigest != old.sourceDigest && launches.size() == 2 &&
+                  quota->residentFiles() == 1,
+              "fresh generation rotates worker under a one-file quota");
+    }
+    reaped(launches.back());
+    check(quota->residentFiles() == 0 && quota->residentBytes() == 0,
+          "generation replacement releases final source authority");
+}
+#endif
 struct RetirementScope final {
     std::shared_ptr<bloom::render::PackedHostRetirementOwner> owner =
         bloom::render::PackedHostRetirementOwner::create();
@@ -284,6 +456,11 @@ int main(int argc, char** argv) {
         captureLimits(source, scratch.path / "limits-spool");
         capturePathReplacement(source, scratch.path / "replacement-spool");
         sessionRevisions(source, scratch.path);
+#if defined(__linux__)
+        retainedWorker(source, scratch.path);
+        failedLeaderCompletesFollowers(source, scratch.path);
+        retainedGenerationReplacement(source, scratch.path);
+#endif
         retirement(source, scratch.path / "retirement-spool");
         std::cout << "PASS: immutable disk-backed video source revisions\n";
     } catch (const std::exception& error) {

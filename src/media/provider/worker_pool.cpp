@@ -2,6 +2,7 @@
 #include <array>
 #include <bloom/media/provider/worker_pool.hpp>
 #include <bloom/platform/file_snapshot.hpp>
+#include <mutex>
 #include <new>
 #include <random>
 
@@ -76,6 +77,45 @@ class Connection final {
     platform::ProcessDeadline deadline_;
     platform::ProcessCancellation cancel_;
 };
+
+[[nodiscard]] std::uint64_t newSessionId() {
+    std::random_device random;
+    std::uint64_t session = (static_cast<std::uint64_t>(random()) << 32U) | random();
+    return session == 0 ? 1 : session;
+}
+
+[[nodiscard]] MessageKind expectedProductKind(const CallRequest& request) {
+    return request.capability.role == Role::Probe         ? MessageKind::Probe
+           : request.capability.role == Role::DemuxIndex  ? MessageKind::Index
+           : request.capability.role == Role::AudioDecode ? MessageKind::Audio
+                                                          : MessageKind::Frame;
+}
+
+[[nodiscard]] WorkerReply validatedProduct(const CallRequest& request, Message message) {
+    if (auto* probe = std::get_if<ProbeResult>(&message.payload)) {
+        if (request.capability.mapping != "bounded-discovery-v1" &&
+            (probe->container != request.capability.container ||
+             std::ranges::any_of(probe->streams, [&](const auto& stream) {
+                 return stream.kind == MediaKind::Video &&
+                        (stream.width != request.width || stream.height != request.height ||
+                         stream.codec != request.capability.codec);
+             })))
+            return Unavailable{Error::IdentityMismatch, "Probe does not match the requested tuple"};
+        return std::move(*probe);
+    }
+    if (auto* index = std::get_if<DemuxIndex>(&message.payload))
+        return std::move(*index);
+    if (auto* audio = std::get_if<AudioBlock>(&message.payload))
+        return std::move(*audio);
+    if (auto* frame = std::get_if<FrameProduct>(&message.payload)) {
+        if (frame->planes.empty() || frame->planes.front().width != request.width ||
+            frame->planes.front().height != request.height)
+            return Unavailable{Error::IdentityMismatch, "Frame extent does not match the request"};
+        return std::move(*frame);
+    }
+    return Unavailable{Error::UnexpectedMessage, "Worker returned no media product"};
+}
+
 WorkerReply execute(const WorkerPoolOptions& options, const CallRequest& request,
                     const std::shared_ptr<const platform::ReadOnlyFileSnapshot>& snapshot,
                     const platform::ProcessCancellation& cancel) {
@@ -90,10 +130,7 @@ WorkerReply execute(const WorkerPoolOptions& options, const CallRequest& request
         return failure(std::get<platform::ProcessFailure>(launched));
     if (options.launched)
         options.launched((*process)->processId());
-    std::random_device random;
-    std::uint64_t session = (static_cast<std::uint64_t>(random()) << 32U) | random();
-    if (session == 0)
-        session = 1;
+    const std::uint64_t session = newSessionId();
     HostProtocol host(session, options.expected);
     Connection connection(**process, deadline, cancel);
     auto stop = [&] {
@@ -109,12 +146,8 @@ WorkerReply execute(const WorkerPoolOptions& options, const CallRequest& request
         stop();
         return *e;
     }
-    const auto expectedKind = request.capability.role == Role::Probe         ? MessageKind::Probe
-                              : request.capability.role == Role::DemuxIndex  ? MessageKind::Index
-                              : request.capability.role == Role::AudioDecode ? MessageKind::Audio
-                                                                             : MessageKind::Frame;
-    auto response =
-        connection.exchange({MessageKind::Call, session, 2, request}, host, expectedKind);
+    auto response = connection.exchange({MessageKind::Call, session, 2, request}, host,
+                                        expectedProductKind(request));
     if (const auto* e = std::get_if<Unavailable>(&response)) {
         stop();
         return *e;
@@ -140,26 +173,7 @@ WorkerReply execute(const WorkerPoolOptions& options, const CallRequest& request
     // Cancellation arriving during orderly close also prevents product publication.
     if (cancel())
         return Unavailable{Error::Cancelled, "Cancelled before product publication"};
-    if (auto* probe = std::get_if<ProbeResult>(&message.payload)) {
-        if (request.capability.mapping != "bounded-discovery-v1" &&
-            (probe->container != request.capability.container ||
-             std::ranges::any_of(probe->streams, [&](const auto& stream) {
-                 return stream.kind == MediaKind::Video &&
-                        (stream.width != request.width || stream.height != request.height ||
-                         stream.codec != request.capability.codec);
-             })))
-            return Unavailable{Error::IdentityMismatch, "Probe does not match the requested tuple"};
-        return std::move(*probe);
-    }
-    if (auto* index = std::get_if<DemuxIndex>(&message.payload))
-        return std::move(*index);
-    if (auto* audio = std::get_if<AudioBlock>(&message.payload))
-        return std::move(*audio);
-    const auto& frame = std::get<FrameProduct>(message.payload);
-    if (frame.planes.front().width != request.width ||
-        frame.planes.front().height != request.height)
-        return Unavailable{Error::IdentityMismatch, "Frame extent does not match the request"};
-    return std::get<FrameProduct>(std::move(message.payload));
+    return validatedProduct(request, std::move(message));
 }
 } // namespace
 struct WorkerTicket::State {
@@ -175,14 +189,164 @@ std::shared_ptr<const WorkerReply> WorkerTicket::result() const {
 }
 struct MediaWorkerPool::State {
     explicit State(WorkerPoolOptions value) : options(std::move(value)) {}
+    struct Retained final {
+        Retained(std::unique_ptr<platform::ProcessSupervisor> value,
+                 std::shared_ptr<const platform::ReadOnlyFileSnapshot> source,
+                 const std::uint64_t id, const Handshake& expected)
+            : process(std::move(value)), snapshot(std::move(source)), session(id),
+              host(id, expected), started(Clock::now()), lastUsed(started) {}
+        std::unique_ptr<platform::ProcessSupervisor> process;
+        std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot;
+        std::uint64_t session = 0;
+        std::uint64_t sequence = 1;
+        HostProtocol host;
+        Clock::time_point started;
+        Clock::time_point lastUsed;
+        std::size_t calls = 0;
+    };
     WorkerPoolOptions options;
     std::atomic<bool> stopping{false};
     std::atomic<std::size_t> active{0};
+    std::mutex retainedMutex;
+    std::unique_ptr<Retained> retained;
 };
 MediaWorkerPool::MediaWorkerPool(WorkerPoolOptions options)
     : state_(std::make_shared<State>(std::move(options))) {}
 MediaWorkerPool::~MediaWorkerPool() { shutdown(); }
 void MediaWorkerPool::shutdown() { state_->stopping.store(true); }
+void MediaWorkerPool::releaseRetained() {
+    const std::lock_guard lock(state_->retainedMutex);
+    state_->retained.reset();
+}
+
+WorkerReply MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step,
+                                  CallRequest request,
+                                  std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot,
+                                  const platform::ProcessCancellation& cancel,
+                                  const bool retainWorker) {
+    if (request.snapshotBytes != 0 || state_->options.process.inputSnapshot)
+        return Unavailable{Error::IdentityMismatch,
+                           "Snapshot authority must be supplied by its owning host capability"};
+    if (snapshot) {
+        if (request.capability.role != Role::Probe && request.sourceDigest != snapshot->digest())
+            return Unavailable{Error::SourceChanged,
+                               "Snapshot does not match the requested source revision"};
+        request.sourceDigest = snapshot->digest();
+        request.snapshotBytes = snapshot->size();
+    }
+    if (state_->stopping.load())
+        return Unavailable{Error::Shutdown, "Worker pool is shutting down"};
+    if (state_->options.capacity != 1 || state_->options.timeout <= std::chrono::milliseconds(0) ||
+        state_->options.timeout > std::chrono::minutes(5))
+        return Unavailable{Error::InvalidValue, "Invalid direct worker pool limits"};
+    if (state_->options.expected.execution.resourceProfile != "media-v1" ||
+        state_->options.process.addressSpaceBytes != 2ULL * 1024 * 1024 * 1024 ||
+        state_->options.process.openFiles != 64)
+        return Unavailable{Error::IdentityMismatch,
+                           "Process limits do not match the execution profile"};
+    if (!attempt.accepts(step, state_->options.expected.execution) ||
+        attempt.pipeline().providers[step].capability != request.capability ||
+        (request.capability.role != Role::Probe && request.capability.role != Role::VideoDecode &&
+         request.capability.role != Role::DemuxIndex &&
+         request.capability.role != Role::AudioDecode))
+        return Unavailable{Error::Unavailable,
+                           "Call does not match pinned execution and capability"};
+    if (std::ranges::find(state_->options.expected.declarations,
+                          attempt.pipeline().providers[step]) ==
+        state_->options.expected.declarations.end())
+        return Unavailable{Error::IdentityMismatch,
+                           "Pinned qualification is absent from the handshake"};
+    std::unique_lock lock(state_->retainedMutex, std::try_to_lock);
+    if (!lock.owns_lock())
+        return Unavailable{Error::Busy, "Video worker capacity reached"};
+    if (state_->active.fetch_add(1) != 0) {
+        state_->active.fetch_sub(1);
+        return Unavailable{Error::Busy, "Video worker capacity reached"};
+    }
+    struct Slot final {
+        std::atomic<std::size_t>& count;
+        ~Slot() { count.fetch_sub(1); }
+    } slot{state_->active};
+    const auto cancelled = [&] { return state_->stopping.load() || (cancel && cancel()); };
+    if (cancelled()) {
+        state_->retained.reset();
+        return Unavailable{Error::Cancelled, "Video worker call cancelled"};
+    }
+    const bool retain =
+        retainWorker && state_->options.retainedVideo && snapshot &&
+        (request.capability.role == Role::Probe || request.capability.role == Role::VideoDecode ||
+         request.capability.role == Role::DemuxIndex);
+    try {
+        if (!retain) {
+            state_->retained.reset();
+            return execute(state_->options, request, snapshot, cancelled);
+        }
+        // The inherited immutable source handle is fixed at process launch. A newly captured
+        // generation, even with the same digest, must get a fresh worker and decoder state.
+        const auto now = Clock::now();
+        if (state_->retained && (state_->retained->snapshot != snapshot ||
+                                 now - state_->retained->started >= std::chrono::minutes(5) ||
+                                 now - state_->retained->lastUsed >= std::chrono::seconds(30) ||
+                                 state_->retained->calls >= 128))
+            state_->retained.reset();
+        if (!state_->retained) {
+            auto options = state_->options.process;
+            options.inputSnapshot = snapshot;
+            options.arguments.emplace_back("--retained-video");
+            auto launched = platform::ProcessSupervisor::launch(options);
+            auto* process = std::get_if<std::unique_ptr<platform::ProcessSupervisor>>(&launched);
+            if (!process)
+                return failure(std::get<platform::ProcessFailure>(launched));
+            if (state_->options.launched)
+                state_->options.launched((*process)->processId());
+            const auto id = newSessionId();
+            state_->retained = std::make_unique<State::Retained>(std::move(*process), snapshot, id,
+                                                                 state_->options.expected);
+            Connection connection(*state_->retained->process, now + state_->options.timeout,
+                                  cancelled);
+            auto hello =
+                connection.exchange({MessageKind::Handshake, id, 1, state_->options.expected},
+                                    state_->retained->host, MessageKind::Handshake);
+            if (const auto* error = std::get_if<Unavailable>(&hello)) {
+                state_->retained.reset();
+                return *error;
+            }
+        }
+        auto& retained = *state_->retained;
+        const auto sequence = ++retained.sequence;
+        Connection connection(*retained.process, Clock::now() + state_->options.timeout, cancelled);
+        auto response =
+            connection.exchange({MessageKind::Call, retained.session, sequence, request},
+                                retained.host, expectedProductKind(request));
+        if (const auto* error = std::get_if<Unavailable>(&response)) {
+            state_->retained.reset();
+            return *error;
+        }
+        auto message = std::get<Message>(std::move(response));
+        if (const auto* error = std::get_if<Unavailable>(&message.payload)) {
+            state_->retained.reset();
+            return *error;
+        }
+        if (cancelled()) {
+            state_->retained.reset();
+            return Unavailable{Error::Cancelled, "Cancelled before video product publication"};
+        }
+        auto product = validatedProduct(request, std::move(message));
+        if (std::holds_alternative<Unavailable>(product)) {
+            state_->retained.reset();
+            return product;
+        }
+        retained.lastUsed = Clock::now();
+        ++retained.calls;
+        return product;
+    } catch (const std::bad_alloc&) {
+        state_->retained.reset();
+        return Unavailable{Error::Oversized, "Worker allocation budget exhausted"};
+    } catch (const std::exception&) {
+        state_->retained.reset();
+        return Unavailable{Error::Io, "Worker call failed unexpectedly"};
+    }
+}
 WorkerTicket
 MediaWorkerPool::submit(runtime::TaskScheduler& scheduler, runtime::TaskOwner owner,
                         const MediaAttempt& attempt, std::size_t step, CallRequest request,

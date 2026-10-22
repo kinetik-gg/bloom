@@ -250,7 +250,15 @@ WorkerSnapshotInput::open(const std::uint64_t size) {
         !S_ISREG(status.st_mode) || status.st_nlink != 0 || status.st_size < 0 ||
         static_cast<std::uint64_t>(status.st_size) != size)
         return ProcessFailure{ProcessError::Io, EINVAL};
-    return std::unique_ptr<WorkerSnapshotInput>(new WorkerSnapshotInput(size));
+    // Keep descriptor 4 as the process-wide immutable authority across retained calls. Each
+    // input owns a close-on-exec duplicate and uses pread, so shared file offsets are irrelevant.
+    Descriptor descriptor(::fcntl(4, F_DUPFD_CLOEXEC, 5));
+    if (descriptor.get() < 0)
+        return ProcessFailure{ProcessError::Io, errno};
+    auto input =
+        std::unique_ptr<WorkerSnapshotInput>(new WorkerSnapshotInput(size, descriptor.get()));
+    (void)descriptor.take();
+    return input;
 #else
     (void)size;
     return ProcessFailure{ProcessError::Unavailable, 0};
@@ -258,7 +266,8 @@ WorkerSnapshotInput::open(const std::uint64_t size) {
 }
 WorkerSnapshotInput::~WorkerSnapshotInput() {
 #if defined(__linux__) || defined(__APPLE__)
-    ::close(4);
+    if (descriptor_ >= 0)
+        ::close(descriptor_);
 #endif
 }
 ProcessResult<std::size_t> WorkerSnapshotInput::read(const std::uint64_t offset,
@@ -272,7 +281,7 @@ ProcessResult<std::size_t> WorkerSnapshotInput::read(const std::uint64_t offset,
         return std::size_t{0};
     ssize_t result = 0;
     do {
-        result = ::pread(4, bytes.data(), count, static_cast<off_t>(offset));
+        result = ::pread(descriptor_, bytes.data(), count, static_cast<off_t>(offset));
     } while (result < 0 && errno == EINTR);
     if (result < 0)
         return ProcessFailure{ProcessError::Io, errno};

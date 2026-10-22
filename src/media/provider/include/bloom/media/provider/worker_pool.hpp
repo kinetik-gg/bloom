@@ -11,6 +11,9 @@ struct WorkerPoolOptions {
     Handshake expected;
     std::chrono::milliseconds timeout{5000};
     std::size_t capacity = 2;
+    // FFmpeg video sessions may retain one process for a pinned immutable source generation.
+    // Other providers keep the existing one-call worker lifecycle.
+    bool retainedVideo = false;
     // Optional process-lifecycle telemetry, invoked on the BlockingIo task.
     std::function<void(std::int64_t)> launched;
 };
@@ -25,7 +28,7 @@ class WorkerTicket final {
     std::shared_ptr<State> state_;
 };
 // Host-only facade. This target depends on the scheduler, while bloom_media_provider does not.
-// Each bounded slot owns one fresh process per call; no provider or attempt reuse in v1.
+// Video sessions can retain one bounded worker for an explicitly retained source revision.
 class MediaWorkerPool final {
   public:
     explicit MediaWorkerPool(WorkerPoolOptions options);
@@ -36,6 +39,15 @@ class MediaWorkerPool final {
     submit(runtime::TaskScheduler& scheduler, runtime::TaskOwner owner, const MediaAttempt& attempt,
            std::size_t step, CallRequest request,
            std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot = {});
+    // Synchronous execution on the caller's existing BlockingIo task. This does not create a
+    // private scheduler or poll another task; cancellation is propagated to the supervisor.
+    [[nodiscard]] WorkerReply call(const MediaAttempt& attempt, std::size_t step,
+                                   CallRequest request,
+                                   std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot,
+                                   const platform::ProcessCancellation& cancel = {},
+                                   bool retainWorker = false);
+    // Drop a pinned worker before capturing a fresh source revision. The caller runs off UI.
+    void releaseRetained();
     void shutdown();
 
   private:
