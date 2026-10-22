@@ -398,18 +398,113 @@ void testHeldRetirementConservation(Expectations& checks) {
                   "detached pending payload metadata and registration remain charged");
     for (int i = 0; i < 32; ++i)
         prepared.store("new", makeImage(4, 4));
-    checks.expect(prepared.entryCount() == 0 && pool->retainedBytes() == charged,
-                  "pending subset occupancy prevents unbounded queued replacements");
+    checks.expect(prepared.entryCount() == 0 && prepared.find("new") == nullptr &&
+                      pool->retainedBytes() == 2 * charged && prepared.retainedBytes() == 512 &&
+                      scope.owner->snapshot().allocations == 2,
+                  "one candidate remains fully charged; repeated stores cannot queue more");
     scope.owner->beginShutdown();
     checks.expect(!scope.owner->exitAcknowledged(),
                   "common owner cannot exit while charged reference release is held");
     scope.release();
-    checks.expect(until([&] { return pool->retainedBytes() == 0; }) &&
-                      external->pixels().size() == 16,
-                  "actual cache reference release returns charge; external legacy pin stays valid");
+    checks.expect(until([&] { return prepared.find("new") != nullptr; }) &&
+                      prepared.entryCount() == 1 && prepared.retainedBytes() == 256 &&
+                      pool->retainedBytes() == charged && external->pixels().size() == 16,
+                  "actual old-reference release promotes the captured image without another store");
     prepared.store("closed", makeImage(4, 4));
-    checks.expect(prepared.entryCount() == 0,
+    checks.expect(prepared.find("closed") == nullptr && prepared.entryCount() == 1,
                   "closed owner refuses optional stores without reviving a lane");
+    prepared.clear();
+    checks.expect(until([&] { return pool->retainedBytes() == 0; }),
+                  "late registered candidate retires through the closing owner");
+}
+
+void testCandidatePressureAndClose(Expectations& checks) {
+    RetirementScope scope;
+    scope.blocked = true;
+    bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
+    auto pool = std::make_shared<bloom::runtime::OperationCache>(1U << 20U, ledger);
+    GpuPreparedUploadCache prepared(pool, scope.owner, 256, 1);
+    const auto oldImage = makeImage(4, 4);
+    const auto newImage = makeImage(4, 4);
+    prepared.store("old", oldImage);
+    const auto charge = pool->retainedBytes();
+    prepared.store("new", newImage);
+    checks.expect(until([&] {
+                      const std::lock_guard lock(scope.mutex);
+                      return scope.entered;
+                  }),
+                  "replacement reaches held host retirement");
+    checks.expect(prepared.find("new") == nullptr && prepared.entryCount() == 0 &&
+                      prepared.retainedBytes() == 512 && pool->retainedBytes() == 2 * charge,
+                  "held old and candidate references both remain charged before retirement");
+    pool->setByteBudget(0);
+    checks.expect(prepared.find("new") == nullptr && prepared.entryCount() == 0 &&
+                      pool->retainedBytes() == 2 * charge &&
+                      scope.owner->snapshot().allocations == 2,
+                  "pressure cancels candidate without borrowing pending retirement credit");
+    pool->setByteBudget(charge);
+    for (int i = 0; i < 16; ++i)
+        prepared.store("later", makeImage(4, 4));
+    checks.expect(prepared.find("later") == nullptr && pool->retainedBytes() == 2 * charge &&
+                      scope.owner->snapshot().allocations == 2,
+                  "retiring candidate keeps its one-slot bound until actual worker release");
+    pool->closePreparedUploads();
+    scope.owner->beginShutdown();
+    checks.expect(!scope.owner->exitAcknowledged(),
+                  "close cannot acknowledge while held old and cancelled candidate remain live");
+    scope.release();
+    checks.expect(until([&] { return pool->retainedBytes() == 0; }) &&
+                      prepared.retainedBytes() == 0 && prepared.entryCount() == 0,
+                  "both exact charges return only after worker-side release");
+}
+
+void testOrdinaryPayloadWorkerRetirement(Expectations& checks) {
+    RetirementScope scope;
+    scope.blocked = true;
+    bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
+    auto pool = std::make_shared<bloom::runtime::OperationCache>(1U << 20U, ledger);
+    GpuPreparedUploadCache prepared(pool, scope.owner);
+    auto image = makeImage(64, 64);
+    const std::weak_ptr<const Rgba32fImage> backing = image;
+    pool->store("ordinary", {}, {.image = image, .values = {}, .bounds = {}});
+    image.reset();
+    const auto ordinaryCharge = pool->retainedBytes();
+    auto decoded = makeImage(64, 64);
+    const std::weak_ptr<const Rgba32fImage> decodedBacking = decoded;
+    pool->store("decoded", {}, {.image = decoded, .values = {}, .bounds = {}},
+                bloom::runtime::OperationCacheEntryKind::DecodedMedia);
+    decoded.reset();
+    const auto totalCharge = pool->retainedBytes();
+    const auto decodedCharge = totalCharge - ordinaryCharge;
+    const auto caller = std::this_thread::get_id();
+    pool->clearOperations();
+    checks.expect(until([&] {
+                      const std::lock_guard lock(scope.mutex);
+                      return scope.entered;
+                  }),
+                  "ordinary CPU image reaches existing host worker free gate");
+    {
+        const std::lock_guard lock(scope.mutex);
+        checks.expect(scope.freeThread != caller,
+                      "ordinary image cache reference is released off the purge caller");
+    }
+    pool->clearDecodedMedia();
+    checks.expect(!pool->find("ordinary", {}) && !pool->find("decoded", {}) && !backing.expired() &&
+                      !decodedBacking.expired() && pool->retainedBytes() == totalCharge &&
+                      pool->retainedBytes(bloom::runtime::OperationCacheEntryKind::DecodedMedia) ==
+                          decodedCharge &&
+                      scope.owner->snapshot().allocations == 2,
+                  "ordinary and decoded misses leave both physical refs and exact charges pending");
+    pool->closePreparedUploads();
+    scope.owner->beginShutdown();
+    checks.expect(!scope.owner->exitAcknowledged(),
+                  "ordinary registration prevents early host-owner exit");
+    scope.release();
+    checks.expect(until([&] {
+                      return backing.expired() && decodedBacking.expired() &&
+                             pool->retainedBytes() == 0;
+                  }),
+                  "ordinary and decoded image frees precede worker charge foldback");
 }
 
 void testProjectedVictimsPreserveWarmEntries(Expectations& checks) {
@@ -436,8 +531,9 @@ void testProjectedVictimsPreserveWarmEntries(Expectations& checks) {
         prepared.store("d", image);
     checks.expect(prepared.find("a") == nullptr && prepared.find("b") == image &&
                       prepared.find("c") == image && prepared.find("d") == nullptr &&
-                      pool->find("operation", {}).has_value() && pool->retainedBytes() == total,
-                  "pending subset credit selects no collateral prepared or ordinary victims");
+                      pool->find("operation", {}).has_value() &&
+                      pool->retainedBytes() == total + preparedCharge / 3,
+                  "one charged candidate selects no collateral prepared or ordinary victims");
     pool->trimToBytes(total - preparedCharge / 3);
     checks.expect(prepared.find("b") == image && prepared.find("c") == image &&
                       pool->find("operation", {}).has_value(),
@@ -469,8 +565,8 @@ void testSharedDefaultIsMemoryLimited(Expectations& checks) {
     const auto charge = pool->retainedBytes();
     pool->setByteBudget(charge);
     prepared.store("extra", image);
-    checks.expect(pool->retainedBytes() <= charge && prepared.entryCount() <= 4100,
-                  "real combined bytes bound further admission, including pending references");
+    checks.expect(pool->retainedBytes() <= charge + charge / 4100 && prepared.entryCount() <= 4100,
+                  "one pending candidate is charged in addition to the bounded live set");
     prepared.clear();
     checks.expect(until([&] { return pool->retainedBytes() == 0; }) &&
                       prepared.retainedBytes() == 0 &&
@@ -674,6 +770,8 @@ int main() {
         testSharedNamespaceAndPolicy(expectations);
         testOrdinaryGraceIsPreserved(expectations);
         testHeldRetirementConservation(expectations);
+        testCandidatePressureAndClose(expectations);
+        testOrdinaryPayloadWorkerRetirement(expectations);
         testSourceRevisionWorkerRetirement(expectations);
         testSameLedgerFreshnessAndShrink(expectations);
         testProjectedVictimsPreserveWarmEntries(expectations);

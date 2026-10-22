@@ -109,7 +109,10 @@ class OperationCache final {
                              std::optional<std::size_t> entryCap = {});
     [[nodiscard]] std::shared_ptr<const render::Rgba32fImage>
     findPreparedUpload(const std::string& content);
-    // Worker-only: prepares/registers on the existing host retirement owner before insertion.
+    // Worker-only: prepares/registers on the existing host retirement owner before insertion. At
+    // most one already-produced image may wait for an evicted entry's actual worker retirement;
+    // that candidate remains fully charged and is promoted by the next lookup/store after capacity
+    // returns. Further candidates are refused until the slot clears.
     void storePreparedUpload(std::string content,
                              std::shared_ptr<const render::Rgba32fImage> image);
     void clearPreparedUploads();
@@ -159,6 +162,7 @@ class OperationCache final {
         OperationCacheEntryKind kind = OperationCacheEntryKind::Operation;
         std::uint64_t protectedUntil = 0;
         bool registered = false;
+        bool retiredCandidate = false;
         std::shared_ptr<Accounting> accounting;
         std::shared_ptr<render::detail::PackedHostRetirementState> retirement;
     };
@@ -166,6 +170,9 @@ class OperationCache final {
     using Position = Entries::iterator;
     static void destroyPreparedEntry(render::detail::PackedHostRetirementNode*) noexcept;
     static void destroySourceRevisionEntry(render::detail::PackedHostRetirementNode*) noexcept;
+    static void destroyOrdinaryEntry(render::detail::PackedHostRetirementNode*) noexcept;
+    void retireCandidateLocked();
+    void promoteCandidateLocked();
     void touch(Position entry);
     void evictToLocked(std::size_t limit, std::uint64_t& counter);
     void removeLocked(Position candidate);
@@ -178,6 +185,7 @@ class OperationCache final {
     std::uint64_t accessEpoch_ = 0;
     OperationCacheAccessStatistics statistics_;
     Entries entries_;
+    std::unique_ptr<Entry> preparedCandidate_;
     std::unordered_map<Key, Position, KeyHash> index_;
     std::unordered_map<Address, Position, AddressHash> addresses_;
 };
