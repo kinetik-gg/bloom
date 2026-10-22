@@ -1,6 +1,7 @@
 #include <bloom/host/session_recovery.hpp>
 
 #include <algorithm>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -12,7 +13,8 @@ namespace {
 // Recovery files are ordinary Bloom project archives, so they carry the project extension: a
 // recovered file opens through the same Open the artist already knows, with no second reader and
 // no schema of its own. The leading "recovery-" keeps them recognisable inside the directory, and
-// the session id keeps two concurrently open projects from writing over each other.
+// an owner UUID plus session id keeps separate process lifetimes and concurrently open projects
+// from writing over each other. The broad scan also recognizes earlier recovery-<id>.bloom files.
 constexpr std::string_view kRecoveryFilePrefix = "recovery-";
 constexpr std::string_view kRecoveryFileExtension = ".bloom";
 
@@ -58,9 +60,17 @@ SessionRecoveryResult::publicationFailed(SavePublicationFailure failure) noexcep
 }
 
 std::filesystem::path sessionRecoveryFilePath(const std::filesystem::path& directory,
+                                              const std::string_view ownerToken,
                                               const ProjectSessionId sessionId) {
-    return directory / (std::string(kRecoveryFilePrefix) + std::to_string(sessionId.value()) +
-                        std::string(kRecoveryFileExtension));
+    const auto hexDigit = [](const char digit) {
+        return (digit >= '0' && digit <= '9') || (digit >= 'a' && digit <= 'f');
+    };
+    if (ownerToken.size() != 32 || !std::all_of(ownerToken.begin(), ownerToken.end(), hexDigit) ||
+        !sessionId.isValid()) {
+        throw std::invalid_argument("invalid recovery owner or session identity");
+    }
+    return directory / (std::string(kRecoveryFilePrefix) + std::string(ownerToken) + "-" +
+                        std::to_string(sessionId.value()) + std::string(kRecoveryFileExtension));
 }
 
 SessionRecoveryResult writeSessionRecoverySnapshot(

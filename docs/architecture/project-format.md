@@ -955,8 +955,12 @@ the same target share one application intent-order record and one platform publi
 ### Recovery Files
 
 A session that is dirty periodically publishes its canonical document to a recovery file under the
-platform per-user application data directory (`Bloom/recovery/recovery-<session id>.bloom`), by
-default every 60 seconds. This is not a save and never claims to be one:
+platform per-user application data directory
+(`Bloom/recovery/recovery-<owner UUID>-<session id>.bloom`), by default every 60 seconds.
+The UUID is generated for each installed project content lifetime and is independent of the
+process-local session ID, which starts again at one on each launch. New and successful Open install
+fresh UUIDs, including when Open installs a recovery archive as the active project. This is not a
+save and never claims to be one:
 
 - it is written through the same nine-step staged/atomic sequence above, reusing the same archive
   writer and the same schema version, so a recovery file IS an ordinary project archive and
@@ -965,12 +969,16 @@ default every 60 seconds. This is not a save and never claims to be one:
   and the artist still owes the project a real Save
 - every failure is typed and non-fatal, and the next interval retries; a recovery write is never
   allowed to be the reason a session is lost
-- a successful Save retires the file, because the project on disk then holds that work
+- a successful Save or an explicit unsaved-change Discard retires only the current installed
+  content's file; a clean timer tick also removes only that file, except while it is the target of
+  an accepted recovery Open
 
 On the next launch, a recovery file is offered back ("Recover unsaved changes") only when it is
 newer than the project it belongs to, or when that project was never saved at all. A recovery file
 older than its saved project describes work the artist already has, and offering it would invite
-them to overwrite the newer file with it.
+them to overwrite the newer file with it. Discovery includes earlier
+`recovery-<session id>.bloom` files. A pending or declined recovery offer remains on disk; even a
+timer firing inside the decision dialog cannot retire an artifact owned by another launch.
 
 The expected external-file fingerprint is either `Absent` or the existing regular file's identity,
 byte size, high-resolution modification time, and SHA-256 of its complete bytes. Open computes it

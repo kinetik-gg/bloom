@@ -58,6 +58,8 @@ using bloom::host::writeSessionRecoverySnapshot;
 using bloom::platform::ArtifactOverwritePolicy;
 using bloom::platform::StagedArtifactCoordinator;
 
+constexpr std::string_view kOwnerToken = "0123456789abcdef0123456789abcdef";
+
 class Expectations final {
   public:
     void expect(const bool condition, const std::string_view message,
@@ -181,8 +183,8 @@ void testDirtySessionWritesAnOpenableRecoveryFile(Expectations& expectations) {
     }
     auto artifactCoordinator = std::move(artifacts).takeCoordinator();
     auto session = makeSession(expectations, identitySource, std::nullopt);
-    const auto recoveryPath =
-        sessionRecoveryFilePath(directory.path(), session.stateSnapshot().projectSessionId);
+    const auto recoveryPath = sessionRecoveryFilePath(directory.path(), kOwnerToken,
+                                                      session.stateSnapshot().projectSessionId);
 
     const auto clean = writeSessionRecoverySnapshot(session, *coordinator, artifactCoordinator,
                                                     recoveryPath, {}, makeOperation());
@@ -226,8 +228,8 @@ void testSuccessfulSaveRetiresTheRecoveryFile(Expectations& expectations) {
     }
     auto artifactCoordinator = std::move(artifacts).takeCoordinator();
     auto session = makeSession(expectations, identitySource, std::nullopt);
-    const auto recoveryPath =
-        sessionRecoveryFilePath(directory.path(), session.stateSnapshot().projectSessionId);
+    const auto recoveryPath = sessionRecoveryFilePath(directory.path(), kOwnerToken,
+                                                      session.stateSnapshot().projectSessionId);
     const auto projectPath = directory.path() / "project.bloom";
 
     expectations.expect(session.execute(rename("Edited", session)).changed(), "the edit commits");
@@ -286,8 +288,8 @@ void testStartupOfferOnlyNamesWorkTheProjectDoesNotAlreadyHold(Expectations& exp
         "a recovery directory that does not exist offers nothing, and does not fail");
 
     auto session = makeSession(expectations, identitySource, std::nullopt);
-    const auto recoveryPath =
-        sessionRecoveryFilePath(directory.path(), session.stateSnapshot().projectSessionId);
+    const auto recoveryPath = sessionRecoveryFilePath(directory.path(), kOwnerToken,
+                                                      session.stateSnapshot().projectSessionId);
     expectations.expect(session.execute(rename("Edited", session)).changed(), "the edit commits");
     expectations.expect(writeSessionRecoverySnapshot(session, *coordinator, artifactCoordinator,
                                                      recoveryPath, {}, makeOperation())
@@ -324,6 +326,16 @@ void testStartupOfferOnlyNamesWorkTheProjectDoesNotAlreadyHold(Expectations& exp
     expectations.expect(newerOffer.has_value() && newerOffer->recoveryPath == recoveryPath &&
                             newerOffer->projectPath == projectPath,
                         "a recovery file newer than its saved project is offered with that path");
+
+    // The old process-local naming scheme remains discoverable after filenames gain a launch
+    // owner token. It is never an automatic cleanup target of a new ProjectHost.
+    const auto legacyPath = directory.path() / "recovery-1.bloom";
+    std::error_code code;
+    std::filesystem::rename(recoveryPath, legacyPath, code);
+    expectations.expect(!code, "the old-format recovery file fixture is installed");
+    const auto legacyOffer = findSessionRecoveryOffer(directory.path(), std::nullopt);
+    expectations.expect(legacyOffer.has_value() && legacyOffer->recoveryPath == legacyPath,
+                        "a recovery artifact named by the legacy runtime session ID is found");
 }
 
 } // namespace

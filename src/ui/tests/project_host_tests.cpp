@@ -13,9 +13,11 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QString>
+#include <QTimer>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
@@ -316,6 +318,124 @@ void testRecoverySnapshotAndStartupOffer(Expectations& expectations) {
                         "recovery: the recovery open reaches a terminal state");
     expectations.expect(host.displayPath() == std::optional(secondOffer->recoveryPath),
                         "recovery: recovering opens the recovery file like any other project");
+    host.writeRecoverySnapshot();
+    expectations.expect(std::filesystem::exists(secondOffer->recoveryPath),
+                        "recovery: a clean tick never deletes the opened recovery project");
+}
+
+// A fresh host starts with the same runtime session ID as a crashed host. Its clean timer tick,
+// including one delivered by a nested recovery-decision event loop, cannot retire the earlier
+// host's artifact.
+void testRecoverySurvivesCleanRestartAndPendingDecision(Expectations& expectations) {
+    TempDirectory directory;
+    if (!directory.isValid()) {
+        expectations.expect(false, "recovery restart: temp directory is available");
+        return;
+    }
+    const auto recoveryDirectory = directory.path() / "recovery";
+    bloom::runtime::TaskScheduler scheduler;
+    std::filesystem::path crashedPath;
+    bloom::host::ProjectSessionId crashedSessionId;
+    {
+        ProjectHost crashed(scheduler);
+        crashed.setRecoveryDirectory(recoveryDirectory);
+        crashedSessionId = crashed.stateSnapshot().projectSessionId;
+        expectations.expect(executeRename(crashed, "Unsaved before restart"),
+                            "recovery restart: the first host becomes dirty");
+        crashed.writeRecoverySnapshot();
+        const auto offer = crashed.recoveryOffer();
+        expectations.expect(offer.has_value(),
+                            "recovery restart: the first host publishes a recovery artifact");
+        if (!offer.has_value()) {
+            return;
+        }
+        crashedPath = offer->recoveryPath;
+    }
+
+    ProjectHost restarted(scheduler);
+    restarted.setRecoveryDirectory(recoveryDirectory);
+    expectations.expect(restarted.stateSnapshot().projectSessionId == crashedSessionId,
+                        "recovery restart: runtime session IDs restart at the same value");
+    restarted.writeRecoverySnapshot();
+    expectations.expect(std::filesystem::exists(crashedPath),
+                        "recovery restart: a clean host tick preserves the previous artifact");
+
+    restarted.setRecoveryPolicy({.interval = std::chrono::seconds{1}});
+    int decisions = 0;
+    restarted.setRecoveryDecisionProvider([&](const std::filesystem::path& offeredPath) {
+        ++decisions;
+        expectations.expect(offeredPath == crashedPath,
+                            "recovery restart: startup offers the prior artifact");
+        QEventLoop nestedDecision;
+        QTimer::singleShot(1'300, &nestedDecision, &QEventLoop::quit);
+        nestedDecision.exec(); // The host's one-second recovery timer runs inside this dialog.
+        expectations.expect(std::filesystem::exists(crashedPath),
+                            "recovery restart: the pending decision protects the offered file");
+        return false;
+    });
+    restarted.offerRecoveryOnStartup();
+    expectations.expect(decisions == 1 && std::filesystem::exists(crashedPath),
+                        "recovery restart: declining the offer leaves the prior artifact intact");
+}
+
+void testConcurrentRecoveryOwnersAndExplicitDiscard(Expectations& expectations) {
+    TempDirectory directory;
+    if (!directory.isValid()) {
+        expectations.expect(false, "recovery owners: temp directory is available");
+        return;
+    }
+    const auto recoveryDirectory = directory.path() / "recovery";
+    bloom::runtime::TaskScheduler scheduler;
+    ProjectHost first(scheduler);
+    ProjectHost second(scheduler);
+    first.setRecoveryDirectory(recoveryDirectory);
+    second.setRecoveryDirectory(recoveryDirectory);
+    expectations.expect(first.stateSnapshot().projectSessionId ==
+                            second.stateSnapshot().projectSessionId,
+                        "recovery owners: concurrent hosts have colliding runtime session IDs");
+    expectations.expect(executeRename(first, "First unsaved"),
+                        "recovery owners: the first host becomes dirty");
+    first.writeRecoverySnapshot();
+    const auto firstOffer = first.recoveryOffer();
+    expectations.expect(firstOffer.has_value(),
+                        "recovery owners: the first host publishes an artifact");
+    if (!firstOffer.has_value()) {
+        return;
+    }
+    const auto firstPath = firstOffer->recoveryPath;
+
+    second.writeRecoverySnapshot();
+    expectations.expect(std::filesystem::exists(firstPath),
+                        "recovery owners: a concurrent clean host cannot remove the first file");
+    expectations.expect(executeRename(second, "Second unsaved"),
+                        "recovery owners: the second host becomes dirty");
+    second.writeRecoverySnapshot();
+    std::vector<std::filesystem::path> paths;
+    for (const auto& entry : std::filesystem::directory_iterator(recoveryDirectory)) {
+        if (entry.path().extension() == ".bloom") {
+            paths.push_back(entry.path());
+        }
+    }
+    expectations.expect(paths.size() == 2,
+                        "recovery owners: two concurrent hosts publish separate artifacts");
+    if (paths.size() != 2) {
+        return;
+    }
+    const auto secondPath = paths.front() == firstPath ? paths.back() : paths.front();
+    expectations.expect(secondPath != firstPath && std::filesystem::exists(secondPath),
+                        "recovery owners: the second artifact is independent");
+
+    second.setUnsavedChangeDecisionProvider([] { return UnsavedChangeDecision::Discard; });
+    second.newProject();
+    expectations.expect(!std::filesystem::exists(secondPath) &&
+                            std::filesystem::exists(firstPath) && !second.isDirty(),
+                        "recovery owners: explicit Discard retires only the discarded session's "
+                        "artifact");
+
+    first.beginSaveAs(directory.path() / "first.bloom");
+    expectations.expect(waitUntilIdle(first), "recovery owners: the first real save completes");
+    expectations.expect(!std::filesystem::exists(firstPath) && !first.isDirty(),
+                        "recovery owners: saving the remaining host retires its own artifact");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -581,6 +701,8 @@ int main(int argc, char** argv) {
     testDirtyAfterExecutedTransaction(expectations);
     testFullSaveThenOpenCycle(expectations);
     testRecoverySnapshotAndStartupOffer(expectations);
+    testRecoverySurvivesCleanRestartAndPendingDecision(expectations);
+    testConcurrentRecoveryOwnersAndExplicitDiscard(expectations);
     testBusyRefusalWhileInFlight(expectations);
     testTypedFailureSurfacedOnUnwritablePath(expectations);
     testUnsavedChangeDecisionSeamForNew(expectations);

@@ -22,6 +22,7 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -279,6 +280,14 @@ class ProjectHost final : public QObject {
     ProjectHostActivity activity_ = ProjectHostActivity::Idle;
     host::SessionRecoveryPolicy recoveryPolicy_;
     std::filesystem::path recoveryDirectory_;
+    // Fresh for each installed content lifetime; never derived from ProjectSessionId. Rotated on
+    // New/Open so an archive opened from this host's own recovery path is not its next cleanup
+    // target. Automatic cleanup is restricted to paths bearing this token.
+    std::string recoveryOwnerToken_;
+    // An offered file stays protected through a nested decision dialog and any Save/Open
+    // continuation. In particular, an offer of this host's own file must not be retired while
+    // the ordinary Open path is about to read it.
+    std::optional<std::filesystem::path> protectedRecoveryOfferPath_;
 
     UnsavedChangeDecisionProvider decisionProvider_;
     ProjectPathProvider openPathProvider_;

@@ -9,6 +9,7 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QStandardPaths>
+#include <QUuid>
 
 #include <cstddef>
 #include <fstream>
@@ -35,6 +36,10 @@ constexpr std::uint64_t kBytesPerMebibyte = 1024ULL * 1024ULL;
         base = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
     }
     return std::filesystem::path(base.toStdString()) / "Bloom" / "recovery";
+}
+
+[[nodiscard]] std::string newRecoveryOwnerToken() {
+    return QUuid::createUuid().toString(QUuid::Id128).toLower().toStdString();
 }
 
 // The document path of the field a save refused as non-finite, or an empty view when this failure
@@ -143,7 +148,7 @@ ProjectHost::ProjectHost(runtime::TaskScheduler& scheduler, QObject* parent)
 
     // Repeating, not single-shot: the recovery write is a cadence, not a response to an event.
     // Started unconditionally -- a tick on a clean session costs one dirty-state read and retires
-    // any file left over from before the last save.
+    // only a file written by this host, never one found from a previous or concurrent launch.
     recoveryTimer_.setSingleShot(false);
     recoveryTimer_.setInterval(static_cast<int>(recoveryPolicy_.interval.count()) * 1000);
     connect(&recoveryTimer_, &QTimer::timeout, this, &ProjectHost::writeRecoverySnapshot);
@@ -308,13 +313,13 @@ std::filesystem::path ProjectHost::currentRecoveryPath() const {
     if (!session_.has_value()) {
         return {};
     }
-    return host::sessionRecoveryFilePath(recoveryDirectory_,
+    return host::sessionRecoveryFilePath(recoveryDirectory_, recoveryOwnerToken_,
                                          session_->stateSnapshot().projectSessionId);
 }
 
 void ProjectHost::discardRecoveryFile() {
     const auto path = currentRecoveryPath();
-    if (!path.empty()) {
+    if (!path.empty() && protectedRecoveryOfferPath_ != path) {
         static_cast<void>(host::removeSessionRecoveryFile(path));
     }
 }
@@ -331,7 +336,7 @@ void ProjectHost::writeRecoverySnapshot() {
         return;
     }
     const auto path = currentRecoveryPath();
-    if (path.empty()) {
+    if (path.empty() || protectedRecoveryOfferPath_ == path) {
         return;
     }
     std::error_code code;
@@ -352,12 +357,22 @@ void ProjectHost::offerRecoveryOnStartup() {
     if (!offer.has_value() || !recoveryDecisionProvider_) {
         return;
     }
+    protectedRecoveryOfferPath_ = offer->recoveryPath;
     if (!recoveryDecisionProvider_(offer->recoveryPath)) {
+        protectedRecoveryOfferPath_.reset();
         return;
     }
     // Recovering IS opening: the recovery file is an ordinary Bloom archive, so it goes through
     // the same Open the artist would run on it themselves, unsaved-change prompt included.
-    confirmUnsavedChanges([this, path = offer->recoveryPath] { beginOpen(path); });
+    confirmUnsavedChanges([this, path = offer->recoveryPath] {
+        beginOpen(path);
+        if (activity_ != ProjectHostActivity::Opening) {
+            protectedRecoveryOfferPath_.reset();
+        }
+    });
+    if (activity_ != ProjectHostActivity::Opening && activity_ != ProjectHostActivity::Saving) {
+        protectedRecoveryOfferPath_.reset();
+    }
 }
 
 bool ProjectHost::hasDirtyDecodedContent() const {
@@ -393,6 +408,10 @@ void ProjectHost::confirmUnsavedChanges(std::function<void()> onProceed) {
         return;
     case UnsavedChangeDecision::Discard:
         setActivity(ProjectHostActivity::Idle);
+        // Discard is the artist's explicit decision to abandon this session's unsaved work.
+        // Retire only this host's recovery artifact; an offered file from another launch is
+        // never an automatic cleanup target.
+        discardRecoveryFile();
         onProceed();
         return;
     case UnsavedChangeDecision::Save:
@@ -704,7 +723,9 @@ void ProjectHost::replaceWithNewProject() {
         // left completely untouched rather than crashing the application.
         return;
     }
+    auto nextRecoveryOwnerToken = newRecoveryOwnerToken();
     session_.emplace(std::move(created).takeSession());
+    recoveryOwnerToken_.swap(nextRecoveryOwnerToken);
     // A new project is always decoded, editable content -- never preserved-read-only -- so any
     // previously retained original archive bytes no longer describe the installed content.
     retainedArchiveBytes_.clear();
@@ -868,6 +889,9 @@ void ProjectHost::handleSaveResult(host::SessionSaveResult result) {
         // edit"): confirmUnsavedChanges() re-reads dirty state now, so a clean project proceeds
         // immediately, a still-dirty one (failure/supersession/an intervening edit) re-prompts.
         confirmUnsavedChanges(std::move(continuation));
+        if (activity_ != ProjectHostActivity::Opening && activity_ != ProjectHostActivity::Saving) {
+            protectedRecoveryOfferPath_.reset();
+        }
     }
 }
 
@@ -927,6 +951,14 @@ void ProjectHost::handleOpenResult(host::SessionOpenResult result) {
         retainedArchiveBytes_.clear();
     }
     pendingOpenArchiveBytes_.clear();
+
+    if (installed) {
+        // Open can install an archive from this host's own recovery path. The newly installed
+        // content must have a different artifact identity so a later clean tick or Save cannot
+        // mistake that opened project file for a disposable recovery snapshot.
+        recoveryOwnerToken_ = newRecoveryOwnerToken();
+    }
+    protectedRecoveryOfferPath_.reset();
 
     emit dirtyStateChanged();
     emit openFinished(outcome, message);

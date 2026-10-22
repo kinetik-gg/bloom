@@ -93,6 +93,11 @@ one. Every advance is checked before changing state, and an issued value is neve
 Exhaustion is process-lifetime state. Restarting Bloom creates a new runtime session; no recovery
 path resets a live counter or aliases an older generation.
 
+Recovery file ownership has a separate UUID in the filename, regenerated when New or Open installs
+different content. It does not change `ProjectSessionId` or enter durable project truth. A new host
+may discover an older recovery file but its automatic cleanup addresses only its current UUID and
+session ID.
+
 Installing New or a successful Open advances `SessionResultAcceptanceGeneration` and cancels
 replaceable work owned by the previous installed content. That invalidates only acceptance of task
 results into `ProjectSession`; it does not revoke a `PublicationIntentId`, change per-target ordering,
