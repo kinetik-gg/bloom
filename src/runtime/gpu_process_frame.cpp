@@ -9,7 +9,6 @@
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
-#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
 #include <algorithm>
@@ -30,22 +29,6 @@
 #include <vector>
 
 namespace bloom::runtime {
-
-std::size_t
-gpuProcessFrameByteBudgetForAvailable(const std::optional<std::size_t> availableBytes) noexcept {
-    // Pure policy, no floor and no ceiling: a conservative quarter of what the host reports
-    // available. Unknown availability is a small typed fallback, never an invented large budget.
-    constexpr std::size_t kUnknownAvailabilityFallbackBytes = std::size_t{512} * 1024U * 1024U;
-    constexpr std::size_t kAvailableShareDenominator = 4U;
-    if (!availableBytes.has_value()) {
-        return kUnknownAvailabilityFallbackBytes;
-    }
-    return *availableBytes / kAvailableShareDenominator;
-}
-
-std::size_t defaultGpuProcessFrameByteBudget() noexcept {
-    return gpuProcessFrameByteBudgetForAvailable(machineMemorySample().availableBytes);
-}
 
 // One caller-visible request slot. The calling CPU worker builds the immutable `scene` BEFORE the
 // slot is enqueued; the owner thread owns native execution and writes `outcome`. The caller owns
@@ -227,8 +210,9 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
 
     const auto beforeStages = executor->counters();
     // 2. Admit the scene through the real executor.
-    const auto begun = executor->begin(scene, phase.lease ? phase.lease->executorByteLimit()
-                                                          : options.requestByteBudget);
+    const auto begun = executor->begin(
+        scene, phase.lease ? phase.lease->executorByteLimit()
+                           : options.requestByteBudget.value_or(request.pixelStorageByteLimit));
     if (begun.code != GpuSceneExecutorDiagnosticCode::None) {
         const auto code = mapExecutorDiagnostic(begun.code);
         return failure(code == GpuProcessFrameDiagnosticCode::Cancelled
@@ -442,7 +426,9 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
                     // Producer construction allocates no image. The per-request phase allowance
                     // and live-pin/native limits remain the authority when begin() runs; a cold
                     // reusable-cache split must not impose an unrelated per-image ceiling.
-                    executorBudgets.maxImageBytes = options.requestByteBudget;
+                    const auto heap = device->availableAllocationBudget().device_local_bytes;
+                    if (options.requestByteBudget || heap != 0)
+                        executorBudgets.maxImageBytes = options.requestByteBudget.value_or(heap);
                 }
                 executorBudgets.collectQueueTimestamps =
                     executorBudgets.collectQueueTimestamps || options.collectQueueTimestamps;
@@ -487,7 +473,15 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
         std::shared_ptr<GpuProcessFrameRequest> active;
         {
             std::unique_lock lock(mutex);
-            cv.wait(lock, [this] { return stopping || !queue.empty(); });
+            cv.wait_for(lock, std::chrono::milliseconds(50),
+                        [this] { return stopping || !queue.empty(); });
+            if (!stopping && queue.empty()) {
+                lock.unlock();
+                if (device && options.processingPhasePolicy)
+                    static_cast<void>(options.processingPhasePolicy->reportDevice(
+                        device->ownershipEpoch(), device->availableAllocationBudget()));
+                continue;
+            }
             // Shutdown drains every queued request as a typed cancellation, then exits. A request
             // that already observed cancellation while queued is also resolved here.
             if (stopping) {
@@ -500,6 +494,10 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
             active = std::move(queue.front());
             queue.pop_front();
         }
+
+        if (device && options.processingPhasePolicy)
+            static_cast<void>(options.processingPhasePolicy->reportDevice(
+                device->ownershipEpoch(), device->availableAllocationBudget()));
 
         if (active->cancellation.isCancellationRequested() || stopRequested.load()) {
             std::lock_guard lock(mutex);

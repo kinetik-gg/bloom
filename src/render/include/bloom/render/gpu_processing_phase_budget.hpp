@@ -34,9 +34,6 @@ struct GpuProcessingPhaseRequest final {
     std::uint64_t minimumExecutorBytes = 0;
     bool sourceFree = false;
     bool native = true;
-    // Unknown sources get a bounded per-request share, independently of output extent. Known
-    // minima may exceed the share; the paired remaining capacity still limits the whole phase.
-    std::uint32_t capacityShareDenominator = 4;
 };
 
 enum class GpuProcessingPhaseAdmission {

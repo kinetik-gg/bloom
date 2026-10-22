@@ -109,6 +109,21 @@ void testProcessingAdmissionBeforeCpuFallback(Expectations& expectations) {
     expectations.expect(recovered && static_cast<bool>(*recovered) &&
                             shared->snapshot().reservations.admittedPhases == 0,
                         "shared root release enables later CPU attempt and returns phase quota");
+    auto automatic = requestFor(directory.path() / "root-capacity.exr");
+    automatic.processingPhasePolicy = shared;
+    automatic.evaluation.pixelStorageByteLimit = 0;
+    automatic.useRootPixelCapacity = true;
+    auto automaticBegin =
+        host::beginOutputAnalysisAttemptV1(scheduler, coordinator, ledger, std::move(automatic));
+    expectations.expect(static_cast<bool>(automaticBegin),
+                        "root-derived final attempt submits without caller-side sampling");
+    if (automaticBegin) {
+        auto runner = std::move(automaticBegin).takeHandle();
+        auto outcome = pumpUntilComplete(runner);
+        expectations.expect(outcome && static_cast<bool>(*outcome) &&
+                                shared->snapshot().reservations.admittedPhases == 0,
+                            "worker resolves omitted pixel limit from the shared sampled root");
+    }
     disabled->beginShutdown();
     disabled->collectRetired();
 }

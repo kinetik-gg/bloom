@@ -129,6 +129,13 @@ void finalPreparation() {
     auto cold = bloom::runtime::detail::prepareExportScene(options, plan, request, {});
     require(!cold.scene && cold.diagnosticCode == GpuProcessFrameDiagnosticCode::AwaitingCapacity,
             "final preparation awaits paired capacity before preparing a scene");
+    auto omitted = options;
+    omitted.requestByteBudget.reset();
+    omitted.readbackByteBudget.reset();
+    auto coldDefault = bloom::runtime::detail::prepareExportScene(omitted, plan, request, {});
+    require(!coldDefault.scene &&
+                coldDefault.diagnosticCode == GpuProcessFrameDiagnosticCode::AwaitingCapacity,
+            "omitted final limits never manufacture capacity before root delivery");
     MemoryBudgetState sample;
     sample.machine.availableBytes = 60 * gib;
     sample.process.status = ProcessMemoryStatus::Finite;
@@ -141,6 +148,14 @@ void finalPreparation() {
     sample.processSampleFresh = true;
     sample.sampleSerial = 1;
     policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+    require(policy->reportDevice(111, {.source = GpuAllocationBudgetSource::MemoryBudget,
+                                       .device_local_bytes = gib,
+                                       .available_bytes = 0}),
+            "measured zero final device report accepted");
+    auto measuredZero = bloom::runtime::detail::prepareExportScene(omitted, plan, request, {});
+    require(!measuredZero.scene &&
+                measuredZero.diagnosticCode == GpuProcessFrameDiagnosticCode::BudgetRefused,
+            "omitted final limits refuse measured zero without a fabricated floor");
     require(policy->reportDevice(111, {.source = GpuAllocationBudgetSource::MemoryBudget,
                                        .device_local_bytes = gib,
                                        .available_bytes = gib}),
@@ -162,6 +177,15 @@ void finalPreparation() {
                     encoded.readbackByteAllowance ==
                         512ULL * 1024 * 1024 + 1920ULL * 1080 * 64 + 1024ULL * 1024,
                 "encoded final reserves program, transfer and independent host adoption overlap");
+    }
+    options.requestByteBudget.reset();
+    options.readbackByteBudget.reset();
+    {
+        auto automatic = bloom::runtime::detail::prepareExportScene(options, plan, request, {});
+        require(automatic.scene && automatic.phaseLease &&
+                    automatic.phaseLease->executorByteLimit() > gib / 4 &&
+                    automatic.readbackByteAllowance == 1920ULL * 1080 * 32 + 1024ULL * 1024,
+                "omitted final budgets use sampled root capacity beyond the old quarter gate");
     }
     options.readbackByteBudget = 1;
     auto minimum = bloom::runtime::detail::prepareExportScene(options, plan, request, {});

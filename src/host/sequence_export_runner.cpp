@@ -560,14 +560,15 @@ struct SequenceExportRunnerV1::State {
                            .resolution = runtime::CompositionFormatResolution{},
                            .quality = runtime::EvaluationQuality::Reference,
                            .colorIntent = work->colorIntent(),
-                           .pixelStorageByteLimit = runtime::defaultGpuProcessFrameByteBudget(),
+                           .pixelStorageByteLimit = 0,
                            .bypassLookNodes = false},
             .assetBaseDirectory = work->request.assetBaseDirectory,
             .targetPath = work->request.range.destination,
             .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
             .owner = owner,
             .preset = preset,
-            .gpuProvider = work->request.gpuProvider};
+            .gpuProvider = work->request.gpuProvider,
+            .useRootPixelCapacity = true};
         auto begin = beginOutputAnalysisAttemptV1(scheduler, artifacts, ledger, std::move(request));
         if (!begin) {
             fail({Error::Busy, "Frame analysis admission refused"});

@@ -6,7 +6,9 @@
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <limits>
 #include <new>
 #include <type_traits>
 #include <utility>
@@ -255,6 +257,7 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                 : (requestedCommand != nullptr ? requestedCommand : canonicalCommand);
         auto plan = state_->request.plan;
         auto evaluation = state_->request.evaluation;
+        const bool useRootPixelCapacity = state_->request.useRootPixelCapacity;
         auto assetBaseDirectory = state_->request.assetBaseDirectory;
 
         runtime::TaskRequest cpuRequest(
@@ -262,11 +265,11 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::Cpu);
         auto submission = state_->scheduler->submit<BuildOutcomeV1>(
             std::move(cpuRequest),
-            [plan = std::move(plan), evaluation, assetBaseDirectory = std::move(assetBaseDirectory),
-             resolved, preset, ledger, gpuProvider = std::move(gpuProvider),
-             processingPolicy = std::move(processingPolicy), forceCpuFallback,
-             outputColorCommand = std::move(outputColorCommand)](
-                runtime::TaskContext& context) -> runtime::TaskResult<BuildOutcomeV1> {
+            [plan = std::move(plan), evaluation, useRootPixelCapacity,
+             assetBaseDirectory = std::move(assetBaseDirectory), resolved, preset, ledger,
+             gpuProvider = std::move(gpuProvider), processingPolicy = std::move(processingPolicy),
+             forceCpuFallback, outputColorCommand = std::move(outputColorCommand)](
+                runtime::TaskContext& context) mutable -> runtime::TaskResult<BuildOutcomeV1> {
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
                 }
@@ -300,6 +303,15 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                 }
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
+                }
+                if (useRootPixelCapacity) {
+                    const auto capacity = processingPolicy->snapshot().reservations;
+                    if (!capacity.hostReady || !capacity.hostCapacityBytes)
+                        return admissionFailure(
+                            runtime::GpuProcessFrameDiagnosticCode::AwaitingCapacity);
+                    evaluation.pixelStorageByteLimit =
+                        static_cast<std::size_t>(std::min<std::uint64_t>(
+                            *capacity.hostCapacityBytes, std::numeric_limits<std::size_t>::max()));
                 }
                 if (gpuProvider != nullptr && !forceCpuFallback) {
                     auto evaluator = gpuProvider->evaluator();

@@ -112,7 +112,7 @@ void sizingAndLifetime() {
     auto grant = budget.reserve(full);
     require(grant.lease && grant.lease->sourceByteLimit() == 0 &&
                 grant.lease->hostBytes() == full.fixedHostBytes &&
-                grant.lease->deviceBytes() < gib / 2,
+                grant.lease->deviceBytes() == gib,
             "1080p source-free envelope admits without whole-domain reservation");
     auto alias = grant.lease;
     grant.lease->markUnproven();
@@ -127,10 +127,30 @@ void sizingAndLifetime() {
             "last alias releases retained unproven reservation");
     full.sourceFree = false;
     auto media = budget.reserve(full);
-    require(media.lease && media.lease->sourceByteLimit() == gib / 4 &&
-                media.lease->hostBytes() <= gib,
-            "media source cap is independent of output and respects paired host remainder");
+    const auto sourceRoom = (gib - full.fixedHostBytes) / 3;
+    require(media.lease && media.lease->sourceByteLimit() == sourceRoom &&
+                media.lease->sourceByteLimit() > gib / 4 && media.lease->hostBytes() <= gib,
+            "media source beyond a quarter admits within the exact paired host remainder");
     media.lease.reset();
+    GpuProcessingPhaseBudget concurrent(2);
+    concurrent.setHostCapacity(1000, true);
+    concurrent.setDeviceCapacity(1000, true);
+    GpuProcessingPhaseRequest fitting{.fixedHostBytes = 40,
+                                      .requestedSourceBytes = 100,
+                                      .minimumSourceBytes = 100,
+                                      .deviceWorkingBytes = 100,
+                                      .requestedExecutorBytes = 500,
+                                      .minimumExecutorBytes = 500};
+    auto first = concurrent.reserve(fitting);
+    require(first.lease && first.lease->executorByteLimit() == 500,
+            "executor beyond a quarter admits when actual device capacity fits");
+    auto held = concurrent.reserve(fitting);
+    require(!held.lease && held.domain == GpuProcessingPhaseDomain::Device,
+            "held device claims refuse a second phase that would overcommit");
+    first.lease.reset();
+    held = concurrent.reserve(fitting);
+    require(held.lease, "retired claims restore paired admission");
+    held.lease.reset();
     const auto max = std::numeric_limits<std::uint64_t>::max();
     budget.setHostCapacity(max, true);
     budget.setDeviceCapacity(max, true);

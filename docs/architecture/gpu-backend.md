@@ -1108,9 +1108,14 @@ Disabled or unavailable GPU providers still require host admission before CPU ev
 GPU coverage, parity and strict final-output behavior remain required under the same policy.
 
 Final-evaluator producer budgets distinguish defaults from explicit overrides. An explicit
-`executorBudgets` value is honored verbatim. A rooted default uses `requestByteBudget` as its
-producer image upper ceiling, rather than capturing the startup reusable-cache split; each request
-is still constrained by its admitted executor allowance, live pins and native resource limits.
+`executorBudgets` value is honored verbatim. A rooted default uses the stable device-local heap
+size as its producer image upper ceiling, rather than capturing the startup reusable-cache split;
+omitted request/readback ceilings use the off-UI sampled root's device/host capacity at each
+attempt. An explicit numeric ceiling, including zero, is honored. The phase limits each source and
+executor request to the actual remaining host/device room after held claims, with the exact
+three-way source overlap; it imposes no separate quarter share. Live pins and native resource
+limits still constrain execution. The final owner refreshes its device report during idle polling
+and before executing queued work.
 Unrooted legacy defaults remain unchanged. This does not enlarge an admitted phase or guarantee
 that a composition fits.
 

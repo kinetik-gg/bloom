@@ -39,9 +39,16 @@ only; this never enters the report, the approval digest, or the resource ledger.
 evaluator remains the correctness oracle and the explicit `Disabled`/unavailable fallback,
 unsupported scenes stay typed `UnsupportedGpuSubset`, and no operation qualification is changed.
 Explicit final-evaluator `executorBudgets` remain authoritative. With a processing root and no
-override, the producer image upper ceiling follows `requestByteBudget` rather than a startup
-reusable-cache allocation; the admitted per-request allowance, live pins and native resource limits
-still constrain execution. The owning GPU contract defines phase-retirement proof on budget refusal.
+override, the producer image upper ceiling follows the stable device-local heap size rather than a
+startup reusable-cache allocation. Explicit request/readback ceilings remain exact. Omitted
+ceilings resolve on the evaluation worker from the shared root's sampled device/host capacities;
+still, range, video and headless callers likewise derive their pixel-storage request there after
+the provider's off-UI capacity refresh. Unknown or stale capacity awaits a fresh sample, and known
+zero is a refusal. The phase admits only the actual remaining host/device capacity after held
+claims, including its three-way source peak and final output/readback overlap. No separate quarter
+share or unknown-capacity byte floor limits a valid frame. The final device owner refreshes its
+live allocation report while idle and before executing queued work. The owning GPU contract defines
+phase-retirement proof on budget refusal.
 If final host adoption fails after the readback fence completes, the evaluator releases only the
 exact positively retired phase. Unknown native work or an independent pending OCIO upload still
 prevents retirement and retains the generation.

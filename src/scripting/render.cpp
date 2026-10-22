@@ -127,14 +127,15 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
                        .resolution = runtime::CompositionFormatResolution{},
                        .quality = runtime::EvaluationQuality::Reference,
                        .colorIntent = colorIntent,
-                       .pixelStorageByteLimit = runtime::defaultGpuProcessFrameByteBudget()},
+                       .pixelStorageByteLimit = 0},
         .assetBaseDirectory = assetBaseDirectory,
         .targetPath = destination,
         .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
         .owner = {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(1)},
         .preset = preset,
         .displayProcessorProvider = nullptr,
-        .gpuProvider = gpuProvider};
+        .gpuProvider = gpuProvider,
+        .useRootPixelCapacity = true};
     auto attemptBegin = host::beginOutputAnalysisAttemptV1(scheduler, *artifacts, ledger,
                                                            std::move(attemptRequest));
     if (!attemptBegin) {

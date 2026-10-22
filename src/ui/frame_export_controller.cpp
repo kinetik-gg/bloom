@@ -735,7 +735,7 @@ bool FrameExportController::beginAttempt(
                        .resolution = runtime::CompositionFormatResolution{},
                        .quality = runtime::EvaluationQuality::Reference,
                        .colorIntent = pendingColorIntent_,
-                       .pixelStorageByteLimit = runtime::defaultGpuProcessFrameByteBudget(),
+                       .pixelStorageByteLimit = 0,
                        .bypassLookNodes = sequence_ && sequence_->bypassLookNodes},
         .assetBaseDirectory = pendingAssetBaseDirectory_,
         .targetPath = pendingDestination_,
@@ -743,7 +743,8 @@ bool FrameExportController::beginAttempt(
         .owner = {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(1)},
         .preset = pendingPreset_,
         .displayProcessorProvider = displayProcessorProvider_,
-        .gpuProvider = gpuExportProvider_};
+        .gpuProvider = gpuExportProvider_,
+        .useRootPixelCapacity = true};
 
     auto begin = host::beginOutputAnalysisAttemptV1(scheduler_, artifactCoordinator_, *ledger_,
                                                     std::move(request));

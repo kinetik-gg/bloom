@@ -246,11 +246,12 @@ void maximumMediaPartition() {
     GpuProcessingPhaseBudget budget;
     budget.setHostCapacity(maximum, true);
     budget.setDeviceCapacity(100, true);
-    GpuProcessingPhaseRequest media{.fixedHostBytes = fixed,
-                                    .requestedSourceBytes = maximum,
-                                    .minimumSourceBytes = sourceRoom + 1,
-                                    .deviceWorkingBytes = 1,
-                                    .capacityShareDenominator = 1};
+    GpuProcessingPhaseRequest media{
+        .fixedHostBytes = fixed,
+        .requestedSourceBytes = maximum,
+        .minimumSourceBytes = sourceRoom + 1,
+        .deviceWorkingBytes = 1,
+    };
     auto overflow = budget.reserve(media);
     require(!overflow.lease && overflow.status == GpuProcessingPhaseAdmission::BudgetRefused &&
                 overflow.domain == GpuProcessingPhaseDomain::Host,

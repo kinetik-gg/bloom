@@ -12,12 +12,13 @@ std::shared_ptr<GpuProcessingPhaseLease> uploadPhase(GpuDevice& device,
                                                      GpuProcessingPhaseBudget& budget,
                                                      std::uint64_t uploadBytes,
                                                      std::uint64_t nativeBytes = 8ULL << 20) {
-    auto grant = budget.reserve({.fixedHostBytes = 4096,
-                                 .requestedSourceBytes = uploadBytes,
-                                 .minimumSourceBytes = uploadBytes,
-                                 .requestedExecutorBytes = nativeBytes,
-                                 .minimumExecutorBytes = nativeBytes,
-                                 .capacityShareDenominator = 1});
+    auto grant = budget.reserve({
+        .fixedHostBytes = 4096,
+        .requestedSourceBytes = uploadBytes,
+        .minimumSourceBytes = uploadBytes,
+        .requestedExecutorBytes = nativeBytes,
+        .minimumExecutorBytes = nativeBytes,
+    });
     uploadRequire(grant.lease && device.retainProcessingPhase(grant.lease),
                   "an unchanged F+3L upload grant is admitted and retained");
     return std::move(grant.lease);

@@ -139,6 +139,10 @@ struct OutputAnalysisAttemptRequestV1 final {
     // refused and the attempt falls back to the honest CPU reference/display path; a foreign
     // command is never stamped with the canonical display identity.
     std::shared_ptr<const runtime::PreparedGpuOcioCommand> outputColorCommand = nullptr;
+    // Production callers leave the numeric evaluator field unset and resolve it once from the
+    // sampled processing root on the Evaluating CPU worker. Explicit caller byte limits, including
+    // zero, remain unchanged when this flag is false.
+    bool useRootPixelCapacity = false;
 };
 
 enum class OutputAnalysisAttemptStageV1 : std::uint8_t {

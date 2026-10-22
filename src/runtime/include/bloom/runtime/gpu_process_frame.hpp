@@ -157,17 +157,6 @@ struct GpuProcessFrameOutcome final {
     explicit operator bool() const noexcept { return hasValue(); }
 };
 
-// A bounded default working byte budget for ONE GPU final-render/export frame, derived from the
-// host's currently-available RAM. Pure policy: a conservative share (1/4) of what is actually
-// available, with NO fixed floor and NO fixed ceiling. A low-memory host therefore gets a small
-// budget rather than an over-committing floor, and a large host gets a proportionally large budget
-// rather than an artificial ceiling, so the gate opens for any composition the host can genuinely
-// run. Unknown availability uses a small typed conservative fallback. A caller that needs an exact
-// limit still injects one explicitly.
-[[nodiscard]] std::size_t
-gpuProcessFrameByteBudgetForAvailable(std::optional<std::size_t> availableBytes) noexcept;
-[[nodiscard]] std::size_t defaultGpuProcessFrameByteBudget() noexcept;
-
 struct GpuProcessFrameEvaluatorOptions final {
     std::shared_ptr<GpuProcessingPhasePolicy> processingPhasePolicy = {};
     // Explicit activation: false never touches a device and every request is Disabled.
@@ -175,12 +164,11 @@ struct GpuProcessFrameEvaluatorOptions final {
     // Explicit native loader override (empty means the platform loader). No workspace/build path is
     // ever hardcoded. This is the same field `GpuDeviceCreationOptions::loader_path` uses.
     std::filesystem::path loaderPath;
-    // Per-request LIVE unique pinned-byte budget handed to GpuSceneExecutor::begin(). The default
-    // is the host-availability-derived budget above, never a fixed 1 GiB that would refuse a large
-    // composition or over-commit a small host.
-    std::uint64_t requestByteBudget = defaultGpuProcessFrameByteBudget();
-    // Hard ceiling for the one final readback allocation (host staging + returned pixels).
-    std::uint64_t readbackByteBudget = defaultGpuProcessFrameByteBudget();
+    // Explicit ceilings are honored, including zero. Omission derives the request's executor
+    // ceiling from the sampled processing root's device capacity and the readback ceiling from its
+    // sampled host capacity on the calling worker. The paired phase still admits the actual peak.
+    std::optional<std::uint64_t> requestByteBudget;
+    std::optional<std::uint64_t> readbackByteBudget;
     // Bounded per-native-job deadline while polling the executor.
     std::chrono::milliseconds nativeDeadline{30000};
     // Bounded admission: the maximum number of admitted-but-not-yet-running requests. A request
@@ -188,8 +176,9 @@ struct GpuProcessFrameEvaluatorOptions final {
     std::size_t maxQueuedRequests = 16;
     GpuSceneCacheBudgets cacheBudgets{};
     // Explicit producer overrides are honored verbatim. Without an override, a rooted evaluator
-    // uses requestByteBudget as the producer image upper ceiling; actual work remains bounded by
-    // the admitted phase, live-pin accounting and native resource limits. Metadata/structural
+    // uses the stable device-local heap size as the producer image upper ceiling; actual work
+    // remains bounded by the admitted phase, live-pin accounting and native resource limits.
+    // Metadata/structural
     // defaults remain bounded. An unrooted legacy evaluator retains the reusable-cache defaults.
     // Diagnostics preserve omitted producer defaults; enabling timing is not a budget override.
     bool collectQueueTimestamps = false;

@@ -418,12 +418,13 @@ void testWarmOutputZeroDispatch(Expectations& expectations, GpuDevice& device,
         }
     } guard{device, phase, retired};
     const auto admit = [&](std::uint64_t uploadBytes = 1ULL << 20) {
-        auto grant = root.reserve({.fixedHostBytes = 1ULL << 20,
-                                   .requestedSourceBytes = uploadBytes,
-                                   .minimumSourceBytes = uploadBytes,
-                                   .requestedExecutorBytes = 16ULL << 20,
-                                   .minimumExecutorBytes = 16ULL << 20,
-                                   .capacityShareDenominator = 1});
+        auto grant = root.reserve({
+            .fixedHostBytes = 1ULL << 20,
+            .requestedSourceBytes = uploadBytes,
+            .minimumSourceBytes = uploadBytes,
+            .requestedExecutorBytes = 16ULL << 20,
+            .minimumExecutorBytes = 16ULL << 20,
+        });
         if (!grant.lease || !device.retainProcessingPhase(grant.lease))
             throw std::runtime_error("warm upload max1 exact root admission failed");
         phase = std::move(grant.lease);

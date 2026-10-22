@@ -1,5 +1,6 @@
 #include "gpu_process_frame_preparation_private.hpp"
 
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
 #include <algorithm>
@@ -53,8 +54,31 @@ prepareExportScene(const GpuProcessFrameEvaluatorOptions& options,
         return result;
     }
     GpuScenePreparationPhase phase;
-    result.readbackByteAllowance = options.readbackByteBudget;
+    result.readbackByteAllowance =
+        options.readbackByteBudget.value_or(request.pixelStorageByteLimit);
     if (options.processingPhasePolicy && plan) {
+        const auto capacity = options.processingPhasePolicy->snapshot().reservations;
+        if ((!options.readbackByteBudget && capacity.hostReady &&
+             capacity.hostCapacityBytes == 0) ||
+            (!options.requestByteBudget && capacity.deviceReady &&
+             capacity.deviceCapacityBytes == 0)) {
+            result.status = GpuProcessFrameStatus::Failed;
+            result.diagnosticCode = GpuProcessFrameDiagnosticCode::BudgetRefused;
+            result.diagnosticMessage = "The final processing root reports zero capacity";
+            return result;
+        }
+        if ((!options.readbackByteBudget && (!capacity.hostReady || !capacity.hostCapacityBytes)) ||
+            (!options.requestByteBudget &&
+             (!capacity.deviceReady || !capacity.deviceCapacityBytes))) {
+            result.status = GpuProcessFrameStatus::Failed;
+            result.diagnosticCode = GpuProcessFrameDiagnosticCode::AwaitingCapacity;
+            result.diagnosticMessage = "The final processing root has no ready capacity sample";
+            return result;
+        }
+        const auto readbackBudget =
+            options.readbackByteBudget.value_or(capacity.hostCapacityBytes.value_or(0));
+        const auto executorBudget =
+            options.requestByteBudget.value_or(capacity.deviceCapacityBytes.value_or(0));
         std::uint64_t pixels =
             static_cast<std::uint64_t>(plan->format().width()) * plan->format().height();
         if (const auto* proxy = std::get_if<ProxyResolution>(&request.resolution))
@@ -74,20 +98,20 @@ prepareExportScene(const GpuProcessFrameEvaluatorOptions& options,
             result.diagnosticMessage = "The final phase output envelope overflows";
             return result;
         }
-        if (options.readbackByteBudget < nativeProgram + pixels * perPixel) {
+        if (readbackBudget < nativeProgram + pixels * perPixel) {
             result.status = GpuProcessFrameStatus::Failed;
             result.diagnosticCode = GpuProcessFrameDiagnosticCode::BudgetRefused;
             result.diagnosticMessage = "The final output minimum exceeds the readback ceiling";
             return result;
         }
         result.readbackByteAllowance =
-            std::min(options.readbackByteBudget, nativeProgram + pixels * perPixel + padding);
+            std::min(readbackBudget, nativeProgram + pixels * perPixel + padding);
         phase.policy = options.processingPhasePolicy;
         phase.envelope = {.output = GpuProcessingPhaseOutput::FloatFinal,
                           .encodedBytes = encodedOutput ? pixels * 16 : 0,
                           .metadataBytes = 16ULL * 1024 * 1024,
                           .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
-                          .requestedExecutorBytes = options.requestByteBudget,
+                          .requestedExecutorBytes = executorBudget,
                           .minimumExecutorBytes = pixels * 16,
                           .deviceWorkingBytes = result.readbackByteAllowance};
     }

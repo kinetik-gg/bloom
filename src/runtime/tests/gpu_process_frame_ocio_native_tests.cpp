@@ -36,10 +36,12 @@
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/qualified_display_preparation.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -398,31 +400,14 @@ int run(int argc, char** argv) {
     evaluatorOptions.processingPhasePolicy = phasePolicy;
     evaluatorOptions.enabled = true;
     evaluatorOptions.loaderPath = options.loader_path;
-    // Deliberately leave requestByteBudget/readbackByteBudget at their DEFAULTS: the production
-    // host-availability-derived budget, not an injected test limit. This is the "default factory"
-    // budget path the desktop/CLI/MCP roots take.
+    // Leave both numeric ceilings omitted. The production path resolves them from the sampled
+    // processing root on the worker rather than probing the OS during options construction.
     evaluatorOptions.ocioContext = ocioContext;
     evaluatorOptions.mediaContext = GpuSceneMediaContext::fromEvaluator(cpuEvaluator);
-    // Availability can change between real OS probes; the untouched default initializers sample
-    // it independently, so comparing them with a later probe is not a stable budget assertion.
     expectations.expect(
-        evaluatorOptions.requestByteBudget > 0 && evaluatorOptions.readbackByteBudget > 0 &&
+        !evaluatorOptions.requestByteBudget && !evaluatorOptions.readbackByteBudget &&
             !evaluatorOptions.executorBudgets,
-        "the default factory uses positive host budgets without a producer override");
-    // Pure policy: a conservative quarter of available, no fixed floor or ceiling; unknown
-    // availability is a small typed fallback.
-    expectations.expect(
-        bloom::runtime::gpuProcessFrameByteBudgetForAvailable(std::size_t{128} * 1024U * 1024U) ==
-                std::size_t{32} * 1024U * 1024U &&
-            bloom::runtime::gpuProcessFrameByteBudgetForAvailable(std::size_t{16} * 1024U * 1024U *
-                                                                  1024U) ==
-                std::size_t{4} * 1024U * 1024U * 1024U &&
-            bloom::runtime::gpuProcessFrameByteBudgetForAvailable(std::size_t{128} * 1024U * 1024U *
-                                                                  1024U) ==
-                std::size_t{32} * 1024U * 1024U * 1024U &&
-            bloom::runtime::gpuProcessFrameByteBudgetForAvailable(std::nullopt) ==
-                std::size_t{512} * 1024U * 1024U,
-        "the pure budget policy scales with availability with no fixed floor or ceiling");
+        "the default factory leaves capacity to the sampled root without a producer override");
     auto evaluator = GpuProcessFrameEvaluator::create(evaluatorOptions);
     expectations.expect(evaluator != nullptr, "the evaluator is constructed");
     if (evaluator == nullptr || !evaluator->gpuAvailable()) {
@@ -630,7 +615,9 @@ int run(int argc, char** argv) {
         const auto largePlan = mixedPlan(format(kLargeWidth, kLargeHeight), fixture.asset,
                                          Color4d{-0.2, 1.6, 0.35, 0.5}, 7000);
         auto largeRequest = acesRequest(*largePlan);
-        largeRequest.pixelStorageByteLimit = bloom::runtime::defaultGpuProcessFrameByteBudget();
+        largeRequest.pixelStorageByteLimit = static_cast<std::size_t>(std::min<std::uint64_t>(
+            phasePolicy->snapshot().reservations.hostCapacityBytes.value_or(0),
+            std::numeric_limits<std::size_t>::max()));
         auto largeOracleRequest = largeRequest;
         largeOracleRequest.bypassOperationCache = true;
         const auto largeOracle = cpuEvaluator.evaluate(largePlan, largeOracleRequest, {});

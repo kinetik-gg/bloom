@@ -308,11 +308,10 @@ void GpuProcessingPhaseBudget::setSampledHostCapacity(
     const auto beforeBytes = state_->counters.hostCapacityBytes;
     const bool beforeReady = state_->counters.hostReady;
     const auto& backing = state_->rootedHostBacking;
-    const auto retired = backing.retiredBytesSaturated ||
-                                 backing.retiredMaterializedBytes < retiredBytesAtSample
-                             ? creditBytes
-                             : std::min(creditBytes,
-                                        backing.retiredMaterializedBytes - retiredBytesAtSample);
+    const auto retired =
+        backing.retiredBytesSaturated || backing.retiredMaterializedBytes < retiredBytesAtSample
+            ? creditBytes
+            : std::min(creditBytes, backing.retiredMaterializedBytes - retiredBytesAtSample);
     state_->hostBackingCreditRemaining = creditBytes - retired;
     if (bytes) {
         state_->counters.hostCapacityBytes = *bytes > retired ? *bytes - retired : 0;
@@ -364,8 +363,7 @@ RootedHostBackingSnapshot GpuProcessingPhaseBudget::rootedHostBackingSnapshot() 
 
 GpuProcessingPhaseGrant
 GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noexcept {
-    if (request.capacityShareDenominator == 0 ||
-        request.minimumSourceBytes > request.requestedSourceBytes ||
+    if (request.minimumSourceBytes > request.requestedSourceBytes ||
         request.minimumExecutorBytes > request.requestedExecutorBytes ||
         (request.sourceFree && request.minimumSourceBytes != 0) ||
         (!request.native &&
@@ -421,13 +419,8 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
         return refused(GpuProcessingPhaseDomain::Host);
     }
     const std::uint64_t sourceRoom = (hostRemaining - request.fixedHostBytes) / 3;
-    const std::uint64_t sourceShare =
-        *counters.hostCapacityBytes / request.capacityShareDenominator;
     const std::uint64_t sourceBytes =
-        request.sourceFree
-            ? 0
-            : std::min(request.requestedSourceBytes,
-                       std::min(sourceRoom, std::max(sourceShare, request.minimumSourceBytes)));
+        request.sourceFree ? 0 : std::min(request.requestedSourceBytes, sourceRoom);
     if (sourceBytes < request.minimumSourceBytes ||
         (!request.sourceFree && request.requestedSourceBytes != 0 && sourceBytes == 0)) {
         return refused(GpuProcessingPhaseDomain::Host);
@@ -440,11 +433,7 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
             return refused(GpuProcessingPhaseDomain::Device);
         }
         const std::uint64_t executorRoom = deviceRemaining - request.deviceWorkingBytes;
-        const std::uint64_t executorShare =
-            *counters.deviceCapacityBytes / request.capacityShareDenominator;
-        executorBytes =
-            std::min(request.requestedExecutorBytes,
-                     std::min(executorRoom, std::max(executorShare, request.minimumExecutorBytes)));
+        executorBytes = std::min(request.requestedExecutorBytes, executorRoom);
         if (executorBytes < request.minimumExecutorBytes ||
             (request.requestedExecutorBytes != 0 && executorBytes == 0)) {
             return refused(GpuProcessingPhaseDomain::Device);
