@@ -16,6 +16,9 @@
 #include <QTest>
 #include <QTreeWidget>
 #include <QUrl>
+#include <atomic>
+#include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -34,7 +37,12 @@
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <chrono>
 #include <iostream>
+#include <optional>
+#include <string>
+#include <thread>
+#include <utility>
 
 namespace {
 using namespace bloom;
@@ -50,6 +58,111 @@ bool drop(QWidget& target, const QMimeData& mime) {
     QDropEvent event(QPointF(50, 50), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(&target, &event);
     return event.isAccepted();
+}
+template <typename Predicate> bool waitUntil(Predicate predicate) {
+    QElapsedTimer timer;
+    timer.start();
+    while (!predicate() && timer.elapsed() < 5000)
+        QTest::qWait(1);
+    return predicate();
+}
+class CatalogWorkerHold final {
+  public:
+    explicit CatalogWorkerHold(runtime::TaskScheduler& scheduler)
+        : submission_(scheduler.submit<void>(
+              runtime::TaskRequest("Hold input colour catalogue worker",
+                                   {.kind = runtime::TaskOwnerKind::Application,
+                                    .id = runtime::TaskOwnerId::fromRaw(999)},
+                                   runtime::TaskPriority::Foreground, runtime::TaskExecutor::Cpu),
+              [this](runtime::TaskContext&) {
+                  entered_ = true;
+                  while (!released_)
+                      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                  return runtime::TaskResult<void>::succeeded();
+              })) {}
+    ~CatalogWorkerHold() { release(); }
+    [[nodiscard]] bool entered() const { return submission_.accepted() && entered_; }
+    void release() {
+        if (released_.exchange(true))
+            return;
+        if (submission_.accepted())
+            while (!submission_.handle.tryTakeResult())
+                QTest::qWait(1);
+    }
+
+  private:
+    runtime::TaskSubmission<void> submission_;
+    std::atomic<bool> entered_{false};
+    std::atomic<bool> released_{false};
+};
+void inputColorCatalogFollowsWorkingSpace() {
+    auto config = runtime::TaskSchedulerConfig::defaults();
+    config.cpuWorkerCount = 1;
+    config.rowBandWorkerCount = 1;
+    runtime::TaskScheduler scheduler(config);
+    ui::ProjectHost host(scheduler);
+    ui::CompositionSession session(*host.liveDocumentAndStack().first,
+                                   *host.liveDocumentAndStack().second, host.lowestCompositionId());
+    commands::Transaction seed("Seed colour catalogue composition", session.snapshot().revision());
+    seed.emplace<commands::AddComposition>("Main", document::CompositionFormat{},
+                                           core::RationalTime::fromInteger(10));
+    const auto seeded = session.executeTransaction(std::move(seed));
+    const auto id = seeded.succeeded()
+                        ? seeded.outputId<document::CompositionId>(commands::kAddCompositionOutput)
+                        : std::nullopt;
+    require(id && session.setComposition(*id), "catalogue fixture composition");
+
+    auto aces = *host.colorSettings();
+    const auto revision = color::ocioBuiltInContentRevision(
+        color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri);
+    require(revision.has_value(), "ACES catalogue revision resolves");
+    aces.ocioConfig.locator =
+        document::BuiltInOcioConfigLocator{std::string(color::kAcesCgV1ConfigUri)};
+    aces.ocioConfig.expectedRevision.digest = *revision;
+    aces.processColorSpaceId = "ACEScg";
+    require(host.setColorSettings(aces) == bloom::host::ProjectSessionColorSettingsStatus::Updated,
+            "ACES catalogue settings apply to the project");
+    session.setColorSettings(aces);
+    ui::TaskUiBridge bridge(scheduler);
+    ui::AssetController controller(session, host, scheduler, bridge);
+
+    {
+        CatalogWorkerHold hold(scheduler);
+        require(waitUntil([&] { return hold.entered(); }), "catalogue worker barrier starts");
+        controller.requestInputColorSpaces();
+        require(controller.inputColorSpaces() == nullptr, "initial catalogue request is pending");
+        require(session.setWorkingColorSpaceOverride(std::string("Linear P3-D65")),
+                "pending catalogue working space changes");
+        require(controller.inputColorSpaces() == nullptr,
+                "old pending catalogue is not exposed after working-space change");
+        hold.release();
+    }
+    require(waitUntil([&] {
+                const auto* spaces = controller.inputColorSpaces();
+                return spaces && !spaces->empty();
+            }),
+            "replacement working-space catalogue completes after old pending request is retired");
+
+    {
+        CatalogWorkerHold hold(scheduler);
+        require(waitUntil([&] { return hold.entered(); }),
+                "cached catalogue worker barrier starts");
+        require(session.setWorkingColorSpaceOverride(std::nullopt),
+                "cached catalogue working-space override clears");
+        require(controller.inputColorSpaces() == nullptr,
+                "cached choices are invalidated synchronously on working-space change");
+        hold.release();
+    }
+    require(waitUntil([&] {
+                const auto* spaces = controller.inputColorSpaces();
+                return spaces && !spaces->empty();
+            }),
+            "catalogue prepares again after cached working-space change");
+    const auto* stable = controller.inputColorSpaces();
+    require(session.addSolidLayer("Unrelated", {0.1, 0.2, 0.3, 1.0}),
+            "unrelated authoring edit succeeds");
+    require(controller.inputColorSpaces() == stable,
+            "unrelated snapshot keeps the ready catalogue without resubmission");
 }
 void compositionDrops() {
     auto initial =
@@ -444,6 +557,7 @@ void run() {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
+        inputColorCatalogFollowsWorkingSpace();
         compositionDrops();
         run();
         return 0;

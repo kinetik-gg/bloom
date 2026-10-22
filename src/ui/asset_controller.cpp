@@ -323,8 +323,12 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
     });
     connect(&host_, &ProjectHost::colorSettingsChanged, this, [this] {
         const bool requested = inputColorCatalogPending_ || inputColorCatalog_ != nullptr;
-        if (inputColorCatalogPending_)
+        if (inputColorCatalogPending_) {
             inputColorCatalogTask_.cancel();
+            inputColorCatalogPending_ = false;
+            inputColorCatalogRequestedSettings_.reset();
+            inputColorCatalogRequestedWorking_.clear();
+        }
         inputColorCatalog_.reset();
         if (requested)
             requestInputColorSpaces();
@@ -347,8 +351,12 @@ void AssetController::cancel() {
         import_.cancel();
     if (previewPending_)
         preview_.cancel();
-    if (inputColorCatalogPending_)
+    if (inputColorCatalogPending_) {
         inputColorCatalogTask_.cancel();
+        inputColorCatalogPending_ = false;
+        inputColorCatalogRequestedSettings_.reset();
+        inputColorCatalogRequestedWorking_.clear();
+    }
 }
 void AssetController::setCachePurgeGate(const bool gated) {
     if (cachePurgeGate_ == gated)
@@ -386,8 +394,12 @@ void AssetController::requestInputColorSpaces() {
     if (inputColorCatalogPending_ && inputColorCatalogRequestedSettings_ == settings &&
         inputColorCatalogRequestedWorking_ == working)
         return;
-    if (inputColorCatalogPending_)
+    if (inputColorCatalogPending_) {
         inputColorCatalogTask_.cancel();
+        inputColorCatalogPending_ = false;
+        inputColorCatalogRequestedSettings_.reset();
+        inputColorCatalogRequestedWorking_.clear();
+    }
     inputColorCatalog_.reset();
     auto submission = scheduler_.submit<std::shared_ptr<InputColorCatalog>>(
         runtime::TaskRequest(
@@ -412,7 +424,11 @@ void AssetController::requestInputColorSpaces() {
                     settings.ocioConfig.expectedRevision.digest, working);
                 if (resolved.ready()) {
                     auto config = std::move(resolved).takeResolved();
-                    result->spaces = config.colorSpaces();
+                    if (config)
+                        result->spaces = config->colorSpaces();
+                    else
+                        result->diagnostic = QObject::tr("The selected OCIO configuration could "
+                                                         "not be resolved.");
                 } else
                     result->diagnostic = QObject::tr("The selected OCIO configuration could not "
                                                      "be resolved.");
@@ -601,6 +617,22 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
     emit activityChanged();
 }
 void AssetController::refresh() {
+    // The picker requests its catalogue lazily. Once requested, a composition working-space edit
+    // must retire the old choices even if the previous worker is still running; unrelated document
+    // revisions leave the ready catalogue and its worker alone.
+    if (const auto* settings = host_.colorSettings()) {
+        const std::string_view working = session_.colorIntent().workingColorSpaceId;
+        const bool pendingChanged =
+            inputColorCatalogPending_ && (inputColorCatalogRequestedSettings_ != *settings ||
+                                          inputColorCatalogRequestedWorking_ != working);
+        const bool cachedChanged =
+            inputColorCatalog_ && (inputColorCatalog_->settings != *settings ||
+                                   inputColorCatalog_->workingColorSpaceId != working);
+        if (pendingChanged || cachedChanged) {
+            requestInputColorSpaces();
+            emit changed();
+        }
+    }
     freshnessTimer_.stop();
     ++contentGeneration_;
     assetsDirty_ = true;
