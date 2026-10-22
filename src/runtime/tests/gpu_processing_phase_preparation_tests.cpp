@@ -315,11 +315,13 @@ void mixedAndNestedQuotas() {
         ++sample.sampleSerial;
         policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
         const auto low = builder.build(lowPlan, lowRequest);
-        require(
-            !low.scene && low.diagnostic.code == PreparedGpuSceneDiagnosticCode::MediaUnavailable &&
-                low.diagnostic.message.find("source capture exceeds") != std::string::npos &&
-                policy->snapshot().reservations.admittedPhases == 0,
-            "former decoded-only96B envelope refuses encoded capture without borrowing coverage");
+        require(!low.scene &&
+                    low.diagnostic.code == PreparedGpuSceneDiagnosticCode::MediaUnavailable &&
+                    low.diagnostic.message.find("Image revision and decode exceed") !=
+                        std::string::npos &&
+                    policy->snapshot().reservations.admittedPhases == 0,
+                "former decoded-only96B envelope refuses encoded revision and decode without "
+                "borrowing coverage");
         sample.process.domains[0].limitBytes = 16ULL * 1024 * 1024 + headroom;
         sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
         ++sample.sampleSerial;
