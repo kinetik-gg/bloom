@@ -572,12 +572,22 @@ void testAddAndLayout(TestContext& test) {
                 expected = static_cast<double>(comp.format().width());
             if (parameter.schemaKey == document::kSolidHeightParameterSchemaKey)
                 expected = static_cast<double>(comp.format().height());
+            if (parameter.schemaKey == document::kGradientStartParameterSchemaKey &&
+                definition.key.typeId == document::kRadialGradientNodeType)
+                expected = document::Vec2d{static_cast<double>(comp.format().width()) / 2.0,
+                                           static_cast<double>(comp.format().height()) / 2.0};
+            if (parameter.schemaKey == document::kGradientEndParameterSchemaKey)
+                expected = document::Vec2d{
+                    static_cast<double>(comp.format().width()),
+                    definition.key.typeId == document::kRadialGradientNodeType
+                        ? static_cast<double>(comp.format().height()) / 2.0 : 0.0};
             if (parameter.schemaKey == document::kPositionParameterSchemaKey)
                 expected = document::Vec2d{static_cast<double>(comp.format().width()) / 2.0,
                                            static_cast<double>(comp.format().height()) / 2.0};
             test.expect(record && record->schemaKey == parameter.schemaKey &&
                             record->source == ParameterSource{ConstantValueSource{expected}},
-                        "registry default is copied exactly into an independent parameter");
+                        "composition-aware default is copied into an independent parameter: " +
+                            definition.key.typeId + "." + parameter.role);
         }
         if (definition.cardinality == NodeCardinality::OnePerComposition) {
             refuse<AddNode>(test, fixture, OperationIssueCode::Unsupported, definition.key.typeId,

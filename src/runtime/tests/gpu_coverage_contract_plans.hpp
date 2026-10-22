@@ -174,6 +174,8 @@ imageCombinePlan(const bloom::runtime::ImageCombineMode mode, const std::uint64_
     second.sourceNodeId = NodeId::fromRaw(idBase + 1);
     second.color = CompiledColorParameter{ParameterId::fromRaw(idBase + 2),
                                           Color4d{0.75, -0.25, 2.0, 0.6}};
+    second.width.id = ParameterId::fromRaw(idBase + 7);
+    second.height.id = ParameterId::fromRaw(idBase + 8);
     auto layer = std::get<CompiledLayerOutput>(definition.operations[1]);
     layer.input = OperationIndex::fromRaw(2);
     CompiledImageEffect combine{

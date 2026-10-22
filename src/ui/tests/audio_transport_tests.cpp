@@ -163,9 +163,9 @@ int run(int argc, char** argv) {
               << '\n';
     require(!mix->clips.empty(), "stage 3: mix has clips");
     require(appliedClips == 1, "stage 4: clip applied to the engine");
-    require(fixture.assets->audioBuffer(assetId) == nullptr &&
-                audioPlaybackSession.audioBuffer(assetId) != nullptr,
-            "active mix pins admitted audio after controller releases delivery");
+    require(audioPlaybackSession.audioBuffer(assetId) == delivered.lock() &&
+                fixture.assets->decodedAudioBytes() == 0,
+            "active mix pins admitted audio outside the controller retention cache");
 
     (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(0));
     playback.play();
