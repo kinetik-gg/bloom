@@ -1,6 +1,7 @@
 #include <bloom/host/frame_export_publication.hpp>
 
 #include <bloom/core/sha256.hpp>
+#include <bloom/output/flat_exr_options.hpp>
 #include <bloom/output/output_limits.hpp>
 
 #include <algorithm>
@@ -105,6 +106,20 @@ FrameExportPublicationResultV1 FrameExportPublicationResultV1::failure(
 }
 
 namespace {
+
+[[nodiscard]] std::optional<std::uint64_t> addChecked(const std::uint64_t left,
+                                                      const std::uint64_t right) noexcept {
+    if (right > std::numeric_limits<std::uint64_t>::max() - left)
+        return std::nullopt;
+    return left + right;
+}
+
+[[nodiscard]] std::optional<std::uint64_t> multiplyChecked(const std::uint64_t left,
+                                                           const std::uint64_t right) noexcept {
+    if (right != 0 && left > std::numeric_limits<std::uint64_t>::max() / right)
+        return std::nullopt;
+    return left * right;
+}
 
 [[nodiscard]] std::filesystem::path
 uniqueScratchFilePath(const std::filesystem::path& directory,
@@ -248,53 +263,76 @@ FrameExportPublicationResultV1 executeExportPublication(
             FrameExportPublicationStageV1::Preflight, FrameExportUnexpectedFailureV1{}));
     }
 
-    // PNG's prepared straight-RGBA8 stream is the one buffer the approved job adds on top of the
-    // attempt's already-charged retained products, so it is both checked against its own closed
-    // limit and folded into the expanded reservation below -- BEFORE anything is allocated or any
-    // file is created (frame-output.md: "An insufficient or overflowing reservation rejects the
-    // stage before allocation or file creation"). EXR exposes the retained rows directly and adds
-    // nothing here, which is why its peak arithmetic below is unchanged.
+    // Admission precedes staging and every writer allocation. The attempt charge already holds
+    // process pixels and any GPU-encoded display payload; this scratch claim covers preparation,
+    // writer, verifier and protocol-copy overlap without counting those retained products again.
     const bool isPng = attempt.preset() == output::OutputPresetV1::PngRgba8SrgbV1;
     const bool isTiff = attempt.preset() == output::OutputPresetV1::TiffRgba16SrgbV1;
+    const auto* descriptor = attempt.frame()->processImage().descriptor();
+    if (!descriptor)
+        return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
+            FrameExportPublicationStageV1::Preflight, FrameExportUnexpectedFailureV1{}));
+    const auto extent = descriptor->dataWindow().extent();
+    const std::uint64_t width = extent.width();
+    const std::uint64_t height = extent.height();
+    constexpr std::uint64_t chunk = output::kOutputAdapterMaximumStreamingChunkBytesV1;
+    // zlib's default deflate tables/hash state are below 320 KiB; inflate is below 40 KiB.
+    // One MiB covers their state and small codec objects in either sequential stage.
+    constexpr std::uint64_t pngCodecStateEstimate = 1024U * 1024U;
+    std::optional<std::uint64_t> additional;
     std::uint64_t preparedBytes = 0;
-    if (isTiff) {
-        const auto* descriptor = attempt.frame()->processImage().descriptor();
-        if (!descriptor)
-            return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
-                FrameExportPublicationStageV1::Preflight, FrameExportUnexpectedFailureV1{}));
-        // One prepared frame plus protocol serialization/copy; acknowledgement bounds the queue.
-        preparedBytes = static_cast<std::uint64_t>(descriptor->layout().pixelStorageBytes) * 2U;
-    }
     if (isPng) {
         const auto counted = output::checkedPngPreparedByteCountV1(attempt);
         if (!counted.has_value()) {
             return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
                 FrameExportPublicationStageV1::Preflight, FrameExportUnexpectedFailureV1{}));
         }
-        const auto preparedLimit =
-            std::min(limits.preparedPngByteLimit, output::kOutputExportPreparedPngBytesMaximumV1);
-        if (preparedLimit == 0 || *counted > preparedLimit) {
+        if (limits.preparedPngByteLimit && *counted > *limits.preparedPngByteLimit) {
             return FrameExportPublicationResultV1::failure(
                 FrameExportPublicationFailureV1(FrameExportPublicationStageV1::ColorPreparing,
                                                 FrameExportPreparedBytesExceededV1{}));
         }
         preparedBytes = *counted;
+        const auto rowPayload = multiplyChecked(width, 4);
+        const auto row = rowPayload ? addChecked(*rowPayload, 1) : std::nullopt;
+        const auto decoded = row ? multiplyChecked(*row, height) : std::nullopt;
+        // The writer streams row spans directly; it owns a 16 MiB pending IDAT block and a
+        // 64 KiB drain buffer, with no full-row copy.
+        constexpr std::uint64_t writer = chunk + 64U * 1024U;
+        const auto verifier =
+            decoded ? addChecked(*decoded, std::max(preparedBytes, chunk)) : std::nullopt;
+        const auto scratch = verifier
+                                 ? addChecked(std::max(writer, *verifier), pngCodecStateEstimate)
+                                 : std::nullopt;
+        additional = scratch ? addChecked(preparedBytes, *scratch) : std::nullopt;
+    } else if (isTiff) {
+        // The protocol prepares one frame and holds one serialized/copy buffer until acknowledged.
+        const auto protocol =
+            multiplyChecked(static_cast<std::uint64_t>(descriptor->layout().pixelStorageBytes), 2);
+        additional = protocol ? addChecked(*protocol, chunk) : std::nullopt;
+    } else {
+        // Reopen verification owns componentBits for the full image. The optional transform row
+        // may coexist with it; codec-owned workspace follows the qualified OpenEXR version's
+        // compression geometry and one-thread endpoints. This is an admission estimate rather
+        // than telemetry of OpenEXR's actual allocations.
+        const auto row = multiplyChecked(width, 16);
+        const auto componentBits =
+            static_cast<std::uint64_t>(descriptor->layout().pixelStorageBytes);
+        const auto verifier = row ? addChecked(componentBits, *row) : std::nullopt;
+        const auto compression = attempt.report()->exr()
+                                     ? attempt.report()->exr()->options().compression
+                                     : output::FlatExrCompressionV1::Zip;
+        const auto codec = output::flatExrCodecWorkspaceBytesV1(width, height, compression);
+        additional = verifier && codec ? addChecked(*verifier, *codec) : std::nullopt;
     }
-
-    // Approved-job admission transactionally expands the SAME reservation the attempt already
-    // holds (design decision 5: "Approved-job admission transactionally expands that reservation
-    // to the checked peak ... it neither double-charges shared retained storage") -- the checked
-    // peak here is the retained bytes already charged, plus PNG's prepared display/output pixels
-    // (zero for EXR), plus one streaming chunk of encoder/verifier/copy scratch. The attempt's own
-    // retained storage is never re-added, so nothing is double-charged.
-    const auto currentCharge = attempt.resources()->chargedBytes();
-    constexpr auto chunkBound =
-        static_cast<std::uint64_t>(output::kOutputAdapterMaximumStreamingChunkBytesV1);
-    constexpr auto maximumBytes = std::numeric_limits<std::uint64_t>::max();
-    auto peak =
-        currentCharge > maximumBytes - preparedBytes ? maximumBytes : currentCharge + preparedBytes;
-    peak = peak > maximumBytes - chunkBound ? maximumBytes : peak + chunkBound;
-    if (attempt.resources()->expand(peak) != output::ExportResourceAdmissionStatusV1::Reserved) {
+    output::ExportResourceAdmissionStatusV1 scratchStatus{};
+    auto scratchClaim = additional ? attempt.resources()->reserveScratch(*additional, scratchStatus,
+                                                                         context.cancellation())
+                                   : nullptr;
+    if (context.isCancellationRequested()) {
+        return cancelledResult(FrameExportPublicationStageV1::Preflight);
+    }
+    if (!scratchClaim) {
         return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
             FrameExportPublicationStageV1::Preflight, FrameExportResourceExhaustedV1{}));
     }

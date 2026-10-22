@@ -219,6 +219,7 @@ class PackedHostStorageAuthority final
     promoteFinalProduct(const std::shared_ptr<PackedHostStorageAuthority>& process,
                         const std::shared_ptr<PackedHostStorageAuthority>& encoded = {}) noexcept;
     [[nodiscard]] PackedHostStorageSnapshot snapshot() const noexcept;
+    [[nodiscard]] GpuProcessingRootIdentity rootIdentity() const noexcept { return state_; }
 
   private:
     friend class PackedHostStorageToken;

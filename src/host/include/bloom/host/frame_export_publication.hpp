@@ -64,11 +64,9 @@ struct SequenceNamingV1 final {
 struct FrameExportLimitsV1 final {
     std::chrono::steady_clock::duration totalDeadline = std::chrono::hours(24);
     std::chrono::steady_clock::duration noProgressInterval = std::chrono::seconds(120);
-    // The PNG preset's retained-prepared-bytes ceiling (frame-output.md's "Version 1 export
-    // limits": "retained prepared PNG bytes | 256 MiB"). Ignored by the EXR preset, which retains
-    // no prepared display/output buffer at all. A request may LOWER this ("a request may lower but
-    // not raise them"); a higher value is clamped back down to the closed limit.
-    std::uint64_t preparedPngByteLimit = output::kOutputExportPreparedPngBytesMaximumV1;
+    // Optional caller cap on the PNG prepared stream. Omission uses the exact checked frame size;
+    // a supplied cap remains authoritative, including zero.
+    std::optional<std::uint64_t> preparedPngByteLimit = std::nullopt;
 };
 
 enum class FrameExportApprovalStatusV1 : std::uint8_t {
@@ -288,9 +286,10 @@ class [[nodiscard]] FrameExportPublicationResultV1 final {
 // bridging Writing/Verifying scratch file (bloom/output/flat_exr_export_write.hpp); the scratch
 // file is always removed before this call returns, on every path. `clock` is design decision 5's
 // injectable monotonic clock (defaults to the task system's own std::chrono::steady_clock source).
-// Approved-job resource admission (design decision 5) transactionally expands the SAME
-// output::ExportResourceReservationV1 the attempt already owns (reached through
-// `request.attempt()->resources()`); no separate ExportResourceLedgerV1 reference is needed here.
+// Approved-job resource admission (design decision 5) creates a publication-scoped scratch claim
+// through the attempt's reservation (reached through `request.attempt()->resources()`). It shares
+// that reservation's ledger/root, counts concurrent publications independently, and releases after
+// this invocation's writer/verifier exits. No separate ExportResourceLedgerV1 reference is needed.
 [[nodiscard]] FrameExportPublicationResultV1 executeExportPublication(
     runtime::TaskContext& context, platform::StagedArtifactCoordinator& artifacts,
     FrameExportRequestV1 request, const std::filesystem::path& scratchDirectory,

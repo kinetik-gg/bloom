@@ -38,7 +38,15 @@ std::optional<std::uint64_t> processHeadroom(const ProcessMemorySample& sample) 
 std::optional<render::GpuProcessingPhaseRequest>
 processingPhaseRequest(const GpuProcessingPhaseEnvelope& envelope) noexcept {
     if (envelope.pixels == 0) {
-        return {};
+        // A non-native, source-free output stage owns no pixel operation. It still needs the
+        // existing root's request slot, and any explicit metadata must be admitted there.
+        if (!envelope.sourceFree || envelope.native || envelope.encodedBytes != 0 ||
+            envelope.retainedCoverageByteLimit != 0 || envelope.requestedSourceBytes != 0 ||
+            envelope.minimumSourceBytes != 0 || envelope.requestedExecutorBytes.value_or(0) != 0 ||
+            envelope.minimumExecutorBytes != 0 || envelope.deviceWorkingBytes != 0)
+            return {};
+        return render::GpuProcessingPhaseRequest{
+            .fixedHostBytes = envelope.metadataBytes, .sourceFree = true, .native = false};
     }
     const auto outputs = multiply(
         envelope.pixels, envelope.output == GpuProcessingPhaseOutput::PackedPreview ? 8 : 48);

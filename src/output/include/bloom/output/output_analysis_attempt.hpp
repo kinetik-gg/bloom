@@ -122,6 +122,12 @@ struct OutputAnalysisAttemptBuildInputsV1 final {
     OutputAnalysisAttemptDisplayProductsV1 display;
     // Optional GPU-encoded display payload. Absent keeps the unchanged CPU display path.
     OutputAnalysisAttemptGpuDisplayV1 gpuDisplay = {};
+    // The already sampled composition root used by final evaluation. The retained resource
+    // reservation owns it through approval/publication, including EXR re-preparation.
+    std::shared_ptr<runtime::GpuProcessingPhasePolicy> processingPolicy = nullptr;
+    // Worker-only refresh retained through a delayed approval. A host provider capture keeps its
+    // sampler alive; injected roots can omit this and rely on their own asynchronous sampler.
+    ExportCapacityRefreshV1 capacityRefresh = {};
 };
 
 class [[nodiscard]] OutputAnalysisAttemptBuildResultV1 final {
@@ -213,6 +219,9 @@ class OutputAnalysisAttemptV1 final {
                             OutputAnalysisAttemptGpuDisplayV1 gpuDisplay,
                             std::shared_ptr<ExportResourceReservationV1> reservation) noexcept;
 
+    // Members are destroyed in reverse declaration order. Keep the admission claim alive until
+    // every retained frame/display/metadata product has been destroyed.
+    std::shared_ptr<ExportResourceReservationV1> reservation_;
     std::shared_ptr<const runtime::ProcessFrame> frame_;
     std::shared_ptr<const ProcessFrameSemanticIdentityV1> processIdentity_;
     std::shared_ptr<const OutputAnalysisReportV1> report_;
@@ -221,7 +230,6 @@ class OutputAnalysisAttemptV1 final {
     OutputAnalysisAttemptTargetV1 target_;
     OutputAnalysisAttemptDisplayProductsV1 display_;
     OutputAnalysisAttemptGpuDisplayV1 gpuDisplay_;
-    std::shared_ptr<ExportResourceReservationV1> reservation_;
 };
 
 // The Analyzing stage's typed successor: computes the OutputAnalysisDigest (when approvable),

@@ -3,6 +3,7 @@
 #include <bloom/output/output_analysis_digest.hpp>
 #include <bloom/output/output_limits.hpp>
 #include <bloom/render/image.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
 #include <limits>
 #include <utility>
@@ -34,10 +35,10 @@ OutputAnalysisAttemptV1::OutputAnalysisAttemptV1(
     OutputAnalysisAttemptTargetV1 target, OutputAnalysisAttemptDisplayProductsV1 display,
     OutputAnalysisAttemptGpuDisplayV1 gpuDisplay,
     std::shared_ptr<ExportResourceReservationV1> reservation) noexcept
-    : frame_(std::move(frame)), processIdentity_(std::move(processIdentity)),
-      report_(std::move(report)), digest_(digest), preset_(preset), target_(std::move(target)),
-      display_(std::move(display)), gpuDisplay_(std::move(gpuDisplay)),
-      reservation_(std::move(reservation)) {}
+    : reservation_(std::move(reservation)), frame_(std::move(frame)),
+      processIdentity_(std::move(processIdentity)), report_(std::move(report)), digest_(digest),
+      preset_(preset), target_(std::move(target)), display_(std::move(display)),
+      gpuDisplay_(std::move(gpuDisplay)) {}
 
 namespace {
 
@@ -95,6 +96,35 @@ checkedAttemptRetainedBytes(const render::Rgba32fImageDescriptor& descriptor,
     }
     total += gpuDisplayBytes;
     return total;
+}
+
+// Already-materialized final pixels stay charged to their originating processing root. Only
+// published authorities with the exact same root and exact payload size are deducted from the
+// export's incremental host claim; allocation headers remain counted by that root exactly once.
+[[nodiscard]] std::optional<std::uint64_t>
+alreadyRootedPixelBytes(const OutputAnalysisAttemptBuildInputsV1& inputs) noexcept {
+    if (!inputs.processingPolicy)
+        return 0;
+    const auto root = inputs.processingPolicy->rootIdentity();
+    std::uint64_t bytes = 0;
+    const auto process = inputs.frame->processImage().storageAuthority();
+    if (process) {
+        const auto snapshot = process->snapshot();
+        const auto expected = inputs.frame->processImage().pixelStorageByteCost();
+        if (process->rootIdentity() != root || !snapshot.published || snapshot.bytes != expected)
+            return std::nullopt;
+        bytes = snapshot.bytes;
+    }
+    const auto encoded = inputs.gpuDisplay.pixels.authority();
+    if (encoded) {
+        const auto snapshot = encoded->snapshot();
+        const auto expected = inputs.gpuDisplay.pixels.size() * sizeof(render::Rgba8);
+        if (encoded->rootIdentity() != root || !snapshot.published || snapshot.bytes != expected ||
+            snapshot.bytes > std::numeric_limits<std::uint64_t>::max() - bytes)
+            return std::nullopt;
+        bytes += snapshot.bytes;
+    }
+    return bytes;
 }
 
 // The report's own preset decides which display products a completed attempt must retain; nothing
@@ -210,8 +240,15 @@ buildOutputAnalysisAttemptV1(OutputAnalysisAttemptBuildInputsV1 inputs,
             OutputAnalysisAttemptErrorCodeV1::ResourceReservationFailed);
     }
 
+    const auto rootedBytes = alreadyRootedPixelBytes(inputs);
+    if (!rootedBytes || *rootedBytes > *retainedBytes)
+        return OutputAnalysisAttemptBuildResultV1::failure(
+            OutputAnalysisAttemptErrorCodeV1::ResourceReservationFailed);
+
     ExportResourceAdmissionStatusV1 admissionStatus = ExportResourceAdmissionStatusV1::Reserved;
-    auto reservation = ledger.reserve(*retainedBytes, admissionStatus);
+    auto reservation =
+        ledger.reserve(*retainedBytes, admissionStatus, std::nullopt, inputs.processingPolicy,
+                       *rootedBytes, std::move(inputs.capacityRefresh));
     if (reservation == nullptr) {
         return OutputAnalysisAttemptBuildResultV1::failure(
             OutputAnalysisAttemptErrorCodeV1::ResourceReservationFailed);
@@ -247,13 +284,16 @@ prepareFlatExrAttemptV1(const OutputAnalysisAttemptV1& source, FlatExrRgba32fOpt
         if (!report)
             return OutputAnalysisAttemptBuildResultV1::failure(
                 OutputAnalysisAttemptErrorCodeV1::InvalidReport);
-        return buildOutputAnalysisAttemptV1({.frame = source.frame(),
-                                             .processIdentity = source.processIdentity(),
-                                             .report = report.report(),
-                                             .target = source.target(),
-                                             .display = {},
-                                             .gpuDisplay = {}},
-                                            ledger);
+        return buildOutputAnalysisAttemptV1(
+            {.frame = source.frame(),
+             .processIdentity = source.processIdentity(),
+             .report = report.report(),
+             .target = source.target(),
+             .display = {},
+             .gpuDisplay = {},
+             .processingPolicy = source.resources()->processingPolicy(),
+             .capacityRefresh = source.resources()->capacityRefresh()},
+            ledger);
     } catch (...) {
         return OutputAnalysisAttemptBuildResultV1::failure(
             OutputAnalysisAttemptErrorCodeV1::InternalInvariant);

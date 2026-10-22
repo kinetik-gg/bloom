@@ -507,7 +507,8 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                      .report = analyzed.report(),
                      .target = resolved->target,
                      .display = resolved->color.display,
-                     .gpuDisplay = std::move(gpuDisplay)},
+                     .gpuDisplay = std::move(gpuDisplay),
+                     .processingPolicy = processingPolicy},
                     *ledger);
                 if (!buildResult) {
                     return runtime::TaskResult<BuildOutcomeV1>::succeeded(

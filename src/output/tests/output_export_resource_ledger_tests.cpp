@@ -1,307 +1,364 @@
+#include <bloom/output/output_analysis_attempt.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
-#include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/cancellation.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
+#include "flat_exr_test_support.hpp"
+
+#include <algorithm>
+#include <barrier>
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <source_location>
 #include <string_view>
+#include <thread>
 
 namespace {
 
 namespace output = bloom::output;
-using bloom::runtime::MemoryBudgetLedger;
-constexpr std::size_t gib = std::size_t{1024} * 1024 * 1024;
-
-auto at(const int seconds) {
-    return MemoryBudgetLedger::Clock::time_point{} + std::chrono::seconds(seconds);
-}
+namespace render = bloom::render;
+namespace runtime = bloom::runtime;
+namespace support = bloom_output_flat_exr_test_support;
+constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
 
 class Expectations final {
   public:
     void expect(const bool condition, const std::string_view message,
                 const std::source_location location = std::source_location::current()) {
-        if (condition) {
+        if (condition)
             return;
-        }
         ++failures_;
         std::cerr << location.file_name() << ':' << location.line() << ": " << message << '\n';
     }
-
     [[nodiscard]] int failures() const noexcept { return failures_; }
 
   private:
     int failures_ = 0;
 };
 
-void testReserveWithinCapSucceeds(Expectations& expectations) {
+[[nodiscard]] std::shared_ptr<runtime::GpuProcessingPhasePolicy>
+sampledRoot(const std::uint64_t availableBytes) {
+    auto root = std::make_shared<runtime::GpuProcessingPhasePolicy>();
+    runtime::MemoryBudgetState delivered;
+    delivered.machine.availableBytes = availableBytes;
+    delivered.process.source = runtime::ProcessMemorySource::MacOsHostOnly;
+    delivered.process.status = runtime::ProcessMemoryStatus::Unsupported;
+    delivered.process.sampledAt = runtime::GpuProcessingPhasePolicy::Clock::now();
+    delivered.sampleSerial = 1;
+    delivered.processSampleFresh = true;
+    root->applyHostSample(delivered, 16 * gib, delivered.process.sampledAt);
+    return root;
+}
+
+void legacyExplicitQuotasAndLifetime(Expectations& checks) {
     output::ExportResourceLedgerV1 ledger(1024);
     output::ExportResourceAdmissionStatusV1 status{};
-    auto reservation = ledger.reserve(100, status, /*jobAllowance=*/512);
-    expectations.expect(reservation != nullptr &&
-                            status == output::ExportResourceAdmissionStatusV1::Reserved,
-                        "reserve within both caps succeeds");
-    expectations.expect(ledger.chargedBytes() == 100,
-                        "the ledger charges exactly the reserved bytes");
-    expectations.expect(reservation->chargedBytes() == 100,
-                        "the reservation reports its own charged bytes");
-}
-
-void testReserveExceedingJobAllowanceFails(Expectations& expectations) {
-    output::ExportResourceLedgerV1 ledger(1024);
-    output::ExportResourceAdmissionStatusV1 status{};
-    auto reservation = ledger.reserve(600, status, /*jobAllowance=*/512);
-    expectations.expect(reservation == nullptr &&
-                            status == output::ExportResourceAdmissionStatusV1::JobAllowanceExceeded,
-                        "a reservation over the per-job cap is refused and charges nothing");
-    expectations.expect(ledger.chargedBytes() == 0, "a refused reservation charges zero bytes");
-}
-
-void testReserveExceedingServiceAllowanceFails(Expectations& expectations) {
-    output::ExportResourceLedgerV1 ledger(100);
-    output::ExportResourceAdmissionStatusV1 firstStatus{};
-    auto first = ledger.reserve(80, firstStatus, /*jobAllowance=*/1000);
-    expectations.expect(first != nullptr, "the first reservation fits the shared allowance");
-
-    output::ExportResourceAdmissionStatusV1 secondStatus{};
-    auto second = ledger.reserve(30, secondStatus, /*jobAllowance=*/1000);
-    expectations.expect(
-        second == nullptr &&
-            secondStatus == output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded,
-        "a second reservation that would exceed the shared concurrent allowance is refused");
-    expectations.expect(ledger.chargedBytes() == 80,
-                        "a refused second reservation leaves the first charge untouched");
-}
-
-void testReleaseOnDestructionIsZeroLeak(Expectations& expectations) {
-    output::ExportResourceLedgerV1 ledger(1024);
-    {
-        output::ExportResourceAdmissionStatusV1 status{};
-        auto reservation = ledger.reserve(500, status);
-        expectations.expect(reservation != nullptr, "the reservation is granted");
-        expectations.expect(ledger.chargedBytes() == 500, "the ledger reflects the live charge");
-    }
-    expectations.expect(ledger.chargedBytes() == 0,
-                        "dropping the reservation releases every charged byte (zero leak)");
-}
-
-void testExpandGrowsAndRefusesOverCap(Expectations& expectations) {
-    output::ExportResourceLedgerV1 ledger(1024);
-    output::ExportResourceAdmissionStatusV1 status{};
-    auto reservation = ledger.reserve(100, status, /*jobAllowance=*/300);
-    expectations.expect(reservation != nullptr, "the initial reservation is granted");
-
-    expectations.expect(reservation->expand(250) ==
-                            output::ExportResourceAdmissionStatusV1::Reserved,
-                        "expand() to a higher total within the job cap succeeds");
-    expectations.expect(reservation->chargedBytes() == 250,
-                        "expand() raises the reservation's own charge to the new total");
-    expectations.expect(ledger.chargedBytes() == 250,
-                        "expand() charges only the incremental delta against the shared ledger");
-
-    expectations.expect(reservation->expand(200) ==
-                            output::ExportResourceAdmissionStatusV1::Reserved,
-                        "expand() to a lower total than already charged is a no-op success");
-    expectations.expect(reservation->chargedBytes() == 250,
-                        "expand() never lowers the charge (no double-charging, no shrink either)");
-
-    expectations.expect(reservation->expand(400) ==
-                            output::ExportResourceAdmissionStatusV1::JobAllowanceExceeded,
-                        "expand() beyond the per-job cap is refused");
-    expectations.expect(reservation->chargedBytes() == 250,
-                        "a refused expand() leaves the prior charge intact");
-}
-
-void testPressureKeepsChargesAndGraduallyRestoresAdmission(Expectations& expectations) {
-    MemoryBudgetLedger memory(16 * gib, 16 * gib);
-    memory.setConfiguredTotal(4 * gib);
-    output::ExportResourceLedgerV1 ledger(memory);
-    output::ExportResourceAdmissionStatusV1 status{};
-    auto first = ledger.reserve(2 * gib, status);
-    auto second = ledger.reserve(gib, status);
-    expectations.expect(first && second, "two jobs reserve 3 GiB within the 2 GiB per-job cap");
-    if (!first || !second)
+    auto first = ledger.reserve(100, status, 512);
+    checks.expect(first && status == output::ExportResourceAdmissionStatusV1::Reserved &&
+                      first->chargedBytes() == 100 && ledger.chargedBytes() == 100,
+                  "explicit unrooted reservation charges once");
+    if (!first)
         return;
-
-    const auto pressure = memory.poll({.availableBytes = 6 * gib}, at(0));
-    expectations.expect(pressure.retainedBytes == 3 * gib && pressure.retentionPercent == 25 &&
-                            ledger.concurrentAllowance() == gib,
-                        "the fake pressure poll accounts for 3 GiB and trims admission to 1 GiB");
-    auto refused = ledger.reserve(1, status);
-    expectations.expect(
-        !refused && status == output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded,
-        "new work receives the typed service refusal while over the trimmed cap");
-    expectations.expect(second->expand(gib + 1) ==
-                            output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded,
-                        "existing work cannot grow beyond the trimmed shared allowance");
-    expectations.expect(second->expand(gib) == output::ExportResourceAdmissionStatusV1::Reserved,
-                        "an expansion that needs no additional bytes remains a no-op success");
-    expectations.expect(first->chargedBytes() == 2 * gib && second->chargedBytes() == gib &&
-                            ledger.chargedBytes() == 3 * gib,
-                        "trimming and refused admission leave every live reservation untouched");
-
-    static_cast<void>(memory.poll({.availableBytes = 16 * gib}, at(1)));
-    static_cast<void>(memory.poll({.availableBytes = 16 * gib}, at(10)));
-    expectations.expect(ledger.concurrentAllowance() == gib,
-                        "healthy samples do not restore admission before the ten-second hold");
-    static_cast<void>(memory.poll({.availableBytes = 16 * gib}, at(11)));
-    expectations.expect(ledger.concurrentAllowance() == 2 * gib,
-                        "the first recovery step restores only half the configured ceiling");
-    refused = ledger.reserve(1, status);
-    expectations.expect(
-        !refused && status == output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded,
-        "partial recovery still refuses admission above the live allowance");
-    static_cast<void>(memory.poll({.availableBytes = 16 * gib}, at(21)));
-    auto admitted = ledger.reserve(gib / 2, status);
-    expectations.expect(ledger.concurrentAllowance() == 4 * gib && admitted &&
-                            status == output::ExportResourceAdmissionStatusV1::Reserved,
-                        "full gradual recovery admits work again without releasing active jobs");
-    expectations.expect(second->expand(3 * gib / 2) ==
-                                output::ExportResourceAdmissionStatusV1::Reserved &&
-                            ledger.chargedBytes() == 4 * gib,
-                        "restored allowance also admits growth up to the original ceiling");
-}
-
-void testReleaseAllowsAdmissionUnderPressure(Expectations& expectations) {
-    MemoryBudgetLedger memory(16 * gib, 16 * gib);
-    memory.setConfiguredTotal(4 * gib);
-    output::ExportResourceLedgerV1 ledger(memory);
-    output::ExportResourceAdmissionStatusV1 status{};
-    auto first = ledger.reserve(2 * gib, status);
-    auto second = ledger.reserve(gib, status);
-    static_cast<void>(memory.poll({.availableBytes = 6 * gib}, at(0)));
+    checks.expect(first->expand(250) == output::ExportResourceAdmissionStatusV1::Reserved &&
+                      ledger.chargedBytes() == 250,
+                  "unrooted expansion charges only the increment");
+    checks.expect(first->expand(200) == output::ExportResourceAdmissionStatusV1::Reserved &&
+                      first->chargedBytes() == 250,
+                  "a smaller expansion never releases a live claim");
+    checks.expect(first->expand(513) ==
+                      output::ExportResourceAdmissionStatusV1::JobAllowanceExceeded,
+                  "explicit job cap binds expansion");
+    auto refused = ledger.reserve(800, status, 1000);
+    checks.expect(!refused &&
+                      status == output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded &&
+                      ledger.chargedBytes() == 250,
+                  "explicit service cap refuses without disturbing held work");
     first.reset();
-    auto refused = ledger.reserve(1, status);
-    expectations.expect(ledger.chargedBytes() == gib && !refused &&
-                            status ==
-                                output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded,
-                        "releasing one job leaves the other charged at the entire trimmed cap");
-    second.reset();
-    auto admitted = ledger.reserve(gib, status);
-    expectations.expect(
-        admitted && status == output::ExportResourceAdmissionStatusV1::Reserved &&
-            ledger.concurrentAllowance() == gib,
-        "releases reopen admission within the lower cap without waiting for recovery");
+    checks.expect(ledger.chargedBytes() == 0, "last release returns the complete charge");
+    auto admitted = ledger.reserve(800, status, 1000);
+    checks.expect(admitted && status == output::ExportResourceAdmissionStatusV1::Reserved,
+                  "release reopens explicit service admission");
 }
 
-void testRegistrationDuringPressure(Expectations& expectations) {
-    MemoryBudgetLedger memory(16 * gib, 16 * gib);
-    memory.setConfiguredTotal(4 * gib);
-    static_cast<void>(memory.poll({.availableBytes = 6 * gib}, at(0)));
-    output::ExportResourceLedgerV1 ledger(memory);
+void rootedClaimsUseTheSampledRoot(Expectations& checks) {
+    auto root = sampledRoot(8 * gib);
+    output::ExportResourceLedgerV1 ledger;
     output::ExportResourceAdmissionStatusV1 status{};
-    auto refused = ledger.reserve(gib + 1, status);
-    expectations.expect(
-        ledger.concurrentAllowance() == gib && !refused &&
-            status == output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded,
-        "a queue created during pressure starts with reduced admission immediately");
+    auto first = ledger.reserve(3 * gib, status, std::nullopt, root);
+    checks.expect(first && status == output::ExportResourceAdmissionStatusV1::Reserved &&
+                      !first->jobAllowance() && first->processingPolicy() == root,
+                  "a rooted export uses sampled headroom beyond the old implicit 2 GiB job cap");
+    if (!first)
+        return;
+    auto second = ledger.reserve(2 * gib, status, std::nullopt, root);
+    checks.expect(second && ledger.chargedBytes() == 5 * gib,
+                  "the old implicit 4 GiB service cap does not trim rooted exports");
+    const auto held = root->snapshot().reservations;
+    checks.expect(held.totalHostClaimBytes == 5 * gib && held.ownedProcessingHostBytes == 5 * gib &&
+                      root->snapshot().reservations.ownedFinalProcessHostBytes == 0,
+                  "unmaterialized export claims occupy root headroom without fabricated backing");
+    checks.expect(root->reserve({.output = runtime::GpuProcessingPhaseOutput::FloatFinal,
+                                 .pixels = 0,
+                                 .sourceFree = true,
+                                 .native = false})
+                          .status == render::GpuProcessingPhaseAdmission::Accepted,
+                  "a zero-byte output phase is a real admitted root phase");
+    second.reset();
+    checks.expect(root->snapshot().reservations.totalHostClaimBytes == 3 * gib,
+                  "one completed export retires only its own host claim");
+    first.reset();
+    checks.expect(root->snapshot().reservations.totalHostClaimBytes == 0 &&
+                      ledger.chargedBytes() == 0,
+                  "last export releases all tokens and ledger claims");
 }
 
-void testUnregisterAfterFacadeAndLastReservation(Expectations& expectations) {
-    MemoryBudgetLedger memory(16 * gib, 16 * gib);
-    memory.setConfiguredTotal(4 * gib);
-    output::ExportResourceLedgerV1 peer(memory);
+void rootedRefusalAndExplicitCaps(Expectations& checks) {
+    auto root = sampledRoot(gib);
+    output::ExportResourceLedgerV1 implicit;
+    output::ExportResourceAdmissionStatusV1 status{};
+    auto refused = implicit.reserve(2 * gib, status, std::nullopt, root);
+    checks.expect(!refused &&
+                      status == output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded &&
+                      implicit.chargedBytes() == 0 &&
+                      root->snapshot().reservations.totalHostClaimBytes == 0 &&
+                      root->snapshot().reservations.admittedPhases == 0,
+                  "real root headroom refuses and leaves no phase or ledger claim");
+
+    auto roomyRoot = sampledRoot(8 * gib);
+    output::ExportResourceLedgerV1 explicitLedger(4 * gib);
+    auto first = explicitLedger.reserve(3 * gib, status, std::nullopt, roomyRoot);
+    auto second = explicitLedger.reserve(2 * gib, status, std::nullopt, roomyRoot);
+    checks.expect(first && !second &&
+                      status == output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded &&
+                      explicitLedger.chargedBytes() == 3 * gib,
+                  "an explicit constructor service cap still binds rooted exports");
+    auto jobRefused = implicit.reserve(2 * gib, status, gib, roomyRoot);
+    checks.expect(!jobRefused &&
+                      status == output::ExportResourceAdmissionStatusV1::JobAllowanceExceeded,
+                  "an explicit per-job cap still binds rooted exports");
+}
+
+void rootedExpansionAndFacadeLifetime(Expectations& checks) {
+    auto root = sampledRoot(gib);
     std::shared_ptr<output::ExportResourceReservationV1> reservation;
     {
-        output::ExportResourceLedgerV1 ledger(memory);
+        output::ExportResourceLedgerV1 ledger;
         output::ExportResourceAdmissionStatusV1 status{};
-        reservation = ledger.reserve(gib, status);
-        expectations.expect(reservation != nullptr, "a reservation can outlive its ledger facade");
+        reservation = ledger.reserve(100, status, std::nullopt, root);
+        checks.expect(reservation && root->snapshot().reservations.totalHostClaimBytes == 100,
+                      "the initial unowned metadata claim is held");
     }
     if (!reservation)
         return;
     auto alias = reservation;
     reservation.reset();
-    const auto held = memory.poll({.availableBytes = 16 * gib}, at(0));
-    expectations.expect(
-        held.retainedBytes == gib && peer.concurrentAllowance() == 2 * gib,
-        "the last reservation alias keeps both its charge and participant weight alive");
-    expectations.expect(alias->expand(3 * gib / 2) ==
-                            output::ExportResourceAdmissionStatusV1::Reserved,
-                        "a reservation remains usable after its facade is destroyed");
-    const auto pressure = memory.poll({.availableBytes = 6 * gib}, at(5));
-    expectations.expect(
-        pressure.retainedBytes == 3 * gib / 2 &&
-            alias->expand(2 * gib) ==
-                output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded,
-        "pressure callbacks still constrain a reservation after facade destruction");
+    checks.expect(alias->expand(250) == output::ExportResourceAdmissionStatusV1::Reserved &&
+                      alias->chargedBytes() == 250 &&
+                      root->snapshot().reservations.totalHostClaimBytes == 250,
+                  "reservation remains expandable after facade destruction");
+    checks.expect(alias->expand(200) == output::ExportResourceAdmissionStatusV1::Reserved &&
+                      root->snapshot().reservations.totalHostClaimBytes == 250,
+                  "a lower peak cannot release a still-live claim");
     alias.reset();
-    const auto released = memory.poll({.availableBytes = 6 * gib}, at(10));
-    expectations.expect(released.retainedBytes == 0 && peer.concurrentAllowance() == 4 * gib / 10,
-                        "last release unregisters callbacks and their weight before the next poll");
-    // With ASan, this poll also detects callbacks accessing the destroyed reservation state.
+    checks.expect(root->snapshot().reservations.totalHostClaimBytes == 0 &&
+                      root->snapshot().reservations.admittedPhases == 0,
+                  "last alias retires incremental tokens and phase together");
 }
 
-void testEmptyFacadeUnregisters(Expectations& expectations) {
-    MemoryBudgetLedger memory(16 * gib, 16 * gib);
-    memory.setConfiguredTotal(4 * gib);
-    output::ExportResourceLedgerV1 peer(memory);
-    {
-        output::ExportResourceLedgerV1 ledger(memory);
-        static_cast<void>(memory.poll({.availableBytes = 16 * gib}, at(0)));
-        expectations.expect(peer.concurrentAllowance() == 2 * gib,
-                            "two export ledgers share one aggregate cap");
-    }
-    static_cast<void>(memory.poll({.availableBytes = 16 * gib}, at(1)));
-    expectations.expect(peer.concurrentAllowance() == 4 * gib,
-                        "an empty facade unregisters immediately and restores its peer's share");
-}
-
-void testDefaultUsesProcessLedger(Expectations& expectations) {
-    auto& memory = bloom::runtime::processMemoryBudgetLedger();
-    {
-        output::ExportResourceLedgerV1 ledger(1024);
-        output::ExportResourceAdmissionStatusV1 status{};
-        auto reservation = ledger.reserve(100, status);
-        expectations.expect(reservation && memory.poll({}, at(0)).retainedBytes == 100,
-                            "the default constructor registers with the process memory ledger");
-    }
-    expectations.expect(memory.poll({}, at(1)).retainedBytes == 0,
-                        "the process ledger has no dangling participant after normal destruction");
-}
-
-void testColdReusableClampPreservesLiveWork(Expectations& expectations) {
-    MemoryBudgetLedger memory(60 * gib, 60 * gib);
-    memory.beginProcessSampling();
-    output::ExportResourceLedgerV1 ledger(memory, 1024);
+void concurrentExpansionChargesOnce(Expectations& checks) {
+    auto root = sampledRoot(gib);
+    output::ExportResourceLedgerV1 ledger;
     output::ExportResourceAdmissionStatusV1 status{};
-    auto reservation = ledger.reserve(100, status, 512);
-    expectations.expect(reservation && ledger.concurrentAllowance() == 1024 &&
-                            memory.state().effectiveBytes == 0,
-                        "cold reusable zero preserves actual bounded export scratch admission");
-    const bloom::runtime::MemoryBudgetSample zero{
-        .machine = {.availableBytes = 60 * gib},
-        .physicalBytes = 60 * gib,
-        .process = {
-            .source = bloom::runtime::ProcessMemorySource::LinuxCgroupV2,
-            .status = bloom::runtime::ProcessMemoryStatus::Finite,
-            .sampledAt = at(0),
-            .membershipPath = "/fixture",
-            .domains = {{"/fixture", bloom::runtime::ProcessMemoryLimitKind::Finite, 0, 0}}}};
-    const auto state = memory.applySample(zero, at(0));
-    expectations.expect(
-        state.effectiveBytes == 0 && ledger.chargedBytes() == 100 && reservation &&
-            reservation->chargedBytes() == 100 && ledger.concurrentAllowance() == 1024,
-        "cache hard zero neither destroys live reservations nor changes their existing bound");
-    reservation.reset();
-    expectations.expect(ledger.chargedBytes() == 0, "live reservation still releases exactly once");
+    auto reservation = ledger.reserve(100, status, std::nullopt, root);
+    checks.expect(reservation != nullptr, "concurrent-expansion fixture is admitted");
+    if (!reservation)
+        return;
+    std::barrier start(3);
+    output::ExportResourceAdmissionStatusV1 first{};
+    output::ExportResourceAdmissionStatusV1 second{};
+    std::thread a([&] {
+        start.arrive_and_wait();
+        first = reservation->expand(250);
+    });
+    std::thread b([&] {
+        start.arrive_and_wait();
+        second = reservation->expand(250);
+    });
+    start.arrive_and_wait();
+    a.join();
+    b.join();
+    checks.expect(first == output::ExportResourceAdmissionStatusV1::Reserved &&
+                      second == output::ExportResourceAdmissionStatusV1::Reserved &&
+                      reservation->chargedBytes() == 250 && ledger.chargedBytes() == 250 &&
+                      root->snapshot().reservations.totalHostClaimBytes == 250,
+                  "concurrent expansion retains the single peak exactly once");
+}
+
+void publicationScratchClaimsOverlapAndRetire(Expectations& checks) {
+    auto root = sampledRoot(gib);
+    output::ExportResourceLedgerV1 ledger;
+    output::ExportResourceAdmissionStatusV1 status{};
+    const runtime::CancellationToken cancellation;
+    auto attempt = ledger.reserve(100, status, std::nullopt, root);
+    checks.expect(attempt != nullptr, "attempt fixture is admitted");
+    if (!attempt)
+        return;
+    auto first = attempt->reserveScratch(80, status, cancellation);
+    auto second = attempt->reserveScratch(80, status, cancellation);
+    checks.expect(first && second && ledger.chargedBytes() == 260 &&
+                      root->snapshot().reservations.totalHostClaimBytes == 260 &&
+                      attempt->chargedBytes() == 100,
+                  "overlapping publications reserve independent scratch without recharging pixels");
+    first.reset();
+    checks.expect(ledger.chargedBytes() == 180 &&
+                      root->snapshot().reservations.totalHostClaimBytes == 180,
+                  "first publication retires only its own scratch");
+    second.reset();
+    auto sequential = attempt->reserveScratch(80, status, cancellation);
+    checks.expect(sequential && ledger.chargedBytes() == 180 &&
+                      root->snapshot().reservations.totalHostClaimBytes == 180,
+                  "sequential publication reuses headroom without accumulating old peak");
+    sequential.reset();
+    attempt.reset();
+    checks.expect(ledger.chargedBytes() == 0 &&
+                      root->snapshot().reservations.totalHostClaimBytes == 0,
+                  "all publication and retained claims retire on last owner release");
+
+    output::ExportResourceLedgerV1 capped(200);
+    auto base = capped.reserve(100, status, 150, root);
+    checks.expect(base != nullptr, "explicit-cap attempt fixture is admitted");
+    if (!base)
+        return;
+    auto jobDenied = base->reserveScratch(51, status, cancellation);
+    checks.expect(!jobDenied &&
+                      status == output::ExportResourceAdmissionStatusV1::JobAllowanceExceeded,
+                  "scratch observes the parent's explicit total per-job cap");
+    auto one = base->reserveScratch(50, status, cancellation);
+    auto two = base->reserveScratch(50, status, cancellation);
+    auto serviceDenied = base->reserveScratch(1, status, cancellation);
+    checks.expect(one && two && !serviceDenied &&
+                      status == output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded &&
+                      capped.chargedBytes() == 200,
+                  "all simultaneous scratch claims remain under the explicit service cap");
+}
+
+void publicationRefreshFailureRetainsNoScratch(Expectations& checks) {
+    auto root = sampledRoot(gib);
+    output::ExportResourceLedgerV1 ledger;
+    output::ExportResourceAdmissionStatusV1 status{};
+    const runtime::CancellationToken cancellation;
+    unsigned refreshes = 0;
+    auto attempt = ledger.reserve(100, status, std::nullopt, root, 0,
+                                  [&refreshes](const runtime::CancellationToken&) { ++refreshes; });
+    checks.expect(attempt != nullptr, "refresh fixture is admitted");
+    if (!attempt)
+        return;
+    auto scratch = attempt->reserveScratch(20, status, cancellation);
+    checks.expect(scratch && refreshes == 1 && ledger.chargedBytes() == 120,
+                  "publication refresh runs before its independent scratch admission");
+    scratch.reset();
+    attempt.reset();
+
+    auto failing = ledger.reserve(100, status, std::nullopt, root, 0,
+                                  [](const runtime::CancellationToken&) { throw 1; });
+    checks.expect(failing != nullptr, "throwing-refresh fixture is admitted");
+    if (!failing)
+        return;
+    auto denied = failing->reserveScratch(20, status, cancellation);
+    checks.expect(!denied &&
+                      status == output::ExportResourceAdmissionStatusV1::CapacityRefreshFailed &&
+                      ledger.chargedBytes() == 100 &&
+                      root->snapshot().reservations.totalHostClaimBytes == 100,
+                  "refresh failure refuses publication without a partial scratch claim");
+}
+
+void attemptDeductsOnlyPublishedSameRootBacking(Expectations& checks) {
+    auto root = sampledRoot(8 * gib);
+    auto fixture = support::roundTripFixture();
+    const auto descriptor = *fixture.processImage.descriptor();
+    const auto oldPixels = fixture.processImage.pixels();
+    auto phase = root->reserve({.output = runtime::GpuProcessingPhaseOutput::FloatFinal,
+                                .pixels = descriptor.layout().pixelCount,
+                                .sourceFree = true,
+                                .native = false});
+    checks.expect(phase.lease != nullptr, "rooted fixture phase is admitted");
+    if (!phase.lease)
+        return;
+    auto builder = render::Rgba32fImageBuilder::create(
+        descriptor, descriptor.layout().pixelStorageBytes, phase.lease);
+    checks.expect(static_cast<bool>(builder), "rooted fixture image allocates");
+    if (!builder)
+        return;
+    for (std::uint32_t row = 0; row < descriptor.dataWindow().extent().height(); ++row) {
+        auto target = builder.value()->row(descriptor.dataWindow().originY() + row);
+        checks.expect(static_cast<bool>(target), "rooted fixture row exists");
+        if (!target)
+            return;
+        const auto offset =
+            static_cast<std::size_t>(row) * descriptor.dataWindow().extent().width();
+        std::ranges::copy(oldPixels.subspan(offset, target.value()->size()),
+                          target.value()->begin());
+    }
+    auto image = std::move(*builder.value()).freeze();
+    checks.expect(static_cast<bool>(image), "rooted fixture image publishes");
+    if (!image)
+        return;
+    fixture.processImage = std::move(*image.value());
+    auto source = support::prepareSource(std::move(fixture));
+    const auto authority = source.frame->processImage().storageAuthority();
+    checks.expect(authority && authority->snapshot().published &&
+                      authority->rootIdentity() == root->rootIdentity(),
+                  "attempt source carries published backing under the expected root");
+    if (!authority)
+        return;
+    const auto rootedBytes = authority->snapshot().bytes;
+    const auto before = root->snapshot().reservations.totalHostClaimBytes;
+    output::ExportResourceLedgerV1 ledger;
+    auto build = [&](const std::shared_ptr<runtime::GpuProcessingPhasePolicy>& policy) {
+        return output::buildOutputAnalysisAttemptV1(
+            {.frame = source.frame,
+             .processIdentity = source.processIdentity,
+             .report = source.report,
+             .target = {.targetKey = bloom::core::ArtifactTargetKey::fromRaw(7),
+                        .observation = bloom::platform::ArtifactTargetObservation::absent(),
+                        .targetPath = "/tmp/unused-rooted-export.exr",
+                        .overwritePolicy =
+                            bloom::platform::ArtifactOverwritePolicy::CreateOrReplace},
+             .display = {},
+             .processingPolicy = policy},
+            ledger);
+    };
+    auto admitted = build(root);
+    checks.expect(static_cast<bool>(admitted), "same-root published process frame is admitted");
+    if (!admitted)
+        return;
+    const auto reservation = admitted.attempt()->resources();
+    checks.expect(reservation->alreadyRootedBytes() == rootedBytes &&
+                      root->snapshot().reservations.totalHostClaimBytes - before ==
+                          reservation->chargedBytes() - rootedBytes,
+                  "export deducts only the already-published pixel payload, not metadata");
+    const auto held = root->snapshot().reservations.totalHostClaimBytes;
+    auto alien = build(sampledRoot(8 * gib));
+    checks.expect(!alien &&
+                      alien.error() ==
+                          output::OutputAnalysisAttemptErrorCodeV1::ResourceReservationFailed &&
+                      root->snapshot().reservations.totalHostClaimBytes == held,
+                  "mismatched root refuses rather than crediting another root's pixels");
 }
 
 } // namespace
 
 int main() {
-    Expectations expectations;
-    testReserveWithinCapSucceeds(expectations);
-    testReserveExceedingJobAllowanceFails(expectations);
-    testReserveExceedingServiceAllowanceFails(expectations);
-    testReleaseOnDestructionIsZeroLeak(expectations);
-    testExpandGrowsAndRefusesOverCap(expectations);
-    testPressureKeepsChargesAndGraduallyRestoresAdmission(expectations);
-    testReleaseAllowsAdmissionUnderPressure(expectations);
-    testRegistrationDuringPressure(expectations);
-    testUnregisterAfterFacadeAndLastReservation(expectations);
-    testEmptyFacadeUnregisters(expectations);
-    testDefaultUsesProcessLedger(expectations);
-    testColdReusableClampPreservesLiveWork(expectations);
-    return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    Expectations checks;
+    legacyExplicitQuotasAndLifetime(checks);
+    rootedClaimsUseTheSampledRoot(checks);
+    rootedRefusalAndExplicitCaps(checks);
+    rootedExpansionAndFacadeLifetime(checks);
+    concurrentExpansionChargesOnce(checks);
+    publicationScratchClaimsOverlapAndRetire(checks);
+    publicationRefreshFailureRetainsNoScratch(checks);
+    attemptDeductsOnlyPublishedSameRootBacking(checks);
+    return checks.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -72,7 +72,7 @@ bounded contracts. Required still/range/video/headless route evidence and the fu
 parity fixture pass, including explicit-cap refusal and proven retirement. Conservative envelopes
 are not unique physical RAM/VRAM charges or width-two qualification.
 
-Updated: 2026-09-20
+Updated: 2026-10-23
 
 ## Working-Space Output Contract
 
@@ -889,38 +889,55 @@ skips `ColorPreparing`; no active worker is implied while an approvable attempt 
 
 Attempt resource admission computes and reserves the checked retained bytes needed through the
 approval decision, including the process frame, semantic-identity product, report, target state,
-and PNG processor product. Approved-job admission transactionally expands that reservation to the
-checked peak across retained attempt products, prepared display/output pixels, encoder scratch, and
-verification chunks; it neither double-charges shared retained storage nor grants display mapping a
-hidden second allowance. Variable-size encoded output also has an explicit cap. An insufficient or
-overflowing reservation rejects the stage before allocation or file creation. Cancellation before
+and PNG processor product. Approved-job admission creates a publication-scoped scratch claim under
+the same ledger and processing root for prepared display/output pixels, encoder scratch, and
+verification chunks. Concurrent publications of one attempt hold separate scratch claims, while
+sequential publications release each claim after their writer/verifier exits; retained products are
+charged once. A ProcessFrame or GPU-encoded payload already published under the exact
+injected processing root remains charged there; export deducts only that verified payload from its
+new claim. Other retained metadata and new scratch enter the same root, and both the phase and its
+incremental claims remain held until the attempt/job releases the reservation. Variable-size
+encoded output also has an explicit cap. An insufficient or overflowing reservation rejects the
+stage before allocation or file creation. Cancellation before
 identity completion publishes no partial identity; cancellation before publication publishes no
 artifact.
+
+The export worker refreshes the host capacity sample before attempt admission and again before
+each delayed publication's scratch admission. The retained refresh callback owns its provider and
+receives the publication task's cancellation token; a failed refresh refuses scratch without a
+partial claim. A root injected by the application can instead use its own asynchronous sampler,
+and still must present a fresh valid sample at admission.
 
 The former fixed per-dimension, pixel-count, and process-frame-byte limits are removed from
 validity. PNG uses its signed 31-bit dimension bound and EXR uses checked signed 32-bit inclusive
 windows. Allocation is admitted against live owned capacity before a job creates additional pixel
 or verifier buffers. The remaining version 1 publication limits are:
 
-| Resource | Hard limit |
+| Resource | Limit |
 | --- | ---: |
-| retained prepared PNG bytes | 256 MiB (`268435456`) |
+| prepared PNG RGBA8 pixels | checked `4 × width × height`; an explicit caller cap, including zero, is authoritative; no implicit 256 MiB cap |
 | one encoder or verifier streaming chunk | 16 MiB (`16777216`) |
-| one export job's aggregate Bloom-host resident allowance | 2 GiB (`2147483648`) |
-| all concurrent export jobs' aggregate Bloom-host resident allowance | 4 GiB (`4294967296`) |
+| rooted export host reservation | available headroom sampled by the injected processing root, including all held claims; explicit caller job/service caps still bind |
+| legacy unrooted export job/service defaults | 2 GiB (`2147483648`) per job and 4 GiB (`4294967296`) concurrent |
 | staged or pre-existing artifact bytes read/written/hashed | 16 GiB (`17179869184`) |
 | one export's total monotonic elapsed time | 24 hours (`86400` seconds) |
 | permitted no-progress interval in a writer, reader, or filesystem stage | 120 seconds |
 
-The host allowance includes retained inputs, prepared pixels, adapter state charged at its qualified
-worst case, encoder scratch, verification decode state, hashes, canonical metadata, and queued I/O
-buffers. The supervised OCIO helper has the separate hard process ceiling and per-slab deadlines in
-the color contract; its sealed shared-memory slabs are also charged to the export job's host
-allowance. Admission reserves from the service allowance before work starts and releases on every
-terminal path. Checked arithmetic overflow, an adapter whose worst-case memory cannot be
-conservatively charged, inability to stream within the chunk cap, artifact growth beyond the cap,
+The rooted host reservation covers new retained metadata, prepared pixels, writer/verifier overlap,
+protocol copies, and scratch before staging starts. PNG admission accounts for its prepared `4WH`
+buffer plus the greater of writer scratch (pending IDAT and drain buffer) and
+reopen-verifier scratch (decoded rows and retained IDAT data), with a bounded codec-state
+estimate. EXR additionally owns the complete
+`16WH` reopened component-bits product, any output-transform row, and a checked codec-workspace
+estimate derived from compression block geometry, the qualified OpenEXR buffer bound, and its
+single-thread reader/writer configuration; this estimate is not measured library allocation.
+TIFF admits its protocol
+frame/copy overlap with checked arithmetic. Published process and encoded backing stay counted by
+their originating root rather than receiving a second charge. The supervised OCIO helper retains
+its separate process ceiling and per-slab deadlines in the color contract. Checked arithmetic
+overflow, root refusal, inability to stream within the chunk cap, artifact growth beyond the cap,
 deadline expiry, or no-progress expiry fails with a typed resource diagnostic and publishes
-nothing. A target unable to enforce these limits cannot report the preset `Qualified`.
+nothing.
 
 Cancellation is checked between operations, scanlines/chunks, write calls, and verification chunks.
 Cancellation before publication removes the private staging artifact and leaves the destination

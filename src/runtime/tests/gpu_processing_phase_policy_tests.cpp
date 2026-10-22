@@ -43,6 +43,34 @@ void require(const bool value, const char* message) {
         throw std::runtime_error(message);
     }
 }
+MemoryBudgetState sample(GpuProcessingPhasePolicy::Clock::time_point now);
+void sourceFreeOutputStage() {
+    const auto now = GpuProcessingPhasePolicy::Clock::now();
+    GpuProcessingPhasePolicy policy;
+    policy.applyHostSample(sample(now), 64 * gib, now);
+    auto zero = policy.reserve({.output = GpuProcessingPhaseOutput::FloatFinal,
+                                .pixels = 0,
+                                .sourceFree = true,
+                                .native = false},
+                               now);
+    require(zero.status == GpuProcessingPhaseAdmission::Accepted && zero.lease &&
+                zero.lease->hostBytes() == 0,
+            "zero-byte non-native source-free output stage retains a real root phase");
+    auto metadata = policy.reserve({.output = GpuProcessingPhaseOutput::FloatFinal,
+                                    .pixels = 0,
+                                    .metadataBytes = 64,
+                                    .sourceFree = true,
+                                    .native = false},
+                                   now);
+    require(metadata.status == GpuProcessingPhaseAdmission::Accepted && metadata.lease &&
+                metadata.lease->hostBytes() == 64,
+            "nonpixel output-stage metadata remains admitted under the same root");
+    require(policy.reserve({.pixels = 0, .sourceFree = false, .native = false}, now).status ==
+                    GpuProcessingPhaseAdmission::InvalidRequest &&
+                policy.reserve({.pixels = 0, .sourceFree = true, .native = true}, now).status ==
+                    GpuProcessingPhaseAdmission::InvalidRequest,
+            "ordinary and native zero-pixel work remains invalid");
+}
 MemoryBudgetState sample(const GpuProcessingPhasePolicy::Clock::time_point now) {
     MemoryBudgetState result;
     result.machine.availableBytes = 60 * gib;
@@ -967,6 +995,7 @@ int main(int argc, char** argv) {
     try {
         if (argc == 2 && std::string_view(argv[1]) == "--live-unlimited-probe")
             return liveConstraintRemoval();
+        sourceFreeOutputStage();
         lowMemoryHostFinalAdmission();
         liveHeadroomDuringCachePressure();
         rootedBackingReconcilesSampledHostHeadroom();
