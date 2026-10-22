@@ -323,6 +323,23 @@ void GpuProcessingPhaseBudget::setSampledHostCapacity(
         beforeReady != state_->counters.hostReady)
         incrementSaturating(state_->counters.admissionRevision);
 }
+void GpuProcessingPhaseBudget::tightenHostCapacity(
+    const std::optional<std::uint64_t> upperBound, const bool closeReadiness,
+    const std::chrono::steady_clock::time_point validUntil) noexcept {
+    const std::lock_guard lock(state_->mutex);
+    const auto beforeBytes = state_->counters.hostCapacityBytes;
+    const bool beforeReady = state_->counters.hostReady;
+    if (upperBound && state_->counters.hostCapacityBytes)
+        state_->counters.hostCapacityBytes =
+            std::min(*upperBound, *state_->counters.hostCapacityBytes);
+    if (closeReadiness) {
+        state_->counters.hostReady = false;
+        state_->hostValidUntil = validUntil;
+    }
+    if (beforeBytes != state_->counters.hostCapacityBytes ||
+        beforeReady != state_->counters.hostReady)
+        incrementSaturating(state_->counters.admissionRevision);
+}
 void GpuProcessingPhaseBudget::setDeviceCapacity(const std::optional<std::uint64_t> bytes,
                                                  const bool ready) noexcept {
     const std::lock_guard lock(state_->mutex);

@@ -306,6 +306,7 @@ void retirementRevokesCreditBeforeBackingFree() {
     const auto baseline = budget.rootedHostBackingSnapshot().retiredMaterializedBytes;
     budget.setSampledHostCapacity(credit + 64, true,
                                   std::chrono::steady_clock::time_point::max(), credit, baseline);
+    const auto upperBoundCalculatedBeforeFree = budget.snapshot().hostCapacityBytes;
     deletionBudget = &budget;
     holdWatchedDelete = true;
     enteredWatchedDelete = false;
@@ -320,6 +321,16 @@ void retirementRevokesCreditBeforeBackingFree() {
     expect(wait([&] { return budget.snapshot().totalHostClaimBytes == 0; }) &&
                budget.snapshot().hostCapacityBytes == 64 && freedWhileCharged,
            "completed free releases the claim without restoring unsampled OS headroom");
+    budget.tightenHostCapacity(upperBoundCalculatedBeforeFree, false,
+                               std::chrono::steady_clock::time_point::max());
+    expect(budget.snapshot().hostCapacityBytes == 64 && budget.snapshot().hostReady,
+           "duplicate bound computed before retirement cannot restore revoked capacity");
+    budget.tightenHostCapacity(upperBoundCalculatedBeforeFree, true,
+                               std::chrono::steady_clock::time_point::min());
+    budget.tightenHostCapacity(upperBoundCalculatedBeforeFree, false,
+                               std::chrono::steady_clock::time_point::max());
+    expect(budget.snapshot().hostCapacityBytes == 64 && !budget.snapshot().hostReady,
+           "stale delivery closes readiness and a later duplicate cannot reopen it");
     clearObservation();
 }
 void capacityFailureWatermark() {

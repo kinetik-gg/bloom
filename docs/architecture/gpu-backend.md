@@ -1859,10 +1859,11 @@ queued for off-UI retirement remains materialized and charged until its worker s
 free. At that boundary, the root revokes the sample's remaining credit before deallocation while
 the charge stays held through the completed free. Retirement between sampling and delivery is
 deducted atomically when the capacity is applied; a fresh OS sample is needed to restore capacity
-afterward because allocator page retention need not raise measured free space. Measured zero, stale
-or incomplete delivery, cancellation and unproven retirement
-retain their existing fail-closed behavior. This reconciliation does not measure allocator overhead,
-whole-process RSS or GPU driver commitment.
+afterward because allocator page retention need not raise measured free space. Duplicate and stale
+delivery tighten capacity under the same root lock as retirement, so they cannot restore revoked
+credit or reopen readiness. Measured zero, stale or incomplete delivery, cancellation and unproven
+retirement retain their existing fail-closed behavior. This reconciliation does not measure
+allocator overhead, whole-process RSS or GPU driver commitment.
 
 ### Resident request cancellation and failure retirement (G2E)
 

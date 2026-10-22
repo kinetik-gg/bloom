@@ -130,13 +130,10 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
             finiteProcessCeiling_ = finiteProcessCeiling_
                                         ? std::min<std::uint64_t>(*finiteProcessCeiling_, *finite)
                                         : *finite;
-            const auto current = budget_.snapshot();
             const auto compensated = addSaturating(*finite, duplicateCredit);
-            if (current.hostCapacityBytes && compensated < *current.hostCapacityBytes) {
-                budget_.setHostCapacity(compensated, current.hostReady,
-                                        hostSampleAt_.value_or(Clock::time_point::min()) +
-                                            std::chrono::seconds(10));
-            }
+            budget_.tightenHostCapacity(compensated, false,
+                                       hostSampleAt_.value_or(Clock::time_point::min()) +
+                                           std::chrono::seconds(10));
         }
         return;
     }
@@ -198,7 +195,7 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
     } else if (finiteProcessCeiling_ && *finiteProcessCeiling_ == 0) {
         allowance.emplace(0);
     }
-    if (allowance && *allowance != 0 && (!complete || !fresh || sample.awaitingProcessSample)) {
+    if (allowance && *allowance != 0 && fresh && (!complete || sample.awaitingProcessSample)) {
         const auto current = budget_.snapshot().hostCapacityBytes;
         allowance = current ? std::optional{std::min(*allowance, *current)} : std::nullopt;
     }
@@ -213,7 +210,7 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
         budget_.setSampledHostCapacity(allowance, ready, validUntil, backingCredit,
                                        retiredBytesAtSample);
     else
-        budget_.setHostCapacity(allowance, ready, validUntil);
+        budget_.tightenHostCapacity(allowance, true, validUntil);
 }
 void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
                                                const std::size_t physicalBytes,

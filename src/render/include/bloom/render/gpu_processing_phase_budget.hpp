@@ -266,6 +266,10 @@ class GpuProcessingPhaseBudget final {
                                 std::chrono::steady_clock::time_point validUntil,
                                 std::uint64_t creditBytes,
                                 std::uint64_t retiredBytesAtSample) noexcept;
+    // Duplicate/stale delivery may tighten an existing capacity only. Keep its current readiness
+    // and expiry for a duplicate; a stale delivery closes readiness at the supplied deadline.
+    void tightenHostCapacity(std::optional<std::uint64_t> upperBound, bool closeReadiness,
+                             std::chrono::steady_clock::time_point validUntil) noexcept;
     void setDeviceCapacity(std::optional<std::uint64_t> bytes, bool ready) noexcept;
     [[nodiscard]] GpuProcessingPhaseSnapshot snapshot() const noexcept;
     [[nodiscard]] RootedHostBackingSnapshot rootedHostBackingSnapshot() const noexcept;
