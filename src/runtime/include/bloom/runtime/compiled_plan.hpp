@@ -194,7 +194,16 @@ struct FileTransformKernel final {
     std::optional<document::AssetRecord> asset;
     friend bool operator==(const FileTransformKernel&, const FileTransformKernel&) = default;
 };
-using ImageEffectKernel = std::variant<IdentityImageKernel, CstKernel, FileTransformKernel>;
+// Scene-linear, straight-RGB affine effects. The sampled parameter is absent for Invert.
+// Every mode preserves alpha and all image windows; no display-referred clamp is implied.
+enum class PointwiseImageEffect : std::uint8_t { Exposure, Offset, Multiply, Invert };
+struct PointwiseImageKernel final {
+    PointwiseImageEffect effect = PointwiseImageEffect::Invert;
+    std::optional<CompiledScalarParameter> amount;
+    friend bool operator==(const PointwiseImageKernel&, const PointwiseImageKernel&) = default;
+};
+using ImageEffectKernel =
+    std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel>;
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
     OperationIndex input;

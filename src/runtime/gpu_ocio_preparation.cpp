@@ -56,6 +56,8 @@ void appendF64(std::vector<std::byte>& bytes, const double value) {
     appendText(bytes, transform.view);
     appendF64(bytes, transform.exposure);
     appendF64(bytes, transform.contrast);
+    appendF64(bytes, static_cast<double>(transform.affineScale));
+    appendF64(bytes, static_cast<double>(transform.affineOffset));
     // FileTransform content identity: the exact LUT content digest and format plus the requested
     // interpolation/direction and the process/working space ids.
     if (transform.lutFile != nullptr) {
@@ -247,6 +249,9 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
             return color::buildOcioGpuProgramForFileTransform(
                 config, *transform.lutFile, transform.interpolation, transform.direction,
                 transform.processSpaceId, transform.workingSpaceId, {}, cancel);
+        case GpuOcioTransformKind::PointwiseAffine:
+            return color::buildOcioGpuProgramForPointwiseAffine(
+                config, transform.affineScale, transform.affineOffset);
         }
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
     }();

@@ -241,7 +241,9 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kTextLetterSpacingParameterSchemaKey ||
            schemaKey == kAudioLevelParameterSchemaKey ||
            schemaKey == "bloom.composition-source.time-offset" ||
-           schemaKey == "bloom.composition-source.time-scale";
+           schemaKey == "bloom.composition-source.time-scale" ||
+           schemaKey == "bloom.exposure.stops" || schemaKey == "bloom.offset.amount" ||
+           schemaKey == "bloom.multiply.factor";
 }
 
 // The Color4d-valued animatable schemas (task S5): a solid's colour and a text layer's colour.

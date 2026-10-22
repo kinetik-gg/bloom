@@ -81,6 +81,8 @@ using bloom::runtime::EvaluationRequest;
 using bloom::runtime::GpuCoverageFixtureCriterion;
 using bloom::runtime::ImageEffectKernel;
 using bloom::runtime::OperationIndex;
+using bloom::runtime::PointwiseImageEffect;
+using bloom::runtime::PointwiseImageKernel;
 using bloom::runtime::PreparedGpuSceneDiagnosticCode;
 
 using bloom::gpu_coverage_gate::classifyFixtureExecution;
@@ -341,6 +343,16 @@ displayProofRunner(const bool customView) {
         "effect.FileTransformKernel", GpuCoverageFixtureCriterion::Prepared,
         "src/color OCIO image effect tests", [] { return runFileTransformFixture(102000); }, {},
         FixturePrerequisite::PackagedShaderTools);
+    const auto pointwise = [](const PointwiseImageEffect kind, const double value,
+                              const std::uint64_t idBase) {
+        return PointwiseImageKernel{
+            kind, CompiledScalarParameter{ParameterId::fromRaw(idBase + 1), value}};
+    };
+    add("effect.PointwiseImageKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime pointwise image effect tests", [pointwise] {
+            return runBuilder(effectPlan(pointwise(PointwiseImageEffect::Exposure, 1.25, 103100),
+                                         103100));
+        }, {}, FixturePrerequisite::PackagedShaderTools);
 
     // Every one of the eight blend modes is emitted by the real production builder now: Normal
     // stays the retained SourceOver merge, every other mode an explicit BlendV1 fold.
@@ -480,16 +492,26 @@ displayProofRunner(const bool customView) {
         "node.bloom.ocio-file-transform", GpuCoverageFixtureCriterion::Prepared,
         "src/color OCIO image effect tests", [] { return runFileTransformFixture(109000); }, {},
         FixturePrerequisite::PackagedShaderTools);
-    addImageEffectPlan(
-        "node.bloom.multiply",
-        bloom::runtime::PointwiseImageKernel{
-            bloom::runtime::PointwiseImageEffect::Multiply,
-            CompiledScalarParameter{ParameterId::fromRaw(114001), -2.0}},
-        114000, "src/runtime pointwise image effect parity tests");
-    addImageEffectPlan(
-        "node.bloom.invert",
-        bloom::runtime::PointwiseImageKernel{bloom::runtime::PointwiseImageEffect::Invert, {}},
-        114100, "src/runtime pointwise image effect parity tests");
+    add("node.bloom.exposure", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime pointwise image effect tests", [pointwise] {
+            return runBuilder(effectPlan(pointwise(PointwiseImageEffect::Exposure, 1.25, 110100),
+                                         110100));
+        }, {}, FixturePrerequisite::PackagedShaderTools);
+    add("node.bloom.offset", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime pointwise image effect tests", [pointwise] {
+            return runBuilder(effectPlan(pointwise(PointwiseImageEffect::Offset, -0.35, 110200),
+                                         110200));
+        }, {}, FixturePrerequisite::PackagedShaderTools);
+    add("node.bloom.multiply", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime pointwise image effect parity tests", [pointwise] {
+            return runBuilder(effectPlan(pointwise(PointwiseImageEffect::Multiply, -2.0, 114000),
+                                         114000));
+        }, {}, FixturePrerequisite::PackagedShaderTools);
+    add("node.bloom.invert", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime pointwise image effect parity tests", [] {
+            return runBuilder(effectPlan(
+                bloom::runtime::PointwiseImageKernel{PointwiseImageEffect::Invert, {}}, 114100));
+        }, {}, FixturePrerequisite::PackagedShaderTools);
     return list;
 }
 

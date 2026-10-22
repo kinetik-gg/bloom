@@ -195,6 +195,9 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             ? node_editor::displayTypeName(definition_.role)
         : isInputColorSpaceSchema(definition_.schemaKey)             ? tr("Input colour space")
         : definition_.schemaKey == document::kTextParameterSchemaKey ? tr("Text")
+        : definition_.schemaKey == "bloom.exposure.stops" ? tr("Exposure (stops)")
+        : definition_.schemaKey == "bloom.offset.amount" ? tr("Offset")
+        : definition_.schemaKey == "bloom.multiply.factor" ? tr("Factor")
         : definition_.schemaKey == document::kTextAlignmentParameterSchemaKey ? tr("Text Alignment")
         : definition_.schemaKey == document::kTextLineHeightParameterSchemaKey ? tr("Line Height")
         : definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey

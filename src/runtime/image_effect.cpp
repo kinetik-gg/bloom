@@ -62,10 +62,25 @@ processorFailure(const color::OcioColorSpaceProcessorError error) {
 PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effect,
                                                 const EvaluationColorIntent& intent,
                                                 const std::filesystem::path& base,
-                                                const CancellationToken& cancellation) {
+                                                const CancellationToken& cancellation,
+                                                const std::optional<double> pointwiseAmount) {
     if (effect.bypass || std::holds_alternative<IdentityImageKernel>(effect.kernel))
         return {};
     PreparedImageEffect prepared;
+    if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel)) {
+        prepared.pointwise = pointwiseAffine(*pointwise, pointwiseAmount);
+        if (!prepared.pointwise) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                          "Pointwise effect parameter cannot be represented");
+            return prepared;
+        }
+        OperationKey pointwiseKey;
+        pointwiseKey.add(pointwise->effect);
+        pointwiseKey.add(static_cast<double>(prepared.pointwise->scale));
+        pointwiseKey.add(static_cast<double>(prepared.pointwise->offset));
+        prepared.cacheIdentity = pointwiseKey.bytes();
+        return prepared;
+    }
     OperationKey key;
     key.add(std::string(intent.ocioConfigUri));
     const auto revision = intent.ocioConfigRevision.toLowercaseHex();
@@ -231,6 +246,14 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                 result.diagnostic = refusal(EvaluationDiagnosticCode::ColorTransformFailed,
                                             "OCIO could not return finite working RGB");
                 return result;
+            }
+            if (effect.pointwise) {
+                for (auto& pixel : straight) {
+                    for (std::size_t channel = 0; channel < 3; ++channel) {
+                        pixel[channel] = pixel[channel] * effect.pointwise->scale +
+                                         effect.pointwise->offset;
+                    }
+                }
             }
             for (std::size_t i = 0; i < count; ++i) {
                 const auto alpha = (*source.value())[x + i].alpha();

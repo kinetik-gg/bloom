@@ -81,6 +81,52 @@ bool samePixels(const runtime::EvaluationResult& a, const runtime::EvaluationRes
                               b.frame()->processImage().pixels());
 }
 
+void testExposureAndOffset() {
+    runtime::CpuCompositionEvaluator evaluator;
+    const auto baseline = planWith({});
+    const auto baselineResult = evaluator.evaluate(baseline, requestFor(*baseline), {});
+    const auto amount = [](const runtime::PointwiseImageEffect kind, const double value) {
+        return runtime::PointwiseImageKernel{
+            kind, runtime::CompiledScalarParameter{document::ParameterId::fromRaw(90), value}};
+    };
+    for (const auto kind : {runtime::PointwiseImageEffect::Exposure,
+                            runtime::PointwiseImageEffect::Offset}) {
+        const auto neutral = planWith({amount(kind, 0.0)});
+        const auto result = evaluator.evaluate(neutral, requestFor(*neutral), {});
+        expect(samePixels(result, baselineResult), "neutral pointwise effects preserve pixels");
+    }
+    const auto check = [&](const runtime::PointwiseImageEffect kind, const double value,
+                           const std::array<float, 3> expected) {
+        const auto plan = planWith({amount(kind, value)});
+        const auto cold = evaluator.evaluate(plan, requestFor(*plan), {});
+        const auto warm = evaluator.evaluate(plan, requestFor(*plan), {});
+        expect(cold.frame() && cold.diagnostics().empty(),
+               "pointwise effect evaluates without diagnostic");
+        expect(samePixels(cold, warm), "pointwise warm memo preserves exact pixels");
+        if (!cold.frame())
+            return;
+        bool foundContent = false;
+        for (const auto pixel : cold.frame()->processImage().pixels()) {
+            if (pixel.alpha() == 0.0F) {
+                expect(pixel.red() == 0.0F && pixel.green() == 0.0F && pixel.blue() == 0.0F,
+                       "transparent pointwise output remains black");
+                continue;
+            }
+            foundContent = true;
+            expect(pixel.alpha() == 0.5F &&
+                       std::abs(pixel.red() - expected[0]) < 1e-6F &&
+                       std::abs(pixel.green() - expected[1]) < 1e-6F &&
+                       std::abs(pixel.blue() - expected[2]) < 1e-6F,
+                   "pointwise effect preserves signed HDR straight-RGB and alpha semantics");
+        }
+        expect(foundContent, "pointwise fixture has visible content");
+    };
+    check(runtime::PointwiseImageEffect::Exposure, 1.0,
+          {-0.125F, 0.18F, 2.0F});
+    check(runtime::PointwiseImageEffect::Offset, -0.25,
+          {-0.1875F, -0.035F, 0.875F});
+}
+
 void testCst() {
     runtime::CpuCompositionEvaluator evaluator;
     const auto source = planWith({});
@@ -379,6 +425,7 @@ void testMultiplyAndInvert() {
 int main() {
     try {
         testCst();
+        testExposureAndOffset();
         testLookBypass();
         testFileTransform();
         testMultiplyAndInvert();

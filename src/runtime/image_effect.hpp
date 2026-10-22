@@ -1,5 +1,7 @@
 #pragma once
 
+#include "pointwise_image_effect.hpp"
+
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -9,6 +11,7 @@
 namespace bloom::runtime::detail {
 
 struct PreparedImageEffect final {
+    std::optional<PointwiseAffine> pointwise;
     std::shared_ptr<const color::CpuColorSpaceProcessor> processor;
     std::shared_ptr<const color::CpuColorSpaceProcessor> afterProcessor;
     std::shared_ptr<const color::CpuFileTransformProcessor> fileProcessor;
@@ -16,7 +19,8 @@ struct PreparedImageEffect final {
     std::string cacheIdentity;
     bool cancelled = false;
     [[nodiscard]] bool identity() const noexcept {
-        return !diagnostic && !cancelled ? (!processor || processor->isIdentity()) &&
+        return !diagnostic && !cancelled ? (!pointwise || pointwise->identity()) &&
+                                               (!processor || processor->isIdentity()) &&
                                                (!afterProcessor || afterProcessor->isIdentity()) &&
                                                (!fileProcessor || fileProcessor->isIdentity())
                                          : true;
@@ -30,7 +34,8 @@ class ImageEffectContext final {
     [[nodiscard]] PreparedImageEffect prepare(const CompiledImageEffect& effect,
                                               const EvaluationColorIntent& intent,
                                               const std::filesystem::path& base = {},
-                                              const CancellationToken& cancellation = {});
+                                              const CancellationToken& cancellation = {},
+                                              std::optional<double> pointwiseAmount = {});
 
   private:
     std::mutex mutex_;

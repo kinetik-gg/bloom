@@ -23,6 +23,7 @@
 #include "gpu_scene_vector_emission.hpp"
 #include "input_color_context.hpp"
 #include "layer_parent_transform.hpp"
+#include "pointwise_image_effect.hpp"
 
 #include <bloom/media/image.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
@@ -182,9 +183,10 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     }
     const auto* cst = std::get_if<CstKernel>(&effect.kernel);
     const auto* file = std::get_if<FileTransformKernel>(&effect.kernel);
-    if (cst == nullptr && file == nullptr) {
+    const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel);
+    if (cst == nullptr && file == nullptr && pointwise == nullptr) {
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
-                    "An image effect kernel is not a supported colour transform");
+                    "An image effect kernel is not supported");
     }
 
     const std::string working{request.colorIntent.workingColorSpaceId};
@@ -195,7 +197,30 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     // Resolve the exact CPU chain for this kernel, short-circuiting every case the CPU treats as an
     // identity passthrough before any geometry or GPU work happens.
     std::vector<GpuOcioTransformSpec> legs;
-    if (cst != nullptr) {
+    if (pointwise != nullptr) {
+        std::optional<double> amount;
+        if (pointwise->amount.has_value()) {
+            const auto sampled = resolveParameter(*pointwise->amount, plan, resolved);
+            if (!sampled) {
+                return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                            "Pointwise effect amount is not evaluable");
+            }
+            amount = sampled->value;
+        }
+        const auto affine = pointwiseAffine(*pointwise, amount);
+        if (!affine) {
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                        "Pointwise effect amount cannot be represented");
+        }
+        if (affine->identity()) {
+            return identity();
+        }
+        GpuOcioTransformSpec leg;
+        leg.kind = GpuOcioTransformKind::PointwiseAffine;
+        leg.affineScale = affine->scale;
+        leg.affineOffset = affine->offset;
+        legs.push_back(std::move(leg));
+    } else if (cst != nullptr) {
         const std::string from = cst->fromId.empty() ? working : cst->fromId;
         const std::string to = cst->toId.empty() ? working : cst->toId;
         if (from == to) {

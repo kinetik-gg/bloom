@@ -102,6 +102,7 @@ BLOOM_GPU_REQUIRED_OPERATION(CompiledImageEffect, "image effect");
 BLOOM_GPU_REQUIRED_EFFECT(IdentityImageKernel, "identity image effect kernel");
 BLOOM_GPU_REQUIRED_EFFECT(CstKernel, "colour-space transform kernel");
 BLOOM_GPU_REQUIRED_EFFECT(FileTransformKernel, "file transform kernel");
+BLOOM_GPU_REQUIRED_EFFECT(PointwiseImageKernel, "scene-linear pointwise image effect kernel");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT

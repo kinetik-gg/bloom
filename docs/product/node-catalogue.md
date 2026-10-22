@@ -101,8 +101,8 @@ keeps display transforms out of scene/process pixels.
 | --- | --- | --- |
 | `C1` | OCIO Colour Space Transform | Built: reusable image-effect lowering, exact-config source/destination spaces, working-space defaults, alpha-preserving conversion and typed pass-through diagnostics |
 | `C1` | OCIO File Transform | Built: LUT assets, working/process-space conversion, interpolation, direction and look bypass; supervised Linux execution, typed unavailable fallback on macOS/Windows |
-| `C1` | Exposure | Scene-linear light scaling |
-| `C1` | Offset, Multiply | Scene-linear RGB with unchanged alpha; no implicit clamp. Multiply factor 1 is neutral, including for negative and HDR RGB. |
+| `C1` | Exposure | Built: stops scale scene-linear straight RGB by `2^stops`; alpha is preserved |
+| `C1` | Offset, Multiply | Built: scene-linear straight RGB with unchanged alpha and no implicit clamp. Offset adds an amount; Multiply scales by a factor with neutral value 1, including for negative and HDR RGB. |
 | `C1` | Lift/Gamma/Gain | Explicit grading model and working space |
 | `C1` | Contrast, Pivot | Declared pivot and processing space |
 | `C1` | Levels | Explicit black/white points, gamma, channel policy, and optional clamp |

@@ -112,3 +112,55 @@ void testMultiplyInvertLowering(Expectations& expectations) {
             "Multiply and Invert retain typed operation, neutral factor and node identity");
     }
 }
+
+void testExposureOffsetLowering(Expectations& expectations) {
+    using namespace document;
+    for (const auto* type : {"bloom.exposure", "bloom.offset"}) {
+        auto project = makeProject(singleLayerOptions());
+        auto* composition = project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        const auto effectId = NodeId::fromRaw(920);
+        const auto* definition = builtInNodeDefinitions().find(type, 1);
+        require(definition != nullptr && definition->parameters.size() == 1,
+                "pointwise definition exists with one scalar control");
+        const auto parameterId = ParameterId::fromRaw(920);
+        require(composition->parameters().insert(
+                    {parameterId, definition->parameters.front().schemaKey,
+                     ConstantValueSource{1.25}}),
+                "pointwise amount is valid");
+        require(graph.addNode({effectId, definition->key.typeId, {{"amount", parameterId}}, 1}),
+                "pointwise node is accepted");
+        require(graph.eraseEdge(kFirstSourceEdge), "source edge is removed");
+        require(graph.addEdge(
+                    {kFirstSourceEdge, {kFirstSolidNode, "image"}, NodeInputRef{effectId, "input"}}),
+                "source feeds pointwise effect");
+        require(graph.addEdge(
+                    {EdgeId::fromRaw(920), {effectId, "image"},
+                     NodeInputRef{kFirstLayerNode, std::string(kLayerOutputContentInputPort)}}),
+                "pointwise effect feeds Layer");
+        expectations.expect(project.validate().ok(), "pointwise graph is valid document truth");
+        runtime::NodeDefinitionRegistry registry;
+        require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+        registry.freeze();
+        const auto result = compile(std::move(project), registry);
+        expectations.expect(result.plan != nullptr, "pointwise graph compiles");
+        if (!result.plan)
+            continue;
+        const auto effect = std::ranges::find_if(result.plan->operations(), [](const auto& operation) {
+            return std::holds_alternative<runtime::CompiledImageEffect>(operation);
+        });
+        expectations.expect(effect != result.plan->operations().end(),
+                            "pointwise lowers through image-effect operation");
+        if (effect == result.plan->operations().end())
+            continue;
+        const auto& lowered = std::get<runtime::CompiledImageEffect>(*effect);
+        const auto* kernel = std::get_if<runtime::PointwiseImageKernel>(&lowered.kernel);
+        expectations.expect(kernel && kernel->amount &&
+                                kernel->effect ==
+                                    (std::string_view(type) == "bloom.exposure"
+                                         ? runtime::PointwiseImageEffect::Exposure
+                                         : runtime::PointwiseImageEffect::Offset) &&
+                                kernel->amount->id == parameterId,
+                            "pointwise lowering retains mode and editable parameter identity");
+    }
+}

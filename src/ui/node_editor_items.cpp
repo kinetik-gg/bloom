@@ -100,6 +100,16 @@ std::span<const QString> nodeCategoryOrder() {
 }
 
 QString displayTypeName(const std::string_view typeId) {
+    if (typeId == "bloom.exposure")
+        return QCoreApplication::translate("node_editor", "Exposure");
+    if (typeId == "bloom.offset")
+        return QCoreApplication::translate("node_editor", "Offset");
+    if (typeId == "bloom.multiply")
+        return QCoreApplication::translate("node_editor", "Multiply");
+    if (typeId == "bloom.invert")
+        return QCoreApplication::translate("node_editor", "Invert");
+    if (typeId == "amount")
+        return QCoreApplication::translate("node_editor", "Amount");
     if (typeId == "bloom.ocio-colour-space-transform")
         return QCoreApplication::translate("node_editor", "OCIO Colour Space Transform");
     if (typeId == "bloom.ocio-file-transform")

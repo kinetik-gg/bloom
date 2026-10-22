@@ -349,6 +349,15 @@ enum class ScalarDomain : std::uint8_t {
             },
             [index, &plan, &failure](const CompiledImageEffect& effect) {
                 bool validKernel = true;
+                if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel)) {
+                    const bool invert = pointwise->effect == PointwiseImageEffect::Invert;
+                    validKernel = static_cast<std::uint8_t>(pointwise->effect) <=
+                                      static_cast<std::uint8_t>(PointwiseImageEffect::Invert) &&
+                                  (invert ? !pointwise->amount
+                                          : pointwise->amount.has_value() &&
+                                                hasValidScalarCurveReference(*pointwise->amount,
+                                                                             plan, index, failure));
+                }
                 if (const auto* file = std::get_if<FileTransformKernel>(&effect.kernel))
                     validKernel = file->interpolation >= 0 && file->interpolation <= 2 &&
                                   file->direction >= 0 && file->direction <= 1 &&
@@ -1648,10 +1657,19 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             }
             std::optional<detail::PreparedImageEffect> preparedEffect;
             if (const auto* effect = std::get_if<CompiledImageEffect>(&plan->operations()[index])) {
+                std::optional<double> pointwiseAmount;
+                if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect->kernel);
+                    pointwise && pointwise->amount) {
+                    const auto sampled =
+                        detail::resolveParameter(*pointwise->amount, *plan, resolved);
+                    if (sampled)
+                        pointwiseAmount = sampled->value;
+                }
                 preparedEffect = request.bypassLookNodes && effect->look
                                      ? detail::PreparedImageEffect{}
                                      : imageEffectContext()->prepare(*effect, request.colorIntent,
-                                                                     mediaBase, cancellation);
+                                                                     mediaBase, cancellation,
+                                                                     pointwiseAmount);
                 if (preparedEffect->cancelled)
                     return EvaluationResult::cancelled();
                 if (preparedEffect->diagnostic) {
@@ -1835,6 +1853,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             if (const auto* cst = std::get_if<CstKernel>(&step.kernel)) {
                                 key.add(cst->fromId);
                                 key.add(cst->toId);
+                            }
+                            if (const auto* pointwise =
+                                    std::get_if<PointwiseImageKernel>(&step.kernel)) {
+                                key.add(pointwise->effect);
+                                if (pointwise->amount)
+                                    parameter(*pointwise->amount);
                             }
                             if (const auto* file = std::get_if<FileTransformKernel>(&step.kernel)) {
                                 key.add(file->lutAssetId);

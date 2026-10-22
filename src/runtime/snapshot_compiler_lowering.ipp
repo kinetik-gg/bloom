@@ -643,6 +643,25 @@ lowerImageEffect(const document::NodeRecord& node,
         addTopologyFailure(node.id, "Image effect input could not be lowered.");
         return std::nullopt;
     }
+    const auto pointwise = [&]() -> std::optional<runtime::PointwiseImageEffect> {
+        if (node.typeId == "bloom.exposure")
+            return runtime::PointwiseImageEffect::Exposure;
+        if (node.typeId == "bloom.offset")
+            return runtime::PointwiseImageEffect::Offset;
+        if (node.typeId == "bloom.multiply")
+            return runtime::PointwiseImageEffect::Multiply;
+        if (node.typeId == "bloom.invert")
+            return runtime::PointwiseImageEffect::Invert;
+        return std::nullopt;
+    }();
+    if (pointwise) {
+        if (*pointwise == runtime::PointwiseImageEffect::Invert)
+            return runtime::CompiledImageEffect{node.id, *input,
+                                                runtime::PointwiseImageKernel{*pointwise, {}}};
+        if (const auto amount = compiledScalarParameter(findParameterBinding(node, "amount")))
+            return runtime::CompiledImageEffect{
+                node.id, *input, runtime::PointwiseImageKernel{*pointwise, *amount}};
+    }
     if (node.typeId == "bloom.ocio-colour-space-transform") {
         const auto* from = parameterConstant<std::string>(findParameterBinding(node, "from"));
         const auto* to = parameterConstant<std::string>(findParameterBinding(node, "to"));

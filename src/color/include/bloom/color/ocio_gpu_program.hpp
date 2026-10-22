@@ -26,6 +26,8 @@ inline constexpr std::string_view kOcioGpuFileTransformSemanticsId =
 inline constexpr std::string_view kOcioGpuExposureContrastSemanticsId =
     "bloom.color.ocio-process-exposure-contrast.v1";
 inline constexpr std::string_view kOcioGpuLut3dSemanticsId = "bloom.color.ocio-process-lut3d.v1";
+inline constexpr std::string_view kOcioGpuPointwiseAffineSemanticsId =
+    "bloom.color.ocio-process-pointwise-affine.v1";
 
 // Versioned precise-sampling and CPU-math-parity GLSL adapter. OCIO's generated body samples its
 // LUT resources with the built-in `texture()` function, whose hardware linear filtering quantizes
@@ -91,6 +93,12 @@ buildOcioGpuProgramForDisplay(const ResolvedBloomNeutralConfig& resolved, std::s
 buildOcioGpuProgramForCst(const ResolvedBloomNeutralConfig& resolved, std::string_view fromId,
                           std::string_view toId,
                           const render::OcioGpuProgramLimits& limits = {}) noexcept;
+
+// Exact scene-linear RGB scale and offset, extracted from OCIO MatrixTransform. Alpha remains
+// unchanged by the production ProcessEffect wrapper, including transparent pixels.
+[[nodiscard]] render::OcioGpuProgramResult buildOcioGpuProgramForPointwiseAffine(
+    const ResolvedBloomNeutralConfig& resolved, float scale, float offset,
+    const render::OcioGpuProgramLimits& limits = {}) noexcept;
 
 // File transform extraction. Arbitrary `.cube`/`.clf`/`.spi1d`/`.spi3d` bytes are never parsed
 // in-process: the exact bytes and their digest are handed to the isolated bloom-color-worker, which

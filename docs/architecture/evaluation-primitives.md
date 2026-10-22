@@ -638,6 +638,15 @@ uses cancellable chunks, and diagnostics survive warm frame memo hits. The proce
 is skipped for a proven identity LUT to retain bit identity. Canonical identity `.cube` tables
 with the default unit domain are exact no-ops, including negative and HDR input.
 
+`PointwiseImageKernel` adds scene-linear affine RGB processing. Exposure samples an animatable
+amount in stops and scales straight RGB by `2^stops`; Offset samples an animatable amount and adds
+it to each straight RGB channel. Both preserve alpha and the input data/display windows, leave
+negative and HDR RGB unclamped, and turn transparent black into transparent black. A zero amount
+is an exact identity. The sampled value and binary32 affine coefficients enter the effect cache
+identity. The CPU reference uses cancellable row chunks; GPU preparation extracts an OCIO
+`MatrixTransform` from the same coefficients and emits a resident `ProcessEffect` command through
+the existing bounded scene executor. A preparation failure takes the explicit CPU fallback.
+
 The plan also carries `bypass` and `look`; `EvaluationRequest::bypassLookNodes` skips only marked
 nodes. Bypass shares upstream image storage and bounds. Active colour transforms materialize the
 RGBA32F image, transform straight RGB, then restore the original alpha association. Alpha zero

@@ -129,8 +129,10 @@ template <typename Definition>
     using namespace bloom::document;
     switch (definition.lowering) {
     case NodeLoweringKind::ImageEffect:
-        return definition.inputs ==
-                   std::vector<InputPortDefinition>{{"input", SocketValueKind::Image}} &&
+        return (definition.inputs ==
+                    std::vector<InputPortDefinition>{{"input", SocketValueKind::Image}} ||
+                (hasLeadingImageInput(definition, "input") &&
+                 hasParameterSockets(definition, 1))) &&
                definition.outputs ==
                    std::vector<OutputPortDefinition>{{"image", SocketValueKind::Image}} &&
                !definition.layerSlotInput && !definition.audioLayerSlotInput;
@@ -513,6 +515,24 @@ template <typename Definition>
         NodeCategory::Color};
 }
 
+[[nodiscard]] NodeDefinition pointwiseImageDefinition(const char* typeId, const char* parameterKey,
+                                                       const double neutral) {
+    NodeDefinition definition{{typeId, 1},
+                              NodeLoweringKind::ImageEffect,
+                              {{"input", SocketValueKind::Image}},
+                              {{"image", SocketValueKind::Image}},
+                              {},
+                              std::nullopt,
+                              NodeCardinality::Many,
+                              NodeCategory::Color};
+    if (parameterKey != nullptr) {
+        definition.parameters.push_back(
+            {"amount", parameterKey, ParameterValueKind::Float64, true, true, neutral});
+        definition.inputs.push_back({"amount", SocketValueKind::Scalar, false});
+    }
+    return definition;
+}
+
 [[nodiscard]] NodeDefinition imageDefinition() {
     using namespace bloom::document;
     return {
@@ -717,6 +737,10 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
                                             imageDefinition(),
                                             cstDefinition(),
                                             fileTransformDefinition(),
+                                            pointwiseImageDefinition("bloom.exposure", "bloom.exposure.stops", 0.0),
+                                            pointwiseImageDefinition("bloom.offset", "bloom.offset.amount", 0.0),
+                                            pointwiseImageDefinition("bloom.multiply", "bloom.multiply.factor", 1.0),
+                                            pointwiseImageDefinition("bloom.invert", nullptr, 0.0),
                                             videoDefinition(),
                                             audioDefinition(),
                                             compositionSourceDefinition()};
