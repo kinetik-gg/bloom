@@ -135,7 +135,7 @@ panel menus or the composition context menu.
 | --- | --- |
 | Search field text | Filters the tree by composition name, case-insensitively |
 | View > Expand All / Collapse All | Expands or collapses the asset tree |
-| Add > New Composition… | Opens the name, size, frame-rate, and duration dialog (duration entered in Frames or Seconds), then adds one composition through the command path |
+| Add > New Composition… | Opens the name, size, exact frame-rate, and duration dialog, then adds one composition through the command path. Frame rate accepts a positive integer or `numerator/denominator` with positive 32-bit components; presets include 24, 25, 30, 24000/1001, 30000/1001, and 60000/1001. Duration accepts whole Frames or positive decimal/rational Seconds. Switching units preserves the exact duration. Changing rate in Frames preserves the displayed integer frame count; changing rate in Seconds preserves the exact time. Values that cannot be represented by the document's rational types show an inline error and disable Add |
 | Add > New Folder | Disabled; tooltip: `Folders arrive with asset organisation` |
 | Select > All / None | Selects all visible rows or clears the selection |
 | Double-click a composition | Switches the shared `CompositionSession` to that composition |

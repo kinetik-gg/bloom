@@ -2,11 +2,12 @@
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
-#include <memory>
 
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/core/safe_parse.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/project.hpp>
@@ -14,7 +15,6 @@
 
 #include <QDialog>
 #include <QDialogButtonBox>
-#include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QInputDialog>
@@ -25,10 +25,14 @@
 #include <QSpinBox>
 #include <QWidget>
 
-#include <cmath>
+#include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
 
 namespace bloom::ui {
 namespace {
@@ -49,87 +53,189 @@ namespace {
 
 // The unit the Duration field is entered in. Frames is the default; Seconds is offered beside it so
 // the artist can author a duration however they think about it. The two are the same value seen in
-// different units: switching converts the field so the resulting composition duration is unchanged
-// (up to frame precision), it never silently changes the length.
+// different units: switching re-displays the exact canonical duration and never silently changes
+// its value.
 enum class DurationUnit : std::uint8_t { Frames, Seconds };
 
-// Seconds are carried to microseconds so a fractional entry is exact and safe: 0.001 s is 1000/1e6,
-// which reduces, and the value round-trips through toSeconds() without a float remainder.
-constexpr std::int64_t kSecondsDenominator = 1'000'000;
-
-// The largest whole-frame count the dialog models; matches the Frames field's range.
-constexpr std::int64_t kMaxFrames = 1'000'000;
-
-// Rounds a double to a bounded int64 without invoking std::llround's out-of-range undefined
-// behavior. Values at or outside [minimum, maximum] clamp to the nearer bound, so an inherited
-// extreme (but valid) duration can be displayed safely.
-[[nodiscard]] std::int64_t clampedRound(const double value, const std::int64_t minimum,
-                                        const std::int64_t maximum) noexcept {
-    const auto low = static_cast<double>(minimum);
-    const auto high = static_cast<double>(maximum);
-    if (!std::isfinite(value) || value <= low) {
-        return minimum;
-    }
-    if (value >= high) {
-        return maximum;
-    }
-    return std::llround(value);
+[[nodiscard]] std::optional<std::int64_t> positiveInteger(const std::string_view text) {
+    const auto value = core::parseInteger(text, 10);
+    return value && *value > 0 ? value : std::nullopt;
 }
 
-// The exact composition duration a field value names in `unit` at `rate`, or nullopt when the value
-// is not representable (nonpositive, or outside int64). Frames are integer by construction; seconds
-// are converted at microsecond precision.
-[[nodiscard]] std::optional<core::RationalTime>
-durationForValue(const double value, const DurationUnit unit, const document::FrameRate rate) {
-    if (unit == DurationUnit::Frames) {
-        if (!std::isfinite(value) || value < 1.0) {
-            return std::nullopt;
-        }
-        const auto frames = clampedRound(value, 1, kMaxFrames);
-        const auto rateDenominator = static_cast<std::int64_t>(rate.denominator());
-        const auto rateNumerator = static_cast<std::int64_t>(rate.numerator());
-        if (rateNumerator <= 0 || rateDenominator <= 0 ||
-            frames > std::numeric_limits<std::int64_t>::max() / rateDenominator) {
-            return std::nullopt;
-        }
-        return core::RationalTime::create(frames * rateDenominator, rateNumerator);
-    }
-    if (!std::isfinite(value) || value <= 0.0) {
-        return std::nullopt;
-    }
-    const auto microseconds = value * static_cast<double>(kSecondsDenominator);
-    if (!std::isfinite(microseconds) || microseconds < 1.0 ||
-        microseconds > static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
-        return std::nullopt;
-    }
-    return core::RationalTime::create(std::llround(microseconds), kSecondsDenominator);
+[[nodiscard]] bool positiveDigitText(const std::string_view value) {
+    const auto text = core::trimAsciiWhitespace(value);
+    return !text.empty() && text.find_first_not_of("0123456789") == std::string_view::npos &&
+           text.find_first_not_of('0') != std::string_view::npos;
 }
 
-// The field value that displays `duration` in `unit` at `rate`. Frames round to the nearest whole
-// frame and clamp to the field's range; seconds are returned exactly (the field's own decimal
-// precision rounds only the display).
-[[nodiscard]] double displayValueForDuration(const core::RationalTime duration,
-                                             const DurationUnit unit,
-                                             const document::FrameRate rate) {
-    const double seconds = duration.toSeconds();
-    if (unit == DurationUnit::Seconds) {
-        return std::isfinite(seconds) ? seconds : 1.0 / static_cast<double>(kSecondsDenominator);
+[[nodiscard]] bool positiveRateSyntax(const QString& text) {
+    const auto value = text.toUtf8().toStdString();
+    const auto slash = value.find('/');
+    return positiveDigitText(std::string_view(value).substr(0, slash)) &&
+           (slash == std::string::npos ||
+            positiveDigitText(std::string_view(value).substr(slash + 1)));
+}
+
+[[nodiscard]] bool positiveSecondsSyntax(const QString& text) {
+    const auto value = std::string(core::trimAsciiWhitespace(text.toUtf8().toStdString()));
+    const auto slash = value.find('/');
+    if (slash != std::string::npos)
+        return positiveDigitText(std::string_view(value).substr(0, slash)) &&
+               positiveDigitText(std::string_view(value).substr(slash + 1));
+    const auto point = value.find('.');
+    if (point == std::string::npos)
+        return positiveDigitText(value);
+    const auto whole = std::string_view(value).substr(0, point);
+    const auto fraction = std::string_view(value).substr(point + 1);
+    return !fraction.empty() && whole.find_first_not_of("0123456789") == std::string_view::npos &&
+           fraction.find_first_not_of("0123456789") == std::string_view::npos &&
+           (whole.find_first_not_of('0') != std::string_view::npos ||
+            fraction.find_first_not_of('0') != std::string_view::npos);
+}
+
+[[nodiscard]] std::optional<document::FrameRate> parseRate(const QString& text) {
+    const auto value = text.toUtf8().toStdString();
+    const auto slash = value.find('/');
+    const auto numerator = positiveInteger(std::string_view(value).substr(0, slash));
+    const auto denominator = slash == std::string::npos
+                                 ? std::optional<std::int64_t>{1}
+                                 : positiveInteger(std::string_view(value).substr(slash + 1));
+    constexpr auto maximum = std::numeric_limits<std::uint32_t>::max();
+    if (!numerator || !denominator || *numerator > maximum || *denominator > maximum)
+        return std::nullopt;
+    return document::FrameRate::create(static_cast<std::uint32_t>(*numerator),
+                                       static_cast<std::uint32_t>(*denominator));
+}
+
+[[nodiscard]] QString rateText(const document::FrameRate rate) {
+    const auto numerator = QString::number(rate.numerator());
+    return rate.denominator() == 1
+               ? numerator
+               : numerator + QLatin1Char('/') + QString::number(rate.denominator());
+}
+
+[[nodiscard]] std::optional<core::RationalTime> durationForFrames(const std::int64_t count,
+                                                                  const document::FrameRate rate) {
+    if (count <= 0)
+        return std::nullopt;
+    const auto divisor =
+        std::gcd(static_cast<std::uint64_t>(count), static_cast<std::uint64_t>(rate.numerator()));
+    const auto reduced = static_cast<std::uint64_t>(count) / divisor;
+    if (reduced >
+        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) / rate.denominator())
+        return std::nullopt;
+    return core::RationalTime::create(static_cast<std::int64_t>(reduced * rate.denominator()),
+                                      static_cast<std::int64_t>(rate.numerator() / divisor));
+}
+
+// Divide a decimal integer by a small factor without constructing a wider machine integer.
+void divideDecimal(std::string& digits, const unsigned factor) {
+    unsigned remainder = 0;
+    for (char& digit : digits) {
+        const unsigned current = remainder * 10 + static_cast<unsigned>(digit - '0');
+        digit = static_cast<char>('0' + current / factor);
+        remainder = current % factor;
     }
-    const auto rateNumerator = static_cast<double>(rate.numerator());
-    const auto rateDenominator = static_cast<double>(rate.denominator());
-    if (rateNumerator <= 0.0 || rateDenominator <= 0.0) {
-        return 1.0;
+    digits.erase(0, digits.find_first_not_of('0'));
+}
+
+[[nodiscard]] std::optional<core::RationalTime> parseSeconds(const QString& text) {
+    const auto value = std::string(core::trimAsciiWhitespace(text.toUtf8().toStdString()));
+    const auto slash = value.find('/');
+    if (slash != std::string::npos) {
+        const auto numerator = positiveInteger(std::string_view(value).substr(0, slash));
+        const auto denominator = positiveInteger(std::string_view(value).substr(slash + 1));
+        return numerator && denominator ? core::RationalTime::create(*numerator, *denominator)
+                                        : std::nullopt;
     }
-    const double frames = seconds * rateNumerator / rateDenominator;
-    return static_cast<double>(clampedRound(frames, 1, kMaxFrames));
+    const auto point = value.find('.');
+    std::string whole = value.substr(0, point);
+    std::string fraction = point == std::string::npos ? std::string{} : value.substr(point + 1);
+    if (whole.empty())
+        whole = "0";
+    if (whole.find_first_not_of("0123456789") != std::string::npos ||
+        fraction.find_first_not_of("0123456789") != std::string::npos ||
+        (point != std::string::npos && fraction.empty()))
+        return std::nullopt;
+    while (!fraction.empty() && fraction.back() == '0')
+        fraction.pop_back();
+    // After trailing zeros are removed the final digit lacks either a factor of two or five.
+    // More than 62 fractional places therefore leaves at least 2^63 or 5^63 in the reduced
+    // denominator, which cannot fit RationalTime's positive signed denominator.
+    if (fraction.size() > 62)
+        return std::nullopt;
+    std::string digits = whole + fraction;
+    digits.erase(0, digits.find_first_not_of('0'));
+    if (digits.empty())
+        return std::nullopt;
+    auto twos = fraction.size();
+    auto fives = fraction.size();
+    while (twos > 0 && ((digits.back() - '0') % 2) == 0) {
+        divideDecimal(digits, 2);
+        --twos;
+    }
+    while (fives > 0 && ((digits.back() - '0') % 5) == 0) {
+        divideDecimal(digits, 5);
+        --fives;
+    }
+    std::int64_t denominator = 1;
+    constexpr auto maximum = std::numeric_limits<std::int64_t>::max();
+    for (std::size_t index = 0; index < twos; ++index) {
+        if (denominator > maximum / 2)
+            return std::nullopt;
+        denominator *= 2;
+    }
+    for (std::size_t index = 0; index < fives; ++index) {
+        if (denominator > maximum / 5)
+            return std::nullopt;
+        denominator *= 5;
+    }
+    const auto numerator = positiveInteger(digits);
+    return numerator ? core::RationalTime::create(*numerator, denominator) : std::nullopt;
+}
+
+[[nodiscard]] QString secondsText(const core::RationalTime duration) {
+    const auto numerator = QString::number(static_cast<qlonglong>(duration.numerator()));
+    return duration.denominator() == 1
+               ? numerator
+               : numerator + QLatin1Char('/') +
+                     QString::number(static_cast<qlonglong>(duration.denominator()));
+}
+
+[[nodiscard]] std::optional<std::int64_t> frameCountForDuration(const core::RationalTime duration,
+                                                                const document::FrameRate rate) {
+    const auto mapping =
+        core::FrameTimeMapping::create(duration, rate.numerator(), rate.denominator());
+    if (!mapping)
+        return std::nullopt;
+    const auto floor = mapping.value()->frameOffsetForTime(duration);
+    if (!floor || *floor > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+        return std::nullopt;
+    // Use the existing exact nearest-frame mapping when an enlarged interval is representable.
+    // A huge inherited duration can still show its exact floor without converting via double.
+    if (duration.numerator() <= std::numeric_limits<std::int64_t>::max() - duration.denominator()) {
+        const auto enlarged = core::RationalTime::create(
+            duration.numerator() + duration.denominator(), duration.denominator());
+        if (enlarged) {
+            const auto longer =
+                core::FrameTimeMapping::create(*enlarged, rate.numerator(), rate.denominator());
+            if (longer) {
+                const auto nearest = longer.value()->nearestFrameIndex(duration);
+                if (nearest <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+                    return std::max<std::int64_t>(1, static_cast<std::int64_t>(nearest));
+            }
+        }
+    }
+    return std::max<std::int64_t>(1, static_cast<std::int64_t>(*floor));
 }
 
 struct NewCompositionFields final {
     QLineEdit* name = nullptr;
     QSpinBox* width = nullptr;
     QSpinBox* height = nullptr;
-    QDoubleSpinBox* frameRate = nullptr;
-    QDoubleSpinBox* duration = nullptr;
+    QLineEdit* frameRate = nullptr;
+    kit::KDropdown* ratePresets = nullptr;
+    QLineEdit* duration = nullptr;
     kit::KDropdown* durationUnit = nullptr;
     kit::KColorChip* background = nullptr;
     QLabel* error = nullptr;
@@ -166,29 +272,31 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
     fields.height->setValue(static_cast<int>(currentFormat.height()));
     form->addRow(QObject::tr("Height"), fields.height);
     const auto inheritedRate = currentFormat.frameRate();
-    fields.frameRate = new QDoubleSpinBox(&dialog);
+    fields.frameRate = new kit::KLineEdit(&dialog);
     fields.frameRate->setObjectName(QStringLiteral("assetsFrameRateField"));
-    fields.frameRate->setDecimals(3);
-    fields.frameRate->setRange(0.001, 1000.0);
-    fields.frameRate->setSingleStep(1.0);
-    fields.frameRate->setKeyboardTracking(false);
-    {
-        // Display the inherited rate precisely enough to read (29.970 for 30000/1001) instead of
-        // truncating it to a whole number. The exact rational is kept until the artist edits it.
-        const QSignalBlocker blocker(fields.frameRate);
-        fields.frameRate->setValue(static_cast<double>(inheritedRate.numerator()) /
-                                   static_cast<double>(inheritedRate.denominator()));
-    }
-    form->addRow(QObject::tr("Frame rate (fps)"), fields.frameRate);
+    fields.frameRate->setText(rateText(inheritedRate));
+    fields.frameRate->setPlaceholderText(QObject::tr("24 or 30000/1001"));
+    fields.ratePresets = new kit::KDropdown(&dialog);
+    fields.ratePresets->setObjectName(QStringLiteral("assetsFrameRatePresetDropdown"));
+    fields.ratePresets->addItem(QObject::tr("Custom"), QString{});
+    for (const auto* preset : {"24", "25", "30", "24000/1001", "30000/1001", "60000/1001"})
+        fields.ratePresets->addItem(QString::fromLatin1(preset), QString::fromLatin1(preset));
+    const auto inheritedPreset = fields.ratePresets->findData(rateText(inheritedRate));
+    fields.ratePresets->setCurrentIndex(inheritedPreset < 0 ? 0 : inheritedPreset);
+    auto* rateRow = new QWidget(&dialog);
+    auto* rateLayout = new QHBoxLayout(rateRow);
+    rateLayout->setContentsMargins(0, 0, 0, 0);
+    rateLayout->addWidget(fields.frameRate, 1);
+    rateLayout->addWidget(fields.ratePresets);
+    form->addRow(QObject::tr("Frame rate (fps)"), rateRow);
 
     // Duration + unit selector on one row (label "Duration", numeric field, unit dropdown). The
     // default is the current composition's own duration when one exists, otherwise ten seconds --
     // which the Frames default shows as 10 * fps frames, never ten frames by accident.
     const auto initialDuration =
         current == nullptr ? core::RationalTime::fromInteger(10) : current->duration();
-    fields.duration = new QDoubleSpinBox(&dialog);
+    fields.duration = new kit::KLineEdit(&dialog);
     fields.duration->setObjectName(QStringLiteral("assetsDurationField"));
-    fields.duration->setKeyboardTracking(false);
     fields.durationUnit = new kit::KDropdown(&dialog);
     fields.durationUnit->setObjectName(QStringLiteral("assetsDurationUnitDropdown"));
     fields.durationUnit->addItem(QObject::tr("Frames"), QStringLiteral("frames"));
@@ -219,59 +327,53 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
 
     fields.buttons->button(QDialogButtonBox::Ok)->setObjectName(QStringLiteral("assetsDialogOk"));
 
-    // The exact duration the dialog authors. It changes only on a numeric edit or a frame-rate
-    // change -- never on a unit switch, which only re-displays the same canonical duration in the
-    // other unit. That keeps one frame at 24 fps exactly 1/24 across Frames -> Seconds -> Frames
-    // instead of degrading to a rounded microsecond count.
+    // The exact duration the dialog authors. Unit changes only re-display this rational value;
+    // a rate change in Frames re-divides the exact integer count shown in the field.
     std::optional<core::RationalTime> canonicalDuration = initialDuration;
+    core::RationalTime lastValidDuration = initialDuration;
     DurationUnit unit = DurationUnit::Frames;
-    bool frameRateEdited = false;
-
-    const auto effectiveRate = [&]() -> document::FrameRate {
-        if (!frameRateEdited) {
-            return inheritedRate;
-        }
-        // The artist's typed rate at millifps precision, reduced to lowest terms.
-        const auto numerator =
-            clampedRound(fields.frameRate->value() * 1000.0, 1, std::int64_t{1000} * 1000);
-        return document::FrameRate::create(static_cast<std::uint32_t>(numerator), 1000)
-            .value_or(inheritedRate);
-    };
     const auto currentUnit = [&fields] {
         return fields.durationUnit->currentData().toString() == QStringLiteral("seconds")
                    ? DurationUnit::Seconds
                    : DurationUnit::Frames;
     };
-    // Applies the numeric field's range/decimals/step to the active unit WITHOUT changing its
-    // value.
     const auto configureValueField = [&fields](const DurationUnit next) {
-        const QSignalBlocker blocker(fields.duration);
-        if (next == DurationUnit::Frames) {
-            fields.duration->setDecimals(0);
-            fields.duration->setRange(1.0, static_cast<double>(kMaxFrames));
-            fields.duration->setSingleStep(1.0);
-        } else {
-            fields.duration->setDecimals(6);
-            fields.duration->setRange(1.0 / static_cast<double>(kSecondsDenominator), 1'000'000.0);
-            fields.duration->setSingleStep(0.1);
-        }
+        fields.duration->setPlaceholderText(next == DurationUnit::Frames
+                                                ? QObject::tr("Whole frames")
+                                                : QObject::tr("Seconds or an exact fraction"));
     };
-    // Re-displays the canonical duration in the active unit; the field's own precision rounds only
-    // the display, never the stored value.
     const auto displayCanonical = [&] {
         if (!canonicalDuration.has_value()) {
             return;
         }
         const QSignalBlocker blocker(fields.duration);
-        fields.duration->setValue(
-            displayValueForDuration(*canonicalDuration, unit, effectiveRate()));
+        if (unit == DurationUnit::Seconds) {
+            fields.duration->setText(secondsText(*canonicalDuration));
+            return;
+        }
+        const auto rate = parseRate(fields.frameRate->text());
+        const auto frames = rate ? frameCountForDuration(*canonicalDuration, *rate) : std::nullopt;
+        fields.duration->setText(frames ? QString::number(static_cast<qlonglong>(*frames))
+                                        : QString{});
     };
-    // Enables OK only for a representable duration and reports the reason when not.
     const auto refreshValidity = [&] {
-        const bool valid = canonicalDuration.has_value();
-        if (!valid) {
+        const auto rate = parseRate(fields.frameRate->text());
+        const bool valid = rate.has_value() && canonicalDuration.has_value();
+        if (!rate) {
             fields.error->setText(
-                QObject::tr("Enter a duration greater than zero and within the supported range."));
+                positiveRateSyntax(fields.frameRate->text())
+                    ? QObject::tr("Frame-rate numerator and denominator must fit 32 bits.")
+                    : QObject::tr("Enter a positive frame rate as N or N/D."));
+            fields.error->show();
+        } else if (!canonicalDuration) {
+            const bool overflow =
+                unit == DurationUnit::Frames
+                    ? positiveDigitText(fields.duration->text().toUtf8().toStdString())
+                    : positiveSecondsSyntax(fields.duration->text());
+            fields.error->setText(
+                overflow
+                    ? QObject::tr("Duration exceeds the signed rational-time range at this rate.")
+                    : QObject::tr("Enter a positive duration in the selected unit."));
             fields.error->show();
         } else {
             fields.error->hide();
@@ -285,22 +387,40 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
 
     QObject::connect(fields.durationUnit, &kit::KDropdown::currentIndexChanged, &dialog, [&](int) {
         unit = currentUnit();
+        if (!canonicalDuration)
+            canonicalDuration = lastValidDuration;
         configureValueField(unit);
         displayCanonical(); // same canonical duration, expressed in the new unit
         refreshValidity();
     });
-    // A frame-rate change keeps the entered number: in Frames the exact frame count is re-divided
-    // by the new rate, in Seconds the exact seconds are unchanged.
-    QObject::connect(fields.frameRate, &QDoubleSpinBox::valueChanged, &dialog, [&](double) {
-        frameRateEdited = true;
+    QObject::connect(fields.frameRate, &QLineEdit::textChanged, &dialog, [&](const QString& text) {
+        const QSignalBlocker blocker(fields.ratePresets);
+        const auto selected = fields.ratePresets->findData(text);
+        fields.ratePresets->setCurrentIndex(selected < 0 ? 0 : selected);
         if (unit == DurationUnit::Frames) {
-            canonicalDuration = durationForValue(fields.duration->value(), unit, effectiveRate());
+            const auto count = positiveInteger(fields.duration->text().toUtf8().toStdString());
+            const auto rate = parseRate(text);
+            canonicalDuration = count && rate ? durationForFrames(*count, *rate) : std::nullopt;
+            if (canonicalDuration)
+                lastValidDuration = *canonicalDuration;
         }
         refreshValidity();
     });
-    // A numeric edit replaces the canonical duration with the exact value the artist entered.
-    QObject::connect(fields.duration, &QDoubleSpinBox::valueChanged, &dialog, [&](double) {
-        canonicalDuration = durationForValue(fields.duration->value(), unit, effectiveRate());
+    QObject::connect(fields.ratePresets, &kit::KDropdown::currentIndexChanged, &dialog, [&](int) {
+        const auto preset = fields.ratePresets->currentData().toString();
+        if (!preset.isEmpty())
+            fields.frameRate->setText(preset);
+    });
+    QObject::connect(fields.duration, &QLineEdit::textChanged, &dialog, [&](const QString& text) {
+        if (unit == DurationUnit::Seconds) {
+            canonicalDuration = parseSeconds(text);
+        } else {
+            const auto count = positiveInteger(text.toUtf8().toStdString());
+            const auto rate = parseRate(fields.frameRate->text());
+            canonicalDuration = count && rate ? durationForFrames(*count, *rate) : std::nullopt;
+        }
+        if (canonicalDuration)
+            lastValidDuration = *canonicalDuration;
         refreshValidity();
     });
     QObject::connect(fields.buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
@@ -319,11 +439,12 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
         return std::nullopt;
     }
 
-    const auto rate = effectiveRate();
+    const auto rate = parseRate(fields.frameRate->text());
     const auto format = document::CompositionFormat::create(
         static_cast<std::uint32_t>(fields.width->value()),
-        static_cast<std::uint32_t>(fields.height->value()), currentFormat.pixelAspect(), rate);
-    if (!format.has_value() || !canonicalDuration.has_value()) {
+        static_cast<std::uint32_t>(fields.height->value()), currentFormat.pixelAspect(),
+        rate.value_or(inheritedRate));
+    if (!rate || !format.has_value() || !canonicalDuration.has_value()) {
         return std::nullopt;
     }
     const auto duration = *canonicalDuration;
@@ -331,7 +452,7 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
     commands::Transaction transaction(QStringLiteral("Add Composition").toStdString(),
                                       session.snapshot().revision());
     transaction.emplace<commands::AddComposition>(
-        fields.name->text().toStdString(), *format, rate, duration,
+        fields.name->text().toStdString(), *format, *rate, duration,
         core::Color4d{static_cast<double>(fields.background->color().red),
                       static_cast<double>(fields.background->color().green),
                       static_cast<double>(fields.background->color().blue),
