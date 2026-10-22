@@ -142,6 +142,10 @@ gate, so production service-backed RAM fill defaults to width one. See the
 
 The detailed implementation status and next merge gates live in [`roadmap.md`](roadmap.md).
 
+The [performance and reliability sprint](plans/performance-reliability-sprint.md) tracks the ordered
+node, recovery, RAM preview, cache, audio, media and document work under #306, with
+[local milestone validation](development/local-validation.md).
+
 See [Export](user-guide/exporting-video.md) for composition export presets, audio,
 verification and cancellation.
 
