@@ -152,6 +152,16 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
                 display = job.source->displayWindow;
                 aspect = job.source->pixelAspect;
             }
+            if (const auto* affine = std::get_if<GpuBatchAffine>(&operations[index]);
+                affine && affine->outputDescriptor) {
+                if (affine->outputDescriptor->dataWindow() != *window) {
+                    fail(GpuOperationBatchCode::InvalidRequest,
+                         "batch affine output descriptor disagrees with its data window");
+                    return false;
+                }
+                display = affine->outputDescriptor->displayWindow();
+                aspect = affine->outputDescriptor->pixelAspect();
+            }
             requestedMetadata = sizeof(std::uint32_t);
             const auto width = window->extent().width();
             const auto height = window->extent().height();

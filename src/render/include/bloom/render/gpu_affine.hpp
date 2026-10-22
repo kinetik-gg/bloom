@@ -147,6 +147,8 @@ struct GpuAffineMatrixParameters final {
     ImageWindow outputWindow;
     GpuAffineMatrix matrix;
     float opacity = 1.0F;
+    // Resize/Fit can author a new display extent/PAR; ordinary layer placements inherit.
+    std::optional<Rgba32fImageDescriptor> outputDescriptor{};
 };
 
 // Per-call ceilings. Defaults are effectively unbounded so the real bounds are the live device

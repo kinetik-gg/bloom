@@ -507,6 +507,34 @@ void testValidityQuery(TestContext& test) {
                 "queries leave all live truth, allocator, revision and history untouched");
 }
 
+void testResizeFitParameters(TestContext& test) {
+    for (const auto* type : {"bloom.resize", "bloom.fit"}) {
+        Fixture fixture;
+        const auto result = exercise<AddNode>(test, fixture, type, Vec2d{});
+        const auto width = result.outputId<ParameterId>("parameter.width");
+        const auto aspect = result.outputId<ParameterId>("parameter.pixelAspectNumerator");
+        const auto filter = result.outputId<ParameterId>("parameter.filter");
+        if (!width || !aspect || !filter)
+            throw std::logic_error("Resize/Fit exposes registered control identities");
+        (void)exercise<SetParameterSource>(test, fixture, *width,
+                                           ConstantValueSource{std::int64_t{2048}});
+        (void)exercise<SetParameterSource>(test, fixture, *aspect,
+                                           ConstantValueSource{std::int64_t{2}});
+        refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *width,
+                                   ConstantValueSource{std::int64_t{0}});
+        refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *aspect,
+                                   ConstantValueSource{std::int64_t{0}});
+        refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *filter,
+                                   ConstantValueSource{std::int64_t{1}});
+        if (const auto policy = result.outputId<ParameterId>("parameter.policy")) {
+            (void)exercise<SetParameterSource>(test, fixture, *policy,
+                                               ConstantValueSource{std::int64_t{1}});
+            refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *policy,
+                                       ConstantValueSource{std::int64_t{2}});
+        }
+    }
+}
+
 void testAddAndLayout(TestContext& test) {
     Fixture fixture;
     for (const auto& definition : builtInNodeDefinitions().definitions()) {
@@ -1429,6 +1457,7 @@ int main() {
         bloom::commands::test::testLayerRanges(test);
         bloom::commands::test::testValidityQuery(test);
         bloom::commands::test::testAddAndLayout(test);
+        bloom::commands::test::testResizeFitParameters(test);
         bloom::commands::test::testNewNodePlacementDoesNotMoveExistingCards(test);
         bloom::commands::test::testWiringAndRename(test);
         bloom::commands::test::testRemoveAndDissolve(test);

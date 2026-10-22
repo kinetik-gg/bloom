@@ -3,6 +3,7 @@
 #include "discrete_image_effect.hpp"
 #include "input_color_context.hpp"
 #include "operation_key.hpp"
+#include "resize_fit_geometry.hpp"
 
 #include <algorithm>
 #include <array>
@@ -58,6 +59,10 @@ processorFailure(const color::OcioColorSpaceProcessorError error) {
     }
     return refusal(EvaluationDiagnosticCode::ColorTransformFailed, "TransformBuildFailed");
 }
+[[nodiscard]] EvaluationDiagnostic spatialFailure(const EvaluationDiagnosticCode code,
+                                                  std::string reason) {
+    return {code, DiagnosticSeverity::Error, {}, "Resize/Fit: " + reason, std::move(reason)};
+}
 } // namespace
 
 PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effect,
@@ -90,6 +95,10 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
         pointwiseKey.add(static_cast<double>(prepared.pointwise->scale));
         pointwiseKey.add(static_cast<double>(prepared.pointwise->offset));
         prepared.cacheIdentity = pointwiseKey.bytes();
+        return prepared;
+    }
+    if (const auto* kernel = std::get_if<ResizeFitKernel>(&effect.kernel)) {
+        prepared.resizeFit = *kernel;
         return prepared;
     }
     OperationKey key;
@@ -192,11 +201,67 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                                    const render::Rgba32fImage& input, const std::size_t pixelBudget,
                                    const CancellationToken& cancellation,
                                    const OperationIndex operation,
-                                   const EvaluationProgressCallback& progress) {
+                                   const EvaluationProgressCallback& progress,
+                                   const double horizontalScale, const double verticalScale) {
     if (effect.discrete)
         return applyDiscreteImageEffect(*effect.discrete, input, pixelBudget, cancellation,
                                         operation, progress);
     ImageEffectResult result;
+    if (effect.resizeFit) {
+        if (cancellation.isCancellationRequested()) {
+            result.cancelled = true;
+            return result;
+        }
+        const auto geometry = resolveResizeFitGeometry(*effect.resizeFit, *input.descriptor(),
+                                                       horizontalScale, verticalScale);
+        if (!geometry) {
+            result.diagnostic = spatialFailure(EvaluationDiagnosticCode::InvalidParameter,
+                                               "Resize/Fit output geometry is not representable");
+            return result;
+        }
+        auto target = render::Rgba32fImageBuilder::create(geometry->descriptor, pixelBudget);
+        if (!target) {
+            result.diagnostic =
+                spatialFailure(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
+                               "Resize/Fit output exceeds the pixel storage budget");
+            return result;
+        }
+        const auto source = input.view();
+        if (!source) {
+            result.diagnostic = spatialFailure(EvaluationDiagnosticCode::InvalidPixel,
+                                               "Resize/Fit input image is invalid");
+            return result;
+        }
+        const auto window = geometry->descriptor.dataWindow();
+        const ParentedLayerTransform transform{geometry->matrix, input.descriptor()->dataWindow(),
+                                               1.0, 1.0, 1.0F};
+        for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
+            if (cancellation.isCancellationRequested()) {
+                result.cancelled = true;
+                return result;
+            }
+            const auto row = target.value()->row(y);
+            if (!row || transform.row(*source.value(), window, y, *row.value())) {
+                result.diagnostic = spatialFailure(EvaluationDiagnosticCode::InvalidPixel,
+                                                   "Resize/Fit produced an invalid row");
+                return result;
+            }
+            reportProgress(progress, {EvaluationProgressStage::Operation, operation,
+                                      static_cast<std::uint64_t>(y + 1), window.extent().height()});
+        }
+        if (cancellation.isCancellationRequested()) {
+            result.cancelled = true;
+            return result;
+        }
+        auto frozen = std::move(*target.value()).freeze();
+        if (!frozen) {
+            result.diagnostic = spatialFailure(EvaluationDiagnosticCode::InvalidPixel,
+                                               "Resize/Fit output validation failed");
+            return result;
+        }
+        result.image = std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
+        return result;
+    }
     auto builder = render::Rgba32fImageBuilder::create(*input.descriptor(), pixelBudget);
     if (!builder) {
         result.diagnostic = refusal(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,

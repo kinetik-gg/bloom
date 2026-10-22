@@ -175,9 +175,9 @@ struct CompiledCompositionSource final {
                            const CompiledCompositionSource&) = default;
 };
 
-// Colour effects preserve data/display windows and operate on straight RGB, preserving alpha.
-// Discrete image effects instead permute premultiplied samples and change data bounds. Identity and
-// bypass share the input storage exactly. This is the common lowering for subsequent image effects.
+// Colour kernels preserve windows/bounds and operate on straight RGB with preserved alpha.
+// Spatial kernels author output geometry and resample premultiplied RGBA directly. All publish
+// finite premultiplied RGBA32F. Identity and bypass share the input storage exactly.
 struct IdentityImageKernel final {
     friend bool operator==(const IdentityImageKernel&, const IdentityImageKernel&) = default;
 };
@@ -213,8 +213,20 @@ struct DiscreteImageKernel final {
     }
     friend bool operator==(const DiscreteImageKernel&, const DiscreteImageKernel&) = default;
 };
+// Constant output geometry. Resize stretches; Fit uses a physical-aspect-preserving fit/fill.
+// Bilinear is the initial explicitly versioned filter (0), shared with Layer Output.
+struct ResizeFitKernel final {
+    std::int64_t width = 1920;
+    std::int64_t height = 1080;
+    std::int64_t pixelAspectNumerator = 1;
+    std::int64_t pixelAspectDenominator = 1;
+    std::int64_t filter = 0;
+    // 0 = Resize (stretch), 1 = Fit (contain), 2 = Fill (cover).
+    std::int64_t policy = 0;
+    friend bool operator==(const ResizeFitKernel&, const ResizeFitKernel&) = default;
+};
 using ImageEffectKernel = std::variant<IdentityImageKernel, CstKernel, FileTransformKernel,
-                                       PointwiseImageKernel, DiscreteImageKernel>;
+                                       PointwiseImageKernel, DiscreteImageKernel, ResizeFitKernel>;
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
     OperationIndex input;

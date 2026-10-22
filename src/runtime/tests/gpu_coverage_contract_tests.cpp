@@ -335,6 +335,8 @@ displayProofRunner(const bool customView) {
 
     addImageEffectPlan("effect.IdentityImageKernel", bloom::runtime::IdentityImageKernel{}, 100000,
                        {});
+    addImageEffectPlan("effect.ResizeFitKernel", bloom::runtime::ResizeFitKernel{10, 7}, 103000,
+                       "src/runtime Resize/Fit production affine preparation");
     add(
         "effect.CstKernel", GpuCoverageFixtureCriterion::Prepared,
         "src/color OCIO image effect tests", [] { return runCstEffectFixture(101000); }, {},
@@ -453,6 +455,10 @@ displayProofRunner(const bool customView) {
     // explicit list cannot satisfy it, so it cannot reuse another node's fixture.
     add("node.bloom.solid-source", GpuCoverageFixtureCriterion::Prepared,
         "src/document node_definition_registry tests", [] { return runBuilder(basePlan()); });
+    addImageEffectPlan("node.bloom.resize", bloom::runtime::ResizeFitKernel{10, 7}, 104000,
+                       "src/runtime Resize production affine preparation");
+    addImageEffectPlan("node.bloom.fit", bloom::runtime::ResizeFitKernel{10, 7, 1, 1, 0, 1}, 105000,
+                       "src/runtime Fit production affine preparation");
     add("node.bloom.layer-output", GpuCoverageFixtureCriterion::Prepared,
         "src/document node_definition_registry tests", [] { return runBuilder(basePlan()); });
     add("node.bloom.layer-stack", GpuCoverageFixtureCriterion::Prepared,

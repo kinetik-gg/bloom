@@ -230,6 +230,11 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
     }
 
     if (const auto* affineCommand = std::get_if<GpuSceneAffineCommand>(&command)) {
+        if (affineCommand->outputDescriptor &&
+            (affineCommand->outputDescriptor->dataWindow() != affineCommand->outputWindow ||
+             affineCommand->outputDescriptor->pixelAspect() != affineCommand->pixelAspect))
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "an affine output descriptor disagrees with its geometry");
         if (!affineFieldsFinite(*affineCommand)) {
             color[index] = 2;
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
@@ -259,6 +264,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.outputWindow = affineCommand->outputWindow;
         step.affineMatrix = affineCommand->matrix;
         step.affineOpacity = affineCommand->opacity;
+        step.affineOutputDescriptor = affineCommand->outputDescriptor;
         steps.push_back(std::move(step));
         color[index] = 2;
         return {};

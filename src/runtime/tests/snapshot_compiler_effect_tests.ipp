@@ -1,7 +1,7 @@
 void testImageEffectLowering(Expectations& expectations) {
     using namespace document;
     for (const auto* type : {"bloom.ocio-colour-space-transform", "bloom.ocio-file-transform",
-                              "bloom.flip", "bloom.rotate-90"}) {
+                             "bloom.flip", "bloom.rotate-90", "bloom.resize", "bloom.fit"}) {
         auto project = makeProject(singleLayerOptions());
         auto* composition = project.findComposition(kCompositionId);
         auto& graph = composition->graph();
@@ -51,7 +51,9 @@ void testImageEffectLowering(Expectations& expectations) {
                              ? std::holds_alternative<runtime::DiscreteImageKernel>(lowered.kernel)
                          : std::string_view(type) == "bloom.ocio-colour-space-transform"
                              ? std::holds_alternative<runtime::CstKernel>(lowered.kernel)
-                             : std::holds_alternative<runtime::FileTransformKernel>(lowered.kernel)),
+                         : std::string_view(type) == "bloom.ocio-file-transform"
+                             ? std::holds_alternative<runtime::FileTransformKernel>(lowered.kernel)
+                             : std::holds_alternative<runtime::ResizeFitKernel>(lowered.kernel)),
                     "lowering preserves CST node identity and typed kernel");
             }
         }

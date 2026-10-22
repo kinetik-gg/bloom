@@ -13,6 +13,7 @@ namespace bloom::runtime::detail {
 struct PreparedImageEffect final {
     std::optional<PointwiseAffine> pointwise;
     std::optional<DiscreteImageKernel> discrete;
+    std::optional<ResizeFitKernel> resizeFit;
     std::shared_ptr<const color::CpuColorSpaceProcessor> processor;
     std::shared_ptr<const color::CpuColorSpaceProcessor> afterProcessor;
     std::shared_ptr<const color::CpuFileTransformProcessor> fileProcessor;
@@ -20,6 +21,8 @@ struct PreparedImageEffect final {
     std::string cacheIdentity;
     bool cancelled = false;
     [[nodiscard]] bool identity() const noexcept {
+        if (resizeFit)
+            return false;
         return !diagnostic && !cancelled
                    ? (!discrete || discrete->identity()) && (!pointwise || pointwise->identity()) &&
                          (!processor || processor->isIdentity()) &&
@@ -53,5 +56,6 @@ struct ImageEffectResult final {
 [[nodiscard]] ImageEffectResult
 applyImageEffect(const PreparedImageEffect& effect, const render::Rgba32fImage& input,
                  std::size_t pixelBudget, const CancellationToken& cancellation,
-                 OperationIndex operation, const EvaluationProgressCallback& progress);
+                 OperationIndex operation, const EvaluationProgressCallback& progress,
+                 double horizontalScale = 1.0, double verticalScale = 1.0);
 } // namespace bloom::runtime::detail

@@ -20,11 +20,13 @@
 //    takes the existing CPU reference path; it is never substituted with an identity result.
 
 #include "discrete_image_effect.hpp"
+#include "gpu_scene_layer_emission.hpp"
 #include "gpu_scene_preparation_common.hpp"
 #include "gpu_scene_vector_emission.hpp"
 #include "input_color_context.hpp"
 #include "layer_parent_transform.hpp"
 #include "pointwise_image_effect.hpp"
+#include "resize_fit_geometry.hpp"
 
 #include <bloom/media/image.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
@@ -76,8 +78,17 @@ gpuSceneCommandDescriptorOf(const std::vector<GpuSceneCommand>& commands,
     return std::visit(
         [&](const auto& item) -> std::optional<GpuSceneCommandDescriptor> {
             using T = std::decay_t<decltype(item)>;
-            if constexpr (std::is_same_v<T, GpuSceneTranslationCommand> ||
-                          std::is_same_v<T, GpuSceneAffineCommand>) {
+            if constexpr (std::is_same_v<T, GpuSceneAffineCommand>) {
+                if (item.outputDescriptor)
+                    return GpuSceneCommandDescriptor{item.outputWindow,
+                                                     item.outputDescriptor->displayWindow(),
+                                                     item.outputDescriptor->pixelAspect()};
+                const auto source = gpuSceneCommandDescriptorOf(commands, item.input, depth + 1);
+                if (!source)
+                    return std::nullopt;
+                return GpuSceneCommandDescriptor{item.outputWindow, source->display,
+                                                 source->pixelAspect};
+            } else if constexpr (std::is_same_v<T, GpuSceneTranslationCommand>) {
                 const auto source = gpuSceneCommandDescriptorOf(commands, item.input, depth + 1);
                 if (!source.has_value()) {
                     return std::nullopt;
@@ -148,6 +159,8 @@ struct GpuSceneEffectEmission final {
     bool consumedText = false;
     bool consumedShape = false;
 };
+
+#include "gpu_scene_resize_fit_emission.ipp"
 
 // Emits the scene command(s) for one reachable CompiledImageEffect. Returns nullopt on success and
 // a fail-closed failure otherwise.
@@ -241,6 +254,9 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         result.output = result.local;
         return std::nullopt;
     }
+    if (const auto* kernel = std::get_if<ResizeFitKernel>(&effect.kernel))
+        return emitResizeFitCommand(*kernel, effect.input, operationIndex, ctx, cancellation, emit,
+                                    charge, chargeCoverage, result);
     const auto* cst = std::get_if<CstKernel>(&effect.kernel);
     const auto* file = std::get_if<FileTransformKernel>(&effect.kernel);
     const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel);

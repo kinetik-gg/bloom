@@ -114,6 +114,14 @@ QString displayTypeName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Invert");
     if (typeId == "amount")
         return QCoreApplication::translate("node_editor", "Amount");
+    if (typeId == "bloom.resize")
+        return QCoreApplication::translate("node_editor", "Resize");
+    if (typeId == "bloom.fit")
+        return QCoreApplication::translate("node_editor", "Fit");
+    if (typeId == "pixelAspectNumerator")
+        return QCoreApplication::translate("node_editor", "Pixel Aspect Numerator");
+    if (typeId == "pixelAspectDenominator")
+        return QCoreApplication::translate("node_editor", "Pixel Aspect Denominator");
     if (typeId == "bloom.ocio-colour-space-transform")
         return QCoreApplication::translate("node_editor", "OCIO Colour Space Transform");
     if (typeId == "bloom.ocio-file-transform")

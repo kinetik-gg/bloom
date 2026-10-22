@@ -292,6 +292,44 @@ kernel in the stage; the translate-only case is a path inside this one.
   picture of the full-resolution frame, a rotated layer included, rather than pretending device
   pixels are square.
 
+### Resize And Fit
+
+`bloom.resize` and `bloom.fit` schema 1 lower through the image-effect boundary to the shared
+`ResizeFitKernel`. Resize stretches the input display canvas independently in X and Y. Fit defaults
+to centred Fit (contain); Fill (cover) instead crops centred overflow. Both compute physical aspect
+from the source and target pixel aspect ratios. Source data-window offsets and overscan remain
+sampling coordinates; they do not redefine the source display canvas.
+
+Both nodes expose constant width, height, pixel-aspect numerator/denominator, a Bilinear filter
+selector, and bypass. Fit also exposes Fit/Fill. Dimensions and ratio terms are positive integers
+up to 32768; zero, negative, unsupported filter/policy values, and driven/animated geometry are
+rejected. Bilinear is the only filter in this version. The generic registered-node commands provide
+Add, parameter edits, duplication, undo/redo, and project persistence; Properties reads these same
+schemas and selectors.
+
+The output data/display canvas starts at zero with the authored extent and PAR. A proxy scales the
+extent with ceiling and derives its exact PAR to preserve the authored physical aspect. The
+Composition Output still chooses the composition render extent. Fit letterboxes with transparent
+black; Fill clips to the target canvas. The existing inverse-mapped affine primitive interpolates
+premultiplied RGBA directly, preserving finite signed/HDR RGB and alpha, with transparent-black
+taps outside the source data window. This initial bilinear filter has no additional downsampling
+antialiasing prefilter.
+
+CPU and GPU share checked geometry. The CPU uses the existing parented affine row reference; GPU
+preparation emits resident `GpuSceneAffineCommand` work using `AffineBilinearV1`, including for
+preview and final-render evaluation. An optional checked output descriptor on individual and batched
+affine work carries the new display canvas/PAR without a pixel readback. Deferred vector inputs
+materialize through existing native coverage before this resample. No CPU-rendered Resize/Fit
+output is uploaded as a GPU implementation.
+
+Cache identity covers every geometry/filter/policy value, input identity, windows/PAR, proxy and ROI;
+the executor independently keys the actual affine map, output descriptor and shader. Spatial inputs
+retain full support for ROI requests. CPU work checks cancellation per row and before publication,
+reports row progress, and refuses invalid geometry or output-budget exhaustion. Native work uses
+the existing executor allocation, cancellation, cache pin and proven-retirement ownership. Native
+numeric parity, warm-cache and batch checks are included in the existing harnesses and remain
+subject to their device qualification; macOS/Windows retain the explicit CPU fallback contract.
+
 ### Blending
 
 The Layer Stack stage folds each entry through one blend kernel carrying that entry's own Layer Output

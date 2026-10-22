@@ -676,6 +676,24 @@ lowerImageEffect(const document::NodeRecord& node,
             return runtime::CompiledImageEffect{
                 node.id, *input, runtime::PointwiseImageKernel{*pointwise, *amount}};
     }
+    if (node.typeId == "bloom.resize" || node.typeId == "bloom.fit") {
+        const auto* width = parameterConstant<std::int64_t>(findParameterBinding(node, "width"));
+        const auto* height = parameterConstant<std::int64_t>(findParameterBinding(node, "height"));
+        const auto* numerator =
+            parameterConstant<std::int64_t>(findParameterBinding(node, "pixelAspectNumerator"));
+        const auto* denominator =
+            parameterConstant<std::int64_t>(findParameterBinding(node, "pixelAspectDenominator"));
+        const auto* filter = parameterConstant<std::int64_t>(findParameterBinding(node, "filter"));
+        const auto* bypass = parameterConstant<bool>(findParameterBinding(node, "bypass"));
+        const auto* policy = parameterConstant<std::int64_t>(findParameterBinding(node, "policy"));
+        if (width && height && numerator && denominator && filter && bypass &&
+            (node.typeId == "bloom.resize" || policy))
+            return runtime::CompiledImageEffect{
+                node.id, *input,
+                runtime::ResizeFitKernel{*width, *height, *numerator, *denominator, *filter,
+                                         node.typeId == "bloom.resize" ? 0 : *policy + 1},
+                *bypass};
+    }
     if (node.typeId == "bloom.ocio-colour-space-transform") {
         const auto* from = parameterConstant<std::string>(findParameterBinding(node, "from"));
         const auto* to = parameterConstant<std::string>(findParameterBinding(node, "to"));

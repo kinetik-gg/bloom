@@ -188,6 +188,29 @@ Authored authoredProject() {
     if (!authoredParameters) {
         throw std::runtime_error("fixture parameters");
     }
+    for (const auto* type : {"bloom.resize", "bloom.fit"}) {
+        const auto* definition = document::builtInNodeDefinitions().find(type, 1);
+        const auto nodeId = draft.ids().allocateNode();
+        if (!definition || !nodeId)
+            throw std::runtime_error("Resize/Fit persisted node definition");
+        std::vector<document::ParameterBinding> bindings;
+        for (const auto& parameter : definition->parameters) {
+            const auto id = draft.ids().allocateParameter();
+            auto value = parameter.defaultValue;
+            if (parameter.role == "width")
+                value = std::int64_t{2048};
+            if (parameter.role == "pixelAspectNumerator")
+                value = std::int64_t{2};
+            if (parameter.role == "policy")
+                value = std::int64_t{1};
+            if (!id || !composition.parameters().insert(
+                           {*id, parameter.schemaKey, document::ConstantValueSource{value}}))
+                throw std::runtime_error("Resize/Fit persisted parameter");
+            bindings.push_back({parameter.role, *id});
+        }
+        if (!graph.addNode({*nodeId, type, std::move(bindings), 1}))
+            throw std::runtime_error("Resize/Fit persisted node");
+    }
     if (!draft.validate().ok()) {
         throw std::runtime_error("fixture validation");
     }
@@ -261,6 +284,10 @@ void roundTripAndReopen() {
     }
 
     const auto* vector3 = composition->parameters().find(authored.vector3Parameter);
+    expect(std::ranges::equal(composition->graph().nodes(), original->graph().nodes()) &&
+               std::ranges::equal(composition->parameters().records(),
+                                  original->parameters().records()),
+           "Resize/Fit node identities, output size, PAR and Fill policy reopen exactly");
     const auto* vector3Constant =
         vector3 == nullptr ? nullptr : std::get_if<document::ConstantValueSource>(&vector3->source);
     const auto* vector3Value = vector3Constant == nullptr

@@ -65,7 +65,7 @@ level's dependencies.
 | Level | Planned nodes | Important behavior |
 | --- | --- | --- |
 | `F1` | Transform 2D | Position, anchor, scale, rotation, opacity, defined sampling, and transparent borders |
-| `F1` | Resize, Fit | Explicit output extent, pixel aspect, filter, and fit/fill policy |
+| `F1` | Resize, Fit | Built: explicit output extent and PAR, premultiplied bilinear resampling, centred Fit/Fill, shared CPU/GPU affine paths; constant geometry in schema 1, native qualification pending |
 | `C1` | Crop, Pad, Reformat | Preserve and deliberately change data/display windows and canvas semantics |
 | `C1` | Flip, Mirror, Rotate 90 | Flip and Rotate 90 v1 are built: exact pixel permutations, both Flip axes, signed integer clockwise quarter turns. Mirror remains a retained candidate. |
 | `C1` | Tile, Repeat | Defined edge and repeat modes |

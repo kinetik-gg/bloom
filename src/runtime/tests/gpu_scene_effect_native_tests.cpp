@@ -526,11 +526,71 @@ void runDiscrete(Expectations& expectations, GpuDevice& device, GpuSceneCache& c
     }
 }
 
+void runResizeFit(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    const CpuGpuSceneBuilder builder;
+    const CpuCompositionEvaluator evaluator;
+    for (const bloom::runtime::ResizeFitKernel kernel :
+         {bloom::runtime::ResizeFitKernel{8, 8}, bloom::runtime::ResizeFitKernel{8, 8, 1, 1, 0, 1},
+          bloom::runtime::ResizeFitKernel{8, 8, 1, 1, 0, 2},
+          bloom::runtime::ResizeFitKernel{16, 12, 2, 1, 0, 1}}) {
+        auto definition = effectPlan(CstKernel{}, 25000)->copyDefinition();
+        std::get<CompiledImageEffect>(definition.operations[1]).kernel = kernel;
+        const auto plan = std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+        for (const bool proxy : {false, true}) {
+            auto request = requestFor(*plan);
+            if (proxy) {
+                const auto extent = bloom::render::ImageExtent::create(6, 5);
+                request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+            }
+            const auto prepared = builder.build(plan, request);
+            const auto cpu = evaluator.evaluate(plan, request, {});
+            expectations.expect(prepared && cpu.frame(),
+                                "Resize/Fit native: production GPU/CPU routes prepare");
+            if (!prepared || !cpu.frame())
+                continue;
+            auto executor = GpuSceneExecutor::create(device, cache);
+            expectations.expect(executor.hasValue(), "Resize/Fit native: executor creates");
+            if (!executor)
+                continue;
+            const auto before = executor.executor->counters();
+            const auto cold = runScene(*executor.executor, prepared.scene);
+            const auto after = executor.executor->counters();
+            expectations.expect(
+                cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                    after.readbacks == before.readbacks,
+                "Resize/Fit native: resident evaluation completes without readback");
+            const auto pixels = cpu.frame()->processImage().pixels();
+            bool matches = cold.pixels.size() == pixels.size();
+            for (std::size_t i = 0; matches && i < pixels.size(); ++i)
+                for (std::size_t channel = 0; channel < 4; ++channel) {
+                    const float actual = cold.pixels[i].components()[channel];
+                    const float expected = pixels[i].components()[channel];
+                    matches =
+                        matches && std::isfinite(actual) &&
+                        std::abs(actual - expected) <= 2e-6F * std::max(1.0F, std::abs(expected));
+                    if (channel == 3 && (expected == 0 || expected == 1))
+                        matches = matches && actual == expected;
+                }
+            const auto& descriptor = *cpu.frame()->processImage().descriptor();
+            expectations.expect(matches && cold.dataWindow == descriptor.dataWindow() &&
+                                    cold.displayWindow == descriptor.displayWindow() &&
+                                    cold.pixelAspect == descriptor.pixelAspect(),
+                                "Resize/Fit native: pixels, alpha/HDR and geometry match CPU");
+            const auto warm = runScene(*executor.executor, prepared.scene);
+            expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                    executor.executor->counters().affineDispatches ==
+                                        after.affineDispatches,
+                                "Resize/Fit native: unchanged warm render runs no affine dispatch");
+        }
+    }
+}
+
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                const std::string& from, const std::string& to) {
     runCst(expectations, device, cache, from, to);
     runPointwise(expectations, device, cache);
     runDiscrete(expectations, device, cache);
+    runResizeFit(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
 #endif

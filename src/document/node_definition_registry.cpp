@@ -501,6 +501,33 @@ template <typename Definition>
         NodeCategory::Color};
 }
 
+[[nodiscard]] NodeDefinition resizeFitDefinition(const bool fit) {
+    NodeDefinition definition{
+        {fit ? "bloom.fit" : "bloom.resize", 1},
+        NodeLoweringKind::ImageEffect,
+        {{"input", SocketValueKind::Image}},
+        {{"image", SocketValueKind::Image}},
+        {{"width", "bloom.resize-fit.width", ParameterValueKind::Integer, true, false,
+          std::int64_t{1920}},
+         {"height", "bloom.resize-fit.height", ParameterValueKind::Integer, true, false,
+          std::int64_t{1080}},
+         {"pixelAspectNumerator", "bloom.resize-fit.pixel-aspect-numerator",
+          ParameterValueKind::Integer, true, false, std::int64_t{1}},
+         {"pixelAspectDenominator", "bloom.resize-fit.pixel-aspect-denominator",
+          ParameterValueKind::Integer, true, false, std::int64_t{1}},
+         {"filter", "bloom.resize-fit.filter", ParameterValueKind::Integer, true, false,
+          std::int64_t{0}},
+         {"bypass", "bloom.resize-fit.bypass", ParameterValueKind::Boolean, true, false, false}},
+        std::nullopt,
+        NodeCardinality::Many,
+        NodeCategory::Compositing};
+    if (fit)
+        definition.parameters.push_back({"policy", "bloom.resize-fit.policy",
+                                         ParameterValueKind::Integer, true, false,
+                                         std::int64_t{0}});
+    return definition;
+}
+
 [[nodiscard]] NodeDefinition cstDefinition() {
     return {
         {"bloom.ocio-colour-space-transform", 1},
@@ -766,6 +793,8 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         pointwiseImageDefinition("bloom.invert", nullptr, 0.0),
         discreteImageDefinition(false),
         discreteImageDefinition(true),
+        resizeFitDefinition(false),
+        resizeFitDefinition(true),
         videoDefinition(),
         audioDefinition(),
         compositionSourceDefinition()};

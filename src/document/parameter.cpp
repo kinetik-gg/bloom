@@ -244,6 +244,18 @@ constantMatchesSchema(const std::string_view schemaKey,
         return std::holds_alternative<bool>(constant.value);
     if (schemaKey == "bloom.rotate-90.quarter-turns")
         return std::holds_alternative<std::int64_t>(constant.value);
+    if (schemaKey.starts_with("bloom.resize-fit.")) {
+        if (schemaKey == "bloom.resize-fit.bypass")
+            return std::holds_alternative<bool>(constant.value);
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        if (!value)
+            return false;
+        if (schemaKey == "bloom.resize-fit.filter")
+            return *value == 0;
+        if (schemaKey == "bloom.resize-fit.policy")
+            return *value >= 0 && *value <= 1;
+        return *value >= 1 && *value <= 32768;
+    }
     if (schemaKey == "bloom.ocio-effect.bypass" || schemaKey == "bloom.ocio-effect.look")
         return std::holds_alternative<bool>(constant.value);
     if (schemaKey == "bloom.ocio-file.lut" || schemaKey == "bloom.ocio-file.interpolation" ||
@@ -330,7 +342,8 @@ constantMatchesSchema(const std::string_view schemaKey,
 
 [[nodiscard]] bool isValidSourceForSchema(const std::string_view schemaKey,
                                           const bloom::document::ParameterSource& source) {
-    if ((schemaKey.starts_with("bloom.ocio-") || schemaKey == "bloom.shape.path") &&
+    if ((schemaKey.starts_with("bloom.ocio-") || schemaKey.starts_with("bloom.resize-fit.") ||
+         schemaKey == "bloom.shape.path") &&
         !std::holds_alternative<bloom::document::ConstantValueSource>(source))
         return false;
     if (!isGenericallyValidSource(source)) {

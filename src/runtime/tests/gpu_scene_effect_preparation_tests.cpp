@@ -10,6 +10,7 @@
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
 #include <bloom/runtime/input_color_context.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -123,6 +124,54 @@ void testDiscretePreparation(Expectations& expectations) {
                 affine->outputWindow.extent().width() == ((kernel.quarterTurns & 1U) ? 6U : 8U) &&
                 affine->outputWindow.extent().height() == ((kernel.quarterTurns & 1U) ? 8U : 6U),
             "discrete effect emits a genuine resident affine pass and exact data extents");
+    }
+}
+
+void testResizeFitPreparation(Expectations& expectations) {
+    for (const std::int64_t policy : {0, 1, 2}) {
+        const bloom::runtime::ResizeFitKernel kernel{10, 10, 2, 1, 0, policy};
+        const auto plan = effectPlan({solidLeaf(8000)}, kernel, 8100);
+        auto request = requestFor(*plan);
+        const auto prepared = CpuGpuSceneBuilder{}.build(plan, request);
+        expectations.expect(prepared.hasValue(),
+                            "Resize/Fit prepares through the production builder");
+        if (!prepared)
+            continue;
+        const auto command = prepared.scene->commandForOperation()[1];
+        const auto* affine = std::get_if<bloom::runtime::GpuSceneAffineCommand>(
+            &prepared.scene->commands()[command]);
+        expectations.expect(affine && affine->outputDescriptor &&
+                                affine->outputDescriptor->displayWindow().extent().width() == 10 &&
+                                affine->outputDescriptor->displayWindow().extent().height() == 10 &&
+                                affine->pixelAspect == *bloom::core::PixelAspectRatio::create(2, 1),
+                            "Resize/Fit emits a real affine with the authored extent and PAR");
+        CpuCompositionEvaluator evaluator;
+        const auto cpu = evaluator.evaluate(plan, request, {});
+        std::vector<std::shared_ptr<const Rgba32fImage>> images;
+        const bool replayed = replayScene(*prepared.scene, images);
+        bool matches = cpu.frame() && replayed && images[prepared.scene->outputCommand()];
+        if (matches) {
+            const auto expected = cpu.frame()->processImage().pixels();
+            const auto actual = images[prepared.scene->outputCommand()]->pixels();
+            matches = expected.size() == actual.size();
+            for (std::size_t i = 0; matches && i < expected.size(); ++i)
+                for (std::size_t channel = 0; channel < 4; ++channel)
+                    matches =
+                        matches &&
+                        std::abs(expected[i].components()[channel] -
+                                 actual[i].components()[channel]) <=
+                            2e-6F * std::max(1.0F, std::abs(expected[i].components()[channel]));
+        }
+        expectations.expect(matches,
+                            "prepared Resize/Fit command replay matches the CPU reference");
+        const auto roi = ImageWindow::create(2, 1, 3, 3);
+        request.roi = *roi.value();
+        const auto clipped = CpuGpuSceneBuilder{}.build(plan, request);
+        const auto cpuRoi = evaluator.evaluate(plan, request, {});
+        expectations.expect(clipped && cpuRoi.frame() &&
+                                clipped.scene->outputDescriptor().dataWindow() ==
+                                    cpuRoi.frame()->processImage().descriptor()->dataWindow(),
+                            "Resize/Fit preserves the production ROI route");
     }
 }
 
@@ -331,6 +380,7 @@ void testRealFileTransform(Expectations& expectations, const std::string& workin
 int main() {
     try {
         Expectations expectations;
+        testResizeFitPreparation(expectations);
         testIdentityAndRefusals(expectations);
         testDiscretePreparation(expectations);
 

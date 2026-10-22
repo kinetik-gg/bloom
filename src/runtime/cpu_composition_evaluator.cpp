@@ -4,6 +4,7 @@
 #include "image_source.hpp"
 #include "layer_parent_transform.hpp"
 #include "operation_key.hpp"
+#include "resize_fit_geometry.hpp"
 #include "video_source.hpp"
 #include <bloom/media/video/colour.hpp>
 #include <bloom/render/path_raster.hpp>
@@ -360,6 +361,8 @@ enum class ScalarDomain : std::uint8_t {
                                                 hasValidScalarCurveReference(*pointwise->amount,
                                                                              plan, index, failure));
                 }
+                if (const auto* resize = std::get_if<ResizeFitKernel>(&effect.kernel))
+                    validKernel = detail::validResizeFitKernel(*resize);
                 if (const auto* file = std::get_if<FileTransformKernel>(&effect.kernel))
                     validKernel = file->interpolation >= 0 && file->interpolation <= 2 &&
                                   file->direction >= 0 && file->direction <= 1 &&
@@ -1540,7 +1543,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 if (const auto* layer = std::get_if<CompiledLayerOutput>(&operation))
                     fullSupport[layer->input.value()] = true;
                 if (const auto* effect = std::get_if<CompiledImageEffect>(&operation);
-                    effect && std::holds_alternative<DiscreteImageKernel>(effect->kernel))
+                    effect && (std::holds_alternative<DiscreteImageKernel>(effect->kernel) ||
+                               std::holds_alternative<ResizeFitKernel>(effect->kernel)))
                     fullSupport[effect->input.value()] = true;
             }
             for (std::size_t i = fullSupport.size(); i-- > 0;)
@@ -1861,6 +1865,15 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             key.add(std::string(request.colorIntent.ocioConfigUri));
                             key.add(preparedEffect->cacheIdentity);
                             key.add(step.kernel.index());
+                            if (const auto* resize = std::get_if<ResizeFitKernel>(&step.kernel)) {
+                                key.add(std::string{"resize-fit-bilinear-v1"});
+                                key.add(resize->width);
+                                key.add(resize->height);
+                                key.add(resize->pixelAspectNumerator);
+                                key.add(resize->pixelAspectDenominator);
+                                key.add(resize->filter);
+                                key.add(resize->policy);
+                            }
                             if (const auto* cst = std::get_if<CstKernel>(&step.kernel)) {
                                 key.add(cst->fromId);
                                 key.add(cst->toId);
@@ -2178,7 +2191,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             if (slots[index] && !preparedEffect->identity()) {
                                 auto result = detail::applyImageEffect(
                                     *preparedEffect, *slots[index], remainingPixelBudget(),
-                                    cancellation, operationIndex, progress);
+                                    cancellation, operationIndex, progress,
+                                    resolved.horizontalScale, resolved.verticalScale);
                                 if (result.cancelled) {
                                     operationCancelled = true;
                                     return;
@@ -2194,7 +2208,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                         return;
                                     }
                                     if (std::holds_alternative<DiscreteImageKernel>(
-                                            effect.kernel)) {
+                                            effect.kernel) || preparedEffect->resizeFit) {
                                         operationFailure = std::move(*result.diagnostic);
                                         return;
                                     }
@@ -2204,7 +2218,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 } else if (result.image) {
                                     slots[index] = std::move(result.image);
                                     if (std::holds_alternative<DiscreteImageKernel>(
-                                            effect.kernel)) {
+                                            effect.kernel) || preparedEffect->resizeFit) {
                                         bounds[index].local = detail::boundsForWindow(
                                             slots[index]->descriptor()->dataWindow(),
                                             resolved.horizontalScale, resolved.verticalScale);

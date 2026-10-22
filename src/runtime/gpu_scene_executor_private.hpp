@@ -105,6 +105,7 @@ struct GpuSceneExecutorStep final {
     // the output data window is `outputWindow`.
     render::GpuAffineMatrix affineMatrix;
     float affineOpacity = 1.0F;
+    std::optional<render::Rgba32fImageDescriptor> affineOutputDescriptor{};
     // Blend: `input` is the foreground source, `destination` the backdrop.
     core::BlendMode blendMode = core::kDefaultBlendMode;
     // OCIO ProcessEffect: the immutable prepared command (descriptor + artifact + identity).
@@ -215,9 +216,10 @@ pointResampleFieldsValid(const GpuScenePointResampleCommand& resample) noexcept 
         if (!affineFieldsFinite(*affine)) {
             return {};
         }
-        return makeGpuSceneAffineSemanticKey(
-            affine->inputKey, affine->sourceWindow, affine->matrix, affine->opacity,
-            affine->outputWindow, affine->pixelAspect, std::string{kAffineArtifactToken});
+        return makeGpuSceneAffineSemanticKey(affine->inputKey, affine->sourceWindow, affine->matrix,
+                                             affine->opacity, affine->outputWindow,
+                                             affine->pixelAspect, std::string{kAffineArtifactToken},
+                                             affine->outputDescriptor);
     }
     if (const auto* resample = std::get_if<GpuScenePointResampleCommand>(&command)) {
         if (!pointResampleFieldsValid(*resample)) {
@@ -293,6 +295,9 @@ descriptorMatches(const GpuSceneCommand& command, const render::GpuImage& image,
         if (!windowsEqual(image.dataWindow(), affine->outputWindow)) {
             return false;
         }
+        if (affine->outputDescriptor)
+            return image.displayWindow() == affine->outputDescriptor->displayWindow() &&
+                   image.pixelAspect() == affine->outputDescriptor->pixelAspect();
         if (translationInput != nullptr) {
             return image.displayWindow() == translationInput->displayWindow() &&
                    image.pixelAspect() == translationInput->pixelAspect();
@@ -360,6 +365,10 @@ expectedDescriptorOf(const PreparedGpuScene& scene, const GpuSceneCommandIndex i
                 }
                 return SceneDescriptorInfo{item.outputWindow, source->display, source->pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuSceneAffineCommand>) {
+                if (item.outputDescriptor)
+                    return SceneDescriptorInfo{item.outputWindow,
+                                               item.outputDescriptor->displayWindow(),
+                                               item.outputDescriptor->pixelAspect()};
                 const auto source = expectedDescriptorOf(scene, item.input, depth + 1);
                 if (!source.has_value()) {
                     return std::nullopt;
