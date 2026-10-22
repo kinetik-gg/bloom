@@ -2,8 +2,8 @@
   "schema": "bloom.gpu.shader.manifest.v1",
   "operation": "GradientV1",
   "entrypoint": "main",
-  "shader": {"language": "GLSL_460", "stage": "compute", "sha256": "e8a88bdb62f87399101df7bc1040d9f0f5141df733145fbdaf1f54241cef306c", "spirvSha256": "f5999e4e717f50c6b75ca6871dab0f77f0f51ae0909a8544694de5f74e87fc4f", "localSizeX": 256},
+  "shader": {"language": "GLSL_460", "stage": "compute", "sha256": "21a7706b627914b8f0d89b53ae4edabd90ecf376be49c7d4ce6ba74e69a1837b", "spirvSha256": "92e74281a729b3175e12b9b58fe55bfabbe8a5b63034eb2c6a82e4c9b1e6e16f", "localSizeX": 256},
   "bindings": [{"set": 0, "binding": 0, "kind": "storage-image", "access": "writeonly", "format": "rgba32f"}],
   "pushConstant": {"byteCount": 96},
-  "contracts": {"color": "straight scene-linear interpolation; premultiplied RGBA32F output", "repeat": "clamp/repeat/mirror", "geometry": "physical pixel aspect, pixel-centre sampling"}
+  "contracts": {"color": "straight scene-linear interpolation; premultiplied RGBA32F output", "repeat": "clamp/repeat/mirror", "geometry": "physical pixel aspect, pixel-centre sampling; O(1) binary64 normalized origin/steps split into compensated Float32 pairs for production linear projection and radial norm; phase reduction retains the low component"}
 }

@@ -74,5 +74,27 @@ int main() {
             return 1;
         }
     }
+    // Authoring colours are Float64. Only the sampled, premultiplied process pixel
+    // must fit Float32; neither unused endpoint is itself a process pixel.
+    gradient = {{1e39, -1e39, 0, 1}, {-1e39, 1e39, 0, 1},
+                {0, 0}, {1, 0}, 0, false, 1};
+    const auto hdrMidpoint = gradientPixel(gradient, 0.5, 0.5);
+    if (!hdrMidpoint || !near(hdrMidpoint.value()->red(), 0.0F) ||
+        !near(hdrMidpoint.value()->green(), 0.0F) ||
+        !near(hdrMidpoint.value()->alpha(), 1.0F)) {
+        std::cerr << "finite HDR gradient samples must survive oversized endpoints\n";
+        return 1;
+    }
+    gradient = {{0, 0, 0, 1}, {1, 1, 1, 1},
+                {100000000, 0}, {100000008, 0}, 1, false, 1};
+    const auto distantRepeat = gradientPixel(gradient, 0.5, 0.5);
+    gradient.repeat = 2;
+    const auto distantMirror = gradientPixel(gradient, 0.5, 0.5);
+    if (!distantRepeat || !distantMirror ||
+        !near(distantRepeat.value()->red(), 0.0625F) ||
+        !near(distantMirror.value()->red(), 0.0625F)) {
+        std::cerr << "distant repeat and mirror must preserve fractional pixel phase\n";
+        return 1;
+    }
     return 0;
 }

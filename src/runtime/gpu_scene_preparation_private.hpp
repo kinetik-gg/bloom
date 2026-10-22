@@ -27,7 +27,7 @@ inline constexpr std::string_view kGpuSolidSpirvSha256 =
 inline constexpr std::string_view kGpuCheckerSpirvSha256 =
     "fbd77d34d3203413940d33041b63032fd8d6dc610ef1b877239bb590b72d2330";
 inline constexpr std::string_view kGpuGradientSpirvSha256 =
-    "f5999e4e717f50c6b75ca6871dab0f77f0f51ae0909a8544694de5f74e87fc4f";
+    "92e74281a729b3175e12b9b58fe55bfabbe8a5b63034eb2c6a82e4c9b1e6e16f";
 inline constexpr std::string_view kGpuTranslationOpacitySpirvSha256 =
     "0049b132bf98214375023a82472f2839a0e8f30e1b1209a0f214ef283b97c3b8";
 inline constexpr std::string_view kGpuSourceOverSpirvSha256 =

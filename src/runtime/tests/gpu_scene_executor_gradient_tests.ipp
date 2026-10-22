@@ -47,6 +47,68 @@ void testGradientProduction(Expectations& expectations, GpuDevice& device,
     expectParity(expectations, *executor.executor, oracle, degenerate, requestFor(*degenerate),
                  "radial gradient zero-length geometry");
 
+    // A completed executor may remain alive while another executor uses the same device.
+    // Keeping the first facade must not retain exclusive native batch ownership.
+    {
+        auto other = GpuSceneExecutor::create(device, *cache.cache);
+        expectations.expect(other.hasValue(), "gradient: second live executor creates");
+        if (other) {
+            cache.cache->clear();
+            const auto plan = gradientPlan(false);
+            expectParity(expectations, *other.executor, oracle, plan, requestFor(*plan),
+                         "gradient after another live executor completed native work");
+        }
+    }
+    // Disabling multi-operation batching still permits the required singleton source kernel.
+    {
+        GpuSceneExecutorBudgets serialBudgets;
+        serialBudgets.enableNativeBatches = false;
+        auto serial = GpuSceneExecutor::create(device, *cache.cache, serialBudgets);
+        expectations.expect(serial.hasValue(), "gradient: serial native executor creates");
+        if (serial) {
+            cache.cache->clear();
+            const auto plan = gradientPlan(false);
+            expectParity(expectations, *serial.executor, oracle, plan, requestFor(*plan),
+                         "gradient singleton with multi-operation batching disabled");
+        }
+    }
+
+    // The authoring endpoints need not individually fit the Float32 process format.
+    // A one-pixel source samples their midpoint, which is exactly finite black here.
+    {
+        auto hdrDefinition = gradientPlan(false)->copyDefinition();
+        auto& hdr = std::get<bloom::runtime::CompiledSolid>(hdrDefinition.operations[0]);
+        hdr.color.source = Color4d{1e39, -1e39, 0, 1};
+        hdr.gradient->endColor.source = Color4d{-1e39, 1e39, 0, 1};
+        hdr.width.source = 1.0;
+        hdr.height.source = 1.0;
+        hdr.gradient->start.source = bloom::document::Vec2d{0, 0};
+        hdr.gradient->end.source = bloom::document::Vec2d{1, 0};
+        hdr.gradient->repeat = 0;
+        const auto hdrPlan = publish(std::move(hdrDefinition));
+        const auto hdrFrame = oracle.evaluate(hdrPlan, requestFor(*hdrPlan), {});
+        expectations.expect(hdrFrame.frame() != nullptr,
+                            "gradient: finite sampled HDR output accepts Float64 endpoints");
+    }
+
+    for (const bool radial : {false, true}) {
+        for (const std::int64_t repeat : {std::int64_t{1}, std::int64_t{2}}) {
+            auto distantDefinition = gradientPlan(radial)->copyDefinition();
+            auto& distant = std::get<bloom::runtime::CompiledSolid>(distantDefinition.operations[0]);
+            distant.color.source = Color4d{0, 0, 0, 1};
+            distant.gradient->endColor.source = Color4d{1, 1, 1, 1};
+            distant.gradient->start.source = bloom::document::Vec2d{100000000, 0};
+            distant.gradient->end.source = bloom::document::Vec2d{100000008, 0};
+            distant.gradient->repeat = repeat;
+            const auto distantPlan = publish(std::move(distantDefinition));
+            const std::string label = std::string(radial ? "radial" : "linear") +
+                " gradient distant " + (repeat == 1 ? "repeat" : "mirror") +
+                " preserves fractional phase";
+            expectParity(expectations, *executor.executor, oracle, distantPlan,
+                         requestFor(*distantPlan), label);
+        }
+    }
+
     auto definition = gradientPlan(false)->copyDefinition();
     auto& animated = std::get<bloom::runtime::CompiledSolid>(definition.operations[0]);
     animated.gradient->end.source = bloom::runtime::Vec2CurveIndex::fromRaw(0);

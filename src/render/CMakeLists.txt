@@ -1305,9 +1305,9 @@ endif()
 set(BLOOM_GRADIENT_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/gradient.comp")
 set(BLOOM_GRADIENT_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/gradient.manifest")
 set(BLOOM_GRADIENT_COMP_SHA256
-    "e8a88bdb62f87399101df7bc1040d9f0f5141df733145fbdaf1f54241cef306c")
+    "21a7706b627914b8f0d89b53ae4edabd90ecf376be49c7d4ce6ba74e69a1837b")
 set(BLOOM_GRADIENT_SPV_SHA256
-    "f5999e4e717f50c6b75ca6871dab0f77f0f51ae0909a8544694de5f74e87fc4f")
+    "92e74281a729b3175e12b9b58fe55bfabbe8a5b63034eb2c6a82e4c9b1e6e16f")
 file(SHA256 "${BLOOM_GRADIENT_COMP}" bloom_gradient_comp_sha256)
 if(NOT bloom_gradient_comp_sha256 STREQUAL BLOOM_GRADIENT_COMP_SHA256)
     message(FATAL_ERROR "gradient.comp source pin mismatch")

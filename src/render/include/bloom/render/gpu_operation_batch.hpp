@@ -41,6 +41,9 @@ struct GpuBatchGradient final {
     float exactHeight = 0.0F;
     std::uint32_t repeat = 0; // clamp, repeat, mirror
     bool radial = false;
+    // Binary64 normalized coordinate metadata split into portable Float32 hi/lo pairs.
+    // Linear: origin, column step, row step; radial: origin x/y, column/row step.
+    std::optional<std::array<float, 8>> normalizedCoordinates;
 };
 struct GpuBatchTranslation final {
     GpuBatchImageRef source;

@@ -141,6 +141,28 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
                                      static_cast<float>(aspect.denominator());
             const auto safeGeometry = [&] {
                 if (!std::isfinite(aspectValue) || aspectValue <= 0) return false;
+                if (gradient->normalizedCoordinates) {
+                    const auto& values = *gradient->normalizedCoordinates;
+                    if (!finiteArray(values)) return false;
+                    const auto pair = [&](const std::size_t index) {
+                        return std::abs(static_cast<long double>(values[index * 2])) +
+                               std::abs(static_cast<long double>(values[index * 2 + 1]));
+                    };
+                    const auto width = static_cast<long double>(window->extent().width() - 1);
+                    const auto height = static_cast<long double>(window->extent().height() - 1);
+                    const auto x = pair(0) + width * pair(gradient->radial ? 2 : 1);
+                    const auto y = gradient->radial ? pair(1) + height * pair(3)
+                                                    : height * pair(2);
+                    if (gradient->radial) {
+                        const auto minimumSquareRoot = std::sqrt(
+                            static_cast<long double>(std::numeric_limits<float>::min()));
+                        for (std::size_t coordinate = 0; coordinate < 4; ++coordinate)
+                            if (pair(coordinate) > 0 && pair(coordinate) < minimumSquareRoot)
+                                return false;
+                    }
+                    const auto magnitude = gradient->radial ? x * x + y * y : x + y;
+                    return magnitude <= static_cast<long double>(arithmeticLimit);
+                }
                 const long double limit = static_cast<long double>(arithmeticLimit);
                 const long double minNormal =
                     static_cast<long double>(std::numeric_limits<float>::min());
@@ -173,9 +195,10 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
                             limit);
             };
             if (!finiteArray(gradient->first) || !finiteArray(gradient->second) ||
-                !std::ranges::all_of(gradient->endpoints, [](const float value) {
+                (!gradient->normalizedCoordinates &&
+                 !std::ranges::all_of(gradient->endpoints, [](const float value) {
                     return std::isfinite(value);
-                }) ||
+                })) ||
                 gradient->first[3] < 0 || gradient->first[3] > 1 ||
                 gradient->second[3] < 0 || gradient->second[3] > 1 ||
                 !std::isfinite(gradient->inverseHorizontalScale) ||
@@ -190,14 +213,22 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
                      "gradient values exceed the native Float32 arithmetic capability");
                 return false;
             }
-            pack(job, GradientPush{gradient->first, gradient->second, gradient->endpoints,
-                                   {gradient->inverseHorizontalScale,
-                                    gradient->inverseVerticalScale, aspectValue,
-                                    static_cast<float>(gradient->repeat)},
+            auto endpoints = gradient->endpoints;
+            std::array<float, 4> transform{gradient->inverseHorizontalScale,
+                                           gradient->inverseVerticalScale, aspectValue,
+                                           static_cast<float>(gradient->repeat)};
+            if (gradient->normalizedCoordinates) {
+                std::copy_n(gradient->normalizedCoordinates->begin(), 4, endpoints.begin());
+                std::copy_n(gradient->normalizedCoordinates->begin() + 4, 4, transform.begin());
+            }
+            pack(job, GradientPush{gradient->first, gradient->second, endpoints, transform,
                                    {static_cast<float>(window->extent().width()),
                                     static_cast<float>(window->extent().height()),
                                     gradient->exactWidth, gradient->exactHeight},
-                                   {gradient->radial ? 1 : 0, 0, 0, 0}});
+                                   {gradient->normalizedCoordinates ? (gradient->radial ? 3 : 2)
+                                                                    : (gradient->radial ? 1 : 0),
+                                    0, 0, static_cast<std::int32_t>(gradient->repeat)}});
+
         } else {
             const GpuBatchImageRef* source = nullptr;
             float opacity = 1;

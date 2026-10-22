@@ -2200,14 +2200,19 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         [&](const CompiledSolid& solid) {
                             const auto color =
                                 detail::resolveParameter(solid.color, *plan, resolved);
-                            if (!color.has_value()) {
+                            if (!color.has_value() || !color->value.isValid()) {
                                 operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
                                                               "Solid color could not be resolved",
                                                               {}, operationSubject);
                                 return;
                             }
-                            const auto pixel =
-                                render::solidPixelFromStraightLinearRec709Scene(color->value);
+                            // Gradient endpoints are straight Float64 colours. An endpoint need
+                            // not fit a standalone Float32 pixel when every sampled interpolation
+                            // does; validate the process representation after sampling instead.
+                            const auto pixel = solid.gradient
+                                ? render::ImageResult<render::Rgba32f>::success(
+                                      render::Rgba32f::transparent())
+                                : render::solidPixelFromStraightLinearRec709Scene(color->value);
                             if (!pixel) {
                                 operationFailure = imageDiagnostic(
                                     *pixel.error(),

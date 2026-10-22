@@ -16,6 +16,8 @@
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/image.hpp>
 
+#include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -43,7 +45,11 @@ template <typename Emit, typename Charge>
         return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                     "Solid parameters are not evaluable");
     }
-    const auto pixel = render::solidPixelFromStraightLinearRec709Scene(color->value);
+    if (!color->value.isValid())
+        return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan, "Source colour is invalid");
+    const auto pixel = solid.gradient
+        ? render::ImageResult<render::Rgba32f>::success(render::Rgba32f::transparent())
+        : render::solidPixelFromStraightLinearRec709Scene(color->value);
     if (!pixel) {
         return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan, "Solid colour is not evaluable");
     }
@@ -99,13 +105,46 @@ template <typename Emit, typename Charge>
                                   static_cast<float>(start->value.y),
                                   static_cast<float>(end->value.x),
                                   static_cast<float>(end->value.y)};
-        const bool authorDegenerate = start->value.x == end->value.x &&
-                                      start->value.y == end->value.y;
-        const bool deviceDegenerate = gpuGradient->endpoints[0] == gpuGradient->endpoints[2] &&
-                                      gpuGradient->endpoints[1] == gpuGradient->endpoints[3];
-        if (authorDegenerate != deviceDegenerate)
+        const auto finiteColor = [](const auto& components) {
+            return std::ranges::all_of(components, [](const float value) {
+                return std::isfinite(value);
+            });
+        };
+        if (!finiteColor(gpuGradient->first) || !finiteColor(gpuGradient->second))
             return fail(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
-                        "Gradient endpoint separation is below Float32 device precision");
+                        "Gradient straight colours exceed native Float32 representation");
+        const double aspect = static_cast<double>(solidAspect.numerator()) /
+                              solidAspect.denominator();
+        const double dx = (end->value.x - start->value.x) * aspect;
+        const double dy = end->value.y - start->value.y;
+        const double span = std::hypot(dx, dy);
+        std::array<double, 4> coordinates{};
+        if (start->value.x != end->value.x || start->value.y != end->value.y) {
+            if (!(span > 0.0) || !std::isfinite(span))
+                return fail(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
+                            "Gradient span exceeds native coordinate preparation");
+            const double x = ((0.5 / hScale - start->value.x) * aspect) / span;
+            const double y = (0.5 / vScale - start->value.y) / span;
+            const double column = (aspect / hScale) / span;
+            const double row = (1.0 / vScale) / span;
+            coordinates = solid.gradient->radial
+                ? std::array<double, 4>{x, y, column, row}
+                : std::array<double, 4>{(dx == 0.0 ? 0.0 : x * (dx / span)) +
+                                           (dy == 0.0 ? 0.0 : y * (dy / span)),
+                                       column * (dx / span), row * (dy / span), 0.0};
+        }
+        std::array<float, 8> split{};
+        for (std::size_t component = 0; component < coordinates.size(); ++component) {
+            const auto high = static_cast<float>(coordinates[component]);
+            const auto low = static_cast<float>(coordinates[component] - static_cast<double>(high));
+            if (!std::isfinite(high) || !std::isfinite(low) ||
+                (coordinates[component] != 0.0 && high == 0.0F && low == 0.0F))
+                return fail(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
+                            "Gradient normalized coordinates exceed native Float32 pair representation");
+            split[component * 2] = high;
+            split[component * 2 + 1] = low;
+        }
+        gpuGradient->normalizedCoordinates = split;
         gpuGradient->inverseHorizontalScale = static_cast<float>(1.0 / hScale);
         gpuGradient->inverseVerticalScale = static_cast<float>(1.0 / vScale);
         gpuGradient->exactWidth = static_cast<float>(exactWidth);
@@ -140,6 +179,10 @@ template <typename Emit, typename Charge>
         key.add(std::bit_cast<std::uint32_t>(gpuGradient->inverseVerticalScale));
         key.add(std::bit_cast<std::uint32_t>(gpuGradient->exactWidth));
         key.add(std::bit_cast<std::uint32_t>(gpuGradient->exactHeight));
+        key.add(gpuGradient->normalizedCoordinates.has_value());
+        if (gpuGradient->normalizedCoordinates)
+            for (const auto component : *gpuGradient->normalizedCoordinates)
+                key.add(std::bit_cast<std::uint32_t>(component));
         key.add(gpuGradient->repeat);
         key.add(gpuGradient->radial);
     }

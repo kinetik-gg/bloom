@@ -11,21 +11,86 @@ layout(push_constant) uniform BloomGradientPush {
     ivec4 flags; // radial, data-window origin x/y, reserved
 } p;
 
+struct BloomDf { float hi; float lo; };
+
+BloomDf bloom_df(float value) { return BloomDf(value, 0.0); }
+
+BloomDf bloom_df_add(BloomDf a, BloomDf b)
+{
+    precise float sum = a.hi + b.hi;
+    precise float virtualB = sum - a.hi;
+    precise float error = (a.hi - (sum - virtualB)) + (b.hi - virtualB);
+    error = error + (a.lo + b.lo);
+    precise float total = sum + error;
+    precise float totalError = (sum - (total - error)) + (error - (total - sum));
+    return BloomDf(total, totalError);
+}
+
+BloomDf bloom_df_mul(BloomDf a, BloomDf b)
+{
+    precise float product = a.hi * b.hi;
+    precise float error = fma(a.hi, b.hi, -product);
+    const float crossA = a.hi * b.lo;
+    const float crossB = a.lo * b.hi;
+    error = error + (crossA + crossB);
+    precise float total = product + error;
+    precise float totalError = (product - (total - error)) + (error - (total - product));
+    return BloomDf(total, totalError);
+}
+
+// Preserve the low component when the high component is an exact period boundary.
+float bloom_phase(BloomDf value, int repeat) {
+    if (repeat == 0) return clamp(value.hi + value.lo, 0.0, 1.0);
+    float period = repeat == 2 ? 2.0 : 1.0;
+    precise float high = value.hi - trunc(value.hi / period) * period;
+    precise float low = value.lo - trunc(value.lo / period) * period;
+    BloomDf folded = bloom_df_add(bloom_df(high), bloom_df(low));
+    if (folded.hi < 0.0 || (folded.hi == 0.0 && folded.lo < 0.0))
+        folded = bloom_df_add(folded, bloom_df(period));
+    if (folded.hi > period || (folded.hi == period && folded.lo >= 0.0))
+        folded = bloom_df_add(folded, bloom_df(-period));
+    float phase = folded.hi + folded.lo;
+    return repeat == 2 && phase > 1.0 ? 2.0 - phase : phase;
+}
+
+BloomDf bloom_df_sqrt(BloomDf value) {
+    if (value.hi == 0.0) return bloom_df(0.0);
+    float root = sqrt(value.hi);
+    BloomDf residual = bloom_df_add(value, bloom_df_mul(bloom_df(-root), bloom_df(root)));
+    return bloom_df_add(bloom_df(root), bloom_df((residual.hi + residual.lo) / (2.0 * root)));
+}
+
 void main() {
     ivec2 index = ivec2(gl_GlobalInvocationID.xy);
     if (index.x >= int(p.extent.x) || index.y >= int(p.extent.y)) return;
-    vec2 physical = vec2((float(index.x + p.flags.y) + 0.5) * p.transform.x,
-                         (float(index.y + p.flags.z) + 0.5) * p.transform.y);
-    vec2 delta = (p.endpoints.zw - p.endpoints.xy) * vec2(p.transform.z, 1.0);
-    vec2 offset = (physical - p.endpoints.xy) * vec2(p.transform.z, 1.0);
-    float length2 = dot(delta, delta);
-    float t = length2 == 0.0 ? 0.0 :
-              (p.flags.x != 0 ? length(offset) * inversesqrt(length2)
-                              : dot(offset, delta) / length2);
-    int repeat = int(p.transform.w);
-    if (repeat == 1) t = fract(t);
-    else if (repeat == 2) { float u = mod(t, 2.0); t = u <= 1.0 ? u : 2.0 - u; }
-    else t = clamp(t, 0.0, 1.0);
+    float t;
+    if (p.flags.x >= 2) {
+        BloomDf value;
+        if (p.flags.x == 2) {
+            value = bloom_df_add(BloomDf(p.endpoints.x, p.endpoints.y),
+                bloom_df_add(bloom_df_mul(BloomDf(p.endpoints.z, p.endpoints.w), bloom_df(float(index.x))),
+                             bloom_df_mul(BloomDf(p.transform.x, p.transform.y), bloom_df(float(index.y)))));
+        } else {
+            BloomDf x = bloom_df_add(BloomDf(p.endpoints.x, p.endpoints.y),
+                bloom_df_mul(BloomDf(p.transform.x, p.transform.y), bloom_df(float(index.x))));
+            BloomDf y = bloom_df_add(BloomDf(p.endpoints.z, p.endpoints.w),
+                bloom_df_mul(BloomDf(p.transform.z, p.transform.w), bloom_df(float(index.y))));
+            value = bloom_df_sqrt(bloom_df_add(bloom_df_mul(x, x), bloom_df_mul(y, y)));
+        }
+        t = bloom_phase(value, p.flags.w);
+    } else {
+        vec2 physical = vec2((float(index.x + p.flags.y) + 0.5) * p.transform.x,
+                             (float(index.y + p.flags.z) + 0.5) * p.transform.y);
+        vec2 delta = (p.endpoints.zw - p.endpoints.xy) * vec2(p.transform.z, 1.0);
+        vec2 offset = (physical - p.endpoints.xy) * vec2(p.transform.z, 1.0);
+        float length2 = dot(delta, delta);
+        t = length2 == 0.0 ? 0.0 :
+            (p.flags.x != 0 ? length(offset) * inversesqrt(length2) : dot(offset, delta) / length2);
+        int repeat = int(p.transform.w);
+        if (repeat == 1) t = fract(t);
+        else if (repeat == 2) { float u = mod(t, 2.0); t = u <= 1.0 ? u : 2.0 - u; }
+        else t = clamp(t, 0.0, 1.0);
+    }
     // Weighted endpoints avoid overflowing the difference of opposite-sign HDR colours.
     vec4 straight = p.first * (1.0 - t) + p.second * t;
     float coverage = clamp(p.extent.z - float(index.x + p.flags.y), 0.0, 1.0) *
