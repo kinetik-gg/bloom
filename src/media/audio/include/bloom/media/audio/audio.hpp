@@ -157,7 +157,7 @@ struct AudioBuffer final {
     std::uint64_t frames = 0;
     std::vector<std::vector<float>> planes;
     // When present, frames is the full source duration while planes stays empty.
-    std::shared_ptr<AudioStream> stream;
+    std::shared_ptr<AudioStream> stream{};
 };
 
 struct WaveformRange final {

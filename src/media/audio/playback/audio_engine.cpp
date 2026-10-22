@@ -487,8 +487,8 @@ void AudioEngine::mixBlock(const std::uint64_t firstProducedFrame,
                     continue;
                 }
                 if (clip.buffer->stream) {
-                    if (const auto sample =
-                            clip.buffer->stream->sample(*sourceFrame, sourceChannel, cancelled))
+                    if (const auto sample = clip.buffer->stream->sample(
+                            *sourceFrame, static_cast<std::uint32_t>(sourceChannel), cancelled))
                         output[outputFrame * config_.channels + channel] += *sample * clip.level;
                 } else if (*sourceFrame < clip.buffer->planes[sourceChannel].size()) {
                     output[outputFrame * config_.channels + channel] +=

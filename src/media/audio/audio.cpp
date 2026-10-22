@@ -323,15 +323,16 @@ AudioResult<WaveformSummary> waveformSummary(AudioStream& stream, const std::siz
             start += count;
         }
         // A bucket can be empty when the source is shorter than the requested summary.
-        for (std::size_t bucket = 0; bucket < bucketCount; ++bucket)
-            if (!seen[bucket]) {
-                const auto frame = std::min<std::uint64_t>(probe.frames - 1, bucketStart(bucket));
+        for (std::size_t emptyBucket = 0; emptyBucket < bucketCount; ++emptyBucket)
+            if (!seen[emptyBucket]) {
+                const auto frame =
+                    std::min<std::uint64_t>(probe.frames - 1, bucketStart(emptyBucket));
                 for (std::size_t channel = 0; channel < probe.channels; ++channel) {
                     const auto sample = stream.sample(frame, static_cast<std::uint32_t>(channel));
                     if (!sample)
                         return AudioResult<WaveformSummary>::failure(
                             AudioError::codeOnly(AudioErrorCode::DecoderFailure));
-                    summary.buckets[bucket][channel] = {*sample, *sample};
+                    summary.buckets[emptyBucket][channel] = {*sample, *sample};
                 }
             }
         return AudioResult<WaveformSummary>::success(std::move(summary));
