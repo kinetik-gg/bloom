@@ -41,7 +41,8 @@ void preparationRefusalFeedback(Expectations& checks) {
     ui::CompositionSession session(document, commands, project.initialCompositionId);
     checks.expect(session.addSolidLayer("Solid", {0.25, 0.5, 0.75, 1}), "feedback solid authored");
     PipelineFixture fixture;
-    const auto compiled = fixture.compiler.compile({session.snapshot(), session.compositionId()});
+    const auto compiled =
+        fixture.compiler.compile({session.snapshot(), session.compositionId()}, {});
     checks.expect(compiled.plan != nullptr, "feedback scene compiles through the actual compiler");
     if (!compiled.plan)
         return;
