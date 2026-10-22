@@ -3,7 +3,9 @@
 #include <bloom/document/persisted_text.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
+#include <limits>
 #include <set>
 #include <string>
 #include <string_view>
@@ -34,9 +36,284 @@ void validateProjectUniqueDeclaration(const Id id, const std::size_t composition
 
 namespace bloom::document {
 
+namespace {
+std::atomic<std::uint64_t> draftContentDetaches{0};
+std::atomic<std::uint64_t> editableContentCopies{0};
+std::atomic<std::uint64_t> contentChargeWalks{0};
+
+void charge(std::size_t& total, const std::size_t bytes) noexcept {
+    total = bytes > std::numeric_limits<std::size_t>::max() - total
+                ? std::numeric_limits<std::size_t>::max()
+                : total + bytes;
+}
+
+template <typename T> void chargeRecords(std::size_t& total, const std::size_t count) noexcept {
+    charge(total, count > std::numeric_limits<std::size_t>::max() / sizeof(T)
+                      ? std::numeric_limits<std::size_t>::max()
+                      : count * sizeof(T));
+}
+
+void chargeValue(std::size_t& total, const ParameterValue& value) {
+    std::visit(
+        [&](const auto& item) {
+            using Value = std::decay_t<decltype(item)>;
+            if constexpr (std::is_same_v<Value, std::string>)
+                charge(total, item.size());
+            else if constexpr (std::is_same_v<Value, PathValue>)
+                chargeRecords<PathAnchor>(total, item.anchors.size());
+        },
+        value);
+}
+
+void chargeLocator(std::size_t& total, const AssetLocator& locator) noexcept {
+    charge(total, locator.kind.size());
+    charge(total, locator.portability.size());
+    charge(total, locator.path.size());
+    charge(total, locator.relinkHint.size());
+}
+
+void chargeColumn(std::size_t& total, const DataBlockTableColumn& column) {
+    charge(total, column.name.size());
+    chargeRecords<ParameterValue>(total, column.values.size());
+    for (const auto& value : column.values)
+        chargeValue(total, value);
+}
+} // namespace
+
+Composition::Composition(const CompositionId id, std::string name,
+                         const core::RationalTime duration, CanonicalGraph graph,
+                         const CompositionFormat format)
+    : id_(id), name_(std::move(name)), duration_(duration), format_(format),
+      editableContent_(std::make_unique<Content>(std::move(graph))) {}
+
+Composition::Composition(const Composition& other)
+    : workArea_(other.workArea_), workingColorSpaceId_(other.workingColorSpaceId_),
+      safeAreas_(other.safeAreas_), backgroundColor_(other.backgroundColor_), id_(other.id_),
+      name_(other.name_), duration_(other.duration_), format_(other.format_),
+      frozenContent_(other.frozenContent_) {
+    if (other.editableContent_) {
+        editableContent_ = std::make_unique<Content>(*other.editableContent_);
+        editableContentCopies.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+Composition& Composition::operator=(const Composition& other) {
+    if (this != &other) {
+        Composition copy(other);
+        *this = std::move(copy);
+    }
+    return *this;
+}
+
+Composition::Content& Composition::mutableContent() {
+    if (!editableContent_) {
+        editableContent_ = std::make_unique<Content>(*frozenContent_);
+        draftContentDetaches.fetch_add(1, std::memory_order_relaxed);
+    }
+    return *editableContent_;
+}
+
+void Composition::freezeContent() {
+    if (editableContent_) {
+        // Called on a COPY of the draft's Project. Moving this copy's buffer into immutable
+        // storage cannot let a pointer retained from the original Draft mutate a Snapshot.
+        auto frozen = std::make_shared<Content>(std::move(*editableContent_));
+        frozen->frozenByteCharge = calculateContentByteCharge(*frozen);
+        frozenContent_ = std::move(frozen);
+        editableContent_.reset();
+    }
+}
+
+Composition::CopyWork Composition::copyWork() noexcept {
+    return {.draftDetaches = draftContentDetaches.load(std::memory_order_relaxed),
+            .editableCopies = editableContentCopies.load(std::memory_order_relaxed),
+            .contentChargeWalks = contentChargeWalks.load(std::memory_order_relaxed)};
+}
+
+std::size_t Composition::contentByteCharge() const {
+    return editableContent_ ? calculateContentByteCharge(*editableContent_)
+                            : frozenContent_->frozenByteCharge;
+}
+
+std::size_t Composition::calculateContentByteCharge(const Content& authored) {
+    contentChargeWalks.fetch_add(1, std::memory_order_relaxed);
+    std::size_t bytes = sizeof(Content);
+    chargeRecords<ParameterRecord>(bytes, authored.parameters.records().size());
+    chargeRecords<AnimationCurveRecord>(bytes, authored.animationCurves.records().size());
+    chargeRecords<NodeRecord>(bytes, authored.graph.nodes().size());
+    chargeRecords<EdgeRecord>(bytes, authored.graph.edges().size());
+    chargeRecords<LayerOutputBoundary>(bytes, authored.graph.layerOutputs().size());
+    chargeRecords<LayerStack>(bytes, authored.graph.merges().size());
+    chargeRecords<std::pair<const NodeId, NodeLayoutRecord>>(bytes, authored.nodeLayout.size());
+    chargeRecords<std::pair<const NodeGroupId, NodeGroupRecord>>(bytes, authored.nodeGroups.size());
+    for (const auto& node : authored.graph.nodes()) {
+        charge(bytes, node.typeId.size());
+        chargeRecords<ParameterBinding>(bytes, node.parameters.size());
+        for (const auto& binding : node.parameters)
+            charge(bytes, binding.role.size());
+    }
+    for (const auto& parameter : authored.parameters.records()) {
+        charge(bytes, parameter.schemaKey.size());
+        std::visit(
+            [&](const auto& source) {
+                using Source = std::decay_t<decltype(source)>;
+                if constexpr (std::is_same_v<Source, ConstantValueSource>)
+                    chargeValue(bytes, source.value);
+                else if constexpr (std::is_same_v<Source, AnimationCurveSource>) {
+                    if (source.defaultValue)
+                        chargeValue(bytes, *source.defaultValue);
+                } else
+                    charge(bytes, source.outputPort.size());
+            },
+            parameter.source);
+    }
+    for (const auto& edge : authored.graph.edges()) {
+        charge(bytes, edge.source.port.size());
+        std::visit(
+            [&](const auto& destination) {
+                using Destination = std::decay_t<decltype(destination)>;
+                if constexpr (std::is_same_v<Destination, NodeInputRef>)
+                    charge(bytes, destination.port.size());
+                else
+                    charge(bytes, destination.role.size());
+            },
+            edge.destination);
+    }
+    for (const auto& boundary : authored.graph.layerOutputs()) {
+        charge(bytes, boundary.name.size());
+        charge(bytes, boundary.outputPort.size());
+    }
+    for (const auto& stack : authored.graph.merges())
+        chargeRecords<LayerStackEntry>(bytes, stack.entries().size());
+    for (const auto& [id, group] : authored.nodeGroups) {
+        static_cast<void>(id);
+        charge(bytes, group.name.size());
+        chargeRecords<NodeId>(bytes, group.members.size());
+    }
+    for (const auto& curve : authored.animationCurves.records()) {
+        std::visit(
+            [&](const auto& record) {
+                using Record = std::decay_t<decltype(record)>;
+                if constexpr (std::is_same_v<Record, ScalarAnimationCurve>) {
+                    chargeRecords<ScalarKeyframe>(bytes, record.keyframes.size());
+                } else {
+                    for (const auto& component : record.components)
+                        chargeRecords<ScalarKeyframe>(bytes, component.keyframes.size());
+                }
+            },
+            curve);
+    }
+    return bytes;
+}
+
+void Project::freezeCompositionContent() {
+    for (auto& composition : compositions_)
+        composition.freezeContent();
+}
+
+std::size_t Project::rootByteCharge() const {
+    std::size_t bytes = sizeof(Project);
+    charge(bytes, name_.size());
+    chargeRecords<Composition>(bytes, compositions_.size());
+    chargeRecords<AssetRecord>(bytes, assets_.size());
+    chargeRecords<AssetFolder>(bytes, assetFolders_.size());
+    chargeRecords<ExtensionRecord>(bytes, extensionRecords_.size());
+    chargeRecords<DataBlockRecord>(bytes, dataBlocks_.size());
+    for (const auto& composition : compositions_) {
+        charge(bytes, composition.name().size());
+        if (composition.workingColorSpaceId())
+            charge(bytes, composition.workingColorSpaceId()->size());
+    }
+    for (const auto& asset : assets_) {
+        chargeLocator(bytes, asset.locator);
+        charge(bytes, asset.interpretation.inputColorSpaceId.size());
+        charge(bytes, asset.manifest.pattern.size());
+        chargeRecords<AssetSequenceMember>(bytes, asset.manifest.members.size());
+        chargeRecords<std::int64_t>(bytes, asset.manifest.gaps.size());
+        for (const auto& member : asset.manifest.members)
+            chargeLocator(bytes, member.locator);
+        chargeRecords<AssetVideoStream>(bytes, asset.videoStreams.size());
+        for (const auto& stream : asset.videoStreams) {
+            charge(bytes, stream.codec.size());
+            charge(bytes, stream.profile.size());
+            charge(bytes, stream.pixelFormat.size());
+            charge(bytes, stream.timecode.size());
+            chargeRecords<std::string>(bytes, stream.channelLayout.size());
+            for (const auto& channel : stream.channelLayout)
+                charge(bytes, channel.size());
+        }
+        charge(bytes, asset.fontFamily.size());
+        charge(bytes, asset.fontStyle.size());
+        charge(bytes, asset.name.size());
+        chargeRecords<std::string>(bytes, asset.tags.size());
+        for (const auto& tag : asset.tags)
+            charge(bytes, tag.size());
+    }
+    for (const auto& folder : assetFolders_)
+        charge(bytes, folder.name.size());
+    for (const auto& block : dataBlocks_) {
+        charge(bytes, block.typeId.size());
+        charge(bytes, block.mediaType.size());
+        charge(bytes, block.provenance.createdAt.size());
+        std::visit(
+            [&](const auto& source) {
+                using Source = std::decay_t<decltype(source)>;
+                if constexpr (std::is_same_v<Source, AssetLocator>)
+                    chargeLocator(bytes, source);
+                else {
+                    charge(bytes, source.name.size());
+                    charge(bytes, source.version.size());
+                }
+            },
+            block.provenance.source);
+        chargeRecords<std::string>(bytes, block.tags.size());
+        for (const auto& tag : block.tags)
+            charge(bytes, tag.size());
+        std::visit(
+            [&](const auto& payload) {
+                using Payload = std::decay_t<decltype(payload)>;
+                if constexpr (std::is_same_v<Payload, DataBlockCurve>) {
+                    chargeRecords<double>(bytes, payload.samples.size());
+                } else if constexpr (std::is_same_v<Payload, DataBlockRamp>) {
+                    chargeRecords<DataBlockRampStop>(bytes, payload.stops.size());
+                } else if constexpr (std::is_same_v<Payload, DataBlockTable>) {
+                    chargeRecords<DataBlockTableColumn>(bytes, payload.columns.size());
+                    for (const auto& column : payload.columns)
+                        chargeColumn(bytes, column);
+                } else if constexpr (std::is_same_v<Payload, DataBlockPointSet>) {
+                    chargeRecords<Vec3d>(bytes, payload.points.size());
+                    chargeRecords<DataBlockTableColumn>(bytes, payload.attributes.size());
+                    for (const auto& column : payload.attributes)
+                        chargeColumn(bytes, column);
+                } else if constexpr (std::is_same_v<Payload, PathValue>)
+                    chargeRecords<PathAnchor>(bytes, payload.anchors.size());
+                // Opaque payload bytes have shared immutable storage. HistoryCharge accounts for
+                // that storage separately, by identity, across all retained roots.
+            },
+            block.payload);
+    }
+    for (const auto& record : extensionRecords_) {
+        charge(bytes, record.ownerId.size());
+        charge(bytes, record.typeId.size());
+        charge(bytes, record.mediaType.size());
+        std::visit(
+            [&](const auto& policy) {
+                using Policy = std::decay_t<decltype(policy)>;
+                if constexpr (std::is_same_v<Policy, ExtensionHostReferenceTable>) {
+                    chargeRecords<ExtensionHostReference>(bytes, policy.references.size());
+                    for (const auto& reference : policy.references)
+                        charge(bytes, reference.key.size());
+                } else if constexpr (std::is_same_v<Policy, ExtensionOwnerRemapper>)
+                    charge(bytes, policy.remapperId.size());
+            },
+            record.referencePolicy);
+    }
+    return bytes;
+}
+
 bool Composition::nodeLocked(const NodeId node) const {
     std::vector<NodeId> pending;
-    for (const auto& layer : graph_.layerOutputs())
+    for (const auto& layer : graph().layerOutputs())
         if (layer.locked)
             pending.push_back(layer.nodeId);
     std::unordered_set<NodeId> seen;
@@ -47,7 +324,7 @@ bool Composition::nodeLocked(const NodeId node) const {
             return true;
         if (!seen.insert(id).second)
             continue;
-        for (const auto& edge : graph_.edges()) {
+        for (const auto& edge : graph().edges()) {
             const auto* input = std::get_if<NodeInputRef>(&edge.destination);
             if (input && input->nodeId == id)
                 pending.push_back(edge.source.nodeId);
@@ -56,7 +333,7 @@ bool Composition::nodeLocked(const NodeId node) const {
     return false;
 }
 bool Composition::parameterLocked(const ParameterId parameter) const {
-    for (const auto& node : graph_.nodes())
+    for (const auto& node : graph().nodes())
         for (const auto& binding : node.parameters)
             if (binding.parameterId == parameter && nodeLocked(node.id))
                 return true;
@@ -92,18 +369,18 @@ ValidationResult Composition::validate() const {
                    "Invalid composition background colour");
     if (!safeAreas_.isValid())
         result.add(ValidationCode::InvalidValue, "safeAreas", "Invalid composition safe areas");
-    for (const auto& layer : graph_.layerOutputs()) {
+    for (const auto& layer : graph().layerOutputs()) {
         if (layer.inPoint < core::RationalTime{} || layer.inPoint >= layer.endPoint(duration_) ||
             layer.endPoint(duration_) > duration_)
             result.add(ValidationCode::InvalidValue, "graph.layerOutputs.range",
                        "Invalid layer range");
     }
-    result.append("parameters", parameters_.validate());
-    result.append("animationCurves", animationCurves_.validate());
-    result.append("", validateAnimationCurveReferences(parameters_, animationCurves_));
-    result.append("graph", graph_.validate(parameters_, builtInNodeDefinitions(), id_));
-    result.append("", validateNodeLayout(nodeLayout_, graph_));
-    result.append("", validateNodeGroups(nodeGroups_, graph_));
+    result.append("parameters", parameters().validate());
+    result.append("animationCurves", animationCurves().validate());
+    result.append("", validateAnimationCurveReferences(parameters(), animationCurves()));
+    result.append("graph", graph().validate(parameters(), builtInNodeDefinitions(), id_));
+    result.append("", validateNodeLayout(nodeLayout(), graph()));
+    result.append("", validateNodeGroups(nodeGroups(), graph()));
     return result;
 }
 

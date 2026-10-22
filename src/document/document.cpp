@@ -117,13 +117,17 @@ static void reserveProjectIds(IdAllocator& ids, const Project& project) noexcept
 struct DocumentState {
     explicit DocumentState(Project projectValue) : project(std::move(projectValue)) {
         reserveProjectIds(ids, project);
+        rootByteCharge = project.rootByteCharge();
     }
 
     DocumentState(Project projectValue, const IdAllocatorHighWater persistedHighWater)
-        : project(std::move(projectValue)), ids(IdAllocator::fromHighWater(persistedHighWater)) {}
+        : project(std::move(projectValue)), ids(IdAllocator::fromHighWater(persistedHighWater)) {
+        rootByteCharge = project.rootByteCharge();
+    }
 
     Project project;
     IdAllocator ids;
+    std::size_t rootByteCharge = 0;
 };
 
 } // namespace bloom::document::detail
@@ -170,6 +174,7 @@ namespace bloom::document {
 const Project& Snapshot::project() const noexcept { return state_->project; }
 
 const IdAllocator& Snapshot::ids() const noexcept { return state_->ids; }
+std::size_t Snapshot::rootByteCharge() const noexcept { return state_->rootByteCharge; }
 
 Draft::Draft(Revision baseRevision, std::shared_ptr<const detail::DocumentIdentity> identity,
              std::unique_ptr<detail::DocumentState> state) noexcept
@@ -183,10 +188,14 @@ const Project& Draft::project() const noexcept { return state_->project; }
 Project& Draft::project() noexcept { return state_->project; }
 const IdAllocator& Draft::ids() const noexcept { return state_->ids; }
 IdAllocator& Draft::ids() noexcept { return state_->ids; }
+std::size_t Draft::rootByteCharge() const { return state_->project.rootByteCharge(); }
 ValidationResult Draft::validate() const { return state_->project.validate(); }
 
 Document::Document(Project initialProject) {
-    auto initialState = std::make_shared<detail::DocumentState>(std::move(initialProject));
+    // Copy the publication shell even for an initial project: callers may have retained a
+    // mutable pointer before moving their Project into this constructor.
+    auto initialState = std::make_shared<detail::DocumentState>(initialProject);
+    initialState->project.freezeCompositionContent();
     const auto validation = initialState->project.validate();
     if (!validation.ok()) {
         throw std::invalid_argument("Initial Bloom document project is invalid");
@@ -196,8 +205,8 @@ Document::Document(Project initialProject) {
 }
 
 Document::Document(Project initialProject, const IdAllocatorHighWater persistedHighWater) {
-    auto initialState =
-        std::make_shared<detail::DocumentState>(std::move(initialProject), persistedHighWater);
+    auto initialState = std::make_shared<detail::DocumentState>(initialProject, persistedHighWater);
+    initialState->project.freezeCompositionContent();
     const auto validation = initialState->project.validate();
     if (!validation.ok()) {
         throw std::invalid_argument("Initial Bloom document project is invalid");
@@ -211,6 +220,14 @@ Document::Document(Project initialProject, const IdAllocatorHighWater persistedH
 }
 
 Document::~Document() = default;
+
+Document::Work Document::work() const noexcept {
+    return {.drafts = drafts_.load(std::memory_order_relaxed),
+            .validations = validations_.load(std::memory_order_relaxed),
+            .publications = publications_.load(std::memory_order_relaxed),
+            .restores = restores_.load(std::memory_order_relaxed),
+            .observerCallbacks = observerCallbacks_.load(std::memory_order_relaxed)};
+}
 
 DocumentObserverId Document::addObserver(DocumentObserver observer) {
     if (!observer) {
@@ -250,6 +267,7 @@ void Document::notify(const DocumentEvent& event) const noexcept {
         return;
     }
     for (const auto& callback : callbacks) {
+        observerCallbacks_.fetch_add(1, std::memory_order_relaxed);
         try {
             callback(event);
         } catch (...) {
@@ -271,7 +289,9 @@ Draft Document::draft(const Snapshot& base) const {
     if (base.identity_ != identity_) {
         throw DocumentProvenanceError("Cannot draft a snapshot owned by another document");
     }
-    return Draft(base.revision_, identity_, std::make_unique<detail::DocumentState>(*base.state_));
+    auto state = std::make_unique<detail::DocumentState>(*base.state_);
+    drafts_.fetch_add(1, std::memory_order_relaxed);
+    return Draft(base.revision_, identity_, std::move(state));
 }
 
 CommitResult Document::commit(const Revision expectedRevision, Draft&& draftValue) {
@@ -294,10 +314,18 @@ CommitResult Document::commit(const Revision expectedRevision, Draft&& draftValu
         validation.add(ValidationCode::InvalidValue, "draft", "Draft has no document state");
         return reject({CommitStatus::InvalidDraft, std::nullopt, std::move(validation)});
     }
+    validations_.fetch_add(1, std::memory_order_relaxed);
     auto validation = draftValue.validate();
     if (!validation.ok()) {
         return reject({CommitStatus::InvalidDraft, std::nullopt, std::move(validation)});
     }
+
+    // A Draft exposes mutable Project/Composition references. Publish a separate shell and
+    // freeze the shell's private copy of every edited payload before taking the commit lock;
+    // moving the Draft itself would let a retained reference mutate an immutable Snapshot.
+    auto publishedState = std::make_shared<detail::DocumentState>(*draftValue.state_);
+    publishedState->project.freezeCompositionContent();
+    publishedState->rootByteCharge = publishedState->project.rootByteCharge();
 
     std::unique_lock lock(mutex_);
     if (expectedRevision != revision_) {
@@ -310,11 +338,13 @@ CommitResult Document::commit(const Revision expectedRevision, Draft&& draftValu
         return reject(overflowResult());
     }
 
-    draftValue.state_->ids.mergeHighWater(state_->ids);
-    detail::reserveProjectIds(draftValue.state_->ids, draftValue.state_->project);
-    state_ = std::make_shared<detail::DocumentState>(std::move(*draftValue.state_));
-    draftValue.state_.reset();
+    publishedState->ids.mergeHighWater(state_->ids);
+    detail::reserveProjectIds(publishedState->ids, publishedState->project);
+    state_ = std::move(publishedState);
+    // Leave the caller's Draft independent and alive until its own destructor. A reference kept
+    // while editing remains valid, but it can only mutate the unpublished draft copy.
     revision_ = *publishedRevision;
+    publications_.fetch_add(1, std::memory_order_relaxed);
     auto result = CommitResult{CommitStatus::Committed, Snapshot(revision_, identity_, state_), {}};
     // The lock is deliberately released before callbacks run. `notify()` takes the same mutex to
     // snapshot the observer list and observers are allowed to read the new snapshot.
@@ -345,6 +375,7 @@ CommitResult Document::restore(const Revision expectedRevision,
                        "Historical snapshot has no document state");
         return reject({CommitStatus::InvalidDraft, std::nullopt, std::move(validation)});
     }
+    validations_.fetch_add(1, std::memory_order_relaxed);
     const auto validation = historicalSnapshot.project().validate();
     if (!validation.ok()) {
         return reject({CommitStatus::InvalidDraft, std::nullopt, validation});
@@ -366,6 +397,8 @@ CommitResult Document::restore(const Revision expectedRevision,
     detail::reserveProjectIds(restoredState->ids, restoredState->project);
     state_ = std::move(restoredState);
     revision_ = *publishedRevision;
+    publications_.fetch_add(1, std::memory_order_relaxed);
+    restores_.fetch_add(1, std::memory_order_relaxed);
     auto result = CommitResult{CommitStatus::Committed, Snapshot(revision_, identity_, state_), {}};
     lock.unlock();
     notify({.kind = DocumentEventKind::RevisionChanged,

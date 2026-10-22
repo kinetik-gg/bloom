@@ -56,6 +56,9 @@ using bloom::document::Vec2d;
 
 static_assert(std::is_aggregate_v<IdAllocatorHighWater>);
 static_assert(std::is_trivially_copyable_v<IdAllocatorHighWater>);
+template <typename T>
+concept PubliclyFreezable = requires(T& value) { value.freezeCompositionContent(); };
+static_assert(!PubliclyFreezable<Project>);
 
 class ExpectationContext final {
   public:
@@ -130,7 +133,8 @@ compositionIds(const std::uint64_t composition, const std::uint64_t base) noexce
     };
 }
 
-[[nodiscard]] Composition makeSingleLayerComposition(const SingleLayerCompositionIds& ids) {
+[[nodiscard]] Composition makeSingleLayerComposition(const SingleLayerCompositionIds& ids,
+                                                     NodeRecord** escapedSourceNode = nullptr) {
     CanonicalGraph graph(ids.stackNode);
     NodeRecord sourceNode{ids.sourceNode, "com.example.source", {}, 1};
     NodeRecord layerOutputNode{
@@ -181,6 +185,8 @@ compositionIds(const std::uint64_t composition, const std::uint64_t base) noexce
                                     std::string(bloom::document::kCompositionOutputInputPort)}});
     graph.setCompositionOutput(
         {ids.outputNode, std::string(bloom::document::kCompositionOutputOutputPort)});
+    if (escapedSourceNode != nullptr)
+        *escapedSourceNode = graph.findNode(ids.sourceNode);
 
     Composition composition(ids.composition, "Composition", RationalTime::fromInteger(1),
                             std::move(graph));
@@ -738,6 +744,145 @@ void testAllocatorExhaustionSurvivesRestore(ExpectationContext& expectations) {
                         "restore preserves published exhaustion in independent namespaces");
 }
 
+void testCompositionContentSharesUnrelatedSnapshots(ExpectationContext& expectations) {
+    for (const std::uint64_t count : {1ULL, 10ULL, 100ULL}) {
+        Project project(id<ProjectId>(1), "Shared compositions");
+        for (std::uint64_t ordinal = 1; ordinal <= count; ++ordinal) {
+            if (!project.addComposition(
+                    makeSingleLayerComposition(compositionIds(ordinal, ordinal * 1'000))))
+                throw std::logic_error("Could not build sharing fixture");
+        }
+        Document document(std::move(project));
+        std::uint64_t observedPublications = 0;
+        [[maybe_unused]] const auto observer =
+            document.addObserver([&](const bloom::document::DocumentEvent& event) {
+                if (event.kind == bloom::document::DocumentEventKind::RevisionChanged)
+                    ++observedPublications;
+            });
+        const auto before = document.snapshot();
+        const auto copiesBefore = Composition::copyWork();
+        auto draft = document.draft(before);
+        expectations.expect(Composition::copyWork().draftDetaches == copiesBefore.draftDetaches &&
+                                Composition::copyWork().editableCopies ==
+                                    copiesBefore.editableCopies,
+                            "drafting 1/10/100 compositions shares every authored payload");
+
+        auto* edited = draft.project().findComposition(id<CompositionId>(1));
+        if (!edited)
+            throw std::logic_error("Missing edited composition in sharing fixture");
+        auto& layout = edited->nodeLayout();
+        if (layout.empty())
+            throw std::logic_error("Missing node layout in sharing fixture");
+        const auto firstNode = layout.begin()->first;
+        const auto wasCollapsed = layout.begin()->second.collapsed;
+        layout.begin()->second.collapsed = !wasCollapsed;
+        const auto draftContentIdentity = edited->contentIdentity();
+        expectations.expect(Composition::copyWork().draftDetaches == copiesBefore.draftDetaches + 1,
+                            "one mutable accessor copies only the edited composition payload");
+
+        const auto committed = document.commit(before.revision(), std::move(draft));
+        if (!expectations.expect(committed.committed() && committed.snapshot.has_value(),
+                                 "the structurally shared draft publishes"))
+            continue;
+        const auto after = *committed.snapshot;
+        const auto* beforeEdited = before.project().findComposition(id<CompositionId>(1));
+        const auto* afterEdited = after.project().findComposition(id<CompositionId>(1));
+        expectations.expect(
+            beforeEdited && afterEdited &&
+                beforeEdited->nodeLayout().at(firstNode).collapsed == wasCollapsed &&
+                afterEdited->nodeLayout().at(firstNode).collapsed != wasCollapsed &&
+                afterEdited->contentIdentity() != draftContentIdentity &&
+                Composition::copyWork().editableCopies == copiesBefore.editableCopies + 1,
+            "publication freezes a separate copy and preserves the old snapshot");
+        // A mutable reference retained before commit still points into the caller's Draft.
+        // Mutating it after publication must not change either immutable snapshot.
+        layout.begin()->second.collapsed = wasCollapsed;
+        expectations.expect(afterEdited &&
+                                afterEdited->nodeLayout().at(firstNode).collapsed != wasCollapsed &&
+                                beforeEdited->nodeLayout().at(firstNode).collapsed == wasCollapsed,
+                            "retained draft references cannot mutate published content");
+        bool unrelatedShared = true;
+        for (std::uint64_t ordinal = 2; ordinal <= count; ++ordinal) {
+            const auto* oldComposition =
+                before.project().findComposition(id<CompositionId>(ordinal));
+            const auto* newComposition =
+                after.project().findComposition(id<CompositionId>(ordinal));
+            unrelatedShared &=
+                oldComposition && newComposition &&
+                oldComposition->contentIdentity() == newComposition->contentIdentity();
+        }
+        expectations.expect(unrelatedShared && document.work().drafts == 1 &&
+                                document.work().validations == 1 &&
+                                document.work().publications == 1 &&
+                                document.work().observerCallbacks == 1 && observedPublications == 1,
+                            "unrelated payloads stay shared and stage counters stay deterministic");
+    }
+}
+
+void testEscapedAuthoredGraphPointersStayOutsideSnapshots(ExpectationContext& expectations) {
+    const auto initialIds = compositionIds(1, 1'000);
+    NodeRecord* initialEscaped = nullptr;
+    Project source(id<ProjectId>(1), "Escaped initial graph");
+    if (!source.addComposition(makeSingleLayerComposition(initialIds, &initialEscaped)))
+        throw std::logic_error("Could not build initial graph escape fixture");
+    const auto* sourceNode = std::as_const(source)
+                                 .findComposition(initialIds.composition)
+                                 ->graph()
+                                 .findNode(initialIds.sourceNode);
+    if (!expectations.expect(initialEscaped != nullptr && initialEscaped == sourceNode,
+                             "the pre-construction node pointer still belongs to the live source"))
+        return;
+
+    // Pass the source as an lvalue so its moved graph storage remains alive for the mutation.
+    // A frozen Composition constructor would share that storage into the initial Snapshot.
+    Document initialDocument(source);
+    const auto initialSnapshot = initialDocument.snapshot();
+    const auto originalType = initialSnapshot.project()
+                                  .findComposition(initialIds.composition)
+                                  ->graph()
+                                  .findNode(initialIds.sourceNode)
+                                  ->typeId;
+    initialEscaped->typeId = "com.example.changed-source";
+    expectations.expect(initialSnapshot.project()
+                                .findComposition(initialIds.composition)
+                                ->graph()
+                                .findNode(initialIds.sourceNode)
+                                ->typeId == originalType,
+                        "a pointer escaped before initial construction cannot mutate its Snapshot");
+
+    Document document(makeProject(initialIds));
+    const auto before = document.snapshot();
+    auto draft = document.draft(before);
+    const auto addedIds = compositionIds(2, 2'000);
+    NodeRecord* addedEscaped = nullptr;
+    if (!draft.project().addComposition(makeSingleLayerComposition(addedIds, &addedEscaped)))
+        throw std::logic_error("Could not build added graph escape fixture");
+    const auto* draftNode = std::as_const(draft.project())
+                                .findComposition(addedIds.composition)
+                                ->graph()
+                                .findNode(addedIds.sourceNode);
+    if (!expectations.expect(addedEscaped != nullptr && addedEscaped == draftNode,
+                             "the pre-add node pointer still belongs to the live draft"))
+        return;
+    const auto published = document.commit(before.revision(), std::move(draft));
+    if (!expectations.expect(published.committed() && published.snapshot.has_value(),
+                             "a newly added composition publishes"))
+        return;
+    const auto addedSnapshot = *published.snapshot;
+    const auto addedType = addedSnapshot.project()
+                               .findComposition(addedIds.composition)
+                               ->graph()
+                               .findNode(addedIds.sourceNode)
+                               ->typeId;
+    addedEscaped->typeId = "com.example.changed-draft";
+    expectations.expect(addedSnapshot.project()
+                                .findComposition(addedIds.composition)
+                                ->graph()
+                                .findNode(addedIds.sourceNode)
+                                ->typeId == addedType,
+                        "a pointer escaped before adding a composition cannot mutate publication");
+}
+
 } // namespace
 
 int main() {
@@ -748,6 +893,8 @@ int main() {
         testProjectGlobalDeclarationIds(expectations);
         testPublicationReconcilesAllocatorHighWater(expectations);
         testAllocatorExhaustionSurvivesRestore(expectations);
+        testCompositionContentSharesUnrelatedSnapshots(expectations);
+        testEscapedAuthoredGraphPointersStayOutsideSnapshots(expectations);
         return expectations.ok() ? EXIT_SUCCESS : EXIT_FAILURE;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';

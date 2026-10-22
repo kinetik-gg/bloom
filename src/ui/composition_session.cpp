@@ -265,6 +265,8 @@ QString statusMessage(const commands::CommandResult& result) {
         return QStringLiteral("The command draft no longer matches its document snapshot");
     case commands::CommandStatus::RevisionOverflow:
         return QStringLiteral("The document revision limit was reached");
+    case commands::CommandStatus::HistoryLimit:
+        return QStringLiteral("The edit exceeds the undo memory limit and was not applied");
     case commands::CommandStatus::NothingToUndo:
         return QStringLiteral("There is nothing to undo");
     case commands::CommandStatus::NothingToRedo:
@@ -1843,6 +1845,12 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
         // command stack, so the seam only publishes the non-duplicating history transition here.
         emit historyChanged();
         return;
+    }
+    if (event.kind == commands::CommandEventKind::HistoryChanged &&
+        event.result.historyEntriesDropped != 0) {
+        emit commandRejected(
+            QStringLiteral("Undo memory limit reached: %1 oldest undo step(s) were retired")
+                .arg(static_cast<qulonglong>(event.result.historyEntriesDropped)));
     }
     if (event.kind == commands::CommandEventKind::RevisionChanged) {
         const auto previousRevision = snapshot_.revision();

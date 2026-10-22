@@ -1,8 +1,10 @@
 #include "command_test_support.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <limits>
 #include <optional>
+#include <vector>
 
 namespace bloom::commands::test {
 namespace {
@@ -654,6 +656,100 @@ void testExhaustionSurvivesUndoAndRedo(TestContext& test) {
                 "redo must retain the exhausted sentinel");
 }
 
+void testBoundedUndoHistoryAndByteAccounting(TestContext& test) {
+    const auto rename = [](CommandStack& stack, Document& document, std::string name) {
+        Transaction transaction("Rename", document.snapshot().revision());
+        transaction.emplace<SetProjectName>(std::move(name));
+        return stack.execute(std::move(transaction));
+    };
+
+    Document counted(makeProject());
+    CommandStack countStack(counted);
+    const auto original = counted.snapshot();
+    const auto contentWorkBefore = document::Composition::copyWork();
+    const auto first = rename(countStack, counted, "Project name 001");
+    const auto afterFirst = counted.snapshot();
+    const auto contentWorkAfter = document::Composition::copyWork();
+    const auto rootCharge = original.project().rootByteCharge() + sizeof(document::IdAllocator);
+    const auto afterRootCharge =
+        afterFirst.project().rootByteCharge() + sizeof(document::IdAllocator);
+    const auto sharedContentCharge = original.project().compositions().front().contentByteCharge();
+    test.expect(first.changed() &&
+                    original.project().compositions().front().contentIdentity() ==
+                        afterFirst.project().compositions().front().contentIdentity() &&
+                    contentWorkAfter.contentChargeWalks == contentWorkBefore.contentChargeWalks &&
+                    countStack.historyChargedBytes() ==
+                        rootCharge + afterRootCharge + sharedContentCharge,
+                "history charges shared content once without walking its graph again");
+
+    auto extensionProject = makeProject();
+    const document::OpaqueExtensionPayload sharedPayload(std::vector<std::byte>(1024));
+    for (std::uint64_t id = 1; id <= 2; ++id) {
+        const auto added = extensionProject.addExtensionRecord(
+            {.id = document::ExtensionRecordId::fromRaw(id),
+             .ownerId = "vendor.module",
+             .typeId = "vendor.module.record-type",
+             .schemaVersion = document::SchemaVersion{1, 0},
+             .mediaType = "application/octet-stream",
+             .referencePolicy = document::NoExtensionReferences{},
+             .payload = sharedPayload});
+        test.expect(added, "the shared extension payload fixture is valid");
+    }
+    Document extensionDocument(std::move(extensionProject));
+    CommandStack extensionStack(extensionDocument);
+    const auto extensionBefore = extensionDocument.snapshot();
+    const auto extensionEdit = rename(extensionStack, extensionDocument, "Project name 001");
+    const auto extensionAfter = extensionDocument.snapshot();
+    test.expect(extensionEdit.changed() &&
+                    extensionStack.historyChargedBytes() ==
+                        extensionBefore.project().rootByteCharge() +
+                            extensionAfter.project().rootByteCharge() +
+                            2 * sizeof(document::IdAllocator) +
+                            extensionBefore.project().compositions().front().contentByteCharge() +
+                            sharedPayload.size(),
+                "history charges shared opaque extension storage once across records and roots");
+
+    Document bounded(makeProject());
+    CommandStack boundedStack(bounded, {.maxEntries = 2, .maxChargedBytes = 512ULL * 1024 * 1024});
+    test.expect(rename(boundedStack, bounded, "Project name 001").changed() &&
+                    rename(boundedStack, bounded, "Project name 002").changed(),
+                "the first two edits fit the two-entry undo policy");
+    const auto third = rename(boundedStack, bounded, "Project name 003");
+    test.expect(third.changed() && third.historyEntriesDropped == 1 && boundedStack.size() == 2 &&
+                    boundedStack.work().historyEntriesRetired == 1 &&
+                    boundedStack.historyChargedBytes() <=
+                        boundedStack.historyLimits().maxChargedBytes,
+                "the oldest entry is explicitly retired while the newest stays undoable");
+    test.expect(boundedStack.undo().changed() &&
+                    bounded.snapshot().project().name() == "Project name 002" &&
+                    boundedStack.undo().changed() &&
+                    bounded.snapshot().project().name() == "Project name 001" &&
+                    boundedStack.undo().status == CommandStatus::NothingToUndo,
+                "retained undo steps restore exact state and stop at the announced floor");
+    test.expect(boundedStack.redo().changed() && boundedStack.redo().changed() &&
+                    bounded.snapshot().project().name() == "Project name 003",
+                "redo restores exact state after bounded history pruning");
+
+    const auto oneStepBytes = countStack.historyChargedBytes();
+    Document byteBounded(makeProject());
+    CommandStack byteStack(byteBounded, {.maxEntries = 10, .maxChargedBytes = oneStepBytes});
+    const auto byteFirst = rename(byteStack, byteBounded, "Project name 001");
+    const auto byteSecond = rename(byteStack, byteBounded, "Project name 002");
+    test.expect(byteFirst.changed() && byteSecond.changed() &&
+                    byteSecond.historyEntriesDropped == 1 && byteStack.size() == 1 &&
+                    byteStack.historyChargedBytes() <= oneStepBytes,
+                "a deduplicated byte cap retires old snapshots without refusing the newest step");
+
+    Document refused(makeProject());
+    CommandStack refusedStack(refused, {.maxEntries = 10, .maxChargedBytes = oneStepBytes - 1});
+    const auto revision = refused.snapshot().revision();
+    const auto denied = rename(refusedStack, refused, "Project name 001");
+    test.expect(denied.status == CommandStatus::HistoryLimit && refusedStack.size() == 0 &&
+                    refused.snapshot().revision() == revision &&
+                    refused.snapshot().project().name() == "Original Project",
+                "an oversized single undo step rejects before publication without losing truth");
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -669,6 +765,7 @@ int main() {
         bloom::commands::test::testStaleExecuteUndoAndRedoAreNoOps(test);
         bloom::commands::test::testLayerOrderNoChangeAndRedoInvalidation(test);
         bloom::commands::test::testExhaustionSurvivesUndoAndRedo(test);
+        bloom::commands::test::testBoundedUndoHistoryAndByteAccounting(test);
     } catch (const std::exception& error) {
         test.fail(std::string("unexpected test exception: ") + error.what());
     }

@@ -3,7 +3,9 @@
 #include <bloom/document/project.hpp>
 #include <bloom/document/validation.hpp>
 
+#include <atomic>
 #include <compare>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -51,6 +53,8 @@ class Snapshot final {
     [[nodiscard]] Revision revision() const noexcept { return revision_; }
     [[nodiscard]] const Project& project() const noexcept;
     [[nodiscard]] const IdAllocator& ids() const noexcept;
+    [[nodiscard]] const void* stateIdentity() const noexcept { return state_.get(); }
+    [[nodiscard]] std::size_t rootByteCharge() const noexcept;
 
   private:
     friend class Document;
@@ -75,6 +79,8 @@ class Draft final {
     [[nodiscard]] Project& project() noexcept;
     [[nodiscard]] const IdAllocator& ids() const noexcept;
     [[nodiscard]] IdAllocator& ids() noexcept;
+    [[nodiscard]] const void* stateIdentity() const noexcept { return state_.get(); }
+    [[nodiscard]] std::size_t rootByteCharge() const;
     [[nodiscard]] ValidationResult validate() const;
 
   private:
@@ -121,6 +127,13 @@ using DocumentObserver = std::function<void(const DocumentEvent&)>;
 
 class Document final {
   public:
+    struct Work final {
+        std::uint64_t drafts = 0;
+        std::uint64_t validations = 0;
+        std::uint64_t publications = 0;
+        std::uint64_t restores = 0;
+        std::uint64_t observerCallbacks = 0;
+    };
     explicit Document(Project initialProject);
     Document(Project initialProject, IdAllocatorHighWater persistedHighWater);
     Document(const Document&) = delete;
@@ -134,6 +147,7 @@ class Document final {
     [[nodiscard]] CommitResult commit(Revision expectedRevision, Draft&& draft);
     [[nodiscard]] CommitResult restore(Revision expectedRevision,
                                        const Snapshot& historicalSnapshot);
+    [[nodiscard]] Work work() const noexcept;
 
     [[nodiscard]] DocumentObserverId addObserver(DocumentObserver observer);
     void removeObserver(DocumentObserverId observerId) noexcept;
@@ -147,6 +161,11 @@ class Document final {
     std::shared_ptr<const detail::DocumentState> state_;
     mutable std::vector<std::pair<DocumentObserverId, DocumentObserver>> observers_;
     mutable DocumentObserverId nextObserverId_ = 1;
+    mutable std::atomic<std::uint64_t> drafts_{0};
+    mutable std::atomic<std::uint64_t> validations_{0};
+    mutable std::atomic<std::uint64_t> publications_{0};
+    mutable std::atomic<std::uint64_t> restores_{0};
+    mutable std::atomic<std::uint64_t> observerCallbacks_{0};
 };
 
 } // namespace bloom::document

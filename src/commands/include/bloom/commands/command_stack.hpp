@@ -32,7 +32,19 @@ using CommandObserver = std::function<void(const CommandEvent&)>;
 
 class CommandStack final {
   public:
+    struct HistoryLimits final {
+        std::size_t maxEntries = 256;
+        std::size_t maxChargedBytes = 512ULL * 1024 * 1024;
+    };
+    struct Work final {
+        std::uint64_t operationApplies = 0;
+        std::uint64_t lockedLayerChecks = 0;
+        std::uint64_t chargedSnapshotsVisited = 0;
+        std::uint64_t overBudgetValidations = 0;
+        std::uint64_t historyEntriesRetired = 0;
+    };
     explicit CommandStack(document::Document& document);
+    CommandStack(document::Document& document, HistoryLimits limits);
     CommandStack(const CommandStack&) = delete;
     CommandStack& operator=(const CommandStack&) = delete;
     CommandStack(CommandStack&&) = delete;
@@ -49,6 +61,9 @@ class CommandStack final {
     [[nodiscard]] std::optional<std::string_view> redoLabel() const noexcept;
     [[nodiscard]] document::Revision trackedRevision() const noexcept { return trackedRevision_; }
     [[nodiscard]] std::size_t size() const noexcept { return history_.size(); }
+    [[nodiscard]] std::size_t historyChargedBytes() const noexcept { return historyChargedBytes_; }
+    [[nodiscard]] HistoryLimits historyLimits() const noexcept { return limits_; }
+    [[nodiscard]] Work work() const noexcept { return work_; }
 
     void clear();
 
@@ -78,6 +93,9 @@ class CommandStack final {
 
     std::vector<HistoryEntry> history_;
     std::size_t cursor_ = 0;
+    HistoryLimits limits_;
+    std::size_t historyChargedBytes_ = 0;
+    Work work_;
     document::Revision trackedRevision_;
     document::Document& document_;
     mutable std::mutex observerMutex_;

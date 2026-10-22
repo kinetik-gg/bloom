@@ -161,6 +161,7 @@ enum class CommandStatus {
     ForeignDocument,
     DraftBaseMismatch,
     RevisionOverflow,
+    HistoryLimit,
     NothingToUndo,
     NothingToRedo,
 };
@@ -207,6 +208,9 @@ struct CommandResult {
     // composition within the cap. Undo publishes the inverted (reversed, before/after-swapped)
     // list; redo publishes the stored forward list.
     std::optional<std::vector<LayerIdentityRemap>> layerIdentityRemaps;
+    // Oldest undo entries retired to keep the configured history entry/charged-byte bounds.
+    // Redo-branch replacement is ordinary branch semantics and is not included here.
+    std::size_t historyEntriesDropped = 0;
 
     [[nodiscard]] bool succeeded() const noexcept {
         return status == CommandStatus::Succeeded || status == CommandStatus::NoChange;

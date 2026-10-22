@@ -13,6 +13,9 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/validation.hpp>
 
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -28,30 +31,45 @@ struct WorkArea {
 class Composition final {
   public:
     Composition(CompositionId id, std::string name, core::RationalTime duration,
-                CanonicalGraph graph, CompositionFormat format = {})
-        : id_(id), name_(std::move(name)), duration_(duration), format_(format),
-          graph_(std::move(graph)), nodeLayout_(defaultNodeLayout(graph_.nodes())) {}
+                CanonicalGraph graph, CompositionFormat format = {});
+    Composition(const Composition& other);
+    Composition& operator=(const Composition& other);
+    Composition(Composition&&) noexcept = default;
+    Composition& operator=(Composition&&) noexcept = default;
 
     [[nodiscard]] CompositionId id() const noexcept { return id_; }
     [[nodiscard]] const std::string& name() const noexcept { return name_; }
     [[nodiscard]] core::RationalTime duration() const noexcept { return duration_; }
     [[nodiscard]] CompositionFormat format() const noexcept { return format_; }
-    [[nodiscard]] const ParameterStore& parameters() const noexcept { return parameters_; }
-    [[nodiscard]] ParameterStore& parameters() noexcept { return parameters_; }
+    [[nodiscard]] const ParameterStore& parameters() const noexcept { return content().parameters; }
+    [[nodiscard]] ParameterStore& parameters() { return mutableContent().parameters; }
     [[nodiscard]] const AnimationCurveStore& animationCurves() const noexcept {
-        return animationCurves_;
+        return content().animationCurves;
     }
-    [[nodiscard]] AnimationCurveStore& animationCurves() noexcept { return animationCurves_; }
-    [[nodiscard]] const CanonicalGraph& graph() const noexcept { return graph_; }
-    [[nodiscard]] CanonicalGraph& graph() noexcept { return graph_; }
+    [[nodiscard]] AnimationCurveStore& animationCurves() {
+        return mutableContent().animationCurves;
+    }
+    [[nodiscard]] const CanonicalGraph& graph() const noexcept { return content().graph; }
+    [[nodiscard]] CanonicalGraph& graph() { return mutableContent().graph; }
 
-    [[nodiscard]] const NodeLayout& nodeLayout() const noexcept { return nodeLayout_; }
-    [[nodiscard]] NodeLayout& nodeLayout() noexcept { return nodeLayout_; }
+    [[nodiscard]] const NodeLayout& nodeLayout() const noexcept { return content().nodeLayout; }
+    [[nodiscard]] NodeLayout& nodeLayout() { return mutableContent().nodeLayout; }
 
     // Node groups live beside the layout, not inside the graph: they frame cards and carry no
     // evaluation meaning whatsoever (see node_layout.hpp).
-    [[nodiscard]] const NodeGroups& nodeGroups() const noexcept { return nodeGroups_; }
-    [[nodiscard]] NodeGroups& nodeGroups() noexcept { return nodeGroups_; }
+    [[nodiscard]] const NodeGroups& nodeGroups() const noexcept { return content().nodeGroups; }
+    [[nodiscard]] NodeGroups& nodeGroups() { return mutableContent().nodeGroups; }
+
+    // The identity/charge of the immutable authored collections, for deterministic undo
+    // accounting. Draft-local mutable content has its own identity until publication freezes it.
+    [[nodiscard]] const void* contentIdentity() const noexcept { return &content(); }
+    [[nodiscard]] std::size_t contentByteCharge() const;
+    struct CopyWork final {
+        std::uint64_t draftDetaches = 0;
+        std::uint64_t editableCopies = 0;
+        std::uint64_t contentChargeWalks = 0;
+    };
+    [[nodiscard]] static CopyWork copyWork() noexcept;
 
     [[nodiscard]] const std::optional<WorkArea>& workArea() const noexcept { return workArea_; }
     void setWorkArea(std::optional<WorkArea> area) noexcept { workArea_ = area; }
@@ -76,6 +94,25 @@ class Composition final {
     [[nodiscard]] ValidationResult validate() const;
 
   private:
+    friend class Project;
+    struct Content final {
+        explicit Content(CanonicalGraph graphValue)
+            : graph(std::move(graphValue)), nodeLayout(defaultNodeLayout(graph.nodes())) {}
+        ParameterStore parameters;
+        AnimationCurveStore animationCurves;
+        CanonicalGraph graph;
+        NodeLayout nodeLayout;
+        NodeGroups nodeGroups;
+        // Computed once before this payload is published through frozenContent_. Editable
+        // draft copies ignore this value and recompute their live charge on demand.
+        std::size_t frozenByteCharge = 0;
+    };
+    [[nodiscard]] const Content& content() const noexcept {
+        return editableContent_ ? *editableContent_ : *frozenContent_;
+    }
+    [[nodiscard]] Content& mutableContent();
+    [[nodiscard]] static std::size_t calculateContentByteCharge(const Content& authored);
+    void freezeContent();
     std::optional<WorkArea> workArea_{};
     std::optional<std::string> workingColorSpaceId_{};
     SafeAreaSettings safeAreas_{};
@@ -84,11 +121,8 @@ class Composition final {
     std::string name_;
     core::RationalTime duration_;
     CompositionFormat format_;
-    ParameterStore parameters_;
-    AnimationCurveStore animationCurves_;
-    CanonicalGraph graph_;
-    NodeLayout nodeLayout_;
-    NodeGroups nodeGroups_;
+    std::shared_ptr<const Content> frozenContent_;
+    std::unique_ptr<Content> editableContent_;
 };
 
 class Project final {
@@ -138,8 +172,13 @@ class Project final {
 
     [[nodiscard]] ValidationResult validate() const;
     [[nodiscard]] ValidationResult validateCompositionNesting() const;
+    [[nodiscard]] std::size_t rootByteCharge() const;
 
   private:
+    friend class Document;
+    // Only Document may freeze its independent publication shell. Exposing this on a Draft's
+    // mutable Project would let a retained element pointer mutate a later Snapshot.
+    void freezeCompositionContent();
     ProjectId id_;
     std::string name_;
     std::vector<Composition> compositions_;

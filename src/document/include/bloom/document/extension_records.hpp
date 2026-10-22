@@ -35,6 +35,7 @@ class OpaqueExtensionPayload final {
     [[nodiscard]] std::size_t size() const noexcept {
         return storage_ == nullptr ? 0 : storage_->size();
     }
+    [[nodiscard]] const void* storageIdentity() const noexcept { return storage_.get(); }
     [[nodiscard]] bool empty() const noexcept { return size() == 0; }
 
     friend bool operator==(const OpaqueExtensionPayload& left,
