@@ -39,6 +39,10 @@ std::shared_ptr<output::ExportResourceReservationV1> detail::reserveSequenceExpo
     const std::optional<std::uint64_t> explicitJobLimit,
     std::shared_ptr<GpuExportProvider> provider, const runtime::CancellationToken& cancellation,
     output::ExportResourceAdmissionStatusV1& status) noexcept {
+    if (explicitJobLimit && bytes > *explicitJobLimit) {
+        status = output::ExportResourceAdmissionStatusV1::JobAllowanceExceeded;
+        return {};
+    }
     if (!provider) {
         status = output::ExportResourceAdmissionStatusV1::CapacityRefreshFailed;
         return {};
@@ -58,7 +62,7 @@ std::shared_ptr<output::ExportResourceReservationV1> detail::reserveSequenceExpo
             [provider = std::move(provider)](const runtime::CancellationToken& token) {
                 provider->refreshProcessingCapacity(token);
             };
-        return ledger.reserve(bytes, status, explicitJobLimit, std::move(policy), 0,
+        return ledger.reserve(bytes, status, std::nullopt, std::move(policy), 0,
                               std::move(refresh));
     } catch (...) {
         status = output::ExportResourceAdmissionStatusV1::CapacityRefreshFailed;

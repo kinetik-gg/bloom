@@ -753,8 +753,9 @@ never perform disk I/O or wait for a writer.
 `ExportResourceLedgerV1` admits production export claims through the shared processing host root.
 Retained attempts, independent publication scratch, sequence queues and decoded audio expansion
 remain charged through their owning work and retirement. The old 4 GiB concurrent and 2 GiB
-per-job allowances apply only to unrooted compatibility callers; an explicit caller job or service
-cap still binds a rooted claim. Sequence queue admission refreshes provider-owned capacity on its
+per-job allowances apply only to unrooted compatibility callers; an explicit ledger service cap
+still binds a rooted claim. A sequence caller's explicit queue cap checks its initial frame-queue
+envelope without limiting later decoded audio. Sequence queue admission refreshes provider-owned capacity on its
 worker before reserving, and later audio expansion refreshes again. The media provider's separate
 frame geometry and index protocol limits are capability limits, not physical RAM estimates.
 

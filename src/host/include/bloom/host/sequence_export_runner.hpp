@@ -71,8 +71,8 @@ struct SequenceExportRequestV1 {
     core::Sha256Digest ocioConfigRevision = {};
     std::string ocioConfigUri = std::string(runtime::kBloomNeutralOcioConfigUri);
     std::string displayName = {}, viewName = {};
-    // Explicit caller cap on retained queue and decoded audio claims. Omission uses sampled root
-    // headroom; the provider protocol's separate frame/extent/index limits still apply.
+    // Explicit caller cap on the frame queue's initial byte envelope only. Decoded audio later
+    // enters the sampled root separately; the provider's frame/extent/index limits still apply.
     std::optional<std::uint64_t> queueByteLimit = std::nullopt;
     // Shared final-render provider for every frame of the sequence. Null creates one runner-owned,
     // disabled CPU provider with a worker-sampled processing root. The runner copies the exact
