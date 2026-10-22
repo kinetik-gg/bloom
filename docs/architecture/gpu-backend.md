@@ -157,7 +157,9 @@ qualification outcome is `PreviewOnly`; it is not selected for final output.
 pipelines, refuses any pipeline not bound to the exact actual device (`GpuDevice::ownershipEpoch()`
 is the unique ownership identity), and compares every pixel against the CPU primitives and the
 independent OCIO oracle; its report is constructed only by its private factory and is `PreviewOnly`
-only.
+only. Resident timing samples and the faster suffix are advisory telemetry: successful parity and
+capability qualification admit resident requests without a timing-derived minimum image area. The
+existing resident 4K profile ceiling and actual native geometry, byte and ownership checks remain.
 
 Scene preparation, caches, and executor. `CpuGpuSceneBuilder` (`prepared_gpu_scene.hpp`) turns a real
 `CompiledCompositionPlan` plus an `EvaluationRequest` into ordered immutable `GpuSceneCommand`s
@@ -244,8 +246,9 @@ performs no readback. Alongside the lease it retains the genuine immutable resid
 report, the request/process identity, the evaluated bounds, and explicit
 `EvaluationProvider::GpuResident`/`CpuReference` provenance. The factory validates the report's
 eligibility against the exact device ownership epoch and processor, the registry binding and owner
-thread, the trusted expected descriptor, the native display geometry against that descriptor, the
-measured eligible interval, and the actual native allocation plus geometry inside the request budget.
+thread, the trusted expected descriptor, the native display geometry against that descriptor, and
+the actual native allocation plus geometry inside the request budget. A noisy or slower startup
+timing sample cannot refuse an otherwise qualified resident frame.
 `GpuPreviewDisplayService` owns one dedicated service thread, the native device/pipeline created and
 used only on it, the scheduler GPU executor, and one outstanding native job at a time. It exposes the following
 routes on that same owner thread and scheduler lease:

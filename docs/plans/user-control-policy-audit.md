@@ -103,7 +103,7 @@ First replace repeated synchronous sampling/default fractions with one captured 
   the fixed 512 MiB budget (`src/commands/command_stack.cpp`). Determine a concrete large-document
   trigger and distinguish retained history cost from executing the edit before changing admission.
 - Recovery discovery compares candidates against the active project's modification time and returns
-  only the newest candidate (`src/project/session_recovery.cpp`). Verify project identity and candidate
+  only the newest candidate (`src/host/session_recovery.cpp`). Verify project identity and candidate
   selection before claiming recovery correctness; do not delete or overwrite recovery files.
 
 ## Validation and supervision
