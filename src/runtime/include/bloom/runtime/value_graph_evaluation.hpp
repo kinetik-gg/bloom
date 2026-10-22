@@ -7,6 +7,7 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/runtime/compiled_curves.hpp>
 #include <bloom/runtime/compiled_value_graph.hpp>
+#include <bloom/runtime/value_utility_kernels.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -63,10 +64,7 @@ struct ValueGraphEvaluation final {
 [[nodiscard]] std::optional<std::int64_t> valueGraphFrameIndex(core::RationalTime time,
                                                                document::FrameRate rate) noexcept;
 
-// The plan's three curve tables, as the value graph reads them (task FIX1, item G). A literal
-// Scalar, Vector 2 or Colour node whose authored value is on a curve lowers to an index into one of
-// these, and the evaluator samples it at the request time -- the same tables, the same sampler and
-// the same semantics version the image chain's own animated parameters already use.
+// All four curve tables read by the value graph, including animated Vector 3 literals.
 struct ValueGraphCurves final {
     std::span<const CompiledScalarCurve> scalar;
     std::span<const CompiledVec2Curve> vec2;
@@ -96,6 +94,9 @@ struct ValueGraphMemoization final {
     ValueGraphPass pass = ValueGraphPass::All;
     std::span<const CompiledValue> initialOutputs;
     std::span<const EvaluatedOperationBounds> evaluatedBounds;
+    std::size_t maxStringBytes = kDefaultValueStringBytes;
+    std::size_t maxRetainedStringBytes = 8U * kDefaultValueStringBytes;
+    std::size_t maxStringScratchBytes = kDefaultValueStringScratchBytes;
 };
 
 // Evaluates every operation in order. `operations` must already be topologically ordered (the

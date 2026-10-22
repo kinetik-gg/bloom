@@ -1354,10 +1354,13 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
                    std::holds_alternative<ValueOutputIndex>(layer.source.timeMapping.scale.source);
         });
     if (needsValueGraph) {
+        ValueGraphMemoization memoization;
+        memoization.cancellation = &cancellation;
         valueGraph = evaluateValueGraph(plan->valueOperations(), plan->valueOutputCount(), time,
                                         plan->format().frameRate(),
                                         ValueGraphCurves{plan->scalarCurves(), plan->vec2Curves(),
-                                                         plan->color4Curves(), plan->vec3Curves()});
+                                                         plan->color4Curves(), plan->vec3Curves()},
+                                        memoization);
         if (cancellation.isCancellationRequested() || !valueGraph->diagnostics.empty())
             return std::nullopt;
     }

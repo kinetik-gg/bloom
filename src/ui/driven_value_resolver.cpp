@@ -144,10 +144,12 @@ void DrivenValueResolver::start() {
                 } else {
                     runtime::ValueGraphMemoization memoization;
                     memoization.cancellation = &context.cancellation();
-                    const auto evaluated = runtime::evaluateValueGraph(
-                        plan.valueOperations(), plan.valueOutputCount(), time,
-                        composition->format().frameRate(),
-                        {plan.scalarCurves(), plan.vec2Curves(), plan.color4Curves()}, memoization);
+                    const auto evaluated =
+                        runtime::evaluateValueGraph(plan.valueOperations(), plan.valueOutputCount(),
+                                                    time, composition->format().frameRate(),
+                                                    {plan.scalarCurves(), plan.vec2Curves(),
+                                                     plan.color4Curves(), plan.vec3Curves()},
+                                                    memoization);
                     evaluatedOutputs = evaluated.outputs;
                     valueDiagnostics = evaluated.diagnostics;
                 }

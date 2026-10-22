@@ -203,7 +203,19 @@ class Evaluator final {
         available_.assign(outputCount, 0);
         if (!memoization_.initialOutputs.empty()) {
             const auto count = std::min(outputCount, memoization_.initialOutputs.size());
-            std::copy_n(memoization_.initialOutputs.begin(), count, outputs_.begin());
+            for (std::size_t index = 0; index < count; ++index) {
+                const auto& value = memoization_.initialOutputs[index];
+                if (const auto* string = std::get_if<std::string>(&value)) {
+                    if (string->size() > memoization_.maxStringBytes ||
+                        string->size() >
+                            memoization_.maxRetainedStringBytes - retainedStringBytes_) {
+                        initialBudgetFailures_.push_back(index);
+                        continue;
+                    }
+                    retainedStringBytes_ += string->size();
+                }
+                outputs_[index] = value;
+            }
         }
     }
 
@@ -212,6 +224,14 @@ class Evaluator final {
         for (const auto& operation : operations) {
             if (memoization_.cancellation && memoization_.cancellation->isCancellationRequested())
                 return;
+            if (std::ranges::find_if(initialBudgetFailures_, [&](const auto index) {
+                    return index >= operation.firstOutput.value() &&
+                           index - operation.firstOutput.value() < operation.outputCount;
+                }) != initialBudgetFailures_.end()) {
+                fail(operation, {}, "Value graph string budget exceeded",
+                     "An initial value exceeds this evaluation's string budget.");
+                return;
+            }
             const bool postOperation = operation.requiresPostImage;
             if (memoization_.pass == runtime::ValueGraphPass::PreImage && postOperation) {
                 ++operationIndex;
@@ -240,6 +260,7 @@ class Evaluator final {
             }
             runtime::detail::OperationKey key;
             bool valid = true;
+            std::optional<document::ParameterId> oversizedStringOperand;
             const bool cacheable =
                 memoization_.cache != nullptr &&
                 !std::holds_alternative<runtime::CompiledBoundsReadout>(operation.kernel);
@@ -257,6 +278,13 @@ class Evaluator final {
                 if (dependent)
                     key.add(time_);
                 key.add(rate_);
+                // A cache hit copies its retained values before write() can inspect them. Bind
+                // the entry to the same byte and scratch allowances that admitted it, including
+                // the room left by earlier output slots in this evaluation.
+                key.add(memoization_.maxStringBytes);
+                key.add(memoization_.maxRetainedStringBytes);
+                key.add(memoization_.maxStringScratchBytes);
+                key.add(memoization_.maxRetainedStringBytes - retainedStringBytes_);
                 std::visit(
                     [&](const auto& kernel) {
                         if constexpr (requires { kernel.operation; })
@@ -289,18 +317,31 @@ class Evaluator final {
                 runtime::forEachValueOperand(operation.kernel,
                                              [&](const CompiledValueOperand& operand) {
                                                  const auto* value = operandOf(operand);
-                                                 if (value)
-                                                     key.add(*value);
-                                                 else
+                                                 if (value == nullptr) {
                                                      valid = false;
+                                                     return;
+                                                 }
+                                                 // OperationKey serializes the operand value. Do
+                                                 // not copy an oversized literal into its key
+                                                 // before the evaluator's output or utility-input
+                                                 // budget checks can run.
+                                                 const auto* string =
+                                                     std::get_if<std::string>(value);
+                                                 if (string != nullptr &&
+                                                     string->size() > memoization_.maxStringBytes) {
+                                                     oversizedStringOperand = operand.id;
+                                                     valid = false;
+                                                     return;
+                                                 }
+                                                 key.add(*value);
                                              });
             }
             const auto hit = cacheable && valid
                                  ? memoization_.cache->find(key.bytes(), memoization_.revision)
                                  : std::nullopt;
             if (hit) {
-                std::copy(hit->values.begin(), hit->values.end(),
-                          outputs_.begin() + static_cast<std::ptrdiff_t>(first));
+                for (std::size_t slot = 0; slot < std::min(count, hit->values.size()); ++slot)
+                    write(operation, slot, hit->values[slot]);
                 if (memoization_.statistics)
                     ++memoization_.statistics->hits;
             } else {
@@ -310,6 +351,13 @@ class Evaluator final {
                 }
                 const auto diagnosticsBefore = diagnostics_.size();
                 evaluateOperation(operation);
+                if (memoization_.cancellation &&
+                    memoization_.cancellation->isCancellationRequested())
+                    return;
+                if (oversizedStringOperand && diagnosticsBefore == diagnostics_.size()) {
+                    fail(operation, *oversizedStringOperand, "Value graph string budget exceeded",
+                         "An input string exceeds the per-value byte limit.");
+                }
                 if (cacheable && valid && diagnosticsBefore == diagnostics_.size()) {
                     memoization_.cache->store(
                         key.bytes(), memoization_.revision,
@@ -345,13 +393,30 @@ class Evaluator final {
     // refused write is silently dropped rather than diagnosed twice -- run() already reported the
     // operation whose range is wrong, and every slot in the table starts at a usable zero.
     void write(const runtime::CompiledValueOperation& operation, const std::size_t slot,
-               CompiledValue value) {
+               const CompiledValue& value) {
         if (slot >= static_cast<std::size_t>(operation.outputCount) ||
             operation.firstOutput.value() >= outputs_.size() ||
             slot >= outputs_.size() - operation.firstOutput.value()) {
             return;
         }
-        outputs_[operation.firstOutput.value() + slot] = std::move(value);
+        const auto index = operation.firstOutput.value() + slot;
+        const auto* oldString = std::get_if<std::string>(&outputs_[index]);
+        const auto oldBytes = oldString == nullptr ? std::size_t{0} : oldString->size();
+        if (const auto* string = std::get_if<std::string>(&value)) {
+            if (string->size() > memoization_.maxStringBytes ||
+                string->size() >
+                    memoization_.maxRetainedStringBytes - (retainedStringBytes_ - oldBytes)) {
+                fail(operation, {}, "Value graph string budget exceeded",
+                     "The string output exceeds the per-value or retained-output byte limit.");
+                outputs_[index] = std::string{};
+                retainedStringBytes_ -= oldBytes;
+                return;
+            }
+        }
+        const auto* newString = std::get_if<std::string>(&value);
+        outputs_[index] = value;
+        retainedStringBytes_ = retainedStringBytes_ - oldBytes +
+                               (newString == nullptr ? std::size_t{0} : newString->size());
     }
 
     void markAvailable(const runtime::CompiledValueOperation& operation) {
@@ -406,6 +471,8 @@ class Evaluator final {
     std::vector<CompiledValue> outputs_;
     std::vector<std::uint8_t> available_;
     std::vector<ValueGraphDiagnostic> diagnostics_;
+    std::size_t retainedStringBytes_ = 0;
+    std::vector<std::size_t> initialBudgetFailures_;
 };
 
 void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operation) {
@@ -976,8 +1043,18 @@ void Evaluator::evaluateUtility(const runtime::CompiledValueOperation& operation
         operands.push_back(operandOf(operand));
     }
     const auto outcome = runtime::evaluateValueUtility(
-        {kernel.operation, operands, kernel.selectors, time_, rate_,
-         kernel.dataBlock.has_value() ? &*kernel.dataBlock : nullptr});
+        {kernel.operation,
+         operands,
+         kernel.selectors,
+         time_,
+         rate_,
+         kernel.dataBlock.has_value() ? &*kernel.dataBlock : nullptr,
+         {.maxStringBytes = memoization_.maxStringBytes,
+          .availableStringBytes = memoization_.maxRetainedStringBytes - retainedStringBytes_,
+          .maxScratchBytes = memoization_.maxStringScratchBytes,
+          .cancellation = memoization_.cancellation}});
+    if (outcome.cancelled)
+        return;
     if (outcome.failed) {
         const auto& blamed = outcome.failedOperand < kernel.operands.size()
                                  ? kernel.operands[outcome.failedOperand]

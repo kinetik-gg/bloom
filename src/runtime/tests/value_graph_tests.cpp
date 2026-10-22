@@ -493,6 +493,71 @@ void testLayerBoundsPostImagePass(Expectations& expectations) {
                         "a value operation downstream of Layer Bounds runs in the post-pass");
 }
 
+void testRetainedStringBudgetAndDiagnostic(Expectations& expectations) {
+    const std::vector<CompiledValueOperation> operations{
+        {document::NodeId::fromRaw(1), ValueOutputIndex::fromRaw(0), 1,
+         runtime::CompiledValuePassthrough{constant(std::string("abc"))}},
+        {document::NodeId::fromRaw(2), ValueOutputIndex::fromRaw(1), 1,
+         runtime::CompiledValuePassthrough{constant(std::string("de"))}},
+        {document::NodeId::fromRaw(3), ValueOutputIndex::fromRaw(2), 1,
+         runtime::CompiledValueUtility{
+             document::ValueUtilityKernel::StringRepeat,
+             {reference(ValueOutputIndex::fromRaw(1)), constant(std::int64_t{2})},
+             {},
+             std::nullopt}}};
+    runtime::OperationCache cache;
+    runtime::ValueGraphMemoization memo;
+    memo.cache = &cache;
+    memo.revision = document::Revision::fromRaw(1);
+    memo.maxStringBytes = 4;
+    memo.maxRetainedStringBytes = 7;
+    const auto evaluate = [&] {
+        return runtime::evaluateValueGraph(operations, 3, core::RationalTime::fromInteger(0),
+                                           document::FrameRate::framesPerSecond24(), {}, memo);
+    };
+    const auto refused = evaluate();
+    expectations.expect(refused.diagnostics.size() == 1 &&
+                            refused.diagnostics.front().nodeId == document::NodeId::fromRaw(3) &&
+                            refused.diagnostics.front().summary ==
+                                "Value utility string budget exceeded" &&
+                            holds(refused, 2, std::string{}),
+                        "the third string is diagnosed when retained output bytes are exhausted");
+    memo.maxRetainedStringBytes = 9;
+    const auto recovered = evaluate();
+    expectations.expect(recovered.diagnostics.empty() && holds(recovered, 2, std::string("dede")),
+                        "a budget failure is not cached as a successful empty artist value");
+}
+
+void testOversizedLiteralNeverEntersCacheKey(Expectations& expectations) {
+    const std::vector<CompiledValueOperation> operations{
+        {document::NodeId::fromRaw(7), ValueOutputIndex::fromRaw(0), 1,
+         runtime::CompiledValuePassthrough{constant(std::string("five!"))}}};
+    runtime::OperationCache cache;
+    runtime::OperationCacheStatistics statistics;
+    runtime::ValueGraphMemoization memo;
+    memo.cache = &cache;
+    memo.statistics = &statistics;
+    memo.revision = document::Revision::fromRaw(1);
+    memo.maxStringBytes = 4;
+    const auto evaluate = [&] {
+        return runtime::evaluateValueGraph(operations, 1, core::RationalTime::fromInteger(0),
+                                           document::FrameRate::framesPerSecond24(), {}, memo);
+    };
+    const auto first = evaluate();
+    const auto second = evaluate();
+    expectations.expect(first.diagnostics.size() == 1 &&
+                            first.diagnostics.front().nodeId == document::NodeId::fromRaw(7) &&
+                            holds(first, 0, std::string{}) && second.diagnostics.size() == 1 &&
+                            statistics.hits == 0,
+                        "an oversized literal is diagnosed on every evaluation, never cached");
+    memo.maxStringBytes = 6;
+    const auto admitted = evaluate();
+    const auto warm = evaluate();
+    expectations.expect(admitted.diagnostics.empty() && warm.diagnostics.empty() &&
+                            holds(warm, 0, std::string("five!")) && statistics.hits == 1,
+                        "the same literal is cached only after its byte budget admits it");
+}
+
 } // namespace
 
 int main() {
@@ -506,5 +571,7 @@ int main() {
     testRandomAndPromotions(expectations);
     testMalformedPlan(expectations);
     testLayerBoundsPostImagePass(expectations);
+    testRetainedStringBudgetAndDiagnostic(expectations);
+    testOversizedLiteralNeverEntersCacheKey(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

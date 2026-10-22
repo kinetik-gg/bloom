@@ -147,7 +147,7 @@ class ValueUtilityReader final {
 
 // Records a reader's malformed-plan failure on an outcome that already carries its fallbacks.
 inline void noteMalformedOperand(ValueUtilityOutcome& outcome, const ValueUtilityReader& reader) {
-    if (!reader.malformed()) {
+    if (!reader.malformed() || outcome.failed || outcome.cancelled) {
         return;
     }
     outcome.failed = true;

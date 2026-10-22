@@ -1,14 +1,20 @@
+#include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/runtime/value_utility_kernels.hpp>
 
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <mutex>
+#include <optional>
 #include <source_location>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -37,15 +43,16 @@ class Expectations final {
 };
 
 [[nodiscard]] ValueUtilityOutcome run(const Kernel kernel, const std::vector<CompiledValue>& values,
-                                      const std::vector<std::int64_t>& selectors = {}) {
+                                      const std::vector<std::int64_t>& selectors = {},
+                                      const runtime::ValueUtilityLimits limits = {}) {
     std::vector<const CompiledValue*> operands;
     operands.reserve(values.size());
     for (const auto& value : values) {
         operands.push_back(&value);
     }
-    return runtime::evaluateValueUtility({kernel, operands, selectors,
-                                          core::RationalTime::fromInteger(0),
-                                          document::FrameRate::framesPerSecond24()});
+    return runtime::evaluateValueUtility(
+        {kernel, operands, selectors, core::RationalTime::fromInteger(0),
+         document::FrameRate::framesPerSecond24(), nullptr, limits});
 }
 
 template <typename Value>
@@ -374,6 +381,77 @@ void testPredicates(Expectations& expectations) {
     }
 }
 
+void testAmplificationBudgets(Expectations& expectations) {
+    runtime::ValueUtilityLimits limits;
+    limits.maxStringBytes = 32;
+    limits.availableStringBytes = 7;
+    const auto repeat = run(Kernel::StringRepeat, {text("ab"), std::int64_t{4}}, {}, limits);
+    expectations.expect(repeat.failed && !repeat.cancelled && holds(repeat, 0, std::string{}) &&
+                            repeat.summary == "Value utility string budget exceeded",
+                        "Repeat refuses an output beyond the remaining graph allowance");
+    const auto replace =
+        run(Kernel::StringReplace, {text("aaaa"), text("a"), text("bb")}, {}, limits);
+    expectations.expect(replace.failed && holds(replace, 0, std::string{}),
+                        "Replace checks expansion before retaining its result");
+    const auto format =
+        run(Kernel::StringFormat, {text("{0}{0}{0}"), text("abc"), text(""), text(""), text("")},
+            {}, limits);
+    expectations.expect(format.failed && holds(format, 0, std::string{}),
+                        "Format checks repeated slots against the same byte allowance");
+    limits.availableStringBytes = 8;
+    expectations.expect(
+        !run(Kernel::StringRepeat, {text("ab"), std::int64_t{4}}, {}, limits).failed &&
+            !run(Kernel::StringReplace, {text("aaaa"), text("a"), text("bb")}, {}, limits).failed,
+        "an output exactly at the byte budget remains valid");
+    limits.maxScratchBytes = 16;
+    const auto scratch = run(Kernel::StringLength, {text("abcd")}, {}, limits);
+    expectations.expect(scratch.failed &&
+                            scratch.summary == "Value utility scratch budget exceeded" &&
+                            holds(scratch, 0, std::int64_t{0}),
+                        "Unicode indexing refuses scratch work before allocating boundaries");
+}
+
+void testCancellationIsNotAMalformedPlan(Expectations& expectations) {
+    using namespace std::chrono_literals;
+    runtime::TaskScheduler scheduler;
+    std::mutex mutex;
+    std::condition_variable ready;
+    std::optional<runtime::CancellationToken> token;
+    auto submission =
+        scheduler.submit<bool>(runtime::TaskRequest("String cancellation fixture",
+                                                    {.kind = runtime::TaskOwnerKind::Application,
+                                                     .id = runtime::TaskOwnerId::fromRaw(1)}),
+                               [&](runtime::TaskContext& context) -> runtime::TaskResult<bool> {
+                                   {
+                                       std::lock_guard lock(mutex);
+                                       token = context.cancellation();
+                                   }
+                                   ready.notify_one();
+                                   while (!context.isCancellationRequested())
+                                       std::this_thread::sleep_for(1ms);
+                                   return runtime::TaskResult<bool>::cancelled();
+                               });
+    expectations.expect(submission.accepted(), "cancellation fixture starts on a worker");
+    if (!submission.accepted())
+        return;
+    {
+        std::unique_lock lock(mutex);
+        (void)ready.wait_for(lock, 2s, [&] { return token.has_value(); });
+    }
+    submission.handle.cancel();
+    if (!token) {
+        expectations.expect(false, "cancellation fixture supplies a token");
+        return;
+    }
+    runtime::ValueUtilityLimits limits;
+    limits.cancellation = &*token;
+    const auto outcome =
+        run(Kernel::StringReplace, {text("aaaa"), text("a"), text("many")}, {}, limits);
+    expectations.expect(outcome.cancelled && !outcome.failed && holds(outcome, 0, std::string{}),
+                        "cancellation stops string work without a malformed-plan diagnostic");
+    scheduler.beginShutdown();
+}
+
 // A mistyped operand is a malformed plan, and the node still writes values of its declared kinds.
 void testMalformedOperands(Expectations& expectations) {
     const auto outcome = run(Kernel::StringLength, {42.0});
@@ -397,6 +475,8 @@ int main() {
     testMeasuredOperations(expectations);
     testEditingOperations(expectations);
     testPredicates(expectations);
+    testAmplificationBudgets(expectations);
+    testCancellationIsNotAMalformedPlan(expectations);
     testMalformedOperands(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

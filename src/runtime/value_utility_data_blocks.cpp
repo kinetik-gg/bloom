@@ -42,18 +42,44 @@ ValueUtilityOutcome detail::evaluateValueDataBlock(const ValueUtilityInvocation&
         const auto* curve = std::get_if<document::DataBlockCurve>(&block.payload);
         double time = 0.0;
         if (curve == nullptr || !scalar(operand(invocation, 0), time) || curve->samples.empty() ||
-            !(curve->domainEnd > curve->domainStart))
+            !std::isfinite(time) || !std::isfinite(curve->domainStart) ||
+            !std::isfinite(curve->domainEnd) || !(curve->domainEnd > curve->domainStart))
             return failure("Data Sample requires a valid Curve block and scalar time");
-        const double position =
-            std::clamp((time - curve->domainStart) / (curve->domainEnd - curve->domainStart), 0.0,
-                       1.0) *
-            static_cast<double>(curve->samples.size() - 1);
+        if (time <= curve->domainStart || time >= curve->domainEnd) {
+            const auto endpoint =
+                time <= curve->domainStart ? curve->samples.front() : curve->samples.back();
+            if (!std::isfinite(endpoint))
+                return failure("Data Sample endpoint is not finite");
+            ValueUtilityOutcome result;
+            result.outputs[0] = endpoint;
+            return result;
+        }
+        // Use direct differences when finite: half-scaling a subnormal interval would round both
+        // endpoints to zero. Only the genuinely overflowing difference needs scaled operands.
+        const double span = curve->domainEnd - curve->domainStart;
+        const double offset = time - curve->domainStart;
+        const double normalized = std::isfinite(span) && std::isfinite(offset)
+                                      ? offset / span
+                                      : ((time * 0.5) - (curve->domainStart * 0.5)) /
+                                            ((curve->domainEnd * 0.5) - (curve->domainStart * 0.5));
+        if (!std::isfinite(normalized) || normalized < 0.0 || normalized > 1.0)
+            return failure("Data Sample position is not representable");
+        const double position = normalized * static_cast<double>(curve->samples.size() - 1);
+        if (!std::isfinite(position) || position < 0.0 ||
+            position >= static_cast<double>(curve->samples.size()))
+            return failure("Data Sample index is not representable");
         const auto lower = static_cast<std::size_t>(position);
         const auto upper = std::min(lower + 1, curve->samples.size() - 1);
         const double fraction = position - static_cast<double>(lower);
         ValueUtilityOutcome result;
-        result.outputs[0] =
-            curve->samples[lower] + (curve->samples[upper] - curve->samples[lower]) * fraction;
+        const auto left = curve->samples[lower];
+        const auto right = curve->samples[upper];
+        if (!std::isfinite(left) || !std::isfinite(right))
+            return failure("Data Sample values must be finite");
+        const auto interpolated = std::lerp(left, right, fraction);
+        if (!std::isfinite(interpolated))
+            return failure("Data Sample interpolation is not representable");
+        result.outputs[0] = interpolated;
         return result;
     }
     if (invocation.operation == Kernel::RampSample) {

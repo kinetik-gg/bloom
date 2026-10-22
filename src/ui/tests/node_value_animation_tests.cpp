@@ -6,7 +6,11 @@
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
+#include <QElapsedTimer>
 #include <QSignalSpy>
+#include <QThread>
+
+#include <utility>
 
 using namespace bloom;
 using namespace bloom::ui;
@@ -18,6 +22,71 @@ namespace {
     if (!time.has_value())
         throw std::runtime_error("frame time");
     return *time;
+}
+
+void testVector3DrivenReadout() {
+    App fixture;
+    expect(addDefaultSolidLayer(fixture.session), "a solid layer for the Vector 3 readout");
+    QCoreApplication::processEvents();
+    const auto layer = fixture.nodeOfType(document::kLayerOutputNodeType);
+    expect(layer.has_value(), "the Vector 3 fixture has a layer output");
+    if (!layer)
+        return;
+    const auto vector = fixture.addByType(document::kVector3ValueNodeType, {-600, -200});
+    const auto separate = fixture.addByType(document::kSeparateXyzNodeType, {-350, -200});
+    const auto* record = fixture.session.composition()->graph().findNode(vector);
+    document::ParameterId valueId;
+    if (record)
+        for (const auto& binding : record->parameters)
+            if (binding.role == document::kValueParameterRole)
+                valueId = binding.parameterId;
+    expect(valueId.isValid(), "the Vector 3 value parameter is addressable");
+    if (!valueId.isValid())
+        return;
+    auto* vectorOutput = fixture.outputSocket(vector);
+    auto* vectorInput = fixture.namedSocket(separate, QStringLiteral("vector"), true);
+    auto* xOutput = fixture.namedSocket(separate, QStringLiteral("x"), false);
+    auto* opacityInput =
+        fixture.namedSocket(*layer, QString::fromUtf8(document::kOpacityParameterRole), true);
+    expect(vectorOutput && vectorInput && xOutput && opacityInput,
+           "the Vector 3 driver sockets are available");
+    if (!(vectorOutput && vectorInput && xOutput && opacityInput))
+        return;
+    fixture.drag(vectorOutput->scenePos(), vectorInput->scenePos());
+    fixture.drag(xOutput->scenePos(), opacityInput->scenePos());
+    expect(driverFor(fixture, *layer, document::kOpacityParameterRole) != nullptr,
+           "Separate XYZ drives layer opacity");
+    expect(fixture.session.setCurrentTime(frame(0)), "Vector 3 starts at frame zero");
+    expect(fixture.session.setParameterValue(valueId, document::Vec3d{0.2, 0.3, 0.4},
+                                             QStringLiteral("Set Vector 3")),
+           "the first Vector 3 value is authored");
+    expect(fixture.session.toggleKeyframeForParameter(valueId), "Vector 3 receives its first key");
+    expect(fixture.session.setCurrentTime(frame(10)), "Vector 3 moves to frame ten");
+    expect(fixture.session.setParameterValue(valueId, document::Vec3d{0.8, 0.6, 0.1},
+                                             QStringLiteral("Set Vector 3")),
+           "the second Vector 3 value is keyed");
+    const auto* opacity = parameterFor(fixture, *layer, document::kOpacityParameterRole);
+    expect(opacity != nullptr, "the driven opacity parameter is addressable");
+    if (!opacity)
+        return;
+    for (const auto [index, expected] : std::array<std::pair<std::int64_t, double>, 3>{
+             std::pair{std::int64_t{0}, 0.2}, std::pair{std::int64_t{5}, 0.5},
+             std::pair{std::int64_t{10}, 0.8}}) {
+        expect(fixture.session.setCurrentTime(frame(index)), "readout moves to a keyed frame");
+        fixture.session.refreshDrivenValues();
+        const auto expectedText = QString::number(expected, 'g', 12);
+        QElapsedTimer wait;
+        wait.start();
+        while (fixture.session.drivenValueText(opacity->id) != expectedText &&
+               wait.elapsed() < 5000) {
+            QCoreApplication::processEvents();
+            QThread::msleep(5);
+        }
+        const auto composited = composite(fixture, frame(index));
+        expect(fixture.session.drivenValueText(opacity->id) == expectedText && composited.ok &&
+                   closeTo(composited.centerPixel[3], expected),
+               "animated Vector 3 readout matches the rendered Separate XYZ driver");
+    }
 }
 } // namespace
 
@@ -91,6 +160,7 @@ int main(int argc, char** argv) {
 
         // Undo puts the whole thing back.
         expect(a.session.undo(), "the last key undoes");
+        testVector3DrivenReadout();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

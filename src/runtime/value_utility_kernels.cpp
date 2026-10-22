@@ -102,19 +102,64 @@ enum class Family : std::uint8_t {
 namespace bloom::runtime {
 
 ValueUtilityOutcome evaluateValueUtility(const ValueUtilityInvocation& invocation) {
+    auto refused = detail::shapedOutcome(invocation.operation);
+    if (invocation.limits.cancellation &&
+        invocation.limits.cancellation->isCancellationRequested()) {
+        refused.cancelled = true;
+        return refused;
+    }
+    for (std::size_t index = 0; index < invocation.operands.size(); ++index) {
+        const auto* value = invocation.operands[index];
+        const auto* string = value == nullptr ? nullptr : std::get_if<std::string>(value);
+        if (string != nullptr && string->size() > invocation.limits.maxStringBytes) {
+            refused.failed = true;
+            refused.failedOperand = index;
+            refused.summary = "Value utility string budget exceeded";
+            refused.detail = "An input string exceeds the per-value byte limit.";
+            return refused;
+        }
+    }
+    ValueUtilityOutcome outcome;
     switch (familyOf(invocation.operation)) {
     case Family::Time:
-        return detail::evaluateValueTime(invocation);
+        outcome = detail::evaluateValueTime(invocation);
+        break;
     case Family::String:
-        return detail::evaluateValueString(invocation);
+        outcome = detail::evaluateValueString(invocation);
+        break;
     case Family::Numeric:
-        return detail::evaluateValueNumeric(invocation);
+        outcome = detail::evaluateValueNumeric(invocation);
+        break;
     case Family::Conversion:
+        outcome = detail::evaluateValueConversion(invocation);
         break;
     case Family::DataBlocks:
-        return detail::evaluateValueDataBlock(invocation);
+        outcome = detail::evaluateValueDataBlock(invocation);
+        break;
     }
-    return detail::evaluateValueConversion(invocation);
+    if (invocation.limits.cancellation && invocation.limits.cancellation->isCancellationRequested())
+        outcome.cancelled = true;
+    if (outcome.failed || outcome.cancelled)
+        return outcome;
+    auto remaining =
+        std::min(invocation.limits.maxStringBytes, invocation.limits.availableStringBytes);
+    for (std::size_t slot = 0; slot < outcome.outputCount; ++slot) {
+        const auto* string = std::get_if<std::string>(&outcome.outputs[slot]);
+        if (string == nullptr)
+            continue;
+        if (string->size() > remaining) {
+            outcome.failed = true;
+            outcome.summary = "Value utility string budget exceeded";
+            outcome.detail =
+                "The string output exceeds the per-value or retained-output byte limit.";
+            outcome.outputs[slot] = std::string{};
+            if (outcome.outputCount > 1 && std::holds_alternative<bool>(outcome.outputs[1]))
+                outcome.outputs[1] = false;
+        } else {
+            remaining -= string->size();
+        }
+    }
+    return outcome;
 }
 
 } // namespace bloom::runtime

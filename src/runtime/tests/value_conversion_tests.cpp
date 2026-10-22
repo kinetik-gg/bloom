@@ -400,6 +400,26 @@ void testTimeConversions(Expectations& expectations) {
             holds(runAt(rate, Kernel::FramesToSeconds, {std::int64_t{-24}}), 0, -1.0),
         "Frames To Seconds is its exact inverse at a frame-aligned time");
 
+    for (const auto frameRate :
+         {*document::FrameRate::create(24, 1), *document::FrameRate::create(25, 1),
+          *document::FrameRate::create(30000, 1001)}) {
+        for (const auto frame : std::array<std::int64_t, 9>{-100, -29, -7, -1, 0, 1, 7, 29, 100}) {
+            const auto boundary = runAt(frameRate, Kernel::FramesToSeconds, {frame});
+            const auto* seconds = std::get_if<double>(&boundary.outputs[0]);
+            if (boundary.failed || seconds == nullptr) {
+                expectations.expect(false, "an ordinary frame has a Scalar boundary");
+                continue;
+            }
+            const auto before = std::nextafter(*seconds, -std::numeric_limits<double>::infinity());
+            const auto after = std::nextafter(*seconds, std::numeric_limits<double>::infinity());
+            expectations.expect(
+                holds(runAt(frameRate, Kernel::SecondsToFrames, {*seconds}), 0, frame) &&
+                    holds(runAt(frameRate, Kernel::SecondsToFrames, {before}), 0, frame - 1) &&
+                    holds(runAt(frameRate, Kernel::SecondsToFrames, {after}), 0, frame),
+                "a frame boundary and its adjacent Scalars keep exact floor semantics");
+        }
+    }
+
     struct TimecodeCase final {
         double seconds;
         std::string_view label;

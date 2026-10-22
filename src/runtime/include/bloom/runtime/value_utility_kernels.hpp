@@ -3,6 +3,7 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
+#include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/compiled_value_graph.hpp>
 
 #include <array>
@@ -23,16 +24,24 @@ namespace bloom::runtime {
 // without building a plan at all, and keeps value_graph_evaluation.cpp from growing another
 // six hundred lines of string handling.
 //
-// THE FAILURE MODEL IS THE LIBRARY'S, NOT THE PARSER'S. A parsing node NEVER fails: it answers the
-// parsed value or the authored fallback, and a Boolean saying which. The only failure an outcome
-// here can report is a MALFORMED PLAN -- an operand that arrived as the wrong alternative, which
-// the document's typing already refuses and which therefore means the plan disagrees with the
-// document. That is reported, and the node's documented fallbacks are substituted, exactly as
-// every other value kernel treats one.
+// A parser's invalid text is a valid outcome with `valid=false`. Malformed operand kinds, resource
+// exhaustion and invalid numeric data are separate diagnosed failures with typed fallbacks;
+// cancellation stops the current evaluation and is never reported as a malformed plan.
 
 // No library node declares more than four outputs (Separate HSV's four channels), so the outcome
 // carries its values inline rather than allocating one vector per operation per frame.
 inline constexpr std::size_t kMaximumValueUtilityOutputs = 4;
+inline constexpr std::size_t kDefaultValueStringBytes = 1024U * 1024U;
+inline constexpr std::size_t kDefaultValueStringScratchBytes = 16U * 1024U * 1024U;
+
+struct ValueUtilityLimits final {
+    // The per-value limit also applies to input strings. availableStringBytes is the remaining
+    // retained-output allowance in this evaluation; direct kernel callers may use a smaller value.
+    std::size_t maxStringBytes = kDefaultValueStringBytes;
+    std::size_t availableStringBytes = kDefaultValueStringBytes;
+    std::size_t maxScratchBytes = kDefaultValueStringScratchBytes;
+    const CancellationToken* cancellation = nullptr;
+};
 
 struct ValueUtilityInvocation final {
     document::ValueUtilityKernel operation = document::ValueUtilityKernel::ScalarToString;
@@ -48,15 +57,17 @@ struct ValueUtilityInvocation final {
     core::RationalTime time;
     document::FrameRate rate = document::FrameRate::framesPerSecond24();
     const document::DataBlockRecord* dataBlock = nullptr;
+    ValueUtilityLimits limits;
 };
 
 struct ValueUtilityOutcome final {
     std::array<CompiledValue, kMaximumValueUtilityOutputs> outputs{};
     std::uint8_t outputCount = 1;
-    // Set only for a malformed plan. `summary` and `detail` are static text, not formatted per
+    // Set for a diagnosed failure. `summary` and `detail` are static text, not formatted per
     // frame: a diagnostic that allocated a string on every failing frame would cost more in a
     // broken plan than in a working one.
     bool failed = false;
+    bool cancelled = false;
     std::string_view summary;
     std::string_view detail;
     // Which operand was at fault, so the evaluator can name its parameter. Past the operand count

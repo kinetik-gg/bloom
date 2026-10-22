@@ -4,6 +4,7 @@
 
 #include <bloom/core/safe_parse.hpp>
 
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -22,10 +23,85 @@ using runtime::detail::ValueUtilityReader;
 
 using Kernel = document::ValueUtilityKernel;
 
-// A composition's rate as a double. Exact for every rate a document can hold: both parts are
-// std::uint32_t, so the quotient is a ratio of two exactly representable integers.
+// A fast estimate of the composition rate. The exact boundary comparisons below always use the
+// integer numerator and denominator; a rounded quotient cannot decide which side of a frame start
+// an adjacent binary64 value lies on.
 [[nodiscard]] double rateAsScalar(const document::FrameRate rate) noexcept {
     return static_cast<double>(rate.numerator()) / static_cast<double>(rate.denominator());
+}
+
+struct UInt128 final {
+    std::uint64_t high = 0;
+    std::uint64_t low = 0;
+};
+
+// A binary64 second and an integral frame boundary can each be compared as exact integers after
+// moving the binary exponent across the comparison. This keeps a value just BEFORE a boundary in
+// the earlier frame even when floating multiplication would round its product up to an integer.
+[[nodiscard]] UInt128 multiply64x32(const std::uint64_t value,
+                                    const std::uint32_t multiplier) noexcept {
+    const auto lower = (value & 0xffff'ffffULL) * multiplier;
+    const auto upper = (value >> 32U) * multiplier;
+    const auto low = lower + (upper << 32U);
+    return {(upper >> 32U) + static_cast<std::uint64_t>(low < lower), low};
+}
+
+[[nodiscard]] int compare(const UInt128 left, const UInt128 right) noexcept {
+    if (left.high != right.high)
+        return left.high < right.high ? -1 : 1;
+    if (left.low != right.low)
+        return left.low < right.low ? -1 : 1;
+    return 0;
+}
+
+[[nodiscard]] std::optional<UInt128> shiftLeft(const UInt128 value,
+                                               const std::uint32_t bits) noexcept {
+    if (bits == 0 || (value.high == 0 && value.low == 0))
+        return value;
+    const auto used =
+        value.high != 0 ? 128U - std::countl_zero(value.high) : 64U - std::countl_zero(value.low);
+    if (bits > 128U - used)
+        return std::nullopt;
+    if (bits >= 64U)
+        return UInt128{value.low << (bits - 64U), 0};
+    return UInt128{(value.high << bits) | (value.low >> (64U - bits)), value.low << bits};
+}
+
+[[nodiscard]] std::uint64_t magnitude(const std::int64_t value) noexcept {
+    return value < 0 ? static_cast<std::uint64_t>(-(value + 1)) + 1U
+                     : static_cast<std::uint64_t>(value);
+}
+
+[[nodiscard]] int compareSecondsToFrameStart(const double seconds, const std::int64_t frame,
+                                             const document::FrameRate rate) noexcept {
+    if (seconds == 0.0 && frame == 0)
+        return 0;
+    if (seconds < 0.0 && frame >= 0)
+        return -1;
+    if (seconds >= 0.0 && frame < 0)
+        return 1;
+    if (frame == 0)
+        return seconds < 0.0 ? -1 : 1;
+    const auto bits = std::bit_cast<std::uint64_t>(std::abs(seconds));
+    const auto fraction = bits & ((std::uint64_t{1} << 52U) - 1U);
+    const auto biasedExponent = static_cast<std::int32_t>((bits >> 52U) & 0x7ffU);
+    const auto significand = biasedExponent == 0 ? fraction : fraction | (std::uint64_t{1} << 52U);
+    const auto exponent = biasedExponent == 0 ? -1074 : biasedExponent - 1023 - 52;
+    auto secondSide = multiply64x32(significand, rate.numerator());
+    auto frameSide = multiply64x32(magnitude(frame), rate.denominator());
+    int ordering = 0;
+    if (exponent >= 0) {
+        const auto shifted = shiftLeft(secondSide, static_cast<std::uint32_t>(exponent));
+        ordering = shifted ? compare(*shifted, frameSide) : 1;
+    } else {
+        const auto shifted = shiftLeft(frameSide, static_cast<std::uint32_t>(-exponent));
+        ordering = shifted ? compare(secondSide, *shifted) : -1;
+    }
+    return frame < 0 ? -ordering : ordering;
+}
+
+[[nodiscard]] std::int64_t frameFromOrdered(const std::uint64_t value) noexcept {
+    return std::bit_cast<std::int64_t>(value ^ (std::uint64_t{1} << 63U));
 }
 
 // The NOMINAL integer frame count a timecode's frame field counts to: 24 at 24, 25 at 25, and 30 at
@@ -45,15 +121,60 @@ using Kernel = document::ValueUtilityKernel;
     if (std::isnan(seconds)) {
         return 0;
     }
+    if (!std::isfinite(seconds))
+        return seconds < 0.0 ? std::numeric_limits<std::int64_t>::min()
+                             : std::numeric_limits<std::int64_t>::max();
     const double frames = std::floor(seconds * rateAsScalar(rate));
     constexpr double kUpperBound = 9223372036854775808.0;
-    if (frames >= kUpperBound) {
-        return std::numeric_limits<std::int64_t>::max();
-    }
-    if (frames < -kUpperBound) {
+    const auto guess = frames >= kUpperBound   ? std::numeric_limits<std::int64_t>::max()
+                       : frames < -kUpperBound ? std::numeric_limits<std::int64_t>::min()
+                                               : static_cast<std::int64_t>(frames);
+    const auto contains = [&](const std::int64_t frame) {
+        return compareSecondsToFrameStart(seconds, frame, rate) >= 0 &&
+               (frame == std::numeric_limits<std::int64_t>::max() ||
+                compareSecondsToFrameStart(seconds, frame + 1, rate) < 0);
+    };
+    if (contains(guess))
+        return guess;
+    if (guess > std::numeric_limits<std::int64_t>::min() && contains(guess - 1))
+        return guess - 1;
+    if (guess < std::numeric_limits<std::int64_t>::max() && contains(guess + 1))
+        return guess + 1;
+    // Far outside ordinary composition durations, the rounded rate may put the estimate more
+    // than one frame away. The ordered signed range gives a bounded exact fallback search.
+    std::uint64_t low = 0;
+    std::uint64_t high = std::numeric_limits<std::uint64_t>::max();
+    if (compareSecondsToFrameStart(seconds, frameFromOrdered(low), rate) < 0)
         return std::numeric_limits<std::int64_t>::min();
+    if (compareSecondsToFrameStart(seconds, frameFromOrdered(high), rate) >= 0)
+        return std::numeric_limits<std::int64_t>::max();
+    while (high - low > 1) {
+        const auto middle = low + (high - low) / 2;
+        if (compareSecondsToFrameStart(seconds, frameFromOrdered(middle), rate) >= 0)
+            low = middle;
+        else
+            high = middle;
     }
-    return static_cast<std::int64_t>(frames);
+    return frameFromOrdered(low);
+}
+
+[[nodiscard]] std::optional<double> secondsForFrame(const std::int64_t frame,
+                                                    const document::FrameRate rate) noexcept {
+    auto seconds = static_cast<double>(frame) * (static_cast<double>(rate.denominator()) /
+                                                 static_cast<double>(rate.numerator()));
+    for (int correction = 0; correction < 16; ++correction) {
+        if (compareSecondsToFrameStart(seconds, frame, rate) < 0) {
+            seconds = std::nextafter(seconds, std::numeric_limits<double>::infinity());
+            continue;
+        }
+        const auto previous = std::nextafter(seconds, -std::numeric_limits<double>::infinity());
+        if (compareSecondsToFrameStart(previous, frame, rate) >= 0) {
+            seconds = previous;
+            continue;
+        }
+        return framesForSeconds(seconds, rate) == frame ? std::optional(seconds) : std::nullopt;
+    }
+    return std::nullopt;
 }
 
 [[nodiscard]] std::string twoDigits(const std::int64_t value) {
@@ -178,12 +299,17 @@ ValueUtilityOutcome evaluateValueTime(const ValueUtilityInvocation& invocation) 
         outcome.outputs[0] = framesForSeconds(reader.scalar(0), invocation.rate);
         break;
     case Kernel::FramesToSeconds: {
-        // The exact inverse at a frame-aligned time: a frame index times the rate's reciprocal,
-        // with both parts of the rate exactly representable.
         const auto frames = reader.integer(0);
-        outcome.outputs[0] =
-            static_cast<double>(frames) * (static_cast<double>(invocation.rate.denominator()) /
-                                           static_cast<double>(invocation.rate.numerator()));
+        const auto seconds = secondsForFrame(frames, invocation.rate);
+        if (!seconds) {
+            outcome.failed = true;
+            outcome.failedOperand = 0;
+            outcome.summary = "Frame boundary is not representable in Scalar seconds";
+            outcome.detail =
+                "At this magnitude, adjacent frames have no distinct binary64 seconds.";
+            break;
+        }
+        outcome.outputs[0] = *seconds;
         break;
     }
     case Kernel::SecondsToTimecode:
@@ -223,13 +349,10 @@ ValueUtilityOutcome evaluateValueTime(const ValueUtilityInvocation& invocation) 
         // Back through the NOMINAL count, not the actual rate: a non-drop label counts nominal
         // frames per labelled second, and reading it through the fractional rate would answer a
         // different instant than the one the label names.
-        const double seconds = frames.has_value()
-                                   ? static_cast<double>(*frames) *
-                                         (static_cast<double>(invocation.rate.denominator()) /
-                                          static_cast<double>(invocation.rate.numerator()))
-                                   : fallback;
-        outcome.outputs[0] = seconds;
-        outcome.outputs[1] = frames.has_value();
+        const auto seconds =
+            frames.has_value() ? secondsForFrame(*frames, invocation.rate) : std::nullopt;
+        outcome.outputs[0] = seconds.value_or(fallback);
+        outcome.outputs[1] = seconds.has_value();
         break;
     }
     default:

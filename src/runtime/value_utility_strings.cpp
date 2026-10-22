@@ -15,6 +15,7 @@ namespace {
 
 using namespace bloom;
 using runtime::ValueUtilityInvocation;
+using runtime::ValueUtilityLimits;
 using runtime::ValueUtilityOutcome;
 using runtime::detail::selectorAt;
 using runtime::detail::shapedOutcome;
@@ -84,11 +85,14 @@ using Kernel = document::ValueUtilityKernel;
 // One comparison rule for Contains, Starts With, Ends With and Equals, so the four cannot disagree
 // about what "case-insensitive" means.
 [[nodiscard]] bool matchesAt(const std::string_view text, const std::size_t offset,
-                             const std::string_view needle, const bool caseSensitive) {
+                             const std::string_view needle, const bool caseSensitive,
+                             const runtime::CancellationToken* cancellation = nullptr) {
     if (offset + needle.size() > text.size()) {
         return false;
     }
     for (std::size_t index = 0; index < needle.size(); ++index) {
+        if ((index & 4095U) == 0U && cancellation && cancellation->isCancellationRequested())
+            return false;
         const char left = text[offset + index];
         const char right = needle[index];
         if (caseSensitive ? left != right : asciiLower(left) != asciiLower(right)) {
@@ -99,7 +103,8 @@ using Kernel = document::ValueUtilityKernel;
 }
 
 [[nodiscard]] bool containsText(const std::string_view text, const std::string_view needle,
-                                const bool caseSensitive) {
+                                const bool caseSensitive,
+                                const runtime::CancellationToken* cancellation) {
     // A string contains the empty string, at every position. That is the convention every standard
     // library's find() already has, and the alternative would make an unfilled operand read false.
     if (needle.empty()) {
@@ -109,7 +114,9 @@ using Kernel = document::ValueUtilityKernel;
         return false;
     }
     for (std::size_t offset = 0; offset + needle.size() <= text.size(); ++offset) {
-        if (matchesAt(text, offset, needle, caseSensitive)) {
+        if ((offset & 4095U) == 0U && cancellation && cancellation->isCancellationRequested())
+            return false;
+        if (matchesAt(text, offset, needle, caseSensitive, cancellation)) {
             return true;
         }
     }
@@ -123,20 +130,77 @@ using Kernel = document::ValueUtilityKernel;
 //
 // An unmatched `{` or `}` is copied literally. A template is not a program, and refusing to render
 // one because a brace is unbalanced would replace a slightly wrong caption with no caption.
-[[nodiscard]] std::string formatTemplate(const std::string_view pattern,
-                                         const std::span<const std::string_view> arguments) {
-    std::string text;
-    text.reserve(pattern.size());
+class StringBuilder final {
+  public:
+    explicit StringBuilder(const ValueUtilityLimits& limits) : limits_(limits) {}
+
+    [[nodiscard]] bool append(const std::string_view part) {
+        if (cancelled())
+            return false;
+        const auto limit = std::min(limits_.maxStringBytes, limits_.availableStringBytes);
+        if (part.size() > limit - text_.size()) {
+            exceeded_ = true;
+            return false;
+        }
+        // Copy in bounded runs so cancellation can stop even a single large operand.
+        for (std::size_t offset = 0; offset < part.size();) {
+            if (cancelled())
+                return false;
+            const auto count = std::min(std::size_t{4096}, part.size() - offset);
+            text_.append(part.data() + offset, count);
+            offset += count;
+        }
+        return true;
+    }
+    [[nodiscard]] bool append(const char character) {
+        return append(std::string_view(&character, 1));
+    }
+    [[nodiscard]] bool cancelled() {
+        cancelled_ =
+            cancelled_ || (limits_.cancellation && limits_.cancellation->isCancellationRequested());
+        return cancelled_;
+    }
+    [[nodiscard]] bool exceeded() const noexcept { return exceeded_; }
+    [[nodiscard]] bool wasCancelled() const noexcept { return cancelled_; }
+    [[nodiscard]] std::string take() { return std::move(text_); }
+
+  private:
+    const ValueUtilityLimits& limits_;
+    std::string text_;
+    bool exceeded_ = false;
+    bool cancelled_ = false;
+};
+
+void finishString(ValueUtilityOutcome& outcome, StringBuilder& builder) {
+    if (builder.wasCancelled()) {
+        outcome.cancelled = true;
+        return;
+    }
+    if (builder.exceeded()) {
+        outcome.failed = true;
+        outcome.summary = "Value utility string budget exceeded";
+        outcome.detail = "The string output exceeds the per-value or retained-output byte limit.";
+        return;
+    }
+    outcome.outputs[0] = builder.take();
+}
+
+void formatTemplate(const std::string_view pattern,
+                    const std::span<const std::string_view> arguments, StringBuilder& text) {
     std::size_t index = 0;
     while (index < pattern.size()) {
+        if (text.cancelled())
+            return;
         const char character = pattern[index];
         if (character == '{' && index + 1 < pattern.size() && pattern[index + 1] == '{') {
-            text.push_back('{');
+            if (!text.append('{'))
+                return;
             index += 2;
             continue;
         }
         if (character == '}' && index + 1 < pattern.size() && pattern[index + 1] == '}') {
-            text.push_back('}');
+            if (!text.append('}'))
+                return;
             index += 2;
             continue;
         }
@@ -148,38 +212,40 @@ using Kernel = document::ValueUtilityKernel;
             const auto slot = digits.empty() ? std::nullopt : core::parseInteger(digits, 10);
             if (slot.has_value() && *slot >= 0) {
                 if (static_cast<std::size_t>(*slot) < arguments.size()) {
-                    text.append(arguments[static_cast<std::size_t>(*slot)]);
+                    if (!text.append(arguments[static_cast<std::size_t>(*slot)]))
+                        return;
                 }
                 index = close + 1;
                 continue;
             }
         }
-        text.push_back(character);
+        if (!text.append(character))
+            return;
         ++index;
     }
-    return text;
 }
 
-[[nodiscard]] std::string replaceAll(const std::string_view text, const std::string_view search,
-                                     const std::string_view replacement) {
+void replaceAll(const std::string_view text, const std::string_view search,
+                const std::string_view replacement, StringBuilder& result) {
     // An empty search matches everywhere and nowhere: replacing it would either loop forever or
     // interleave the replacement between every character. The text is answered unchanged.
     if (search.empty()) {
-        return std::string(text);
+        (void)result.append(text);
+        return;
     }
-    std::string result;
     std::size_t offset = 0;
     while (offset < text.size()) {
+        if (result.cancelled())
+            return;
         const auto found = text.find(search, offset);
         if (found == std::string_view::npos) {
             break;
         }
-        result.append(text.substr(offset, found - offset));
-        result.append(replacement);
+        if (!result.append(text.substr(offset, found - offset)) || !result.append(replacement))
+            return;
         offset = found + search.size();
     }
-    result.append(text.substr(offset));
-    return result;
+    (void)result.append(text.substr(offset));
 }
 
 // Title case over ASCII: the first word character of each run is upper, the rest lower. A run ends
@@ -209,11 +275,41 @@ namespace bloom::runtime::detail {
 ValueUtilityOutcome evaluateValueString(const ValueUtilityInvocation& invocation) {
     auto outcome = shapedOutcome(invocation.operation);
     ValueUtilityReader reader(invocation);
+    if (invocation.limits.cancellation &&
+        invocation.limits.cancellation->isCancellationRequested()) {
+        outcome.cancelled = true;
+        return outcome;
+    }
+    const auto needsBoundaries = invocation.operation == Kernel::StringLength ||
+                                 invocation.operation == Kernel::StringSubstring ||
+                                 invocation.operation == Kernel::StringCharacterAt ||
+                                 invocation.operation == Kernel::StringPad;
+    if (needsBoundaries) {
+        const auto text = reader.text(0);
+        if (invocation.limits.maxScratchBytes / sizeof(std::size_t) <= text.size()) {
+            outcome.failed = true;
+            outcome.failedOperand = 0;
+            outcome.summary = "Value utility scratch budget exceeded";
+            outcome.detail = "Unicode boundary indexing exceeds the scratch byte limit.";
+            return outcome;
+        }
+    }
+    const auto copyText = [&outcome, &invocation](const std::string_view value) {
+        if (value.size() >
+            std::min(invocation.limits.maxStringBytes, invocation.limits.availableStringBytes)) {
+            outcome.failed = true;
+            outcome.summary = "Value utility string budget exceeded";
+            outcome.detail =
+                "The string output exceeds the per-value or retained-output byte limit.";
+            return false;
+        }
+        outcome.outputs[0] = std::string(value);
+        return true;
+    };
     // The same pair every node with a `valid` output writes: the answer, and whether it is the
-    // node's own or the authored fallback.
-    const auto answered = [&outcome](std::string value, const bool valid) {
-        outcome.outputs[0] = std::move(value);
-        outcome.outputs[1] = valid;
+    // node's own or the authored fallback. Exhaustion never reports an artist-valid answer.
+    const auto answered = [&outcome, &copyText](const std::string_view value, const bool valid) {
+        outcome.outputs[1] = copyText(value) && valid;
     };
     switch (invocation.operation) {
     case Kernel::StringConcatenate: {
@@ -223,24 +319,30 @@ ValueUtilityOutcome evaluateValueString(const ValueUtilityInvocation& invocation
         const std::array<std::string_view, 4> parts{reader.text(0), reader.text(1), reader.text(2),
                                                     reader.text(3)};
         const auto separator = reader.text(4);
-        std::string text;
+        StringBuilder text(invocation.limits);
+        bool hasPart = false;
         for (const auto part : parts) {
             if (part.empty()) {
                 continue;
             }
-            if (!text.empty()) {
-                text.append(separator);
+            if (hasPart) {
+                if (!text.append(separator))
+                    break;
             }
-            text.append(part);
+            if (!text.append(part))
+                break;
+            hasPart = true;
         }
-        outcome.outputs[0] = std::move(text);
+        finishString(outcome, text);
         break;
     }
     case Kernel::StringFormat: {
         const auto pattern = reader.text(0);
         const std::array<std::string_view, 4> arguments{reader.text(1), reader.text(2),
                                                         reader.text(3), reader.text(4)};
-        outcome.outputs[0] = formatTemplate(pattern, arguments);
+        StringBuilder text(invocation.limits);
+        formatTemplate(pattern, arguments, text);
+        finishString(outcome, text);
         break;
     }
     case Kernel::StringLength: {
@@ -260,7 +362,7 @@ ValueUtilityOutcome evaluateValueString(const ValueUtilityInvocation& invocation
         const auto length = requested < 0 ? count - start : std::min(requested, count - start);
         const auto first = boundaries[static_cast<std::size_t>(start)];
         const auto last = boundaries[static_cast<std::size_t>(start + length)];
-        outcome.outputs[0] = std::string(text.substr(first, last - first));
+        (void)copyText(text.substr(first, last - first));
         break;
     }
     case Kernel::StringCharacterAt: {
@@ -270,12 +372,12 @@ ValueUtilityOutcome evaluateValueString(const ValueUtilityInvocation& invocation
         const auto boundaries = unitBoundaries(text);
         const auto count = static_cast<std::int64_t>(unitCount(boundaries));
         if (index < 0 || index >= count) {
-            answered(std::string(fallback), false);
+            answered(fallback, false);
             break;
         }
         const auto first = boundaries[static_cast<std::size_t>(index)];
         const auto last = boundaries[static_cast<std::size_t>(index) + 1];
-        answered(std::string(text.substr(first, last - first)), true);
+        answered(text.substr(first, last - first), true);
         break;
     }
     case Kernel::StringSplit: {
@@ -286,7 +388,7 @@ ValueUtilityOutcome evaluateValueString(const ValueUtilityInvocation& invocation
         // An empty separator splits nothing: every position matches it, so the pieces it would
         // produce are not a decomposition of the text.
         if (separator.empty() || index < 0) {
-            answered(std::string(fallback), false);
+            answered(fallback, false);
             break;
         }
         std::size_t offset = 0;
@@ -310,17 +412,28 @@ ValueUtilityOutcome evaluateValueString(const ValueUtilityInvocation& invocation
         }
         // The fallback, not the empty string, when the index names no piece: an empty piece is a
         // real answer here (",a" splits to an empty first piece), so the two must not look alike.
-        answered(found ? std::string(answer) : std::string(fallback), found);
+        answered(found ? answer : fallback, found);
         break;
     }
-    case Kernel::StringReplace:
-        outcome.outputs[0] = replaceAll(reader.text(0), reader.text(1), reader.text(2));
+    case Kernel::StringReplace: {
+        StringBuilder text(invocation.limits);
+        replaceAll(reader.text(0), reader.text(1), reader.text(2), text);
+        finishString(outcome, text);
         break;
+    }
     case Kernel::StringTrim:
-        outcome.outputs[0] = std::string(core::trimAsciiWhitespace(reader.text(0)));
+        (void)copyText(core::trimAsciiWhitespace(reader.text(0)));
         break;
     case Kernel::StringCase: {
         const auto text = reader.text(0);
+        if (text.size() >
+            std::min(invocation.limits.maxStringBytes, invocation.limits.availableStringBytes)) {
+            outcome.failed = true;
+            outcome.summary = "Value utility string budget exceeded";
+            outcome.detail =
+                "The string output exceeds the per-value or retained-output byte limit.";
+            break;
+        }
         const auto mode =
             selectorAt(invocation, 0, document::kStringCaseModes, document::kDefaultStringCaseMode);
         switch (mode) {
@@ -357,51 +470,62 @@ ValueUtilityOutcome evaluateValueString(const ValueUtilityInvocation& invocation
         const auto fillUnit =
             fill.empty() ? std::string_view{} : fill.substr(0, unitLength(fill, 0));
         if (count >= target || fillUnit.empty()) {
-            outcome.outputs[0] = std::string(text);
+            (void)copyText(text);
             break;
         }
-        std::string padding;
+        StringBuilder result(invocation.limits);
+        if (side == document::StringPadSide::End && !result.append(text)) {
+            finishString(outcome, result);
+            break;
+        }
         for (std::int64_t written = count; written < target; ++written) {
-            padding.append(fillUnit);
+            if (!result.append(fillUnit))
+                break;
         }
-        std::string result;
-        if (side == document::StringPadSide::Start) {
-            result = padding;
-            result.append(text);
-        } else {
-            result = std::string(text);
-            result.append(padding);
-        }
-        outcome.outputs[0] = std::move(result);
+        if (side == document::StringPadSide::Start && !result.exceeded() && !result.wasCancelled())
+            (void)result.append(text);
+        finishString(outcome, result);
         break;
     }
     case Kernel::StringRepeat: {
         const auto text = reader.text(0);
         const auto count = std::clamp(reader.integer(1), std::int64_t{0}, kMaximumRepeatCount);
-        std::string result;
-        result.reserve(text.size() * static_cast<std::size_t>(count));
-        for (std::int64_t repeat = 0; repeat < count; ++repeat) {
-            result.append(text);
+        StringBuilder result(invocation.limits);
+        const auto limit =
+            std::min(invocation.limits.maxStringBytes, invocation.limits.availableStringBytes);
+        if (count != 0 && text.size() > limit / static_cast<std::size_t>(count)) {
+            outcome.failed = true;
+            outcome.failedOperand = 1;
+            outcome.summary = "Value utility string budget exceeded";
+            outcome.detail = "Repeat would exceed the per-value or retained-output byte limit.";
+            break;
         }
-        outcome.outputs[0] = std::move(result);
+        for (std::int64_t repeat = 0; repeat < count; ++repeat) {
+            if (!result.append(text))
+                break;
+        }
+        finishString(outcome, result);
         break;
     }
     case Kernel::StringContains:
-        outcome.outputs[0] = containsText(reader.text(0), reader.text(1), reader.boolean(2));
+        outcome.outputs[0] = containsText(reader.text(0), reader.text(1), reader.boolean(2),
+                                          invocation.limits.cancellation);
         break;
     case Kernel::StringStartsWith: {
         const auto text = reader.text(0);
         const auto needle = reader.text(1);
         outcome.outputs[0] = needle.empty() || (needle.size() <= text.size() &&
-                                                matchesAt(text, 0, needle, reader.boolean(2)));
+                                                matchesAt(text, 0, needle, reader.boolean(2),
+                                                          invocation.limits.cancellation));
         break;
     }
     case Kernel::StringEndsWith: {
         const auto text = reader.text(0);
         const auto needle = reader.text(1);
-        outcome.outputs[0] = needle.empty() || (needle.size() <= text.size() &&
-                                                matchesAt(text, text.size() - needle.size(), needle,
-                                                          reader.boolean(2)));
+        outcome.outputs[0] =
+            needle.empty() || (needle.size() <= text.size() &&
+                               matchesAt(text, text.size() - needle.size(), needle,
+                                         reader.boolean(2), invocation.limits.cancellation));
         break;
     }
     case Kernel::StringEquals: {
@@ -409,7 +533,8 @@ ValueUtilityOutcome evaluateValueString(const ValueUtilityInvocation& invocation
         const auto right = reader.text(1);
         outcome.outputs[0] =
             reader.boolean(2) ? left == right
-                              : (left.size() == right.size() && matchesAt(left, 0, right, false));
+                              : (left.size() == right.size() &&
+                                 matchesAt(left, 0, right, false, invocation.limits.cancellation));
         break;
     }
     default:

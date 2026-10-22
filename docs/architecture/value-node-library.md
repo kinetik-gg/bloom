@@ -15,6 +15,11 @@ filesystem I/O at evaluation time.
 These are new node types only. Existing documents compile with the same plan and retain their
 identity goldens.
 
+`Data Sample` clamps finite times outside a finite Curve domain to its endpoints. Inside the
+domain it normalizes and interpolates without overflowing finite endpoints or sample values; a
+non-finite time, unrepresentable position or non-finite sample produces a node-scoped diagnostic and
+the typed zero fallback.
+
 The value graph's own node catalogue. `layer-graph-model.md` owns the value graph's SHAPE -- two
 graphs in one node set, socket kinds and promotion, drivers, reroutes, the fallback philosophy --
 and this document owns the LIBRARY: what each node is, what it accepts, and what it does at the
@@ -35,10 +40,10 @@ Every node that reads a value OUT of text obeys this contract, and no node may o
 | `valid` output | A Boolean: `true` exactly when the text parsed |
 | `fallback` operand | Of the same kind as `value`, so a graph always has a defined number downstream |
 
-There is no third state. Evaluation does not fail, no exception is thrown, no diagnostic is raised
-for text a node simply does not accept -- unparsable text is an ordinary answer with `valid` false,
-not an error. The only failure a library node can report is a MALFORMED PLAN: an operand that
-arrived as the wrong kind, which the document's own typing already refuses.
+There is no third parse state. Evaluation does not fail and no diagnostic is raised for text a node
+simply does not accept -- unparsable text is an ordinary answer with `valid` false, not an error.
+Malformed plans, exhausted execution budgets and invalid numeric data remain diagnosed separately
+from parse validity.
 
 **Parsing is locale-neutral.** `.` is the decimal separator; ASCII `0`-`9` are the only digits, so a
 non-ASCII digit is INVALID rather than silently folded; there are no thousands separators unless a
@@ -176,10 +181,20 @@ in.
 
 | Node | Inputs | Outputs | Notes |
 | --- | --- | --- | --- |
-| Seconds To Frames | `seconds` Scalar | `result` Integer | `floor(seconds * rate)`. Floored, not rounded: the frame an instant falls INSIDE is the frame being rendered. NaN answers 0; an unreachable magnitude saturates |
-| Frames To Seconds | `frames` Integer | `result` Scalar | `frames / rate`, exact at a frame-aligned time |
+| Seconds To Frames | `seconds` Scalar | `result` Integer | The exact floor of the binary64 seconds value times the rational rate. NaN answers 0; an unreachable magnitude saturates |
+| Frames To Seconds | `frames` Integer | `result` Scalar | The first representable Scalar at or after the exact frame start, when one exists inside that frame |
 | Seconds To Timecode | `seconds` Scalar | `result` String | Non-drop `HH:MM:SS:FF` |
 | Timecode To Seconds | `text` String, `fallback` Scalar | `value` Scalar, `valid` Boolean | Safe parse; accepts `HH:MM:SS:FF`, `MM:SS:FF` and `SS:FF` |
+
+### Frame boundary semantics
+
+Seconds To Frames compares the actual binary64 input against rational frame starts; it does not
+shift values near a boundary by an epsilon. Frames To Seconds chooses the first representable Scalar
+on or after that start. Its immediately preceding `nextafter` value therefore remains in the prior
+frame. At sufficiently large frame indices, a Scalar cannot distinguish adjacent frames; Frames To
+Seconds reports a node-scoped representability diagnostic with the typed zero fallback. Positive
+and negative frames follow the same floor rule. Timecode To Seconds uses the same representable
+boundary policy and marks an unrepresentable label invalid.
 
 ### Drop-frame timecode is NOT supported
 
@@ -231,6 +246,16 @@ Category `String`.
 | String Equals | `a` String, `b` String, `caseSensitive` Boolean (true) | `result` Boolean | Byte equality, or ASCII-folded equality |
 
 ### Text is measured in Unicode scalars
+
+String execution has a 1 MiB per-value byte limit, an 8 MiB retained-output limit per value-graph
+evaluation, and a 16 MiB scratch limit for Unicode boundary indexing. Repeat, Replace, Format,
+Concatenate and Pad check growth before appending, and large copies poll request cancellation.
+Exhaustion writes the typed empty-string fallback and a node-scoped diagnostic; the failed output is
+not entered into the value-operation cache. The retained-output limit counts the bytes in each
+output slot, including cached and post-image initial values, and subtracts a slot's old bytes when
+it is overwritten. It does not count another owner's independent cache or caller copy. The limits
+are overridable by evaluation callers for bounded tests and tighter host policies. Cancellation
+stops the evaluation without reporting a malformed operand.
 
 `Length`, `Substring`, `Character At` and `Pad` count what an artist counts: `é` is one character
 whether it arrived as two bytes or one, and an emoji is one character rather than four.
