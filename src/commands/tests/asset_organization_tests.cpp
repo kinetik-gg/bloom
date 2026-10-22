@@ -199,6 +199,22 @@ void testOrganization(TestContext& test) {
                     document.snapshot().revision() == beforeCollision.revision(),
                 "promotion name collision refuses atomically");
 }
+void testWideImageAssetCommand(TestContext& test) {
+    auto initial =
+        document::makeNewProject("Wide source", "Main", core::RationalTime::fromInteger(24));
+    const auto source = AssetId::fromRaw(1);
+    document::AssetRecord image;
+    image.id = source;
+    image.locator = {"file", "project-relative", "plate.exr", "file:///plate.exr"};
+    image.width = 6000;
+    image.height = 4000;
+    test.expect(initial.project.addAsset(image), "24 Mpixel metadata enters project truth");
+    Document document(std::move(initial.project));
+    CommandStack stack(document);
+    test.expect(
+        execute<AddImageLayer>(document, stack, initial.initialCompositionId, source).changed(),
+        "image layer command accepts large source metadata without decoding pixels");
+}
 void testAssetInputColor(TestContext& test) {
     auto initial =
         document::makeNewProject("Input colour", "Main", core::RationalTime::fromInteger(1));
@@ -293,6 +309,7 @@ int main() {
     try {
         bloom::commands::test::testLutImport(test);
         bloom::commands::test::testOrganization(test);
+        bloom::commands::test::testWideImageAssetCommand(test);
         bloom::commands::test::testAssetInputColor(test);
         bloom::commands::test::testRelinkAndSaturatedOrder(test);
     } catch (const std::exception& error) {

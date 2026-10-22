@@ -51,6 +51,8 @@ void roundTripAndValidation() {
     asset.folder = child;
     asset.tags = {"approved", "hero"};
     asset.order = 42;
+    asset.width = 6000;
+    asset.height = 4000;
     expect(initial.project.addAsset(asset), "organized asset added");
     auto lut = asset;
     lut.id = document::AssetId::fromRaw(78);
@@ -59,6 +61,22 @@ void roundTripAndValidation() {
     lut.name = "Show LUT";
     lut.width = lut.height = 0;
     expect(initial.project.addAsset(lut), "LUT asset is accepted");
+    auto sequence = plate();
+    sequence.id = document::AssetId::fromRaw(79);
+    sequence.kind = document::AssetKind::Sequence;
+    sequence.locator = {"file", "project-relative", "media/wide.0001.exr",
+                        "file:///media/wide.0001.exr"};
+    sequence.width = 20000;
+    sequence.height = 2;
+    sequence.manifest.pattern = "wide.####.exr";
+    sequence.manifest.padding = 4;
+    sequence.manifest.first = 1;
+    sequence.manifest.last = 2;
+    auto second = sequence.locator;
+    second.path = "media/wide.0002.exr";
+    second.relinkHint = "file:///media/wide.0002.exr";
+    sequence.manifest.members = {{1, sequence.locator, {}}, {2, second, {}}};
+    expect(initial.project.addAsset(sequence), "wide EXR sequence metadata added");
     document::Document document(std::move(initial.project));
     auto snapshot = document.snapshot();
     expect(snapshot.ids().highWater().assetFolder == 8,
@@ -79,6 +97,9 @@ void roundTripAndValidation() {
            "name, tags, folder, order and media identity round-trip at 1.22");
     expect(restored.project().findAsset(lut.id) && *restored.project().findAsset(lut.id) == lut,
            "LUT locator, kind and digest round-trip at 1.22");
+    expect(restored.project().findAsset(sequence.id) &&
+               *restored.project().findAsset(sequence.id) == sequence,
+           "wide EXR sequence metadata round-trips without pixel allocation");
     expect(restored.project().assetFolders().size() == 2 &&
                *restored.project().findAssetFolder(child) ==
                    *snapshot.project().findAssetFolder(child),

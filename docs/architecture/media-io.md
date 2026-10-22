@@ -2,7 +2,7 @@
 
 Status: working research
 
-Updated: 2026-10-13
+Updated: 2026-10-23
 
 ## v0 implemented boundary
 
@@ -58,6 +58,10 @@ These are separate bounds, not an aggregate process-memory guarantee. Cancellati
 between file chunks, before and after stb, and during conversion/proxy rows; an in-progress stb
 call is cooperatively cancellable only after it returns. Import and relink preparation and
 thumbnail work use the blocking-I/O task executor, with Jobs progress, diagnostics and Cancel.
+Image and sequence asset metadata retains positive, representable source dimensions without a
+second fixed 16,384-axis or 16,777,216-pixel limit. Actual decode and proxy work still enter the
+caller's checked pixel budget before allocation. Video assets retain the separate bounded media
+provider protocol's current extent and frame-index limits.
 Publication checks the originating project/revision and discards work after project replacement.
 Sequence scanning checks cancellation while enumerating files and hashes only matching image
 members. Missing intervals in sparse spans are derived from adjacent sorted member numbers, so

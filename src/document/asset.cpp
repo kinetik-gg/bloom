@@ -4,6 +4,8 @@
 #include <bloom/document/asset.hpp>
 #include <bloom/document/persisted_text.hpp>
 
+#include <limits>
+
 namespace bloom::document {
 namespace {
 bool validLocator(const AssetLocator& locator) {
@@ -32,6 +34,12 @@ bool validLocator(const AssetLocator& locator) {
                locator.relinkHint.size() <= 16384 && core::isValidUtf8(locator.relinkHint);
     }
     return false;
+}
+bool representableImageExtent(const std::uint32_t width, const std::uint32_t height) {
+    if (width == 0 || height == 0)
+        return false;
+    const auto pixels = static_cast<std::uint64_t>(width) * height;
+    return pixels <= std::numeric_limits<std::size_t>::max() / (4U * sizeof(float));
 }
 } // namespace
 std::string defaultAssetName(const AssetRecord& asset) {
@@ -88,8 +96,12 @@ ValidationResult AssetRecord::validate() const {
         if (rate < 8000 || rate > 384000 || channels == 0 || channels > 32 || frames == 0 ||
             duration <= core::RationalTime{})
             result.add(ValidationCode::InvalidValue, "audio", "Invalid audio descriptor");
-    } else if (width == 0 || height == 0 || width > 16384 || height > 16384 ||
-               static_cast<std::uint64_t>(width) * height > 16777216)
+    } else if (kind == AssetKind::Video &&
+               (width == 0 || height == 0 || width > 16384 || height > 16384 ||
+                static_cast<std::uint64_t>(width) * height > 16777216))
+        result.add(ValidationCode::InvalidValue, "dimensions", "Invalid video dimensions");
+    else if ((kind == AssetKind::Image || kind == AssetKind::Sequence) &&
+             !representableImageExtent(width, height))
         result.add(ValidationCode::InvalidValue, "dimensions", "Invalid image dimensions");
     if (interpretation.colorSpace > AssetColorSpace::Raw ||
         interpretation.inputColorSpaceId.size() > kMaxAssetInputColorSpaceIdBytes ||

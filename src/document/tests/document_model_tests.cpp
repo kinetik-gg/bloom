@@ -114,6 +114,40 @@ void testSparseSequenceManifest(ExpectationContext& expectations) {
     expectations.expect(!asset.validate().ok(), "partial legacy gap enumeration is refused");
 }
 
+void testLargeImageMetadata(ExpectationContext& expectations) {
+    using namespace bloom::document;
+    AssetRecord image;
+    image.id = AssetId::fromRaw(2);
+    image.locator = {"file", "project-relative", "plate.png", "file:///plate.png"};
+    image.width = 6000;
+    image.height = 4000;
+    expectations.expect(image.validate().ok(),
+                        "24 Mpixel image metadata is valid without allocating its pixels");
+
+    AssetRecord sequence = image;
+    sequence.kind = AssetKind::Sequence;
+    sequence.locator = {"file", "project-relative", "plate.0001.exr", "file:///plate.0001.exr"};
+    sequence.width = 20000;
+    sequence.height = 2;
+    sequence.manifest.pattern = "plate.####.exr";
+    sequence.manifest.padding = 4;
+    sequence.manifest.first = 1;
+    sequence.manifest.last = 2;
+    auto second = sequence.locator;
+    second.path = "plate.0002.exr";
+    second.relinkHint = "file:///plate.0002.exr";
+    sequence.manifest.members = {{1, sequence.locator, {}}, {2, second, {}}};
+    expectations.expect(sequence.validate().ok(),
+                        "wide EXR sequence metadata is valid without decoding frames");
+
+    image.width = 0;
+    expectations.expect(!image.validate().ok(), "zero image extent remains invalid");
+    image.width = std::numeric_limits<std::uint32_t>::max();
+    image.height = std::numeric_limits<std::uint32_t>::max();
+    expectations.expect(!image.validate().ok(),
+                        "unrepresentable RGBA32F image storage remains invalid");
+}
+
 template <typename Id> [[nodiscard]] constexpr Id id(const std::uint64_t value) noexcept {
     return Id::fromRaw(value);
 }
@@ -858,6 +892,7 @@ void testLayerParenting(ExpectationContext& expectations) {
 int main() try {
     ExpectationContext expectations;
     testSparseSequenceManifest(expectations);
+    testLargeImageMetadata(expectations);
     testLayerParenting(expectations);
     testMultipleMerges(expectations);
     testRationalTime(expectations);
