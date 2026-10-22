@@ -373,8 +373,9 @@ FlatExrVerifyResultV1 FlatExrRgba32fLinRec709SceneReopenVerifierV1::verify(
         const auto byteCount = componentCount
                                    ? ::multiplyChecked(*componentCount, sizeof(std::uint32_t))
                                    : std::nullopt;
-        if (!pixelCount || *pixelCount > kOutputAnalysisMaximumPixelCountV1 || !componentCount ||
-            !byteCount || *byteCount > kOutputAnalysisMaximumProcessPixelBytesV1) {
+        if (!pixelCount || !componentCount || !byteCount ||
+            *componentCount > std::vector<std::uint32_t>{}.max_size() ||
+            *byteCount > std::numeric_limits<std::size_t>::max()) {
             return FlatExrVerifyResultV1::failed(
                 ::diag(FlatExrVerifyErrorCodeV1::ResourceLimitExceeded));
         }

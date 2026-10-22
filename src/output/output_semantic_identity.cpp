@@ -37,8 +37,6 @@ constexpr std::uint8_t kStraightAlpha = 1;
 constexpr std::uint8_t kPngSrgbRenderingIntent = 0;
 
 constexpr std::uint8_t kIncreasingY = 1;
-constexpr std::uint64_t kPngMaximumPayloadBytes = 268'435'456U;
-constexpr std::uint64_t kExrMaximumPayloadBytes = 1'073'741'824U;
 constexpr std::size_t kPayloadChunkPixels = 1'024;
 constexpr std::size_t kExrPayloadChunkBytes = kPayloadChunkPixels * 4U * sizeof(std::uint32_t);
 
@@ -215,11 +213,6 @@ struct ProcessDescriptorPreflight final {
         }
     }
     const auto count = static_cast<std::uint64_t>(pixelCount);
-    if (count > output::kOutputAnalysisMaximumPixelCountV1 ||
-        descriptor->layout().pixelStorageBytes >
-            output::kOutputAnalysisMaximumProcessPixelBytesV1) {
-        return preflightFailure<ProcessDescriptorPreflight>(Error::ResourceLimitExceeded);
-    }
     return {.value = ProcessDescriptorPreflight{descriptor, canonicalBytes, count},
             .error = Error::None};
 }
@@ -288,7 +281,7 @@ preflightPng(const output::PngRgba8SrgbOutputSemanticIdentityInputV1& input) noe
         return preflightFailure<PngPreflight>(Error::ProcessDescriptorMismatch);
     }
     const auto expectedBytes = multiplyChecked(*expectedPixels, 4U);
-    if (!expectedBytes || *expectedBytes > kPngMaximumPayloadBytes) {
+    if (!expectedBytes || *expectedBytes > std::numeric_limits<std::size_t>::max()) {
         return preflightFailure<PngPreflight>(Error::ResourceLimitExceeded);
     }
     if (verifiedProduct.bytes().size() != *expectedBytes) {
@@ -374,9 +367,6 @@ preflightPng(const output::PngRgba8SrgbOutputSemanticIdentityInputV1& input) noe
     if (!dataPixelCount || !displayPixelCount) {
         return preflightFailure<ExrPreflight>(Error::InvalidWindow);
     }
-    if (*dataPixelCount > output::kOutputAnalysisMaximumPixelCountV1) {
-        return preflightFailure<ExrPreflight>(Error::ResourceLimitExceeded);
-    }
     const auto* descriptor = process.value->descriptor;
     if (*dataPixelCount != process.value->pixelCount ||
         !matchesWindow(metadata.dataWindow, descriptor->dataWindow()) ||
@@ -393,7 +383,9 @@ preflightPng(const output::PngRgba8SrgbOutputSemanticIdentityInputV1& input) noe
     const auto componentCount = multiplyChecked(*dataPixelCount, 4U);
     const auto payloadBytes =
         componentCount ? multiplyChecked(*componentCount, sizeof(std::uint32_t)) : std::nullopt;
-    if (!componentCount || !payloadBytes || *payloadBytes > kExrMaximumPayloadBytes) {
+    if (!componentCount || !payloadBytes ||
+        *componentCount > std::numeric_limits<std::size_t>::max() ||
+        *payloadBytes > std::numeric_limits<std::size_t>::max()) {
         return preflightFailure<ExrPreflight>(Error::ResourceLimitExceeded);
     }
     if (verifiedProduct.componentBits().size() != *componentCount) {

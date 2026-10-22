@@ -149,15 +149,6 @@ void reportProgress(const output::FlatExrWriteProgressCallbackV1& callback,
     }
 }
 
-[[nodiscard]] bool withinResourceLimits(const render::Rgba32fImageDescriptor& descriptor) noexcept {
-    const auto pixelCount = descriptor.layout().pixelCount;
-    if (pixelCount > output::kOutputAnalysisMaximumPixelCountV1 ||
-        descriptor.layout().pixelStorageBytes > output::kOutputAnalysisMaximumProcessPixelBytesV1) {
-        return false;
-    }
-    return true;
-}
-
 } // namespace
 
 namespace bloom::output {
@@ -200,9 +191,6 @@ FlatExrWriteResultV1 FlatExrRgba32fLinRec709SceneWriterV1::write(
     const auto* descriptor = image.descriptor();
     if (descriptor == nullptr) {
         return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination, false);
-    }
-    if (!::withinResourceLimits(*descriptor)) {
-        return ::fail(FlatExrWriteErrorCodeV1::ResourceLimitExceeded, destination, false);
     }
     const auto geometry = ::prepareGeometry(*descriptor);
     if (!geometry) {

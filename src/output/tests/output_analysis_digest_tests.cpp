@@ -568,8 +568,6 @@ void testDependencyClosureUsesPreparedIdentity(Expectations& expectations) {
 }
 
 void testHardCapBoundaryPreflight(Expectations& expectations) {
-    static_assert(output::kOutputAnalysisMaximumPixelCountV1 == 67'108'864U);
-    static_assert(output::kOutputAnalysisMaximumProcessPixelBytesV1 == 1'073'741'824U);
 
     constexpr std::uint32_t width = 32'769U;
     const auto frame = evaluateFrame(width, 1, {0.25, 0.5, 0.75, 1.0}, 4U << 20U);

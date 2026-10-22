@@ -553,13 +553,12 @@ void testWindowPermissionTruth(Expectations& expectations) {
     exr[0].targetDescriptor = maximumWidthPixels;
     exr[5].sourceDescriptor = signedBoundaryWindow;
     exr[5].targetDescriptor = signedBoundaryWindow;
-    setResourceLimitExceeded(exr);
     const auto signedBoundary = validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr);
     const auto signedBoundaryPermissions = signedBoundary.permissionMask();
-    expectations.expect(signedBoundary && !signedBoundary.approvable() &&
+    expectations.expect(signedBoundary.approvable() &&
                             signedBoundaryPermissions &&
                             signedBoundaryPermissions->permits(Facet::DataWindow),
-                        "signed-window representability remains independent of the resource cap");
+                        "signed-window representability does not impose an arbitrary pixel cap");
 
     auto png = makePngReport();
     constexpr std::string_view offsetDataWindow = "height=u:1;origin-x=i:1;origin-y=i:0;width=u:1";
@@ -596,7 +595,6 @@ void testWindowPermissionTruth(Expectations& expectations) {
     png[6].targetDescriptor = pngOversizeWindow;
     png[6].state = State::Unsupported;
     png[6].stableCode = Code::WindowOutOfRange;
-    setResourceLimitExceeded(png);
     const auto oversizedPng = validate(Preset::PngRgba8SrgbV1, png);
     expectations.expect(
         oversizedPng && !oversizedPng.approvable(),
@@ -625,20 +623,20 @@ void testHardResourceLimitTruth(Expectations& expectations) {
     expectations.expect(maximumDimension.approvable(),
                         "width above the former 32768 cap remains approvable");
 
-    constexpr std::string_view maximumPixelCountPixels =
+    constexpr std::string_view formerMaximumPixelCountPixels =
         "height=u:8192;packing=id:rgba;sample-type=id:binary32;width=u:8192";
-    constexpr std::string_view maximumPixelCountWindow =
+    constexpr std::string_view formerMaximumPixelCountWindow =
         "height=u:8192;origin-x=i:0;origin-y=i:0;width=u:8192";
     exr = makeExrReport();
-    exr[0].sourceDescriptor = maximumPixelCountPixels;
-    exr[0].targetDescriptor = maximumPixelCountPixels;
-    exr[5].sourceDescriptor = maximumPixelCountWindow;
-    exr[5].targetDescriptor = maximumPixelCountWindow;
-    exr[6].sourceDescriptor = maximumPixelCountWindow;
-    exr[6].targetDescriptor = maximumPixelCountWindow;
-    const auto maximumPixelCount = validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr);
-    expectations.expect(maximumPixelCount.approvable(),
-                        "the exact checked 2^26 pixel-count boundary remains approvable");
+    exr[0].sourceDescriptor = formerMaximumPixelCountPixels;
+    exr[0].targetDescriptor = formerMaximumPixelCountPixels;
+    exr[5].sourceDescriptor = formerMaximumPixelCountWindow;
+    exr[5].targetDescriptor = formerMaximumPixelCountWindow;
+    exr[6].sourceDescriptor = formerMaximumPixelCountWindow;
+    exr[6].targetDescriptor = formerMaximumPixelCountWindow;
+    const auto formerMaximumPixelCount = validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr);
+    expectations.expect(formerMaximumPixelCount.approvable(),
+                        "the former 2^26 pixel-count boundary remains valid metadata");
 
     constexpr std::string_view excessiveDimensionPixels =
         "height=u:1;packing=id:rgba;sample-type=id:binary32;width=u:32769";
@@ -675,9 +673,29 @@ void testHardResourceLimitTruth(Expectations& expectations) {
     exr[5].targetDescriptor = excessivePixelCountWindow;
     exr[6].sourceDescriptor = excessivePixelCountWindow;
     exr[6].targetDescriptor = excessivePixelCountWindow;
+    expectations.expect(validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr).approvable(),
+                        "a report above the former pixel cap remains valid metadata");
     setResourceLimitExceeded(exr);
-    expectations.expect(validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr).hasValue(),
-                        "checked pixel-count overflow independently requires the resource code");
+    expectations.expect(validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr).issue().code ==
+                            Error::DescriptorRelationshipMismatch,
+                        "the former pixel cap cannot justify resource.limit-exceeded");
+
+    constexpr std::string_view unrepresentablePixels =
+        "height=u:4294967295;packing=id:rgba;sample-type=id:binary32;width=u:4294967295";
+    constexpr std::string_view unrepresentableWindow =
+        "height=u:4294967295;origin-x=i:-2147483648;origin-y=i:-2147483648;"
+        "width=u:4294967295";
+    exr = makeExrReport();
+    exr[0].sourceDescriptor = unrepresentablePixels;
+    exr[0].targetDescriptor = unrepresentablePixels;
+    exr[5].sourceDescriptor = unrepresentableWindow;
+    exr[5].targetDescriptor = unrepresentableWindow;
+    exr[6].sourceDescriptor = unrepresentableWindow;
+    exr[6].targetDescriptor = unrepresentableWindow;
+    setResourceLimitExceeded(exr);
+    const auto unrepresentable = validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr);
+    expectations.expect(unrepresentable && !unrepresentable.approvable(),
+                        "checked RGBA32F host-storage overflow still requires resource.limit-exceeded");
 
     exr = makeExrReport();
     exr[6].sourceDescriptor = excessiveDimensionWindow;
@@ -711,13 +729,12 @@ void testHardResourceLimitTruth(Expectations& expectations) {
     png[5].targetDescriptor = excessivePngWindow;
     png[6].sourceDescriptor = excessivePngWindow;
     png[6].targetDescriptor = excessivePngWindow;
+    expectations.expect(validate(Preset::PngRgba8SrgbV1, png).approvable(),
+                        "PNG metadata above the former pixel cap keeps its nominal dependency");
+    setResourceLimitExceeded(png);
     expectations.expect(validate(Preset::PngRgba8SrgbV1, png).issue().code ==
                             Error::DescriptorRelationshipMismatch,
-                        "a PNG above the aggregate pixel cap cannot retain its nominal dependency code");
-    setResourceLimitExceeded(png);
-    const auto blockedPng = validate(Preset::PngRgba8SrgbV1, png);
-    expectations.expect(blockedPng && !blockedPng.approvable(),
-                        "a PNG above the aggregate pixel cap requires resource.limit-exceeded");
+                        "PNG metadata above the former cap rejects a false resource-limit code");
 }
 
 } // namespace

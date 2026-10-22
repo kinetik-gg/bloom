@@ -67,9 +67,8 @@ enum class PngExportWriteErrorCodeV1 : std::uint8_t {
     // Unreachable for an APPROVED export (an approvable PNG report exists only when those products
     // do), but typed rather than assumed.
     MissingDisplayProducts,
-    // The prepared straight-RGBA8 stream would exceed the effective retained-prepared-PNG-bytes
-    // limit (output_limits.hpp's kOutputExportPreparedPngBytesMaximumV1, or the lower limit this
-    // call was given). Nothing is allocated for the prepared stream and no file is created.
+    // The prepared straight-RGBA8 stream would exceed the caller's explicit byte limit.
+    // Nothing is allocated for the prepared stream and no file is created.
     PreparedBytesLimitExceeded,
     // The qualified display processor could not be applied to the retained process frame (a
     // non-finite sample, an unusable floating-point environment, an allocation failure, or an
@@ -144,14 +143,13 @@ class PngExportWriterV1 final {
     // this call creates it). On any non-Written outcome the caller owns removing whatever partial
     // bytes exist at `scratchPath`, exactly like FlatExrExportWriterV1::run().
     //
-    // `preparedByteLimit` is the effective retained-prepared-PNG-bytes ceiling. It is clamped down
-    // to kOutputExportPreparedPngBytesMaximumV1 and can never raise it -- frame-output.md's
-    // "Version 1 export limits are closed; a request may lower but not raise them".
+    // `preparedByteLimit`, when present, is an explicit caller constraint. The publication owner
+    // admits the exact prepared and verifier peak before calling this writer.
     [[nodiscard]] PngExportWriteResultV1
     run(const OutputAnalysisAttemptV1& attempt, const std::filesystem::path& scratchPath,
         const runtime::CancellationToken& cancellation,
         const OutputExportProgressCallbackV1& progress = {},
-        std::uint64_t preparedByteLimit = kOutputExportPreparedPngBytesMaximumV1) const noexcept;
+        std::optional<std::uint64_t> preparedByteLimit = {}) const noexcept;
 };
 
 } // namespace bloom::output

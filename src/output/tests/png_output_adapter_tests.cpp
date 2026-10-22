@@ -162,17 +162,13 @@ void testIdatChunkingWithoutWholeCompressedImage(support::Expectations& expectat
 
 void testResourceLimitExceededRejected(support::Expectations& expectations) {
     const support::ScratchDirectory scratch("resource-limit");
-    // Both dimensions fit PNG but their product exceeds the current aggregate pixel-
-    // count ceiling (67108864). The claimed pixel span is never dereferenced -- write() rejects
-    // before any pixel access once geometry validation fails -- so a null-backed span of the
-    // right claimed size is safe and avoids allocating an impractically large real buffer.
-    const auto extent = render::ImageExtent::create(32'768, 2'049);
+    // The extent is valid render metadata but exceeds PNG's signed 31-bit dimension domain.
+    // The writer rejects it before looking at the empty prepared pixel span.
+    const auto extent = render::ImageExtent::create(2'147'483'648ULL, 1);
     if (!extent) {
         std::abort();
     }
-    const output::PngRgba8SrgbPreparedStreamV1 prepared{
-        *extent.value(), std::span<const render::Rgba8>(static_cast<const render::Rgba8*>(nullptr),
-                                                        std::size_t{32'768} * 2'049)};
+    const output::PngRgba8SrgbPreparedStreamV1 prepared{*extent.value(), {}};
     const auto destination = scratch.file("oversized.png");
 
     const output::PngRgba8SrgbWriterV1 writer;
@@ -180,7 +176,7 @@ void testResourceLimitExceededRejected(support::Expectations& expectations) {
     expectations.expect(result.status() == output::PngWriteStatusV1::Failed &&
                             result.error() == output::PngWriteErrorCodeV1::ResourceLimitExceeded &&
                             result.destinationRemoved(),
-                        "a pixel count over the closed version 1 ceiling is a typed "
+                        "a PNG dimension outside its format domain is a typed "
                         "ResourceLimitExceeded failure, no partial file");
 }
 

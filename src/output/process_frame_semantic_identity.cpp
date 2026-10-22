@@ -227,17 +227,6 @@ preflightFailure(const ProcessFrameSemanticIdentityErrorCode error) noexcept {
                          : error};
 }
 
-[[nodiscard]] bool exceedsOutputLimits(const Rgba32fImage& image,
-                                       const std::uint64_t pixelCount) noexcept {
-    const auto* descriptor = image.descriptor();
-    if (descriptor == nullptr) {
-        return true;
-    }
-    return pixelCount > bloom::output::kOutputAnalysisMaximumPixelCountV1 ||
-           descriptor->layout().pixelStorageBytes >
-               bloom::output::kOutputAnalysisMaximumProcessPixelBytesV1;
-}
-
 [[nodiscard]] bool
 isSupportedColorIntent(const bloom::runtime::EvaluationColorIntent& intent) noexcept {
     if (intent.workingColorSpaceId.empty() || intent.workingColorSpaceId.size() > 256) {
@@ -300,9 +289,6 @@ colorIntentIdentityBytes(const std::string_view colorSpaceId) noexcept {
     const auto pixelCount = checkedPixelCount(image);
     if (descriptor == nullptr || !pixelCount.has_value()) {
         return preflightFailure(ProcessFrameSemanticIdentityErrorCode::InvalidImage);
-    }
-    if (exceedsOutputLimits(image, *pixelCount)) {
-        return preflightFailure(ProcessFrameSemanticIdentityErrorCode::ResourceLimitExceeded);
     }
     constexpr auto maximumHashBytes = std::numeric_limits<std::uint64_t>::max() / 8U;
     if (*pixelCount > (maximumHashBytes - kPixelStreamFixedBytes) / kBytesPerPixel) {

@@ -4,7 +4,6 @@
 #include <bloom/render/image_types.hpp>
 #include <bloom/runtime/qualified_display_preparation.hpp>
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -82,7 +81,7 @@ namespace {
 PngExportWriteResultV1 PngExportWriterV1::run(
     const OutputAnalysisAttemptV1& attempt, const std::filesystem::path& scratchPath,
     const runtime::CancellationToken& cancellation, const OutputExportProgressCallbackV1& progress,
-    const std::uint64_t preparedByteLimit) const noexcept {
+    const std::optional<std::uint64_t> preparedByteLimit) const noexcept {
     if (attempt.preset() != OutputPresetV1::PngRgba8SrgbV1 || attempt.frame() == nullptr ||
         attempt.processIdentity() == nullptr || attempt.report() == nullptr) {
         return PngExportWriteResultV1::failed(PngExportWriteErrorCodeV1::InvalidAttempt);
@@ -102,16 +101,14 @@ PngExportWriteResultV1 PngExportWriterV1::run(
         return PngExportWriteResultV1::failed(PngExportWriteErrorCodeV1::MissingDisplayProducts);
     }
 
-    // Closed-limit clamp: a caller may lower the retained-prepared-PNG-bytes ceiling, never raise
-    // it. Zero would mean "no prepared stream is representable at all", which is a caller error
-    // rather than a resource outcome, so it is rejected as an over-limit request before anything
-    // is allocated.
-    const auto effectiveLimit = std::min(preparedByteLimit, kOutputExportPreparedPngBytesMaximumV1);
+    // The publication owner has already admitted the checked peak. Preserve an explicit caller
+    // constraint without introducing a second, fixed image-size policy in the codec.
     const auto preparedBytes = checkedPngPreparedByteCountV1(attempt);
     if (!preparedBytes.has_value()) {
         return PngExportWriteResultV1::failed(PngExportWriteErrorCodeV1::InvalidAttempt);
     }
-    if (effectiveLimit == 0 || *preparedBytes > effectiveLimit) {
+    if (preparedByteLimit.has_value() &&
+        (*preparedByteLimit == 0 || *preparedBytes > *preparedByteLimit)) {
         return PngExportWriteResultV1::failed(
             PngExportWriteErrorCodeV1::PreparedBytesLimitExceeded);
     }
@@ -139,7 +136,7 @@ PngExportWriteResultV1 PngExportWriterV1::run(
         const runtime::CpuQualifiedDisplayPreparer preparer(*display.processor);
         colorResult.emplace(preparer.prepare(
             attempt.frame(),
-            {.aggregatePixelStorageByteLimit = static_cast<std::size_t>(effectiveLimit),
+            {.aggregatePixelStorageByteLimit = static_cast<std::size_t>(*preparedBytes),
              .chunkPixelCount = runtime::kDefaultQualifiedDisplayChunkPixelCount,
              .viewAdjust = {},
              .displayName = {},

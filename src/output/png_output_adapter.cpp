@@ -73,8 +73,8 @@ struct ValidatedGeometry final {
 };
 
 // Checked preflight, before any allocation or file I/O: `output_limits.hpp`'s closed version 1
-// pixel-count ceiling, `prepared`'s own internal consistency (pixels.size() must equal
-// width * height), and the arithmetic this writer needs to size its deflate source length.
+// PNG dimension and zlib input-domain bounds, `prepared`'s own internal consistency
+// (pixels.size() must equal width * height), and checked buffer-size arithmetic.
 [[nodiscard]] std::optional<ValidatedGeometry>
 validateGeometry(const output::PngRgba8SrgbPreparedStreamV1& prepared) noexcept {
     const auto width = prepared.dimensions.width();
@@ -87,7 +87,7 @@ validateGeometry(const output::PngRgba8SrgbPreparedStreamV1& prepared) noexcept 
         return std::nullopt;
     }
     const auto pixelCount = multiplyChecked(width, height);
-    if (!pixelCount || *pixelCount > output::kOutputAnalysisMaximumPixelCountV1) {
+    if (!pixelCount || *pixelCount > std::numeric_limits<std::size_t>::max()) {
         return std::nullopt;
     }
     if (prepared.pixels.size() != *pixelCount) {
@@ -98,7 +98,8 @@ validateGeometry(const output::PngRgba8SrgbPreparedStreamV1& prepared) noexcept 
     const auto totalOutputBytes =
         rowOutputBytes ? multiplyChecked(*rowOutputBytes, height) : std::nullopt;
     if (!rowRgbaBytes || !rowOutputBytes || !totalOutputBytes ||
-        *totalOutputBytes > output::kOutputAnalysisMaximumProcessPixelBytesV1) {
+        *rowOutputBytes > std::numeric_limits<uInt>::max() ||
+        *totalOutputBytes > std::numeric_limits<std::size_t>::max()) {
         return std::nullopt;
     }
     return ValidatedGeometry{width, height, *rowRgbaBytes, *rowOutputBytes, *totalOutputBytes};
@@ -191,8 +192,12 @@ PngRgba8SrgbWriterV1::write(const PngRgba8SrgbPreparedStreamV1& prepared,
     if (!geometry) {
         const auto width = prepared.dimensions.width();
         const auto height = prepared.dimensions.height();
-        const auto error = (width == 0 || height == 0 ||
-                            prepared.pixels.size() != static_cast<std::uint64_t>(width) * height)
+        const auto formatOutOfRange =
+            width > detail::kOutputAnalysisPngMaximumDimensionV1 ||
+            height > detail::kOutputAnalysisPngMaximumDimensionV1;
+        const auto error = formatOutOfRange ? PngWriteErrorCodeV1::ResourceLimitExceeded
+                           : (width == 0 || height == 0 ||
+                              prepared.pixels.size() != static_cast<std::uint64_t>(width) * height)
                                ? PngWriteErrorCodeV1::InvalidPreparedStream
                                : PngWriteErrorCodeV1::ResourceLimitExceeded;
         return ::fail(error, destination, false);

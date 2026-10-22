@@ -116,18 +116,6 @@ reportSourceMatchesProcessFrame(const output::OutputAnalysisReportV1View report,
            sourceColor.substr(colorPrefix.size()) == expectedColor;
 }
 
-[[nodiscard]] bool
-processFrameFitsOutputV1Limits(const bloom::runtime::ProcessFrame& processFrame) noexcept {
-    const auto* const descriptor = processFrame.processImage().descriptor();
-    if (descriptor == nullptr) {
-        return false;
-    }
-    const auto& layout = descriptor->layout();
-    return static_cast<std::uint64_t>(layout.pixelCount) <=
-               output::kOutputAnalysisMaximumPixelCountV1 &&
-           layout.pixelStorageBytes <= output::kOutputAnalysisMaximumProcessPixelBytesV1;
-}
-
 [[nodiscard]] bool targetDependencyMatches(const std::string_view descriptor,
                                            const core::Sha256Digest& expectedRevision) noexcept {
     constexpr std::string_view prefix = "kind=id:ocio;revision=id:";
@@ -276,11 +264,6 @@ computeOutputAnalysisDigestV1(const ProcessFrameSemanticIdentityV1& processIdent
         return OutputAnalysisDigestV1Result::failure(
             OutputAnalysisDigestErrorCodeV1::ProcessFrameDescriptorMismatch);
     }
-    if (!processFrameFitsOutputV1Limits(processFrame)) {
-        return OutputAnalysisDigestV1Result::failure(
-            OutputAnalysisDigestErrorCodeV1::ResourceLimitExceeded);
-    }
-
     if (report.preset == OutputPresetV1::FlatExrRgba32fLinRec709SceneV1 &&
         report.facets[2].stableCode == OutputFacetStableCodeV1::ExrOutputColorTransform &&
         !targetDependencyMatches(report.facets[10].targetDescriptor,

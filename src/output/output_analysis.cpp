@@ -278,7 +278,7 @@ exceedsHardResourceLimits(const bloom::output::OutputAnalysisReportV1View report
     if (!pixelCount) {
         return true;
     }
-    return *pixelCount > bloom::output::kOutputAnalysisMaximumPixelCountV1;
+    return !bloom::output::detail::outputAnalysisProcessPixelsFitHostStorageV1(*pixelCount);
 }
 
 [[nodiscard]] std::optional<PixelAspectParts>

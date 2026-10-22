@@ -1,11 +1,22 @@
 #pragma once
 
+#include <bloom/render/image_types.hpp>
+
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 
 namespace bloom::output::detail {
 
 inline constexpr std::uint32_t kOutputAnalysisPngMaximumDimensionV1 = 2'147'483'647U;
+
+// Descriptor validation can reason about enormous metadata without allocating pixels. A report
+// may describe a process frame only when its RGBA32F storage is representable by this host.
+[[nodiscard]] constexpr bool
+outputAnalysisProcessPixelsFitHostStorageV1(const std::uint64_t pixelCount) noexcept {
+    return pixelCount <= std::numeric_limits<std::size_t>::max() / sizeof(render::Rgba32f);
+}
 
 struct OutputAnalysisPositiveRational32V1 final {
     std::uint32_t numerator;

@@ -90,8 +90,7 @@ struct GeometryExpectation final {
 
 // Same checked-arithmetic preflight as png_output_adapter.cpp's validateGeometry(): the caller-
 // supplied `prepared` stream's own internal consistency plus output_limits.hpp's closed version 1
-// pixel-count/byte ceilings and PNG's format dimension bound (reused across both paths --
-// design decision 5).
+// checked pixel/byte representability and PNG's format dimension bound (reused across both paths).
 [[nodiscard]] std::optional<GeometryExpectation>
 validateGeometry(const output::PngRgba8SrgbPreparedStreamV1& prepared) noexcept {
     const auto width = prepared.dimensions.width();
@@ -104,7 +103,7 @@ validateGeometry(const output::PngRgba8SrgbPreparedStreamV1& prepared) noexcept 
         return std::nullopt;
     }
     const auto pixelCount = multiplyChecked(width, height);
-    if (!pixelCount || *pixelCount > output::kOutputAnalysisMaximumPixelCountV1 ||
+    if (!pixelCount || *pixelCount > std::numeric_limits<std::size_t>::max() ||
         prepared.pixels.size() != *pixelCount) {
         return std::nullopt;
     }
@@ -113,7 +112,7 @@ validateGeometry(const output::PngRgba8SrgbPreparedStreamV1& prepared) noexcept 
     const auto totalOutputBytes =
         rowOutputBytes ? multiplyChecked(*rowOutputBytes, height) : std::nullopt;
     if (!rowRgbaBytes || !rowOutputBytes || !totalOutputBytes ||
-        *totalOutputBytes > output::kOutputAnalysisMaximumProcessPixelBytesV1) {
+        *totalOutputBytes > std::numeric_limits<std::size_t>::max()) {
         return std::nullopt;
     }
     return GeometryExpectation{width, height, *rowRgbaBytes, *rowOutputBytes, *totalOutputBytes};

@@ -53,13 +53,13 @@ void testClosedCapabilityStatesAndPrecedence(Expectations& expectations) {
                Code::AdapterUnavailable,
                "adapter.unavailable takes precedence over dependency.missing");
 
-    auto resourceInput = exrInput(descriptor(8'192, 8'193));
-    resourceInput.adapter = OutputAnalysisAdapterStateV1::Unavailable;
-    resourceInput.otherDependency = OutputAnalysisOtherDependencyStateV1::Missing;
-    const auto resource = analyzeFlatExrRgba32fLinRec709SceneV1(std::move(resourceInput));
-    expectCode(expectations, resource, Facet::ExternalDependencies, State::Missing,
-               Code::ResourceLimitExceeded,
-               "resource.limit-exceeded takes precedence over adapter and dependencies");
+    auto largeInput = exrInput(descriptor(8'192, 8'193));
+    largeInput.adapter = OutputAnalysisAdapterStateV1::Unavailable;
+    largeInput.otherDependency = OutputAnalysisOtherDependencyStateV1::Missing;
+    const auto large = analyzeFlatExrRgba32fLinRec709SceneV1(std::move(largeInput));
+    expectCode(expectations, large, Facet::ExternalDependencies, State::Missing,
+               Code::AdapterUnavailable,
+               "an image above the former pixel cap still reports its actual adapter state");
 }
 
 void testPngColorResolutionStates(Expectations& expectations) {
@@ -178,23 +178,22 @@ void testResourceBoundariesAndCoexistence(Expectations& expectations) {
     expectCode(expectations, wideShort, Facet::ExternalDependencies, State::Exact,
                Code::None, "width beyond the former fixed cap is valid when pixel storage fits");
 
-    const auto pixelsAtLimit =
+    const auto pixelsAtFormerLimit =
         analyzeFlatExrRgba32fLinRec709SceneV1(exrInput(descriptor(8'192, 8'192)));
-    expectCode(expectations, pixelsAtLimit, Facet::ExternalDependencies, State::Exact, Code::None,
-               "the exact maximum pixel count does not exceed the resource limit");
-    const auto pixelsOver =
+    expectCode(expectations, pixelsAtFormerLimit, Facet::ExternalDependencies, State::Exact,
+               Code::None, "the former pixel-count boundary is valid metadata");
+    const auto pixelsOverFormerLimit =
         analyzeFlatExrRgba32fLinRec709SceneV1(exrInput(descriptor(8'192, 8'193)));
-    expectCode(expectations, pixelsOver, Facet::ExternalDependencies, State::Missing,
-               Code::ResourceLimitExceeded, "one row over the maximum pixel count is rejected");
+    expectCode(expectations, pixelsOverFormerLimit, Facet::ExternalDependencies, State::Exact,
+               Code::None, "one row over the former pixel-count boundary remains valid metadata");
 
     const auto data = window(std::numeric_limits<std::int32_t>::max(), 0, 8'192, 8'193);
     const auto display = window(0, 0, 8'192, 8'193);
     const auto coexist = analyzeFlatExrRgba32fLinRec709SceneV1(exrInput(descriptor(data, display)));
     expectCode(expectations, coexist, Facet::DataWindow, State::Unsupported, Code::WindowOutOfRange,
-               "window representability remains truthful when a resource limit also fails");
-    expectCode(expectations, coexist, Facet::ExternalDependencies, State::Missing,
-               Code::ResourceLimitExceeded,
-               "resource and window failures coexist without suppressing either facet");
+               "window representability remains truthful for large images");
+    expectCode(expectations, coexist, Facet::ExternalDependencies, State::Exact, Code::None,
+               "a window error does not invent an allocation limit");
 
     const auto largeDisplay = descriptor(window(0, 0, 1, 1), window(0, 0, 32'769, 1));
     const auto displayLimit = analyzeFlatExrRgba32fLinRec709SceneV1(exrInput(largeDisplay));
