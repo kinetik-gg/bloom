@@ -246,11 +246,99 @@ void publicationScratchClaimsOverlapAndRetire(Expectations& checks) {
                   "scratch observes the parent's explicit total per-job cap");
     auto one = base->reserveScratch(50, status, cancellation);
     auto two = base->reserveScratch(50, status, cancellation);
-    auto serviceDenied = base->reserveScratch(1, status, cancellation);
-    checks.expect(one && two && !serviceDenied &&
+    checks.expect(one && !two &&
+                      status == output::ExportResourceAdmissionStatusV1::JobAllowanceExceeded &&
+                      capped.chargedBytes() == 150,
+                  "overlapping scratch claims share the explicit job cap");
+    one.reset();
+    auto laterJobScratch = base->reserveScratch(50, status, cancellation);
+    checks.expect(laterJobScratch && capped.chargedBytes() == 150,
+                  "scratch retirement reopens the same explicit job allowance");
+
+    output::ExportResourceLedgerV1 serviceCapped(200);
+    auto serviceBase = serviceCapped.reserve(100, status, 300, root);
+    checks.expect(serviceBase != nullptr, "explicit service-cap fixture is admitted");
+    if (!serviceBase)
+        return;
+    auto serviceOne = serviceBase->reserveScratch(50, status, cancellation);
+    auto serviceTwo = serviceBase->reserveScratch(50, status, cancellation);
+    auto serviceDenied = serviceBase->reserveScratch(1, status, cancellation);
+    checks.expect(serviceOne && serviceTwo && !serviceDenied &&
                       status == output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded &&
-                      capped.chargedBytes() == 200,
-                  "all simultaneous scratch claims remain under the explicit service cap");
+                      serviceCapped.chargedBytes() == 200,
+                  "the explicit service cap still binds simultaneous job claims");
+}
+
+void explicitJobFamilyClaimsAreAggregate(Expectations& checks) {
+    auto root = sampledRoot(gib);
+    output::ExportResourceLedgerV1 ledger;
+    output::ExportResourceAdmissionStatusV1 status{};
+    const runtime::CancellationToken cancellation;
+    auto parent = ledger.reserve(10, status, 100, root);
+    checks.expect(parent != nullptr, "aggregate job fixture is admitted");
+    if (!parent)
+        return;
+
+    std::barrier start(3);
+    std::shared_ptr<output::ExportResourceReservationV1> owned, scratch;
+    output::ExportResourceAdmissionStatusV1 ownedStatus{}, scratchStatus{};
+    std::thread a([&] {
+        start.arrive_and_wait();
+        owned = parent->reserveOwnedHostBacking(80, ownedStatus, cancellation);
+    });
+    std::thread b([&] {
+        start.arrive_and_wait();
+        scratch = parent->reserveScratch(80, scratchStatus, cancellation);
+    });
+    start.arrive_and_wait();
+    a.join();
+    b.join();
+    checks.expect(static_cast<bool>(owned) != static_cast<bool>(scratch) &&
+                      (owned ? scratchStatus : ownedStatus) ==
+                          output::ExportResourceAdmissionStatusV1::JobAllowanceExceeded &&
+                      ledger.chargedBytes() == 90 &&
+                      root->snapshot().reservations.totalHostClaimBytes == 90,
+                  "concurrent sibling claims cannot each spend the same remaining job allowance");
+    owned.reset();
+    scratch.reset();
+    checks.expect(ledger.chargedBytes() == 10,
+                  "retired sibling returns its exact charge to the shared job counter");
+
+    owned = parent->reserveOwnedHostBacking(80, status, cancellation);
+    checks.expect(owned && ledger.chargedBytes() == 90,
+                  "owned host child reuses the released job allowance");
+    if (!owned)
+        return;
+    auto nested = owned->reserveScratch(5, status, cancellation);
+    auto nestedDenied = owned->reserveOwnedHostBacking(6, status, cancellation);
+    checks.expect(nested && !nestedDenied &&
+                      status == output::ExportResourceAdmissionStatusV1::JobAllowanceExceeded &&
+                      ledger.chargedBytes() == 95 &&
+                      root->snapshot().reservations.totalHostClaimBytes == 95,
+                  "nested refusal rolls back its root phase and leaves the family charge intact");
+    checks.expect(owned->expand(85) == output::ExportResourceAdmissionStatusV1::Reserved &&
+                      parent->expand(11) ==
+                          output::ExportResourceAdmissionStatusV1::JobAllowanceExceeded &&
+                      ledger.chargedBytes() == 100 &&
+                      root->snapshot().reservations.totalHostClaimBytes == 100,
+                  "child expansion consumes the shared limit and blocks parent expansion");
+    nested.reset();
+    checks.expect(parent->expand(15) == output::ExportResourceAdmissionStatusV1::Reserved &&
+                      ledger.chargedBytes() == 100,
+                  "nested retirement releases exactly enough allowance for parent growth");
+    owned.reset();
+    auto recovered = parent->reserveScratch(85, status, cancellation);
+    checks.expect(recovered && ledger.chargedBytes() == 100,
+                  "child retirement reopens allowance for a later sibling");
+    if (!recovered)
+        return;
+    parent.reset();
+    auto afterParent = recovered->reserveScratch(15, status, cancellation);
+    auto afterParentDenied = recovered->reserveScratch(1, status, cancellation);
+    checks.expect(afterParent && !afterParentDenied &&
+                      status == output::ExportResourceAdmissionStatusV1::JobAllowanceExceeded &&
+                      ledger.chargedBytes() == 100,
+                  "descendants retain the same job cap after the original parent retires");
 }
 
 void publicationRefreshFailureRetainsNoScratch(Expectations& checks) {
@@ -456,6 +544,7 @@ int main() {
     rootedExpansionAndFacadeLifetime(checks);
     concurrentExpansionChargesOnce(checks);
     publicationScratchClaimsOverlapAndRetire(checks);
+    explicitJobFamilyClaimsAreAggregate(checks);
     publicationRefreshFailureRetainsNoScratch(checks);
     ownedAudioBackingReconcilesWithoutScratchCredit(checks);
     ownedAudioBackingHonorsExplicitServiceCap(checks);

@@ -46,6 +46,7 @@ enum class ExportResourceAdmissionStatusV1 : std::uint8_t {
 
 namespace detail {
 struct ExportResourceLedgerState;
+struct ExportResourceJobState;
 struct RootedExportReservationState;
 }
 
@@ -77,7 +78,9 @@ class ExportResourceLedgerV1 final {
     // Reserves `bytes` against explicit caps and, when injected, the sampled processing root.
     // `alreadyRootedBytes` is only for verified published backing held by the same root; the
     // caller must prove that identity before passing it. Unrooted callers use the legacy implicit
-    // per-job and service caps. Returns nullptr and a status on refusal with no charge.
+    // per-job and service caps. A job cap counts the parent and all descendant scratch/owned
+    // reservations together until each claim retires. Returns nullptr and a status on refusal
+    // with no charge.
     [[nodiscard]] std::shared_ptr<ExportResourceReservationV1>
     reserve(std::uint64_t bytes, ExportResourceAdmissionStatusV1& status,
             std::optional<std::uint64_t> jobAllowance = std::nullopt,
@@ -96,7 +99,8 @@ class ExportResourceLedgerV1 final {
                                 std::shared_ptr<runtime::GpuProcessingPhasePolicy> processingPolicy,
                                 std::uint64_t alreadyRootedBytes,
                                 ExportCapacityRefreshV1 capacityRefresh,
-                                std::uint64_t fixedHostBackingBytes) noexcept;
+                                std::uint64_t fixedHostBackingBytes,
+                                std::shared_ptr<detail::ExportResourceJobState> job = {}) noexcept;
     explicit ExportResourceLedgerV1(
         std::shared_ptr<detail::ExportResourceLedgerState> state) noexcept
         : state_(std::move(state)) {}
@@ -126,7 +130,8 @@ class ExportResourceReservationV1 final {
     refreshCapacity(const runtime::CancellationToken& cancellation) const noexcept;
     // A publication owns its own incremental scratch claim. Concurrent publications of the same
     // attempt add their simultaneous claims; completed publications release them independently.
-    // The parent's explicit per-job cap still applies to retained bytes plus this scratch.
+    // The parent's explicit per-job cap applies to the aggregate of retained bytes and every
+    // simultaneous descendant scratch/owned-backing claim.
     // Refresh exceptions produce CapacityRefreshFailed without charging scratch.
     [[nodiscard]] std::shared_ptr<ExportResourceReservationV1>
     reserveScratch(std::uint64_t additionalBytes, ExportResourceAdmissionStatusV1& status,
@@ -152,6 +157,7 @@ class ExportResourceReservationV1 final {
     ExportResourceReservationV1(std::shared_ptr<detail::ExportResourceLedgerState> ledger,
                                 std::uint64_t initialBytes,
                                 std::optional<std::uint64_t> jobAllowance,
+                                std::shared_ptr<detail::ExportResourceJobState> job,
                                 bool participatesInServiceCap,
                                 std::unique_ptr<detail::RootedExportReservationState>,
                                 ExportCapacityRefreshV1 capacityRefresh) noexcept;
@@ -160,6 +166,7 @@ class ExportResourceReservationV1 final {
     mutable std::mutex mutex_;
     std::uint64_t chargedBytes_ = 0;
     std::optional<std::uint64_t> jobAllowance_;
+    std::shared_ptr<detail::ExportResourceJobState> job_;
     bool participatesInServiceCap_ = true;
     std::unique_ptr<detail::RootedExportReservationState> rooted_;
     ExportCapacityRefreshV1 capacityRefresh_;

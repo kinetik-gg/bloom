@@ -41,6 +41,15 @@ struct ExportResourceLedgerState final {
     }
 };
 
+// The shared ledger mutex protects this counter as well as the service counter. Descendants
+// retain this state after their parent reservation retires, so one explicit job cap covers all
+// simultaneous parent, scratch, owned-backing, and nested charges.
+struct ExportResourceJobState final {
+    explicit ExportResourceJobState(const std::uint64_t cap) : allowance(cap) {}
+    const std::uint64_t allowance;
+    std::uint64_t chargedBytes = 0;
+};
+
 struct RootedExportReservationState final {
     std::shared_ptr<runtime::GpuProcessingPhasePolicy> policy;
     std::shared_ptr<render::GpuProcessingPhaseLease> phase;
@@ -82,7 +91,8 @@ std::shared_ptr<ExportResourceReservationV1> ExportResourceLedgerV1::reserveWith
     const std::optional<std::uint64_t> jobAllowance,
     std::shared_ptr<runtime::GpuProcessingPhasePolicy> processingPolicy,
     const std::uint64_t alreadyRootedBytes, ExportCapacityRefreshV1 capacityRefresh,
-    const std::uint64_t fixedHostBackingBytes) noexcept {
+    const std::uint64_t fixedHostBackingBytes,
+    std::shared_ptr<detail::ExportResourceJobState> job) noexcept {
     if (alreadyRootedBytes > bytes ||
         ((alreadyRootedBytes != 0 || fixedHostBackingBytes != 0) && !processingPolicy) ||
         fixedHostBackingBytes > bytes - alreadyRootedBytes) {
@@ -90,7 +100,8 @@ std::shared_ptr<ExportResourceReservationV1> ExportResourceLedgerV1::reserveWith
         return {};
     }
     const std::optional<std::uint64_t> effectiveJobAllowance =
-        jobAllowance       ? jobAllowance
+        job                ? std::optional{job->allowance}
+        : jobAllowance     ? jobAllowance
         : processingPolicy ? std::nullopt
                            : std::optional{kOutputExportJobResidentAllowanceV1};
     if (effectiveJobAllowance && bytes > *effectiveJobAllowance) {
@@ -100,6 +111,8 @@ std::shared_ptr<ExportResourceReservationV1> ExportResourceLedgerV1::reserveWith
 
     const bool capped = !processingPolicy || state_->explicitConcurrentLimit;
     try {
+        if (!job && effectiveJobAllowance)
+            job = std::make_shared<detail::ExportResourceJobState>(*effectiveJobAllowance);
         std::unique_ptr<detail::RootedExportReservationState> rooted;
         if (processingPolicy) {
             rooted = std::make_unique<detail::RootedExportReservationState>();
@@ -130,14 +143,21 @@ std::shared_ptr<ExportResourceReservationV1> ExportResourceLedgerV1::reserveWith
         // Build the shared owner before charging the ledger. If control-block allocation throws,
         // its raw-object cleanup owns zero charge and only releases the rooted phase/tokens.
         auto reservation = std::shared_ptr<ExportResourceReservationV1>(
-            new ExportResourceReservationV1(state_, 0, effectiveJobAllowance, capped,
-                                            std::move(rooted), std::move(capacityRefresh)));
+            new ExportResourceReservationV1(state_, 0, effectiveJobAllowance, std::move(job),
+                                            capped, std::move(rooted), std::move(capacityRefresh)));
         {
             const std::lock_guard lock(state_->mutex);
+            if (reservation->job_ &&
+                bytes > reservation->job_->allowance - reservation->job_->chargedBytes) {
+                status = ExportResourceAdmissionStatusV1::JobAllowanceExceeded;
+                return {};
+            }
             if (!state_->chargeLocked(bytes, capped)) {
                 status = ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded;
                 return {};
             }
+            if (reservation->job_)
+                reservation->job_->chargedBytes += bytes;
             reservation->chargedBytes_ = bytes;
         }
         status = ExportResourceAdmissionStatusV1::Reserved;
@@ -160,12 +180,13 @@ std::uint64_t ExportResourceLedgerV1::concurrentAllowance() const noexcept {
 
 ExportResourceReservationV1::ExportResourceReservationV1(
     std::shared_ptr<detail::ExportResourceLedgerState> ledger, const std::uint64_t initialBytes,
-    const std::optional<std::uint64_t> jobAllowance, const bool participatesInServiceCap,
+    const std::optional<std::uint64_t> jobAllowance,
+    std::shared_ptr<detail::ExportResourceJobState> job, const bool participatesInServiceCap,
     std::unique_ptr<detail::RootedExportReservationState> rooted,
     ExportCapacityRefreshV1 capacityRefresh) noexcept
     : ledger_(std::move(ledger)), chargedBytes_(initialBytes), jobAllowance_(jobAllowance),
-      participatesInServiceCap_(participatesInServiceCap), rooted_(std::move(rooted)),
-      capacityRefresh_(std::move(capacityRefresh)) {}
+      job_(std::move(job)), participatesInServiceCap_(participatesInServiceCap),
+      rooted_(std::move(rooted)), capacityRefresh_(std::move(capacityRefresh)) {}
 
 ExportResourceReservationV1::~ExportResourceReservationV1() {
     // Hold the service charge until the rooted phase and every scratch claim have retired.
@@ -173,6 +194,8 @@ ExportResourceReservationV1::~ExportResourceReservationV1() {
     if (ledger_) {
         const std::lock_guard lock(ledger_->mutex);
         ledger_->releaseLocked(chargedBytes_, participatesInServiceCap_);
+        if (job_)
+            job_->chargedBytes -= chargedBytes_;
     }
 }
 
@@ -216,17 +239,9 @@ std::shared_ptr<ExportResourceReservationV1> ExportResourceReservationV1::reserv
     if (status != ExportResourceAdmissionStatusV1::Reserved)
         return {};
     const std::lock_guard reservationLock(mutex_);
-    std::optional<std::uint64_t> remainingJobAllowance;
-    if (jobAllowance_) {
-        if (chargedBytes_ > *jobAllowance_ || additionalBytes > *jobAllowance_ - chargedBytes_) {
-            status = ExportResourceAdmissionStatusV1::JobAllowanceExceeded;
-            return {};
-        }
-        remainingJobAllowance = *jobAllowance_ - chargedBytes_;
-    }
     ExportResourceLedgerV1 facade(ledger_);
-    return facade.reserve(additionalBytes, status, remainingJobAllowance,
-                          rooted_ ? rooted_->policy : nullptr);
+    return facade.reserveWithFixedHostBacking(additionalBytes, status, jobAllowance_,
+                                              rooted_ ? rooted_->policy : nullptr, 0, {}, 0, job_);
 }
 
 std::shared_ptr<ExportResourceReservationV1> ExportResourceReservationV1::reserveOwnedHostBacking(
@@ -240,17 +255,9 @@ std::shared_ptr<ExportResourceReservationV1> ExportResourceReservationV1::reserv
         status = ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded;
         return {};
     }
-    std::optional<std::uint64_t> remainingJobAllowance;
-    if (jobAllowance_) {
-        if (chargedBytes_ > *jobAllowance_ || bytes > *jobAllowance_ - chargedBytes_) {
-            status = ExportResourceAdmissionStatusV1::JobAllowanceExceeded;
-            return {};
-        }
-        remainingJobAllowance = *jobAllowance_ - chargedBytes_;
-    }
     ExportResourceLedgerV1 facade(ledger_);
-    return facade.reserveWithFixedHostBacking(bytes, status, remainingJobAllowance, rooted_->policy,
-                                              0, {}, bytes);
+    return facade.reserveWithFixedHostBacking(bytes, status, jobAllowance_, rooted_->policy, 0, {},
+                                              bytes, job_);
 }
 
 ExportResourceAdmissionStatusV1
@@ -275,8 +282,12 @@ ExportResourceReservationV1::expand(const std::uint64_t newTotalBytes) noexcept 
     }
     {
         const std::lock_guard lock(ledger_->mutex);
+        if (job_ && delta > job_->allowance - job_->chargedBytes)
+            return ExportResourceAdmissionStatusV1::JobAllowanceExceeded;
         if (!ledger_->chargeLocked(delta, participatesInServiceCap_))
             return ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded;
+        if (job_)
+            job_->chargedBytes += delta;
         chargedBytes_ = newTotalBytes;
     }
     if (claim)
