@@ -40,6 +40,7 @@ double* editedComponent(document::ParameterValue& value, document::AnimationComp
 struct SessionColorConverterState final {
     std::mutex mutex;
     std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> processor;
+    document::ColorSettings settings;
     std::atomic<bool> cancelled{false};
     bool finished = false;
 };
@@ -79,16 +80,19 @@ kit::KColorConverter CompositionSession::colorConverter(const std::string_view s
     if (!document::isColor4AnimatableSchemaKey(schemaKey) &&
         schemaKey != document::kColorOperandParameterSchemaKey)
         return {};
+    auto settings = colorSettings_;
+    if (const auto* currentComposition = composition();
+        currentComposition != nullptr && currentComposition->workingColorSpaceId().has_value()) {
+        settings.processColorSpaceId = *currentComposition->workingColorSpaceId();
+    }
+    if (colorConverterState_ && colorConverterState_->settings != settings) {
+        colorConverterState_->cancelled.store(true);
+        colorConverterState_.reset();
+    }
     if (!colorConverterState_) {
         colorConverterState_ = std::make_shared<SessionColorConverterState>();
         const auto state = colorConverterState_;
-        auto settings = colorSettings_;
-        if (const auto* currentComposition = composition();
-            currentComposition != nullptr &&
-            currentComposition->workingColorSpaceId().has_value()) {
-            settings.processColorSpaceId = *currentComposition->workingColorSpaceId();
-        }
-        connect(this, &QObject::destroyed, [state] { state->cancelled.store(true); });
+        state->settings = settings;
         // Only the immutable, bounded built-in runs here. No widget/session pointer crosses
         // into the worker. Destruction cancels publication and never waits on the UI thread.
         QThreadPool::globalInstance()->start([state, settings] {
@@ -109,6 +113,11 @@ kit::KColorConverter CompositionSession::colorConverter(const std::string_view s
         auto* timer = new QTimer(this);
         timer->setInterval(16);
         connect(timer, &QTimer::timeout, this, [this, state, timer] {
+            if (state->cancelled.load()) {
+                timer->stop();
+                timer->deleteLater();
+                return;
+            }
             bool finished = false;
             bool ready = false;
             {
@@ -342,6 +351,8 @@ CompositionSession::CompositionSession(document::Document& document,
 }
 
 CompositionSession::~CompositionSession() {
+    if (colorConverterState_ != nullptr)
+        colorConverterState_->cancelled.store(true);
     if (commandObserverState_ != nullptr) {
         commandObserverState_->owner = nullptr;
         commandObserverState_.reset();

@@ -1,3 +1,4 @@
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
@@ -294,6 +295,83 @@ void shapeColorPin() {
     }
 }
 
+void workingSpaceConverterPin() {
+    const auto format = document::CompositionFormat::create(4, 4);
+    if (!format)
+        std::abort();
+    auto project = document::makeNewProject("Working Colour", "Main",
+                                            core::RationalTime::fromInteger(10), *format);
+    const auto id = project.initialCompositionId;
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, id);
+    auto settings = session.colorSettings();
+    const auto revision = color::ocioBuiltInContentRevision(
+        color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri);
+    expect(revision.has_value(), "ACES config revision resolves for converter test");
+    if (!revision)
+        return;
+    settings.ocioConfig.locator =
+        document::BuiltInOcioConfigLocator{std::string(color::kAcesCgV1ConfigUri)};
+    settings.ocioConfig.expectedRevision.digest = *revision;
+    settings.processColorSpaceId = "ACEScg";
+    session.setColorSettings(std::move(settings));
+
+    const auto source =
+        ui::kit::KColor::fromRgba(0.8F, 0.3F, 0.1F, 1.0F, ui::kit::ColorSpace::Reference);
+    const auto displayed = [&]() -> std::optional<ui::kit::KColor> {
+        const auto converter = session.colorConverter();
+        return converter ? source.converted(ui::kit::ColorSpace::Display, converter) : std::nullopt;
+    };
+    expect(waitUntil([&] { return displayed().has_value(); }), "initial ACEScg converter prepares");
+    const auto aces = displayed();
+    expect(session.addSolidLayer("Unrelated", {0.2, 0.3, 0.4, 1.0}),
+           "unrelated authoring edit succeeds");
+    expect(displayed().has_value(), "unrelated document revision keeps the ready converter");
+    expect(session.setWorkingColorSpaceOverride(std::string("Linear P3-D65")),
+           "composition working-space override applies");
+    expect(waitUntil([&] { return displayed().has_value(); }),
+           "converter prepares after composition override");
+    const auto p3 = displayed();
+    const auto changed =
+        aces && p3 &&
+        (std::abs(aces->red - p3->red) > 1e-4F || std::abs(aces->green - p3->green) > 1e-4F ||
+         std::abs(aces->blue - p3->blue) > 1e-4F);
+    expect(changed, "composition override changes the authoring swatch transform");
+
+    expect(stack.undo().changed(), "working-space override is undoable");
+    expect(waitUntil([&] { return displayed().has_value(); }),
+           "converter prepares after working-space undo");
+    const auto undone = displayed();
+    expect(aces && undone && std::abs(aces->red - undone->red) < 1e-6F &&
+               std::abs(aces->green - undone->green) < 1e-6F &&
+               std::abs(aces->blue - undone->blue) < 1e-6F,
+           "undo restores the original swatch transform");
+
+    expect(stack.redo().changed(), "working-space override is redoable");
+    expect(waitUntil([&] { return displayed().has_value(); }),
+           "converter prepares after working-space redo");
+    const auto redone = displayed();
+    expect(p3 && redone && std::abs(p3->red - redone->red) < 1e-6F &&
+               std::abs(p3->green - redone->green) < 1e-6F &&
+               std::abs(p3->blue - redone->blue) < 1e-6F,
+           "redo restores the override swatch transform");
+
+    auto replacement = document::makeNewProject("Rebound Colour", "Main",
+                                                core::RationalTime::fromInteger(10), *format);
+    const auto replacementId = replacement.initialCompositionId;
+    document::Document replacementDocument(std::move(replacement.project));
+    commands::CommandStack replacementStack(replacementDocument);
+    session.rebind(replacementDocument, replacementStack, replacementId);
+    expect(waitUntil([&] { return displayed().has_value(); }),
+           "converter prepares for the rebound composition");
+    const auto rebound = displayed();
+    expect(aces && rebound && std::abs(aces->red - rebound->red) < 1e-6F &&
+               std::abs(aces->green - rebound->green) < 1e-6F &&
+               std::abs(aces->blue - rebound->blue) < 1e-6F,
+           "rebind uses the new composition's effective working space");
+}
+
 void migrationPin() {
     auto project = document::makeNewProject("Legacy", "Main", core::RationalTime::fromInteger(10));
     const auto id = project.initialCompositionId;
@@ -382,6 +460,7 @@ int main(int argc, char** argv) try {
     ui::kit::installKinetikTheme(application);
     boundaryPins();
     shapeColorPin();
+    workingSpaceConverterPin();
     migrationPin();
     return failures == 0 ? 0 : 1;
 } catch (const std::exception& error) {

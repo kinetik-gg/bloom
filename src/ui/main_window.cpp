@@ -683,6 +683,7 @@ void MainWindow::showProjectColorSettings() {
     const auto* current = projectHost_.colorSettings();
     if (current == nullptr)
         return;
+    const auto original = *current;
 
     QDialog dialog(this);
     dialog.setWindowTitle(tr("Project Settings — Colour"));
@@ -694,11 +695,15 @@ void MainWindow::showProjectColorSettings() {
     config->addItem(tr("Bloom Neutral v1"), QStringLiteral("neutral"));
     config->addItem(tr("ACES 1.3 CG (OCIO built-in)"), QStringLiteral("aces"));
     const auto* const currentBuiltin =
-        std::get_if<document::BuiltInOcioConfigLocator>(&current->ocioConfig.locator);
+        std::get_if<document::BuiltInOcioConfigLocator>(&original.ocioConfig.locator);
     const auto currentUri = currentBuiltin == nullptr ? std::string_view{} : currentBuiltin->uri;
-    config->setCurrentIndex(config->findData(currentUri == color::kAcesCgV1ConfigUri
-                                                 ? QVariant{QStringLiteral("aces")}
-                                                 : QVariant{QStringLiteral("neutral")}));
+    const auto currentKey = currentUri == color::kAcesCgV1ConfigUri ? QStringLiteral("aces")
+                            : currentUri == color::kBloomNeutralV1ConfigUri
+                                ? QStringLiteral("neutral")
+                                : QStringLiteral("current");
+    if (currentKey == QStringLiteral("current"))
+        config->addItem(tr("Current configuration (editing unavailable)"), currentKey);
+    config->setCurrentIndex(config->findData(currentKey));
     form->addRow(tr("OCIO config"), config);
 
     auto* working = new kit::KDropdown(&dialog);
@@ -709,23 +714,28 @@ void MainWindow::showProjectColorSettings() {
     summary->setWordWrap(true);
     form->addRow(tr("Summary"), summary);
     auto* hint = new kit::KLabel(
-        tr("For an external config.ocio, choose the file suggested by $OCIO in the project "
-           "browser. External configs retain their durable file reference and are resolved by "
-           "the supervised colour helper."),
+        tr("Existing external OCIO configurations are preserved. Editing or selecting an "
+           "external configuration is not yet available here."),
         &dialog);
     hint->setWordWrap(true);
     layout->addWidget(hint);
 
-    const auto populate = [config, working, summary] {
+    const auto populate = [config, working, summary, original, currentKey] {
         const auto digestText = [](const core::Sha256Digest& digest) {
             const auto hex = digest.toLowercaseHex();
             return QString::fromUtf8(hex.data(), static_cast<qsizetype>(hex.size()));
         };
-        const bool aces = config->currentData().toString() == QStringLiteral("aces");
+        const auto selected = config->currentData().toString();
+        const bool aces = selected == QStringLiteral("aces");
         const std::array<std::string_view, 5> acesSpaces{
             "ACEScg", "ACES2065-1", "Linear Rec.709 (sRGB)", "Linear P3-D65", "Linear Rec.2020"};
         working->clearItems();
-        if (aces) {
+        if (selected == QStringLiteral("current")) {
+            working->addItem(QString::fromStdString(original.processColorSpaceId),
+                             QString::fromStdString(original.processColorSpaceId));
+            summary->setText(QObject::tr("Current configuration retained\nRevision: %1")
+                                 .arg(digestText(original.ocioConfig.expectedRevision.digest)));
+        } else if (aces) {
             for (const auto id : acesSpaces)
                 working->addItem(QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size())),
                                  QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size())));
@@ -735,16 +745,27 @@ void MainWindow::showProjectColorSettings() {
                 QObject::tr("Config: cg-config-v1.0.0_aces-v1.3_ocio-v2.1\n"
                             "Revision: %1\nDisplays: sRGB - Display (ACES 1.0 - SDR Video, "
                             "Un-tone-mapped, Raw)")
-                    .arg(revision.has_value() ? digestText(*revision)
-                                              : QObject::tr("unavailable")));
+                    .arg(selected == currentKey
+                             ? digestText(original.ocioConfig.expectedRevision.digest)
+                         : revision.has_value() ? digestText(*revision)
+                                                : QObject::tr("unavailable")));
         } else {
             working->addItem(QStringLiteral("lin_rec709_scene"),
                              QStringLiteral("lin_rec709_scene"));
             summary->setText(QObject::tr("Config: Bloom Neutral v1\nRevision: %1\nDisplays: "
                                          "sRGB - Display")
-                                 .arg(digestText(color::kBloomNeutralV1ConfigDigest)));
+                                 .arg(digestText(selected == currentKey
+                                                     ? original.ocioConfig.expectedRevision.digest
+                                                     : color::kBloomNeutralV1ConfigDigest)));
         }
-        working->setCurrentIndex(0);
+        if (selected == currentKey) {
+            const auto previous = QString::fromStdString(original.processColorSpaceId);
+            if (working->findData(previous) < 0)
+                working->addItem(previous, previous);
+            working->setCurrentIndex(working->findData(previous));
+        } else {
+            working->setCurrentIndex(0);
+        }
     };
     connect(config, &kit::KDropdown::currentIndexChanged, &dialog, [populate] { populate(); });
     populate();
@@ -757,14 +778,22 @@ void MainWindow::showProjectColorSettings() {
         return;
 
     const auto selected = config->currentData().toString();
+    const auto workingId = working->currentData().toString().toStdString();
+    if (selected == currentKey && workingId == original.processColorSpaceId)
+        return;
+    if (selected == QStringLiteral("current"))
+        return;
     document::ColorSettings settings;
-    if (selected == QStringLiteral("aces")) {
+    if (selected == currentKey) {
+        settings = original;
+        settings.processColorSpaceId = workingId;
+    } else if (selected == QStringLiteral("aces")) {
         const auto revision = color::ocioBuiltInContentRevision(
             color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri);
         if (!revision.has_value())
             return;
         settings = {.schemaVersion = document::kColorSettingsSchemaVersionV1,
-                    .processColorSpaceId = working->currentData().toString().toStdString(),
+                    .processColorSpaceId = workingId,
                     .ocioConfig = {
                         .schemaVersion = document::kOcioConfigReferenceSchemaVersionV1,
                         .locator = document::BuiltInOcioConfigLocator{std::string(

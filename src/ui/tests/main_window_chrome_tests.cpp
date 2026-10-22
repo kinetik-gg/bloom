@@ -4,6 +4,8 @@
 #include "window_fixture.hpp"
 #undef BLOOM_GRAMMAR_ARTIFACT_DIR
 
+#include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
@@ -35,6 +37,8 @@
 #include <QAction>
 #include <QApplication>
 #include <QDesktopServices>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -1001,6 +1005,82 @@ void testPreferencesAudioActionMirrorsCommittedPreference(Expectations& expectat
     previewController.beginShutdown();
 }
 
+void testProjectColorDialogPreservesCurrentIntent(Expectations& expectations) {
+    bool ok = false;
+    Fixture fixture(&ok);
+    expectations.expect(ok, "colour settings: stand-in editors registered");
+    if (!ok)
+        return;
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
+                      fixture.frameExportController);
+    auto* action = window.findChild<QAction*>(QStringLiteral("projectColorSettingsAction"));
+    expectations.expect(action != nullptr, "colour settings: project action exists");
+    if (!action)
+        return;
+
+    const auto choose = [&](const QString& expectedConfig, const QString& expectedWorking,
+                            const QString& changeConfig = {}) {
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            auto* config =
+                dialog ? dialog->findChild<kit::KDropdown*>("projectColorConfigPicker") : nullptr;
+            auto* working =
+                dialog ? dialog->findChild<kit::KDropdown*>("projectWorkingColorSpacePicker")
+                       : nullptr;
+            expectations.expect(config && working, "colour settings: dialog has both selectors");
+            if (config && working) {
+                expectations.expect(config->currentData().toString() == expectedConfig &&
+                                        working->currentData().toString() == expectedWorking,
+                                    "colour settings: dialog opens on the saved intent");
+                if (!changeConfig.isEmpty())
+                    config->setCurrentIndex(config->findData(changeConfig));
+            }
+            if (dialog)
+                dialog->accept();
+        });
+        action->trigger();
+    };
+
+    auto aces = *fixture.projectHost.colorSettings();
+    const auto revision = bloom::color::ocioBuiltInContentRevision(
+        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
+    expectations.expect(revision.has_value(), "colour settings: ACES revision resolves");
+    if (!revision)
+        return;
+    aces.ocioConfig.locator =
+        bloom::document::BuiltInOcioConfigLocator{std::string(bloom::color::kAcesCgV1ConfigUri)};
+    aces.ocioConfig.expectedRevision.digest = *revision;
+    aces.processColorSpaceId = "Linear P3-D65";
+    expectations.expect(fixture.projectHost.setColorSettings(aces) ==
+                            bloom::host::ProjectSessionColorSettingsStatus::Updated,
+                        "colour settings: ACES setup is accepted");
+    choose("aces", "Linear P3-D65");
+    expectations.expect(*fixture.projectHost.colorSettings() == aces,
+                        "colour settings: unchanged ACES dialog retains nondefault working space");
+
+    auto external = aces;
+    external.ocioConfig.locator =
+        bloom::document::ExternalOcioConfigLocator{"file:///show/config.ocio"};
+    external.ocioConfig.portability = bloom::document::OcioConfigPortability::External;
+    external.ocioConfig.contextVariables = {{"SHOW", "sample"}};
+    expectations.expect(fixture.projectHost.setColorSettings(external) ==
+                            bloom::host::ProjectSessionColorSettingsStatus::Updated,
+                        "colour settings: external setup is accepted");
+    choose("current", "Linear P3-D65");
+    expectations.expect(*fixture.projectHost.colorSettings() == external,
+                        "colour settings: unchanged external dialog retains locator and revision");
+
+    choose("current", "Linear P3-D65", "neutral");
+    const auto changed = fixture.projectHost.colorSettings();
+    const auto* builtIn =
+        changed == nullptr
+            ? nullptr
+            : std::get_if<bloom::document::BuiltInOcioConfigLocator>(&changed->ocioConfig.locator);
+    expectations.expect(builtIn && builtIn->uri == bloom::color::kBloomNeutralV1ConfigUri &&
+                            changed->processColorSpaceId == "lin_rec709_scene",
+                        "colour settings: an explicit config choice updates the project");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1016,6 +1096,7 @@ int main(int argc, char** argv) {
     testHelpMenuItemsExistAndFire(expectations);
     testPreferencesActionIsInTheEditMenuWithPreferencesRole(expectations);
     testPreferencesAudioActionMirrorsCommittedPreference(expectations);
+    testProjectColorDialogPreservesCurrentIntent(expectations);
     testWindowStatusBarIsAKitStripWithEveryCell(expectations);
     testWindowStatusBarReportsSelectedMemoryBudgets(expectations);
     testWindowStatusBarKeepsMemoryReasonDuringRamPreview(expectations);
