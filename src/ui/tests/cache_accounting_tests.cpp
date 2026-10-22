@@ -529,7 +529,7 @@ void testAssetProxyAndAudioParticipation(Expectations& check) {
                                           host.lowestCompositionId());
     bloom::ui::TaskUiBridge bridge(scheduler);
     bloom::ui::AssetController assets(session, host, scheduler, bridge, nullptr, nullptr,
-                                      {.standaloneByteAllowance = 16 * 1024 * 1024});
+                                      {.policy = {}, .standaloneByteAllowance = 16 * 1024 * 1024});
     assets.importFiles({directory.filePath("proxy.png"), audioPath});
     QElapsedTimer timer;
     timer.start();
