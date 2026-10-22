@@ -526,7 +526,8 @@ Multiply uses an animatable finite scalar `factor` with neutral value `1`: `rgb'
 Invert's initial color mode has no parameter: `rgb' = 1 - rgb`. Both accept negative and HDR RGB
 and never clamp them. Thus an input channel of `2` becomes `-1` after Invert, while `-0.25`
 becomes `1.25`; a negative Multiply factor may reverse signs. A result that cannot be represented
-as finite Float32 is a typed evaluation failure rather than a saturated or silently clamped pixel.
+as finite Float32 produces a typed diagnostic and a pass-through rather than a saturated or
+silently clamped pixel.
 The sampled factor, operation kind, and input image identity participate in the process cache key;
 the same math applies to preview and final routes. Separate alpha and mask inversion modes require
 their own typed contracts and are not implied by this color mode.
