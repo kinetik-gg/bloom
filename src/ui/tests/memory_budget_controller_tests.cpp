@@ -236,6 +236,8 @@ void sampledPressurePreviewRecovery() {
     runtime::TaskScheduler scheduler(schedulerConfig);
     ui::TaskUiBridge bridge(scheduler);
     bridge.stop();
+    std::size_t jobsPolls = 0;
+    QObject::connect(&bridge, &ui::TaskUiBridge::snapshotsPolled, &bridge, [&] { ++jobsPolls; });
     std::atomic_size_t preparations{0};
     std::atomic_bool admittedWithinLiveBudget{true};
     const auto stage = ui::makeCompositionPreviewCpuStage(
@@ -326,6 +328,10 @@ void sampledPressurePreviewRecovery() {
     expect(spin([&] { return readyAt(timeAt(1), runtime::PreviewResolutionPolicy::Quarter); }) &&
                preparations == 3 && admittedWithinLiveBudget,
            "uncached Quarter preview executes with a fitting real phase and request budget");
+    // Preview submission wakes the Jobs monitor. Stop it after the completed renders so the
+    // held-sample span actually proves completion delivery without progress polling.
+    bridge.stop();
+    const auto pollsBeforeHold = jobsPolls;
     auto stale = *view->load();
     stale.sampledAt -= 11s;
     expect(view->publish(stale), "stalled sample fixture expires actual delivered defaults");
@@ -344,7 +350,8 @@ void sampledPressurePreviewRecovery() {
         preview.notifyProcessingCapacityChanged();
     }
     QCoreApplication::processEvents();
-    expect(owner.admittedSampleCount() == 3 && preparations == 3 && !bridge.isRunning(),
+    expect(owner.admittedSampleCount() == 3 && preparations == 3 && !bridge.isRunning() &&
+               jobsPolls == pollsBeforeHold,
            "held sampler and stale defaults admit no backlog or retry spin with Jobs stopped");
     held->release.count_down();
     expect(spin([&] { return readyAt(timeAt(3), runtime::PreviewResolutionPolicy::Quarter); }) &&
