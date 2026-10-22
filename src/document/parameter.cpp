@@ -186,6 +186,13 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* color = std::get_if<bloom::core::Color4d>(&constant.value);
         return color != nullptr && color->isValid();
     }
+    if (schemaKey == kCheckerCellWidthParameterSchemaKey ||
+        schemaKey == kCheckerCellHeightParameterSchemaKey ||
+        schemaKey == kCheckerWidthParameterSchemaKey ||
+        schemaKey == kCheckerHeightParameterSchemaKey) {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value != nullptr && *value >= 1 && *value <= 16777216;
+    }
     if (schemaKey == kPositionParameterSchemaKey || schemaKey == kAnchorParameterSchemaKey ||
         schemaKey == kScaleParameterSchemaKey) {
         // One rule for all three Vec2d transform values: finite, otherwise unbounded. Scale is

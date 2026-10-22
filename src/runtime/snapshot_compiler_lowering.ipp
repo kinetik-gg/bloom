@@ -526,6 +526,8 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     switch (definition.lowering) {
     case NodeLoweringKind::Solid:
         return lowerSolid(node);
+    case NodeLoweringKind::Checker:
+        return lowerChecker(node);
     case NodeLoweringKind::CompositionSource:
         return lowerCompositionSource(node);
     case NodeLoweringKind::VideoSource:
@@ -592,6 +594,26 @@ lowerSolid(const document::NodeRecord& node) {
         return std::nullopt;
     }
     return runtime::CompiledSolid{node.id, *color, *width, *height};
+}
+
+[[nodiscard]] std::optional<runtime::CompiledOperation>
+lowerChecker(const document::NodeRecord& node) {
+    const auto a = compiledColorParameter(findParameterBinding(node, "colorA"));
+    const auto b = compiledColorParameter(findParameterBinding(node, "colorB"));
+    const auto* cellWidth = parameterConstant<std::int64_t>(findParameterBinding(node, "cellWidth"));
+    const auto* cellHeight = parameterConstant<std::int64_t>(findParameterBinding(node, "cellHeight"));
+    const auto* width = parameterConstant<std::int64_t>(findParameterBinding(node, "width"));
+    const auto* height = parameterConstant<std::int64_t>(findParameterBinding(node, "height"));
+    if (!a || !b || !cellWidth || !cellHeight || !width || !height || *cellWidth < 1 ||
+        *cellHeight < 1 || *width < 1 || *height < 1 || *cellWidth > 16777216 ||
+        *cellHeight > 16777216 || *width > 16777216 || *height > 16777216) {
+        addTopologyFailure(node.id, "Checker parameters could not be lowered.");
+        return std::nullopt;
+    }
+    return runtime::CompiledChecker{node.id, *a, *b, static_cast<std::uint32_t>(*cellWidth),
+                                    static_cast<std::uint32_t>(*cellHeight),
+                                    static_cast<std::uint32_t>(*width),
+                                    static_cast<std::uint32_t>(*height)};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledCompositionSource>

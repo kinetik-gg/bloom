@@ -82,6 +82,7 @@ struct GpuSceneExecutorStep final {
     // Solid / merge base / transparent output. The windows are optional because ImageWindow has no
     // default constructor.
     render::Rgba32f solidPixel = render::Rgba32f::transparent();
+    std::optional<render::GpuSolidParameters::Checker> checker;
     std::optional<render::ImageWindow> solidDataWindow;
     std::optional<render::ImageWindow> solidDisplayWindow;
     core::PixelAspectRatio solidPixelAspect = core::PixelAspectRatio::square();

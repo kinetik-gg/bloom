@@ -45,6 +45,10 @@ InitializationAllocationStats initializationAllocationStats(GpuDevice& device) {
 
 void GpuSolid::Impl::resetPipelineResources() noexcept {
     // Free children through their still-live pools, matching reverse member destruction.
+    checkerPipeline = vk::raii::Pipeline{nullptr};
+    checkerPipelineLayout = vk::raii::PipelineLayout{nullptr};
+    checkerShaderModule = vk::raii::ShaderModule{nullptr};
+    checkerAttempted = false;
     if (*fence) {
         initializationDestroyed.fetch_add(1);
     }

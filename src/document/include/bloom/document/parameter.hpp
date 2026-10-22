@@ -19,6 +19,10 @@ namespace bloom::document {
 inline constexpr std::string_view kSolidColorParameterSchemaKey = "bloom.solid.color";
 inline constexpr std::string_view kSolidWidthParameterSchemaKey = "bloom.solid.width";
 inline constexpr std::string_view kSolidHeightParameterSchemaKey = "bloom.solid.height";
+inline constexpr std::string_view kCheckerCellWidthParameterSchemaKey = "bloom.checker.cell-width";
+inline constexpr std::string_view kCheckerCellHeightParameterSchemaKey = "bloom.checker.cell-height";
+inline constexpr std::string_view kCheckerWidthParameterSchemaKey = "bloom.checker.width";
+inline constexpr std::string_view kCheckerHeightParameterSchemaKey = "bloom.checker.height";
 inline constexpr std::string_view kTextParameterSchemaKey = "bloom.text.content";
 inline constexpr std::string_view kTextSizeParameterSchemaKey = "bloom.text.size";
 // Font references are family|style|digest strings. The old integer values remain accepted while

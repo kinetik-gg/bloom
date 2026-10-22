@@ -211,6 +211,43 @@ set(BLOOM_SOLID_COMP_SHA256
 set(BLOOM_SOLID_SPV_SHA256
     "2fae4aef67267e98a53034448639bfb00a69568ec3be1d8ed1a1bc60b31a0318")
 
+# CheckerV1 shares GpuSolid's bounded resident-image lifecycle and descriptor set, with a
+# separate pinned coordinate-aware shader. The optional validator checks the exact artifact.
+set(BLOOM_CHECKER_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/checker.comp")
+set(BLOOM_CHECKER_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/checker.manifest")
+set(BLOOM_CHECKER_COMP_SHA256
+    "0bfdf86e26c604bd4cb70ea478d6285e0cd3561e01beb3467974a97e4e5ae200")
+set(BLOOM_CHECKER_SPV_SHA256
+    "94ba2a1a4355d9d1625e09f27257fb4e68df574a26409b8ae8351d16711f14b9")
+file(SHA256 "${BLOOM_CHECKER_COMP}" bloom_checker_comp_sha256)
+if(NOT bloom_checker_comp_sha256 STREQUAL BLOOM_CHECKER_COMP_SHA256)
+    message(FATAL_ERROR "CheckerV1 source digest changed without artifact regeneration")
+endif()
+file(READ "${BLOOM_CHECKER_MANIFEST}" bloom_checker_manifest_text)
+if(NOT bloom_checker_manifest_text MATCHES "${BLOOM_CHECKER_COMP_SHA256}" OR
+   NOT bloom_checker_manifest_text MATCHES "${BLOOM_CHECKER_SPV_SHA256}")
+    message(FATAL_ERROR "CheckerV1 manifest does not bind the pinned shader")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_checker_generated_spv "${CMAKE_CURRENT_BINARY_DIR}/checker.generated.spv")
+    execute_process(COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                    "${BLOOM_CHECKER_COMP}" -o "${bloom_checker_generated_spv}"
+                    RESULT_VARIABLE bloom_checker_glslang_result)
+    if(NOT bloom_checker_glslang_result EQUAL 0)
+        message(FATAL_ERROR "CheckerV1 GLSL compilation failed")
+    endif()
+    execute_process(COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2
+                    "${bloom_checker_generated_spv}"
+                    RESULT_VARIABLE bloom_checker_spirv_val_result)
+    if(NOT bloom_checker_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "CheckerV1 SPIR-V validation failed")
+    endif()
+    file(SHA256 "${bloom_checker_generated_spv}" bloom_checker_spv_sha256)
+    if(NOT bloom_checker_spv_sha256 STREQUAL BLOOM_CHECKER_SPV_SHA256)
+        message(FATAL_ERROR "CheckerV1 embedded artifact digest mismatch")
+    endif()
+endif()
+
 file(SHA256 "${BLOOM_SOLID_COMP}" bloom_solid_comp_sha256)
 if(NOT bloom_solid_comp_sha256 STREQUAL BLOOM_SOLID_COMP_SHA256)
     message(FATAL_ERROR
@@ -1145,6 +1182,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_resident_display_readback_private.hpp
         vulkan/gpu_resident_display_resources.cpp
         vulkan/gpu_solid.cpp
+        vulkan/gpu_solid_checker.cpp
         vulkan/gpu_solid_resources.cpp
         vulkan/gpu_solid_covered.cpp
         vulkan/gpu_solid_fault.hpp

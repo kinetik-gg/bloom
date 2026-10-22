@@ -27,7 +27,7 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
          index < steps.size() && operations.size() < render::kGpuOperationBatchCapacity; ++index) {
         const auto& step = steps[index];
         if (step.kind == GpuSceneExecutorStepKind::Solid) {
-            if (!step.solidDataWindow || !step.solidDisplayWindow)
+            if (!step.solidDataWindow || !step.solidDisplayWindow || step.checker)
                 return std::nullopt;
             operations.emplace_back(
                 render::GpuBatchSolid{{step.solidPixel, *step.solidDataWindow,

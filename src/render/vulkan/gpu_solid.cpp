@@ -191,6 +191,32 @@ GpuSolidDiagnostic GpuSolid::begin(const GpuSolidParameters& parameters,
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::InvalidArgument,
                                   "the data window is empty");
     }
+    if (const auto& checker = parameters.checker) {
+        constexpr std::uint32_t kMaximum = 16384;
+        // At the boundary the largest product is (8*(16384-1)+7)*16384,
+        // below 2^31; all shader numerator and denominator products remain uint32.
+        static_assert((8ULL * (kMaximum - 1ULL) + 7ULL) * kMaximum < (1ULL << 31));
+        static_assert(8ULL * kMaximum * kMaximum == (1ULL << 31));
+        const std::uint32_t dimensions[]{width,
+                                         height,
+                                         checker->authorWidth,
+                                         checker->authorHeight,
+                                         checker->cellWidth,
+                                         checker->cellHeight,
+                                         checker->compositionWidth,
+                                         checker->compositionHeight,
+                                         checker->proxyWidth,
+                                         checker->proxyHeight};
+        for (const auto dimension : dimensions) {
+            if (dimension == 0 || dimension > kMaximum)
+                return gpuSolidDiagnostic(
+                    GpuSolidDiagnosticCode::Unsupported,
+                    "CheckerV1 integer-rational device geometry exceeds its 16384-pixel limit");
+        }
+        if (parameters.dataWindow.originX() != 0 || parameters.dataWindow.originY() != 0)
+            return gpuSolidDiagnostic(GpuSolidDiagnosticCode::Unsupported,
+                                      "CheckerV1 requires a source-local data window");
+    }
     const std::uint64_t required = static_cast<std::uint64_t>(width) * height * sizeof(Rgba32f);
     const std::uint64_t allowed =
         byteBudget < impl.budgets.maxImageBytes ? byteBudget : impl.budgets.maxImageBytes;
@@ -229,6 +255,8 @@ GpuSolidDiagnostic GpuSolid::begin(const GpuSolidParameters& parameters,
         }
         impl.pipelineReady = true;
     }
+    if (parameters.checker && !impl.createCheckerPipeline())
+        return impl.createDiagnostic;
 
     impl.clearJob();
     auto resident = std::make_unique<GpuImageImpl>();
@@ -294,18 +322,45 @@ GpuSolidDiagnostic GpuSolid::begin(const GpuSolidParameters& parameters,
                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
                                      nullptr, 1, &toGeneral);
 
-    impl.commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *impl.pipeline);
-    impl.commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *impl.pipelineLayout, 0,
+    const auto selectedPipeline = parameters.checker ? *impl.checkerPipeline : *impl.pipeline;
+    const auto selectedLayout =
+        parameters.checker ? *impl.checkerPipelineLayout : *impl.pipelineLayout;
+    impl.commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, selectedPipeline);
+    impl.commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, selectedLayout, 0,
                                           {*impl.descriptorSet}, {});
-    SolidPushConstants push{};
-    push.pixel[0] = parameters.pixel.red();
-    push.pixel[1] = parameters.pixel.green();
-    push.pixel[2] = parameters.pixel.blue();
-    push.pixel[3] = parameters.pixel.alpha();
-    push.width = width;
-    push.height = height;
-    impl.commandBuffer.pushConstants(*impl.pipelineLayout, vk::ShaderStageFlagBits::eCompute, 0,
-                                     static_cast<std::uint32_t>(sizeof(SolidPushConstants)), &push);
+    if (const auto& checker = parameters.checker) {
+        CheckerPushConstants push{};
+        push.colorA[0] = parameters.pixel.red();
+        push.colorA[1] = parameters.pixel.green();
+        push.colorA[2] = parameters.pixel.blue();
+        push.colorA[3] = parameters.pixel.alpha();
+        push.colorB[0] = checker->colorB.red();
+        push.colorB[1] = checker->colorB.green();
+        push.colorB[2] = checker->colorB.blue();
+        push.colorB[3] = checker->colorB.alpha();
+        push.width = width;
+        push.height = height;
+        push.authorWidth = checker->authorWidth;
+        push.authorHeight = checker->authorHeight;
+        push.cellWidth = checker->cellWidth;
+        push.cellHeight = checker->cellHeight;
+        push.compositionWidth = checker->compositionWidth;
+        push.compositionHeight = checker->compositionHeight;
+        push.proxyWidth = checker->proxyWidth;
+        push.proxyHeight = checker->proxyHeight;
+        impl.commandBuffer.pushConstants(selectedLayout, vk::ShaderStageFlagBits::eCompute, 0,
+                                         sizeof(push), &push);
+    } else {
+        SolidPushConstants push{};
+        push.pixel[0] = parameters.pixel.red();
+        push.pixel[1] = parameters.pixel.green();
+        push.pixel[2] = parameters.pixel.blue();
+        push.pixel[3] = parameters.pixel.alpha();
+        push.width = width;
+        push.height = height;
+        impl.commandBuffer.pushConstants(selectedLayout, vk::ShaderStageFlagBits::eCompute, 0,
+                                         sizeof(push), &push);
+    }
     const std::uint64_t groupCount =
         (static_cast<std::uint64_t>(width) + kWorkgroupSizeX - 1U) / kWorkgroupSizeX;
     const auto groups = static_cast<std::uint32_t>(groupCount);

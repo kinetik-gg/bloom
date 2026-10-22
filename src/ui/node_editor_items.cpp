@@ -201,6 +201,8 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Audio");
     if (typeId == document::kSolidSourceNodeType)
         return QCoreApplication::translate("node_editor", "Solid");
+    if (typeId == document::kCheckerSourceNodeType)
+        return QCoreApplication::translate("node_editor", "Checker");
     if (typeId == document::kLayerOutputNodeType)
         return QCoreApplication::translate("node_editor", "Layer");
     if (typeId == document::kLayerStackNodeType)

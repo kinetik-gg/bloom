@@ -73,6 +73,16 @@ struct GpuSolidParameters final {
     ImageWindow dataWindow;
     ImageWindow displayWindow;
     core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
+    // CheckerV1 uses this existing bounded resident-image lifecycle and a separate pinned shader.
+    // `pixel` is color A; the second premultiplied color and rational geometry live here.
+    struct Checker final {
+        Rgba32f colorB = Rgba32f::transparent();
+        std::uint32_t authorWidth = 0, authorHeight = 0;
+        std::uint32_t cellWidth = 0, cellHeight = 0;
+        std::uint32_t compositionWidth = 0, compositionHeight = 0;
+        std::uint32_t proxyWidth = 0, proxyHeight = 0;
+    };
+    std::optional<Checker> checker;
 };
 
 // Hard ceiling on the retained resident image bytes (width*height*16). The

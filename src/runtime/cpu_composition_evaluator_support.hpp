@@ -78,6 +78,7 @@ void forEachInput(const CompiledOperation& operation, Function&& function) {
     std::visit(Overloaded{
                    [](const CompiledShape&) {},
                    [](const CompiledSolid&) {},
+                   [](const CompiledChecker&) {},
                    [](const CompiledText&) {},
                    [&function](const CompiledImageEffect& effect) {
                        function(effect.input);

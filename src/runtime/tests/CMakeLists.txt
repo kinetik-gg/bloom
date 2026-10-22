@@ -234,6 +234,13 @@ bloom_add_test(
 
 bloom_find_dependency(OpenColorIO)
 add_executable(bloom_runtime_image_effect_test image_effect_tests.cpp)
+add_executable(bloom_runtime_checker_image_test checker_image_tests.cpp)
+target_include_directories(bloom_runtime_checker_image_test PRIVATE ..)
+target_link_libraries(bloom_runtime_checker_image_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_runtime_checker_image_test)
+bloom_enable_strict_floating_point(bloom_runtime_checker_image_test)
+bloom_add_test(NAME bloom.runtime.checker_image COMMAND bloom_runtime_checker_image_test
+    LABELS runtime unit gpu TIMEOUT 30)
 target_include_directories(bloom_runtime_image_effect_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(bloom_runtime_image_effect_test PRIVATE bloom_runtime_evaluator OpenColorIO::OpenColorIO)
 bloom_enable_warnings(bloom_runtime_image_effect_test)

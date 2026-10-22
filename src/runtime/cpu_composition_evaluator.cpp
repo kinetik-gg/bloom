@@ -1,4 +1,5 @@
 #include "cpu_composition_evaluator_support.hpp"
+#include "checker_image.hpp"
 #include "cpu_composition_resolution.hpp"
 #include "image_effect.hpp"
 #include "image_source.hpp"
@@ -60,6 +61,7 @@ static_assert(document::kMaximumTextSizePixels == render::kMaximumTextPixelSize,
         Overloaded{
             [&subject](const CompiledShape& shape) { subject.nodeId = shape.sourceNodeId; },
             [&subject](const CompiledSolid& solid) { subject.nodeId = solid.sourceNodeId; },
+            [&subject](const CompiledChecker& checker) { subject.nodeId = checker.sourceNodeId; },
             [&subject](const CompiledCompositionSource& source) {
                 subject.nodeId = source.sourceNodeId;
             },
@@ -333,6 +335,12 @@ enum class ScalarDomain : std::uint8_t {
                 return hasValidColorCurveReference(solid.color, plan, index, failure) &&
                        hasValidScalarCurveReference(solid.width, plan, index, failure) &&
                        hasValidScalarCurveReference(solid.height, plan, index, failure);
+            },
+            [&plan, index, &failure](const CompiledChecker& checker) {
+                return hasValidColorCurveReference(checker.colorA, plan, index, failure) &&
+                       hasValidColorCurveReference(checker.colorB, plan, index, failure) &&
+                       checker.cellWidth > 0 && checker.cellHeight > 0 && checker.width > 0 &&
+                       checker.height > 0;
             },
             [&plan, index, &failure](const CompiledCompositionSource& source) {
                 const auto& mapping = source.timeMapping;
@@ -941,6 +949,10 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                                                      operationSubject));
                     static_cast<void>(registerScalar(solid.height, "height",
                                                      ScalarDomain::Dimension, operationSubject));
+                },
+                [&](const CompiledChecker& checker) {
+                    static_cast<void>(registerColor(checker.colorA, "colorA", operationSubject) &&
+                                      registerColor(checker.colorB, "colorB", operationSubject));
                 },
                 [&](const CompiledShape& shape) {
                     static_cast<void>(
@@ -1874,6 +1886,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             parameter(step.color);
                             parameter(step.width);
                             parameter(step.height);
+                        } else if constexpr (std::is_same_v<Step, CompiledChecker>) {
+                            parameter(step.colorA);
+                            parameter(step.colorB);
+                            key.add(step.cellWidth);
+                            key.add(step.cellHeight);
+                            key.add(step.width);
+                            key.add(step.height);
                         } else if constexpr (std::is_same_v<Step, CompiledShape>) {
                             key.add(step.kind);
                             parameter(step.size);
@@ -2179,6 +2198,121 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 operationFailure =
                                     imageDiagnostic(*frozen.error(), operationSubject,
                                                     "Solid process image could not be published");
+                                return;
+                            }
+                            produced.emplace(std::move(*frozen.value()));
+                        },
+                        [&](const CompiledChecker& checker) {
+                            const auto colorA = detail::resolveParameter(checker.colorA, *plan, resolved);
+                            const auto colorB = detail::resolveParameter(checker.colorB, *plan, resolved);
+                            if (!colorA || !colorB) {
+                                operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                                                              "Checker colors could not be resolved", {},
+                                                              operationSubject);
+                                return;
+                            }
+                            const auto a = render::solidPixelFromStraightLinearRec709Scene(colorA->value);
+                            const auto b = render::solidPixelFromStraightLinearRec709Scene(colorB->value);
+                            if (!a || !b) {
+                                operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                                              "Checker colors are not evaluable", {},
+                                                              operationSubject);
+                                return;
+                            }
+                            const auto proxyWidth = static_cast<std::uint32_t>(
+                                fullDescriptor.displayWindow().extent().width());
+                            const auto proxyHeight = static_cast<std::uint32_t>(
+                                fullDescriptor.displayWindow().extent().height());
+                            const detail::CheckerGeometry geometry{
+                                checker.width, checker.height, checker.cellWidth, checker.cellHeight,
+                                plan->format().width(), plan->format().height(), proxyWidth,
+                                proxyHeight};
+                            if (!geometry.valid()) {
+                                operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                                              "Checker geometry exceeds supported bounds", {},
+                                                              operationSubject);
+                                return;
+                            }
+                            const std::uint64_t width =
+                                (std::uint64_t{checker.width} * proxyWidth +
+                                 geometry.compositionWidth - 1) / geometry.compositionWidth;
+                            const std::uint64_t height =
+                                (std::uint64_t{checker.height} * proxyHeight +
+                                 geometry.compositionHeight - 1) / geometry.compositionHeight;
+                            if (width > 16777216 || height > 16777216) {
+                                operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                                              "Checker output exceeds supported extent", {},
+                                                              operationSubject);
+                                return;
+                            }
+                            const auto window = render::ImageWindow::create(0, 0, width, height);
+                            if (!window) {
+                                operationFailure = imageDiagnostic(*window.error(), operationSubject,
+                                                                   "Checker bounds are invalid");
+                                return;
+                            }
+                            auto local = render::Rgba32fImageDescriptor::create(
+                                *window.value(), fullDescriptor.displayWindow(),
+                                fullDescriptor.pixelAspect());
+                            if (!local) {
+                                operationFailure = imageDiagnostic(*local.error(), operationSubject,
+                                                                   "Checker descriptor is invalid");
+                                return;
+                            }
+                            auto descriptor = *local.value();
+                            bounds[index].local = detail::boundsForWindow(
+                                descriptor.dataWindow(), resolved.horizontalScale,
+                                resolved.verticalScale);
+                            bounds[index].local.right = checker.width;
+                            bounds[index].local.bottom = checker.height;
+                            bounds[index].output = bounds[index].local;
+                            if (!clipDescriptor(descriptor, index))
+                                return;
+                            auto builder = render::Rgba32fImageBuilder::create(
+                                descriptor, remainingPixelBudget());
+                            if (!builder) {
+                                operationFailure = imageDiagnostic(*builder.error(), operationSubject,
+                                                                   "Checker image could not be allocated");
+                                return;
+                            }
+                            const auto data = descriptor.dataWindow();
+                            reportRowPassStarted(progress, operationIndex, data.extent().height());
+                            auto& image = *builder.value();
+                            const auto outcome = runRowBandPass(
+                                rowBands, cancellation, data.extent().height(), data.originY(),
+                                [&image, geometry, a = *a.value(), b = *b.value(),
+                                 &operationSubject](const std::int64_t y) -> RowFailure {
+                                    auto row = image.row(y);
+                                    if (!row)
+                                        return imageDiagnostic(*row.error(), operationSubject,
+                                                               "Checker row could not be addressed");
+                                    for (std::size_t column = 0; column < row.value()->size(); ++column) {
+                                        const auto x = static_cast<std::uint32_t>(
+                                            image.descriptor().dataWindow().originX() +
+                                            static_cast<std::int64_t>(column));
+                                        const auto counts = detail::checkerSampleCounts(
+                                            geometry, x, static_cast<std::uint32_t>(y));
+                                        const auto pixel = detail::checkerPixel(a, b, counts);
+                                        if (!pixel)
+                                            return imageDiagnostic(*pixel.error(), operationSubject,
+                                                                   "Checker pixel is invalid");
+                                        (*row.value())[column] = *pixel.value();
+                                    }
+                                    return std::nullopt;
+                                });
+                            if (outcome.cancelled) {
+                                operationCancelled = true;
+                                return;
+                            }
+                            if (outcome.failure || outcome.incomplete) {
+                                operationFailure = rowPassFailure(outcome, operationSubject);
+                                return;
+                            }
+                            reportRowPassFinished(progress, operationIndex, data.extent().height());
+                            auto frozen = std::move(*builder.value()).freeze();
+                            if (!frozen) {
+                                operationFailure = imageDiagnostic(*frozen.error(), operationSubject,
+                                                                   "Checker image could not be published");
                                 return;
                             }
                             produced.emplace(std::move(*frozen.value()));

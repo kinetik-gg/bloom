@@ -122,6 +122,19 @@ struct CompiledSolid {
     friend bool operator==(const CompiledSolid&, const CompiledSolid&) = default;
 };
 
+// Checker colours are straight authored values; cell and canvas dimensions are in authored
+// pixels. The reference and resident paths share a 4x4 sample grid at output resolution.
+struct CompiledChecker final {
+    document::NodeId sourceNodeId;
+    CompiledColorParameter colorA;
+    CompiledColorParameter colorB;
+    std::uint32_t cellWidth = 64;
+    std::uint32_t cellHeight = 64;
+    std::uint32_t width = 1920;
+    std::uint32_t height = 1080;
+    friend bool operator==(const CompiledChecker&, const CompiledChecker&) = default;
+};
+
 // A lowered text source. Size and colour became typed operands in task S5, when both schemas
 // became animatable. Content still never INTERPOLATES -- a String has no midpoint and no command in
 // the surface can put it on a curve -- but since task DRIVE-1 it can VARY, because a driver binding
@@ -421,7 +434,7 @@ struct CompiledCompositionOutput {
 };
 
 using CompiledOperation =
-    std::variant<CompiledSolid, CompiledText, CompiledImageSource, CompiledVideoSource,
+    std::variant<CompiledSolid, CompiledChecker, CompiledText, CompiledImageSource, CompiledVideoSource,
                  CompiledLayerOutput, CompiledMerge, CompiledCompositionOutput, CompiledShape,
                  CompiledCompositionSource, CompiledImageEffect>;
 

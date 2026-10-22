@@ -1,0 +1,41 @@
+#version 460
+// CheckerV1: one native resident dispatch, fixed 4x4 subpixel sampling. No tile list.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 0, rgba32f) uniform writeonly image2D bloom_checker_output;
+layout(push_constant) uniform BloomCheckerPush {
+    vec4 colorA;
+    vec4 colorB;
+    uint width;
+    uint height;
+    uint authorWidth;
+    uint authorHeight;
+    uint cellWidth;
+    uint cellHeight;
+    uint compositionWidth;
+    uint compositionHeight;
+    uint proxyWidth;
+    uint proxyHeight;
+} p;
+
+void main() {
+    const uvec2 xy = gl_GlobalInvocationID.xy;
+    if (xy.x >= p.width || xy.y >= p.height) return;
+    uint countA = 0u, countB = 0u;
+    for (uint sy = 0u; sy < 4u; ++sy) {
+        const uint yn = (8u * xy.y + 2u * sy + 1u) * p.compositionHeight;
+        const uint yd = 8u * p.proxyHeight;
+        if (yn >= yd * p.authorHeight) continue;
+        const uint cy = yn / (yd * p.cellHeight);
+        for (uint sx = 0u; sx < 4u; ++sx) {
+            const uint xn = (8u * xy.x + 2u * sx + 1u) * p.compositionWidth;
+            const uint xd = 8u * p.proxyWidth;
+            if (xn >= xd * p.authorWidth) continue;
+            const uint cx = xn / (xd * p.cellWidth);
+            if (((cx + cy) & 1u) != 0u) ++countB;
+            else ++countA;
+        }
+    }
+    const float wa = float(countA) * (1.0 / 16.0);
+    const float wb = float(countB) * (1.0 / 16.0);
+    imageStore(bloom_checker_output, ivec2(xy), p.colorA * wa + p.colorB * wb);
+}

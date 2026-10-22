@@ -166,6 +166,28 @@ template <typename Definition>
                             ParameterValueKind::Color4d,
                             isAnimatableSchemaKey(kSolidColorParameterSchemaKey)) &&
                hasParameterSockets(definition, 0) && !definition.layerSlotInput.has_value();
+    case NodeLoweringKind::Checker:
+        return hasCanonicalKey(definition, kCheckerSourceNodeType,
+                               kCheckerSourceNodeSchemaVersion) &&
+               definition.inputs.size() == 2 && definition.parameters.size() == 6 &&
+               hasImageOutput(definition, "image") &&
+               hasParameter(definition, 0, "colorA", kSolidColorParameterSchemaKey,
+                            ParameterValueKind::Color4d, true) &&
+               hasParameter(definition, 1, "colorB", kSolidColorParameterSchemaKey,
+                            ParameterValueKind::Color4d, true) &&
+               hasParameter(definition, 2, "cellWidth", kCheckerCellWidthParameterSchemaKey,
+                            ParameterValueKind::Integer) &&
+               hasParameter(definition, 3, "cellHeight", kCheckerCellHeightParameterSchemaKey,
+                            ParameterValueKind::Integer) &&
+               hasParameter(definition, 4, "width", kCheckerWidthParameterSchemaKey,
+                            ParameterValueKind::Integer) &&
+               hasParameter(definition, 5, "height", kCheckerHeightParameterSchemaKey,
+                            ParameterValueKind::Integer) &&
+               definition.inputs[0].name == "colorA" &&
+               definition.inputs[0].valueKind == SocketValueKind::Color &&
+               !definition.inputs[0].required && definition.inputs[1].name == "colorB" &&
+               definition.inputs[1].valueKind == SocketValueKind::Color &&
+               !definition.inputs[1].required && !definition.layerSlotInput;
     case NodeLoweringKind::VideoSource:
         return hasCanonicalKey(definition, "bloom.video-source", 1) &&
                hasOutput(definition, "image", SocketValueKind::Image) &&
@@ -394,6 +416,38 @@ template <typename Definition>
     definition.parameters.push_back({std::string(kSolidHeightParameterRole),
                                      std::string(kSolidHeightParameterSchemaKey),
                                      ParameterValueKind::Float64, true, true, 1.0});
+    return definition;
+}
+
+[[nodiscard]] NodeDefinition checkerDefinition() {
+    using namespace bloom::document;
+    NodeDefinition definition{{std::string(kCheckerSourceNodeType), kCheckerSourceNodeSchemaVersion},
+                              NodeLoweringKind::Checker,
+                              {},
+                              {{"image", SocketValueKind::Image}},
+                              {{"colorA", std::string(kSolidColorParameterSchemaKey),
+                                ParameterValueKind::Color4d, true, true,
+                                core::Color4d{0.18, 0.18, 0.18, 1.0}},
+                               {"colorB", std::string(kSolidColorParameterSchemaKey),
+                                ParameterValueKind::Color4d, true, true,
+                                core::Color4d{0.5, 0.5, 0.5, 1.0}},
+                               {"cellWidth", std::string(kCheckerCellWidthParameterSchemaKey),
+                                ParameterValueKind::Integer, true, false, std::int64_t{64}},
+                               {"cellHeight", std::string(kCheckerCellHeightParameterSchemaKey),
+                                ParameterValueKind::Integer, true, false, std::int64_t{64}},
+                               {"width", std::string(kCheckerWidthParameterSchemaKey),
+                                ParameterValueKind::Integer, true, false, std::int64_t{1920}},
+                               {"height", std::string(kCheckerHeightParameterSchemaKey),
+                                ParameterValueKind::Integer, true, false, std::int64_t{1080}}},
+                              std::nullopt,
+                              NodeCardinality::Many,
+                              NodeCategory::Sources};
+    for (const auto& parameter : std::span(definition.parameters).first(2))
+        definition.inputs.push_back({parameter.role,
+                                     parameter.valueKind == ParameterValueKind::Color4d
+                                         ? SocketValueKind::Color
+                                         : SocketValueKind::Scalar,
+                                     false});
     return definition;
 }
 
@@ -782,6 +836,7 @@ bool NodeDefinitionRegistry::containsType(const std::string_view typeId) const n
 bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
     std::vector<NodeDefinition> definitions{shapeDefinition(),
                                             solidDefinition(),
+                                            checkerDefinition(),
                                             layerOutputDefinition(),
                                             layerStackDefinition(),
                                             compositionOutputDefinition(),

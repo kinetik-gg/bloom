@@ -119,6 +119,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.cacheKey = solidCommand->semanticKey;
         step.cacheOnComplete = true;
         step.solidPixel = solidCommand->pixel;
+        step.checker = solidCommand->checker;
         step.solidDataWindow = solidCommand->dataWindow;
         step.solidDisplayWindow = solidCommand->displayWindow;
         step.solidPixelAspect = solidCommand->pixelAspect;

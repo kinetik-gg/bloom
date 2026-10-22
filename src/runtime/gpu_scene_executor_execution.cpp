@@ -240,7 +240,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
             return std::nullopt;
         }
         return render::GpuSolidParameters{step.solidPixel, *step.solidDataWindow,
-                                          *step.solidDisplayWindow, step.solidPixelAspect};
+                                          *step.solidDisplayWindow, step.solidPixelAspect,
+                                          step.checker};
     };
     switch (step.kind) {
     case GpuSceneExecutorStepKind::Solid: {

@@ -81,6 +81,7 @@ template <typename Alternative> struct GpuImageEffectCoverageTraits;
     }
 
 BLOOM_GPU_REQUIRED_OPERATION(CompiledSolid, "solid source");
+BLOOM_GPU_REQUIRED_OPERATION(CompiledChecker, "checker source");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledText, "text source");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledImageSource, "image source");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledVideoSource, "video source");
@@ -368,6 +369,7 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     using document::NodeLoweringKind;
     switch (lowering) {
     case NodeLoweringKind::Solid:
+    case NodeLoweringKind::Checker:
     case NodeLoweringKind::Shape:
     case NodeLoweringKind::Text:
     case NodeLoweringKind::ImageSource:
@@ -409,6 +411,8 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     switch (lowering) {
     case NodeLoweringKind::Solid:
         return "operation.CompiledSolid";
+    case NodeLoweringKind::Checker:
+        return "operation.CompiledChecker";
     case NodeLoweringKind::Shape:
         return "operation.CompiledShape";
     case NodeLoweringKind::Text:

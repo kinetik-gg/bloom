@@ -23,6 +23,7 @@ namespace bloom::runtime::detail {
 // silently approximated.
 [[nodiscard]] inline bool isGpuSceneSubsetOperation(const CompiledOperation& operation) noexcept {
     return std::holds_alternative<CompiledSolid>(operation) ||
+           std::holds_alternative<CompiledChecker>(operation) ||
            std::holds_alternative<CompiledText>(operation) ||
            std::holds_alternative<CompiledShape>(operation) ||
            std::holds_alternative<CompiledImageSource>(operation) ||

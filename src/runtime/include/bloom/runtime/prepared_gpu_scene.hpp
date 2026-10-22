@@ -37,6 +37,7 @@
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/gpu_affine.hpp>
 #include <bloom/render/gpu_blend.hpp>
+#include <bloom/render/gpu_solid.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/render/path_raster.hpp>
 #include <bloom/runtime/cancellation.hpp>
@@ -146,6 +147,7 @@ struct GpuSceneSolidCommand final {
     OperationIndex sourceOperation = OperationIndex::fromRaw(0);
     // The exact resolved premultiplied lin_rec709_scene pixel the CPU solid primitive produced.
     render::Rgba32f pixel = render::Rgba32f::transparent();
+    std::optional<render::GpuSolidParameters::Checker> checker;
     render::ImageWindow dataWindow;
     render::ImageWindow displayWindow;
     core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
