@@ -1074,6 +1074,13 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                                 break;
                         }
                     }
+                    if (const auto* pointwise =
+                            std::get_if<PointwiseImageKernel>(&effect.kernel);
+                        pointwise && pointwise->amount) {
+                        static_cast<void>(registerScalar(*pointwise->amount, "amount",
+                                                         ScalarDomain::Unbounded,
+                                                         operationSubject));
+                    }
                 },
                 [](const CompiledImageSource&) {},
                 [](const CompiledVideoSource&) {},

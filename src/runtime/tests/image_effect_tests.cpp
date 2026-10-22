@@ -882,6 +882,8 @@ void testPointwiseFailureAndTimeDependence() {
            "a Time-driven pointwise amount changes the cached image at a new time");
 }
 
+#include "pointwise_preflight_tests.ipp"
+
 } // namespace
 
 int main(const int argc, char** argv) {
@@ -907,6 +909,7 @@ int main(const int argc, char** argv) {
         testFileTransform();
         testMultiplyAndInvert();
         testPointwiseFailureAndTimeDependence();
+        testPointwiseAnimatedPreflight();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
