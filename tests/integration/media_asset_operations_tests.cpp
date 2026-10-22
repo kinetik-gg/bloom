@@ -4,6 +4,73 @@
 #include <bloom/project/document_decode.hpp>
 #include <bloom/project/document_reconstruct.hpp>
 #include <bloom/project/strict_json_dom.hpp>
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <string>
+
+namespace {
+bool audioImportCancellationAndRecovery() {
+    const auto path =
+        std::filesystem::temp_directory_path() /
+        ("bloom-audio-import-cancel-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".wav");
+    struct RemoveFile final {
+        std::filesystem::path path;
+        ~RemoveFile() {
+            std::error_code error;
+            std::filesystem::remove(path, error);
+        }
+    } cleanup{path};
+    constexpr std::uint32_t dataBytes = 8U * 1024U * 1024U;
+    {
+        std::ofstream output(path, std::ios::binary);
+        const auto u16 = [&](std::uint16_t value) {
+            const char bytes[] = {static_cast<char>(value), static_cast<char>(value >> 8U)};
+            output.write(bytes, sizeof(bytes));
+        };
+        const auto u32 = [&](std::uint32_t value) {
+            const char bytes[] = {static_cast<char>(value), static_cast<char>(value >> 8U),
+                                  static_cast<char>(value >> 16U), static_cast<char>(value >> 24U)};
+            output.write(bytes, sizeof(bytes));
+        };
+        output.write("RIFF", 4);
+        u32(36U + dataBytes);
+        output.write("WAVEfmt ", 8);
+        u32(16);
+        u16(1);
+        u16(1);
+        u32(48'000);
+        u32(48'000U * 2U);
+        u16(2);
+        u16(16);
+        output.write("data", 4);
+        u32(dataBytes);
+        output.seekp(44 + dataBytes - 1);
+        output.put('\0');
+        if (!output)
+            return false;
+    }
+    std::size_t probeChecks = 0;
+    const bloom::commands::ImportAssets stoppedProbe({path}, path.parent_path(),
+                                                     [&] { return ++probeChecks >= 2; });
+    if (!stoppedProbe.prepared().empty() ||
+        stoppedProbe.diagnostic() != "Audio import failed: Audio operation was cancelled")
+        return false;
+
+    std::size_t digestChecks = 0;
+    const bloom::commands::ImportAssets stoppedDigest({path}, path.parent_path(),
+                                                      [&] { return ++digestChecks > 100; });
+    if (digestChecks <= 100 || !stoppedDigest.prepared().empty() ||
+        stoppedDigest.diagnostic() != "Audio import failed: Audio operation was cancelled")
+        return false;
+
+    const bloom::commands::ImportAssets recovered({path}, path.parent_path());
+    return recovered.diagnostic().empty() && recovered.prepared().size() == 1 &&
+           recovered.prepared().front().frames == dataBytes / 2U;
+}
+} // namespace
 
 int main() {
     namespace doc = bloom::document;
@@ -72,5 +139,7 @@ int main() {
     asset.manifest.members.push_back({});
     if (asset.validate().ok())
         return 7;
+    if (!audioImportCancellationAndRecovery())
+        return 16;
     return 0;
 }

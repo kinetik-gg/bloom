@@ -85,21 +85,46 @@ document::AssetLocator locator(const std::filesystem::path& path,
         return {"file", "external", *uri, *uri};
     return {"file", "project-relative", relativeText, *uri};
 }
-std::optional<core::Sha256Digest> digestFile(const std::filesystem::path& path) {
+media::audio::AudioResult<core::Sha256Digest> digestFile(const std::filesystem::path& path,
+                                                         const std::function<bool()>& cancel) {
+    const auto cancelled = [&] {
+        if (!cancel)
+            return false;
+        try {
+            return cancel();
+        } catch (...) {
+            return true;
+        }
+    };
+    if (cancelled())
+        return media::audio::AudioResult<core::Sha256Digest>::failure(
+            media::audio::AudioError::codeOnly(media::audio::AudioErrorCode::Cancelled));
     std::ifstream input(path, std::ios::binary);
     if (!input)
-        return std::nullopt;
+        return media::audio::AudioResult<core::Sha256Digest>::failure(
+            media::audio::AudioError::codeOnly(media::audio::AudioErrorCode::FileReadFailed));
     core::Sha256Hasher hasher;
     std::array<std::byte, static_cast<std::size_t>(64) * 1024> buffer{};
     while (input) {
+        if (cancelled())
+            return media::audio::AudioResult<core::Sha256Digest>::failure(
+                media::audio::AudioError::codeOnly(media::audio::AudioErrorCode::Cancelled));
         input.read(reinterpret_cast<char*>(buffer.data()),
                    static_cast<std::streamsize>(buffer.size()));
         const auto count = input.gcount();
         if (count > 0 && !hasher.update(std::span<const std::byte>{buffer}.first(
                              static_cast<std::size_t>(count))))
-            return std::nullopt;
+            return media::audio::AudioResult<core::Sha256Digest>::failure(
+                media::audio::AudioError::codeOnly(media::audio::AudioErrorCode::FileReadFailed));
     }
-    return hasher.finalize();
+    if (cancelled())
+        return media::audio::AudioResult<core::Sha256Digest>::failure(
+            media::audio::AudioError::codeOnly(media::audio::AudioErrorCode::Cancelled));
+    if (input.bad())
+        return media::audio::AudioResult<core::Sha256Digest>::failure(
+            media::audio::AudioError::codeOnly(media::audio::AudioErrorCode::FileReadFailed));
+    auto digest = hasher.finalize();
+    return media::audio::AudioResult<core::Sha256Digest>::success(std::move(digest));
 }
 } // namespace
 OperationResult RelinkFontAsset::apply(document::Draft& draft) const {
@@ -218,7 +243,7 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
                 continue;
             }
             if (extension == ".wav" || extension == ".mp3") {
-                const auto probe = media::audio::probeAudio(path);
+                const auto probe = media::audio::probeAudio(path, {}, cancel);
                 if (!probe.value()) {
                     diagnostic_ =
                         "Audio import failed: " + media::audio::describeAudioError(*probe.error());
@@ -228,13 +253,14 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
                 document::AssetRecord asset;
                 asset.kind = document::AssetKind::Audio;
                 asset.locator = locator(path, projectDirectory);
-                const auto digest = digestFile(path);
-                if (!digest.has_value()) {
-                    diagnostic_ = "Audio digest failed";
+                const auto digest = digestFile(path, cancel);
+                if (!digest.value()) {
+                    diagnostic_ =
+                        "Audio import failed: " + media::audio::describeAudioError(*digest.error());
                     assets_.clear();
                     return;
                 }
-                asset.contentDigest = *digest;
+                asset.contentDigest = *digest.value();
                 asset.rate = probe.value()->rate;
                 asset.channels = probe.value()->channels;
                 asset.frames = probe.value()->frames;
