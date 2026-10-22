@@ -98,7 +98,7 @@ GpuProcessingPhasePolicy::sampleHostMemory(const CancellationToken& cancellation
         if (!pendingHostBackingCredit_ ||
             sample.process.sampledAt >= pendingHostBackingCredit_->sampledAt)
             pendingHostBackingCredit_ =
-                HostSampleBackingCredit{sample.process.sampledAt, credit, std::nullopt};
+                HostSampleBackingCredit{sample.process.sampledAt, credit, std::nullopt, 0};
     }
     return sample;
 }
@@ -111,7 +111,8 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
     const auto duplicateCredit =
         appliedHostBackingCredit_ &&
                 appliedHostBackingCredit_->sampledAt == sample.process.sampledAt &&
-                appliedHostBackingCredit_->finiteHeadroom == finite
+                appliedHostBackingCredit_->finiteHeadroom == finite &&
+                appliedHostBackingCredit_->sampleSerial == sample.sampleSerial
             ? appliedHostBackingCredit_->bytes
             : 0;
     if (newerDelivery) {
@@ -160,7 +161,8 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
             : 0;
     if (fresh) {
         appliedHostBackingCredit_ =
-            HostSampleBackingCredit{sample.process.sampledAt, backingCredit, finite};
+            HostSampleBackingCredit{sample.process.sampledAt, backingCredit, finite,
+                                    sample.sampleSerial};
         pendingHostBackingCredit_.reset();
     }
     processConstraintHistory_.recordFinite(
@@ -172,6 +174,13 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
         isCompleteProcessMemorySample(sample.process) && finite) {
         finiteProcessCeiling_ = finite;
     }
+    // A retained finite ceiling was measured at an older time. Backing created since that
+    // observation was not included in its free-space reading and must not be added to it.
+    const auto finiteBackingCredit =
+        fresh && sample.process.status == ProcessMemoryStatus::Finite &&
+                isCompleteProcessMemorySample(sample.process) && finite
+            ? backingCredit
+            : 0;
     std::optional<std::uint64_t> allowance;
     if (sample.machine.availableBytes) {
         // Measured headroom bounds new work. Cache preferences and arbitrary reserve percentages
@@ -181,7 +190,7 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
             allowance.emplace(std::min<std::uint64_t>(*allowance, physicalBytes));
         if (finiteProcessCeiling_) {
             allowance.emplace(
-                std::min(*allowance, addSaturating(*finiteProcessCeiling_, backingCredit)));
+                std::min(*allowance, addSaturating(*finiteProcessCeiling_, finiteBackingCredit)));
         }
     } else if (finiteProcessCeiling_ && *finiteProcessCeiling_ == 0) {
         allowance.emplace(0);

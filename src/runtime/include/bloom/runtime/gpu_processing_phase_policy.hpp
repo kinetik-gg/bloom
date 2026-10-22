@@ -106,6 +106,7 @@ class GpuProcessingPhasePolicy final {
         Clock::time_point sampledAt{};
         std::uint64_t bytes = 0;
         std::optional<std::uint64_t> finiteHeadroom;
+        std::uint64_t sampleSerial = 0;
     };
     std::optional<HostSampleBackingCredit> pendingHostBackingCredit_;
     std::optional<HostSampleBackingCredit> appliedHostBackingCredit_;

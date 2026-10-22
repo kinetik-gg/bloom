@@ -387,6 +387,47 @@ void rootedBackingReconcilesSampledHostHeadroom() {
                         .status == GpuProcessingPhaseAdmission::BudgetRefused,
             "measured zero never gains a floor from previously retired backing");
 }
+void newBackingCannotInflateAnOlderFiniteLimit() {
+    HostRetirement retirement;
+    require(retirement.owner->prepare(), "rooted host retirement worker is ready");
+    GpuProcessingPhasePolicy policy(2, retirement.owner);
+    const auto start = GpuProcessingPhasePolicy::Clock::now();
+    MemoryBudgetState delivered;
+    delivered.machine.availableBytes = 4096;
+    delivered.process.source = ProcessMemorySource::LinuxCgroupV2;
+    delivered.process.status = ProcessMemoryStatus::Finite;
+    delivered.process.sampledAt = start;
+    delivered.process.domains = {{.path = "/own",
+                                  .kind = ProcessMemoryLimitKind::Finite,
+                                  .limitBytes = 2048,
+                                  .currentBytes = 1024}};
+    delivered.processSampleFresh = true;
+    delivered.sampleSerial = 1;
+    policy.applyHostSample(delivered, 4096, start);
+    const auto header = detail::packedHostAllocationMetadataBytes();
+    auto phase = policy.reserve(
+        {.pixels = 32, .metadataBytes = header, .sourceFree = true, .native = false}, start);
+    require(phase.lease != nullptr, "initial finite headroom admits a real packed vector");
+    auto backing = PackedRgba8Storage::create(32, phase.lease, 128);
+    require(backing && backing.value()->promote(), "new backing publishes after finite probe");
+    phase.lease.reset();
+
+    scriptedSampleAt = start + std::chrono::seconds(1);
+    static_cast<void>(policy.sampleHostMemory({}, scriptedHostSample));
+    delivered.machine.availableBytes = 2048;
+    delivered.process.source = ProcessMemorySource::OtherHostOnly;
+    delivered.process.status = ProcessMemoryStatus::Unsupported;
+    delivered.process.domains.clear();
+    delivered.process.sampledAt = scriptedSampleAt;
+    ++delivered.sampleSerial;
+    policy.applyHostSample(delivered, 4096, scriptedSampleAt);
+    require(policy.snapshot().reservations.hostCapacityBytes == 1024 &&
+                policy.reserve({.pixels = 112, .sourceFree = true, .native = false},
+                               scriptedSampleAt)
+                        .status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "current backing credit cannot enlarge older finite headroom that never counted it");
+    backing.value()->reset();
+}
 void policy() {
     const auto now = GpuProcessingPhasePolicy::Clock::now();
     GpuProcessingPhasePolicy policy;
@@ -891,6 +932,7 @@ int main(int argc, char** argv) {
         lowMemoryHostFinalAdmission();
         liveHeadroomDuringCachePressure();
         rootedBackingReconcilesSampledHostHeadroom();
+        newBackingCannotInflateAnOlderFiniteLimit();
         policy();
         deviceReportRecoversAfterPressure();
         liveDeviceReportCreditsOnlyOwnedNativeBacking();

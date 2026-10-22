@@ -1846,6 +1846,8 @@ The sample credit belongs to that policy root and exact sample timestamp. Only a
 delivery can add it to measured machine and finite-process headroom, with saturation and the
 physical-capacity ceiling. Ordinary admission continues to subtract the entire live root claim,
 including unallocated phase estimates, host promises and held phases.
+An older finite-process headroom ceiling remains uncredited when a later sample cannot verify that
+same finite process reading; new backing may not have existed when that ceiling was measured.
 
 Aliases and cache-held byte totals provide no credit. Provisional backed vectors are eligible
 after construction; failed allocation, reserve-before-allocation, legacy vectors, source/coverage
