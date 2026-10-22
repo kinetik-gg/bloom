@@ -127,6 +127,9 @@ struct DeviceAllocatorState final {
     std::uint64_t maxStorageBufferRange = 0;
     // Summed DEVICE_LOCAL heap size, not committed allocator bytes.
     std::uint64_t deviceLocalBytes = 0;
+    // Owner-only VMA frame index. Advancing it refreshes VK_EXT_memory_budget even when this
+    // allocator has made no allocations while other processes changed device-memory usage.
+    std::uint32_t budgetFrameIndex = 0;
 
     // Declared before native RAII fields: all native teardown precedes final quota release. The
     // lease points only to a neutral ledger, never back to this generation (no reference cycle).

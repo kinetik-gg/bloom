@@ -99,6 +99,14 @@ void preparationRefusalFeedback(Expectations& checks) {
                                  .device_local_bytes = gib,
                                  .available_bytes = gib}),
         "feedback device capacity becomes positive");
+    {
+        const auto recovered = builder.build(compiled.plan, request);
+        checks.expect(recovered.scene != nullptr && recovered.phaseLease != nullptr,
+                      "same device recovers after external memory pressure clears without a new "
+                      "host sample or a successful intervening preparation");
+    }
+    checks.expect(policy->snapshot().reservations.totalDeviceClaimBytes == 0,
+                  "recovered preparation releases its transient device reservation");
     auto held = policy->reserve({.pixels = 1, .sourceFree = true, .native = false});
     checks.expect(held.lease != nullptr, "feedback competing phase holds the only slot");
     const auto refusedCount = builder.build(compiled.plan, request);

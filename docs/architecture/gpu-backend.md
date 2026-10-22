@@ -323,6 +323,11 @@ capability boundary. A live `VK_EXT_memory_budget` result already excludes alloc
 A nominal estimate or unknown fallback must separately account for the owner's live and retiring
 allocations; it is not treated as fresh free memory.
 
+Owner-thread budget sampling explicitly refreshes VMA's driver sample before reading heap budgets.
+Reading `vmaGetHeapBudgets()` alone can retain an old external-pressure reading until enough local
+allocations occur; rejected work must recover when another process frees VRAM, even while Bloom
+makes no allocations. The existing owner sampling cadence bounds these refreshes.
+
 Explicit/unrooted resident callers retain an additive capacity plan for lease, scene-cache and
 request ceilings. That legacy plan partitions a bounded pool 50/20/30 with cache headroom; no sum
 can exceed its pool. It is not the active-work policy for ordinary rooted preview. Rooted requests

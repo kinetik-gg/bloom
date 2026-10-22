@@ -221,10 +221,14 @@ GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept {
     if (std::this_thread::get_id() != impl_->owner) {
         return result;
     }
-    const auto& control = *impl_->control;
+    auto& control = *impl_->control;
     result.device_local_bytes = control.deviceLocalBytes;
 
     if (control.allocator != VK_NULL_HANDLE && control.memoryBudgetEnabled) {
+        // vmaGetHeapBudgets normally reuses its last driver sample until enough allocations pass
+        // through this allocator. Refresh explicitly so an idle Bloom sees memory freed or used by
+        // other processes on the owner's existing budget-sampling cadence.
+        vmaSetCurrentFrameIndex(control.allocator, ++control.budgetFrameIndex);
         const VkPhysicalDeviceMemoryProperties* properties = nullptr;
         vmaGetMemoryProperties(control.allocator, &properties);
         if (properties != nullptr && properties->memoryHeapCount > 0U) {
