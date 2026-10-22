@@ -142,8 +142,8 @@ void selectedTotalsAndHardwareDefaults() {
 
     MemoryBudgetLedger unresolved;
     const auto fallback = unresolved.allocate();
-    auto sample = bloom::runtime::MemoryBudgetSample{.machine = {.availableBytes = gib},
-                                                     .physicalBytes = 60 * gib};
+    auto sample = bloom::runtime::MemoryBudgetSample{
+        .machine = {.availableBytes = gib}, .physicalBytes = 60 * gib, .process = {}};
     state = unresolved.applySample(sample, at(0));
     const auto selected = unresolved.allocate();
     expect(selected.operationCacheByteBudget == 18 * gib &&
