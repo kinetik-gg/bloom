@@ -129,6 +129,23 @@ template <typename Definition>
     using namespace bloom::document;
     switch (definition.lowering) {
     case NodeLoweringKind::ImageEffect:
+        if (definition.key.typeId == "bloom.image-mix" ||
+            definition.key.typeId == "bloom.set-alpha") {
+            const bool mix = definition.key.typeId == "bloom.image-mix";
+            return definition.key.schemaVersion == 1 &&
+                   definition.inputs.size() == 3 &&
+                   hasLeadingImageInput(definition, "input") &&
+                   definition.inputs[1] == InputPortDefinition{
+                       mix ? "second" : "matte", SocketValueKind::Image, true} &&
+                   hasParameterSockets(definition, 2) &&
+                   hasParameter(definition, 0, mix ? "factor" : "channel",
+                                mix ? "bloom.image-mix.factor" : "bloom.set-alpha.channel",
+                                mix ? ParameterValueKind::Float64 : ParameterValueKind::Integer,
+                                mix) &&
+                   definition.outputs ==
+                       std::vector<OutputPortDefinition>{{"image", SocketValueKind::Image}} &&
+                   !definition.layerSlotInput && !definition.audioLayerSlotInput;
+        }
         return (definition.inputs ==
                     std::vector<InputPortDefinition>{{"input", SocketValueKind::Image}} ||
                 (hasLeadingImageInput(definition, "input") &&
@@ -533,6 +550,24 @@ template <typename Definition>
     return definition;
 }
 
+[[nodiscard]] NodeDefinition imageCombineDefinition(const bool mix) {
+    return {{mix ? "bloom.image-mix" : "bloom.set-alpha", 1},
+            NodeLoweringKind::ImageEffect,
+            {{"input", SocketValueKind::Image},
+             {mix ? "second" : "matte", SocketValueKind::Image},
+             {mix ? "factor" : "channel", mix ? SocketValueKind::Scalar
+                                               : SocketValueKind::Integer, false}},
+            {{"image", SocketValueKind::Image}},
+            {{mix ? "factor" : "channel",
+              mix ? "bloom.image-mix.factor" : "bloom.set-alpha.channel",
+              mix ? ParameterValueKind::Float64 : ParameterValueKind::Integer, true, mix,
+              mix ? bloom::document::ParameterValue{1.0}
+                  : bloom::document::ParameterValue{std::int64_t{0}}}},
+            std::nullopt,
+            NodeCardinality::Many,
+            NodeCategory::Compositing};
+}
+
 [[nodiscard]] NodeDefinition imageDefinition() {
     using namespace bloom::document;
     return {
@@ -741,6 +776,8 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
                                             pointwiseImageDefinition("bloom.offset", "bloom.offset.amount", 0.0),
                                             pointwiseImageDefinition("bloom.multiply", "bloom.multiply.factor", 1.0),
                                             pointwiseImageDefinition("bloom.invert", nullptr, 0.0),
+                                            imageCombineDefinition(true),
+                                            imageCombineDefinition(false),
                                             videoDefinition(),
                                             audioDefinition(),
                                             compositionSourceDefinition()};

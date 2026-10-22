@@ -108,6 +108,18 @@ QString displayTypeName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Multiply");
     if (typeId == "bloom.invert")
         return QCoreApplication::translate("node_editor", "Invert");
+    if (typeId == "bloom.image-mix")
+        return QCoreApplication::translate("node_editor", "Image Mix");
+    if (typeId == "bloom.set-alpha")
+        return QCoreApplication::translate("node_editor", "Set Alpha");
+    if (typeId == "second")
+        return QCoreApplication::translate("node_editor", "Second Image");
+    if (typeId == "matte")
+        return QCoreApplication::translate("node_editor", "Matte");
+    if (typeId == "factor")
+        return QCoreApplication::translate("node_editor", "Factor");
+    if (typeId == "channel")
+        return QCoreApplication::translate("node_editor", "Channel (0 A, 1 R, 2 G, 3 B, 4 Luma)");
     if (typeId == "amount")
         return QCoreApplication::translate("node_editor", "Amount");
     if (typeId == "bloom.ocio-colour-space-transform")

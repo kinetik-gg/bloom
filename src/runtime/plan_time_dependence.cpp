@@ -81,6 +81,12 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                 else if constexpr (std::is_same_v<Step, CompiledMerge>)
                     return std::ranges::any_of(
                         step.entries, [&](const auto& entry) { return input(entry.input); });
+                else if constexpr (std::is_same_v<Step, CompiledImageEffect>) {
+                    const auto* combine = std::get_if<ImageCombineKernel>(&step.kernel);
+                    return input(step.input) ||
+                           (step.secondaryInput && input(*step.secondaryInput)) ||
+                           (combine && combine->factor && parameter(*combine->factor));
+                }
                 else
                     return input(step.input);
             },

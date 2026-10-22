@@ -8,6 +8,7 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/shape.hpp>
 #include <bloom/render/embedded_fonts.hpp>
+#include <bloom/render/image_coverage.hpp>
 #include <bloom/runtime/compiled_curves.hpp>
 #include <bloom/runtime/compiled_value_graph.hpp>
 #include <bloom/runtime/operation_index.hpp>
@@ -202,14 +203,25 @@ struct PointwiseImageKernel final {
     std::optional<CompiledScalarParameter> amount;
     friend bool operator==(const PointwiseImageKernel&, const PointwiseImageKernel&) = default;
 };
+enum class ImageCombineMode : std::uint8_t { Mix, SetAlpha, MultiplyAlpha };
+struct ImageCombineKernel final {
+    ImageCombineMode mode = ImageCombineMode::Mix;
+    std::optional<CompiledScalarParameter> factor;
+    render::ImageCoverageChannel channel = render::ImageCoverageChannel::Alpha;
+    friend bool operator==(const ImageCombineKernel&, const ImageCombineKernel&) = default;
+};
 using ImageEffectKernel =
-    std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel>;
+    std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
+                 ImageCombineKernel>;
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
     OperationIndex input;
     ImageEffectKernel kernel;
     bool bypass = false;
     bool look = false;
+    // Second image/matte for flat RGBA combines. The base input owns the output data/display
+    // windows; the second input is sampled by global pixel coordinate and clipped to those windows.
+    std::optional<OperationIndex> secondaryInput{};
     friend bool operator==(const CompiledImageEffect&, const CompiledImageEffect&) = default;
 };
 

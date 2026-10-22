@@ -107,6 +107,7 @@ struct GpuSceneExecutorStep final {
     float affineOpacity = 1.0F;
     // Blend: `input` is the foreground source, `destination` the backdrop.
     core::BlendMode blendMode = core::kDefaultBlendMode;
+    std::optional<render::GpuImageCombineParameters> imageCombine;
     // OCIO ProcessEffect: the immutable prepared command (descriptor + artifact + identity).
     // `input` is the resident RGBA32F source; the output window/display window/pixel aspect are
     // `outputWindow` plus the scene command's preserved display geometry (carried through the scene

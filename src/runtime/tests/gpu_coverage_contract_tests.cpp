@@ -63,6 +63,7 @@ using bloom::gpu_coverage_fixtures::codeName;
 using bloom::gpu_coverage_fixtures::format;
 using bloom::gpu_coverage_fixtures::LayerValues;
 using bloom::gpu_coverage_fixtures::publish;
+using bloom::gpu_coverage_plans::imageCombinePlan;
 using bloom::gpu_coverage_fixtures::requestFor;
 using bloom::gpu_coverage_fixtures::twoLayerPlan;
 using bloom::runtime::CompiledColorParameter;
@@ -353,6 +354,10 @@ displayProofRunner(const bool customView) {
             return runBuilder(effectPlan(pointwise(PointwiseImageEffect::Exposure, 1.25, 103100),
                                          103100));
         }, {}, FixturePrerequisite::PackagedShaderTools);
+    add("effect.ImageCombineKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime image combine production scene preparation", [] {
+            return runBuilder(imageCombinePlan(bloom::runtime::ImageCombineMode::Mix, 103200));
+        });
 
     // Every one of the eight blend modes is emitted by the real production builder now: Normal
     // stays the retained SourceOver merge, every other mode an explicit BlendV1 fold.
@@ -512,6 +517,15 @@ displayProofRunner(const bool customView) {
             return runBuilder(effectPlan(
                 bloom::runtime::PointwiseImageKernel{PointwiseImageEffect::Invert, {}}, 114100));
         }, {}, FixturePrerequisite::PackagedShaderTools);
+    add("node.bloom.image-mix", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime image combine production scene preparation", [] {
+            return runBuilder(imageCombinePlan(bloom::runtime::ImageCombineMode::Mix, 110300));
+        });
+    add("node.bloom.set-alpha", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime image combine production scene preparation", [] {
+            return runBuilder(imageCombinePlan(bloom::runtime::ImageCombineMode::SetAlpha,
+                                               110400));
+        });
     return list;
 }
 

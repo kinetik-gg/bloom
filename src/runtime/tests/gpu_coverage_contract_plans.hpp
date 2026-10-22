@@ -152,6 +152,35 @@ effectPlan(const ImageEffectKernel& kernel, const std::uint64_t idBase) {
 }
 
 [[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+imageCombinePlan(const bloom::runtime::ImageCombineMode mode, const std::uint64_t idBase) {
+    auto definition = basePlan()->copyDefinition();
+    auto first = std::get<CompiledSolid>(definition.operations[0]);
+    auto second = first;
+    second.sourceNodeId = NodeId::fromRaw(idBase + 1);
+    second.color = CompiledColorParameter{ParameterId::fromRaw(idBase + 2),
+                                          Color4d{0.75, -0.25, 2.0, 0.6}};
+    auto layer = std::get<CompiledLayerOutput>(definition.operations[1]);
+    layer.input = OperationIndex::fromRaw(2);
+    CompiledImageEffect combine{
+        NodeId::fromRaw(idBase + 3), OperationIndex::fromRaw(0),
+        bloom::runtime::ImageCombineKernel{
+            mode, mode == bloom::runtime::ImageCombineMode::SetAlpha
+                      ? std::optional<CompiledScalarParameter>{}
+                      : std::optional<CompiledScalarParameter>{CompiledScalarParameter{
+                            ParameterId::fromRaw(idBase + 4), 0.375}},
+            bloom::render::ImageCoverageChannel::Alpha},
+        false, false, OperationIndex::fromRaw(1)};
+    auto merge = std::get<CompiledMerge>(definition.operations[4]);
+    merge.entries = {CompiledMergeInput{LayerSlotId::fromRaw(idBase + 5), layer.layerId,
+                                        OperationIndex::fromRaw(3)}};
+    definition.operations = {first, second, combine, layer, merge,
+                             CompiledCompositionOutput{NodeId::fromRaw(idBase + 6),
+                                                       OperationIndex::fromRaw(4)}};
+    definition.output = OperationIndex::fromRaw(5);
+    return publish(std::move(definition));
+}
+
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
 modifiedLayer(const std::function<void(CompiledLayerOutput&)>& edit) {
     auto definition = basePlan()->copyDefinition();
     edit(std::get<CompiledLayerOutput>(definition.operations[1]));

@@ -63,12 +63,34 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
                                                 const EvaluationColorIntent& intent,
                                                 const std::filesystem::path& base,
                                                 const CancellationToken& cancellation,
-                                                const std::optional<double> pointwiseAmount) {
+                                                const std::optional<double> sampledAmount) {
     if (effect.bypass || std::holds_alternative<IdentityImageKernel>(effect.kernel))
         return {};
     PreparedImageEffect prepared;
+    if (const auto* combine = std::get_if<ImageCombineKernel>(&effect.kernel)) {
+        if (!effect.secondaryInput ||
+            static_cast<std::uint8_t>(combine->mode) >
+                static_cast<std::uint8_t>(ImageCombineMode::MultiplyAlpha) ||
+            static_cast<std::uint8_t>(combine->channel) >
+                static_cast<std::uint8_t>(render::ImageCoverageChannel::Luma) ||
+            (combine->mode == ImageCombineMode::SetAlpha) != !combine->factor ||
+            (combine->factor && (!sampledAmount || !std::isfinite(*sampledAmount) ||
+                                 *sampledAmount < 0.0 || *sampledAmount > 1.0))) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                          "Image combine parameters are invalid");
+            return prepared;
+        }
+        const float factor = combine->factor ? static_cast<float>(*sampledAmount) : 1.0F;
+        prepared.combine = PreparedImageEffect::Combine{combine->mode, factor, combine->channel};
+        OperationKey combineKey;
+        combineKey.add(combine->mode);
+        combineKey.add(static_cast<double>(factor));
+        combineKey.add(combine->channel);
+        prepared.cacheIdentity = combineKey.bytes();
+        return prepared;
+    }
     if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel)) {
-        prepared.pointwise = pointwiseAffine(*pointwise, pointwiseAmount);
+        prepared.pointwise = pointwiseAffine(*pointwise, sampledAmount);
         if (!prepared.pointwise) {
             prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
                                           "Pointwise effect parameter cannot be represented");
@@ -178,7 +200,9 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
 }
 
 ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
-                                   const render::Rgba32fImage& input, const std::size_t pixelBudget,
+                                   const render::Rgba32fImage& input,
+                                   const render::Rgba32fImage* secondary,
+                                   const std::size_t pixelBudget,
                                    const CancellationToken& cancellation,
                                    const OperationIndex operation,
                                    const EvaluationProgressCallback& progress) {
@@ -196,6 +220,97 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
         return result;
     }
     const auto window = input.descriptor()->dataWindow();
+    if (effect.combine) {
+        if (secondary == nullptr || secondary->descriptor() == nullptr) {
+            result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                        "Image combine second input is unavailable");
+            return result;
+        }
+        const auto secondView = secondary->view();
+        if (!secondView) {
+            result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                        "Image combine second input is invalid");
+            return result;
+        }
+        const auto secondWindow = secondary->descriptor()->dataWindow();
+        const auto total = window.extent().height();
+        reportProgress(progress, {EvaluationProgressStage::Operation, operation, 0, total});
+        for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
+            if (cancellation.isCancellationRequested()) {
+                result.cancelled = true;
+                return result;
+            }
+            const auto sourceRow = view.value()->row(y);
+            auto targetRow = builder.value()->row(y);
+            if (!sourceRow || !targetRow) {
+                result.diagnostic = refusal(EvaluationDiagnosticCode::InternalInvariant,
+                                            "Image combine base row is unavailable");
+                return result;
+            }
+            std::optional<std::span<const render::Rgba32f>> secondRow;
+            if (y >= secondWindow.originY() && y < secondWindow.maxYExclusive()) {
+                const auto fetched = secondView.value()->row(y);
+                if (!fetched) {
+                    result.diagnostic = refusal(EvaluationDiagnosticCode::InternalInvariant,
+                                                "Image combine second row is unavailable");
+                    return result;
+                }
+                secondRow = *fetched.value();
+            }
+            for (std::size_t column = 0; column < sourceRow.value()->size(); ++column) {
+                if ((column & 4095U) == 0 && cancellation.isCancellationRequested()) {
+                    result.cancelled = true;
+                    return result;
+                }
+                const auto x = window.originX() + static_cast<std::int64_t>(column);
+                const auto base = (*sourceRow.value())[column];
+                const auto matte = secondRow && x >= secondWindow.originX() &&
+                                           x < secondWindow.maxXExclusive()
+                                       ? (*secondRow)[static_cast<std::size_t>(x - secondWindow.originX())]
+                                       : render::Rgba32f::transparent();
+                render::ImageResult<render::Rgba32f> pixel =
+                    render::ImageResult<render::Rgba32f>::success(base);
+                if (effect.combine->mode == ImageCombineMode::SetAlpha) {
+                    pixel = render::setImageAlpha(
+                        base, render::imageCoverage(matte, effect.combine->channel));
+                } else {
+                    const double weight = effect.combine->mode == ImageCombineMode::Mix
+                                              ? static_cast<double>(effect.combine->factor)
+                                              : static_cast<double>(render::imageCoverage(
+                                                    matte, effect.combine->channel)) *
+                                                    static_cast<double>(effect.combine->factor);
+                    const double baseWeight = effect.combine->mode == ImageCombineMode::Mix
+                                                  ? 1.0 - weight : weight;
+                    const double matteWeight = effect.combine->mode == ImageCombineMode::Mix
+                                                   ? weight : 0.0;
+                    pixel = render::Rgba32f::fromPremultiplied(
+                        static_cast<float>(baseWeight * static_cast<double>(base.red()) +
+                                           matteWeight * static_cast<double>(matte.red())),
+                        static_cast<float>(baseWeight * static_cast<double>(base.green()) +
+                                           matteWeight * static_cast<double>(matte.green())),
+                        static_cast<float>(baseWeight * static_cast<double>(base.blue()) +
+                                           matteWeight * static_cast<double>(matte.blue())),
+                        static_cast<float>(baseWeight * static_cast<double>(base.alpha()) +
+                                           matteWeight * static_cast<double>(matte.alpha())));
+                }
+                if (!pixel) {
+                    result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                                "Image combine produced invalid premultiplied RGB");
+                    return result;
+                }
+                (*targetRow.value())[column] = *pixel.value();
+            }
+        }
+        auto frozen = std::move(*builder.value()).freeze();
+        if (!frozen) {
+            result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                        "Image combine image validation failed");
+            return result;
+        }
+        result.image = std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
+        reportProgress(progress, {EvaluationProgressStage::Operation, operation, total, total});
+        return result;
+    }
     const auto total = window.extent().height();
     reportProgress(progress, {EvaluationProgressStage::Operation, operation, 0, total});
     for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {

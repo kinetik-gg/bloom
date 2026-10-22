@@ -132,6 +132,10 @@ std::string_view gpuBlendShaderIdentity(const core::BlendMode mode,
                            : std::string_view{"blend-v1-f32-portable"};
 }
 
+std::string_view gpuImageCombineShaderIdentity() noexcept {
+    return vulkan_detail::kImageCombineSpirvDigest;
+}
+
 std::string_view GpuBlend::shaderIdentity(const core::BlendMode mode) const noexcept {
     if (impl_ == nullptr) {
         return {};

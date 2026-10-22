@@ -104,6 +104,7 @@ enum class GpuBlendKernelPolicy : std::uint8_t {
 // this, so a capability or policy change can never serve a wrongly keyed image.
 [[nodiscard]] std::string_view gpuBlendShaderIdentity(core::BlendMode mode,
                                                       bool float64Selected) noexcept;
+[[nodiscard]] std::string_view gpuImageCombineShaderIdentity() noexcept;
 
 struct GpuBlendCreateResult;
 

@@ -235,6 +235,14 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* value = std::get_if<double>(&constant.value);
         return value != nullptr && std::isfinite(*value);
     }
+    if (schemaKey == "bloom.image-mix.factor") {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value != nullptr && std::isfinite(*value) && *value >= 0.0 && *value <= 1.0;
+    }
+    if (schemaKey == "bloom.set-alpha.channel") {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value != nullptr && *value >= 0 && *value <= 4;
+    }
     if (schemaKey == "bloom.ocio-cst.from" || schemaKey == "bloom.ocio-cst.to" ||
         schemaKey == "bloom.ocio-file.process-space") {
         const auto* value = std::get_if<std::string>(&constant.value);

@@ -349,6 +349,22 @@ enum class ScalarDomain : std::uint8_t {
             },
             [index, &plan, &failure](const CompiledImageEffect& effect) {
                 bool validKernel = true;
+                if (const auto* combine = std::get_if<ImageCombineKernel>(&effect.kernel)) {
+                    validKernel = effect.secondaryInput.has_value() &&
+                                  effect.secondaryInput->value() < index &&
+                                  static_cast<std::uint8_t>(combine->mode) <=
+                                      static_cast<std::uint8_t>(ImageCombineMode::MultiplyAlpha) &&
+                                  static_cast<std::uint8_t>(combine->channel) <=
+                                      static_cast<std::uint8_t>(render::ImageCoverageChannel::Luma) &&
+                                  ((combine->mode == ImageCombineMode::SetAlpha &&
+                                    !combine->factor) ||
+                                   (combine->mode != ImageCombineMode::SetAlpha &&
+                                    combine->factor.has_value() &&
+                                    hasValidScalarCurveReference(*combine->factor, plan, index,
+                                                                 failure)));
+                } else if (effect.secondaryInput) {
+                    validKernel = false;
+                }
                 if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel)) {
                     const bool invert = pointwise->effect == PointwiseImageEffect::Invert;
                     validKernel = static_cast<std::uint8_t>(pointwise->effect) <=
@@ -1665,6 +1681,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     if (sampled)
                         pointwiseAmount = sampled->value;
                 }
+                if (const auto* combine = std::get_if<ImageCombineKernel>(&effect->kernel);
+                    combine && combine->factor) {
+                    const auto sampled =
+                        detail::resolveParameter(*combine->factor, *plan, resolved);
+                    if (sampled)
+                        pointwiseAmount = sampled->value;
+                }
                 preparedEffect =
                     request.bypassLookNodes && effect->look
                         ? detail::PreparedImageEffect{}
@@ -1675,9 +1698,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 if (preparedEffect->diagnostic) {
                     auto warning = *preparedEffect->diagnostic;
                     warning.subject = operationSubject;
-                    if (std::holds_alternative<PointwiseImageKernel>(effect->kernel)) {
+                    if (std::holds_alternative<PointwiseImageKernel>(effect->kernel) ||
+                        std::holds_alternative<ImageCombineKernel>(effect->kernel)) {
                         return EvaluationResult::failed(
-                            diagnostic(warning.code, "Pointwise image effect cannot be evaluated",
+                            diagnostic(warning.code, "Image effect cannot be evaluated",
                                        warning.detail, operationSubject));
                     }
                     imageWarnings.push_back(std::move(warning));
@@ -1864,6 +1888,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 key.add(pointwise->effect);
                                 if (pointwise->amount)
                                     parameter(*pointwise->amount);
+                            }
+                            if (const auto* combine =
+                                    std::get_if<ImageCombineKernel>(&step.kernel)) {
+                                key.add(combine->mode);
+                                key.add(combine->channel);
+                                if (combine->factor)
+                                    parameter(*combine->factor);
                             }
                             if (const auto* file = std::get_if<FileTransformKernel>(&step.kernel)) {
                                 key.add(file->lutAssetId);
@@ -2171,7 +2202,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             bounds[index].output = bounds[index].local;
                             if (slots[index] && !preparedEffect->identity()) {
                                 auto result = detail::applyImageEffect(
-                                    *preparedEffect, *slots[index], remainingPixelBudget(),
+                                    *preparedEffect, *slots[index],
+                                    effect.secondaryInput && slots[effect.secondaryInput->value()]
+                                        ? slots[effect.secondaryInput->value()].get()
+                                        : nullptr,
+                                    remainingPixelBudget(),
                                     cancellation, operationIndex, progress);
                                 if (result.cancelled) {
                                     operationCancelled = true;

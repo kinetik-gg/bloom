@@ -36,6 +36,7 @@
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/gpu_affine.hpp>
+#include <bloom/render/gpu_blend.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/render/path_raster.hpp>
 #include <bloom/runtime/cancellation.hpp>
@@ -284,6 +285,7 @@ struct GpuSceneBlendCommand final {
     std::string sourceKey;
     std::string destinationKey;
     core::BlendMode mode = core::kDefaultBlendMode;
+    std::optional<render::GpuImageCombineParameters> imageCombine;
     // The source data window and the output data window (== destination data window).
     render::ImageWindow sourceWindow;
     render::ImageWindow outputWindow;
@@ -438,13 +440,21 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
 [[nodiscard]] inline std::string makeGpuSceneBlendSemanticKey(
     const std::string& sourceKey, const std::string& destinationKey, const core::BlendMode mode,
     const render::ImageWindow& sourceWindow, const render::ImageWindow& outputWindow,
-    const core::PixelAspectRatio& pixelAspect, const std::string& artifactDigest) {
+    const core::PixelAspectRatio& pixelAspect, const std::string& artifactDigest,
+    const std::optional<render::GpuImageCombineParameters>& imageCombine = {}) {
     std::string key = "blend-v1|src=";
     key.append(sourceKey);
     key.append("|dst=");
     key.append(destinationKey);
     key.append("|mode=");
     key.append(std::to_string(static_cast<unsigned>(mode)));
+    if (imageCombine) {
+        key.append("|image-combine=");
+        key.append(std::to_string(static_cast<unsigned>(imageCombine->kind)));
+        key.append("|channel=");
+        key.append(std::to_string(static_cast<unsigned>(imageCombine->channel)));
+        gpu_scene_key_detail::appendSemanticFloatBits(key, imageCombine->factor);
+    }
     gpu_scene_key_detail::appendSemanticWindow(key, sourceWindow);
     gpu_scene_key_detail::appendSemanticWindow(key, outputWindow);
     gpu_scene_key_detail::appendSemanticPixelAspect(key, pixelAspect);

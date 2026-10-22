@@ -491,6 +491,7 @@ emitMergeCommand(const CompiledMerge& stack, const CompiledCompositionPlan& plan
                                    .sourceKey = entry.key,
                                    .destinationKey = accumulatorKey,
                                    .mode = entry.mode,
+                                   .imageCombine = {},
                                    .sourceWindow = entry.window,
                                    .outputWindow = descriptor.dataWindow(),
                                    .pixelAspect = descriptor.pixelAspect(),

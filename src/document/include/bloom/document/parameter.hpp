@@ -243,7 +243,7 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == "bloom.composition-source.time-offset" ||
            schemaKey == "bloom.composition-source.time-scale" ||
            schemaKey == "bloom.exposure.stops" || schemaKey == "bloom.offset.amount" ||
-           schemaKey == "bloom.multiply.factor";
+           schemaKey == "bloom.multiply.factor" || schemaKey == "bloom.image-mix.factor";
 }
 
 // The Color4d-valued animatable schemas (task S5): a solid's colour and a text layer's colour.
@@ -271,7 +271,8 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 // degrees must be free to wind past a full turn in either direction, so the unit domain belongs to
 // the schema rather than to "scalar values" as a class.
 [[nodiscard]] constexpr bool hasUnitDomainSchemaKey(const std::string_view schemaKey) noexcept {
-    return schemaKey == kOpacityParameterSchemaKey || schemaKey == kAudioLevelParameterSchemaKey;
+    return schemaKey == kOpacityParameterSchemaKey || schemaKey == kAudioLevelParameterSchemaKey ||
+           schemaKey == "bloom.image-mix.factor";
 }
 
 // Whether a scalar value under this schema is confined to the text size domain (0, kMaximumText-

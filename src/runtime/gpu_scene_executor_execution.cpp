@@ -351,7 +351,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
                                   "a blend step is incomplete before dispatch");
         }
         const render::GpuBlendParameters parameters{images[step.input], images[step.destination],
-                                                    step.blendMode};
+                                                    step.blendMode, step.imageCombine};
         const auto native = blend->beginBlend(parameters, remaining);
         if (native.code != render::GpuBlendDiagnosticCode::None) {
             return diagnosticFromBlend(native);

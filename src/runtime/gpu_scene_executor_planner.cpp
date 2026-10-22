@@ -45,10 +45,13 @@ using gpu_scene_executor_detail::makeDiagnostic;
         if (blend == nullptr) {
             return {};
         }
-        return makeGpuSceneBlendSemanticKey(blendCommand->sourceKey, blendCommand->destinationKey,
-                                            blendCommand->mode, blendCommand->sourceWindow,
-                                            blendCommand->outputWindow, blendCommand->pixelAspect,
-                                            actualBlendArtifactToken(*blend, blendCommand->mode));
+        return makeGpuSceneBlendSemanticKey(
+            blendCommand->sourceKey, blendCommand->destinationKey, blendCommand->mode,
+            blendCommand->sourceWindow, blendCommand->outputWindow, blendCommand->pixelAspect,
+            blendCommand->imageCombine
+                ? std::string(render::gpuImageCombineShaderIdentity())
+                : actualBlendArtifactToken(*blend, blendCommand->mode),
+            blendCommand->imageCombine);
     }
     return effectiveCommandKey(command);
 }
@@ -293,6 +296,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.cacheOnComplete = true;
         step.outputWindow = blendCommand->outputWindow;
         step.blendMode = blendCommand->mode;
+        step.imageCombine = blendCommand->imageCombine;
         steps.push_back(std::move(step));
         color[index] = 2;
         return {};

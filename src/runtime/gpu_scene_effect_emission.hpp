@@ -33,6 +33,7 @@
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
 #include <cstddef>
+#include <cmath>
 #include <filesystem>
 #include <limits>
 #include <memory>
@@ -146,6 +147,9 @@ struct GpuSceneEffectEmission final {
     std::size_t consumedLeaf = kNoVectorLeaf;
     bool consumedText = false;
     bool consumedShape = false;
+    std::size_t consumedSecondLeaf = kNoVectorLeaf;
+    bool consumedSecondText = false;
+    bool consumedSecondShape = false;
 };
 
 // Emits the scene command(s) for one reachable CompiledImageEffect. Returns nullopt on success and
@@ -184,6 +188,110 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     const auto* cst = std::get_if<CstKernel>(&effect.kernel);
     const auto* file = std::get_if<FileTransformKernel>(&effect.kernel);
     const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel);
+    const auto* combine = std::get_if<ImageCombineKernel>(&effect.kernel);
+    if (combine != nullptr) {
+        if (!effect.secondaryInput || effect.secondaryInput->value() >= plan.operations().size() ||
+            static_cast<std::uint8_t>(combine->mode) >
+                static_cast<std::uint8_t>(ImageCombineMode::MultiplyAlpha) ||
+            static_cast<std::uint8_t>(combine->channel) >
+                static_cast<std::uint8_t>(render::ImageCoverageChannel::Luma))
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Image combine kernel or second input is invalid");
+        const auto secondValue = effect.secondaryInput->value();
+        if (!outputWindowOf[inputValue])
+            return identity();
+        if (!outputWindowOf[secondValue])
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                        "Image combine second input has no resident image");
+        float factor = 1.0F;
+        if (combine->factor) {
+            const auto sampled = resolveParameter(*combine->factor, plan, resolved);
+            if (!sampled || !std::isfinite(sampled->value) || sampled->value < 0.0 ||
+                sampled->value > 1.0)
+                return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                            "Image combine factor is outside its unit domain");
+            factor = static_cast<float>(sampled->value);
+        } else if (combine->mode != ImageCombineMode::SetAlpha) {
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Image combine factor is missing");
+        }
+        if (combine->mode == ImageCombineMode::Mix && factor == 0.0F)
+            return identity();
+
+        // Both image inputs may be deferred vector leaves. Materialize each through the same
+        // native coverage route the ordinary image-effect path uses before the two-input dispatch.
+        const auto residentInput = [&](const std::size_t value, GpuSceneCommandIndex& command,
+                                       std::string& key, std::size_t& consumedLeaf,
+                                       bool& consumedText, bool& consumedShape)
+            -> std::optional<GpuSceneLeafFailure> {
+            command = commandForOperation[value];
+            key = keyOf[value];
+            if (command != kInvalidGpuSceneCommand)
+                return std::nullopt;
+            const auto& chain = vectors[value];
+            if (!chain || chain->source >= plan.operations().size())
+                return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                            "Image combine vector input is not materializable");
+            const auto error = emitVectorLeafLayer(
+                plan.operations()[chain->source], plan, resolved, chain->matrix,
+                *outputWindowOf[value], ctx.fullDisplayWindow, ctx.fullPixelAspect,
+                ctx.hScale, ctx.vScale, chain->opacity, false, ctx.allowance, operationIndex,
+                nullptr, ctx.coverageCache, cancellation, emit, charge, chargeCoverage,
+                command, key, consumedText, consumedShape);
+            if (!error)
+                consumedLeaf = chain->source;
+            return error;
+        };
+        GpuSceneCommandIndex baseCommand = kInvalidGpuSceneCommand;
+        GpuSceneCommandIndex secondCommand = kInvalidGpuSceneCommand;
+        std::string baseKey;
+        std::string secondKey;
+        if (const auto error = residentInput(inputValue, baseCommand, baseKey,
+                                             result.consumedLeaf, result.consumedText,
+                                             result.consumedShape))
+            return error;
+        if (const auto error = residentInput(secondValue, secondCommand, secondKey,
+                                             result.consumedSecondLeaf,
+                                             result.consumedSecondText,
+                                             result.consumedSecondShape))
+            return error;
+        const auto baseDescriptor = gpuSceneCommandDescriptorOf(*ctx.commands, baseCommand, 0);
+        const auto secondDescriptor = gpuSceneCommandDescriptorOf(*ctx.commands, secondCommand, 0);
+        if (!baseDescriptor || !secondDescriptor)
+            return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                        "Image combine resident descriptors are not derivable");
+        const auto outputWindow = baseDescriptor->data;
+        if (const auto error = charge(outputWindow.extent().width(),
+                                      outputWindow.extent().height(), sizeof(render::Rgba32f)))
+            return error;
+        const render::GpuImageCombineParameters parameters{
+            static_cast<render::GpuImageCombineKind>(combine->mode), factor, combine->channel};
+        GpuSceneBlendCommand command{.sourceOperation = operationIndex,
+                                     .source = secondCommand,
+                                     .destination = baseCommand,
+                                     .sourceKey = secondKey,
+                                     .destinationKey = baseKey,
+                                     .mode = core::BlendMode::Normal,
+                                     .imageCombine = parameters,
+                                     .sourceWindow = secondDescriptor->data,
+                                     .outputWindow = outputWindow,
+                                     .pixelAspect = baseDescriptor->pixelAspect,
+                                     .artifactDigest =
+                                         std::string(render::gpuImageCombineShaderIdentity()),
+                                     .semanticKey = {}};
+        command.semanticKey = makeGpuSceneBlendSemanticKey(
+            secondKey, baseKey, command.mode, command.sourceWindow, command.outputWindow,
+            command.pixelAspect, command.artifactDigest, command.imageCombine);
+        result.command = emit(std::move(command));
+        result.key = makeGpuSceneBlendSemanticKey(
+            secondKey, baseKey, core::BlendMode::Normal, secondDescriptor->data, outputWindow,
+            baseDescriptor->pixelAspect, std::string(render::gpuImageCombineShaderIdentity()),
+            parameters);
+        result.window = outputWindow;
+        result.local = bounds[inputValue].output;
+        result.output = result.local;
+        return std::nullopt;
+    }
     if (cst == nullptr && file == nullptr && pointwise == nullptr) {
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                     "An image effect kernel is not supported");
@@ -445,6 +553,12 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
         if (emitted.consumedShape) {
             shapeConsumed[emitted.consumedLeaf] = true;
         }
+    }
+    if (emitted.consumedSecondLeaf != kNoVectorLeaf) {
+        if (emitted.consumedSecondText)
+            textConsumed[emitted.consumedSecondLeaf] = true;
+        if (emitted.consumedSecondShape)
+            shapeConsumed[emitted.consumedSecondLeaf] = true;
     }
     return std::nullopt;
 }

@@ -11,6 +11,12 @@
 namespace bloom::runtime::detail {
 
 struct PreparedImageEffect final {
+    struct Combine final {
+        ImageCombineMode mode = ImageCombineMode::Mix;
+        float factor = 1.0F;
+        render::ImageCoverageChannel channel = render::ImageCoverageChannel::Alpha;
+    };
+    std::optional<Combine> combine;
     std::optional<PointwiseAffine> pointwise;
     std::shared_ptr<const color::CpuColorSpaceProcessor> processor;
     std::shared_ptr<const color::CpuColorSpaceProcessor> afterProcessor;
@@ -19,7 +25,9 @@ struct PreparedImageEffect final {
     std::string cacheIdentity;
     bool cancelled = false;
     [[nodiscard]] bool identity() const noexcept {
-        return !diagnostic && !cancelled ? (!pointwise || pointwise->identity()) &&
+        return !diagnostic && !cancelled ? (!combine || (combine->mode == ImageCombineMode::Mix &&
+                                                         combine->factor == 0.0F)) &&
+                                               (!pointwise || pointwise->identity()) &&
                                                (!processor || processor->isIdentity()) &&
                                                (!afterProcessor || afterProcessor->isIdentity()) &&
                                                (!fileProcessor || fileProcessor->isIdentity())
@@ -35,7 +43,7 @@ class ImageEffectContext final {
                                               const EvaluationColorIntent& intent,
                                               const std::filesystem::path& base = {},
                                               const CancellationToken& cancellation = {},
-                                              std::optional<double> pointwiseAmount = {});
+                                              std::optional<double> sampledAmount = {});
 
   private:
     std::mutex mutex_;
@@ -50,6 +58,7 @@ struct ImageEffectResult final {
 
 [[nodiscard]] ImageEffectResult
 applyImageEffect(const PreparedImageEffect& effect, const render::Rgba32fImage& input,
+                 const render::Rgba32fImage* secondary,
                  std::size_t pixelBudget, const CancellationToken& cancellation,
                  OperationIndex operation, const EvaluationProgressCallback& progress);
 } // namespace bloom::runtime::detail

@@ -643,6 +643,34 @@ lowerImageEffect(const document::NodeRecord& node,
         addTopologyFailure(node.id, "Image effect input could not be lowered.");
         return std::nullopt;
     }
+    if (node.typeId == "bloom.image-mix" || node.typeId == "bloom.set-alpha") {
+        const bool mix = node.typeId == "bloom.image-mix";
+        const auto second = findInputOperation(node.id, mix ? "second" : "matte", indices);
+        if (!second) {
+            addTopologyFailure(node.id, "Image combine second input could not be lowered.");
+            return std::nullopt;
+        }
+        if (mix) {
+            if (const auto factor = compiledScalarParameter(findParameterBinding(node, "factor")))
+                return runtime::CompiledImageEffect{
+                    node.id, *input,
+                    runtime::ImageCombineKernel{runtime::ImageCombineMode::Mix, *factor,
+                                                render::ImageCoverageChannel::Alpha},
+                    false, false, *second};
+        } else {
+            const auto* channel =
+                parameterConstant<std::int64_t>(findParameterBinding(node, "channel"));
+            if (channel && *channel >= 0 && *channel <= 4)
+                return runtime::CompiledImageEffect{
+                    node.id, *input,
+                    runtime::ImageCombineKernel{
+                        runtime::ImageCombineMode::SetAlpha, {},
+                        static_cast<render::ImageCoverageChannel>(*channel)},
+                    false, false, *second};
+        }
+        addTopologyFailure(node.id, "Image combine parameters could not be lowered.");
+        return std::nullopt;
+    }
     const auto pointwise = [&]() -> std::optional<runtime::PointwiseImageEffect> {
         if (node.typeId == "bloom.exposure")
             return runtime::PointwiseImageEffect::Exposure;
