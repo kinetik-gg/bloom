@@ -134,11 +134,19 @@ int main() {
     validated.id = document::AssetId::fromRaw(1);
     context.expect(validated.validate().ok(),
                    "the prepared asset record satisfies document::AssetRecord::validate()");
+    for (const auto* portableUri : {"file://server/share/image.png", "file:///C:/Media/image.png",
+                                    "file:///tmp/image.png", "file:///tmp/back%5Cslash.png"}) {
+        validated.locator.path = portableUri;
+        validated.locator.relinkHint = validated.locator.path;
+        context.expect(validated.validate().ok(),
+                       "a valid foreign-platform locator remains valid project data");
+    }
     validated.locator.path = "file:///tmp/bad%00.png";
     validated.locator.relinkHint = validated.locator.path;
     context.expect(!validated.validate().ok(), "an encoded NUL is not a valid external path");
     context.expect(media::resolveImagePath(validated.locator.path, validated.locator.relinkHint,
-                                           projectDirectory).empty(),
+                                           projectDirectory)
+                       .empty(),
                    "a malformed external URI never resolves");
 
     // Ordinary assets retain relocation by a real project-relative path. The hint may point
@@ -168,10 +176,11 @@ int main() {
                            std::string::npos,
                    "a POSIX backslash component uses an escaped external URI");
     if (backslashImport.prepared().size() == 1)
-        context.expect(media::resolveImagePath(backslashImport.prepared().front().locator.path,
-                                               backslashImport.prepared().front().locator.relinkHint,
-                                               projectDirectory) == backslashSource,
-                       "a backslash-bearing external path resolves exactly");
+        context.expect(
+            media::resolveImagePath(backslashImport.prepared().front().locator.path,
+                                    backslashImport.prepared().front().locator.relinkHint,
+                                    projectDirectory) == backslashSource,
+            "a backslash-bearing external path resolves exactly");
 #endif
 
     // The locator must resolve back to the real mounted file: this is exactly what

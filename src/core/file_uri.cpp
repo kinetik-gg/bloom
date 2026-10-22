@@ -4,9 +4,7 @@
 
 namespace bloom::core {
 namespace {
-bool alpha(const char c) {
-    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
-}
+bool alpha(const char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
 bool digit(const char c) { return c >= '0' && c <= '9'; }
 bool unreserved(const char c) {
     return alpha(c) || digit(c) || c == '-' || c == '.' || c == '_' || c == '~';
@@ -81,8 +79,8 @@ std::optional<std::string> fileUriFromAbsolutePath(const std::filesystem::path& 
 #if defined(_WIN32)
     if (raw.starts_with("//")) {
         const auto slash = raw.find('/', 2);
-        if (slash == std::string::npos || slash == 2 || !validAuthority(
-                std::string_view(raw).substr(2, slash - 2)))
+        if (slash == std::string::npos || slash == 2 ||
+            !validAuthority(std::string_view(raw).substr(2, slash - 2)))
             return std::nullopt;
         return "file://" + raw.substr(2, slash - 2) + encode(std::string_view(raw).substr(slash));
     }
@@ -96,7 +94,12 @@ std::optional<std::string> fileUriFromAbsolutePath(const std::filesystem::path& 
     return "file://" + encode(raw);
 }
 
-std::optional<std::filesystem::path> absolutePathFromFileUri(std::string_view uri) {
+namespace {
+struct ParsedFileUri {
+    std::string authority;
+    std::string path;
+};
+std::optional<ParsedFileUri> parseFileUri(std::string_view uri) {
     if (!fileScheme(uri))
         return std::nullopt;
     uri.remove_prefix(5);
@@ -124,7 +127,7 @@ std::optional<std::filesystem::path> absolutePathFromFileUri(std::string_view ur
             if (high < 0 || low < 0)
                 return std::nullopt;
             const char value = static_cast<char>((high << 4) | low);
-            if (value == '\0' || value == '/' || value == '\\')
+            if (value == '\0' || value == '/')
                 return std::nullopt;
             decoded.push_back(value);
             i += 2;
@@ -136,9 +139,25 @@ std::optional<std::filesystem::path> absolutePathFromFileUri(std::string_view ur
     }
     if (!isValidUtf8(decoded))
         return std::nullopt;
-    if (!authority.empty() && !localHost(authority)) {
+    return ParsedFileUri{std::string(authority), std::move(decoded)};
+}
+} // namespace
+
+bool isAbsoluteFileUri(const std::string_view uri) { return parseFileUri(uri).has_value(); }
+
+std::optional<std::filesystem::path> absolutePathFromFileUri(const std::string_view uri) {
+    auto parsed = parseFileUri(uri);
+    if (!parsed)
+        return std::nullopt;
+    auto& decoded = parsed->path;
 #if defined(_WIN32)
-        decoded = "//" + std::string(authority) + decoded;
+    // An escaped POSIX backslash is a filename character, never a Windows separator.
+    if (decoded.find('\\') != std::string::npos)
+        return std::nullopt;
+#endif
+    if (!parsed->authority.empty() && !localHost(parsed->authority)) {
+#if defined(_WIN32)
+        decoded = "//" + parsed->authority + decoded;
 #else
         // A remote authority is a UNC path on Windows, not a local POSIX pathname.
         return std::nullopt;
@@ -147,9 +166,6 @@ std::optional<std::filesystem::path> absolutePathFromFileUri(std::string_view ur
 #if defined(_WIN32)
     if (decoded.size() >= 3 && decoded[0] == '/' && alpha(decoded[1]) && decoded[2] == ':')
         decoded.erase(0, 1);
-#else
-    if (decoded.size() >= 3 && decoded[0] == '/' && alpha(decoded[1]) && decoded[2] == ':')
-        return std::nullopt;
 #endif
     const auto path = std::filesystem::path(
         std::u8string(reinterpret_cast<const char8_t*>(decoded.data()), decoded.size()));

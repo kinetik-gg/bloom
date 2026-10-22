@@ -1,6 +1,6 @@
 #include <algorithm>
-#include <bloom/core/utf8.hpp>
 #include <bloom/core/file_uri.hpp>
+#include <bloom/core/utf8.hpp>
 #include <bloom/document/asset.hpp>
 #include <bloom/document/persisted_text.hpp>
 
@@ -10,8 +10,7 @@ bool validLocator(const AssetLocator& locator) {
     if (locator.kind == "file") {
         if (locator.portability == "external")
             return !locator.path.empty() && locator.path.size() <= 16384 &&
-                   locator.relinkHint == locator.path &&
-                   core::absolutePathFromFileUri(locator.path).has_value();
+                   locator.relinkHint == locator.path && core::isAbsoluteFileUri(locator.path);
         return locator.portability == "project-relative" && !locator.path.empty() &&
                locator.path.size() <= 4096 && locator.path.front() != '/' &&
                locator.path.find('\\') == std::string::npos &&
