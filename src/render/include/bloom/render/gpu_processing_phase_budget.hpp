@@ -9,6 +9,7 @@
 namespace bloom::render {
 namespace detail {
 struct GpuProcessingPhaseBudgetState;
+class ProcessingHostBackingToken;
 struct PackedHostRetirementState;
 void markHostPixelsMaterialized(void*) noexcept;
 void retireHostPixelsBeforeFree(void*) noexcept;
@@ -72,7 +73,8 @@ struct GpuProcessingPhaseSnapshot final {
     std::uint64_t ownedFinalEncodedHostBytes = 0;
     std::uint64_t ownedFinalHostMetadataBytes = 0;
     std::size_t ownedFinalHostAllocations = 0;
-    // Exact allocator-requested transient processing scratch and its allocation headers.
+    // Exact processing scratch and adopted, measured retained host backing. Metadata applies
+    // only to allocator-owned scratch; an adopted backing includes its object in payload bytes.
     std::uint64_t ownedProcessingHostBytes = 0;
     std::uint64_t ownedProcessingHostMetadataBytes = 0;
     std::size_t ownedProcessingHostAllocations = 0;
@@ -142,6 +144,7 @@ class GpuProcessingPhaseLease final {
     friend class NativeImageStorageToken;
     friend class NativeBufferStorageToken;
     friend class ProcessingHostStorageToken;
+    friend class detail::ProcessingHostBackingToken;
     explicit GpuProcessingPhaseLease(
         std::shared_ptr<detail::GpuProcessingPhaseBudgetState>) noexcept;
     std::shared_ptr<detail::GpuProcessingPhaseBudgetState> state_;

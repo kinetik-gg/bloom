@@ -1,10 +1,13 @@
 #include <bloom/render/native_image_storage.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/render/packed_rgba8_storage.hpp>
+#include <bloom/render/processing_host_storage.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstddef>
 #include <exception>
 #include <iostream>
 #include <limits>
@@ -429,6 +432,70 @@ void rootedBackingReconcilesSampledHostHeadroom() {
                                delivered.process.sampledAt)
                         .status == GpuProcessingPhaseAdmission::BudgetRefused,
             "measured zero never gains a floor from previously retired backing");
+}
+void adoptedHostBackingCreditsOnlyMaterializedBytes() {
+    using Backing = std::array<std::byte, 80>;
+    static_assert(sizeof(Backing) == 80);
+    const auto start = GpuProcessingPhasePolicy::Clock::now();
+    const auto firstRequest = GpuProcessingPhaseEnvelope{
+        .pixels = 1, .metadataBytes = 72, .sourceFree = true, .native = false};
+    const auto secondRequest = GpuProcessingPhaseEnvelope{
+        .pixels = 1, .metadataBytes = 52, .sourceFree = true, .native = false};
+    MemoryBudgetState delivered;
+    delivered.machine.availableBytes = 200;
+    delivered.process.source = ProcessMemorySource::OtherHostOnly;
+    delivered.process.status = ProcessMemoryStatus::Unsupported;
+    delivered.process.sampledAt = start;
+    delivered.processSampleFresh = true;
+    delivered.sampleSerial = 1;
+    GpuProcessingPhasePolicy rooted(3);
+    rooted.applyHostSample(delivered, 200, start);
+    auto first = rooted.reserve(firstRequest, start);
+    require(first.lease && first.lease->hostBytes() == 80,
+            "first zero-source host phase reserves the full retained allocation");
+    auto held = adoptProcessingHostBacking(std::make_unique<Backing>(), first.lease, 80);
+    require(held && rooted.snapshot().reservations.totalHostClaimBytes == 80,
+            "adoption materializes the existing claim without increasing it");
+    first.lease.reset();
+    scriptedSampleAt = start + std::chrono::seconds(1);
+    static_cast<void>(rooted.sampleHostMemory({}, scriptedHostSample));
+    delivered.machine.availableBytes = 60;
+    delivered.process.sampledAt = scriptedSampleAt;
+    ++delivered.sampleSerial;
+    rooted.applyHostSample(delivered, 200, scriptedSampleAt);
+    require(rooted.snapshot().reservations.hostCapacityBytes == 140,
+            "fresh OS free is reconciled only with actual retained root backing");
+    auto second = rooted.reserve(secondRequest, scriptedSampleAt);
+    require(second.lease && second.lease->hostBytes() == 60 &&
+                rooted.reserve({.pixels = 1, .sourceFree = true, .native = false}, scriptedSampleAt)
+                        .status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "second track fits while further held claims still refuse overcommit");
+    held.reset();
+    require(rooted.snapshot().reservations.hostCapacityBytes == 60 &&
+                rooted.snapshot().reservations.totalHostClaimBytes == 60 &&
+                rooted.reserve({.pixels = 1, .sourceFree = true, .native = false}, scriptedSampleAt)
+                        .status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "backing retirement revokes sample credit before another admission");
+    second.lease.reset();
+
+    GpuProcessingPhasePolicy bare(2);
+    delivered.machine.availableBytes = 200;
+    delivered.process.sampledAt = start;
+    delivered.sampleSerial = 1;
+    bare.applyHostSample(delivered, 200, start);
+    auto promise = bare.reserve(firstRequest, start);
+    require(promise.lease && promise.lease->hostBytes() == 80,
+            "unmaterialized host phase still reserves its fixed estimate");
+    static_cast<void>(bare.sampleHostMemory({}, scriptedHostSample));
+    delivered.machine.availableBytes = 60;
+    delivered.process.sampledAt = scriptedSampleAt;
+    ++delivered.sampleSerial;
+    bare.applyHostSample(delivered, 200, scriptedSampleAt);
+    require(bare.snapshot().reservations.hostCapacityBytes == 60 &&
+                bare.reserve(secondRequest, scriptedSampleAt).status ==
+                    GpuProcessingPhaseAdmission::BudgetRefused,
+            "a bare fixed-host promise cannot receive materialized-backing sample credit");
+    promise.lease.reset();
 }
 void newBackingCannotInflateAnOlderFiniteLimit() {
     HostRetirement retirement;
@@ -1010,6 +1077,7 @@ int main(int argc, char** argv) {
         lowMemoryHostFinalAdmission();
         liveHeadroomDuringCachePressure();
         rootedBackingReconcilesSampledHostHeadroom();
+        adoptedHostBackingCreditsOnlyMaterializedBytes();
         newBackingCannotInflateAnOlderFiniteLimit();
         policy();
         deviceReportRecoversAfterPressure();

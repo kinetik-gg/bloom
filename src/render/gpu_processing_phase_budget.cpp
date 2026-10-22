@@ -1,6 +1,7 @@
 #include <bloom/render/gpu_processing_phase_budget.hpp>
 #include <bloom/render/native_image_storage.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
+#include <bloom/render/processing_host_storage.hpp>
 
 #include "gpu_processing_phase_budget_private.hpp"
 
@@ -57,6 +58,65 @@ GpuProcessingPhaseLease::~GpuProcessingPhaseLease() {
         --counters.unprovenPhases;
     }
 }
+
+namespace detail {
+ProcessingHostBackingToken::ProcessingHostBackingToken(
+    std::shared_ptr<GpuProcessingPhaseLease> phase, const std::uint64_t measuredBytes) noexcept
+    : phase_(std::move(phase)), bytes_(measuredBytes), materialized_(true) {}
+ProcessingHostBackingToken::ProcessingHostBackingToken(ProcessingHostBackingToken&& other) noexcept
+    : phase_(std::move(other.phase_)), bytes_(std::exchange(other.bytes_, 0)),
+      materialized_(std::exchange(other.materialized_, false)) {}
+ProcessingHostBackingToken::~ProcessingHostBackingToken() {
+    retireBeforeFree();
+    releaseAfterFree();
+}
+std::optional<ProcessingHostBackingToken> ProcessingHostBackingToken::transfer(
+    const std::shared_ptr<GpuProcessingPhaseLease>& phase,
+    const std::uint64_t measuredBytes) noexcept {
+    if (!phase || measuredBytes == 0)
+        return {};
+    const std::lock_guard lock(phase->state_->mutex);
+    auto& state = *phase->state_;
+    auto& counters = state.counters;
+    if (phase->id_ == 0 || phase->unproven_ ||
+        measuredBytes > phase->remainingOutputHostBytes_ ||
+        measuredBytes > phase->remainingHostBytes_)
+        return {};
+    // The measured allocation was constructed while the fixed phase claim was held. This
+    // atomic transfer changes ownership, never the total host claim or admission capacity.
+    phase->remainingOutputHostBytes_ -= measuredBytes;
+    phase->remainingHostBytes_ -= measuredBytes;
+    counters.hostReservedBytes -= measuredBytes;
+    counters.ownedProcessingHostBytes += measuredBytes;
+    ++counters.ownedProcessingHostAllocations;
+    state.rootedHostBacking.materializedBytes += measuredBytes;
+    return ProcessingHostBackingToken(phase, measuredBytes);
+}
+void ProcessingHostBackingToken::retireBeforeFree() noexcept {
+    if (!phase_ || !materialized_)
+        return;
+    const std::lock_guard lock(phase_->state_->mutex);
+    retireHostBackingLocked(*phase_->state_, bytes_);
+    materialized_ = false;
+}
+void ProcessingHostBackingToken::releaseAfterFree() noexcept {
+    if (!phase_)
+        return;
+    std::shared_ptr<GpuProcessingPhaseLease> releasedPhase;
+    {
+        const std::lock_guard lock(phase_->state_->mutex);
+        auto& counters = phase_->state_->counters;
+        counters.ownedProcessingHostBytes -= bytes_;
+        --counters.ownedProcessingHostAllocations;
+        phase_->remainingOutputHostBytes_ += bytes_;
+        phase_->remainingHostBytes_ += bytes_;
+        counters.hostReservedBytes += bytes_;
+        releasedPhase = std::move(phase_);
+        bytes_ = 0;
+    }
+    releasedPhase.reset();
+}
+} // namespace detail
 
 std::uint64_t GpuProcessingPhaseLease::revisionAfterOwnRelease() const noexcept {
     return admissionRevision_ == std::numeric_limits<std::uint64_t>::max() ? admissionRevision_

@@ -96,11 +96,92 @@ void freshnessAndLifetime() {
     require(budget.snapshot().ownedProcessingHostAllocations == 0,
             "explicit null-phase compatibility remains visibly unrooted");
 }
+struct ObservedBacking final {
+    GpuProcessingPhaseBudget* budget = nullptr;
+    bool* sawRetirementBeforeDelete = nullptr;
+    std::uint64_t expectedCapacity = 0;
+    std::uint64_t expectedOwnedBytes = 0;
+    ~ObservedBacking() noexcept {
+        if (!budget || !sawRetirementBeforeDelete)
+            return;
+        const auto snapshot = budget->snapshot();
+        *sawRetirementBeforeDelete =
+            snapshot.hostCapacityBytes == expectedCapacity &&
+            snapshot.totalHostClaimBytes >= sizeof(ObservedBacking) &&
+            snapshot.ownedProcessingHostBytes == expectedOwnedBytes &&
+            budget->rootedHostBackingSnapshot().materializedBytes == 0;
+    }
+};
+void adoptedBackingRetiresBeforeDelete() {
+    constexpr auto bytes = sizeof(ObservedBacking);
+    GpuProcessingPhaseBudget budget(2);
+    budget.setHostCapacity(4 * bytes, true);
+    auto result = budget.reserve({.fixedHostBytes = bytes, .sourceFree = true, .native = false});
+    require(result.lease != nullptr, "fixed host phase admits the future real allocation");
+    bool retiredBeforeDelete = false;
+    auto backing = std::make_unique<ObservedBacking>();
+    backing->budget = &budget;
+    backing->sawRetirementBeforeDelete = &retiredBeforeDelete;
+    backing->expectedCapacity = bytes;
+    backing->expectedOwnedBytes = bytes;
+    auto retained = adoptProcessingHostBacking(std::move(backing), result.lease, bytes);
+    require(retained && budget.rootedHostBackingSnapshot().materializedBytes == bytes,
+            "only completed unique backing becomes exact rooted sample credit");
+    const auto owned = budget.snapshot();
+    require(owned.hostReservedBytes == 0 && owned.ownedProcessingHostBytes == bytes &&
+                owned.totalHostClaimBytes == bytes,
+            "ownership transfer does not add a second host claim");
+    const auto retirement = budget.rootedHostBackingSnapshot();
+    budget.setSampledHostCapacity(2 * bytes, true, std::chrono::steady_clock::time_point::max(),
+                                  bytes, retirement.retiredMaterializedBytes);
+    result.lease.reset();
+    std::thread destroy([held = std::move(retained)]() mutable { held.reset(); });
+    destroy.join();
+    const auto released = budget.snapshot();
+    require(retiredBeforeDelete && released.hostCapacityBytes == bytes &&
+                released.totalHostClaimBytes == 0 && released.ownedProcessingHostBytes == 0 &&
+                released.admittedPhases == 0 &&
+                budget.rootedHostBackingSnapshot().materializedBytes == 0,
+            "foreign-thread deleter revokes credit before delete and releases claim afterward");
+}
+void failedAdoptionCannotCreateCredit() {
+    constexpr auto bytes = sizeof(ObservedBacking);
+    GpuProcessingPhaseBudget budget(1);
+    budget.setHostCapacity(4 * bytes, true);
+    auto result = budget.reserve({.fixedHostBytes = bytes, .sourceFree = true, .native = false});
+    require(result.lease != nullptr, "fixed host promise admits");
+    bool deletedWhileClaimHeld = false;
+    auto oversized = std::make_unique<ObservedBacking>();
+    oversized->budget = &budget;
+    oversized->sawRetirementBeforeDelete = &deletedWhileClaimHeld;
+    oversized->expectedCapacity = 4 * bytes;
+    require(!adoptProcessingHostBacking(std::move(oversized), result.lease, bytes + 1),
+            "actual backing beyond fixed phase claim refuses transfer");
+    require(deletedWhileClaimHeld &&
+                budget.rootedHostBackingSnapshot().materializedBytes == 0 &&
+                budget.snapshot().totalHostClaimBytes == bytes,
+            "failed adoption destroys backing before phase can release its original claim");
+    require(!adoptProcessingHostBacking(std::make_unique<ObservedBacking>(), result.lease, 1),
+            "adoption cannot claim less than the owned object itself");
+    result.lease->markUnproven();
+    require(!adoptProcessingHostBacking(std::make_unique<ObservedBacking>(), result.lease, bytes),
+            "unproven phase cannot turn a completed backing into sampled credit");
+    std::unique_ptr<ObservedBacking> cancelled = std::make_unique<ObservedBacking>();
+    cancelled.reset();
+    require(!adoptProcessingHostBacking(std::move(cancelled), result.lease, bytes) &&
+                budget.rootedHostBackingSnapshot().materializedBytes == 0,
+            "cancelled backing cannot become a materialized claim");
+    result.lease.reset();
+    require(budget.snapshot().totalHostClaimBytes == 0,
+            "failure and cancellation leave no owned or held allocation");
+}
 } // namespace
 int main() {
     try {
         allocatorBacking();
         freshnessAndLifetime();
+        adoptedBackingRetiresBeforeDelete();
+        failedAdoptionCannotCreateCredit();
         std::cout << "PASS: transient processing host allocator ownership\n";
         return 0;
     } catch (const std::exception& error) {

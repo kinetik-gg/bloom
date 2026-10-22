@@ -7,6 +7,7 @@
 #include <memory>
 #include <new>
 #include <optional>
+#include <type_traits>
 #include <utility>
 
 namespace bloom::render {
@@ -50,6 +51,61 @@ struct ProcessingHostStorageGrant final {
     std::optional<ProcessingHostStorageToken> token;
     std::uint64_t revisionAfterOwnRelease = 0;
 };
+
+namespace detail {
+// Internal transfer of a completed allocation from a phase's fixed-host promise. The token
+// stays in the shared backing's deleter, so sampled credit is revoked before the object frees.
+class ProcessingHostBackingToken final {
+  public:
+    ProcessingHostBackingToken() = default;
+    ProcessingHostBackingToken(const ProcessingHostBackingToken&) = delete;
+    ProcessingHostBackingToken& operator=(const ProcessingHostBackingToken&) = delete;
+    ProcessingHostBackingToken(ProcessingHostBackingToken&&) noexcept;
+    ProcessingHostBackingToken& operator=(ProcessingHostBackingToken&&) = delete;
+    ~ProcessingHostBackingToken();
+    [[nodiscard]] static std::optional<ProcessingHostBackingToken>
+    transfer(const std::shared_ptr<GpuProcessingPhaseLease>& phase,
+             std::uint64_t measuredBytes) noexcept;
+    void retireBeforeFree() noexcept;
+    void releaseAfterFree() noexcept;
+
+  private:
+    ProcessingHostBackingToken(std::shared_ptr<GpuProcessingPhaseLease> phase,
+                               std::uint64_t measuredBytes) noexcept;
+    std::shared_ptr<GpuProcessingPhaseLease> phase_;
+    std::uint64_t bytes_ = 0;
+    bool materialized_ = false;
+};
+} // namespace detail
+
+// Adopt only an already initialized, uniquely owned allocation whose measured object and
+// nested backing bytes fit the phase's existing fixed-host claim. No new capacity is granted.
+// A failed adoption consumes and destroys the unique backing while its phase claim remains held.
+template <class T>
+[[nodiscard]] std::shared_ptr<const T>
+adoptProcessingHostBacking(std::unique_ptr<T> backing,
+                           const std::shared_ptr<GpuProcessingPhaseLease>& phase,
+                           const std::uint64_t measuredBytes) noexcept {
+    static_assert(std::is_nothrow_destructible_v<T>);
+    if (!backing || measuredBytes < sizeof(T))
+        return {};
+    auto transferred = detail::ProcessingHostBackingToken::transfer(phase, measuredBytes);
+    if (!transferred)
+        return {};
+    auto deleter = [token = std::move(*transferred)](const T* pointer) mutable noexcept {
+        token.retireBeforeFree();
+        delete pointer;
+        token.releaseAfterFree();
+    };
+    auto* raw = backing.release();
+    try {
+        // On control-block allocation failure shared_ptr invokes this deleter, including
+        // retirement and final claim release, before the exception reaches this catch.
+        return std::shared_ptr<const T>(raw, std::move(deleter));
+    } catch (...) {
+        return {};
+    }
+}
 
 // A vector's real allocator request is admitted before new, and released after delete. Null phase
 // is explicitly legacy/unrooted; a rooted refusal never switches to untracked storage.
