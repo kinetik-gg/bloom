@@ -30,6 +30,44 @@ uint pixelErrors(vec4 value) {
         subnormal(value.w)) result |= 4u;
     return result;
 }
+// Two-component Float32 arithmetic retains the residuals that matter when signed HDR
+// inputs cancel. `precise` forbids reassociation; explicit fma recovers product error.
+// No optional Float64 device capability is needed.
+vec2 twoSum(float a, float b) {
+    precise float sum = a + b;
+    precise float carried = sum - a;
+    precise float error = (a - (sum - carried)) + (b - carried);
+    return vec2(sum, error);
+}
+vec2 addWide(vec2 a, vec2 b) {
+    vec2 sum = twoSum(a.x, b.x);
+    precise float error = sum.y + (a.y + b.y);
+    return twoSum(sum.x, error);
+}
+vec2 productWide(float a, float b) {
+    precise float product = a * b;
+    return vec2(product, fma(a, b, -product));
+}
+vec2 scaleWide(vec2 a, float b) {
+    vec2 product = productWide(a.x, b);
+    precise float error = product.y + a.y * b;
+    return twoSum(product.x, error);
+}
+float mixComponent(float a, float b, float t) {
+    if (t == 0.0) return a;
+    if (t == 1.0) return b;
+    vec2 result = addWide(scaleWide(twoSum(1.0, -t), a), productWide(b, t));
+    return result.x + result.y;
+}
+float luma(vec3 rgb) {
+    // High/low splits of the CPU reference's double Rec.709 coefficients.
+    vec2 red = scaleWide(vec2(0.2125999927520752, 7.247924815878548e-9), rgb.r);
+    vec2 green = scaleWide(vec2(0.7152000069618225, -6.9618225628786945e-9), rgb.g);
+    vec2 blue = scaleWide(vec2(0.0722000002861023, -2.86102294633217e-10), rgb.b);
+    vec2 result = addWide(addWide(red, green), blue);
+    float numerator = result.x + result.y;
+    return numerator;
+}
 float coverage(vec4 matte) {
     if (bloom_push.channel == 0u) return matte.a;
     if (matte.a <= 0.0) return 0.0;
@@ -37,10 +75,17 @@ float coverage(vec4 matte) {
     if (bloom_push.channel == 1u) value = matte.r / matte.a;
     else if (bloom_push.channel == 2u) value = matte.g / matte.a;
     else if (bloom_push.channel == 3u) value = matte.b / matte.a;
-    else value = dot(matte.rgb, vec3(0.2126, 0.7152, 0.0722)) / matte.a;
+    else value = luma(matte.rgb) / matte.a;
     return clamp(value, 0.0, 1.0);
 }
 
+// Shift alpha by 24 bits so half the least subnormal is a normal Float32.
+// A nonzero subnormal CPU alpha cannot be reproduced on flush-to-zero devices;
+// reject that numerical case through the existing status/CPU fallback boundary.
+bool needsSubnormalAlpha(float scaledAlpha) {
+    const float minNormal = uintBitsToFloat(0x00800000u);
+    return scaledAlpha > minNormal && scaledAlpha < minNormal * 16777216.0;
+}
 void main() {
     uvec2 index = gl_GlobalInvocationID.xy;
     if (index.x >= bloom_push.destWidth || index.y >= bloom_push.destHeight) return;
@@ -62,13 +107,28 @@ void main() {
     vec4 result = vec4(0.0);
     if (bloom_push.mode == 8u) {
         float t = bloom_push.factor;
-        result = a * (1.0 - t) + b * t;
+        if (needsSubnormalAlpha(mixComponent(a.a * 16777216.0, b.a * 16777216.0, t))) {
+            atomicOr(bloom_error.flags[0], 4u);
+            imageStore(bloom_output, destination, a);
+            return;
+        }
+        result = vec4(mixComponent(a.r, b.r, t), mixComponent(a.g, b.g, t),
+                      mixComponent(a.b, b.b, t), mixComponent(a.a, b.a, t));
     } else if (bloom_push.mode == 9u) {
         float alpha = coverage(b);
         result = a.a > 0.0 ? vec4(a.rgb * (alpha / a.a), alpha)
                            : vec4(0.0, 0.0, 0.0, alpha);
     } else if (bloom_push.mode == 10u) {
-        float amount = clamp(coverage(b) * bloom_push.factor, 0.0, 1.0);
+        float matteCoverage = coverage(b);
+        precise float scaledAlpha = a.a * 16777216.0;
+        scaledAlpha = scaledAlpha * matteCoverage;
+        scaledAlpha = scaledAlpha * bloom_push.factor;
+        if (needsSubnormalAlpha(scaledAlpha)) {
+            atomicOr(bloom_error.flags[0], 4u);
+            imageStore(bloom_output, destination, a);
+            return;
+        }
+        float amount = clamp(matteCoverage * bloom_push.factor, 0.0, 1.0);
         result = a * amount;
     } else {
         atomicOr(bloom_error.flags[0], 2u);
@@ -80,5 +140,8 @@ void main() {
         imageStore(bloom_output, destination, a);
         return;
     }
+    // Rgba32f::fromPremultiplied canonicalizes zero alpha after float rounding.
+    // RGB can remain nonzero when alpha underflows, so enforce the same invariant here.
+    if (result.a == 0.0) result = vec4(0.0);
     imageStore(bloom_output, destination, result);
 }

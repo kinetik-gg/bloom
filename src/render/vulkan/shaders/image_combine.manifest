@@ -7,8 +7,8 @@
   "shader": {
     "language": "GLSL_460",
     "stage": "compute",
-    "sha256": "0b7cd760adbffda983c658f3dabd12603b85fbc2d5910c1a55a75ca9667c5a51",
-    "spirvSha256": "9b9d27deb653e2b38d8d5799c38821c2d80a5640d2c334591b7a41569fa37ded",
+    "sha256": "45628e5c99ff9fb205ccb9bfea999d4146f748f1fb8cfd2763267551b5802623",
+    "spirvSha256": "35228c5398b7a8d94ffede995a36e7341acd9d7211bbc193e7a57e7955980422",
     "localSizeX": 256,
     "localSizeY": 1,
     "localSizeZ": 1
