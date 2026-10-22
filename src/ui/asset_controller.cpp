@@ -166,22 +166,24 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
             return selected;
         const auto elapsed =
             static_cast<long double>(*frame) - static_cast<long double>(source.startFrame);
-        if (elapsed < static_cast<long double>(std::numeric_limits<std::int64_t>::min()) ||
-            elapsed > static_cast<long double>(std::numeric_limits<std::int64_t>::max()))
+        if (elapsed < -9223372036854775808.0L || elapsed >= 9223372036854775808.0L)
             return selected;
         const auto length = static_cast<std::uint64_t>(asset.manifest.last) -
                             static_cast<std::uint64_t>(asset.manifest.first) + 1;
         const auto signedOffset = static_cast<std::int64_t>(elapsed);
-        std::uint64_t offset = signedOffset < 0 ? 0 : static_cast<std::uint64_t>(signedOffset);
-        else if (source.loopMode == 1)
-            offset %= length;
-        else if (source.loopMode == 2 && length > 1) {
-            const auto period = 2 * (length - 1);
-            offset %= period;
-            if (offset >= length)
-                offset = period - offset;
-        } else
-            offset = std::min(offset, length - 1);
+        std::uint64_t offset = 0;
+        if (signedOffset >= 0) {
+            offset = static_cast<std::uint64_t>(signedOffset);
+            if (source.loopMode == 1)
+                offset %= length;
+            else if (source.loopMode == 2 && length > 1) {
+                const auto period = 2 * (length - 1);
+                offset %= period;
+                if (offset >= length)
+                    offset = period - offset;
+            } else
+                offset = std::min(offset, length - 1);
+        }
         const auto wanted =
             static_cast<std::int64_t>(static_cast<std::uint64_t>(asset.manifest.first) + offset);
         auto found = std::ranges::upper_bound(asset.manifest.members, wanted, {},
