@@ -102,14 +102,14 @@ keeps display transforms out of scene/process pixels.
 | `C1` | OCIO Colour Space Transform | Built: reusable image-effect lowering, exact-config source/destination spaces, working-space defaults, alpha-preserving conversion and typed pass-through diagnostics |
 | `C1` | OCIO File Transform | Built: LUT assets, working/process-space conversion, interpolation, direction and look bypass; supervised Linux execution, typed unavailable fallback on macOS/Windows |
 | `C1` | Exposure | Scene-linear light scaling |
-| `C1` | Offset, Multiply | Declared scene/process space; no implicit clamp |
+| `C1` | Offset, Multiply | Scene-linear RGB with unchanged alpha; no implicit clamp. Multiply factor 1 is neutral, including for negative and HDR RGB. |
 | `C1` | Lift/Gamma/Gain | Explicit grading model and working space |
 | `C1` | Contrast, Pivot | Declared pivot and processing space |
 | `C1` | Levels | Explicit black/white points, gamma, channel policy, and optional clamp |
 | `C1` | Curves | Versioned interpolation with explicit RGB, channel, or luminance behavior |
 | `C1` | Hue/Saturation, Vibrance | Declared perceptual model and working space |
 | `C1` | White Balance | Declared chromatic-adaptation model and working space |
-| `C1` | Invert | Separate color, alpha, and mask modes |
+| `C1` | Invert | Scene-linear color mode maps straight RGB to `1 - RGB` and preserves alpha. Separate alpha and mask modes remain planned. |
 | `C1` | Luminance | Declared coefficients and source encoding; produces scalar or mask data |
 | `V1` | Gamut Compress, Tone Map | Explicit rendering model; never an automatic hidden repair |
 | `V1` | Color Match | Analysis plus an inspectable, reproducible transform result |

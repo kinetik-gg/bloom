@@ -480,6 +480,16 @@ displayProofRunner(const bool customView) {
         "node.bloom.ocio-file-transform", GpuCoverageFixtureCriterion::Prepared,
         "src/color OCIO image effect tests", [] { return runFileTransformFixture(109000); }, {},
         FixturePrerequisite::PackagedShaderTools);
+    addImageEffectPlan(
+        "node.bloom.multiply",
+        bloom::runtime::PointwiseImageKernel{
+            bloom::runtime::PointwiseImageEffect::Multiply,
+            CompiledScalarParameter{ParameterId::fromRaw(114001), -2.0}},
+        114000, "src/runtime pointwise image effect parity tests");
+    addImageEffectPlan(
+        "node.bloom.invert",
+        bloom::runtime::PointwiseImageKernel{bloom::runtime::PointwiseImageEffect::Invert, {}},
+        114100, "src/runtime pointwise image effect parity tests");
     return list;
 }
 

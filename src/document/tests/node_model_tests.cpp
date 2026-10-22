@@ -196,6 +196,30 @@ void compositionNesting() {
                                }),
            "graph validation refuses direct self nesting");
 }
+
+void multiplyInvertDefinitions() {
+    const auto* multiply = builtInNodeDefinitions().find("bloom.multiply", 1);
+    const auto* invert = builtInNodeDefinitions().find("bloom.invert", 1);
+    expect(multiply && multiply->category == NodeCategory::Color &&
+               multiply->lowering == NodeLoweringKind::ImageEffect &&
+               multiply->inputs.size() == 2 &&
+               multiply->inputs[0].valueKind == SocketValueKind::Image &&
+               multiply->inputs[1].name == "amount" &&
+               multiply->inputs[1].valueKind == SocketValueKind::Scalar &&
+               multiply->parameters.size() == 1 &&
+               multiply->parameters[0].schemaKey == "bloom.multiply.factor" &&
+               multiply->parameters[0].supportsAnimation &&
+               std::get<double>(multiply->parameters[0].defaultValue) == 1.0 &&
+               isScalarAnimatableSchemaKey("bloom.multiply.factor"),
+           "Multiply exposes an animatable, linkable scene-linear factor with neutral one");
+    expect(invert && invert->category == NodeCategory::Color &&
+               invert->lowering == NodeLoweringKind::ImageEffect &&
+               invert->inputs.size() == 1 &&
+               invert->inputs[0].valueKind == SocketValueKind::Image &&
+               invert->parameters.empty() && invert->outputs.size() == 1 &&
+               invert->outputs[0].valueKind == SocketValueKind::Image,
+           "Invert exposes the color image contract without an alpha or mask control");
+}
 } // namespace
 
 int main() {
@@ -215,6 +239,7 @@ int main() {
            "shape closed domains");
 
     compositionNesting();
+    multiplyInvertDefinitions();
     socketKinds();
     layoutRecords();
     nodeGroupRecords();

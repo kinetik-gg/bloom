@@ -513,6 +513,24 @@ RGB is not clamped, valid alpha remains in `[0, 1]`, and transparent borders are
 future Color Mix or grade operation defines its own space and alpha contract; generic scalar Mix
 does not define color interpolation.
 
+### Multiply and Invert image effects
+
+The `bloom.multiply` and `bloom.invert` Color nodes use the composition's declared scene-linear
+working RGB. A canonical process pixel is premultiplied, so both effects first recover straight RGB
+for nonzero alpha, apply their operation independently to each color channel, then multiply by the
+original alpha. Alpha and the input image's display/data windows are unchanged. Zero-alpha pixels
+remain canonical transparent black; hidden straight RGB is not reconstructed. Neither effect
+changes a mask, alpha, or display encoding.
+
+Multiply uses an animatable finite scalar `factor` with neutral value `1`: `rgb' = rgb * factor`.
+Invert's initial color mode has no parameter: `rgb' = 1 - rgb`. Both accept negative and HDR RGB
+and never clamp them. Thus an input channel of `2` becomes `-1` after Invert, while `-0.25`
+becomes `1.25`; a negative Multiply factor may reverse signs. A result that cannot be represented
+as finite Float32 is a typed evaluation failure rather than a saturated or silently clamped pixel.
+The sampled factor, operation kind, and input image identity participate in the process cache key;
+the same math applies to preview and final routes. Separate alpha and mask inversion modes require
+their own typed contracts and are not implied by this color mode.
+
 ## Viewer Analysis Requests
 
 `EvaluationRequest`, `ProcessFrameIdentity`, and `PreviewRequestIdentity` carry an optional `roi`:

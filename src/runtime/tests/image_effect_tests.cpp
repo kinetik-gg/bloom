@@ -305,6 +305,75 @@ void testFileTransform() {
 #endif
 }
 
+void testMultiplyAndInvert() {
+    using runtime::CompiledScalarParameter;
+    using runtime::PointwiseImageEffect;
+    using runtime::PointwiseImageKernel;
+    const auto multiply = [](const double factor) -> runtime::ImageEffectKernel {
+        return PointwiseImageKernel{PointwiseImageEffect::Multiply,
+                                    CompiledScalarParameter{document::ParameterId::fromRaw(30),
+                                                            factor}};
+    };
+    const runtime::ImageEffectKernel invert = PointwiseImageKernel{PointwiseImageEffect::Invert, {}};
+    const auto color = core::Color4d{-0.125, 0.18, 2.0, 0.5};
+    runtime::CpuCompositionEvaluator evaluator;
+    const auto source = planWith({}, color);
+    const auto original = evaluator.evaluate(source, requestFor(*source), {});
+    const auto neutralPlan = planWith({multiply(1.0)}, color);
+    const auto neutral = evaluator.evaluate(neutralPlan, requestFor(*neutralPlan), {});
+    expect(neutral.frame() && neutral.diagnostics().empty() && samePixels(original, neutral),
+           "Multiply factor one preserves signed, HDR and partially transparent pixels");
+
+    const auto multipliedPlan = planWith({multiply(-2.0)}, color);
+    const auto multiplied = evaluator.evaluate(multipliedPlan, requestFor(*multipliedPlan), {});
+    expect(multiplied.frame() && multiplied.diagnostics().empty(),
+           "negative Multiply factor evaluates without a display clamp");
+    if (multiplied.frame()) {
+        const auto pixel = multiplied.frame()->processImage().pixels().front();
+        expect(std::abs(pixel.red() - 0.125F) < 1e-6F &&
+                   std::abs(pixel.green() + 0.18F) < 1e-6F &&
+                   std::abs(pixel.blue() + 2.0F) < 1e-6F && pixel.alpha() == 0.5F,
+               "Multiply scales straight scene-linear RGB then restores original association");
+    }
+    const auto multipliedWarm = evaluator.evaluate(multipliedPlan, requestFor(*multipliedPlan), {});
+    expect(samePixels(multiplied, multipliedWarm) &&
+               multipliedWarm.frame()->operationCacheStatistics().misses == 0,
+           "Multiply warm cache preserves the signed HDR result");
+
+    const auto invertedPlan = planWith({invert}, color);
+    auto request = requestFor(*invertedPlan);
+    const auto inverted = evaluator.evaluate(invertedPlan, request, {});
+    expect(inverted.frame() && inverted.diagnostics().empty(), "color Invert evaluates");
+    if (inverted.frame()) {
+        const auto pixel = inverted.frame()->processImage().pixels().front();
+        expect(std::abs(pixel.red() - 0.5625F) < 1e-6F &&
+                   std::abs(pixel.green() - 0.41F) < 1e-6F &&
+                   std::abs(pixel.blue() + 0.5F) < 1e-6F && pixel.alpha() == 0.5F,
+               "Invert computes one minus straight RGB, preserving HDR, negative and alpha");
+    }
+    const auto window = render::ImageWindow::create(1, 0, 2, 1);
+    expect(window.hasValue(), "Invert ROI fixture has a valid window");
+    if (window && inverted.frame()) {
+        request.roi = *window.value();
+        const auto cropped = evaluator.evaluate(invertedPlan, request, {});
+        expect(cropped.frame() && cropped.diagnostics().empty() &&
+                   cropped.frame()->processImage().descriptor()->dataWindow() == *window.value() &&
+                   cropped.frame()->processImage().pixels().front() ==
+                       inverted.frame()->processImage().pixels()[1],
+               "Invert ROI keeps the requested data window and exact full-frame pixels");
+    }
+
+    const auto transparentPlan = planWith({multiply(-2.0), invert}, {2.0, -0.25, 0.4, 0.0});
+    const auto transparent = evaluator.evaluate(transparentPlan, requestFor(*transparentPlan), {});
+    expect(transparent.frame() && transparent.diagnostics().empty() &&
+               std::ranges::all_of(transparent.frame()->processImage().pixels(),
+                                   [](const auto pixel) {
+                                       return pixel.red() == 0 && pixel.green() == 0 &&
+                                              pixel.blue() == 0 && pixel.alpha() == 0;
+                                   }),
+           "Multiply and Invert keep zero-alpha process pixels transparent black");
+}
+
 } // namespace
 
 int main() {
@@ -312,6 +381,7 @@ int main() {
         testCst();
         testLookBypass();
         testFileTransform();
+        testMultiplyAndInvert();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
