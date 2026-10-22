@@ -137,7 +137,8 @@ PackedRgba8Storage::create(const std::size_t pixelCount,
     try {
         auto authority = PackedHostStorageAuthority::create(phase, byteLimit);
         OwnedVector pixels(pixelCount, Rgba8{}, detail::PackedRgba8Allocator(std::move(authority)));
-        detail::markHostPixelsMaterialized(pixels.data());
+        if (!pixels.empty() && pixels.size() == pixels.capacity())
+            detail::markHostPixelsMaterialized(pixels.data());
         return ImageResult<PackedRgba8Storage>::success(PackedRgba8Storage(std::move(pixels)));
     } catch (const detail::PackedHostCapacityError&) {
         return ImageResult<PackedRgba8Storage>::failure(
