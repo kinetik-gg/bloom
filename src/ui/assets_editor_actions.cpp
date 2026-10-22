@@ -1,3 +1,4 @@
+#include "asset_input_picker_guard.hpp"
 #include "assets_editor_internal.hpp"
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -157,7 +158,16 @@ void AssetsEditor::editInputColor(const document::AssetId id) {
     auto* controller = session_.assetController();
     if (!asset || !controller || !controller->acceptsEdits())
         return;
+    const auto initialInterpretation = asset->interpretation;
+    const auto initialColorIntent = runtime::captureEvaluationColorIntent(session_.colorIntent());
+    if (!initialColorIntent) {
+        emit session_.commandRejected(tr("The project colour configuration is unavailable."));
+        return;
+    }
     QDialog dialog(this);
+    bool documentRebound = false;
+    connect(&session_, &CompositionSession::documentRebound, &dialog,
+            [&] { documentRebound = true; });
     dialog.setObjectName(QStringLiteral("assetsInputColorDialog"));
     dialog.setWindowTitle(tr("Input Colour — %1").arg(QString::fromStdString(asset->name)));
     auto* layout = new QVBoxLayout(&dialog);
@@ -234,9 +244,13 @@ void AssetsEditor::editInputColor(const document::AssetId id) {
     refreshChoices();
     if (dialog.exec() != QDialog::Accepted)
         return;
-    if (&snapshot.project() != &session_.snapshot().project()) {
-        emit session_.commandRejected(tr("Assets changed while choosing input colour. Open the "
-                                         "picker again."));
+    const auto live = session_.snapshot();
+    if (documentRebound ||
+        !detail::assetInputPickerTargetMatches(snapshot.project().id(), id, initialInterpretation,
+                                               live.project()) ||
+        session_.colorIntent() != *initialColorIntent) {
+        emit session_.commandRejected(tr("This asset or its colour configuration changed while "
+                                         "choosing input colour. Open the picker again."));
         return;
     }
     const auto choice = selector->currentData().toString();
@@ -261,7 +275,7 @@ void AssetsEditor::editInputColor(const document::AssetId id) {
         }
     } else if (choice != QStringLiteral("auto"))
         return;
-    commands::Transaction transaction("Set Asset Input Colour", snapshot.revision());
+    commands::Transaction transaction("Set Asset Input Colour", live.revision());
     transaction.emplace<commands::SetAssetInputColor>(id, legacy, std::move(inputId));
     (void)session_.executeTransaction(std::move(transaction));
 }

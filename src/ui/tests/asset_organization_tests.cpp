@@ -1,3 +1,4 @@
+#include "../asset_input_picker_guard.hpp"
 #include "assets_editor_internal.hpp"
 #include <QApplication>
 #include <QDialog>
@@ -98,6 +99,26 @@ void run() {
     document::Document document(std::move(initial.project));
     commands::CommandStack stack(document);
     ui::CompositionSession session(document, stack, initial.initialCompositionId);
+    const auto inputSnapshot = session.snapshot();
+    const auto originalInput = inputSnapshot.project().findAsset(a)->interpretation;
+    auto unrelatedEdit = inputSnapshot.project();
+    unrelatedEdit.setName("Renamed project");
+    require(ui::detail::assetInputPickerTargetMatches(inputSnapshot.project().id(), a,
+                                                      originalInput, unrelatedEdit),
+            "unrelated edit does not invalidate asset input picker");
+    auto conflictingEdit = unrelatedEdit;
+    conflictingEdit.findAsset(a)->interpretation.colorSpace = document::AssetColorSpace::Raw;
+    require(!ui::detail::assetInputPickerTargetMatches(inputSnapshot.project().id(), a,
+                                                       originalInput, conflictingEdit),
+            "concurrent input edit invalidates asset input picker");
+    auto removedAsset = unrelatedEdit;
+    require(removedAsset.removeAsset(a) &&
+                !ui::detail::assetInputPickerTargetMatches(inputSnapshot.project().id(), a,
+                                                           originalInput, removedAsset),
+            "removed asset invalidates asset input picker");
+    require(!ui::detail::assetInputPickerTargetMatches(document::ProjectId::fromRaw(999), a,
+                                                       originalInput, unrelatedEdit),
+            "replaced project invalidates asset input picker");
     ui::AssetsEditor editor(session);
     editor.resize(620, 420);
     editor.show();
