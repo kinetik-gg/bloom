@@ -35,6 +35,29 @@ class ExhaustNodeIds final : public Operation {
     }
 };
 
+class ReplaceExtensionPayload final : public Operation {
+  public:
+    explicit ReplaceExtensionPayload(document::OpaqueExtensionPayload payload)
+        : payload_(std::move(payload)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.test.replace-extension-payload";
+    }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override {
+        auto record = draft.project().extensionRecords().front();
+        if (record.payload == payload_)
+            return OperationResult::noChange();
+        if (!draft.project().removeExtensionRecord(record.id))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue, "Missing record");
+        record.payload = payload_;
+        if (!draft.project().addExtensionRecord(std::move(record)))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue, "Invalid record");
+        return OperationResult::applied();
+    }
+
+  private:
+    document::OpaqueExtensionPayload payload_;
+};
+
 // A deliberately unclassified operation: it leaves renderAffecting() at its default, so it proves
 // the conservative CommandStack behavior without depending on any node command class.
 class UnclassifiedRename final : public Operation {
@@ -673,14 +696,13 @@ void testBoundedUndoHistoryAndByteAccounting(TestContext& test) {
     const auto rootCharge = original.project().rootByteCharge() + sizeof(document::IdAllocator);
     const auto afterRootCharge =
         afterFirst.project().rootByteCharge() + sizeof(document::IdAllocator);
-    const auto sharedContentCharge = original.project().compositions().front().contentByteCharge();
-    test.expect(first.changed() &&
-                    original.project().compositions().front().contentIdentity() ==
-                        afterFirst.project().compositions().front().contentIdentity() &&
-                    contentWorkAfter.contentChargeWalks == contentWorkBefore.contentChargeWalks &&
-                    countStack.historyChargedBytes() ==
-                        rootCharge + afterRootCharge + sharedContentCharge,
-                "history charges shared content once without walking its graph again");
+    test.expect(
+        first.changed() &&
+            original.project().compositions().front().contentIdentity() ==
+                afterFirst.project().compositions().front().contentIdentity() &&
+            contentWorkAfter.contentChargeWalks == contentWorkBefore.contentChargeWalks &&
+            countStack.historyChargedBytes() == rootCharge,
+        "history excludes the active root and shared content without walking its graph again");
 
     auto extensionProject = makeProject();
     const document::OpaqueExtensionPayload sharedPayload(std::vector<std::byte>(1024));
@@ -700,15 +722,10 @@ void testBoundedUndoHistoryAndByteAccounting(TestContext& test) {
     CommandStack extensionStack(extensionDocument);
     const auto extensionBefore = extensionDocument.snapshot();
     const auto extensionEdit = rename(extensionStack, extensionDocument, "Project name 001");
-    const auto extensionAfter = extensionDocument.snapshot();
     test.expect(extensionEdit.changed() &&
                     extensionStack.historyChargedBytes() ==
-                        extensionBefore.project().rootByteCharge() +
-                            extensionAfter.project().rootByteCharge() +
-                            2 * sizeof(document::IdAllocator) +
-                            extensionBefore.project().compositions().front().contentByteCharge() +
-                            sharedPayload.size(),
-                "history charges shared opaque extension storage once across records and roots");
+                        extensionBefore.project().rootByteCharge() + sizeof(document::IdAllocator),
+                "history excludes opaque storage shared with the active project");
 
     Document bounded(makeProject());
     CommandStack boundedStack(bounded, {.maxEntries = 2, .maxChargedBytes = 512ULL * 1024 * 1024});
@@ -731,7 +748,7 @@ void testBoundedUndoHistoryAndByteAccounting(TestContext& test) {
                     bounded.snapshot().project().name() == "Project name 003",
                 "redo restores exact state after bounded history pruning");
 
-    const auto oneStepBytes = countStack.historyChargedBytes();
+    const auto oneStepBytes = rootCharge + afterRootCharge;
     Document byteBounded(makeProject());
     CommandStack byteStack(byteBounded, {.maxEntries = 10, .maxChargedBytes = oneStepBytes});
     const auto byteFirst = rename(byteStack, byteBounded, "Project name 001");
@@ -739,7 +756,7 @@ void testBoundedUndoHistoryAndByteAccounting(TestContext& test) {
     test.expect(byteFirst.changed() && byteSecond.changed() &&
                     byteSecond.historyEntriesDropped == 1 && byteStack.size() == 1 &&
                     byteStack.historyChargedBytes() <= oneStepBytes,
-                "a deduplicated byte cap retires old snapshots without refusing the newest step");
+                "a retained byte cap retires old snapshots without refusing the newest step");
 
     Document refused(makeProject());
     CommandStack refusedStack(refused, {.maxEntries = 10, .maxChargedBytes = oneStepBytes - 1});
@@ -749,6 +766,101 @@ void testBoundedUndoHistoryAndByteAccounting(TestContext& test) {
                     refused.snapshot().revision() == revision &&
                     refused.snapshot().project().name() == "Original Project",
                 "an oversized single undo step rejects before publication without losing truth");
+}
+
+void testSharedPayloadRetentionAndReplacementPressure(TestContext& test) {
+    constexpr std::size_t largeBytes = 2 * 1024 * 1024;
+    auto project = makeProject();
+    const document::OpaqueExtensionPayload originalPayload(std::vector<std::byte>(largeBytes));
+    const auto added =
+        project.addExtensionRecord({.id = document::ExtensionRecordId::fromRaw(1),
+                                    .ownerId = "vendor.module",
+                                    .typeId = "vendor.module.record-type",
+                                    .schemaVersion = document::SchemaVersion{1, 0},
+                                    .subject = std::nullopt,
+                                    .mediaType = "application/octet-stream",
+                                    .referencePolicy = document::NoExtensionReferences{},
+                                    .payload = originalPayload});
+    test.expect(added, "large payload fixture is valid");
+
+    const auto rename = [](CommandStack& stack, Document& document, std::string name) {
+        Transaction transaction("Rename", document.snapshot().revision());
+        transaction.emplace<SetProjectName>(std::move(name));
+        return stack.execute(std::move(transaction));
+    };
+    Document shared(project);
+    CommandStack sharedStack(shared, {.maxEntries = 3, .maxChargedBytes = 32 * 1024});
+    const auto first = rename(sharedStack, shared, "First");
+    const auto second = rename(sharedStack, shared, "Second");
+    test.expect(
+        first.changed() && second.changed() && sharedStack.size() == 2 &&
+            sharedStack.historyChargedBytes() < largeBytes &&
+            shared.snapshot().project().extensionRecords().front().payload.storageIdentity() ==
+                originalPayload.storageIdentity(),
+        "small renames retain undo despite a much larger shared active payload");
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        const auto undone = sharedStack.undo();
+        test.expect(undone.changed() && shared.snapshot().project().name() == "First" &&
+                        sharedStack.historyChargedBytes() <=
+                            sharedStack.historyLimits().maxChargedBytes,
+                    "undo preserves shared-payload charge and exact project truth");
+        const auto redone = sharedStack.redo();
+        test.expect(redone.changed() && shared.snapshot().project().name() == "Second" &&
+                        sharedStack.historyChargedBytes() <=
+                            sharedStack.historyLimits().maxChargedBytes,
+                    "redo preserves shared-payload charge and exact project truth");
+    }
+    test.expect(sharedStack.undo().changed() && rename(sharedStack, shared, "Branch").changed() &&
+                    !sharedStack.canRedo() &&
+                    sharedStack.historyChargedBytes() <=
+                        sharedStack.historyLimits().maxChargedBytes,
+                "branching retires redo and keeps only retained-history bytes charged");
+
+    Document growing(project);
+    CommandStack growingStack(growing, {.maxEntries = 32, .maxChargedBytes = 512 * 1024});
+    for (int index = 0; index < 16; ++index)
+        test.expect(rename(growingStack, growing, "Rename " + std::to_string(index)).changed(),
+                    "the growing history fixture retains every rename");
+    const auto visitsBefore = growingStack.work().chargedSnapshotsVisited;
+    test.expect(rename(growingStack, growing, "Final rename").changed() &&
+                    growingStack.work().chargedSnapshotsVisited - visitsBefore == 4,
+                "a new edit visits only its two new states per preflight and projection");
+
+    const document::OpaqueExtensionPayload replacement(
+        std::vector<std::byte>(largeBytes, std::byte{1}));
+    Document pressured(project);
+    CommandStack pressuredStack(pressured, {.maxEntries = 3, .maxChargedBytes = largeBytes - 1});
+    Transaction replace("Replace payload", pressured.snapshot().revision());
+    replace.emplace<ReplaceExtensionPayload>(replacement);
+    const auto revision = pressured.snapshot().revision();
+    const auto denied = pressuredStack.execute(std::move(replace));
+    test.expect(
+        denied.status == CommandStatus::HistoryLimit && pressuredStack.size() == 0 &&
+            pressured.snapshot().revision() == revision &&
+            pressured.snapshot().project().extensionRecords().front().payload.storageIdentity() ==
+                originalPayload.storageIdentity(),
+        "a real replaced payload over the cap rejects atomically");
+
+    Document allowed(project);
+    CommandStack allowedStack(allowed,
+                              {.maxEntries = 3, .maxChargedBytes = largeBytes + 32 * 1024});
+    Transaction acceptedReplace("Replace payload", allowed.snapshot().revision());
+    acceptedReplace.emplace<ReplaceExtensionPayload>(replacement);
+    const auto accepted = allowedStack.execute(std::move(acceptedReplace));
+    test.expect(accepted.changed() && allowedStack.historyChargedBytes() >= largeBytes &&
+                    allowedStack.historyChargedBytes() <=
+                        allowedStack.historyLimits().maxChargedBytes,
+                "replaced payload is charged while the new payload is active");
+    test.expect(
+        allowedStack.undo().changed() &&
+            allowed.snapshot().project().extensionRecords().front().payload.storageIdentity() ==
+                originalPayload.storageIdentity() &&
+            allowedStack.historyChargedBytes() >= largeBytes &&
+            allowedStack.historyChargedBytes() <= allowedStack.historyLimits().maxChargedBytes &&
+            allowedStack.redo().changed() &&
+            allowed.snapshot().project().extensionRecords().front().payload.storageIdentity() ==
+                replacement.storageIdentity(),
+        "undo and redo charge the inactive replacement while preserving payload identity");
 }
 
 } // namespace
@@ -767,6 +879,7 @@ int main() {
         bloom::commands::test::testLayerOrderNoChangeAndRedoInvalidation(test);
         bloom::commands::test::testExhaustionSurvivesUndoAndRedo(test);
         bloom::commands::test::testBoundedUndoHistoryAndByteAccounting(test);
+        bloom::commands::test::testSharedPayloadRetentionAndReplacementPressure(test);
     } catch (const std::exception& error) {
         test.fail(std::string("unexpected test exception: ") + error.what());
     }

@@ -58,6 +58,14 @@ uses the shared session composition context for Open, and submits composition mu
 session's command stack. Its tree, search, menus, and footer are UI/session presentation state;
 they are not a second asset or project model.
 
+The command stack's bounded undo allowance charges distinct retained roots and immutable payloads
+only while they are absent from the current document. A large payload shared by the active project
+and history does not consume the allowance. Before an edit publishes, the stack checks the retained
+states in both undo and redo directions against the byte and entry limits; an oversized newest step
+is rejected atomically, while older steps may be retired to make room. Undo, redo, and branching
+refresh the charge as active ownership changes. The charge estimates authored content, not process
+RSS or allocator capacity.
+
 ## Identity And Generations
 
 The following identities are deliberately separate:
@@ -96,7 +104,12 @@ path resets a live counter or aliases an older generation.
 Recovery file ownership has a separate UUID in the filename, regenerated when New or Open installs
 different content. It does not change `ProjectSessionId` or enter durable project truth. A new host
 may discover an older recovery file but its automatic cleanup addresses only its current UUID and
-session ID.
+session ID. Each published recovery archive also has a companion ownership record containing its
+captured saved-project path (if any), bound to that archive's digest and write time. Startup checks
+the archive on an I/O worker and compares timestamps only with the saved project identified by a
+valid record. An older archive without a valid record remains offerable as an unidentified project;
+the currently open project's path is never assigned to it. Equal archive and saved-project times
+mean the saved project is current. Retiring an owned recovery removes its companion record too.
 
 Installing New or a successful Open advances `SessionResultAcceptanceGeneration` and cancels
 replaceable work owned by the previous installed content. That invalidates only acceptance of task

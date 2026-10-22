@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -15,6 +16,8 @@
 #include <vector>
 
 namespace bloom::commands {
+
+class HistoryCharge;
 
 enum class CommandEventKind : std::uint8_t {
     RevisionChanged,
@@ -49,7 +52,7 @@ class CommandStack final {
     CommandStack& operator=(const CommandStack&) = delete;
     CommandStack(CommandStack&&) = delete;
     CommandStack& operator=(CommandStack&&) = delete;
-    ~CommandStack() = default;
+    ~CommandStack();
 
     [[nodiscard]] CommandResult execute(Transaction&& transaction);
     [[nodiscard]] CommandResult undo();
@@ -95,6 +98,7 @@ class CommandStack final {
     std::size_t cursor_ = 0;
     HistoryLimits limits_;
     std::size_t historyChargedBytes_ = 0;
+    std::unique_ptr<HistoryCharge> historyCharge_;
     Work work_;
     document::Revision trackedRevision_;
     document::Document& document_;

@@ -75,6 +75,7 @@ struct RecoveryWorkerState final {
     std::filesystem::path path;
     std::optional<document::Revision> revision;
     std::optional<host::SessionRecoveryResult> result;
+    std::optional<host::SessionRecoveryOffer> offer;
 };
 
 struct RecoveryScanState final {
@@ -322,6 +323,7 @@ const std::filesystem::path& ProjectHost::recoveryDirectory() const noexcept {
 
 void ProjectHost::setRecoveryDirectory(std::filesystem::path directory) {
     recoveryDirectory_ = std::move(directory);
+    cachedRecoveryOffer_.reset();
 }
 
 void ProjectHost::setRecoveryPolicy(const host::SessionRecoveryPolicy policy) {
@@ -333,7 +335,7 @@ void ProjectHost::setRecoveryPolicy(const host::SessionRecoveryPolicy policy) {
 }
 
 std::optional<host::SessionRecoveryOffer> ProjectHost::recoveryOffer() const {
-    return host::findSessionRecoveryOffer(recoveryDirectory_, displayPath());
+    return cachedRecoveryOffer_;
 }
 
 std::filesystem::path ProjectHost::currentRecoveryPath() const {
@@ -349,6 +351,9 @@ void ProjectHost::discardRecoveryFile() { retireRecoveryPath(currentRecoveryPath
 void ProjectHost::retireRecoveryPath(std::filesystem::path path) {
     if (path.empty() || protectedRecoveryOfferPath_ == path) {
         return;
+    }
+    if (cachedRecoveryOffer_ && cachedRecoveryOffer_->recoveryPath == path) {
+        cachedRecoveryOffer_.reset();
     }
     if (recoveryTaskState_ && recoveryTaskState_->path == path) {
         recoveryTaskState_->cancelled.store(true, std::memory_order_release);
@@ -427,6 +432,7 @@ void ProjectHost::pollRecoveryScan() {
     auto offer = std::move(recoveryScanState_->offer);
     recoveryScanState_.reset();
     emit recoveryScanActivityChanged(false);
+    cachedRecoveryOffer_ = offer;
     if (offer.has_value()) {
         handleRecoveryOffer(*offer);
     }
@@ -528,8 +534,21 @@ void ProjectHost::scheduleRecoveryWork() {
             }
             state->result.emplace(host::executeSessionRecoverySnapshot(
                 *coordinator, *artifacts, *input, &state->cancelled, std::move(operation)));
+            if (state->result->wrote()) {
+                std::error_code code;
+                const auto writtenAt = std::filesystem::last_write_time(state->path, code);
+                if (!code) {
+                    std::optional<std::filesystem::path> projectPath;
+                    if (input->capturedInput.displayPath()) {
+                        projectPath = input->capturedInput.displayPath()->value();
+                    }
+                    state->offer =
+                        host::SessionRecoveryOffer{state->path, std::move(projectPath), writtenAt};
+                }
+            }
             if (state->retireAfter.load(std::memory_order_acquire)) {
                 static_cast<void>(host::removeSessionRecoveryFile(state->path));
+                state->offer.reset();
             }
             return runtime::TaskResult<void>::succeeded();
         });
@@ -555,6 +574,9 @@ void ProjectHost::pollRecoveryWork() {
     static_cast<void>(recoveryTask_->tryTakeResult());
     auto finished = std::move(recoveryTaskState_);
     recoveryTask_.reset();
+    if (finished->offer) {
+        cachedRecoveryOffer_ = std::move(finished->offer);
+    }
     if (finished->revision.has_value() && session_.has_value() &&
         finished->path == currentRecoveryPath() && hasDirtyDecodedContent() &&
         session_->stateSnapshot().currentRevision != finished->revision) {

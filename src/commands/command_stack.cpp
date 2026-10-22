@@ -9,6 +9,7 @@
 #include <string>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 
@@ -69,11 +70,18 @@ CommandResult resultForCommit(CommandAction action, std::string label,
     return result;
 }
 
-// Counts each retained DocumentState shell and each shared immutable composition payload once,
-// even though adjacent history entries refer to the same snapshot. The charge is a deterministic
-// authored-content estimate, not allocator RSS (which depends on libc and vector spare capacity).
+} // namespace
+
+// Counts each history-owned shell and immutable payload once. Chunks also reachable from the
+// active document do not consume the history allowance. This is an authored-content estimate,
+// not allocator RSS (which depends on libc and vector spare capacity).
 class HistoryCharge final {
   public:
+    void clear() noexcept {
+        chunks_.clear();
+        total_ = {};
+    }
+
     template <typename State> void add(const State& state) {
         const auto root = state.rootByteCharge();
         addChunk(state.stateIdentity(),
@@ -104,46 +112,103 @@ class HistoryCharge final {
                 removeChunk(payload->storageIdentity());
     }
 
-    [[nodiscard]] std::size_t bytes() const noexcept { return bytes_; }
+    void rekeyPublishedDraft(const document::Draft& draft,
+                             const document::Snapshot& published) noexcept {
+        // Commit copies the draft into a new root shell and freezes edited composition content.
+        // Node handles transfer the already staged charges without allocating after publication.
+        rekeyChunk(draft.stateIdentity(), published.stateIdentity());
+        const auto& drafted = draft.project().compositions();
+        const auto& frozen = published.project().compositions();
+        for (std::size_t index = 0; index < drafted.size(); ++index)
+            rekeyChunk(drafted[index].contentIdentity(), frozen[index].contentIdentity());
+    }
+
+    // A commit shares the staged root with the newly published history entry; restore instead
+    // makes a new root shell. Both paths share immutable composition and extension payloads.
+    template <typename State>
+    [[nodiscard]] std::size_t retainedBytes(const State& active, bool sharedRoot) const {
+        std::unordered_set<const void*> activeChunks;
+        if (sharedRoot)
+            activeChunks.insert(active.stateIdentity());
+        for (const auto& composition : active.project().compositions())
+            activeChunks.insert(composition.contentIdentity());
+        for (const auto& record : active.project().extensionRecords())
+            if (record.payload.storageIdentity() != nullptr)
+                activeChunks.insert(record.payload.storageIdentity());
+        for (const auto& block : active.project().typedDataBlocks())
+            if (const auto* payload = std::get_if<document::OpaqueExtensionPayload>(&block.payload);
+                payload != nullptr && payload->storageIdentity() != nullptr)
+                activeChunks.insert(payload->storageIdentity());
+
+        auto retained = total_;
+        for (const void* identity : activeChunks)
+            if (const auto entry = chunks_.find(identity); entry != chunks_.end())
+                retained.subtract(entry->second.bytes);
+        return retained.high == 0 ? retained.low : std::numeric_limits<std::size_t>::max();
+    }
 
   private:
+    // A two-word sum remains exact even if the authored-content estimate crosses SIZE_MAX.
+    // Saturating before subtracting active chunks would undercount large shared payloads.
+    struct WideBytes final {
+        std::size_t low = 0;
+        std::size_t high = 0;
+        void add(const std::size_t bytes) noexcept {
+            if (bytes > std::numeric_limits<std::size_t>::max() - low)
+                ++high;
+            low += bytes;
+        }
+        void subtract(const std::size_t bytes) noexcept {
+            if (bytes > low)
+                --high;
+            low -= bytes;
+        }
+    };
     struct Chunk final {
         std::size_t bytes = 0;
         std::size_t references = 0;
     };
+    void rekeyChunk(const void* from, const void* to) noexcept {
+        if (from == to)
+            return;
+        auto node = chunks_.extract(from);
+        if (node.empty())
+            return;
+        node.key() = to;
+        chunks_.insert(std::move(node));
+    }
     void addChunk(const void* identity, const std::size_t bytes) {
         auto [entry, inserted] = chunks_.try_emplace(identity, Chunk{bytes, 0});
         ++entry->second.references;
         if (inserted)
-            bytes_ = bytes > std::numeric_limits<std::size_t>::max() - bytes_
-                         ? std::numeric_limits<std::size_t>::max()
-                         : bytes_ + bytes;
+            total_.add(bytes);
     }
     void removeChunk(const void* identity) noexcept {
         auto entry = chunks_.find(identity);
         if (entry == chunks_.end())
             return;
         if (--entry->second.references == 0) {
-            bytes_ -= entry->second.bytes;
+            total_.subtract(entry->second.bytes);
             chunks_.erase(entry);
         }
     }
 
     std::unordered_map<const void*, Chunk> chunks_;
-    std::size_t bytes_ = 0;
+    WideBytes total_;
 };
-
-} // namespace
 
 CommandStack::CommandStack(document::Document& document)
     : CommandStack(document, HistoryLimits{}) {}
 
 CommandStack::CommandStack(document::Document& document, const HistoryLimits limits)
-    : limits_(limits), trackedRevision_(document.snapshot().revision()), document_(document) {
+    : limits_(limits), historyCharge_(std::make_unique<HistoryCharge>()),
+      trackedRevision_(document.snapshot().revision()), document_(document) {
     if (limits_.maxEntries == 0 || limits_.maxChargedBytes == 0 ||
         limits_.maxChargedBytes > std::numeric_limits<std::size_t>::max() / 2)
         throw std::invalid_argument("Invalid Bloom undo history limits");
 }
+
+CommandStack::~CommandStack() = default;
 
 CommandObserverId CommandStack::addObserver(CommandObserver observer) {
     if (!observer) {
@@ -335,7 +400,10 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
     oneStep.add(before);
     oneStep.add(std::as_const(draft));
     work_.chargedSnapshotsVisited += 2;
-    if (oneStep.bytes() > limits_.maxChargedBytes) {
+    // Undo/redo publish a fresh root shell, so reserve enough for either payload direction.
+    // A small rename can still proceed when its large immutable payload is shared by both.
+    if (std::max(oneStep.retainedBytes(before, false),
+                 oneStep.retainedBytes(std::as_const(draft), false)) > limits_.maxChargedBytes) {
         // Keep malformed-draft diagnostics ahead of resource policy, as Document::commit does.
         // Ordinary fits still pass through commit's single full validation.
         ++work_.overBudgetValidations;
@@ -366,10 +434,10 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
         return result;
     }
 
-    HistoryCharge projected;
-    for (std::size_t index = 0; index < cursor_; ++index) {
-        projected.add(history_[index].before);
-        projected.add(history_[index].after);
+    HistoryCharge projected = *historyCharge_;
+    for (std::size_t index = cursor_; index < history_.size(); ++index) {
+        projected.remove(history_[index].before);
+        projected.remove(history_[index].after);
         work_.chargedSnapshotsVisited += 2;
     }
     projected.add(before);
@@ -377,12 +445,26 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
     work_.chargedSnapshotsVisited += 2;
     std::size_t oldestDropped = 0;
     auto projectedEntries = cursor_ + 1;
-    while (projectedEntries > limits_.maxEntries || projected.bytes() > limits_.maxChargedBytes) {
+    const auto worstRetainedBytes = [&] {
+        // Every retained state can become current through undo/redo. Restores share payloads
+        // but allocate a new root; check every reachable payload set before publishing.
+        auto worst = projected.retainedBytes(std::as_const(draft), false);
+        worst = std::max(worst, projected.retainedBytes(before, false));
+        for (std::size_t index = oldestDropped; index < cursor_; ++index) {
+            worst = std::max(worst, projected.retainedBytes(history_[index].before, false));
+            worst = std::max(worst, projected.retainedBytes(history_[index].after, false));
+        }
+        return worst;
+    };
+    while (projectedEntries > limits_.maxEntries ||
+           worstRetainedBytes() > limits_.maxChargedBytes) {
         projected.remove(history_[oldestDropped].before);
         projected.remove(history_[oldestDropped].after);
         ++oldestDropped;
         --projectedEntries;
     }
+    const auto currentHistoryCharge = projected.retainedBytes(std::as_const(draft), true);
+    auto stagedCharge = std::make_unique<HistoryCharge>(std::move(projected));
 
     // Stage every allocation needed for history and event publication before Document::commit.
     // A committed edit must never be left without its newest undo step by a later allocation.
@@ -420,13 +502,15 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
     }
 
     const document::Snapshot after = *commitResult.snapshot;
+    stagedCharge->rekeyPublishedDraft(std::as_const(draft), after);
     result.afterRevision = after.revision();
     staged.after = after;
     history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(cursor_), history_.end());
     history_.push_back(std::move(staged));
     history_.erase(history_.begin(), history_.begin() + static_cast<std::ptrdiff_t>(oldestDropped));
     cursor_ = history_.size();
-    historyChargedBytes_ = projected.bytes();
+    historyChargedBytes_ = currentHistoryCharge;
+    historyCharge_.swap(stagedCharge);
     work_.historyEntriesRetired += oldestDropped;
     trackedRevision_ = after.revision();
     notify(result);
@@ -448,6 +532,8 @@ CommandResult CommandStack::undo() {
         return result;
     }
 
+    const auto restoredHistoryCharge = historyCharge_->retainedBytes(entry.before, false);
+
     document::CommitResult restoreResult = document_.restore(before.revision(), entry.before);
     if (!restoreResult.committed() || !restoreResult.snapshot.has_value()) {
         auto result =
@@ -465,6 +551,7 @@ CommandResult CommandStack::undo() {
     if (entry.layerIdentityRemaps.has_value() && !entry.layerIdentityRemaps->empty())
         result.layerIdentityRemaps = invertLayerIdentityRemaps(entry.layerIdentityRemaps);
     --cursor_;
+    historyChargedBytes_ = restoredHistoryCharge;
     trackedRevision_ = restoredRevision;
     notify(result);
     return result;
@@ -485,6 +572,8 @@ CommandResult CommandStack::redo() {
         return result;
     }
 
+    const auto restoredHistoryCharge = historyCharge_->retainedBytes(entry.after, false);
+
     document::CommitResult restoreResult = document_.restore(before.revision(), entry.after);
     if (!restoreResult.committed() || !restoreResult.snapshot.has_value()) {
         auto result =
@@ -501,6 +590,7 @@ CommandResult CommandStack::redo() {
     // Redo replays the stored FORWARD ordered list.
     result.layerIdentityRemaps = entry.layerIdentityRemaps;
     ++cursor_;
+    historyChargedBytes_ = restoredHistoryCharge;
     trackedRevision_ = restoredRevision;
     notify(result);
     return result;
@@ -527,6 +617,7 @@ void CommandStack::clear() {
     history_.clear();
     cursor_ = 0;
     historyChargedBytes_ = 0;
+    historyCharge_->clear();
     const auto snapshot = document_.snapshot();
     trackedRevision_ = snapshot.revision();
     notify(makeResult(CommandAction::Execute, CommandStatus::NoChange, snapshot));

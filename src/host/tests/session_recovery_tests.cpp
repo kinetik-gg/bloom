@@ -237,6 +237,10 @@ void testSuccessfulSaveRetiresTheRecoveryFile(Expectations& expectations) {
                                                      recoveryPath, {}, makeOperation())
                             .wrote(),
                         "the dirty session has a recovery file to retire");
+    auto ownershipPath = recoveryPath;
+    ownershipPath += ".owner";
+    expectations.expect(std::filesystem::exists(ownershipPath),
+                        "the published recovery has an ownership record");
 
     const auto saveAs = session.advancePathIntentForSaveAs();
     expectations.expect(static_cast<bool>(saveAs), "Save As advances path authority");
@@ -257,8 +261,9 @@ void testSuccessfulSaveRetiresTheRecoveryFile(Expectations& expectations) {
                         "the real save publishes");
 
     expectations.expect(removeSessionRecoveryFile(recoveryPath) &&
-                            !std::filesystem::exists(recoveryPath),
-                        "a successful save removes the recovery file");
+                            !std::filesystem::exists(recoveryPath) &&
+                            !std::filesystem::exists(ownershipPath),
+                        "a successful save removes the recovery file and ownership record");
     expectations.expect(removeSessionRecoveryFile(recoveryPath),
                         "removing an already-absent recovery file is not a failure");
 
@@ -312,8 +317,11 @@ void testStartupOfferOnlyNamesWorkTheProjectDoesNotAlreadyHold(Expectations& exp
             std::filesystem::last_write_time(recoveryPath, code) + std::chrono::seconds{10}, code);
         expectations.expect(!code, "the fixture project file is newer than the recovery file");
     }
-    expectations.expect(!findSessionRecoveryOffer(directory.path(), projectPath).has_value(),
-                        "a recovery file older than its saved project is not offered");
+    const auto unrelatedOffer = findSessionRecoveryOffer(directory.path(), projectPath);
+    expectations.expect(
+        unrelatedOffer.has_value() && unrelatedOffer->recoveryPath == recoveryPath &&
+            !unrelatedOffer->projectPath.has_value(),
+        "an unrelated newer saved project cannot suppress or claim a pathless recovery");
 
     {
         std::error_code code;
@@ -324,8 +332,8 @@ void testStartupOfferOnlyNamesWorkTheProjectDoesNotAlreadyHold(Expectations& exp
     }
     const auto newerOffer = findSessionRecoveryOffer(directory.path(), projectPath);
     expectations.expect(newerOffer.has_value() && newerOffer->recoveryPath == recoveryPath &&
-                            newerOffer->projectPath == projectPath,
-                        "a recovery file newer than its saved project is offered with that path");
+                            !newerOffer->projectPath.has_value(),
+                        "a pathless recovery never inherits the caller's saved-project path");
 
     // The old process-local naming scheme remains discoverable after filenames gain a launch
     // owner token. It is never an automatic cleanup target of a new ProjectHost.
@@ -336,6 +344,82 @@ void testStartupOfferOnlyNamesWorkTheProjectDoesNotAlreadyHold(Expectations& exp
     const auto legacyOffer = findSessionRecoveryOffer(directory.path(), std::nullopt);
     expectations.expect(legacyOffer.has_value() && legacyOffer->recoveryPath == legacyPath,
                         "a recovery artifact named by the legacy runtime session ID is found");
+
+    const auto tiedPath = directory.path() / "recovery-2.bloom";
+    std::filesystem::copy_file(legacyPath, tiedPath, code);
+    const auto tiedTime = std::filesystem::last_write_time(legacyPath, code);
+    std::filesystem::last_write_time(tiedPath, tiedTime, code);
+    expectations.expect(!code, "equal-time recovery fixtures are installed");
+    const auto tiedOffer = findSessionRecoveryOffer(directory.path(), projectPath);
+    expectations.expect(tiedOffer.has_value() && tiedOffer->recoveryPath == legacyPath &&
+                            !tiedOffer->projectPath.has_value(),
+                        "equal-time recovery selection is deterministic and has no inferred owner");
+}
+
+void testOfferUsesEachRecoveryOwnProject(Expectations& expectations) {
+    TempDirectory directory;
+    ProjectSessionIdentitySource identitySource;
+    auto coordinator = PublicationCoordinator::create();
+    auto artifacts = StagedArtifactCoordinator::create({});
+    if (!directory.isValid() || !coordinator.has_value() || !artifacts.succeeded()) {
+        expectations.expect(false, "the two-project recovery fixture is available");
+        return;
+    }
+    auto artifactCoordinator = std::move(artifacts).takeCoordinator();
+    const auto projectA = directory.path() / "a.bloom";
+    const auto projectB = directory.path() / "b.bloom";
+    auto sessionA = makeSession(expectations, identitySource, projectA);
+    auto sessionB = makeSession(expectations, identitySource, projectB);
+    const auto recoveryA = sessionRecoveryFilePath(directory.path(), kOwnerToken,
+                                                   sessionA.stateSnapshot().projectSessionId);
+    const auto recoveryB = sessionRecoveryFilePath(directory.path(), kOwnerToken,
+                                                   sessionB.stateSnapshot().projectSessionId);
+    expectations.expect(sessionA.execute(rename("A edit", sessionA)).changed(), "A becomes dirty");
+    expectations.expect(sessionB.execute(rename("B edit", sessionB)).changed(), "B becomes dirty");
+    expectations.expect(writeSessionRecoverySnapshot(sessionA, *coordinator, artifactCoordinator,
+                                                     recoveryA, {}, makeOperation())
+                            .wrote(),
+                        "A recovery is written");
+    expectations.expect(writeSessionRecoverySnapshot(sessionB, *coordinator, artifactCoordinator,
+                                                     recoveryB, {}, makeOperation())
+                            .wrote(),
+                        "B recovery is written");
+    std::error_code code;
+    const auto writtenA = std::filesystem::last_write_time(recoveryA, code);
+    const auto writtenB = std::filesystem::last_write_time(recoveryB, code);
+    expectations.expect(!code, "recovery timestamp is available");
+
+    // B has a newer saved file. It must not suppress A's unsaved work, even when the caller
+    // names B, and B itself must not be offered.
+    std::filesystem::copy_file(recoveryB, projectB, code);
+    std::filesystem::last_write_time(projectB, writtenB + std::chrono::seconds{10}, code);
+    expectations.expect(!code, "newer saved B fixture is available");
+    const auto offerA = findSessionRecoveryOffer(directory.path(), projectB);
+    expectations.expect(offerA.has_value() && offerA->recoveryPath == recoveryA &&
+                            offerA->projectPath == projectA,
+                        "newer saved B filters only B, leaving A with its own path");
+
+    // Equal timestamps count as already saved for that same project.
+    std::filesystem::copy_file(recoveryA, projectA, code);
+    std::filesystem::last_write_time(projectA, writtenA, code);
+    expectations.expect(!code, "equal-time saved A fixture is available");
+    expectations.expect(!findSessionRecoveryOffer(directory.path(), projectB).has_value(),
+                        "equal-time A and newer B suppress their own recoveries");
+
+    // A corrupt newer file cannot hide a valid older one.
+    std::filesystem::last_write_time(projectA, writtenA - std::chrono::seconds{10}, code);
+    const auto corrupt = directory.path() / "recovery-corrupt.bloom";
+    {
+        std::ofstream output(corrupt, std::ios::binary);
+        output << "not a Bloom archive";
+    }
+    std::filesystem::last_write_time(corrupt,
+                                     std::max(writtenA, writtenB) + std::chrono::seconds{20}, code);
+    expectations.expect(!code, "corrupt newest recovery fixture is available");
+    const auto fallback = findSessionRecoveryOffer(directory.path(), projectB);
+    expectations.expect(fallback.has_value() && fallback->recoveryPath == recoveryA &&
+                            fallback->projectPath == projectA,
+                        "corrupt newest recovery is skipped and a valid older one is offered");
 }
 
 } // namespace
@@ -346,6 +430,7 @@ int main() {
         testDirtySessionWritesAnOpenableRecoveryFile(expectations);
         testSuccessfulSaveRetiresTheRecoveryFile(expectations);
         testStartupOfferOnlyNamesWorkTheProjectDoesNotAlreadyHold(expectations);
+        testOfferUsesEachRecoveryOwnProject(expectations);
     } catch (const std::exception& error) {
         std::cerr << "FAILED: unexpected fixture exception: " << error.what() << '\n';
         return EXIT_FAILURE;

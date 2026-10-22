@@ -116,9 +116,8 @@ class [[nodiscard]] SessionRecoveryResult final {
     const SessionSaveOwningInput& input, const std::atomic_bool* cancellationFlag,
     project::ProjectIoOperationMemory operation) noexcept;
 
-// Removes a recovery file that is no longer needed (a successful Save, or closing a session that
-// has nothing unsaved). True when nothing is left at `recoveryPath` afterwards, including when
-// there was nothing there to begin with.
+// Removes a recovery file and its companion ownership record when no longer needed (a successful
+// Save, or closing a session that has nothing unsaved). True when neither remains.
 [[nodiscard]] bool removeSessionRecoveryFile(const std::filesystem::path& recoveryPath) noexcept;
 
 // What a launch found worth offering back to the artist.
@@ -130,10 +129,12 @@ struct SessionRecoveryOffer final {
     std::filesystem::file_time_type recoveredAt{};
 };
 
-// Scans `directory` for recovery files and returns the newest one that is worth offering: one that
-// exists, is non-empty, and -- when its project still exists on disk -- is NEWER than that project,
-// because a recovery file older than the saved project describes work the artist already has. No
-// offer means there is nothing to recover, which is the ordinary case for a clean shutdown.
+// Scans `directory` for the newest openable recovery archive worth offering. Each published
+// recovery carries a separate ownership record bound to its archive digest and write time; only
+// that record can identify the saved project for timestamp comparison. Legacy archives without a
+// valid record remain offerable with an unknown project path. `projectPath` is retained for caller
+// compatibility but never used as evidence of ownership. Equal timestamps count as already saved.
+// This may read/decode bounded archives and must run on an I/O worker, never the UI thread.
 [[nodiscard]] std::optional<SessionRecoveryOffer>
 findSessionRecoveryOffer(const std::filesystem::path& directory,
                          const std::optional<std::filesystem::path>& projectPath) noexcept;

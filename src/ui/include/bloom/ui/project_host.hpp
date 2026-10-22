@@ -169,8 +169,8 @@ class ProjectHost final : public QObject {
     [[nodiscard]] const std::filesystem::path& recoveryDirectory() const noexcept;
     void setRecoveryDirectory(std::filesystem::path directory);
     void setRecoveryPolicy(host::SessionRecoveryPolicy policy);
-    // What this launch found worth offering back, decided without any dialog; std::nullopt when
-    // there is nothing to recover.
+    // Last completed worker result, without filesystem I/O on the UI thread. Startup scanning
+    // and recovery publication update it; std::nullopt until a worker finds an offer.
     [[nodiscard]] std::optional<host::SessionRecoveryOffer> recoveryOffer() const;
 
     // Runs the unsaved-change flow (Save/Discard/Cancel) if, and only if, the current content is a
@@ -297,6 +297,7 @@ class ProjectHost final : public QObject {
     std::shared_ptr<RecoveryWorkerState> recoveryTaskState_;
     std::optional<runtime::TaskHandle<void>> recoveryScanTask_;
     std::shared_ptr<RecoveryScanState> recoveryScanState_;
+    std::optional<host::SessionRecoveryOffer> cachedRecoveryOffer_;
     std::vector<std::filesystem::path> recoveryRetirePaths_;
     bool recoveryRefreshPending_ = false;
     ProjectHostActivity activity_ = ProjectHostActivity::Idle;
