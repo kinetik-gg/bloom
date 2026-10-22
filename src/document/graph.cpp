@@ -115,25 +115,35 @@ expectedBindings(const bloom::document::NodeRecord& node) noexcept {
 
 void validateExpectedBindings(const bloom::document::NodeRecord& node,
                               const bloom::document::ParameterStore& parameters,
+                              const bloom::document::NodeDefinitionRegistry& registry,
                               const std::string& path, bloom::document::ValidationResult& result) {
     using namespace bloom::document;
-    for (const auto& expected : expectedBindings(node)) {
+    const auto validate = [&](const ExpectedParameterBinding& expected) {
         const auto binding =
             std::find_if(node.parameters.begin(), node.parameters.end(),
                          [&](const auto& item) { return item.role == expected.role; });
         const auto bindingPath = path + ".parameters[" + std::string(expected.role) + "]";
         if (binding == node.parameters.end()) {
             if (!expected.required)
-                continue;
+                return;
             result.add(ValidationCode::MissingReference, bindingPath,
                        "Known node schema requires this parameter binding");
-            continue;
+            return;
         }
         const auto* parameter = parameters.find(binding->parameterId);
         if (parameter != nullptr && parameter->schemaKey != expected.schemaKey) {
             result.add(ValidationCode::InvalidValue, bindingPath,
                        "Parameter binding uses the wrong schema for this node role");
         }
+    };
+    for (const auto& expected : expectedBindings(node))
+        validate(expected);
+    if (node.schemaVersion == 1 &&
+        (node.typeId == "bloom.flip" || node.typeId == "bloom.rotate-90" ||
+         node.typeId == "bloom.resize")) {
+        if (const auto* definition = registry.find(node.typeId, node.schemaVersion))
+            for (const auto& parameter : definition->parameters)
+                validate({parameter.role, parameter.schemaKey, parameter.required});
     }
 }
 
@@ -413,7 +423,7 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
                            "Parameter binding references a missing parameter");
             }
         }
-        validateExpectedBindings(node, parameters, path, result);
+        validateExpectedBindings(node, parameters, registry, path, result);
         if (node.typeId == kCompositionSourceNodeType) {
             for (const auto& binding : node.parameters) {
                 if (binding.role != "composition" && binding.role != "loopMode")

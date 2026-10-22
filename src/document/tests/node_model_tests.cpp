@@ -1,4 +1,6 @@
 #include <bloom/document/node_layout.hpp>
+#include <bloom/document/document.hpp>
+#include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/shape.hpp>
 
@@ -15,6 +17,39 @@ void expect(const bool condition, const char* message) {
     if (!condition) {
         ++failures;
         std::cerr << message << '\n';
+    }
+}
+
+void spatialImageBindings() {
+    for (const auto* type : {"bloom.flip", "bloom.rotate-90", "bloom.resize"}) {
+        for (const int mode : {0, 1, 2}) {
+            auto initial = makeNewProject("Bindings", "Main", bloom::core::RationalTime::fromInteger(10));
+            Document document(std::move(initial.project));
+            const auto snapshot = document.snapshot();
+            auto draft = document.draft(snapshot);
+            auto* composition = draft.project().findComposition(initial.initialCompositionId);
+            const auto nodeId = *draft.ids().allocateNode();
+            NodeRecord node{nodeId, type, {}, 1};
+            const auto* definition = builtInNodeDefinitions().find(type, 1);
+            for (const auto& parameter : definition->parameters) {
+                const auto id = *draft.ids().allocateParameter();
+                const bool wrong = mode == 2 && node.parameters.empty();
+                expect(composition->parameters().insert(
+                           {id, wrong ? "bloom.flip.vertical" : parameter.schemaKey,
+                            ConstantValueSource{wrong ? ParameterValue{true} : parameter.defaultValue}}),
+                       "spatial binding fixture parameter inserts");
+                node.parameters.push_back({parameter.role, id});
+            }
+            if (mode == 1)
+                node.parameters.erase(node.parameters.begin());
+            expect(composition->graph().addNode(std::move(node)), "spatial fixture node inserts");
+            composition->nodeLayout()[nodeId] = {};
+            expect(draft.validate().ok() == (mode == 0),
+                   "spatial nodes require complete correctly typed schema bindings");
+            const auto result = document.commit(snapshot.revision(), std::move(draft));
+            expect(result.committed() == (mode == 0),
+                   "invalid spatial bindings cannot enter a document snapshot");
+        }
     }
 }
 
@@ -244,6 +279,7 @@ int main() {
                !shapeConstantMatchesSchema("bloom.shape.kind", std::int64_t{7}),
            "shape closed domains");
 
+    spatialImageBindings();
     compositionNesting();
     multiplyInvertDefinitions();
     socketKinds();
