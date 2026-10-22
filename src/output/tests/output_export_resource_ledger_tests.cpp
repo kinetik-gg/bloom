@@ -50,8 +50,9 @@ class Expectations final {
 
 [[nodiscard]] std::shared_ptr<runtime::GpuProcessingPhasePolicy>
 sampledRoot(const std::uint64_t availableBytes,
-            const std::shared_ptr<render::PackedHostRetirementOwner>& owner = {}) {
-    auto root = std::make_shared<runtime::GpuProcessingPhasePolicy>(32, owner);
+            const std::shared_ptr<render::PackedHostRetirementOwner>& owner = {},
+            const std::size_t requestCapacity = 32) {
+    auto root = std::make_shared<runtime::GpuProcessingPhasePolicy>(requestCapacity, owner);
     runtime::MemoryBudgetState delivered;
     delivered.machine.availableBytes = availableBytes;
     delivered.process.source = runtime::ProcessMemorySource::MacOsHostOnly;
@@ -269,6 +270,38 @@ void publicationScratchClaimsOverlapAndRetire(Expectations& checks) {
                       status == output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded &&
                       serviceCapped.chargedBytes() == 200,
                   "the explicit service cap still binds simultaneous job claims");
+}
+
+void publicationScratchReusesOneParentPhase(Expectations& checks) {
+    auto root = sampledRoot(gib, {}, 1);
+    output::ExportResourceLedgerV1 ledger;
+    output::ExportResourceAdmissionStatusV1 status{};
+    const runtime::CancellationToken cancellation;
+    auto parent = ledger.reserve(100, status, std::nullopt, root);
+    checks.expect(parent && root->snapshot().reservations.admittedPhases == 1,
+                  "one-slot root admits the retained attempt");
+    if (!parent)
+        return;
+    auto first = parent->reserveScratch(80, status, cancellation);
+    auto second = parent->reserveScratch(80, status, cancellation);
+    checks.expect(first && second && ledger.chargedBytes() == 260 &&
+                      root->snapshot().reservations.totalHostClaimBytes == 260 &&
+                      root->snapshot().reservations.admittedPhases == 1,
+                  "overlapping scratch uses the parent's phase and retains separate charges");
+    if (!first || !second)
+        return;
+    parent.reset();
+    auto nested = first->reserveScratch(20, status, cancellation);
+    checks.expect(nested && ledger.chargedBytes() == 180 &&
+                      root->snapshot().reservations.admittedPhases == 1,
+                  "a descendant retains the rooted phase after the parent retires");
+    nested.reset();
+    first.reset();
+    second.reset();
+    checks.expect(ledger.chargedBytes() == 0 &&
+                      root->snapshot().reservations.totalHostClaimBytes == 0 &&
+                      root->snapshot().reservations.admittedPhases == 0,
+                  "all child claims and the shared phase retire on last release");
 }
 
 void explicitJobFamilyClaimsAreAggregate(Expectations& checks) {
@@ -562,6 +595,7 @@ int main() {
     rootedExpansionAndFacadeLifetime(checks);
     concurrentExpansionChargesOnce(checks);
     publicationScratchClaimsOverlapAndRetire(checks);
+    publicationScratchReusesOneParentPhase(checks);
     explicitJobFamilyClaimsAreAggregate(checks);
     publicationRefreshFailureRetainsNoScratch(checks);
     ownedAudioBackingReconcilesWithoutScratchCredit(checks);

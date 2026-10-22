@@ -893,7 +893,10 @@ and PNG processor product. Approved-job admission creates a publication-scoped s
 the same ledger and processing root for prepared display/output pixels, encoder scratch, and
 verification chunks. Concurrent publications of one attempt hold separate scratch claims, while
 sequential publications release each claim after their writer/verifier exits; retained products are
-charged once. A ProcessFrame or GPU-encoded payload already published under the exact
+charged once. Scratch descendants retain the attempt's admitted processing phase and charge their
+own host bytes against it; they do not consume another phase request slot. The shared phase stays
+alive while any descendant claim remains, even if the attempt reservation retires first. A
+ProcessFrame or GPU-encoded payload already published under the exact
 injected processing root remains charged there; export deducts only that verified payload from its
 new claim. Other retained metadata and new scratch enter the same root, and both the phase and its
 incremental claims remain held until the attempt/job releases the reservation. Variable-size

@@ -92,9 +92,11 @@ std::shared_ptr<ExportResourceReservationV1> ExportResourceLedgerV1::reserveWith
     std::shared_ptr<runtime::GpuProcessingPhasePolicy> processingPolicy,
     const std::uint64_t alreadyRootedBytes, ExportCapacityRefreshV1 capacityRefresh,
     const std::uint64_t fixedHostBackingBytes,
-    std::shared_ptr<detail::ExportResourceJobState> job) noexcept {
+    std::shared_ptr<detail::ExportResourceJobState> job,
+    std::shared_ptr<render::GpuProcessingPhaseLease> parentPhase) noexcept {
     if (alreadyRootedBytes > bytes ||
         ((alreadyRootedBytes != 0 || fixedHostBackingBytes != 0) && !processingPolicy) ||
+        (parentPhase && (!processingPolicy || fixedHostBackingBytes != 0)) ||
         fixedHostBackingBytes > bytes - alreadyRootedBytes) {
         status = ExportResourceAdmissionStatusV1::ArithmeticOverflow;
         return {};
@@ -119,17 +121,21 @@ std::shared_ptr<ExportResourceReservationV1> ExportResourceLedgerV1::reserveWith
             rooted->policy = std::move(processingPolicy);
             rooted->alreadyRootedBytes = alreadyRootedBytes;
             rooted->ownsFixedHostBacking = fixedHostBackingBytes != 0;
-            auto phase =
-                rooted->policy->reserve({.output = runtime::GpuProcessingPhaseOutput::FloatFinal,
-                                         .pixels = 0,
-                                         .metadataBytes = fixedHostBackingBytes,
-                                         .sourceFree = true,
-                                         .native = false});
-            if (phase.status != render::GpuProcessingPhaseAdmission::Accepted || !phase.lease) {
-                status = ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded;
-                return {};
+            if (parentPhase) {
+                rooted->phase = std::move(parentPhase);
+            } else {
+                auto phase = rooted->policy->reserve(
+                    {.output = runtime::GpuProcessingPhaseOutput::FloatFinal,
+                     .pixels = 0,
+                     .metadataBytes = fixedHostBackingBytes,
+                     .sourceFree = true,
+                     .native = false});
+                if (phase.status != render::GpuProcessingPhaseAdmission::Accepted || !phase.lease) {
+                    status = ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded;
+                    return {};
+                }
+                rooted->phase = std::move(phase.lease);
             }
-            rooted->phase = std::move(phase.lease);
             const auto unowned = bytes - alreadyRootedBytes - fixedHostBackingBytes;
             if (unowned != 0) {
                 auto claim = render::ProcessingHostStorageToken::reserve(rooted->phase, unowned);
@@ -241,7 +247,8 @@ std::shared_ptr<ExportResourceReservationV1> ExportResourceReservationV1::reserv
     const std::lock_guard reservationLock(mutex_);
     ExportResourceLedgerV1 facade(ledger_);
     return facade.reserveWithFixedHostBacking(additionalBytes, status, jobAllowance_,
-                                              rooted_ ? rooted_->policy : nullptr, 0, {}, 0, job_);
+                                              rooted_ ? rooted_->policy : nullptr, 0, {}, 0, job_,
+                                              rooted_ ? rooted_->phase : nullptr);
 }
 
 std::shared_ptr<ExportResourceReservationV1> ExportResourceReservationV1::reserveOwnedHostBacking(

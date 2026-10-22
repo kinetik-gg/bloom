@@ -100,7 +100,8 @@ class ExportResourceLedgerV1 final {
                                 std::uint64_t alreadyRootedBytes,
                                 ExportCapacityRefreshV1 capacityRefresh,
                                 std::uint64_t fixedHostBackingBytes,
-                                std::shared_ptr<detail::ExportResourceJobState> job = {}) noexcept;
+                                std::shared_ptr<detail::ExportResourceJobState> job = {},
+                                std::shared_ptr<render::GpuProcessingPhaseLease> parentPhase = {}) noexcept;
     explicit ExportResourceLedgerV1(
         std::shared_ptr<detail::ExportResourceLedgerState> state) noexcept
         : state_(std::move(state)) {}
@@ -131,7 +132,8 @@ class ExportResourceReservationV1 final {
     // A publication owns its own incremental scratch claim. Concurrent publications of the same
     // attempt add their simultaneous claims; completed publications release them independently.
     // The parent's explicit per-job cap applies to the aggregate of retained bytes and every
-    // simultaneous descendant scratch/owned-backing claim.
+    // simultaneous descendant scratch/owned-backing claim. Rooted scratch reuses the parent's
+    // phase slot and retains that lease independently of the parent's lifetime.
     // Refresh exceptions produce CapacityRefreshFailed without charging scratch.
     [[nodiscard]] std::shared_ptr<ExportResourceReservationV1>
     reserveScratch(std::uint64_t additionalBytes, ExportResourceAdmissionStatusV1& status,
