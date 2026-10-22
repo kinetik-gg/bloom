@@ -13,4 +13,8 @@ namespace bloom::media::audio::detail {
                                                      const AudioDecodeLimits& limits,
                                                      const CancelAudioWork& cancel) noexcept;
 
+[[nodiscard]] AudioResult<AudioBuffer> openWindowedMp3File(const std::filesystem::path& path,
+                                                           std::size_t windowFrames,
+                                                           const CancelAudioWork& cancel) noexcept;
+
 } // namespace bloom::media::audio::detail

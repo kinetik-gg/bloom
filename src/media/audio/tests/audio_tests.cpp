@@ -1,4 +1,5 @@
 #include <bloom/media/audio/audio.hpp>
+#include <bloom/media/audio/playback/audio_engine.hpp>
 
 #include <array>
 #include <bit>
@@ -11,6 +12,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <numbers>
 #include <span>
 #include <string_view>
@@ -147,6 +149,36 @@ void testWavRoundTripAndWaveform(Expectations& expectations) {
                             decoded.value()->frames == expected.left.size(),
                         "generated WAV decodes into two complete planar channels");
     if (decoded) {
+        const auto windowed = bloom::media::audio::openWindowedAudio(
+            file.path(), AudioDecodeLimits{.sampleBudget = 4096U * 2U});
+        expectations.expect(windowed && windowed.value()->stream &&
+                                windowed.value()->planes.empty() &&
+                                windowed.value()->frames == decoded.value()->frames,
+                            "WAV playback retains a window instead of full planar PCM");
+        if (windowed) {
+            for (const auto frame :
+                 {std::uint64_t{0}, std::uint64_t{4095}, std::uint64_t{4096}, std::uint64_t{8192},
+                  std::uint64_t{47'999}, std::uint64_t{2}}) {
+                for (std::uint32_t channel = 0; channel < 2; ++channel) {
+                    const auto sample = windowed.value()->stream->sample(frame, channel);
+                    expectations.expect(sample &&
+                                            *sample == decoded.value()->planes[channel][frame],
+                                        "window boundary and backward seek match full WAV decode");
+                }
+            }
+            const auto streamingSummary =
+                bloom::media::audio::waveformSummary(*windowed.value()->stream, 8);
+            const auto referenceSummary = bloom::media::audio::waveformSummary(*decoded.value(), 8);
+            expectations.expect(streamingSummary && referenceSummary &&
+                                    streamingSummary.value()->buckets ==
+                                        referenceSummary.value()->buckets,
+                                "bounded WAV waveform matches whole-buffer reference");
+            const auto cancelledSummary = bloom::media::audio::waveformSummary(
+                *windowed.value()->stream, 8, [] { return true; });
+            expectations.expect(!cancelledSummary &&
+                                    cancelledSummary.error()->code == AudioErrorCode::Cancelled,
+                                "streaming waveform observes cancellation");
+        }
         for (std::size_t frame = 0; frame < expected.left.size(); ++frame) {
             expectations.expect(
                 std::bit_cast<std::uint32_t>(decoded.value()->planes[0][frame]) ==
@@ -186,6 +218,47 @@ void testMp3Fixture(Expectations& expectations) {
     expectations.expect(decoded && decoded.value()->frames > 0 &&
                             decoded.value()->planes.size() == 2,
                         "checked-in MP3 fixture decodes into planar samples");
+    const auto windowed =
+        bloom::media::audio::openWindowedAudio(path, AudioDecodeLimits{.sampleBudget = 4096U * 2U});
+    expectations.expect(windowed && windowed.value()->stream && windowed.value()->planes.empty(),
+                        "MP3 opens with persistent bounded playback storage");
+    if (decoded && windowed) {
+        for (const auto frame : {std::uint64_t{0}, std::uint64_t{4095}, std::uint64_t{4096},
+                                 decoded.value()->frames - 1, std::uint64_t{100}}) {
+            for (std::uint32_t channel = 0; channel < 2; ++channel) {
+                const auto sample = windowed.value()->stream->sample(frame, channel);
+                expectations.expect(
+                    sample &&
+                        std::abs(*sample - decoded.value()->planes[channel][frame]) < 0.00001F,
+                    "MP3 window and seek agree with full decoder");
+            }
+        }
+        auto backend = std::make_unique<bloom::media::audio::playback::NullBackend>();
+        auto* captured = backend.get();
+        bloom::media::audio::playback::AudioEngine engine(std::move(backend), {48'000, 2, 1024});
+        const auto buffer =
+            std::make_shared<const bloom::media::audio::AudioBuffer>(std::move(*windowed.value()));
+        static_cast<void>(engine.addClip({.buffer = buffer}));
+        const auto start = RationalTime::create(4094, 48'000).value();
+        expectations.expect(!engine.play(start).has_value() &&
+                                !engine.renderForTesting(5).has_value(),
+                            "mixer plays across MP3 window boundary");
+        if (captured->captured().size() == 10)
+            for (std::size_t frame = 0; frame < 5; ++frame)
+                for (std::size_t channel = 0; channel < 2; ++channel)
+                    expectations.expect(std::abs(captured->captured()[frame * 2 + channel] -
+                                                 decoded.value()->planes[channel][4094 + frame]) <
+                                            0.00001F,
+                                        "mixer PCM matches reference across window boundary");
+        captured->clearCaptured();
+        expectations.expect(!engine.seek(RationalTime::create(100, 48'000).value()).has_value() &&
+                                !engine.renderForTesting(2).has_value(),
+                            "mixer seeks backward through persistent MP3 decoder");
+        if (captured->captured().size() == 4)
+            expectations.expect(
+                std::abs(captured->captured()[0] - decoded.value()->planes[0][100]) < 0.00001F,
+                "seeked mixer PCM matches reference");
+    }
 }
 
 void testHostileInputsAndLimits(Expectations& expectations) {
@@ -260,6 +333,12 @@ void testHostileInputsAndLimits(Expectations& expectations) {
     const auto largeProbe = bloom::media::audio::probeAudio(large.path());
     expectations.expect(largeProbe && largeProbe.value()->frames == largeDataBytes / 8,
                         "WAV metadata probe streams a file larger than the former 64 MiB cap");
+    const auto longWindow = bloom::media::audio::openWindowedAudio(
+        large.path(), AudioDecodeLimits{.sampleBudget = 4096U * 2U});
+    expectations.expect(longWindow && longWindow.value()->stream &&
+                            longWindow.value()->stream->retainedBytes() < 512U * 1024U &&
+                            longWindow.value()->stream->sample(largeDataBytes / 8U - 1U, 0) == 0.0F,
+                        "long WAV playback budget and retained PCM are independent of duration");
     const auto largeDecode = bloom::media::audio::decodeAudio(
         large.path(), AudioDecodeLimits{.sampleBudget = largeDataBytes / 4U});
     expectations.expect(largeDecode && largeDecode.value()->frames == largeDataBytes / 8,

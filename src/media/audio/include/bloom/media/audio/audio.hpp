@@ -2,11 +2,15 @@
 
 #include <bloom/core/rational_time.hpp>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <limits>
+#include <memory>
+#include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <type_traits>
@@ -111,11 +115,49 @@ struct AudioProbe final {
     core::RationalTime duration{};
 };
 
+// Owns one persistent decoder and a bounded interleaved PCM window. Calls may perform file I/O
+// and must be made only on a worker (never on the audio device callback or UI thread).
+class AudioStream {
+  public:
+    static constexpr std::size_t kWindowFrames = 4096;
+    AudioStream(AudioProbe probe, std::size_t windowFrames);
+    virtual ~AudioStream() = default;
+    AudioStream(const AudioStream&) = delete;
+    AudioStream& operator=(const AudioStream&) = delete;
+
+    [[nodiscard]] const AudioProbe& probe() const noexcept { return probe_; }
+    [[nodiscard]] std::uint64_t retainedBytes() const noexcept;
+    [[nodiscard]] std::optional<AudioError> diagnostic() const noexcept;
+    [[nodiscard]] AudioResult<std::size_t>
+    readInterleaved(std::uint64_t firstFrame, std::span<float> output,
+                    const CancelAudioWork& cancel = {}) noexcept;
+    [[nodiscard]] std::optional<float> sample(std::uint64_t frame, std::uint32_t channel,
+                                              const CancelAudioWork& cancel = {}) noexcept;
+
+  protected:
+    [[nodiscard]] virtual AudioResult<std::size_t> fill(std::uint64_t firstFrame,
+                                                        std::span<float> output,
+                                                        const CancelAudioWork& cancel) noexcept = 0;
+
+  private:
+    [[nodiscard]] bool ensureWindow(std::uint64_t frame, const CancelAudioWork& cancel) noexcept;
+    AudioProbe probe_;
+    std::vector<float> window_;
+    std::size_t windowFrames_ = 0;
+    std::uint64_t windowStart_ = 0;
+    std::size_t windowCount_ = 0;
+    std::optional<AudioError> diagnostic_;
+    std::atomic<int> diagnosticCode_{-1};
+    mutable std::mutex mutex_;
+};
+
 struct AudioBuffer final {
     std::uint32_t rate = 0;
     std::uint32_t channels = 0;
     std::uint64_t frames = 0;
     std::vector<std::vector<float>> planes;
+    // When present, frames is the full source duration while planes stays empty.
+    std::shared_ptr<AudioStream> stream;
 };
 
 struct WaveformRange final {
@@ -139,6 +181,15 @@ struct WaveformSummary final {
 [[nodiscard]] AudioResult<AudioBuffer> decodeAudio(const std::filesystem::path& path,
                                                    AudioDecodeLimits limits,
                                                    const CancelAudioWork& cancel = {}) noexcept;
+
+[[nodiscard]] AudioResult<AudioBuffer>
+openWindowedAudio(const std::filesystem::path& path, AudioDecodeLimits limits,
+                  std::size_t windowFrames = AudioStream::kWindowFrames,
+                  const CancelAudioWork& cancel = {}) noexcept;
+
+[[nodiscard]] AudioResult<WaveformSummary>
+waveformSummary(AudioStream& stream, std::size_t bucketCount,
+                const CancelAudioWork& cancel = {}) noexcept;
 
 [[nodiscard]] AudioResult<WaveformSummary> waveformSummary(const AudioBuffer& buffer,
                                                            std::size_t bucketCount) noexcept;

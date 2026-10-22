@@ -127,9 +127,8 @@ class AudioEngine final {
     // Safe on the UI thread: the callback zeros output immediately while device stop is queued.
     void requestSilence() noexcept {
         auto current = silenceState_.load(std::memory_order_acquire);
-        while (!silenceState_.compare_exchange_weak(current, ((current + 2) | 1U),
-                                                    std::memory_order_acq_rel,
-                                                    std::memory_order_acquire)) {
+        while (!silenceState_.compare_exchange_weak(
+            current, ((current + 2) | 1U), std::memory_order_acq_rel, std::memory_order_acquire)) {
         }
     }
     [[nodiscard]] std::uint64_t silenceGeneration() const noexcept {
@@ -174,6 +173,7 @@ class AudioEngine final {
     mutable std::mutex controlMutex_;
     std::vector<AudioClip> clips_;
     std::atomic<bool> playing_{false};
+    std::atomic<std::uint64_t> mixGeneration_{0};
     // Low bit is callback silence; high bits are the UI request generation.
     std::atomic<std::uint64_t> silenceState_{1};
     std::atomic<std::uint64_t> framesWritten_{0};

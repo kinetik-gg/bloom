@@ -6,11 +6,14 @@
 #include "mp3_backend.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <new>
+#include <system_error>
 #include <utility>
 
 namespace {
@@ -27,15 +30,15 @@ using bloom::media::audio::CancelAudioWork;
 
 struct FileReader {
     std::ifstream& input;
-    const CancelAudioWork& cancel;
+    const CancelAudioWork* cancel = nullptr;
     bool cancelled = false;
 };
 
 bool cancelled(FileReader& reader) noexcept {
-    if (reader.cancelled || !reader.cancel)
+    if (reader.cancelled || !reader.cancel || !*reader.cancel)
         return reader.cancelled;
     try {
-        reader.cancelled = reader.cancel();
+        reader.cancelled = (*reader.cancel)();
     } catch (...) {
         reader.cancelled = true;
     }
@@ -143,6 +146,74 @@ decodeOpened(mp3dec_ex_t& decoder, const AudioDecodeLimits& limits, FileReader& 
     }
 }
 
+class Mp3Stream final : public bloom::media::audio::AudioStream {
+  public:
+    Mp3Stream(const AudioProbe probe, const std::size_t windowFrames,
+              const std::filesystem::path& path, const std::uintmax_t size,
+              const std::filesystem::file_time_type modified)
+        : AudioStream(probe, windowFrames), path_(path), size_(size), modified_(modified),
+          reader_{input_, {}} {}
+
+    ~Mp3Stream() override { mp3dec_ex_close(&decoder_); }
+    [[nodiscard]] int open(const CancelAudioWork& cancel) {
+        input_.open(path_, std::ios::binary);
+        if (!input_)
+            return MP3D_E_IOERROR;
+        reader_.cancel = &cancel;
+        io_ = fileIo(reader_);
+        const auto status =
+            mp3dec_ex_open_cb(&decoder_, &io_, MP3D_SEEK_TO_SAMPLE | MP3D_DO_NOT_SCAN);
+        reader_.cancel = nullptr;
+        return status;
+    }
+    [[nodiscard]] bool wasCancelled() const noexcept { return reader_.cancelled; }
+
+  protected:
+    [[nodiscard]] AudioResult<std::size_t> fill(const std::uint64_t firstFrame,
+                                                const std::span<float> output,
+                                                const CancelAudioWork& cancel) noexcept override {
+        std::error_code error;
+        if (std::filesystem::file_size(path_, error) != size_ || error ||
+            std::filesystem::last_write_time(path_, error) != modified_ || error)
+            return AudioResult<std::size_t>::failure(
+                AudioError::codeOnly(AudioErrorCode::FileReadFailed));
+        reader_.cancel = &cancel;
+        reader_.cancelled = false;
+        const auto firstSample = firstFrame * probe().channels;
+        bool seeked = true;
+        if (firstSample < decoder_.cur_sample) {
+            seeked = mp3dec_ex_seek(&decoder_, 0) == 0;
+            if (seeked)
+                decoder_.to_skip = decoder_.start_delay;
+        }
+        std::array<float, 4096> discard{};
+        while (seeked && decoder_.cur_sample < firstSample && !cancelled(reader_)) {
+            const auto remaining = firstSample - decoder_.cur_sample;
+            const auto wanted =
+                static_cast<std::size_t>(std::min<std::uint64_t>(remaining, discard.size()));
+            seeked = mp3dec_ex_read(&decoder_, discard.data(), wanted) == wanted;
+        }
+        const auto samples = seeked ? mp3dec_ex_read(&decoder_, output.data(), output.size()) : 0;
+        reader_.cancel = nullptr;
+        if (reader_.cancelled)
+            return AudioResult<std::size_t>::failure(
+                AudioError::codeOnly(AudioErrorCode::Cancelled));
+        if (samples != output.size())
+            return AudioResult<std::size_t>::failure(
+                AudioError::codeOnly(AudioErrorCode::DecoderFailure));
+        return AudioResult<std::size_t>::success(samples / probe().channels);
+    }
+
+  private:
+    std::filesystem::path path_;
+    std::uintmax_t size_;
+    std::filesystem::file_time_type modified_;
+    std::ifstream input_;
+    FileReader reader_;
+    mp3dec_io_t io_{};
+    mp3dec_ex_t decoder_{};
+};
+
 } // namespace
 
 namespace bloom::media::audio::detail {
@@ -154,10 +225,11 @@ AudioResult<AudioProbe> probeMp3File(const std::filesystem::path& path,
         if (!input)
             return AudioResult<AudioProbe>::failure(
                 AudioError::codeOnly(AudioErrorCode::FileReadFailed));
-        FileReader reader{input, cancel};
+        FileReader reader{input, &cancel};
         auto io = fileIo(reader);
         mp3dec_ex_t decoder{};
-        const auto status = mp3dec_ex_open_cb(&decoder, &io, 0);
+        const auto status =
+            mp3dec_ex_open_cb(&decoder, &io, MP3D_SEEK_TO_SAMPLE | MP3D_DO_NOT_SCAN);
         if (status != 0) {
             mp3dec_ex_close(&decoder);
             return AudioResult<AudioProbe>::failure(
@@ -165,7 +237,28 @@ AudioResult<AudioProbe> probeMp3File(const std::filesystem::path& path,
                                      : status == MP3D_E_MEMORY ? AudioErrorCode::AllocationFailure
                                                                : AudioErrorCode::MalformedFile));
         }
-        auto result = probeOpened(decoder);
+        AudioResult<AudioProbe> result = AudioResult<AudioProbe>::failure(
+            AudioError::codeOnly(AudioErrorCode::InvalidAudioFormat));
+        if (decoder.info.channels > 0 && decoder.info.hz > 0) {
+            std::array<float, 4096> chunk{};
+            std::uint64_t samples = 0;
+            while (!reader.cancelled) {
+                const auto read = mp3dec_ex_read(&decoder, chunk.data(), chunk.size());
+                if (read == 0)
+                    break;
+                if (samples > std::numeric_limits<std::uint64_t>::max() - read)
+                    break;
+                samples += read;
+            }
+            const auto channels = static_cast<std::uint32_t>(decoder.info.channels);
+            const auto frames = samples / channels;
+            if (!reader.cancelled && decoder.last_error == 0 && samples > 0 &&
+                samples % channels == 0 &&
+                frames <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+                result = AudioResult<AudioProbe>::success(
+                    AudioProbe{AudioContainer::Mp3, static_cast<std::uint32_t>(decoder.info.hz),
+                               channels, frames, duration(frames, decoder.info.hz)});
+        }
         mp3dec_ex_close(&decoder);
         if (reader.cancelled)
             return AudioResult<AudioProbe>::failure(
@@ -185,7 +278,7 @@ AudioResult<AudioBuffer> decodeMp3File(const std::filesystem::path& path,
         if (!input)
             return AudioResult<AudioBuffer>::failure(
                 AudioError::codeOnly(AudioErrorCode::FileReadFailed));
-        FileReader reader{input, cancel};
+        FileReader reader{input, &cancel};
         auto io = fileIo(reader);
         mp3dec_ex_t decoder{};
         const auto status = mp3dec_ex_open_cb(&decoder, &io, 0);
@@ -202,6 +295,44 @@ AudioResult<AudioBuffer> decodeMp3File(const std::filesystem::path& path,
             return AudioResult<AudioBuffer>::failure(
                 AudioError::codeOnly(AudioErrorCode::Cancelled));
         return result;
+    } catch (const std::bad_alloc&) {
+        return AudioResult<AudioBuffer>::failure(
+            AudioError::codeOnly(AudioErrorCode::AllocationFailure));
+    }
+}
+
+AudioResult<AudioBuffer> openWindowedMp3File(const std::filesystem::path& path,
+                                             const std::size_t windowFrames,
+                                             const CancelAudioWork& cancel) noexcept {
+    try {
+        std::error_code error;
+        const auto size = std::filesystem::file_size(path, error);
+        if (error)
+            return AudioResult<AudioBuffer>::failure(
+                AudioError::codeOnly(AudioErrorCode::FileReadFailed));
+        const auto modified = std::filesystem::last_write_time(path, error);
+        if (error)
+            return AudioResult<AudioBuffer>::failure(
+                AudioError::codeOnly(AudioErrorCode::FileReadFailed));
+        const auto probe = probeMp3File(path, cancel);
+        if (!probe)
+            return AudioResult<AudioBuffer>::failure(*probe.error());
+        auto stream =
+            std::make_shared<Mp3Stream>(*probe.value(), windowFrames, path, size, modified);
+        const auto status = stream->open(cancel);
+        if (status != 0)
+            return AudioResult<AudioBuffer>::failure(
+                AudioError::codeOnly(stream->wasCancelled()    ? AudioErrorCode::Cancelled
+                                     : status == MP3D_E_MEMORY ? AudioErrorCode::AllocationFailure
+                                                               : AudioErrorCode::MalformedFile));
+        if (stream->probe().frames == 0)
+            return AudioResult<AudioBuffer>::failure(
+                AudioError::codeOnly(AudioErrorCode::InvalidAudioFormat));
+        return AudioResult<AudioBuffer>::success(AudioBuffer{probe.value()->rate,
+                                                             probe.value()->channels,
+                                                             probe.value()->frames,
+                                                             {},
+                                                             std::move(stream)});
     } catch (const std::bad_alloc&) {
         return AudioResult<AudioBuffer>::failure(
             AudioError::codeOnly(AudioErrorCode::AllocationFailure));

@@ -55,7 +55,8 @@ using bloom::media::audio::playback::AudioStatus;
                                                          std::int64_t absoluteFrame,
                                                          const std::uint32_t outputRate) noexcept {
     if (clip.muted || clip.buffer == nullptr || clip.buffer->rate == 0 ||
-        clip.buffer->channels == 0 || clip.buffer->planes.size() != clip.buffer->channels) {
+        clip.buffer->channels == 0 ||
+        (!clip.buffer->stream && clip.buffer->planes.size() != clip.buffer->channels)) {
         return std::nullopt;
     }
     if (clip.mapTime) {
@@ -79,7 +80,8 @@ using bloom::media::audio::playback::AudioStatus;
         return std::nullopt;
     }
     const auto sourceFrame = sourceFrameFor(localFrame, clip.buffer->rate, outputRate);
-    if (sourceFrame >= clip.buffer->frames || sourceFrame >= clip.buffer->planes.front().size())
+    if (sourceFrame >= clip.buffer->frames ||
+        (!clip.buffer->stream && sourceFrame >= clip.buffer->planes.front().size()))
         return std::nullopt;
     return sourceFrame;
 }
@@ -238,9 +240,7 @@ bool AudioEngine::updateClip(const ClipId id, const float level, const bool mute
     return true;
 }
 
-AudioStatus AudioEngine::play(const RationalTime at) {
-    return play(at, silenceGeneration());
-}
+AudioStatus AudioEngine::play(const RationalTime at) { return play(at, silenceGeneration()); }
 
 AudioStatus AudioEngine::play(const RationalTime at, const std::uint64_t silenceGeneration) {
     stopAfterSilenceRequest();
@@ -252,9 +252,9 @@ AudioStatus AudioEngine::play(const RationalTime at, const std::uint64_t silence
         clockOrigin_ = at;
         framesProduced_ = 0;
         writtenAtOrigin_ = framesWritten_.load(std::memory_order_acquire);
-        clockState_.store(std::make_shared<const ClockState>(ClockState{
-                              clockOrigin_, writtenAtOrigin_, playbackRate_, playbackRateNumerator_,
-                              playbackRateDenominator_}),
+        clockState_.store(std::make_shared<const ClockState>(
+                              ClockState{clockOrigin_, writtenAtOrigin_, playbackRate_,
+                                         playbackRateNumerator_, playbackRateDenominator_}),
                           std::memory_order_release);
         ring_->clear();
     }
@@ -295,6 +295,7 @@ AudioStatus AudioEngine::seek(const RationalTime at) {
     // Allocate before stopping the backend. A failed allocation must not strand a live mixer with
     // its device stopped and no restart path.
     auto nextClock = std::make_shared<ClockState>();
+    mixGeneration_.fetch_add(1, std::memory_order_acq_rel);
     const auto wasPlaying = playing_.load(std::memory_order_acquire);
     if (wasPlaying && backend_) {
         backend_->stop();
@@ -379,9 +380,9 @@ RationalTime AudioEngine::positionNow() const noexcept {
     const auto totalWritten = framesWritten_.load(std::memory_order_acquire);
     const auto frames = totalWritten - state->writtenAtOrigin;
     if (state->rateNumerator == state->rateDenominator) {
-        const auto numerator =
-            static_cast<long double>(state->origin.numerator()) * config_.rate +
-            static_cast<long double>(frames) * static_cast<long double>(state->origin.denominator());
+        const auto numerator = static_cast<long double>(state->origin.numerator()) * config_.rate +
+                               static_cast<long double>(frames) *
+                                   static_cast<long double>(state->origin.denominator());
         const auto denominator =
             static_cast<long double>(state->origin.denominator()) * config_.rate;
         if (numerator >= static_cast<long double>(std::numeric_limits<std::int64_t>::min()) &&
@@ -395,7 +396,7 @@ RationalTime AudioEngine::positionNow() const noexcept {
         }
     }
     const auto seconds = state->origin.toSeconds() + static_cast<double>(frames) * state->rate /
-                                                      static_cast<double>(config_.rate);
+                                                         static_cast<double>(config_.rate);
     constexpr auto precision = 1'000'000'000.0;
     const auto scaled = seconds * precision;
     if (!std::isfinite(scaled) ||
@@ -460,6 +461,11 @@ bool AudioEngine::produceBlock(const std::size_t frames) noexcept {
 void AudioEngine::mixBlock(const std::uint64_t firstProducedFrame,
                            const std::span<float> output) noexcept {
     std::fill(output.begin(), output.end(), 0.0F);
+    const auto generation = mixGeneration_.load(std::memory_order_acquire);
+    const CancelAudioWork cancelled = [this, generation] {
+        return !playing_.load(std::memory_order_acquire) ||
+               generation != mixGeneration_.load(std::memory_order_acquire);
+    };
     const auto firstAbsoluteFrame = timeToFrames(clockOrigin_, config_.rate) +
                                     saturatingFrameOffset(firstProducedFrame, playbackRate_);
     for (std::size_t outputFrame = 0; outputFrame < output.size() / config_.channels;
@@ -477,12 +483,17 @@ void AudioEngine::mixBlock(const std::uint64_t firstProducedFrame,
                 continue;
             for (std::size_t channel = 0; channel < config_.channels; ++channel) {
                 const auto sourceChannel = clip.buffer->channels == 1 ? std::size_t{0} : channel;
-                if (sourceChannel >= clip.buffer->planes.size() ||
-                    *sourceFrame >= clip.buffer->planes[sourceChannel].size()) {
+                if (sourceChannel >= clip.buffer->channels) {
                     continue;
                 }
-                output[outputFrame * config_.channels + channel] +=
-                    clip.buffer->planes[sourceChannel][*sourceFrame] * clip.level;
+                if (clip.buffer->stream) {
+                    if (const auto sample =
+                            clip.buffer->stream->sample(*sourceFrame, sourceChannel, cancelled))
+                        output[outputFrame * config_.channels + channel] += *sample * clip.level;
+                } else if (*sourceFrame < clip.buffer->planes[sourceChannel].size()) {
+                    output[outputFrame * config_.channels + channel] +=
+                        clip.buffer->planes[sourceChannel][*sourceFrame] * clip.level;
+                }
             }
         }
     }

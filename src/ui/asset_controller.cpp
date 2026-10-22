@@ -72,6 +72,14 @@ measuredAudioBufferBytes(const media::audio::AudioBuffer& buffer) noexcept {
             !add(plane.size(), sizeof(float), bytes.initialized))
             return {};
     }
+    if (buffer.stream) {
+        const auto retained = buffer.stream->retainedBytes();
+        if (retained > max - bytes.allocated)
+            return {};
+        bytes.allocated += retained;
+        // Decoder allowance is a conservative charge, never fictitious sampled-memory credit.
+        bytes.initialized += retained - 256U * 1024U;
+    }
     return bytes;
 }
 
@@ -126,6 +134,25 @@ audioStorageClaim(const media::audio::AudioProbe& probe,
     if (retained > std::numeric_limits<std::size_t>::max() - scratchSamples * sizeof(float))
         return {};
     return AudioStorageClaim{samples, retained, scratchSamples * sizeof(float)};
+}
+
+[[nodiscard]] std::optional<AudioStorageClaim>
+windowedAudioStorageClaim(const media::audio::AudioProbe& probe) noexcept {
+    constexpr auto window = media::audio::AudioStream::kWindowFrames;
+    constexpr std::uint64_t decoderAllowance = 256U * 1024U;
+    if (probe.frames == 0 || probe.channels == 0 ||
+        probe.channels > std::numeric_limits<std::size_t>::max() / window ||
+        probe.channels > std::numeric_limits<std::uint64_t>::max() / (window * sizeof(float)))
+        return {};
+    const auto samples = static_cast<std::uint64_t>(window) * probe.channels;
+    const auto retained = sizeof(media::audio::AudioBuffer) + sizeof(media::audio::AudioStream) +
+                          samples * sizeof(float) + decoderAllowance;
+    const auto scratch = samples * sizeof(float) + static_cast<std::uint64_t>(256) *
+                                                       probe.channels *
+                                                       sizeof(media::audio::WaveformRange);
+    if (retained > std::numeric_limits<std::uint64_t>::max() - scratch)
+        return {};
+    return AudioStorageClaim{samples, retained, scratch};
 }
 
 enum class AudioSourceCheck { Matches, MissingOrChanged, Cancelled };
@@ -572,8 +599,15 @@ bool AssetController::missing(document::AssetId id) const {
 }
 QString AssetController::audioDiagnostic(document::AssetId id) const {
     const auto found = previews_.find(id);
-    return found == previews_.end() ? QString{}
-                                    : QString::fromStdString(found->second.audioDiagnostic);
+    if (found == previews_.end())
+        return {};
+    if (!found->second.audioDiagnostic.empty())
+        return QString::fromStdString(found->second.audioDiagnostic);
+    const auto buffer = audioBuffer(id);
+    if (buffer && buffer->stream)
+        if (const auto error = buffer->stream->diagnostic())
+            return QString::fromStdString(media::audio::describeAudioError(*error));
+    return {};
 }
 QImage AssetController::thumbnail(document::AssetId id) const {
     const auto found = previews_.find(id);
@@ -1310,7 +1344,7 @@ void AssetController::startThumbnails() {
                                 if (!probe) {
                                     preview.audioDiagnostic =
                                         media::audio::describeAudioError(*probe.error());
-                                } else if (const auto claim = audioStorageClaim(*probe.value())) {
+                                } else if (const auto claim = windowedAudioStorageClaim(*probe.value())) {
                                     std::shared_ptr<render::GpuProcessingPhaseLease> phase;
                                     std::optional<render::ProcessingHostStorageToken> scratch;
                                     if (audioAdmission.policy) {
@@ -1356,40 +1390,39 @@ void AssetController::startThumbnails() {
                                     if (preview.audioDiagnostic.empty()) {
                                         media::audio::AudioDecodeLimits limits;
                                         limits.sampleBudget = claim->samples;
-                                        auto decoded = media::audio::decodeAudio(path, limits,
-                                                                                 cancelAudio);
+                                        auto decoded = media::audio::openWindowedAudio(
+                                            path, limits, media::audio::AudioStream::kWindowFrames,
+                                            cancelAudio);
                                         if (!decoded) {
                                             preview.audioDiagnostic =
                                                 media::audio::describeAudioError(*decoded.error());
                                         } else {
-                                            const auto verified = verifyAudioSource(
-                                                path, asset.contentDigest, context.cancellation());
-                                            if (verified == AudioSourceCheck::Cancelled)
-                                                return runtime::TaskResult<std::shared_ptr<Thumbnails>>::cancelled();
-                                            if (verified != AudioSourceCheck::Matches) {
+                                            auto summary = media::audio::waveformSummary(
+                                                *decoded.value()->stream, 256, cancelAudio);
+                                            if (!summary) {
                                                 preview.audioDiagnostic =
-                                                    "Audio source changed during decode";
+                                                    media::audio::describeAudioError(*summary.error());
                                             } else {
-                                                auto summary = media::audio::waveformSummary(
-                                                    *decoded.value(), 256);
-                                                if (!summary) {
+                                                const auto afterSummary = verifyAudioSource(
+                                                    path, asset.contentDigest,
+                                                    context.cancellation());
+                                                if (afterSummary == AudioSourceCheck::Cancelled)
+                                                    return runtime::TaskResult<std::shared_ptr<Thumbnails>>::cancelled();
+                                                if (afterSummary != AudioSourceCheck::Matches) {
                                                     preview.audioDiagnostic =
-                                                        media::audio::describeAudioError(*summary.error());
-                                                } else {
-                                                    if (auto buffer = adoptAudioBuffer(
-                                                            std::move(*decoded.value()), phase)) {
-                                                        results->waveforms.emplace(
-                                                            asset.id,
-                                                            std::make_shared<const media::audio::
+                                                        "Audio source changed during waveform preparation";
+                                                } else if (auto buffer = adoptAudioBuffer(
+                                                               std::move(*decoded.value()), phase)) {
+                                                    results->waveforms.emplace(
+                                                        asset.id,
+                                                        std::make_shared<const media::audio::
                                                                                  WaveformSummary>(
-                                                                std::move(*summary.value())));
-                                                        keepAudio(asset.id, buffer);
-                                                        preview.missing = false;
-                                                    } else {
-                                                        preview.audioDiagnostic =
-                                                            "Audio storage exceeded its admitted "
-                                                            "phase";
-                                                    }
+                                                            std::move(*summary.value())));
+                                                    keepAudio(asset.id, buffer);
+                                                    preview.missing = false;
+                                                } else {
+                                                    preview.audioDiagnostic =
+                                                        "Audio storage exceeded its admitted phase";
                                                 }
                                             }
                                         }
