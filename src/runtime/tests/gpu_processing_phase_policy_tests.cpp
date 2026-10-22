@@ -252,7 +252,7 @@ void rootedBackingReconcilesSampledHostHeadroom() {
     delivered.processSampleFresh = true;
     delivered.sampleSerial = 1;
     policy.applyHostSample(delivered, 4096, start);
-    const auto header = detail::packedHostAllocationMetadataBytes();
+    const auto header = bloom::render::detail::packedHostAllocationMetadataBytes();
     auto phase = policy.reserve(
         {.pixels = 32, .metadataBytes = header, .sourceFree = true, .native = false}, start);
     require(phase.lease != nullptr, "real preview envelope admits rooted backing");
@@ -419,7 +419,7 @@ void newBackingCannotInflateAnOlderFiniteLimit() {
     delivered.processSampleFresh = true;
     delivered.sampleSerial = 1;
     policy.applyHostSample(delivered, 4096, start);
-    const auto header = detail::packedHostAllocationMetadataBytes();
+    const auto header = bloom::render::detail::packedHostAllocationMetadataBytes();
     auto phase = policy.reserve(
         {.pixels = 32, .metadataBytes = header, .sourceFree = true, .native = false}, start);
     require(phase.lease != nullptr, "initial finite headroom admits a real packed vector");
