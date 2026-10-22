@@ -33,6 +33,10 @@ using gpu_scene_executor_detail::NativePoll;
 } // namespace
 
 void GpuSceneExecutor::Impl::clearJob() noexcept {
+    // A completed/failed request must not keep the device's exclusive batch slot from another
+    // executor. Unproven submissions retain their owner until the existing drain proves safety.
+    if (operationBatch && !operationBatch->hasUnretiredSubmission())
+        operationBatch.reset();
     scene.reset();
     steps.clear();
     const bool failedAndRetired = state == GpuSceneExecutorJobState::Failure && device &&
@@ -186,6 +190,10 @@ void GpuSceneExecutor::Impl::finishReady() noexcept {
         queueTiming->end();
         queueTimingSample = queueTiming->poll();
     }
+    // All native outputs have retired and transferred to image pins before Ready publication.
+    // Release the exclusive batch owner while this executor and its output remain alive.
+    if (operationBatch && !operationBatch->hasUnretiredSubmission())
+        operationBatch.reset();
     state = GpuSceneExecutorJobState::Ready;
     diagnostic = {};
     ++counters.scenesCompleted;

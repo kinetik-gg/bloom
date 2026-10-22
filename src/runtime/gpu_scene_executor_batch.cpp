@@ -6,7 +6,8 @@
 namespace bloom::runtime {
 using gpu_scene_executor_detail::makeDiagnostic;
 std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch() {
-    if (!budgets.enableNativeBatches || batchAttempted)
+    const bool requiredGradient = steps[cursor].kind == GpuSceneExecutorStepKind::Gradient;
+    if ((!budgets.enableNativeBatches && !requiredGradient) || batchAttempted)
         return std::nullopt;
     batchAttempted = true;
     if (steps.size() - cursor < 2 && steps[cursor].kind != GpuSceneExecutorStepKind::Gradient)
@@ -62,6 +63,10 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
         }
         if (step.command != kInvalidGpuSceneCommand)
             produced[step.command] = static_cast<std::uint32_t>(operations.size() - 1);
+        // GradientV1 uses this native owner even when optional multi-operation batching is
+        // disabled. In that mode submit only its required generator kernel.
+        if (!budgets.enableNativeBatches)
+            break;
     }
     if (operations.size() < 2 && steps[cursor].kind != GpuSceneExecutorStepKind::Gradient)
         return std::nullopt;
@@ -126,6 +131,9 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
         ++counters.nativeBatchFallbacks;
         if (native.code == render::GpuOperationBatchCode::Busy)
             operationBatch.reset();
+        if (requiredGradient)
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DispatchRefused,
+                                  "GradientV1 native batch refused: " + native.message);
         return std::nullopt; // Only pre-submit construction/refusal falls back to serial native
                              // work.
     }
