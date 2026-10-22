@@ -131,6 +131,10 @@ applyDiscreteImageEffect(const DiscreteImageKernel kernel, const render::Rgba32f
         }
         reportProgress(progress, {EvaluationProgressStage::Operation, operation, y + 1U, height});
     }
+    if (cancellation.isCancellationRequested()) {
+        result.cancelled = true;
+        return result;
+    }
     auto frozen = std::move(*builder.value()).freeze();
     if (!frozen) {
         refuse(EvaluationDiagnosticCode::InvalidPixel, "Discrete image output is invalid");

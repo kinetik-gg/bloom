@@ -9,6 +9,8 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -17,6 +19,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 namespace {
 using namespace bloom;
@@ -269,6 +272,47 @@ void testDiscreteImages() {
                    "ROI crops rotated output after preserving complete source support");
         }
     }
+}
+
+void testDiscreteFinalRowCancellation() {
+    using namespace runtime;
+    const auto window = render::ImageWindow::create(0, 0, 4, 2);
+    const auto descriptor = render::Rgba32fImageDescriptor::create(
+        *window.value(), *window.value(), core::PixelAspectRatio::square());
+    auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), 4096);
+    const auto input = std::move(*builder.value()).freeze();
+    auto config = TaskSchedulerConfig::defaults();
+    config.cpuWorkerCount = 1;
+    config.blockingIoWorkerCount = 1;
+    TaskScheduler scheduler(config);
+    const TaskOwner owner{TaskOwnerKind::Composition, TaskOwnerId::fromRaw(1)};
+    for (const auto kernel : {DiscreteImageKernel{true, false, 0},
+                              DiscreteImageKernel{false, false, 1}}) {
+        auto group = scheduler.createGroup(owner, "Discrete final-row cancellation");
+        TaskRequest request{"Discrete final-row cancellation", owner};
+        request.groupId = group.handle.id();
+        const auto cancelledWithoutImage = std::make_shared<std::atomic_bool>(false);
+        auto submission = scheduler.submit<void>(request, [&, kernel, handle = group.handle,
+                                                           cancelledWithoutImage](TaskContext& context) {
+            const auto result = detail::applyDiscreteImageEffect(
+                kernel, *input.value(), 4096, context.cancellation(), OperationIndex::fromRaw(1),
+                [&](const auto& progress) {
+                    if (progress.completed == progress.total && progress.total != 0)
+                        handle.cancel();
+                });
+            cancelledWithoutImage->store(result.cancelled && !result.image);
+            return TaskResult<void>::cancelled();
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        std::optional<TaskResult<void>> result;
+        while (!result && std::chrono::steady_clock::now() < deadline) {
+            result = submission.handle.tryTakeResult();
+            std::this_thread::yield();
+        }
+        expect(result && cancelledWithoutImage->load(),
+               "Flip and Rotate90 discard output when cancellation arrives on the final row");
+    }
+    scheduler.beginShutdown();
 }
 
 void testUnaryImageEffectInputArity() {
@@ -1112,6 +1156,7 @@ int main(const int argc, char** argv) {
         }
         if (argc == 2 && std::string_view(argv[1]) == "--discrete-only") {
             testDiscreteImages();
+            testDiscreteFinalRowCancellation();
             testUnaryImageEffectInputArity();
             return failures == 0 ? 0 : 1;
         }
@@ -1122,6 +1167,7 @@ int main(const int argc, char** argv) {
         testImageCombineWindows();
         testImageCombineDrivers();
         testDiscreteImages();
+        testDiscreteFinalRowCancellation();
         testUnaryImageEffectInputArity();
         testBlurEvaluation();
         testSpatialEffectBudgets();
