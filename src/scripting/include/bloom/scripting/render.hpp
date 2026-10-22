@@ -2,6 +2,7 @@
 
 #include <bloom/host/frame_range_runner.hpp>
 #include <bloom/output/output_analysis.hpp>
+#include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/scripting/session.hpp>

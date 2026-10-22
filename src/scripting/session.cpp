@@ -151,8 +151,9 @@ bool Session::isValid() const noexcept {
 
 SessionRenderSourceSnapshot Session::renderSourceSnapshot() const {
     if (binding_) {
-        return binding_->renderSourceSnapshot ? binding_->renderSourceSnapshot()
-                                              : SessionRenderSourceSnapshot{snapshot(), {}};
+        return binding_->renderSourceSnapshot
+                   ? binding_->renderSourceSnapshot()
+                   : SessionRenderSourceSnapshot{snapshot(), {}, std::nullopt};
     }
     const auto* settings = session_->colorSettings();
     return {snapshot(), displayPath_.parent_path(),
