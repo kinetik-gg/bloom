@@ -192,6 +192,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.cacheKey = uploadCommand->semanticKey;
         step.cacheOnComplete = true;
         step.uploadSource = uploadCommand->image;
+        step.uploadDescriptor = uploadCommand->descriptor;
         steps.push_back(std::move(step));
         color[index] = 2;
         return {};

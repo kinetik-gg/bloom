@@ -206,6 +206,76 @@ void testProxiedStill(Expectations& expectations, bloom::render::GpuDevice& devi
                         "proxy: the budget refusal leaves the executor idle");
 }
 
+void testRawBackingAcrossRequestGeometry(Expectations& expectations,
+                                         bloom::render::GpuDevice& device,
+                                         const CpuCompositionEvaluator& evaluator,
+                                         const Fixture& fixture,
+                                         const GpuSceneOcioContext& ocioContext) {
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+    expectations.expect(cache.hasValue(), "raw geometry: cache host");
+    if (!cache)
+        return;
+    auto executor = GpuSceneExecutor::create(device, *cache.cache, GpuSceneExecutorBudgets{});
+    expectations.expect(executor.hasValue(), "raw geometry: executor host");
+    if (!executor)
+        return;
+    const CpuGpuSceneBuilder builder(nullptr, legacyPreparedMediaContext(evaluator), ocioContext);
+    const auto square =
+        mediaPlan(format(9, 7), fixture.asset, LayerValues{.position = {4.5, 3.5}}, 48100);
+    const auto wide = mediaPlan(format(9, 7, pixelAspect(4, 3)), fixture.asset,
+                                LayerValues{.position = {4.5, 3.5}}, 48200);
+    const auto halfExtent = bloom::render::ImageExtent::create(5, 4);
+    if (!halfExtent) {
+        expectations.expect(false, "raw geometry: half extent builds");
+        return;
+    }
+    auto full = acesRequest(*square, kAcesWorking);
+    auto half = full;
+    half.resolution = ProxyResolution{*halfExtent.value()};
+    auto changedPar = acesRequest(*wide, kAcesWorking);
+    const std::array requests{std::pair{square, full}, std::pair{square, half},
+                              std::pair{square, full}, std::pair{wide, changedPar}};
+    const Rgba32fImage* sourceBacking = nullptr;
+    std::string squareUploadKey;
+    for (std::size_t index = 0; index < requests.size(); ++index) {
+        const auto& [plan, request] = requests[index];
+        const auto prepared = builder.build(plan, request);
+        const auto* upload = prepared ? firstUpload(*prepared.scene) : nullptr;
+        expectations.expect(upload != nullptr, "raw geometry: each request prepares an upload");
+        if (upload == nullptr)
+            return;
+        if (index == 0) {
+            sourceBacking = upload->image.get();
+            squareUploadKey = upload->semanticKey;
+        } else {
+            expectations.expect(upload->image.get() == sourceBacking &&
+                                    prepared.scene->mediaStatistics().uploadCacheHits == 1,
+                                "raw geometry: all requests share one decoded allocation");
+        }
+        expectations.expect(upload->descriptor.displayWindow() ==
+                                    prepared.scene->outputDescriptor().displayWindow() &&
+                                upload->descriptor.pixelAspect() ==
+                                    prepared.scene->outputDescriptor().pixelAspect(),
+                            "raw geometry: upload uses the current display window and PAR");
+        expectations.expect((index == 3) ? upload->semanticKey != squareUploadKey
+                                         : upload->semanticKey == squareUploadKey,
+                            "raw geometry: resident identity follows request descriptor");
+        auto oracle = request;
+        oracle.bypassOperationCache = true;
+        const auto frame = evaluator.evaluate(plan, oracle, {});
+        const auto run = runScene(*executor.executor, prepared.scene, kSceneBudget);
+        const auto readback =
+            run.ready && run.image != nullptr
+                ? bloom::render::readbackResidentImage(*run.image, kReadbackBudget)
+                : bloom::render::GpuImageReadback{};
+        expectations.expect(
+            frame.frame() != nullptr && run.ready && run.image != nullptr &&
+                descriptorMatchesScene(*run.image, *prepared.scene) && readback.hasValue() &&
+                pixelsClose(readback.pixels, frame.frame()->processImage().pixels()),
+            "raw geometry: Full/Half/Full/PAR native output matches CPU");
+    }
+}
+
 // An identity (input colour space == working colour space) proxied still under a configured GPU
 // colour context: no OCIO program is prepared, but the full-resolution raw upload still goes
 // through the native PointResampleV1 gather. This is the identity/no-OCIO proxy path the split must

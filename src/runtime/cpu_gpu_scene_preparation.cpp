@@ -31,6 +31,12 @@
 #include <vector>
 
 namespace bloom::runtime {
+
+struct GpuSceneSourceBackingLedger final {
+    std::unordered_set<const void*> identities;
+    std::uint64_t chargedBytes = 0;
+};
+
 namespace {
 
 [[nodiscard]] PreparedGpuSceneBuildResult failed(const PreparedGpuSceneDiagnosticCode code,
@@ -344,29 +350,30 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     std::uint64_t retainedBytes = 0;
     std::uint64_t coverageBytes = 0;
     std::uint64_t sourceBytes = 0;
+    auto sourceBackings = phase_.sourceBackings ? phase_.sourceBackings
+                                                : std::make_shared<GpuSceneSourceBackingLedger>();
     std::unordered_set<const void*> countedCoverage;
     const auto chargeRetained =
-        [&](const std::uint64_t width, const std::uint64_t height,
-            const std::uint64_t bytesPerPixel) -> std::optional<detail::GpuSceneLeafFailure> {
-        if (width == 0 || height == 0) {
+        [&](const void* backing,
+            const std::uint64_t bytes) -> std::optional<detail::GpuSceneLeafFailure> {
+        if (backing == nullptr || bytes == 0) {
             return detail::GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                                               "Prepared command has an empty window"};
+                                               "Prepared source has no pixel backing"};
         }
-        const std::array<std::uint64_t, 3> factors{width, height, bytesPerPixel};
-        const auto bytes = detail::checkedProduct(factors);
-        if (!bytes.has_value()) {
-            return detail::GpuSceneLeafFailure{
-                PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
-                "Prepared command size overflows"};
+        if (sourceBackings->identities.contains(backing)) {
+            return std::nullopt;
         }
-        if (sourceBytes > sourceAllowance || *bytes > sourceAllowance - sourceBytes ||
-            (!phaseLease && (retainedBytes > allowance || *bytes > allowance - retainedBytes))) {
+        if (sourceBackings->chargedBytes > sourceAllowance ||
+            bytes > sourceAllowance - sourceBackings->chargedBytes ||
+            (!phaseLease && (retainedBytes > allowance || bytes > allowance - retainedBytes))) {
             return detail::GpuSceneLeafFailure{
                 PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
                 "Prepared scene exceeds the request pixel allowance"};
         }
-        sourceBytes += *bytes;
-        retainedBytes += *bytes;
+        sourceBackings->identities.insert(backing);
+        sourceBackings->chargedBytes += bytes;
+        sourceBytes += bytes;
+        retainedBytes += bytes;
         return std::nullopt;
     };
     // GPU-transient outputs are not summed here; the executor's live-pin ledger bounds them.
@@ -506,41 +513,47 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             // child's content-addressed command keys are preserved, so an unrelated child edit
             // still reuses every untouched branch. No finished child frame is ever CPU-uploaded.
             detail::GpuSceneNestedResult nested;
+            const auto sourceBytesBefore = sourceBackings->chargedBytes;
             const auto error = detail::prepareNestedComposition(
                 *source, *plan, request, resolved, hScale, vScale, detail::nestedCompositionDepth(),
                 allowance, retainedBytes, cancellation,
-                [this, &phaseLease, sourceAllowance, coverageAllowance, sourceBytes, coverageBytes,
-                 foregroundLimit = request.pixelStorageByteLimit](
+                [this, &phaseLease, &sourceBackings, sourceAllowance, coverageAllowance,
+                 coverageBytes, foregroundLimit = request.pixelStorageByteLimit](
                     const std::shared_ptr<const CompiledCompositionPlan>& childPlan,
                     const EvaluationRequest& childRequest, const CancellationToken& cancel) {
                     // The parent phase covers this bounded nested preparation; a child must not
                     // create another independent reservation for the same retained source set.
                     auto childPhase = phase_;
                     childPhase.admittedLease = phaseLease;
-                    childPhase.remainingSourceBytes =
-                        sourceAllowance > sourceBytes ? sourceAllowance - sourceBytes : 0;
+                    childPhase.sourceBackings = sourceBackings;
+                    childPhase.remainingSourceBytes = sourceAllowance;
                     childPhase.remainingCoverageBytes =
                         coverageAllowance > coverageBytes ? coverageAllowance - coverageBytes : 0;
                     const CpuGpuSceneBuilder child(coverageCache_, mediaContext_, ocioContext_,
                                                    std::move(childPhase));
                     auto admittedRequest = childRequest;
-                    if (phaseLease) {
-                        // Retained quotas are carried separately. They must not become the child's
-                        // foreground preflight/decoder working-set ceiling.
-                        admittedRequest.pixelStorageByteLimit = foregroundLimit;
-                    }
+                    // Retained quotas are carried separately. They must not become the child's
+                    // foreground preflight/decoder working-set ceiling, even without a phase.
+                    admittedRequest.pixelStorageByteLimit = foregroundLimit;
                     return child.build(childPlan, admittedRequest, cancel);
                 },
-                commands, nested);
+                commands, nested, /*sourceChargedExternally=*/true);
             if (error) {
                 return fail(error->code, error->message, mediaStatistics);
             }
-            if (nested.sourceResidentBytes > sourceAllowance - sourceBytes ||
+            const auto newlyCharged = sourceBackings->chargedBytes - sourceBytesBefore;
+            if (sourceBytes > sourceAllowance || newlyCharged > sourceAllowance - sourceBytes ||
                 nested.coverageResidentBytes > coverageAllowance - coverageBytes) {
                 return fail(PreparedGpuSceneDiagnosticCode::BudgetRefused,
                             "Nested retained source/coverage exceeds its parent's admitted quotas");
             }
-            sourceBytes += nested.sourceResidentBytes;
+            if (!phaseLease &&
+                (retainedBytes > allowance || newlyCharged > allowance - retainedBytes)) {
+                return fail(PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
+                            "Nested retained sources exceed the request pixel allowance");
+            }
+            sourceBytes += newlyCharged;
+            retainedBytes += newlyCharged;
             coverageBytes += nested.coverageResidentBytes;
             if (!nested.outputWindow.has_value()) {
                 return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,

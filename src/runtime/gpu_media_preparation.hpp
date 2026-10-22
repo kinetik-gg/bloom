@@ -44,8 +44,9 @@ namespace bloom::runtime::detail {
 // scene preparation is refused so the caller can take the existing CPU path, rather than silently
 // turning a missing or malformed source into a different warning.
 //
-// `uploadSemanticKey` is the decode/upload identity: what makes the DECODED bytes differ. The
-// prepared-upload cache and the emitted GpuSceneUploadCommand use it. `program` is null exactly
+// `uploadSemanticKey` is the emitted GPU resident identity: decoded bytes plus the request upload
+// descriptor. Raw backing reuse uses a separate decode-only key in the prepared-upload cache.
+// `program` is null exactly
 // when the resolved input->working transform is exact identity, in which case `semanticKey` equals
 // `uploadSemanticKey`; otherwise `semanticKey` is the OCIO effect identity over the upload key and
 // the program. `image` always carries the command's resident pixels (converted for the connected
@@ -64,6 +65,9 @@ struct MediaResamplePlan final {
 
 struct MediaUploadOutcome final {
     std::shared_ptr<const render::Rgba32fImage> image;
+    // Request geometry for the upload command. Raw source storage keeps its native descriptor;
+    // this value supplies the composition display/PAR without copying its pixels.
+    std::optional<render::Rgba32fImageDescriptor> uploadDescriptor;
     std::string semanticKey;
     std::string uploadSemanticKey;
     std::shared_ptr<const PreparedGpuOcioCommand> program;

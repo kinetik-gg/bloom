@@ -95,6 +95,7 @@ struct GpuSceneExecutorStep final {
     // for the job lifetime so the staging copy and any unretired submission keep their source
     // alive.
     std::shared_ptr<const render::Rgba32fImage> uploadSource;
+    std::optional<render::Rgba32fImageDescriptor> uploadDescriptor;
     // Translation output data window plus GPU-local translation and opacity.
     std::optional<render::ImageWindow> outputWindow;
     double translationX = 0.0;

@@ -29,7 +29,7 @@ namespace bloom::runtime::detail {
 // Charges one prepared media command's resident bytes; returns a failure when the request allowance
 // would be exceeded. Shared with the solid coverage path's charger via the common header alias.
 using GpuSceneMediaChargeBytes = std::function<std::optional<GpuSceneLeafFailure>(
-    std::uint64_t width, std::uint64_t height, std::uint64_t bytesPerPixel)>;
+    const void* backing, std::uint64_t retainedBytes)>;
 
 // Screens every reachable layer for an unsupported blend or transform BEFORE any media is resolved
 // or decoded. Returns a failure when the whole graph must fail closed, or nullopt to continue. An

@@ -221,7 +221,8 @@ inline void addWindowBytes(std::uint64_t& total, const render::ImageWindow windo
 // allocated at executor time under the executor's own live-pin budget; counting their mutually
 // exclusive lifetimes here would re-introduce the artificial per-frame refusal the builder fixed.
 // Any new command alternative must be classified explicitly here.
-[[nodiscard]] inline std::uint64_t nestedSceneResidentBytes(const PreparedGpuScene& scene) {
+[[nodiscard]] inline std::uint64_t nestedSceneResidentBytes(const PreparedGpuScene& scene,
+                                                            const bool includeUploads = true) {
     std::uint64_t total = 0;
     std::unordered_set<const void*> countedCoverage;
     for (const auto& command : scene.commands()) {
@@ -238,7 +239,8 @@ inline void addWindowBytes(std::uint64_t& total, const render::ImageWindow windo
                 } else if constexpr (std::is_same_v<T, GpuSceneUploadCommand>) {
                     // A frozen host upload image: the one retained RGBA32F allocation. The
                     // point-resample proxy output and the OCIO effect output are GPU-transient.
-                    nested_detail::addWindowBytes(total, item.descriptor.dataWindow());
+                    if (includeUploads)
+                        nested_detail::addWindowBytes(total, item.descriptor.dataWindow());
                 } else if constexpr (std::is_same_v<T, GpuSceneSolidCommand> ||
                                      std::is_same_v<T, GpuSceneTranslationCommand> ||
                                      std::is_same_v<T, GpuSceneAffineCommand> ||
@@ -274,7 +276,8 @@ template <typename BuildChild>
     const double parentHorizontalScale, const double parentVerticalScale, const std::size_t depth,
     const std::uint64_t allowance, std::uint64_t& chargedBytes,
     const CancellationToken& cancellation, BuildChild&& buildChild,
-    std::vector<GpuSceneCommand>& commands, GpuSceneNestedResult& result) {
+    std::vector<GpuSceneCommand>& commands, GpuSceneNestedResult& result,
+    const bool sourceChargedExternally = false) {
     if (depth >= kMaxNestedCompositionDepth) {
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                     "Nested composition depth exceeds the supported limit");
@@ -379,11 +382,13 @@ template <typename BuildChild>
         return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
                     "Nested composition published no output window");
     }
-    result.residentBytes = nestedSceneResidentBytes(childScene);
-    for (const auto& command : childScene.commands()) {
-        if (const auto* upload = std::get_if<GpuSceneUploadCommand>(&command)) {
-            nested_detail::addWindowBytes(result.sourceResidentBytes,
-                                          upload->descriptor.dataWindow());
+    result.residentBytes = nestedSceneResidentBytes(childScene, !sourceChargedExternally);
+    if (!sourceChargedExternally) {
+        for (const auto& command : childScene.commands()) {
+            if (const auto* upload = std::get_if<GpuSceneUploadCommand>(&command)) {
+                nested_detail::addWindowBytes(result.sourceResidentBytes,
+                                              upload->descriptor.dataWindow());
+            }
         }
     }
     result.coverageResidentBytes = result.residentBytes >= result.sourceResidentBytes

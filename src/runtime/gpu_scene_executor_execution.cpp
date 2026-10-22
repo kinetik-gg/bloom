@@ -273,7 +273,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
                                   "an upload step has no converted source before dispatch");
         }
         const auto native = upload->begin(
-            render::GpuImageUploadParameters{step.uploadSource, device->retainedProcessingPhase()},
+            render::GpuImageUploadParameters{step.uploadSource, device->retainedProcessingPhase(),
+                                             step.uploadDescriptor},
             remaining);
         if (native.code != render::GpuImageUploadDiagnosticCode::None) {
             return diagnosticFromUpload(native);

@@ -19,6 +19,116 @@ void testBudgetRefusal(Expectations& expectations, const MediaFixture& fixture) 
         "the media budget refusal is diagnosed as a pixel-storage budget");
 }
 
+[[nodiscard]] std::shared_ptr<const CompiledCompositionPlan>
+sharedSourcePlan(const std::vector<document::AssetRecord>& assets, const std::uint64_t idBase) {
+    std::vector<CompiledOperation> operations;
+    std::vector<CompiledMergeInput> entries;
+    for (std::size_t index = 0; index < assets.size(); ++index) {
+        const auto id = idBase + static_cast<std::uint64_t>(index) * 20;
+        const auto sourceIndex = OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(bloom::runtime::CompiledImageSource{
+            document::NodeId::fromRaw(id + 10), assets[index], 0, 0, 0, {}, false});
+        const auto layerIndex = OperationIndex::fromRaw(operations.size());
+        const auto layerId = document::LayerId::fromRaw(id + 12);
+        operations.emplace_back(layerOutput(
+            document::NodeId::fromRaw(id + 11), layerId, sourceIndex,
+            LayerIds{document::ParameterId::fromRaw(id), document::ParameterId::fromRaw(id + 1),
+                     document::ParameterId::fromRaw(id + 2), document::ParameterId::fromRaw(id + 3),
+                     document::ParameterId::fromRaw(id + 4),
+                     document::ParameterId::fromRaw(id + 5)},
+            LayerValues{.position = {4.0, 4.0}}));
+        entries.emplace_back(document::LayerSlotId::fromRaw(id + 14), layerId, layerIndex);
+    }
+    const auto mergeIndex = OperationIndex::fromRaw(operations.size());
+    operations.emplace_back(CompiledMerge{document::NodeId::fromRaw(idBase + 1000), entries});
+    const auto outputIndex = OperationIndex::fromRaw(operations.size());
+    operations.emplace_back(
+        CompiledCompositionOutput{document::NodeId::fromRaw(idBase + 1001), mergeIndex});
+    return publish(CompiledCompositionPlanDefinition{document::Revision::fromRaw(7), kProjectId,
+                                                     kCompositionId, format(8, 8),
+                                                     std::move(operations), outputIndex});
+}
+
+void testSharedSourceBackingCharge(Expectations& expectations,
+                                   const CpuCompositionEvaluator& evaluator,
+                                   const MediaFixture& fixture) {
+    constexpr std::uint64_t oneSourceBytes = 16ULL * 16 * sizeof(Rgba32f);
+    const auto firstPath = fixture.directory / "shared_backing_a.exr";
+    const auto secondPath = fixture.directory / "shared_backing_b.exr";
+    auto pixels = std::vector<ExrPixel>(256, signedHdrPixels().front());
+    writeExrRgba(firstPath, 16, 16, pixels);
+    pixels.front().red += 0.5F;
+    writeExrRgba(secondPath, 16, 16, pixels);
+    const auto firstAsset = imageAsset(firstPath, "shared-a", 53000);
+    const auto secondAsset = imageAsset(secondPath, "shared-b", 53001);
+    const CpuGpuSceneBuilder builder(nullptr, legacyPreparedMediaContext(evaluator));
+    const auto aliases = sharedSourcePlan({firstAsset, firstAsset, firstAsset}, 54000);
+    auto request = requestFor(*aliases);
+    request.pixelStorageByteLimit = oneSourceBytes;
+    const auto shared = builder.build(aliases, request);
+    expectations.expect(shared.hasValue(), "three source aliases fit one backing charge");
+    if (shared) {
+        const Rgba32fImage* backing = nullptr;
+        std::size_t uploads = 0;
+        bool sameBacking = true;
+        for (const auto& command : shared.scene->commands()) {
+            if (const auto* upload = std::get_if<GpuSceneUploadCommand>(&command)) {
+                ++uploads;
+                if (backing != nullptr && backing != upload->image.get())
+                    sameBacking = false;
+                backing = upload->image.get();
+            }
+        }
+        expectations.expect(uploads == 3 && sameBacking,
+                            "all three aliases retain the same immutable pixels");
+    }
+
+    const auto distinct = sharedSourcePlan({firstAsset, secondAsset}, 55000);
+    request = requestFor(*distinct);
+    request.pixelStorageByteLimit = oneSourceBytes;
+    const auto refused = builder.build(distinct, request);
+    expectations.expect(
+        !refused && refused.diagnostic.code ==
+                        bloom::runtime::PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
+        "two distinct backings need two source charges");
+
+    auto childDefinition = sharedSourcePlan({firstAsset}, 56000)->copyDefinition();
+    childDefinition.compositionId = document::CompositionId::fromRaw(3);
+    const auto child = publish(std::move(childDefinition));
+    auto parentDefinition = sharedSourcePlan({firstAsset}, 57000)->copyDefinition();
+    auto parentOperations = std::vector<CompiledOperation>{parentDefinition.operations[0],
+                                                           parentDefinition.operations[1]};
+    parentOperations.emplace_back(bloom::runtime::CompiledCompositionSource{
+        document::NodeId::fromRaw(58000), 0,
+        bloom::runtime::CompiledCompositionTimeMapping{{document::ParameterId::fromRaw(58001), 0.0},
+                                                       {document::ParameterId::fromRaw(58002), 1.0},
+                                                       0}});
+    parentOperations.emplace_back(layerOutput(
+        document::NodeId::fromRaw(58003), document::LayerId::fromRaw(58004),
+        OperationIndex::fromRaw(2),
+        LayerIds{document::ParameterId::fromRaw(58010), document::ParameterId::fromRaw(58011),
+                 document::ParameterId::fromRaw(58012), document::ParameterId::fromRaw(58013),
+                 document::ParameterId::fromRaw(58014), document::ParameterId::fromRaw(58015)},
+        LayerValues{.position = {4.0, 4.0}}));
+    parentOperations.emplace_back(
+        CompiledMerge{document::NodeId::fromRaw(58005),
+                      {{document::LayerSlotId::fromRaw(58006), document::LayerId::fromRaw(57012),
+                        OperationIndex::fromRaw(1)},
+                       {document::LayerSlotId::fromRaw(58007), document::LayerId::fromRaw(58004),
+                        OperationIndex::fromRaw(3)}}});
+    parentOperations.emplace_back(
+        CompiledCompositionOutput{document::NodeId::fromRaw(58008), OperationIndex::fromRaw(4)});
+    parentDefinition.operations = std::move(parentOperations);
+    parentDefinition.output = OperationIndex::fromRaw(5);
+    parentDefinition.nestedPlans.push_back(child);
+    const auto parent = publish(std::move(parentDefinition));
+    request = requestFor(*parent);
+    request.pixelStorageByteLimit = oneSourceBytes;
+    const auto nested = builder.build(parent, request);
+    expectations.expect(nested.hasValue(),
+                        "parent and nested child share one source backing charge");
+}
+
 // The reported failure: a large EXR source (4608x3164, ~233 MB as RGBA32F) composited over an FHD
 // solid and text is refused by the scene builder under the default 512 MiB preview allowance even
 // though the retained host set is a single source upload. The builder must not sum mutually

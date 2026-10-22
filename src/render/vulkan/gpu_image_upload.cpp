@@ -291,10 +291,16 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
                                 "the upload source is null");
     }
     const Rgba32fImage& source = *parameters.source;
-    const Rgba32fImageDescriptor* const descriptor = source.descriptor();
-    if (descriptor == nullptr) {
+    const Rgba32fImageDescriptor* const sourceDescriptor = source.descriptor();
+    if (sourceDescriptor == nullptr) {
         return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
                                 "the upload source has no descriptor");
+    }
+    const Rgba32fImageDescriptor* const descriptor =
+        parameters.descriptorOverride ? &*parameters.descriptorOverride : sourceDescriptor;
+    if (descriptor->layout() != sourceDescriptor->layout()) {
+        return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
+                                "the upload descriptor layout does not match its source");
     }
     const std::uint32_t width = descriptor->dataWindow().extent().width();
     const std::uint32_t height = descriptor->dataWindow().extent().height();

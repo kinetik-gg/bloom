@@ -107,6 +107,8 @@ int main(const int argc, char** argv) {
             testColdBuilderToExecutor(expectations, *device.device, evaluator, fixture,
                                       ocioContext);
             testProxiedStill(expectations, *device.device, evaluator, fixture, ocioContext);
+            testRawBackingAcrossRequestGeometry(expectations, *device.device, evaluator, fixture,
+                                                ocioContext);
             testProxiedIdentityStill(expectations, *device.device, evaluator, fixture, ocioContext);
             testRealVideoColour(expectations, *device.device, evaluator, options.fixtures,
                                 ocioContext);

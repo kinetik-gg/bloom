@@ -264,6 +264,44 @@ void testBudgetsAndArguments(Expectations& expectations, GpuImageUpload& upload)
                         "a tighter-than-peak byte budget is rejected before allocation");
     expectations.expect(upload.state() == GpuImageUploadJobState::Idle,
                         "a rejected begin leaves the pipeline idle");
+
+    const auto wrongWindow = ImageWindow::create(0, 0, 5, 2);
+    const auto display = ImageWindow::create(0, 0, 8, 6);
+    const auto aspect = PixelAspectRatio::create(4, 3);
+    if (!wrongWindow || !display || !aspect) {
+        expectations.expect(false, "descriptor override fixture builds");
+        return;
+    }
+    const auto wrongDescriptor =
+        Rgba32fImageDescriptor::create(*wrongWindow.value(), *display.value(), *aspect);
+    if (!wrongDescriptor) {
+        expectations.expect(false, "mismatched descriptor override builds");
+        return;
+    }
+    parameters.descriptorOverride = *wrongDescriptor.value();
+    expectations.expect(upload.begin(parameters, 1ULL << 32ULL).code ==
+                            GpuImageUploadDiagnosticCode::InvalidArgument,
+                        "an override with a different packed layout is rejected");
+    const auto requestDescriptor =
+        Rgba32fImageDescriptor::create(*dataWindow.value(), *display.value(), *aspect);
+    if (!requestDescriptor) {
+        expectations.expect(false, "request descriptor override builds");
+        return;
+    }
+    parameters.descriptorOverride = *requestDescriptor.value();
+    const auto accepted = upload.begin(parameters, 1ULL << 32ULL);
+    expectations.expect(accepted.code == GpuImageUploadDiagnosticCode::None,
+                        "a metadata-only descriptor override begins without a pixel copy");
+    if (accepted.code != GpuImageUploadDiagnosticCode::None)
+        return;
+    expectations.expect(pollUntilTerminal(upload) == GpuImageUploadPollResult::Ready,
+                        "an overridden upload reaches Ready");
+    const auto* resident = upload.image();
+    expectations.expect(resident != nullptr && resident->dataWindow() == *dataWindow.value() &&
+                            resident->displayWindow() == *display.value() &&
+                            resident->pixelAspect() == aspect,
+                        "the native resident carries the request display and PAR");
+    (void)upload.takeImage();
 }
 
 void testWrongThread(Expectations& expectations, GpuImageUpload& upload) {

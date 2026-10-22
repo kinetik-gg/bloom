@@ -29,7 +29,7 @@ finishUploadLeaf(const MediaUploadOutcome& outcome, GpuSceneUploadLeafResult& re
                                    outcome.failure.empty() ? "Media source could not be prepared"
                                                            : outcome.failure};
     }
-    const auto descriptor = *outcome.image->descriptor();
+    const auto descriptor = outcome.uploadDescriptor.value_or(*outcome.image->descriptor());
     // The layer transform samples the PROXY image the media source publishes, exactly as the CPU
     // evaluator does: under a fractional proxy the leaf's output window is the point-resample
     // output, not the full-resolution raw upload. At unit scale the two are identical.
@@ -39,8 +39,7 @@ finishUploadLeaf(const MediaUploadOutcome& outcome, GpuSceneUploadLeafResult& re
     result.bounds.output = result.bounds.local;
     result.outputWindow = leafWindow;
     if (const auto error =
-            chargeBytes(descriptor.dataWindow().extent().width(),
-                        descriptor.dataWindow().extent().height(), sizeof(render::Rgba32f))) {
+            chargeBytes(outcome.image->pixels().data(), outcome.image->pixelStorageByteCost())) {
         return error;
     }
     result.image = outcome.image;

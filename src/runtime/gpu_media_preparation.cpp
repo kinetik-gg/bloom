@@ -111,16 +111,28 @@ void addPixelAspect(OperationKey& key, const core::PixelAspectRatio ratio) {
     return key.digest();
 }
 
-// The RAW decode upload identity: the kind tag plus the decode-only identity. It deliberately does
-// NOT fold the proxy scales or display descriptor, so a proxy or display change never re-decodes;
-// the raw upload carries the source's own metadata and the proxy is applied by the point-resample
-// command downstream. The kind tag keeps an image raw upload distinct from a video raw upload.
+// The RAW backing identity: the kind tag plus the decode-only identity. It deliberately does NOT
+// fold proxy scales or display geometry, so those request changes never re-decode. The resident
+// command key below does include geometry because a GPU image retains it.
 [[nodiscard]] std::string rawDecodeUploadKey(const std::string_view kind,
                                              const std::string& decodeKey) {
     OperationKey key;
     key.add(std::string{"gpu-raw-upload-v1"});
     key.add(std::string{kind});
     key.add(decodeKey);
+    return key.digest();
+}
+
+// GPU residents also carry display geometry. A raw backing can be shared across requests, but a
+// resident made for one display/PAR cannot be returned from the scene cache for another request.
+[[nodiscard]] std::string rawUploadCommandKey(const std::string& backingKey,
+                                              const render::Rgba32fImageDescriptor& descriptor) {
+    OperationKey key;
+    key.add(std::string{"gpu-raw-upload-descriptor-v1"});
+    key.add(backingKey);
+    addWindow(key, descriptor.dataWindow());
+    addWindow(key, descriptor.displayWindow());
+    addPixelAspect(key, descriptor.pixelAspect());
     return key.digest();
 }
 
@@ -447,18 +459,17 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
 
     ++statistics.imageSources;
     // A real OR identity input->working transform. The raw upload always stays at the FULL source
-    // dimensions with the source's native metadata. Under a fractional proxy the accepted
+    // dimensions with request geometry on its command. Under a fractional proxy the accepted
     // PointResampleV1 command gathers the full-resolution upload to the proxy output window on the
     // GPU; a non-identity transform then runs the OCIO CST over that proxy geometry. The CPU oracle
     // applies exact nearest resampling before the per-pixel colour transform, and an exact nearest
     // sample commutes with a per-pixel transform, so nearest-then-(optional OCIO) is
     // pixel-identical with no host per-pixel resampling.
     MediaUploadOutcome outcome;
-    outcome.uploadSemanticKey = rawDecodeUploadKey("image-raw", selection.decodeKey);
-    outcome.semanticKey = outcome.uploadSemanticKey;
+    const auto backingKey = rawDecodeUploadKey("image-raw", selection.decodeKey);
     ++statistics.uploadKeyConstructions;
     if (!explicitBypass && context.preparedUploadCache != nullptr) {
-        if (auto cached = context.preparedUploadCache->find(outcome.uploadSemanticKey)) {
+        if (auto cached = context.preparedUploadCache->find(backingKey)) {
             outcome.image = std::move(cached);
             outcome.cacheHit = true;
             ++statistics.uploadCacheHits;
@@ -483,32 +494,12 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
                                                          : decoded.diagnostic;
             return outcome;
         }
-        // The raw upload keeps the FULL source dimensions with the composition display window/pixel
-        // aspect. At unit scale this rebase is exactly the CPU's copy (no pixel resampling); at a
-        // fractional proxy it still copies every source pixel unchanged and the PointResampleV1
-        // command gathers the proxy on the GPU. Parsing the decode once at full resolution keeps
-        // the decode/upload identity independent of the proxy.
-        const auto uploadDescriptor =
-            rawUploadDescriptor(**decoded.value, resolved.imageDescriptor);
-        if (!uploadDescriptor.has_value()) {
-            outcome.failure = "Raw image upload descriptor is invalid";
-            return outcome;
-        }
-        auto rebased = resampleDecodedImage(**decoded.value, *uploadDescriptor, 1.0, 1.0,
-                                            byteBudget(pixelBudget), cancellation);
-        if (rebased.cancelled) {
-            outcome.cancelled = true;
-            return outcome;
-        }
-        if (!rebased.value.has_value()) {
-            outcome.failure =
-                rebased.diagnostic.empty() ? "Image raw rebase failed" : rebased.diagnostic;
-            return outcome;
-        }
-        outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(*rebased.value));
+        // Keep the decoded allocation itself. The request descriptor is attached to the upload
+        // command below; rebasing it here would copy every source pixel only to change metadata.
+        outcome.image = std::move(*decoded.value);
         outcome.converted = true;
         if (!explicitBypass && !planBypass && context.preparedUploadCache != nullptr) {
-            context.preparedUploadCache->store(outcome.uploadSemanticKey, outcome.image);
+            context.preparedUploadCache->store(backingKey, outcome.image);
         }
     }
     if (outcome.image->descriptor() == nullptr) {
@@ -516,7 +507,16 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
         outcome.image.reset();
         return outcome;
     }
-    const auto descriptor = *outcome.image->descriptor();
+    const auto uploadDescriptor = rawUploadDescriptor(*outcome.image, resolved.imageDescriptor);
+    if (!uploadDescriptor) {
+        outcome.failure = "Raw image upload descriptor is invalid";
+        outcome.image.reset();
+        return outcome;
+    }
+    outcome.uploadDescriptor = *uploadDescriptor;
+    outcome.uploadSemanticKey = rawUploadCommandKey(backingKey, *uploadDescriptor);
+    outcome.semanticKey = outcome.uploadSemanticKey;
+    const auto& descriptor = *uploadDescriptor;
     if (!resolvedProxyIsUnit(resolved)) {
         const auto proxyDescriptor = proxyOutputDescriptor(descriptor, resolved);
         if (!proxyDescriptor.has_value()) {
@@ -600,11 +600,10 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
     // the GPU. The raw frame stays at source resolution; under a fractional proxy the
     // PointResampleV1 command gathers it on the GPU before the (optional) OCIO transform. An
     // identity transform is the same raw frame with no OCIO pass, never treated as raw codec data.
-    outcome.uploadSemanticKey = rawDecodeUploadKey("video-raw", selection.decodeKey);
-    outcome.semanticKey = outcome.uploadSemanticKey;
+    const auto backingKey = rawDecodeUploadKey("video-raw", selection.decodeKey);
     ++statistics.uploadKeyConstructions;
     if (!explicitBypass && context.preparedUploadCache != nullptr) {
-        if (auto cached = context.preparedUploadCache->find(outcome.uploadSemanticKey)) {
+        if (auto cached = context.preparedUploadCache->find(backingKey)) {
             outcome.image = std::move(cached);
             outcome.cacheHit = true;
             ++statistics.uploadCacheHits;
@@ -615,9 +614,25 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
     if (outcome.image == nullptr) {
         // Codec-side preparation only: no OCIO processor runs here. The output is premultiplied
         // pre-OCIO RGB at the full frame resolution, exactly the CPU's pre-OCIO state.
+        if (selection.frame->planes.empty()) {
+            outcome.failure = "Raw video frame has no source plane";
+            return outcome;
+        }
+        const auto sourceWindow = render::ImageWindow::create(
+            0, 0, selection.frame->planes[0].width, selection.frame->planes[0].height);
+        if (!sourceWindow) {
+            outcome.failure = "Raw video source descriptor is invalid";
+            return outcome;
+        }
+        const auto sourceDescriptor = render::Rgba32fImageDescriptor::create(
+            *sourceWindow.value(), *sourceWindow.value(), core::PixelAspectRatio::square());
+        if (!sourceDescriptor) {
+            outcome.failure = "Raw video source descriptor is invalid";
+            return outcome;
+        }
         auto prepared = media::video::videoToInputColorSpace(
             *selection.frame, selection.interpretation, selection.inputColorSpaceId,
-            resolved.imageDescriptor, 1.0, 1.0, byteBudget(pixelBudget),
+            *sourceDescriptor.value(), 1.0, 1.0, byteBudget(pixelBudget),
             [&cancellation] { return cancellation.isCancellationRequested(); });
         ++statistics.videoConversions;
         if (const auto* error = std::get_if<media::provider::Unavailable>(&prepared)) {
@@ -632,7 +647,7 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
         outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(pixels));
         outcome.converted = true;
         if (!explicitBypass && !planBypass && context.preparedUploadCache != nullptr) {
-            context.preparedUploadCache->store(outcome.uploadSemanticKey, outcome.image);
+            context.preparedUploadCache->store(backingKey, outcome.image);
         }
     }
     if (outcome.image->descriptor() == nullptr) {
@@ -640,7 +655,16 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
         outcome.image.reset();
         return outcome;
     }
-    const auto descriptor = *outcome.image->descriptor();
+    const auto uploadDescriptor = rawUploadDescriptor(*outcome.image, resolved.imageDescriptor);
+    if (!uploadDescriptor) {
+        outcome.failure = "Raw video upload descriptor is invalid";
+        outcome.image.reset();
+        return outcome;
+    }
+    outcome.uploadDescriptor = *uploadDescriptor;
+    outcome.uploadSemanticKey = rawUploadCommandKey(backingKey, *uploadDescriptor);
+    outcome.semanticKey = outcome.uploadSemanticKey;
+    const auto& descriptor = *uploadDescriptor;
     if (!resolvedProxyIsUnit(resolved)) {
         const auto proxyDescriptor = proxyOutputDescriptor(descriptor, resolved);
         if (!proxyDescriptor.has_value()) {

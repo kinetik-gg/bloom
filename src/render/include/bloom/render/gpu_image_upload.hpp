@@ -25,9 +25,11 @@
 
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
+#include <bloom/render/image.hpp>
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace bloom::render {
@@ -67,6 +69,9 @@ struct GpuImageUploadParameters final {
     std::shared_ptr<const Rgba32fImage> source;
     // Exact already-retained request authority; null only for an explicitly rootless device.
     std::shared_ptr<GpuProcessingPhaseLease> phase = {};
+    // Request geometry can differ from the immutable source's descriptor without rebasing its
+    // pixel allocation. Its packed layout must match the source exactly.
+    std::optional<Rgba32fImageDescriptor> descriptorOverride = {};
 };
 
 // Separately bounded image and staging ceilings. The per-call byteBudget is the peak allowance and

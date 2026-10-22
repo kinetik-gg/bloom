@@ -60,6 +60,7 @@ int main() {
         testGestureCacheNeverTouchesDisk(expectations, evaluator, fixture);
         testAffineAndBlendMedia(expectations, evaluator, fixture);
         testBudgetRefusal(expectations, fixture);
+        testSharedSourceBackingCharge(expectations, evaluator, fixture);
         testLargeSourceUnderDefaultAllowance(expectations);
         testCapacityAwareProducerPolicy(expectations);
 

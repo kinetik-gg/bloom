@@ -615,6 +615,7 @@ struct GpuSceneOcioContext final {
 // Stateless CPU scene preparation. The caller owns the plan and request; nothing is retained beyond
 // the returned scene.
 class GpuSceneCoverageCache;
+struct GpuSceneSourceBackingLedger;
 
 struct GpuScenePreparationPhase final {
     std::shared_ptr<GpuProcessingPhasePolicy> policy;
@@ -624,6 +625,8 @@ struct GpuScenePreparationPhase final {
     std::shared_ptr<render::GpuProcessingPhaseLease> admittedLease = {};
     std::optional<std::uint64_t> remainingSourceBytes = {};
     std::optional<std::uint64_t> remainingCoverageBytes = {};
+    // One source-byte charge per immutable backing across a nested scene build.
+    std::shared_ptr<GpuSceneSourceBackingLedger> sourceBackings = {};
 };
 
 class CpuGpuSceneBuilder final {
