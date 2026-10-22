@@ -278,16 +278,7 @@ exceedsHardResourceLimits(const bloom::output::OutputAnalysisReportV1View report
     if (!pixelCount) {
         return true;
     }
-    constexpr auto maximumDimension = bloom::output::kOutputAnalysisMaximumDimensionV1;
-    const auto windowExceeds = [](const NumericWindow& window) noexcept {
-        return window.width > bloom::output::kOutputAnalysisMaximumDimensionV1 ||
-               window.height > bloom::output::kOutputAnalysisMaximumDimensionV1;
-    };
-    return *sourceWidth > maximumDimension || *sourceHeight > maximumDimension ||
-           *targetWidth > maximumDimension || *targetHeight > maximumDimension ||
-           *pixelCount > bloom::output::kOutputAnalysisMaximumPixelCountV1 ||
-           windowExceeds(*sourceData) || windowExceeds(*targetData) ||
-           windowExceeds(*sourceDisplay) || windowExceeds(*targetDisplay);
+    return *pixelCount > bloom::output::kOutputAnalysisMaximumPixelCountV1;
 }
 
 [[nodiscard]] std::optional<PixelAspectParts>

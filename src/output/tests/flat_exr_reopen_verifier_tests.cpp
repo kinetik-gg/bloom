@@ -283,7 +283,7 @@ void testWrongVersionFieldFlags(support::Expectations& expectations) {
 void testCancellationMidVerify(support::Expectations& expectations) {
     const support::ScratchDirectory scratch("cancel-mid-verify");
     // A wide image so each scanline is a meaningful fraction of the verifier's 16 MiB streaming
-    // chunk cap; at the maximum permitted width (32768) a chunk is 32 rows, so kHeight below spans
+    // chunk cap; at this fixture width (32768) a chunk is 32 rows, so kHeight below spans
     // several chunks, giving a deterministic chunk boundary to block on.
     constexpr std::uint32_t kWidth = 32'768;
     constexpr std::uint32_t kHeight = 200;

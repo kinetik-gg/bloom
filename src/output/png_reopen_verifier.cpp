@@ -9,6 +9,7 @@
 #include "output_semantic_identity.hpp"
 
 #include "png_preset_contract.hpp"
+#include "output_analysis_numeric.hpp"
 
 #include <bloom/output/output_limits.hpp>
 #include <bloom/output/png_reopen_verifier.hpp>
@@ -89,7 +90,7 @@ struct GeometryExpectation final {
 
 // Same checked-arithmetic preflight as png_output_adapter.cpp's validateGeometry(): the caller-
 // supplied `prepared` stream's own internal consistency plus output_limits.hpp's closed version 1
-// dimension/pixel-count/byte ceilings (reused, not duplicated with new PNG-specific numbers --
+// pixel-count/byte ceilings and PNG's format dimension bound (reused across both paths --
 // design decision 5).
 [[nodiscard]] std::optional<GeometryExpectation>
 validateGeometry(const output::PngRgba8SrgbPreparedStreamV1& prepared) noexcept {
@@ -98,8 +99,8 @@ validateGeometry(const output::PngRgba8SrgbPreparedStreamV1& prepared) noexcept 
     if (width == 0 || height == 0) {
         return std::nullopt;
     }
-    if (width > output::kOutputAnalysisMaximumDimensionV1 ||
-        height > output::kOutputAnalysisMaximumDimensionV1) {
+    if (width > output::detail::kOutputAnalysisPngMaximumDimensionV1 ||
+        height > output::detail::kOutputAnalysisPngMaximumDimensionV1) {
         return std::nullopt;
     }
     const auto pixelCount = multiplyChecked(width, height);

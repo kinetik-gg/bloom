@@ -592,12 +592,13 @@ Nominal analysis is derived exactly as follows:
 | external dependencies | `ExternalReference`, `png.ocio-external-reference` | `Exact` |
 
 Report version 1 also derives the export hard-limit result from its canonical descriptors. The
-limit is exceeded iff any source or target pixel width or height, or any source or target data- or
-display-window extent, exceeds `32768`, or checked multiplication of the source pixel width and
-height exceeds `67108864` (`2^26`). Values exactly at either limit do not exceed it. The pixel
+limit is exceeded iff checked multiplication of the source pixel width and height exceeds
+`67108864` (`2^26`). A wide, short image is not refused solely for exceeding `32768` in one
+dimension. Values exactly at the pixel-count limit do not exceed it. The pixel
 relationship rules above require the target extent and the source data-window extent to match the
 source pixels, but validation still checks every named descriptor side directly and performs the
-pixel-count multiplication with overflow detection.
+pixel-count multiplication with overflow detection. Format-specific window representability is
+checked independently.
 
 When that derived condition is true, the external-dependencies facet must be `Missing`,
 `resource.limit-exceeded`; its nominal PNG external-reference or EXR exact tuple and every other
@@ -605,7 +606,8 @@ unavailable-dependency code are invalid. When the condition is false, `resource.
 invalid; the nominal tuple or another otherwise-valid unavailable-dependency code remains valid.
 This relationship is independent of format window representability. A report can therefore require
 `window.out-of-range` on a data/display facet and `resource.limit-exceeded` on external dependencies
-at the same time. Neither code substitutes for or suppresses the other.
+at the same time when the pixel count also exceeds its current allocation ceiling. Neither code
+substitutes for or suppresses the other.
 
 `png.equal-window-required` means specifically that the source display window differs from the PNG
 implicit target `(0,0,W,H)`. Thus equal source data/display windows at a nonzero origin do not
@@ -893,11 +895,12 @@ overflowing reservation rejects the stage before allocation or file creation. Ca
 identity completion publishes no partial identity; cancellation before publication publishes no
 artifact.
 
-Version 1 export limits are closed; a request may lower but not raise them:
+The remaining version 1 aggregate export allocation limits are closed; a request may lower but not
+raise them. The former `32768` per-dimension limit is removed; PNG uses its signed 31-bit dimension
+bound and EXR uses checked signed 32-bit inclusive windows:
 
 | Resource | Hard limit |
 | --- | ---: |
-| width or height | `32768` pixels |
 | checked pixel count | `67108864` (`2^26`) |
 | retained process-pixel bytes | 1 GiB (`1073741824`) |
 | retained prepared PNG bytes | 256 MiB (`268435456`) |

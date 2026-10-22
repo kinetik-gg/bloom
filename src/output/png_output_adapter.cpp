@@ -1,4 +1,5 @@
 #include "png_preset_contract.hpp"
+#include "output_analysis_numeric.hpp"
 
 #include <bloom/output/output_limits.hpp>
 #include <bloom/output/png_output_adapter.hpp>
@@ -72,7 +73,7 @@ struct ValidatedGeometry final {
 };
 
 // Checked preflight, before any allocation or file I/O: `output_limits.hpp`'s closed version 1
-// dimension/pixel-count ceilings, `prepared`'s own internal consistency (pixels.size() must equal
+// pixel-count ceiling, `prepared`'s own internal consistency (pixels.size() must equal
 // width * height), and the arithmetic this writer needs to size its deflate source length.
 [[nodiscard]] std::optional<ValidatedGeometry>
 validateGeometry(const output::PngRgba8SrgbPreparedStreamV1& prepared) noexcept {
@@ -81,8 +82,8 @@ validateGeometry(const output::PngRgba8SrgbPreparedStreamV1& prepared) noexcept 
     if (width == 0 || height == 0) {
         return std::nullopt;
     }
-    if (width > output::kOutputAnalysisMaximumDimensionV1 ||
-        height > output::kOutputAnalysisMaximumDimensionV1) {
+    if (width > output::detail::kOutputAnalysisPngMaximumDimensionV1 ||
+        height > output::detail::kOutputAnalysisPngMaximumDimensionV1) {
         return std::nullopt;
     }
     const auto pixelCount = multiplyChecked(width, height);

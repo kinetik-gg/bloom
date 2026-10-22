@@ -611,9 +611,9 @@ void testWindowPermissionTruth(Expectations& expectations) {
 
 void testHardResourceLimitTruth(Expectations& expectations) {
     constexpr std::string_view maximumDimensionPixels =
-        "height=u:1;packing=id:rgba;sample-type=id:binary32;width=u:32768";
+        "height=u:1;packing=id:rgba;sample-type=id:binary32;width=u:32769";
     constexpr std::string_view maximumDimensionWindow =
-        "height=u:1;origin-x=i:0;origin-y=i:0;width=u:32768";
+        "height=u:1;origin-x=i:0;origin-y=i:0;width=u:32769";
     auto exr = makeExrReport();
     exr[0].sourceDescriptor = maximumDimensionPixels;
     exr[0].targetDescriptor = maximumDimensionPixels;
@@ -623,7 +623,7 @@ void testHardResourceLimitTruth(Expectations& expectations) {
     exr[6].targetDescriptor = maximumDimensionWindow;
     const auto maximumDimension = validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr);
     expectations.expect(maximumDimension.approvable(),
-                        "the exact 32768 dimension boundary remains approvable");
+                        "width above the former 32768 cap remains approvable");
 
     constexpr std::string_view maximumPixelCountPixels =
         "height=u:8192;packing=id:rgba;sample-type=id:binary32;width=u:8192";
@@ -651,19 +651,18 @@ void testHardResourceLimitTruth(Expectations& expectations) {
     exr[5].targetDescriptor = excessiveDimensionWindow;
     exr[6].sourceDescriptor = excessiveDimensionWindow;
     exr[6].targetDescriptor = excessiveDimensionWindow;
-    const auto missingResourceCode = validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr);
-    expectations.expect(missingResourceCode.issue().code == Error::DescriptorRelationshipMismatch &&
-                            missingResourceCode.issue().facetIndex == 10,
-                        "a descriptor above the dimension cap requires the resource-limit code");
+    const auto wideShort = validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr);
+    expectations.expect(wideShort.approvable(),
+                        "a wide short report fits the aggregate allocation ceiling");
     exr[10].state = State::Missing;
     exr[10].stableCode = Code::DependencyMissing;
-    expectations.expect(validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr).issue().code ==
-                            Error::DescriptorRelationshipMismatch,
-                        "another unavailable-dependency code cannot hide a resource-limit failure");
+    expectations.expect(validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr).hasValue(),
+                        "an unavailable dependency remains valid for a wide short report");
     setResourceLimitExceeded(exr);
     expectations.expect(
-        validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr).hasValue(),
-        "the required resource-limit code makes an oversized report valid but blocked");
+        validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr).issue().code ==
+            Error::DescriptorRelationshipMismatch,
+        "the resource-limit code is false for a wide short report");
 
     constexpr std::string_view excessivePixelCountPixels =
         "height=u:8193;packing=id:rgba;sample-type=id:binary32;width=u:8192";
@@ -685,8 +684,9 @@ void testHardResourceLimitTruth(Expectations& expectations) {
     exr[6].targetDescriptor = excessiveDimensionWindow;
     setResourceLimitExceeded(exr);
     expectations.expect(
-        validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr).hasValue(),
-        "an excessive display-window extent independently requires the resource code");
+        validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr).issue().code ==
+            Error::DescriptorRelationshipMismatch,
+        "display metadata width alone does not require the resource code");
 
     exr = makeExrReport();
     setResourceLimitExceeded(exr);

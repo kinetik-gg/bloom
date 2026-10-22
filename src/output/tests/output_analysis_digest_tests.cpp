@@ -568,11 +568,10 @@ void testDependencyClosureUsesPreparedIdentity(Expectations& expectations) {
 }
 
 void testHardCapBoundaryPreflight(Expectations& expectations) {
-    static_assert(output::kOutputAnalysisMaximumDimensionV1 == 32'768U);
     static_assert(output::kOutputAnalysisMaximumPixelCountV1 == 67'108'864U);
     static_assert(output::kOutputAnalysisMaximumProcessPixelBytesV1 == 1'073'741'824U);
 
-    constexpr std::uint32_t width = output::kOutputAnalysisMaximumDimensionV1;
+    constexpr std::uint32_t width = 32'769U;
     const auto frame = evaluateFrame(width, 1, {0.25, 0.5, 0.75, 1.0}, 4U << 20U);
     const auto identity = prepareIdentity(frame);
     const auto widthText = std::to_string(width);
@@ -589,7 +588,7 @@ void testHardCapBoundaryPreflight(Expectations& expectations) {
     const auto atMaximum = output::computeOutputAnalysisDigestV1(
         *identity, {Preset::FlatExrRgba32fLinRec709SceneV1, exr});
     expectations.expect(atMaximum && atMaximum.digest(),
-                        "the exact maximum dimension passes digest preflight");
+                        "width above the former fixed cap passes digest preflight");
 }
 
 } // namespace

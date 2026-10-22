@@ -217,13 +217,8 @@ pngColorCode(const output::PngRgba8SrgbColorResolutionStateV1 state) noexcept {
 [[nodiscard]] constexpr bool
 exceedsResourceLimits(const render::Rgba32fImageDescriptor& descriptor) noexcept {
     const auto data = descriptor.dataWindow().extent();
-    const auto display = descriptor.displayWindow().extent();
     const auto pixelCount = static_cast<std::uint64_t>(data.width()) * data.height();
-    return data.width() > output::kOutputAnalysisMaximumDimensionV1 ||
-           data.height() > output::kOutputAnalysisMaximumDimensionV1 ||
-           display.width() > output::kOutputAnalysisMaximumDimensionV1 ||
-           display.height() > output::kOutputAnalysisMaximumDimensionV1 ||
-           pixelCount > output::kOutputAnalysisMaximumPixelCountV1;
+    return pixelCount > output::kOutputAnalysisMaximumPixelCountV1;
 }
 
 [[nodiscard]] constexpr bool fitsSigned32(const render::ImageWindow window) noexcept {

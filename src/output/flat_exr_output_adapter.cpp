@@ -150,14 +150,6 @@ void reportProgress(const output::FlatExrWriteProgressCallbackV1& callback,
 }
 
 [[nodiscard]] bool withinResourceLimits(const render::Rgba32fImageDescriptor& descriptor) noexcept {
-    const auto dataExtent = descriptor.dataWindow().extent();
-    const auto displayExtent = descriptor.displayWindow().extent();
-    if (dataExtent.width() > output::kOutputAnalysisMaximumDimensionV1 ||
-        dataExtent.height() > output::kOutputAnalysisMaximumDimensionV1 ||
-        displayExtent.width() > output::kOutputAnalysisMaximumDimensionV1 ||
-        displayExtent.height() > output::kOutputAnalysisMaximumDimensionV1) {
-        return false;
-    }
     const auto pixelCount = descriptor.layout().pixelCount;
     if (pixelCount > output::kOutputAnalysisMaximumPixelCountV1 ||
         descriptor.layout().pixelStorageBytes > output::kOutputAnalysisMaximumProcessPixelBytesV1) {

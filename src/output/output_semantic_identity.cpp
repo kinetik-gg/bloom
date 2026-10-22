@@ -215,13 +215,7 @@ struct ProcessDescriptorPreflight final {
         }
     }
     const auto count = static_cast<std::uint64_t>(pixelCount);
-    const auto dataExtent = descriptor->dataWindow().extent();
-    const auto displayExtent = descriptor->displayWindow().extent();
-    if (dataExtent.width() > output::kOutputAnalysisMaximumDimensionV1 ||
-        dataExtent.height() > output::kOutputAnalysisMaximumDimensionV1 ||
-        displayExtent.width() > output::kOutputAnalysisMaximumDimensionV1 ||
-        displayExtent.height() > output::kOutputAnalysisMaximumDimensionV1 ||
-        count > output::kOutputAnalysisMaximumPixelCountV1 ||
+    if (count > output::kOutputAnalysisMaximumPixelCountV1 ||
         descriptor->layout().pixelStorageBytes >
             output::kOutputAnalysisMaximumProcessPixelBytesV1) {
         return preflightFailure<ProcessDescriptorPreflight>(Error::ResourceLimitExceeded);
@@ -279,10 +273,9 @@ preflightPng(const output::PngRgba8SrgbOutputSemanticIdentityInputV1& input) noe
     if (dimensions.width() == 0 || dimensions.height() == 0) {
         return preflightFailure<PngPreflight>(Error::InvalidDimensions);
     }
-    if (dimensions.width() > output::kOutputAnalysisMaximumDimensionV1 ||
-        dimensions.height() > output::kOutputAnalysisMaximumDimensionV1) {
+    if (dimensions.width() > output::detail::kOutputAnalysisPngMaximumDimensionV1 ||
+        dimensions.height() > output::detail::kOutputAnalysisPngMaximumDimensionV1)
         return preflightFailure<PngPreflight>(Error::ResourceLimitExceeded);
-    }
     if (dataWindow.originX() != 0 || dataWindow.originY() != 0 ||
         dataWindow.extent() != dimensions || displayWindow.originX() != 0 ||
         displayWindow.originY() != 0 || displayWindow.extent() != dimensions ||
@@ -381,19 +374,7 @@ preflightPng(const output::PngRgba8SrgbOutputSemanticIdentityInputV1& input) noe
     if (!dataPixelCount || !displayPixelCount) {
         return preflightFailure<ExrPreflight>(Error::InvalidWindow);
     }
-    const auto dataWidth = static_cast<std::uint64_t>(
-        static_cast<std::int64_t>(metadata.dataWindow.xMax) - metadata.dataWindow.xMin + 1);
-    const auto dataHeight = static_cast<std::uint64_t>(
-        static_cast<std::int64_t>(metadata.dataWindow.yMax) - metadata.dataWindow.yMin + 1);
-    const auto displayWidth = static_cast<std::uint64_t>(
-        static_cast<std::int64_t>(metadata.displayWindow.xMax) - metadata.displayWindow.xMin + 1);
-    const auto displayHeight = static_cast<std::uint64_t>(
-        static_cast<std::int64_t>(metadata.displayWindow.yMax) - metadata.displayWindow.yMin + 1);
-    if (dataWidth > output::kOutputAnalysisMaximumDimensionV1 ||
-        dataHeight > output::kOutputAnalysisMaximumDimensionV1 ||
-        displayWidth > output::kOutputAnalysisMaximumDimensionV1 ||
-        displayHeight > output::kOutputAnalysisMaximumDimensionV1 ||
-        *dataPixelCount > output::kOutputAnalysisMaximumPixelCountV1) {
+    if (*dataPixelCount > output::kOutputAnalysisMaximumPixelCountV1) {
         return preflightFailure<ExrPreflight>(Error::ResourceLimitExceeded);
     }
     const auto* descriptor = process.value->descriptor;

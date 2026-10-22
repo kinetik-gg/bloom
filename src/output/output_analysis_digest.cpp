@@ -122,14 +122,8 @@ processFrameFitsOutputV1Limits(const bloom::runtime::ProcessFrame& processFrame)
     if (descriptor == nullptr) {
         return false;
     }
-    const auto dataExtent = descriptor->dataWindow().extent();
-    const auto displayExtent = descriptor->displayWindow().extent();
     const auto& layout = descriptor->layout();
-    return dataExtent.width() <= output::kOutputAnalysisMaximumDimensionV1 &&
-           dataExtent.height() <= output::kOutputAnalysisMaximumDimensionV1 &&
-           displayExtent.width() <= output::kOutputAnalysisMaximumDimensionV1 &&
-           displayExtent.height() <= output::kOutputAnalysisMaximumDimensionV1 &&
-           static_cast<std::uint64_t>(layout.pixelCount) <=
+    return static_cast<std::uint64_t>(layout.pixelCount) <=
                output::kOutputAnalysisMaximumPixelCountV1 &&
            layout.pixelStorageBytes <= output::kOutputAnalysisMaximumProcessPixelBytesV1;
 }

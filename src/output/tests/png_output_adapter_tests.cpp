@@ -111,9 +111,26 @@ void testInvalidPreparedStreamRejected(support::Expectations& expectations) {
     expectations.expect(!std::filesystem::exists(destination), "no file was created");
 }
 
+void testWideShortImageBeyondFormerDimensionCap(support::Expectations& expectations) {
+    const support::ScratchDirectory scratch("wide-short");
+    constexpr std::uint32_t width = 32'769;
+    std::vector<render::Rgba8> pixels(width, render::Rgba8{17, 34, 51, 255});
+    const auto destination = scratch.file("wide-short.png");
+    const output::PngRgba8SrgbWriterV1 writer;
+    const auto written = writer.write(preparedStream(pixels, width, 1), destination, {});
+    expectations.expect(written.status() == output::PngWriteStatusV1::Written,
+                        "a wide short image above the former dimension cap writes");
+    if (written.status() == output::PngWriteStatusV1::Written) {
+        const auto decoded = support::independentlyDecodePng(destination);
+        expectations.expect(decoded.ok && decoded.width == width && decoded.height == 1 &&
+                                decoded.rgba.size() == pixels.size() * 4U,
+                            "the wide short PNG independently decodes at its full width");
+    }
+}
+
 void testResourceLimitExceededRejected(support::Expectations& expectations) {
     const support::ScratchDirectory scratch("resource-limit");
-    // Individually within the per-dimension ceiling (32768) but their product exceeds the pixel-
+    // Both dimensions fit PNG but their product exceeds the current aggregate pixel-
     // count ceiling (67108864). The claimed pixel span is never dereferenced -- write() rejects
     // before any pixel access once geometry validation fails -- so a null-backed span of the
     // right claimed size is safe and avoids allocating an impractically large real buffer.
@@ -239,6 +256,7 @@ int main() {
     support::Expectations expectations;
     testChunkConformanceAndIndependentDecode(expectations);
     testInvalidPreparedStreamRejected(expectations);
+    testWideShortImageBeyondFormerDimensionCap(expectations);
     testResourceLimitExceededRejected(expectations);
     testCancellationMidWrite(expectations);
     testScratchDirectoryIsolation(expectations);

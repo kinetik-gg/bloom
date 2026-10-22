@@ -53,7 +53,7 @@ void testClosedCapabilityStatesAndPrecedence(Expectations& expectations) {
                Code::AdapterUnavailable,
                "adapter.unavailable takes precedence over dependency.missing");
 
-    auto resourceInput = exrInput(descriptor(32'769, 1));
+    auto resourceInput = exrInput(descriptor(8'192, 8'193));
     resourceInput.adapter = OutputAnalysisAdapterStateV1::Unavailable;
     resourceInput.otherDependency = OutputAnalysisOtherDependencyStateV1::Missing;
     const auto resource = analyzeFlatExrRgba32fLinRec709SceneV1(std::move(resourceInput));
@@ -173,14 +173,10 @@ void testWindowAndPixelAspectDerivation(Expectations& expectations) {
 }
 
 void testResourceBoundariesAndCoexistence(Expectations& expectations) {
-    const auto dimensionAtLimit = analyzeFlatExrRgba32fLinRec709SceneV1(
-        exrInput(descriptor(kOutputAnalysisMaximumDimensionV1, 1)));
-    expectCode(expectations, dimensionAtLimit, Facet::ExternalDependencies, State::Exact,
-               Code::None, "the exact maximum dimension does not exceed the resource limit");
-    const auto dimensionOver = analyzeFlatExrRgba32fLinRec709SceneV1(
-        exrInput(descriptor(kOutputAnalysisMaximumDimensionV1 + 1U, 1)));
-    expectCode(expectations, dimensionOver, Facet::ExternalDependencies, State::Missing,
-               Code::ResourceLimitExceeded, "one pixel over the maximum dimension is rejected");
+    const auto wideShort = analyzeFlatExrRgba32fLinRec709SceneV1(
+        exrInput(descriptor(32'769, 1)));
+    expectCode(expectations, wideShort, Facet::ExternalDependencies, State::Exact,
+               Code::None, "width beyond the former fixed cap is valid when pixel storage fits");
 
     const auto pixelsAtLimit =
         analyzeFlatExrRgba32fLinRec709SceneV1(exrInput(descriptor(8'192, 8'192)));
@@ -191,8 +187,8 @@ void testResourceBoundariesAndCoexistence(Expectations& expectations) {
     expectCode(expectations, pixelsOver, Facet::ExternalDependencies, State::Missing,
                Code::ResourceLimitExceeded, "one row over the maximum pixel count is rejected");
 
-    const auto data = window(std::numeric_limits<std::int32_t>::max(), 0, 32'769, 1);
-    const auto display = window(0, 0, 32'769, 1);
+    const auto data = window(std::numeric_limits<std::int32_t>::max(), 0, 8'192, 8'193);
+    const auto display = window(0, 0, 8'192, 8'193);
     const auto coexist = analyzeFlatExrRgba32fLinRec709SceneV1(exrInput(descriptor(data, display)));
     expectCode(expectations, coexist, Facet::DataWindow, State::Unsupported, Code::WindowOutOfRange,
                "window representability remains truthful when a resource limit also fails");
@@ -202,9 +198,8 @@ void testResourceBoundariesAndCoexistence(Expectations& expectations) {
 
     const auto largeDisplay = descriptor(window(0, 0, 1, 1), window(0, 0, 32'769, 1));
     const auto displayLimit = analyzeFlatExrRgba32fLinRec709SceneV1(exrInput(largeDisplay));
-    expectCode(expectations, displayLimit, Facet::ExternalDependencies, State::Missing,
-               Code::ResourceLimitExceeded,
-               "the source display-window extent independently participates in resource limits");
+    expectCode(expectations, displayLimit, Facet::ExternalDependencies, State::Exact, Code::None,
+               "a wide display window does not consume source pixel storage");
 }
 
 void testInvalidInputsFailClosed(Expectations& expectations) {

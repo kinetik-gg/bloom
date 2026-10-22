@@ -368,11 +368,6 @@ FlatExrVerifyResultV1 FlatExrRgba32fLinRec709SceneReopenVerifierV1::verify(
         const auto heightRows =
             static_cast<std::uint64_t>(static_cast<std::int64_t>(dataBox.max.y) -
                                        static_cast<std::int64_t>(dataBox.min.y) + 1);
-        if (width > kOutputAnalysisMaximumDimensionV1 ||
-            heightRows > kOutputAnalysisMaximumDimensionV1) {
-            return FlatExrVerifyResultV1::failed(
-                ::diag(FlatExrVerifyErrorCodeV1::ResourceLimitExceeded));
-        }
         const auto pixelCount = ::multiplyChecked(width, heightRows);
         const auto componentCount = pixelCount ? ::multiplyChecked(*pixelCount, 4U) : std::nullopt;
         const auto byteCount = componentCount

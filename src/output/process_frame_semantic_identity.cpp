@@ -233,13 +233,7 @@ preflightFailure(const ProcessFrameSemanticIdentityErrorCode error) noexcept {
     if (descriptor == nullptr) {
         return true;
     }
-    const auto dataExtent = descriptor->dataWindow().extent();
-    const auto displayExtent = descriptor->displayWindow().extent();
-    return dataExtent.width() > bloom::output::kOutputAnalysisMaximumDimensionV1 ||
-           dataExtent.height() > bloom::output::kOutputAnalysisMaximumDimensionV1 ||
-           displayExtent.width() > bloom::output::kOutputAnalysisMaximumDimensionV1 ||
-           displayExtent.height() > bloom::output::kOutputAnalysisMaximumDimensionV1 ||
-           pixelCount > bloom::output::kOutputAnalysisMaximumPixelCountV1 ||
+    return pixelCount > bloom::output::kOutputAnalysisMaximumPixelCountV1 ||
            descriptor->layout().pixelStorageBytes >
                bloom::output::kOutputAnalysisMaximumProcessPixelBytesV1;
 }

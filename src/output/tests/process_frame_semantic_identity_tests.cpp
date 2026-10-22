@@ -555,18 +555,17 @@ void testPixelBitsAndPreflightPrecedence(Expectations& expectations) {
 }
 
 void testBoundsMalformedAndCancelledPublication(Expectations& expectations) {
-    const auto oversizedPlan = plan(output::kOutputAnalysisMaximumDimensionV1 + 1U, 1);
+    const auto widePlan = plan(32'769U, 1);
     const std::array onePixel{render::Rgba32f::transparent()};
-    auto oversized = publishFixture(
-        {frameIdentity(oversizedPlan),
-         image(window(0, 0, 1, 1), window(0, 0, output::kOutputAnalysisMaximumDimensionV1 + 1U, 1),
+    auto wide = publishFixture(
+        {frameIdentity(widePlan),
+         image(window(0, 0, 1, 1), window(0, 0, 32'769U, 1),
                core::PixelAspectRatio::square(), onePixel)});
-    const auto limited = prepare(oversized);
+    const auto limited = prepare(wide);
     expectations.expect(
-        limited.status() == output::ProcessFrameSemanticIdentityPreparationStatus::Failed &&
-            limited.identity() == nullptr &&
-            limited.error() == output::ProcessFrameSemanticIdentityErrorCode::ResourceLimitExceeded,
-        "output bounds are rejected before pixel hashing or product allocation");
+        limited.status() == output::ProcessFrameSemanticIdentityPreparationStatus::Prepared &&
+            limited.identity() != nullptr,
+        "wide display metadata does not block a one-pixel process identity");
 
     auto movedFrame =
         std::const_pointer_cast<runtime::ProcessFrame>(publishFixture(compositionFixture()));

@@ -541,7 +541,7 @@ void testWindowAndRelationshipBoundaries(test::Expectations& expectations) {
     bool oversizedReachedHashing = false;
     const auto oversized = preparer.preparePngRgba8SrgbV1(
         {.verifiedProduct = verifiedPngForTest(
-             pngBound, extent(output::kOutputAnalysisMaximumDimensionV1 + 1U, 1), {})},
+             pngBound, extent(2'147'483'648U, 1), {})},
         {}, [&oversizedReachedHashing](const output::OutputSemanticIdentityProgressV1& progress) {
             oversizedReachedHashing =
                 oversizedReachedHashing ||
@@ -552,7 +552,7 @@ void testWindowAndRelationshipBoundaries(test::Expectations& expectations) {
                             oversized.error() ==
                                 output::OutputSemanticIdentityErrorCodeV1::ResourceLimitExceeded &&
                             !oversizedReachedHashing,
-                        "PNG resource limits are rejected during preflight before hashing begins");
+                        "PNG format dimension bounds are rejected before hashing begins");
 }
 
 void testThrowingProgress(test::Expectations& expectations) {
