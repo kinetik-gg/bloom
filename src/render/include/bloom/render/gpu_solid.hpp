@@ -82,7 +82,7 @@ struct GpuSolidParameters final {
         std::uint32_t compositionWidth = 0, compositionHeight = 0;
         std::uint32_t proxyWidth = 0, proxyHeight = 0;
     };
-    std::optional<Checker> checker;
+    std::optional<Checker> checker = std::nullopt;
 };
 
 // Hard ceiling on the retained resident image bytes (width*height*16). The

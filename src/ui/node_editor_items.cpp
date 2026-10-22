@@ -114,6 +114,8 @@ QString displayTypeName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Invert");
     if (typeId == "bloom.image-mix")
         return QCoreApplication::translate("node_editor", "Image Mix");
+    if (typeId == "bloom.multiply-alpha")
+        return QCoreApplication::translate("node_editor", "Multiply Alpha");
     if (typeId == "bloom.set-alpha")
         return QCoreApplication::translate("node_editor", "Set Alpha");
     if (typeId == "second")

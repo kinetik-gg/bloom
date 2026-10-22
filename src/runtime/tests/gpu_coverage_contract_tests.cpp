@@ -67,6 +67,7 @@ using bloom::gpu_coverage_plans::imageCombinePlan;
 using bloom::gpu_coverage_fixtures::requestFor;
 using bloom::gpu_coverage_fixtures::twoLayerPlan;
 using bloom::runtime::CompiledColorParameter;
+using bloom::runtime::CompiledChecker;
 using bloom::runtime::CompiledCompositionSource;
 using bloom::runtime::CompiledImageEffect;
 using bloom::runtime::CompiledImageSource;
@@ -293,6 +294,20 @@ displayProofRunner(const bool customView) {
         add(std::string{id}, GpuCoverageFixtureCriterion::Prepared,
             "src/runtime gpu scene preparation tests", [] { return runBuilder(basePlan()); });
     }
+    const auto checkerPlan = [] {
+        return withSource(
+            CompiledChecker{NodeId::fromRaw(94700),
+                            CompiledColorParameter{ParameterId::fromRaw(94701),
+                                                   bloom::core::Color4d{-2.0, 0.5, 4.0, 0.5}},
+                            CompiledColorParameter{ParameterId::fromRaw(94702),
+                                                   bloom::core::Color4d{3.0, -1.0, 0.25, 0.75}},
+                            3, 2, 6, 5},
+            94700);
+    };
+    add("operation.CompiledChecker", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Checker CPU and native parity tests", [checkerPlan] {
+            return runBuilder(checkerPlan());
+        });
     add("operation.CompiledText", GpuCoverageFixtureCriterion::Prepared,
         "src/render text_raster + text source tests",
         [] { return runBuilder(withSource(text(95000), 95000, nullptr, 0.6)); });
@@ -549,6 +564,15 @@ displayProofRunner(const bool customView) {
         "src/runtime canvas image effect tests", [canvas] {
             return runBuilder(effectPlan(canvas(bloom::runtime::CanvasImageEffect::Pad, 110600),
                                          110600));
+        });
+    add("node.bloom.multiply-alpha", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime image combine production scene preparation", [] {
+            return runBuilder(imageCombinePlan(bloom::runtime::ImageCombineMode::MultiplyAlpha,
+                                               110700));
+        });
+    add("node.bloom.checker-source", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Checker CPU and native parity tests", [checkerPlan] {
+            return runBuilder(checkerPlan());
         });
     return list;
 }

@@ -251,7 +251,8 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == "bloom.crop.left" || schemaKey == "bloom.crop.top" ||
            schemaKey == "bloom.crop.right" || schemaKey == "bloom.crop.bottom" ||
            schemaKey == "bloom.pad.left" || schemaKey == "bloom.pad.top" ||
-           schemaKey == "bloom.pad.right" || schemaKey == "bloom.pad.bottom";
+           schemaKey == "bloom.pad.right" || schemaKey == "bloom.pad.bottom" ||
+           schemaKey == "bloom.multiply-alpha.factor";
 }
 
 [[nodiscard]] constexpr bool isCanvasMarginSchemaKey(const std::string_view schemaKey) noexcept {
@@ -287,7 +288,8 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 // the schema rather than to "scalar values" as a class.
 [[nodiscard]] constexpr bool hasUnitDomainSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == kOpacityParameterSchemaKey || schemaKey == kAudioLevelParameterSchemaKey ||
-           schemaKey == "bloom.image-mix.factor";
+           schemaKey == "bloom.image-mix.factor" ||
+           schemaKey == "bloom.multiply-alpha.factor";
 }
 
 // Whether a scalar value under this schema is confined to the text size domain (0, kMaximumText-

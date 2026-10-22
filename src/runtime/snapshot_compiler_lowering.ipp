@@ -665,14 +665,27 @@ lowerImageEffect(const document::NodeRecord& node,
         addTopologyFailure(node.id, "Image effect input could not be lowered.");
         return std::nullopt;
     }
-    if (node.typeId == "bloom.image-mix" || node.typeId == "bloom.set-alpha") {
+    if (node.typeId == "bloom.image-mix" || node.typeId == "bloom.set-alpha" ||
+        node.typeId == "bloom.multiply-alpha") {
         const bool mix = node.typeId == "bloom.image-mix";
+        const bool multiplyAlpha = node.typeId == "bloom.multiply-alpha";
         const auto second = findInputOperation(node.id, mix ? "second" : "matte", indices);
         if (!second) {
             addTopologyFailure(node.id, "Image combine second input could not be lowered.");
             return std::nullopt;
         }
-        if (mix) {
+        if (multiplyAlpha) {
+            const auto factor = compiledScalarParameter(findParameterBinding(node, "factor"));
+            const auto* channel =
+                parameterConstant<std::int64_t>(findParameterBinding(node, "channel"));
+            if (factor && channel && *channel >= 0 && *channel <= 4)
+                return runtime::CompiledImageEffect{
+                    node.id, *input,
+                    runtime::ImageCombineKernel{
+                        runtime::ImageCombineMode::MultiplyAlpha, *factor,
+                        static_cast<render::ImageCoverageChannel>(*channel)},
+                    false, false, *second};
+        } else if (mix) {
             if (const auto factor = compiledScalarParameter(findParameterBinding(node, "factor")))
                 return runtime::CompiledImageEffect{
                     node.id, *input,

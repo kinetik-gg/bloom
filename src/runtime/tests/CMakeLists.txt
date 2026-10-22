@@ -75,6 +75,15 @@ bloom_enable_strict_floating_point(bloom_runtime_qualified_display_preparation_t
 
 include(BloomTesting)
 
+add_executable(bloom_runtime_checker_native_test checker_image_native_tests.cpp)
+target_link_libraries(bloom_runtime_checker_native_test PRIVATE bloom_render)
+target_include_directories(bloom_runtime_checker_native_test PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+bloom_enable_warnings(bloom_runtime_checker_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_checker_native_test)
+bloom_add_test(NAME bloom.runtime.checker_native COMMAND bloom_runtime_checker_native_test
+    LABELS unit gpu runtime)
+set_tests_properties(bloom.runtime.checker_native PROPERTIES SKIP_RETURN_CODE 77)
+
 # Manual, CPU-only private-share qualification. The owning script creates and tears down its own
 # loopback SSHFS fixture; ordinary CTest never creates network services or mounts.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

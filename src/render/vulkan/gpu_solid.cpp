@@ -255,8 +255,12 @@ GpuSolidDiagnostic GpuSolid::begin(const GpuSolidParameters& parameters,
         }
         impl.pipelineReady = true;
     }
-    if (parameters.checker && !impl.createCheckerPipeline())
-        return impl.createDiagnostic;
+    if (parameters.checker && !impl.createCheckerPipeline()) {
+        const auto diagnostic = impl.createDiagnostic;
+        impl.resetPipelineResources();
+        impl.releaseResidentSlot();
+        return diagnostic;
+    }
 
     impl.clearJob();
     auto resident = std::make_unique<GpuImageImpl>();

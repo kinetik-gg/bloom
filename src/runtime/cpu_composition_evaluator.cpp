@@ -458,6 +458,7 @@ enum class ScalarDomain : std::uint8_t {
                     }
                     const auto& input = plan.operations()[layer.input.value()];
                     return std::holds_alternative<CompiledSolid>(input) ||
+                           std::holds_alternative<CompiledChecker>(input) ||
                            std::holds_alternative<CompiledShape>(input) ||
                            std::holds_alternative<CompiledText>(input) ||
                            std::holds_alternative<CompiledImageEffect>(input) ||
@@ -2288,7 +2289,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                                "Checker row could not be addressed");
                                     for (std::size_t column = 0; column < row.value()->size(); ++column) {
                                         const auto x = static_cast<std::uint32_t>(
-                                            image.descriptor().dataWindow().originX() +
+                                            image.descriptor()->dataWindow().originX() +
                                             static_cast<std::int64_t>(column));
                                         const auto counts = detail::checkerSampleCounts(
                                             geometry, x, static_cast<std::uint32_t>(y));

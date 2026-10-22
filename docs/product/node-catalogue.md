@@ -55,7 +55,7 @@ level's dependencies.
 | `C1` | Video Source | Built on Linux: worker-only FFmpeg decode, asset/start frame/loop/colour controls, image and audio outputs, exact CFR timing and preserved alpha; native macOS/Windows providers remain unavailable |
 | `C1` | Shape | Built: one parametric/path source with shared fill and stroke; viewer drawing tools follow |
 | `C1` | Linear Gradient, Radial Gradient, Four-Point Gradient | Explicit interpolation space, repeat mode, and alpha behavior |
-| `C1` | Checker, Grid, Color Bars | Deterministic diagnostic and design generators |
+| `C1` | Checker, Grid, Color Bars | Checker built with two colours, cell/canvas size and deterministic proxy sampling; Grid and Color Bars remain planned |
 | `M1` | Noise, Fractal Noise, Voronoi | Seeded, versioned procedural output with stable CPU/GPU semantics |
 | `M1` | Repeater, Scatter | Instance-like repetition without eagerly duplicating authoring data |
 | `M1` | Audio Spectrum, Audio Waveform | Deterministic audio-analysis-driven image generation |
@@ -83,7 +83,7 @@ level's dependencies.
 | `F1` | Mix | Controlled interpolation between images with explicit mask and factor policy |
 | `C1` | Merge | Named compositing operator and blend mode with declared alpha equation |
 | `C1` | Matte | Explicit image-derived coverage, channel, inversion, space, and time policy |
-| `C1` | Set Alpha, Replace Alpha, Multiply Alpha | Alpha changes remain distinct from RGB color transforms |
+| `C1` | Set Alpha, Replace Alpha, Multiply Alpha | Set Alpha and Multiply Alpha built with image matte channels; Replace Alpha remains planned |
 | `C1` | Premultiply, Unpremultiply | Explicit association conversion with defined zero-alpha behavior |
 | `C1` | Channel Split, Channel Combine | Typed construction and extraction of color, alpha, and data channels |
 | `C1` | Channel Copy, Channel Shuffle, Remove Channels | Preserve arbitrary channels and never infer color meaning from position alone |

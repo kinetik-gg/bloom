@@ -146,6 +146,20 @@ template <typename Definition>
                        std::vector<OutputPortDefinition>{{"image", SocketValueKind::Image}} &&
                    !definition.layerSlotInput && !definition.audioLayerSlotInput;
         }
+        if (definition.key.typeId == "bloom.multiply-alpha") {
+            return definition.key.schemaVersion == 1 && definition.inputs.size() == 4 &&
+                   hasLeadingImageInput(definition, "input") &&
+                   definition.inputs[1] == InputPortDefinition{"matte", SocketValueKind::Image,
+                                                               true} &&
+                   hasParameterSockets(definition, 2) &&
+                   hasParameter(definition, 0, "factor", "bloom.multiply-alpha.factor",
+                                ParameterValueKind::Float64, true, true) &&
+                   hasParameter(definition, 1, "channel", "bloom.multiply-alpha.channel",
+                                ParameterValueKind::Integer) &&
+                   definition.outputs ==
+                       std::vector<OutputPortDefinition>{{"image", SocketValueKind::Image}} &&
+                   !definition.layerSlotInput && !definition.audioLayerSlotInput;
+        }
         return (definition.inputs ==
                     std::vector<InputPortDefinition>{{"input", SocketValueKind::Image}} ||
                 (hasLeadingImageInput(definition, "input") &&
@@ -427,10 +441,10 @@ template <typename Definition>
                               {{"image", SocketValueKind::Image}},
                               {{"colorA", std::string(kSolidColorParameterSchemaKey),
                                 ParameterValueKind::Color4d, true, true,
-                                core::Color4d{0.18, 0.18, 0.18, 1.0}},
+                                bloom::core::Color4d{0.18, 0.18, 0.18, 1.0}},
                                {"colorB", std::string(kSolidColorParameterSchemaKey),
                                 ParameterValueKind::Color4d, true, true,
-                                core::Color4d{0.5, 0.5, 0.5, 1.0}},
+                                bloom::core::Color4d{0.5, 0.5, 0.5, 1.0}},
                                {"cellWidth", std::string(kCheckerCellWidthParameterSchemaKey),
                                 ParameterValueKind::Integer, true, false, std::int64_t{64}},
                                {"cellHeight", std::string(kCheckerCellHeightParameterSchemaKey),
@@ -637,6 +651,23 @@ template <typename Definition>
         definition.inputs.push_back({side, SocketValueKind::Scalar, false});
     }
     return definition;
+}
+
+[[nodiscard]] NodeDefinition multiplyAlphaDefinition() {
+    return {{"bloom.multiply-alpha", 1},
+            NodeLoweringKind::ImageEffect,
+            {{"input", SocketValueKind::Image},
+             {"matte", SocketValueKind::Image},
+             {"factor", SocketValueKind::Scalar, false},
+             {"channel", SocketValueKind::Integer, false}},
+            {{"image", SocketValueKind::Image}},
+            {{"factor", "bloom.multiply-alpha.factor", ParameterValueKind::Float64, true, true,
+              1.0},
+             {"channel", "bloom.multiply-alpha.channel", ParameterValueKind::Integer, true,
+              false, std::int64_t{0}}},
+            std::nullopt,
+            NodeCardinality::Many,
+            NodeCategory::Compositing};
 }
 
 [[nodiscard]] NodeDefinition imageDefinition() {
@@ -852,6 +883,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
                                             imageCombineDefinition(false),
                                             canvasImageDefinition("bloom.crop"),
                                             canvasImageDefinition("bloom.pad"),
+                                            multiplyAlphaDefinition(),
                                             videoDefinition(),
                                             audioDefinition(),
                                             compositionSourceDefinition()};

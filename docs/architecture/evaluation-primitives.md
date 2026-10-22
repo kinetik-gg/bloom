@@ -653,8 +653,8 @@ the existing bounded scene executor. A preparation failure takes the explicit CP
 in full-resolution pixels. Each margin is rounded independently to the nearest output-grid pixel
 for proxy evaluation. Crop removes those rows and columns from both data and display windows;
 Pad expands both windows and fills the new data border with transparent black. Pixel aspect is
-unchanged. A Crop that would empty either window reports a diagnostic and leaves the input intact
-on the CPU path; invalid GPU preparation reports Unsupported and selects the CPU reference path.
+unchanged. A Crop that would empty either window fails with an explicit diagnostic;
+invalid GPU preparation reports Unsupported and selects the CPU reference path.
 No resampling or color conversion occurs: unchanged premultiplied pixels, including negative/HDR
 RGB and partial alpha, are copied exactly. The CPU copies in cancellable rows and 4096-pixel
 chunks; the production GPU scene emits a resident TranslationOpacity pass with integer sampling
@@ -662,6 +662,25 @@ coordinates and an explicit output display window. Both preview and final routes
 scene executor. Cache identity includes mode, sampled margins, input content, data/display windows,
 pixel aspect, resolution, and the GPU shader artifact. The output uses ordinary pixel-budget
 admission and retired resident-image ownership.
+
+Checker is an image source with two animatable straight scene-linear RGBA colours, integer cell
+width/height, and integer authored canvas width/height. It classifies a fixed 4×4 grid of samples
+per output pixel in authored coordinates, using the full composition-to-proxy ratio; samples
+outside the authored canvas are transparent. Its CPU reference and resident CheckerV1 compute
+shader use the same integer-rational positions. Source-local data starts at (0,0), while the
+display window and pixel aspect follow the composition. The GPU preparation requires each source,
+composition and proxy dimension to be at most 16,384 because the shader uses bounded unsigned
+32-bit products; larger valid documents receive an explicit Unsupported/CPU fallback diagnostic.
+The single shader dispatch has constant work per pixel regardless of cell frequency. Resolved
+colours, dimensions, windows and shader digest participate in cache identity.
+
+Multiply Alpha consumes a base image and a matte at matching global pixel coordinates. It reads
+the selected Alpha, straight Red/Green/Blue, or Luma matte channel, treats absent matte pixels as
+zero coverage, and multiplies the base premultiplied RGBA by the clamped coverage and animatable
+unit factor. Zero-alpha matte RGB contributes zero; negative and HDR matte channels are clamped
+only after extraction. The base image retains its data/display windows and pixel aspect. CPU and
+resident two-image GPU paths share the coverage contract, with normal cancellation and budget
+admission. The factor, channel and both input content identities invalidate cached output.
 
 The plan also carries `bypass` and `look`; `EvaluationRequest::bypassLookNodes` skips only marked
 nodes. Bypass shares upstream image storage and bounds. Active colour transforms materialize the

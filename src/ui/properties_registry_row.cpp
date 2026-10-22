@@ -199,6 +199,9 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         : definition_.schemaKey == "bloom.offset.amount" ? tr("Offset")
         : definition_.schemaKey == "bloom.multiply.factor" ? tr("Factor")
         : definition_.schemaKey == "bloom.image-mix.factor" ? tr("Mix factor")
+        : definition_.schemaKey == "bloom.multiply-alpha.factor" ? tr("Alpha factor")
+        : definition_.schemaKey == "bloom.multiply-alpha.channel"
+            ? tr("Matte channel (0 A, 1 R, 2 G, 3 B, 4 Luma)")
         : definition_.schemaKey == "bloom.set-alpha.channel"
             ? tr("Matte channel (0 A, 1 R, 2 G, 3 B, 4 Luma)")
         : definition_.schemaKey == document::kTextAlignmentParameterSchemaKey ? tr("Text Alignment")

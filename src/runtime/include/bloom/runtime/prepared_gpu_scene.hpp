@@ -147,7 +147,7 @@ struct GpuSceneSolidCommand final {
     OperationIndex sourceOperation = OperationIndex::fromRaw(0);
     // The exact resolved premultiplied lin_rec709_scene pixel the CPU solid primitive produced.
     render::Rgba32f pixel = render::Rgba32f::transparent();
-    std::optional<render::GpuSolidParameters::Checker> checker;
+    std::optional<render::GpuSolidParameters::Checker> checker = std::nullopt;
     render::ImageWindow dataWindow;
     render::ImageWindow displayWindow;
     core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
