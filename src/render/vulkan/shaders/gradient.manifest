@@ -1,0 +1,9 @@
+{
+  "schema": "bloom.gpu.shader.manifest.v1",
+  "operation": "GradientV1",
+  "entrypoint": "main",
+  "shader": {"language": "GLSL_460", "stage": "compute", "sha256": "e8a88bdb62f87399101df7bc1040d9f0f5141df733145fbdaf1f54241cef306c", "spirvSha256": "f5999e4e717f50c6b75ca6871dab0f77f0f51ae0909a8544694de5f74e87fc4f", "localSizeX": 256},
+  "bindings": [{"set": 0, "binding": 0, "kind": "storage-image", "access": "writeonly", "format": "rgba32f"}],
+  "pushConstant": {"byteCount": 96},
+  "contracts": {"color": "straight scene-linear interpolation; premultiplied RGBA32F output", "repeat": "clamp/repeat/mirror", "geometry": "physical pixel aspect, pixel-centre sampling"}
+}

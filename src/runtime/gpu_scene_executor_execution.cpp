@@ -244,6 +244,9 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
                                           step.checker};
     };
     switch (step.kind) {
+    case GpuSceneExecutorStepKind::Gradient:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::Unsupported,
+                              "GradientV1 native batch preparation was unavailable");
     case GpuSceneExecutorStepKind::Solid: {
         const auto parameters = solidParameters();
         if (!parameters.has_value()) {

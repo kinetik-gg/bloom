@@ -114,12 +114,14 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
                                   "a solid command has an empty window");
         }
         GpuSceneExecutorStep step;
-        step.kind = GpuSceneExecutorStepKind::Solid;
+        step.kind = solidCommand->gradient ? GpuSceneExecutorStepKind::Gradient
+                                           : GpuSceneExecutorStepKind::Solid;
         step.command = index;
         step.cacheKey = solidCommand->semanticKey;
         step.cacheOnComplete = true;
         step.solidPixel = solidCommand->pixel;
         step.checker = solidCommand->checker;
+        step.gradient = solidCommand->gradient;
         step.solidDataWindow = solidCommand->dataWindow;
         step.solidDisplayWindow = solidCommand->displayWindow;
         step.solidPixelAspect = solidCommand->pixelAspect;

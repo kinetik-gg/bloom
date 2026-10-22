@@ -113,11 +113,30 @@ struct EvaluatedOperationBounds final {
 // A lowered solid source. Its colour is a typed operand rather than a resolved constant (task S5):
 // the solid colour schema is animatable now, so the value is either a constant or an index into the
 // plan's Color4 curve table -- exactly the shape a Layer Output transform operand already had.
+// Linear and radial generators share the Solid source's explicit extent and pixel-window path.
+// Their colours interpolate as straight scene-linear RGBA, then premultiply once for storage.
+struct CompiledGradient final {
+    bool radial = false;
+    CompiledColorParameter endColor;
+    CompiledVec2Parameter start;
+    CompiledVec2Parameter end;
+    document::ParameterId repeatId;
+    std::int64_t repeat = 0; // 0 clamp, 1 repeat, 2 mirror
+    friend bool operator==(const CompiledGradient&, const CompiledGradient&) = default;
+};
+
 struct CompiledSolid {
+    CompiledSolid() = default;
+    CompiledSolid(document::NodeId nodeId, CompiledColorParameter authoredColor,
+                  CompiledScalarParameter authoredWidth, CompiledScalarParameter authoredHeight,
+                  std::optional<CompiledGradient> authoredGradient = {})
+        : sourceNodeId(nodeId), color(std::move(authoredColor)), width(std::move(authoredWidth)),
+          height(std::move(authoredHeight)), gradient(std::move(authoredGradient)) {}
     document::NodeId sourceNodeId;
     CompiledColorParameter color;
     CompiledScalarParameter width;
     CompiledScalarParameter height;
+    std::optional<CompiledGradient> gradient;
 
     friend bool operator==(const CompiledSolid&, const CompiledSolid&) = default;
 };

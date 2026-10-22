@@ -2,6 +2,7 @@
 #include "checker_image.hpp"
 #include "cpu_composition_resolution.hpp"
 #include "image_effect.hpp"
+#include "gradient_source.hpp"
 #include "image_source.hpp"
 #include "layer_parent_transform.hpp"
 #include "operation_key.hpp"
@@ -327,13 +328,36 @@ enum class ScalarDomain : std::uint8_t {
     return true;
 }
 
+[[nodiscard]] bool hasValidVec2CurveReference(const CompiledVec2Parameter& parameter,
+                                              const CompiledCompositionPlan& plan,
+                                              const std::size_t index,
+                                              EvaluationDiagnostic& failure) {
+    if (!parameter.id.isValid() ||
+        (std::holds_alternative<Vec2CurveIndex>(parameter.source) &&
+         std::get<Vec2CurveIndex>(parameter.source).value() >= plan.vec2Curves().size())) {
+        failure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                             "Gradient endpoint references an invalid animation curve", {},
+                             subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
+        failure.subject.parameterId = parameter.id;
+        return false;
+    }
+    return true;
+}
+
 [[nodiscard]] bool hasExpectedInputKinds(const CompiledCompositionPlan& plan,
                                          const std::size_t index, EvaluationDiagnostic& failure) {
     const auto& operation = plan.operations()[index];
     return std::visit(
         Overloaded{
             [&plan, index, &failure](const CompiledSolid& solid) {
-                return hasValidColorCurveReference(solid.color, plan, index, failure) &&
+                const auto gradientValid = !solid.gradient ||
+                    (solid.gradient->repeatId.isValid() && solid.gradient->repeat >= 0 &&
+                     solid.gradient->repeat <= 2 &&
+                     hasValidColorCurveReference(solid.gradient->endColor, plan, index, failure) &&
+                     hasValidVec2CurveReference(solid.gradient->start, plan, index, failure) &&
+                     hasValidVec2CurveReference(solid.gradient->end, plan, index, failure));
+                return gradientValid &&
+                       hasValidColorCurveReference(solid.color, plan, index, failure) &&
                        hasValidScalarCurveReference(solid.width, plan, index, failure) &&
                        hasValidScalarCurveReference(solid.height, plan, index, failure);
             },
@@ -955,6 +979,16 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
             Overloaded{
                 [&](const CompiledSolid& solid) {
                     static_cast<void>(registerColor(solid.color, "color", operationSubject));
+                    if (solid.gradient) {
+                        static_cast<void>(registerColor(solid.gradient->endColor, "endColor",
+                                                        operationSubject));
+                        static_cast<void>(registerVec2(solid.gradient->start, "start",
+                                                       operationSubject));
+                        static_cast<void>(registerVec2(solid.gradient->end, "end",
+                                                       operationSubject));
+                        static_cast<void>(registerParameter(solid.gradient->repeatId,
+                                                            operationSubject));
+                    }
                     static_cast<void>(registerScalar(solid.width, "width", ScalarDomain::Dimension,
                                                      operationSubject));
                     static_cast<void>(registerScalar(solid.height, "height",
@@ -1837,7 +1871,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 layerMatrices[index] = matrix;
             }
             const auto& operation = plan->operations()[index];
-            if (std::holds_alternative<CompiledSolid>(operation) ||
+            if ((std::holds_alternative<CompiledSolid>(operation) &&
+                 !std::get<CompiledSolid>(operation).gradient) ||
                 std::holds_alternative<CompiledShape>(operation) ||
                 std::holds_alternative<CompiledText>(operation))
                 vectors[index] = VectorChain{index, {}, 1};
@@ -1912,6 +1947,14 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             parameter(step.color);
                             parameter(step.width);
                             parameter(step.height);
+                            key.add(step.gradient.has_value());
+                            if (step.gradient) {
+                                key.add(step.gradient->radial);
+                                parameter(step.gradient->endColor);
+                                parameter(step.gradient->start);
+                                parameter(step.gradient->end);
+                                key.add(step.gradient->repeat);
+                            }
                         } else if constexpr (std::is_same_v<Step, CompiledChecker>) {
                             parameter(step.colorA);
                             parameter(step.colorB);
@@ -2103,6 +2146,28 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     "Solid color is not evaluable");
                                 return;
                             }
+                            std::optional<detail::ResolvedGradient> gradient;
+                            if (solid.gradient) {
+                                const auto endColor = detail::resolveParameter(
+                                    solid.gradient->endColor, *plan, resolved);
+                                const auto start = detail::resolveParameter(
+                                    solid.gradient->start, *plan, resolved);
+                                const auto end = detail::resolveParameter(
+                                    solid.gradient->end, *plan, resolved);
+                                if (!endColor || !start || !end || !endColor->value.isValid() ||
+                                    !std::isfinite(start->value.x) || !std::isfinite(start->value.y) ||
+                                    !std::isfinite(end->value.x) || !std::isfinite(end->value.y)) {
+                                    operationFailure = diagnostic(
+                                        EvaluationDiagnosticCode::InvalidParameter,
+                                        "Gradient endpoints are not evaluable", {}, operationSubject);
+                                    return;
+                                }
+                                const auto aspect = fullDescriptor.pixelAspect();
+                                gradient = detail::ResolvedGradient{
+                                    color->value, endColor->value, start->value, end->value,
+                                    solid.gradient->repeat, solid.gradient->radial,
+                                    static_cast<double>(aspect.numerator()) / aspect.denominator()};
+                            }
                             auto descriptor = fullDescriptor;
                             double exactWidth =
                                 static_cast<double>(descriptor.dataWindow().extent().width());
@@ -2180,14 +2245,32 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             const auto solidPixel = *pixel.value();
                             const auto outcome = runRowBandPass(
                                 rowBands, cancellation, height, window.originY(),
-                                [&image, solidPixel, exactWidth, exactHeight, window,
-                                 &operationSubject](const std::int64_t y) -> RowFailure {
+                                [&image, solidPixel, gradient, horizontalScale = resolved.horizontalScale,
+                                 verticalScale = resolved.verticalScale, exactWidth, exactHeight,
+                                 window, &operationSubject](const std::int64_t y) -> RowFailure {
                                     auto row = image.row(y);
                                     if (!row) {
                                         return imageDiagnostic(
                                             *row.error(), operationSubject,
                                             "Solid output row could not be addressed");
                                     }
+                                    if (gradient) {
+                                        for (std::size_t x = 0; x < row.value()->size(); ++x) {
+                                            const double fullX =
+                                                (static_cast<double>(window.originX()) +
+                                                 static_cast<double>(x) + 0.5) /
+                                                horizontalScale;
+                                            const double fullY = (static_cast<double>(y) + 0.5) /
+                                                                 verticalScale;
+                                            const auto value = detail::gradientPixel(*gradient,
+                                                                                    fullX, fullY);
+                                            if (!value)
+                                                return imageDiagnostic(
+                                                    *value.error(), operationSubject,
+                                                    "Gradient pixel is not finite");
+                                            (*row.value())[x] = *value.value();
+                                        }
+                                    } else
                                     render::fillSolidRow(*row.value(), solidPixel);
                                     const auto verticalCoverage =
                                         std::clamp(exactHeight - static_cast<double>(y), 0.0, 1.0);
@@ -2206,15 +2289,16 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                        0.0, 1.0);
                                         if (coverage == 1.0)
                                             continue;
+                                        const auto base = (*row.value())[x];
                                         const auto value = render::Rgba32f::fromPremultiplied(
                                             static_cast<float>(
-                                                static_cast<double>(solidPixel.red()) * coverage),
+                                                static_cast<double>(base.red()) * coverage),
                                             static_cast<float>(
-                                                static_cast<double>(solidPixel.green()) * coverage),
+                                                static_cast<double>(base.green()) * coverage),
                                             static_cast<float>(
-                                                static_cast<double>(solidPixel.blue()) * coverage),
+                                                static_cast<double>(base.blue()) * coverage),
                                             static_cast<float>(
-                                                static_cast<double>(solidPixel.alpha()) *
+                                                static_cast<double>(base.alpha()) *
                                                 coverage));
                                         if (!value)
                                             return imageDiagnostic(

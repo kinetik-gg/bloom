@@ -51,7 +51,10 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
             [&](const auto& step) {
                 using Step = std::decay_t<decltype(step)>;
                 if constexpr (std::is_same_v<Step, CompiledSolid>)
-                    return parameter(step.color) || parameter(step.width) || parameter(step.height);
+                    return parameter(step.color) || parameter(step.width) || parameter(step.height) ||
+                           (step.gradient &&
+                            (parameter(step.gradient->endColor) || parameter(step.gradient->start) ||
+                             parameter(step.gradient->end)));
                 else if constexpr (std::is_same_v<Step, CompiledChecker>)
                     return parameter(step.colorA) || parameter(step.colorB);
                 else if constexpr (std::is_same_v<Step, CompiledShape>)

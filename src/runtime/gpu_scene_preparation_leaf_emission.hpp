@@ -9,6 +9,7 @@
 
 #include "gpu_scene_effect_emission.hpp"
 #include "checker_image.hpp"
+#include "gradient_source.hpp"
 #include "gpu_scene_preparation_common.hpp"
 #include "gpu_scene_preparation_private.hpp"
 
@@ -75,6 +76,43 @@ template <typename Emit, typename Charge>
     const auto solidWindow = descriptor.value()->dataWindow();
     const auto solidDisplay = descriptor.value()->displayWindow();
     const auto solidAspect = descriptor.value()->pixelAspect();
+    std::optional<render::GpuBatchGradient> gpuGradient;
+    if (solid.gradient) {
+        const auto endColor = resolveParameter(solid.gradient->endColor, plan, resolved);
+        const auto start = resolveParameter(solid.gradient->start, plan, resolved);
+        const auto end = resolveParameter(solid.gradient->end, plan, resolved);
+        if (!endColor || !start || !end || !endColor->value.isValid() ||
+            !std::isfinite(start->value.x) || !std::isfinite(start->value.y) ||
+            !std::isfinite(end->value.x) || !std::isfinite(end->value.y))
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Gradient endpoints are not evaluable");
+        gpuGradient.emplace(render::GpuBatchGradient{solidWindow, solidDisplay, solidAspect});
+        gpuGradient->first = {static_cast<float>(color->value.red),
+                              static_cast<float>(color->value.green),
+                              static_cast<float>(color->value.blue),
+                              static_cast<float>(color->value.alpha)};
+        gpuGradient->second = {static_cast<float>(endColor->value.red),
+                               static_cast<float>(endColor->value.green),
+                               static_cast<float>(endColor->value.blue),
+                               static_cast<float>(endColor->value.alpha)};
+        gpuGradient->endpoints = {static_cast<float>(start->value.x),
+                                  static_cast<float>(start->value.y),
+                                  static_cast<float>(end->value.x),
+                                  static_cast<float>(end->value.y)};
+        const bool authorDegenerate = start->value.x == end->value.x &&
+                                      start->value.y == end->value.y;
+        const bool deviceDegenerate = gpuGradient->endpoints[0] == gpuGradient->endpoints[2] &&
+                                      gpuGradient->endpoints[1] == gpuGradient->endpoints[3];
+        if (authorDegenerate != deviceDegenerate)
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
+                        "Gradient endpoint separation is below Float32 device precision");
+        gpuGradient->inverseHorizontalScale = static_cast<float>(1.0 / hScale);
+        gpuGradient->inverseVerticalScale = static_cast<float>(1.0 / vScale);
+        gpuGradient->exactWidth = static_cast<float>(exactWidth);
+        gpuGradient->exactHeight = static_cast<float>(exactHeight);
+        gpuGradient->repeat = static_cast<std::uint32_t>(solid.gradient->repeat);
+        gpuGradient->radial = solid.gradient->radial;
+    }
     auto& entry = bounds[index];
     entry.local = boundsForWindow(solidWindow, hScale, vScale);
     entry.local.right = width->value;
@@ -83,7 +121,7 @@ template <typename Emit, typename Charge>
     outputWindowOf[index] = solidWindow;
 
     OperationKey key;
-    key.add(std::string{"gpu-solid-v1"});
+    key.add(std::string{gpuGradient ? "gpu-gradient-v1" : "gpu-solid-v1"});
     key.add(std::bit_cast<std::uint32_t>(pixel.value()->red()));
     key.add(std::bit_cast<std::uint32_t>(pixel.value()->green()));
     key.add(std::bit_cast<std::uint32_t>(pixel.value()->blue()));
@@ -91,7 +129,21 @@ template <typename Emit, typename Charge>
     addWindowToKey(key, solidWindow);
     addWindowToKey(key, solidDisplay);
     addPixelAspectToKey(key, solidAspect);
-    key.add(std::string{kGpuSolidSpirvSha256});
+    if (gpuGradient) {
+        for (const auto component : gpuGradient->first)
+            key.add(std::bit_cast<std::uint32_t>(component));
+        for (const auto component : gpuGradient->second)
+            key.add(std::bit_cast<std::uint32_t>(component));
+        for (const auto component : gpuGradient->endpoints)
+            key.add(std::bit_cast<std::uint32_t>(component));
+        key.add(std::bit_cast<std::uint32_t>(gpuGradient->inverseHorizontalScale));
+        key.add(std::bit_cast<std::uint32_t>(gpuGradient->inverseVerticalScale));
+        key.add(std::bit_cast<std::uint32_t>(gpuGradient->exactWidth));
+        key.add(std::bit_cast<std::uint32_t>(gpuGradient->exactHeight));
+        key.add(gpuGradient->repeat);
+        key.add(gpuGradient->radial);
+    }
+    key.add(std::string{gpuGradient ? kGpuGradientSpirvSha256 : kGpuSolidSpirvSha256});
     keyOf[index] = key.digest();
 
     if (const auto error = charge(solidWindow.extent().width(), solidWindow.extent().height(),
@@ -100,12 +152,15 @@ template <typename Emit, typename Charge>
     }
     GpuSceneSolidCommand command{.sourceOperation = operationIndex,
                                  .pixel = *pixel.value(),
+                                 .checker = std::nullopt,
+                                 .gradient = std::move(gpuGradient),
                                  .dataWindow = solidWindow,
                                  .displayWindow = solidDisplay,
                                  .pixelAspect = solidAspect,
                                  .semanticKey = keyOf[index]};
     commandForOperation[index] = emit(std::move(command));
-    vectors[index] = GpuSceneVectorChain{index, {}, 1.0};
+    if (!solid.gradient)
+        vectors[index] = GpuSceneVectorChain{index, {}, 1.0};
     return std::nullopt;
 }
 
@@ -193,6 +248,7 @@ template <typename Emit, typename Charge>
                                      checker.cellWidth, checker.cellHeight,
                                      geometry.compositionWidth, geometry.compositionHeight,
                                      proxyWidth, proxyHeight},
+                                 .gradient = std::nullopt,
                                  .dataWindow = dataWindow,
                                  .displayWindow = descriptor.value()->displayWindow(),
                                  .pixelAspect = fullPixelAspect,

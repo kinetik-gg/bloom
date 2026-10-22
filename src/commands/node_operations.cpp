@@ -84,6 +84,15 @@ OperationResult AddNode::apply(document::Draft& draft) const {
             value = static_cast<double>(composition->format().width());
         else if (parameter.schemaKey == document::kSolidHeightParameterSchemaKey)
             value = static_cast<double>(composition->format().height());
+        else if (parameter.schemaKey == document::kGradientStartParameterSchemaKey &&
+                 nodeTypeId_ == document::kRadialGradientNodeType)
+            value = document::Vec2d{static_cast<double>(composition->format().width()) / 2.0,
+                                    static_cast<double>(composition->format().height()) / 2.0};
+        else if (parameter.schemaKey == document::kGradientEndParameterSchemaKey)
+            value = nodeTypeId_ == document::kRadialGradientNodeType
+                ? document::Vec2d{static_cast<double>(composition->format().width()),
+                                  static_cast<double>(composition->format().height()) / 2.0}
+                : document::Vec2d{static_cast<double>(composition->format().width()), 0.0};
         else if (parameter.schemaKey == document::kPositionParameterSchemaKey)
             value = document::Vec2d{static_cast<double>(composition->format().width()) / 2.0,
                                     static_cast<double>(composition->format().height()) / 2.0};

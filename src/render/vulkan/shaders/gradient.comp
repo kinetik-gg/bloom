@@ -1,0 +1,36 @@
+#version 460
+// Linear/Radial Gradient v1. Inputs are straight scene-linear; output is premultiplied RGBA32F.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 0, rgba32f) uniform writeonly image2D bloom_gradient_output;
+layout(push_constant) uniform BloomGradientPush {
+    vec4 first;
+    vec4 second;
+    vec4 endpoints; // start.xy, end.xy in full-resolution author pixels
+    vec4 transform; // inverse horizontal/vertical scale, pixel aspect, repeat mode
+    vec4 extent; // output width/height, exact fractional source width/height
+    ivec4 flags; // radial, data-window origin x/y, reserved
+} p;
+
+void main() {
+    ivec2 index = ivec2(gl_GlobalInvocationID.xy);
+    if (index.x >= int(p.extent.x) || index.y >= int(p.extent.y)) return;
+    vec2 physical = vec2((float(index.x + p.flags.y) + 0.5) * p.transform.x,
+                         (float(index.y + p.flags.z) + 0.5) * p.transform.y);
+    vec2 delta = (p.endpoints.zw - p.endpoints.xy) * vec2(p.transform.z, 1.0);
+    vec2 offset = (physical - p.endpoints.xy) * vec2(p.transform.z, 1.0);
+    float length2 = dot(delta, delta);
+    float t = length2 == 0.0 ? 0.0 :
+              (p.flags.x != 0 ? length(offset) * inversesqrt(length2)
+                              : dot(offset, delta) / length2);
+    int repeat = int(p.transform.w);
+    if (repeat == 1) t = fract(t);
+    else if (repeat == 2) { float u = mod(t, 2.0); t = u <= 1.0 ? u : 2.0 - u; }
+    else t = clamp(t, 0.0, 1.0);
+    // Weighted endpoints avoid overflowing the difference of opposite-sign HDR colours.
+    vec4 straight = p.first * (1.0 - t) + p.second * t;
+    float coverage = clamp(p.extent.z - float(index.x + p.flags.y), 0.0, 1.0) *
+                     clamp(p.extent.w - float(index.y + p.flags.z), 0.0, 1.0);
+    float alpha = straight.a * coverage;
+    imageStore(bloom_gradient_output, index,
+               alpha == 0.0 ? vec4(0.0) : vec4(straight.rgb * alpha, alpha));
+}

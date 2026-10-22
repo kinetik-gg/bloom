@@ -1300,3 +1300,39 @@ if(BUILD_TESTING)
     endif()
     add_subdirectory(tests)
 endif()
+# Fixed native GradientV1 source and embedded SPIR-V. Regeneration follows the same offline
+# glslangValidator/spirv-val/embed recipe as the resident SolidV1 shader.
+set(BLOOM_GRADIENT_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/gradient.comp")
+set(BLOOM_GRADIENT_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/gradient.manifest")
+set(BLOOM_GRADIENT_COMP_SHA256
+    "e8a88bdb62f87399101df7bc1040d9f0f5141df733145fbdaf1f54241cef306c")
+set(BLOOM_GRADIENT_SPV_SHA256
+    "f5999e4e717f50c6b75ca6871dab0f77f0f51ae0909a8544694de5f74e87fc4f")
+file(SHA256 "${BLOOM_GRADIENT_COMP}" bloom_gradient_comp_sha256)
+if(NOT bloom_gradient_comp_sha256 STREQUAL BLOOM_GRADIENT_COMP_SHA256)
+    message(FATAL_ERROR "gradient.comp source pin mismatch")
+endif()
+file(READ "${BLOOM_GRADIENT_MANIFEST}" bloom_gradient_manifest)
+if(NOT bloom_gradient_manifest MATCHES "${BLOOM_GRADIENT_COMP_SHA256}" OR
+   NOT bloom_gradient_manifest MATCHES "${BLOOM_GRADIENT_SPV_SHA256}")
+    message(FATAL_ERROR "gradient.manifest pin mismatch")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_gradient_generated_spv "${CMAKE_CURRENT_BINARY_DIR}/gradient.generated.spv")
+    execute_process(COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                    "${BLOOM_GRADIENT_COMP}" -o "${bloom_gradient_generated_spv}"
+                    RESULT_VARIABLE bloom_gradient_compile_result)
+    if(NOT bloom_gradient_compile_result EQUAL 0)
+        message(FATAL_ERROR "gradient.comp compilation failed")
+    endif()
+    execute_process(COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2
+                    "${bloom_gradient_generated_spv}"
+                    RESULT_VARIABLE bloom_gradient_validate_result)
+    if(NOT bloom_gradient_validate_result EQUAL 0)
+        message(FATAL_ERROR "gradient.comp SPIR-V validation failed")
+    endif()
+    file(SHA256 "${bloom_gradient_generated_spv}" bloom_gradient_spv_sha256)
+    if(NOT bloom_gradient_spv_sha256 STREQUAL BLOOM_GRADIENT_SPV_SHA256)
+        message(FATAL_ERROR "gradient.comp embedded SPIR-V pin mismatch")
+    endif()
+endif()

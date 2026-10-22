@@ -43,6 +43,7 @@ namespace bloom::runtime {
 enum class GpuSceneExecutorStepKind : std::uint8_t {
     Solid,        // GpuSolid::begin: a solid command, a merge transparent base, or a transparent
                   // composition output.
+    Gradient,     // Native GradientV1 batch compute; never a CPU-render/upload surrogate.
     CoveredSolid, // GpuSolid::beginCoveredResident/beginCovered: the R8 coverage path.
     // The native GpuPathCoverage compute dispatch for one vector source's coverage geometry. It
     // does not publish an image; on Ready the covered fill is started from the resident mask.
@@ -83,6 +84,7 @@ struct GpuSceneExecutorStep final {
     // default constructor.
     render::Rgba32f solidPixel = render::Rgba32f::transparent();
     std::optional<render::GpuSolidParameters::Checker> checker;
+    std::optional<render::GpuBatchGradient> gradient;
     std::optional<render::ImageWindow> solidDataWindow;
     std::optional<render::ImageWindow> solidDisplayWindow;
     core::PixelAspectRatio solidPixelAspect = core::PixelAspectRatio::square();

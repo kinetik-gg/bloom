@@ -654,6 +654,37 @@ identity, device capability, and fallback are semantic contracts rather than bac
 The planned artist-facing vocabulary is maintained in
 [`../product/node-catalogue.md`](../product/node-catalogue.md).
 
+## Linear and radial gradient sources
+
+`bloom.linear-gradient` and `bloom.radial-gradient` version 1 are independent image-producing
+authoring nodes. Each stores animatable start/end straight RGBA colours and start/end `Vec2d`
+coordinates, animatable width/height, and a static integer repeat selector (`0` Clamp, `1`
+Repeat, `2` Mirror). New nodes use the composition extent. Linear starts at the left edge and ends
+at the right edge; radial starts at the composition centre and ends at the right edge. The source
+has a local data window from `(0,0)` to its resolved extent and inherits the composition display
+window and pixel aspect. Authored coordinates are full-resolution local pixel-edge coordinates;
+sampling uses pixel centres. The proxy request maps centres back to author space using the exact
+horizontal and vertical resolution scales, so controls and composition geometry do not drift.
+
+Linear `t` is projection onto the start-to-end vector. Radial `t` is distance from start divided by
+the start-to-end distance. Horizontal distances are multiplied by physical pixel aspect in both
+formulas. A zero-length vector chooses the first colour. Clamp confines `t` to `[0,1]`, Repeat
+uses its fractional part, and Mirror folds over period two. The two authored colours interpolate
+in the effective scene-linear working space as straight RGB and independent alpha; the result is
+premultiplied once for the process image. Negative and HDR RGB are retained when the resulting
+Float32 process pixel is finite. The fractional right/bottom extent coverage scales the final
+premultiplied pixel. ROI clips the requested output while preserving full source coordinates and
+the composition display window.
+
+The CPU evaluator shades rows with the shared cancellation and pixel budget gate. The GPU scene
+preparer resolves the same animation operands and windows and emits a semantic key containing both
+straight colours, endpoints, repeat mode, scales, extent, pixel aspect, and the pinned GradientV1
+shader digest. The native operation batch executes the gradient compute shader into a resident
+RGBA32F image, including single-generator batches; no full-frame CPU upload stands in for that
+shader. Its normal completion uses the same fence proof, cancellation, image budget, and retirement
+rules as other native batch operations. Native unavailability is reported explicitly and the
+portable CPU reference remains the supported fallback.
+
 ## Image Effect Lowering
 
 COLOR-3 advances compiled-plan semantics to **8** and CPU evaluator semantics to **9**.

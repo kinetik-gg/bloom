@@ -201,6 +201,26 @@ template <typename Definition>
                !definition.inputs[0].required && definition.inputs[1].name == "colorB" &&
                definition.inputs[1].valueKind == SocketValueKind::Color &&
                !definition.inputs[1].required && !definition.layerSlotInput;
+    case NodeLoweringKind::Gradient:
+        return (hasCanonicalKey(definition, kLinearGradientNodeType, kGradientNodeSchemaVersion) ||
+                hasCanonicalKey(definition, kRadialGradientNodeType, kGradientNodeSchemaVersion)) &&
+               definition.inputs.empty() && hasImageOutput(definition, "image") &&
+               definition.outputs.size() == 1 && definition.parameters.size() == 7 &&
+               hasParameter(definition, 0, "startColor", kGradientStartColorParameterSchemaKey,
+                            ParameterValueKind::Color4d, true) &&
+               hasParameter(definition, 1, "endColor", kGradientEndColorParameterSchemaKey,
+                            ParameterValueKind::Color4d, true) &&
+               hasParameter(definition, 2, "start", kGradientStartParameterSchemaKey,
+                            ParameterValueKind::Vec2d, true) &&
+               hasParameter(definition, 3, "end", kGradientEndParameterSchemaKey,
+                            ParameterValueKind::Vec2d, true) &&
+               hasParameter(definition, 4, "width", kSolidWidthParameterSchemaKey,
+                            ParameterValueKind::Float64, true) &&
+               hasParameter(definition, 5, "height", kSolidHeightParameterSchemaKey,
+                            ParameterValueKind::Float64, true) &&
+               hasParameter(definition, 6, "repeat", kGradientRepeatParameterSchemaKey,
+                            ParameterValueKind::Integer) &&
+               !definition.layerSlotInput;
     case NodeLoweringKind::VideoSource:
         return hasCanonicalKey(definition, "bloom.video-source", 1) &&
                hasOutput(definition, "image", SocketValueKind::Image) &&
@@ -461,6 +481,31 @@ template <typename Definition>
                                          : SocketValueKind::Scalar,
                                      false});
     return definition;
+}
+
+[[nodiscard]] NodeDefinition gradientDefinition(const std::string_view type) {
+    using namespace bloom::document;
+    return {{std::string(type), kGradientNodeSchemaVersion},
+            NodeLoweringKind::Gradient,
+            {},
+            {{"image", SocketValueKind::Image}},
+            {{"startColor", std::string(kGradientStartColorParameterSchemaKey),
+              ParameterValueKind::Color4d, true, true, bloom::core::Color4d{0, 0, 0, 1}},
+             {"endColor", std::string(kGradientEndColorParameterSchemaKey),
+              ParameterValueKind::Color4d, true, true, bloom::core::Color4d{1, 1, 1, 1}},
+             {"start", std::string(kGradientStartParameterSchemaKey), ParameterValueKind::Vec2d,
+              true, true, Vec2d{0, 0}},
+             {"end", std::string(kGradientEndParameterSchemaKey), ParameterValueKind::Vec2d, true,
+              true, Vec2d{1, 0}},
+             {"width", std::string(kSolidWidthParameterSchemaKey), ParameterValueKind::Float64,
+              true, true, 1.0},
+             {"height", std::string(kSolidHeightParameterSchemaKey), ParameterValueKind::Float64,
+              true, true, 1.0},
+             {"repeat", std::string(kGradientRepeatParameterSchemaKey), ParameterValueKind::Integer,
+              true, false, std::int64_t{0}}},
+            std::nullopt,
+            NodeCardinality::Many,
+            NodeCategory::Sources};
 }
 
 [[nodiscard]] NodeDefinition layerOutputDefinition() {
@@ -929,6 +974,8 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         shapeDefinition(),
         solidDefinition(),
         checkerDefinition(),
+        gradientDefinition(kLinearGradientNodeType),
+        gradientDefinition(kRadialGradientNodeType),
         layerOutputDefinition(),
         layerStackDefinition(),
         compositionOutputDefinition(),

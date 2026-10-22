@@ -58,6 +58,7 @@ struct DriverReference final {
         switch (lowering) {
         case runtime::NodeLoweringKind::Solid:
         case runtime::NodeLoweringKind::Checker:
+        case runtime::NodeLoweringKind::Gradient:
         case runtime::NodeLoweringKind::Shape:
         case runtime::NodeLoweringKind::Text:
         case runtime::NodeLoweringKind::CompositionSource:
@@ -554,6 +555,7 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     case runtime::NodeLoweringKind::Shape:
     case runtime::NodeLoweringKind::Solid:
     case runtime::NodeLoweringKind::Checker:
+    case runtime::NodeLoweringKind::Gradient:
     case runtime::NodeLoweringKind::CompositionSource:
     case runtime::NodeLoweringKind::VideoSource:
     case runtime::NodeLoweringKind::ImageEffect:

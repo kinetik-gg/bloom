@@ -9,7 +9,7 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
     if (!budgets.enableNativeBatches || batchAttempted)
         return std::nullopt;
     batchAttempted = true;
-    if (steps.size() - cursor < 2)
+    if (steps.size() - cursor < 2 && steps[cursor].kind != GpuSceneExecutorStepKind::Gradient)
         return std::nullopt;
     std::vector<render::GpuBatchOperation> operations;
     operations.reserve(render::kGpuOperationBatchCapacity);
@@ -26,7 +26,11 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
     for (std::size_t index = cursor;
          index < steps.size() && operations.size() < render::kGpuOperationBatchCapacity; ++index) {
         const auto& step = steps[index];
-        if (step.kind == GpuSceneExecutorStepKind::Solid) {
+        if (step.kind == GpuSceneExecutorStepKind::Gradient) {
+            if (!step.gradient)
+                return std::nullopt;
+            operations.emplace_back(*step.gradient);
+        } else if (step.kind == GpuSceneExecutorStepKind::Solid) {
             if (!step.solidDataWindow || !step.solidDisplayWindow || step.checker)
                 return std::nullopt;
             operations.emplace_back(
@@ -59,7 +63,7 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
         if (step.command != kInvalidGpuSceneCommand)
             produced[step.command] = static_cast<std::uint32_t>(operations.size() - 1);
     }
-    if (operations.size() < 2)
+    if (operations.size() < 2 && steps[cursor].kind != GpuSceneExecutorStepKind::Gradient)
         return std::nullopt;
     if (!operationBatch)
         operationBatch = render::GpuOperationBatch::create(
@@ -98,7 +102,8 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
         counters.dispatches += stats.dispatches;
         for (std::size_t index = cursor; index < cursor + batchStepCount; ++index) {
             const auto& step = steps[index];
-            if (step.kind == GpuSceneExecutorStepKind::Solid)
+            if (step.kind == GpuSceneExecutorStepKind::Solid ||
+                step.kind == GpuSceneExecutorStepKind::Gradient)
                 ++counters.solidDispatches;
             else if (step.kind == GpuSceneExecutorStepKind::Translation)
                 ++counters.translationDispatches;

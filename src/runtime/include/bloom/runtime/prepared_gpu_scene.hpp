@@ -38,6 +38,7 @@
 #include <bloom/render/gpu_affine.hpp>
 #include <bloom/render/gpu_blend.hpp>
 #include <bloom/render/gpu_solid.hpp>
+#include <bloom/render/gpu_operation_batch.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/render/path_raster.hpp>
 #include <bloom/runtime/cancellation.hpp>
@@ -148,6 +149,7 @@ struct GpuSceneSolidCommand final {
     // The exact resolved premultiplied lin_rec709_scene pixel the CPU solid primitive produced.
     render::Rgba32f pixel = render::Rgba32f::transparent();
     std::optional<render::GpuSolidParameters::Checker> checker = std::nullopt;
+    std::optional<render::GpuBatchGradient> gradient;
     render::ImageWindow dataWindow;
     render::ImageWindow displayWindow;
     core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
@@ -161,7 +163,7 @@ struct GpuSceneTranslationCommand final {
     render::ImageWindow sourceWindow;
     render::ImageWindow outputWindow;
     // Canvas operations supply this; ordinary layer translations inherit the input display.
-    std::optional<render::ImageWindow> outputDisplayWindow;
+    std::optional<render::ImageWindow> outputDisplayWindow{};
     // The GPU translation is local to the OUTPUT window and already accounts for the output/source
     // window origin difference, so replay reproduces the CPU LayerTransform translation-only
     // sample.

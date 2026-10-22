@@ -24,6 +24,14 @@ inline constexpr std::string_view kCheckerCellHeightParameterSchemaKey =
     "bloom.checker.cell-height";
 inline constexpr std::string_view kCheckerWidthParameterSchemaKey = "bloom.checker.width";
 inline constexpr std::string_view kCheckerHeightParameterSchemaKey = "bloom.checker.height";
+// Gradient geometry is expressed in full-resolution source pixel-edge coordinates. A pixel is
+// sampled at its centre. Radial distance uses the composition's physical pixel aspect.
+inline constexpr std::string_view kGradientStartParameterSchemaKey = "bloom.gradient.start";
+inline constexpr std::string_view kGradientEndParameterSchemaKey = "bloom.gradient.end";
+inline constexpr std::string_view kGradientStartColorParameterSchemaKey =
+    "bloom.gradient.start-color";
+inline constexpr std::string_view kGradientEndColorParameterSchemaKey = "bloom.gradient.end-color";
+inline constexpr std::string_view kGradientRepeatParameterSchemaKey = "bloom.gradient.repeat";
 inline constexpr std::string_view kTextParameterSchemaKey = "bloom.text.content";
 inline constexpr std::string_view kTextSizeParameterSchemaKey = "bloom.text.size";
 // Font references are family|style|digest strings. The old integer values remain accepted while
@@ -231,6 +239,8 @@ inline constexpr std::int64_t kDefaultBlendModeValue =
 [[nodiscard]] constexpr bool isVec2AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == "bloom.shape.size" || schemaKey == kPositionParameterSchemaKey ||
            schemaKey == kAnchorParameterSchemaKey || schemaKey == kScaleParameterSchemaKey ||
+           schemaKey == kGradientStartParameterSchemaKey ||
+           schemaKey == kGradientEndParameterSchemaKey ||
            schemaKey == kVector2ValueParameterSchemaKey;
 }
 
@@ -279,6 +289,8 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == "bloom.shape.fill-color" || schemaKey == "bloom.shape.stroke-color" ||
            schemaKey == kSolidColorParameterSchemaKey ||
+           schemaKey == kGradientStartColorParameterSchemaKey ||
+           schemaKey == kGradientEndColorParameterSchemaKey ||
            schemaKey == kTextColorParameterSchemaKey || schemaKey == kColorValueParameterSchemaKey;
 }
 

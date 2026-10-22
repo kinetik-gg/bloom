@@ -54,7 +54,8 @@ level's dependencies.
 | `F1` | Image, Image Sequence | Stable asset identity, source interpretation, windows, channels, and missing-frame policy |
 | `C1` | Video Source | Built on Linux: worker-only FFmpeg decode, asset/start frame/loop/colour controls, image and audio outputs, exact CFR timing and preserved alpha; native macOS/Windows providers remain unavailable |
 | `C1` | Shape | Built: one parametric/path source with shared fill and stroke; viewer drawing tools follow |
-| `C1` | Linear Gradient, Radial Gradient, Four-Point Gradient | Explicit interpolation space, repeat mode, and alpha behavior |
+| `C1` | Linear Gradient, Radial Gradient | Built: animated source-pixel endpoints and scene-linear straight RGBA interpolation with independent alpha, Clamp/Repeat/Mirror, explicit extent, native GradientV1 preparation and CPU reference |
+| `C1` | Four-Point Gradient | Planned multi-corner source with explicit interpolation and alpha behavior |
 | `C1` | Checker, Grid, Color Bars | Checker built with two colours, cell/canvas size and deterministic proxy sampling; Grid and Color Bars remain planned |
 | `M1` | Noise, Fractal Noise, Voronoi | Seeded, versioned procedural output with stable CPU/GPU semantics |
 | `M1` | Repeater, Scatter | Instance-like repetition without eagerly duplicating authoring data |

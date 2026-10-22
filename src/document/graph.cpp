@@ -39,6 +39,15 @@ constexpr std::array kSolidSourceBindings{
     ExpectedParameterBinding{bloom::document::kSolidHeightParameterRole,
                              bloom::document::kSolidHeightParameterSchemaKey},
 };
+constexpr std::array kGradientBindings{
+    ExpectedParameterBinding{"startColor", bloom::document::kGradientStartColorParameterSchemaKey},
+    ExpectedParameterBinding{"endColor", bloom::document::kGradientEndColorParameterSchemaKey},
+    ExpectedParameterBinding{"start", bloom::document::kGradientStartParameterSchemaKey},
+    ExpectedParameterBinding{"end", bloom::document::kGradientEndParameterSchemaKey},
+    ExpectedParameterBinding{"width", bloom::document::kSolidWidthParameterSchemaKey},
+    ExpectedParameterBinding{"height", bloom::document::kSolidHeightParameterSchemaKey},
+    ExpectedParameterBinding{"repeat", bloom::document::kGradientRepeatParameterSchemaKey},
+};
 constexpr std::array kTextSourceBindings{
     ExpectedParameterBinding{bloom::document::kTextParameterRole,
                              bloom::document::kTextParameterSchemaKey},
@@ -89,6 +98,9 @@ expectedBindings(const bloom::document::NodeRecord& node) noexcept {
         (node.schemaVersion == kSolidSourceNodeSchemaVersion || node.schemaVersion == 1)) {
         return std::span(kSolidSourceBindings).first(node.schemaVersion == 1 ? 1 : 3);
     }
+    if ((node.typeId == kLinearGradientNodeType || node.typeId == kRadialGradientNodeType) &&
+        node.schemaVersion == kGradientNodeSchemaVersion)
+        return kGradientBindings;
     if (node.typeId == kTextSourceNodeType &&
         (node.schemaVersion == kTextSourceNodeSchemaVersion || node.schemaVersion == 1)) {
         return node.schemaVersion == 1 ? std::span(kTextSourceBindings).first(3)

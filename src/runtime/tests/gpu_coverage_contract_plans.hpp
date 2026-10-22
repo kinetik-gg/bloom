@@ -63,6 +63,21 @@ using bloom::runtime::OperationIndex;
                         LayerValues{.position = {11.5, 8.2}, .opacity = 0.75}, 6.0, 5.0, 90000);
 }
 
+[[nodiscard]] inline CompiledSolid gradient(const bool radial, const std::uint64_t idBase) {
+    using bloom::runtime::CompiledGradient;
+    CompiledSolid source{NodeId::fromRaw(idBase),
+                         {ParameterId::fromRaw(idBase + 1), Color4d{-0.25, 2.0, 0.5, 0.75}},
+                         {ParameterId::fromRaw(idBase + 2), 6.0},
+                         {ParameterId::fromRaw(idBase + 3), 5.0}};
+    source.gradient = CompiledGradient{
+        radial,
+        {ParameterId::fromRaw(idBase + 4), Color4d{1.0, -0.5, 0.25, 0.25}},
+        {ParameterId::fromRaw(idBase + 5), Vec2d{1.0, 1.0}},
+        {ParameterId::fromRaw(idBase + 6), Vec2d{5.0, 1.0}},
+        ParameterId::fromRaw(idBase + 7), radial ? 2 : 0};
+    return source;
+}
+
 [[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
 withSource(const CompiledOperation& source, const std::uint64_t idBase,
            const std::shared_ptr<const CompiledCompositionPlan>* nested = nullptr,

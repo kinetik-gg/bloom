@@ -2,6 +2,7 @@
 #include <bloom/render/processing_host_storage.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -68,6 +69,39 @@ void run(GpuDevice& device) {
         GpuBatchSourceOver{{nullptr, 1}, {nullptr, 2}}};
     auto batch = GpuOperationBatch::create(device);
     require(batch != nullptr, "bounded batch facade creates");
+    // A generator with no image input still dispatches a genuine native kernel. The one-operation
+    // case is reserved for GradientV1; it must retain the same descriptor and publish only after
+    // a fence. The interpolated alpha is independent of RGB until final premultiplication.
+    const auto madeGradientWindow = ImageWindow::create(0, 0, 4, 1);
+    const auto gradientWindow = *madeGradientWindow.value();
+    GpuBatchGradient gradient{gradientWindow, gradientWindow,
+                              bloom::core::PixelAspectRatio::square()};
+    gradient.first = {-1.0F, 0.0F, 2.0F, 1.0F};
+    gradient.second = {3.0F, 0.0F, -2.0F, 0.0F};
+    gradient.endpoints = {0.0F, 0.0F, 4.0F, 0.0F};
+    gradient.exactWidth = 4.0F;
+    gradient.exactHeight = 1.0F;
+    const std::array<GpuBatchOperation, 1> gradientOps{gradient};
+    require(batch->begin(gradientOps, capacity).code == GpuOperationBatchCode::None &&
+                complete(*batch) == GpuOperationBatchState::Ready,
+            "native gradient generator submits and retires");
+    auto gradientImages = batch->takeImages();
+    require(gradientImages.size() == 1, "gradient retains one native image");
+    auto gradientReadback = readbackResidentImage(gradientImages.front(), capacity);
+    require(gradientReadback.code == GpuImageReadbackCode::None &&
+                gradientReadback.pixels.size() == 4,
+            "gradient native image has expected extent");
+    if (gradientReadback.pixels.size() == 4) {
+        const auto& first = gradientReadback.pixels.front();
+        const auto& last = gradientReadback.pixels.back();
+        require(std::fabs(first.alpha() - 0.875F) < 0.0002F &&
+                    std::fabs(first.red() + 0.4375F) < 0.0002F &&
+                    std::fabs(last.alpha() - 0.125F) < 0.0002F &&
+                    std::fabs(last.red() - 0.3125F) < 0.0002F,
+                "native gradient interpolates HDR/negative straight RGB and alpha then premultiplies");
+    }
+    gradientImages.clear();
+    device.reclaimReleasedImages();
     const auto before = root.snapshot();
     const auto baseline = device.allocatorMemorySnapshot();
     {

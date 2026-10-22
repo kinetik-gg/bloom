@@ -528,6 +528,8 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
         return lowerSolid(node);
     case NodeLoweringKind::Checker:
         return lowerChecker(node);
+    case NodeLoweringKind::Gradient:
+        return lowerGradient(node);
     case NodeLoweringKind::CompositionSource:
         return lowerCompositionSource(node);
     case NodeLoweringKind::VideoSource:
@@ -619,6 +621,32 @@ lowerChecker(const document::NodeRecord& node) {
                                     static_cast<std::uint32_t>(*cellHeight),
                                     static_cast<std::uint32_t>(*width),
                                     static_cast<std::uint32_t>(*height)};
+}
+
+[[nodiscard]] std::optional<runtime::CompiledOperation>
+lowerGradient(const document::NodeRecord& node) {
+    using namespace document;
+    const auto startColor = compiledColorParameter(findParameterBinding(node, "startColor"));
+    const auto endColor = compiledColorParameter(findParameterBinding(node, "endColor"));
+    const auto start = compiledVec2Parameter(findParameterBinding(node, "start"));
+    const auto end = compiledVec2Parameter(findParameterBinding(node, "end"));
+    const auto width = compiledScalarParameter(findParameterBinding(node, "width"));
+    const auto height = compiledScalarParameter(findParameterBinding(node, "height"));
+    const auto* repeatBinding = findParameterBinding(node, "repeat");
+    const auto* repeat = parameterConstant<std::int64_t>(repeatBinding);
+    if (!startColor || !endColor || !start || !end || !width || !height || !repeatBinding ||
+        !repeat || *repeat < 0 || *repeat > 2) {
+        addTopologyFailure(node.id, "Gradient parameters could not be lowered.");
+        return std::nullopt;
+    }
+    runtime::CompiledSolid source{node.id, *startColor, *width, *height};
+    source.gradient = runtime::CompiledGradient{node.typeId == kRadialGradientNodeType,
+                                                *endColor,
+                                                *start,
+                                                *end,
+                                                repeatBinding->parameterId,
+                                                *repeat};
+    return source;
 }
 
 [[nodiscard]] std::optional<runtime::CompiledCompositionSource>

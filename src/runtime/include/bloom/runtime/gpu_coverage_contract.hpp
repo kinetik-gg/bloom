@@ -373,6 +373,7 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     switch (lowering) {
     case NodeLoweringKind::Solid:
     case NodeLoweringKind::Checker:
+    case NodeLoweringKind::Gradient:
     case NodeLoweringKind::Shape:
     case NodeLoweringKind::Text:
     case NodeLoweringKind::ImageSource:
@@ -413,6 +414,7 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     using document::NodeLoweringKind;
     switch (lowering) {
     case NodeLoweringKind::Solid:
+    case NodeLoweringKind::Gradient:
         return "operation.CompiledSolid";
     case NodeLoweringKind::Checker:
         return "operation.CompiledChecker";

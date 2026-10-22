@@ -35,6 +35,7 @@ bool State::initialize() {
         return false;
     }
     constexpr bool solidBindings[] = {true};
+    constexpr bool gradientBindings[] = {true};
     constexpr bool translationBindings[] = {true, true, false, false, false};
     constexpr bool affineBindings[] = {true, true, false, false};
     constexpr bool overBindings[] = {true, true, true, false};
@@ -50,7 +51,10 @@ bool State::initialize() {
                                  20, reason, pipelines[2]) ||
         !createCompositePipeline(*control, vulkan_detail::kSourceOverSpirvCode,
                                  vulkan_detail::kSourceOverSpirvByteCount, overBindings, 4, 24,
-                                 reason, pipelines[3]))
+                                 reason, pipelines[3]) ||
+        !createCompositePipeline(*control, vulkan_detail::kGradientSpirvCode,
+                                 vulkan_detail::kGradientSpirvByteCount, gradientBindings, 1, 96,
+                                 reason, pipelines[4]))
         return false;
     const VkDevice device = static_cast<VkDevice>(*control->device);
     const auto* api = control->device.getDispatcher();
@@ -80,9 +84,10 @@ bool State::initialize() {
 
 bool State::prepare(const std::span<const GpuBatchOperation> operations,
                     const GpuOperationBatchBudgets& budgets, const std::uint64_t byteBudget) {
-    if (operations.size() < 2 || operations.size() > kGpuOperationBatchCapacity) {
+    if (operations.empty() || operations.size() > kGpuOperationBatchCapacity ||
+        (operations.size() == 1 && !std::holds_alternative<GpuBatchGradient>(operations.front()))) {
         fail(GpuOperationBatchCode::InvalidRequest,
-             "native batch requires two to eight operations");
+             "native batch requires two to eight operations, or one gradient");
         return false;
     }
     const auto resolve = [this](const GpuBatchImageRef& ref, const std::uint32_t index,
@@ -116,6 +121,83 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
             pack(job, SolidPushConstants{{pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()},
                                          window->extent().width(),
                                          window->extent().height()});
+        } else if (const auto* gradient = std::get_if<GpuBatchGradient>(&operations[index])) {
+            window = gradient->dataWindow;
+            display = gradient->displayWindow;
+            aspect = gradient->pixelAspect;
+            struct alignas(16) GradientPush final {
+                std::array<float, 4> first, second, endpoints, transform, extent;
+                std::array<std::int32_t, 4> flags;
+            };
+            static_assert(sizeof(GradientPush) == 96);
+            constexpr float arithmeticLimit = std::numeric_limits<float>::max() / 2.0F;
+            const auto finiteArray = [](const auto& values) {
+                return std::ranges::all_of(values, [](const float v) {
+                    return std::isfinite(v) &&
+                           std::fabs(v) <= std::numeric_limits<float>::max() / 2.0F;
+                });
+            };
+            const auto aspectValue = static_cast<float>(aspect.numerator()) /
+                                     static_cast<float>(aspect.denominator());
+            const auto safeGeometry = [&] {
+                if (!std::isfinite(aspectValue) || aspectValue <= 0) return false;
+                const long double limit = static_cast<long double>(arithmeticLimit);
+                const long double minNormal =
+                    static_cast<long double>(std::numeric_limits<float>::min());
+                const long double physicalAspect = static_cast<long double>(aspectValue);
+                const long double scaleX =
+                    static_cast<long double>(gradient->inverseHorizontalScale);
+                const long double scaleY =
+                    static_cast<long double>(gradient->inverseVerticalScale);
+                const long double sx = static_cast<long double>(gradient->endpoints[0]);
+                const long double sy = static_cast<long double>(gradient->endpoints[1]);
+                const long double dx = (static_cast<long double>(gradient->endpoints[2]) - sx) *
+                                       physicalAspect;
+                const long double dy = static_cast<long double>(gradient->endpoints[3]) - sy;
+                const long double span2 = dx * dx + dy * dy;
+                if (span2 > limit || (span2 > 0 && span2 < minNormal)) return false;
+                const long double farX =
+                    (static_cast<long double>(window->extent().width()) - 0.5L) * scaleX;
+                const long double farY =
+                    (static_cast<long double>(window->extent().height()) - 0.5L) * scaleY;
+                const long double px = std::max(
+                    std::abs((0.5L * scaleX - sx) * physicalAspect),
+                    std::abs((farX - sx) * physicalAspect));
+                const long double py = std::max(
+                    std::abs(0.5L * scaleY - sy), std::abs(farY - sy));
+                const long double offset2 = px * px + py * py;
+                const long double projection = px * std::abs(dx) + py * std::abs(dy);
+                return offset2 <= limit && projection <= limit &&
+                       (span2 == 0 ||
+                        (gradient->radial ? std::sqrt(offset2 / span2) : projection / span2) <=
+                            limit);
+            };
+            if (!finiteArray(gradient->first) || !finiteArray(gradient->second) ||
+                !std::ranges::all_of(gradient->endpoints, [](const float value) {
+                    return std::isfinite(value);
+                }) ||
+                gradient->first[3] < 0 || gradient->first[3] > 1 ||
+                gradient->second[3] < 0 || gradient->second[3] > 1 ||
+                !std::isfinite(gradient->inverseHorizontalScale) ||
+                !std::isfinite(gradient->inverseVerticalScale) ||
+                gradient->inverseHorizontalScale <= 0 ||
+                gradient->inverseVerticalScale <= 0 ||
+                !std::isfinite(gradient->exactWidth) || gradient->exactWidth <= 0 ||
+                !std::isfinite(gradient->exactHeight) || gradient->exactHeight <= 0 ||
+                gradient->repeat > 2 ||
+                window->originX() != 0 || window->originY() != 0 || !safeGeometry()) {
+                fail(GpuOperationBatchCode::Unsupported,
+                     "gradient values exceed the native Float32 arithmetic capability");
+                return false;
+            }
+            pack(job, GradientPush{gradient->first, gradient->second, gradient->endpoints,
+                                   {gradient->inverseHorizontalScale,
+                                    gradient->inverseVerticalScale, aspectValue,
+                                    static_cast<float>(gradient->repeat)},
+                                   {static_cast<float>(window->extent().width()),
+                                    static_cast<float>(window->extent().height()),
+                                    gradient->exactWidth, gradient->exactHeight},
+                                   {gradient->radial ? 1 : 0, 0, 0, 0}});
         } else {
             const GpuBatchImageRef* source = nullptr;
             float opacity = 1;
@@ -230,7 +312,7 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
             return createCompositeBuffer(control, bytes, host, data, job.metadata[slot], true);
         };
         const std::uint32_t zero = 0;
-        if (job.kind != 0 && !buffer(2, sizeof(zero), true, &zero)) {
+        if (job.kind != 0 && job.kind != 4 && !buffer(2, sizeof(zero), true, &zero)) {
             fail(GpuOperationBatchCode::AllocationFailed, "batch status backing was refused");
             return false;
         }

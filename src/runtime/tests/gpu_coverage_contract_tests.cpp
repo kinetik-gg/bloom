@@ -101,6 +101,7 @@ using bloom::gpu_coverage_gate::structuralFixtureFailures;
 using bloom::gpu_coverage_plans::AffineAxis;
 using bloom::gpu_coverage_plans::basePlan;
 using bloom::gpu_coverage_plans::effectPlan;
+using bloom::gpu_coverage_plans::gradient;
 using bloom::gpu_coverage_plans::layerOnLayerPlan;
 using bloom::gpu_coverage_plans::modifiedLayer;
 using bloom::gpu_coverage_plans::nestedBranchReusePlans;
@@ -493,6 +494,12 @@ displayProofRunner(const bool customView) {
                        "src/runtime Resize production affine preparation");
     addImageEffectPlan("node.bloom.fit", bloom::runtime::ResizeFitKernel{10, 7, 1, 1, 0, 1}, 105000,
                        "src/runtime Fit production affine preparation");
+    add("node.bloom.linear-gradient", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime gradient source and native batch tests",
+        [] { return runBuilder(withSource(gradient(false, 140000), 140000)); });
+    add("node.bloom.radial-gradient", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime gradient source and native batch tests",
+        [] { return runBuilder(withSource(gradient(true, 141000), 141000)); });
     add("node.bloom.layer-output", GpuCoverageFixtureCriterion::Prepared,
         "src/document node_definition_registry tests", [] { return runBuilder(basePlan()); });
     add("node.bloom.layer-stack", GpuCoverageFixtureCriterion::Prepared,

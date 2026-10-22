@@ -182,7 +182,9 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* value = std::get_if<double>(&constant.value);
         return value && std::isfinite(*value) && isScalarWithinSchemaDomain(schemaKey, *value);
     }
-    if (schemaKey == kSolidColorParameterSchemaKey) {
+    if (schemaKey == kSolidColorParameterSchemaKey ||
+        schemaKey == kGradientStartColorParameterSchemaKey ||
+        schemaKey == kGradientEndColorParameterSchemaKey) {
         const auto* color = std::get_if<bloom::core::Color4d>(&constant.value);
         return color != nullptr && color->isValid();
     }
@@ -193,8 +195,9 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* value = std::get_if<std::int64_t>(&constant.value);
         return value != nullptr && *value >= 1 && *value <= 16777216;
     }
-    if (schemaKey == kPositionParameterSchemaKey || schemaKey == kAnchorParameterSchemaKey ||
-        schemaKey == kScaleParameterSchemaKey) {
+    if (schemaKey == kGradientStartParameterSchemaKey ||
+        schemaKey == kGradientEndParameterSchemaKey || schemaKey == kPositionParameterSchemaKey ||
+        schemaKey == kAnchorParameterSchemaKey || schemaKey == kScaleParameterSchemaKey) {
         // One rule for all three Vec2d transform values: finite, otherwise unbounded. Scale is
         // deliberately NOT confined to positive numbers -- a negative factor mirrors the axis and
         // zero collapses the layer, both of which evaluation renders rather than refuses -- and
@@ -220,6 +223,10 @@ constantMatchesSchema(const std::string_view schemaKey,
         // build belongs in the "cannot be interpreted" path, not in a guess.
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr && bloom::core::blendModeFromStoredValue(*stored).has_value();
+    }
+    if (schemaKey == kGradientRepeatParameterSchemaKey) {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value && *value >= 0 && *value <= 2;
     }
     if (schemaKey == kAudioLevelParameterSchemaKey) {
         const auto* level = std::get_if<double>(&constant.value);
