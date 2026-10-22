@@ -21,6 +21,10 @@
 
 class QSettings;
 
+namespace bloom::runtime {
+class OperationCache;
+}
+
 namespace bloom::ui {
 
 // The floor of the default budget (docs/architecture/animation-and-time.md, "RAM preview"). A
@@ -31,7 +35,7 @@ inline constexpr std::size_t kMinimumPreviewFrameCacheByteBudget =
     runtime::kMinimumPreviewFrameCacheByteBudget;
 
 // The configured preview ceiling is 40% of the ledger default total, with a 2 GiB preview
-// minimum at the low-memory floor. Live admission can be smaller under contention or pressure.
+// minimum at the low-memory floor. Only observed finite OS limits can reduce retention targets.
 [[nodiscard]] std::size_t defaultPreviewFrameCacheByteBudget() noexcept;
 
 // Total physical memory in bytes, or 0 when the platform does not report it.
@@ -362,18 +366,20 @@ class PreviewFrameCache final : public QObject {
 
 using PreviewFrameCacheHandle = std::shared_ptr<PreviewFrameCache>;
 
-// Both playback memory settings are resolved through one runtime::MemoryBudgetLedger. A missing,
-// unparseable, or zero value is absent; the ledger applies the machine-derived split and clamps
-// effective allocations so their sum never exceeds the usable budget.
+// A missing, unreadable or zero value selects Automatic. Nonzero preferences remain exact targets;
+// only a verified OS constraint can reduce the effective reusable budgets.
 [[nodiscard]] std::size_t ramPreviewByteBudgetFromSettings(const QSettings& settings);
 [[nodiscard]] std::size_t operationCacheByteBudgetFromSettings(const QSettings& settings);
 [[nodiscard]] runtime::MemoryBudgetAllocation
 cacheMemoryBudgetsFromSettings(const QSettings& settings);
-// Read-only configured weights for an explicit composition root. Sample delivery must not reset
-// the ledger's pressure recovery state by reapplying unchanged configuration.
+// Read-only selected targets for an explicit composition root.
 [[nodiscard]] runtime::MemoryBudgetAllocation
 cacheMemoryBudgetAllocationFromSettings(const QSettings& settings,
                                         const runtime::MemoryBudgetLedger& ledger);
+// Apply the two selected cache targets together without restarting or rewriting preferences.
+[[nodiscard]] runtime::MemoryBudgetAllocation applyCacheMemoryBudgetsFromSettings(
+    const QSettings& settings, runtime::OperationCache& operations, PreviewFrameCache& preview,
+    runtime::MemoryBudgetLedger& ledger = runtime::processMemoryBudgetLedger());
 void setRamPreviewByteBudgetInSettings(QSettings& settings, std::size_t bytes);
 
 } // namespace bloom::ui

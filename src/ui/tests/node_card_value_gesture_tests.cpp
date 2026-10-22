@@ -512,7 +512,6 @@ void valueNodeCards(App& app) {
     static constexpr std::array kCases{
         Case{document::kScalarValueNodeType, 1, "the Scalar card's own cell commits"},
         Case{document::kVector2ValueNodeType, 2, "the Vector 2 card's own cells commit"},
-        Case{document::kIntegerValueNodeType, 1, "the Integer card's own cell commits"},
     };
     double x = -1800.0;
     for (const auto& testCase : kCases) {
@@ -551,6 +550,101 @@ void valueNodeCards(App& app) {
             },
             constant->value);
         expect(holds, testCase.what);
+    }
+
+    for (const auto typeId : {document::kVector2ValueNodeType, document::kVector3ValueNodeType}) {
+        const auto node = app.addByType(typeId, {x, 400.0});
+        x += 260.0;
+        const auto* parameter = parameterFor(app, node, document::kValueParameterRole);
+        expect(parameter != nullptr, "a large vector operand exists");
+        if (!parameter)
+            continue;
+        const auto parameterId = parameter->id;
+        const bool three = typeId == document::kVector3ValueNodeType;
+        expect(app.session.setParameterValue(
+                   parameterId,
+                   three ? document::ParameterValue{document::Vec3d{2e16, 0, -2e16}}
+                         : document::ParameterValue{document::Vec2d{2e9, 0}},
+                   "Seed vector"),
+               "large finite vector values are valid authored data");
+        QCoreApplication::processEvents();
+        const auto editors = controls(app, node, QStringLiteral("nodeOperandEditor"));
+        auto* first = editors.size() > 1 ? qobject_cast<kit::KValueField*>(editors[0]) : nullptr;
+        auto* second = editors.size() > 1 ? qobject_cast<kit::KValueField*>(editors[1]) : nullptr;
+        expect(first && first->value() == (three ? 2e16 : 2e9),
+               "a card displays the actual large vector component");
+        if (!second)
+            continue;
+        click(app, second);
+        type(app, QStringLiteral("7"));
+        key(app, Qt::Key_Return);
+        if (three)
+            expect(app.session.effectiveVec3Value(parameterId) == document::Vec3d{2e16, 7, -2e16},
+                   "editing vector Y preserves exact authoritative X and Z");
+        else
+            expect(app.session.effectiveVec2Value(parameterId) == document::Vec2d{2e9, 7},
+                   "editing vector Y preserves the formerly clamped X component");
+    }
+    const auto integerNode = app.addByType(document::kIntegerValueNodeType, {x, 40.0});
+    auto* integer = qobject_cast<QLineEdit*>(app.editor.graphScene()->nodeFieldForTest(
+        integerNode, QStringLiteral("nodeOperandIntegerEditor")));
+    expect(integer != nullptr, "integer operands have an exact decimal editor");
+    if (integer) {
+        integer->setText(QStringLiteral("9223372036854775807"));
+        Q_EMIT integer->editingFinished();
+        expect(integerOf(app, integerNode, document::kValueParameterRole) ==
+                   std::numeric_limits<std::int64_t>::max(),
+               "integer operands preserve all int64 digits");
+        integer->setText(QStringLiteral("9223372036854775808"));
+        Q_EMIT integer->editingFinished();
+        expect(integerOf(app, integerNode, document::kValueParameterRole) ==
+                   std::numeric_limits<std::int64_t>::max(),
+               "integer overflow is refused without a mutation");
+    }
+
+    if (const auto layer = app.nodeOfType(document::kLayerOutputNodeType)) {
+        const auto* scale = parameterFor(app, *layer, document::kScaleParameterRole);
+        if (scale) {
+            const auto scaleId = scale->id;
+            const auto extreme = std::numeric_limits<double>::max();
+            expect(app.session.setParameterValue(scaleId, document::Vec2d{extreme, 1},
+                                                 "Extreme scale"),
+                   "finite scale factors beyond percentage representation remain authored data");
+            QCoreApplication::processEvents();
+            auto* xField = field(app, *layer, QStringLiteral("nodeScaleXEditor"));
+            auto* yField = field(app, *layer, QStringLiteral("nodeScaleYEditor"));
+            expect(xField && xField->value() == extreme && xField->unit() == QStringLiteral("×"),
+                   "an overflowing percentage displays the exact native factor");
+            if (yField)
+                yField->setValue(200);
+            expect(app.session.effectiveVec2Value(scaleId) == document::Vec2d{extreme, 2},
+                   "editing the other scale axis preserves the finite extreme");
+            if (xField) {
+                click(app, xField);
+                type(app, QStringLiteral("2"));
+                expect(xField->isEditing() && xField->unit() == QStringLiteral("×") &&
+                           xField->property("numericDisplayScale").toDouble() == 1 &&
+                           app.session.effectiveVec2Value(scaleId) == document::Vec2d{2, 2},
+                       "a native-factor gesture keeps its unit through synchronous live refresh");
+                QTest::keyClick(app.editor.graphView(), Qt::Key_A, Qt::ControlModifier);
+                type(app, QStringLiteral("3"));
+                key(app, Qt::Key_Return);
+                expect(app.session.effectiveVec2Value(scaleId) == document::Vec2d{3, 2} &&
+                           xField->value() == 300 && xField->unit() == QStringLiteral("%"),
+                       "a second typed value commits in the original unit, then percentage "
+                       "projection resumes");
+                expect(app.session.setParameterValue(scaleId, document::Vec2d{extreme, 2},
+                                                     "Restore extreme scale"),
+                       "the cancellation fixture restores native-factor scale");
+                QCoreApplication::processEvents();
+                click(app, xField);
+                type(app, QStringLiteral("2"));
+                key(app, Qt::Key_Escape);
+                expect(app.session.effectiveVec2Value(scaleId) == document::Vec2d{extreme, 2} &&
+                           xField->value() == extreme && xField->unit() == QStringLiteral("×"),
+                       "cancelling restores the original value and its native-factor projection");
+            }
+        }
     }
 
     // A Colour value node's chip is the one value row with no number in it; it commits through the

@@ -94,10 +94,9 @@ void GpuSceneCache::releaseImpl() noexcept {
 
 GpuSceneCacheCreateResult GpuSceneCache::create(render::GpuDevice& device,
                                                 const GpuSceneCacheBudgets budgets) {
-    if (budgets.maxRetainedBytes == 0) {
-        return {nullptr, makeDiagnostic(GpuSceneCacheDiagnosticCode::InvalidArgument,
-                                        "the scene cache budget is out of range")};
-    }
+    // Zero retention is a valid cache preference. The executor still needs its owner-bound cache
+    // handle, and insert() already refuses an image larger than a zero byte allowance without
+    // rejecting the active GPU operation that produced it.
     if (device.state() != render::GpuDeviceState::Ready) {
         return {nullptr, makeDiagnostic(GpuSceneCacheDiagnosticCode::DeviceUnavailable,
                                         "the GPU device is not Ready")};

@@ -1,5 +1,5 @@
-#include "deferred_editor_teardown.hpp"
 #include "audio_device_process_teardown.hpp"
+#include "deferred_editor_teardown.hpp"
 #include "packed_host_process_teardown.hpp"
 #include "sequence_export_process_teardown.hpp"
 
@@ -22,8 +22,8 @@
 #include <bloom/ui/acceleration_status.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 #include <bloom/ui/asset_controller.hpp>
-#include <bloom/ui/audio_playback_session.hpp>
 #include <bloom/ui/audio_device_control.hpp>
+#include <bloom/ui/audio_playback_session.hpp>
 #include <bloom/ui/background_preview_controller.hpp>
 #include <bloom/ui/cache_purge_controller.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
@@ -159,13 +159,8 @@ int main(int argc, char* argv[]) try {
         });
     const QSettings playbackSettings;
     const auto cacheBudgets = bloom::ui::cacheMemoryBudgetsFromSettings(playbackSettings);
-    {
-        const auto videoBytes =
-            std::min(std::size_t{256} * 1024U * 1024U, cacheBudgets.operationCacheByteBudget / 4U);
-        cpuEvaluator.setVideoCacheByteBudget(videoBytes);
-        cpuEvaluator.operationCache()->setByteBudget(cacheBudgets.operationCacheByteBudget -
-                                                     videoBytes);
-    }
+    cpuEvaluator.setVideoCacheByteBudget(std::size_t{256} * 1024U * 1024U);
+    cpuEvaluator.operationCache()->setByteBudget(cacheBudgets.operationCacheByteBudget);
     // CACHE-2 (docs/architecture/media-io.md "Disk cache"): one instance shared by the evaluator
     // and the Asset Controller's proxy/thumbnail decodes below -- "the same store". Built from
     // settings alongside the operation cache's own settings-derived budget just above; null when
@@ -206,19 +201,13 @@ int main(int argc, char* argv[]) try {
         32, packedHostRetirement, taskBudgetView);
     bloom::ui::MemoryBudgetController memoryBudgetController(
         taskScheduler, taskUiBridge, bloom::runtime::processMemoryBudgetLedger());
-    bool processingCapacityInitialized = false;
     QObject::connect(
         &memoryBudgetController, &bloom::ui::MemoryBudgetController::sampleApplied, &application,
-        [processingPhasePolicy, &playbackSettings, &processingCapacityInitialized] {
+        [processingPhasePolicy, &playbackSettings] {
             auto& ledger = bloom::runtime::processMemoryBudgetLedger();
             const auto physicalBytes = ledger.physicalByteBudget();
             const auto allocation =
                 bloom::ui::cacheMemoryBudgetAllocationFromSettings(playbackSettings, ledger);
-            if (!processingCapacityInitialized && physicalBytes != 0) {
-                processingCapacityInitialized = true;
-                ledger.setConfiguredTotal(allocation.operationCacheByteBudget +
-                                          allocation.previewFrameCacheByteBudget);
-            }
             const auto delivered = ledger.state();
             processingPhasePolicy->applyHostSample(delivered, physicalBytes, allocation);
         });
@@ -248,8 +237,13 @@ int main(int argc, char* argv[]) try {
     // here.
     auto previewFrameCache =
         std::make_shared<bloom::ui::PreviewFrameCache>(cacheBudgets.previewFrameCacheByteBudget);
-    // Refresh automatic/requested cache weights once worker-delivered host capacity is known.
-    // Stored overrides remain unchanged, and ledger callbacks still enforce the effective cap.
+    // Resolve Automatic after the first worker-delivered physical capacity. Later preference
+    // changes use the same helper immediately; free-memory fluctuations do not rewrite targets.
+    const auto applyMemoryPreferences = [&] {
+        const QSettings currentSettings;
+        return bloom::ui::applyCacheMemoryBudgetsFromSettings(
+            currentSettings, *cpuEvaluator.operationCache(), *previewFrameCache);
+    };
     bool cacheCapacityInitialized = false;
     QObject::connect(&memoryBudgetController, &bloom::ui::MemoryBudgetController::sampleApplied,
                      &application, [&] {
@@ -257,14 +251,7 @@ int main(int argc, char* argv[]) try {
                              bloom::runtime::processMemoryBudgetLedger().physicalByteBudget() == 0)
                              return;
                          cacheCapacityInitialized = true;
-                         const auto requested = bloom::ui::cacheMemoryBudgetAllocationFromSettings(
-                             playbackSettings, bloom::runtime::processMemoryBudgetLedger());
-                         const auto videoBytes = std::min(std::size_t{256} * 1024U * 1024U,
-                                                          requested.operationCacheByteBudget / 4U);
-                         cpuEvaluator.setVideoCacheByteBudget(videoBytes);
-                         cpuEvaluator.operationCache()->setByteBudget(
-                             requested.operationCacheByteBudget - videoBytes);
-                         previewFrameCache->setByteBudget(requested.previewFrameCacheByteBudget);
+                         static_cast<void>(applyMemoryPreferences());
                      });
     // One compiled-plan cache for every consumer of the live revision: the preview surfaces below
     // and the audio mix, which derives from the document rather than from a shown frame.
@@ -409,9 +396,8 @@ int main(int argc, char* argv[]) try {
     gpuExportProvider->prepare(taskScheduler);
     bool shutdownQuiescent = false;
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);
-    shutdownCoordinator.setAudioRetirement(
-        [&] { audioDeviceControl.beginShutdown(); },
-        [&] { return audioDeviceControl.retirementComplete(); });
+    shutdownCoordinator.setAudioRetirement([&] { audioDeviceControl.beginShutdown(); },
+                                           [&] { return audioDeviceControl.retirementComplete(); });
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
                      &memoryBudgetController, &bloom::ui::MemoryBudgetController::beginShutdown);
@@ -515,9 +501,9 @@ int main(int argc, char* argv[]) try {
     application.setQuitOnLastWindowClosed(false);
     QSettings settings;
     auto& playback = previewController.playbackController();
-    bloom::ui::AudioPlaybackSession audioPlaybackSession(
-        compositionSession, taskScheduler, taskUiBridge, snapshotCompiler, compiledPlanCache,
-        cpuEvaluator);
+    bloom::ui::AudioPlaybackSession audioPlaybackSession(compositionSession, taskScheduler,
+                                                         taskUiBridge, snapshotCompiler,
+                                                         compiledPlanCache, cpuEvaluator);
     playback.setAudioDeviceControl(&audioDeviceControl);
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
@@ -578,14 +564,15 @@ int main(int argc, char* argv[]) try {
                                  frameExportController, &ramPreviewController, &previewController,
                                  nullptr, &playback, cpuEvaluator.operationCache().get(),
                                  mediaDiskCache.get(), &accelerationStatus, &cachePurgeController);
-    // Settings the composition root owns take effect immediately: the window has already saved the
-    // value, and these read the same keys back. Cache budgets and the disk cache are startup-read
-    // and deliberately not re-applied here.
-    QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &playback, [&playback] {
+    // Apply memory preferences to their owning caches now. Disk cache configuration alone
+    // remains restart-required; live processing admission is independent of retention targets.
+    QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &playback, [&] {
         const QSettings settings;
         playback.setAudioEnabled(
             settings.value(QStringLiteral("playback/audio-enabled"), true).toBool());
         playback.setLooping(settings.value(QStringLiteral("playback/loop"), true).toBool());
+        static_cast<void>(applyMemoryPreferences());
+        memoryBudgetController.requestSample();
     });
     playback.installWindowShortcut(window);
     // The shutdown contract's second half: the workspace enumerates every live editor native

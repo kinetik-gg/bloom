@@ -1,5 +1,7 @@
 #include <bloom/ui/kit/value_field.hpp>
 
+#include "value_field_format.hpp"
+
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
@@ -141,6 +143,14 @@ void KValueField::setUnit(const QString& unit) {
 
 QString KValueField::unit() const { return unit_; }
 
+void KValueField::setSpecialValueText(const QString& text) {
+    specialValueText_ = text;
+    updateGeometry();
+    update();
+}
+
+QString KValueField::specialValueText() const { return specialValueText_; }
+
 void KValueField::setRange(const double minimum, const double maximum) {
     minimum_ = minimum;
     maximum_ = std::max(maximum, minimum);
@@ -211,14 +221,9 @@ bool KValueField::isEditing() const noexcept { return editing_; }
 QLineEdit* KValueField::lineEdit() const noexcept { return editor_; }
 
 QString KValueField::displayedValue() const {
-    auto text = QString::number(value_, 'f', compact_ ? std::min(decimals_, 2) : decimals_);
-    if (compact_ && text.contains('.')) {
-        while (text.endsWith('0'))
-            text.chop(1);
-        if (text.endsWith('.'))
-            text.chop(1);
-    }
-    return text == "-0" ? QStringLiteral("0") : text;
+    if (!specialValueText_.isEmpty() && value_ == minimum_)
+        return specialValueText_;
+    return valueFieldNumber(value_, compact_ ? std::min(decimals_, 2) : decimals_, compact_);
 }
 
 int KValueField::labelColumnWidth() const {
@@ -273,17 +278,23 @@ State KValueField::visualState() const {
 }
 
 QSize KValueField::sizeHint() const {
-    if (compact_)
-        return {px(Size::PropertiesFieldWidth), px(Size::ControlCompact)};
+    if (compact_) {
+        const auto specialWidth =
+            QFontMetrics(kit::font(TypeRole::Value)).horizontalAdvance(specialValueText_) +
+            px(Spacing::XS) * 2;
+        return {std::max(px(Size::PropertiesFieldWidth), specialWidth), px(Size::ControlCompact)};
+    }
     const QFontMetrics valueMetrics(kit::font(TypeRole::Value));
     // Sized for the widest number the range can produce, not for the number currently in it: the
     // field must not resize as digits change.
     const QString widest =
-        QString::number(std::max(std::abs(minimum_), std::abs(maximum_)), 'f', decimals_);
+        valueFieldNumber(std::max(std::abs(minimum_), std::abs(maximum_)), decimals_, false);
     int cellWidth = valueMetrics.horizontalAdvance(widest) + px(Spacing::S) * 2;
     if (!unit_.isEmpty()) {
         cellWidth += valueMetrics.horizontalAdvance(unit_) + px(Spacing::XS);
     }
+    cellWidth =
+        std::max(cellWidth, valueMetrics.horizontalAdvance(specialValueText_) + px(Spacing::S) * 2);
     const int labelWidth = label_.isEmpty() ? 0 : labelColumnWidth() + px(Spacing::S);
     // Exactly the control height -- no ring margin, for the same reason cellRect() reserves none.
     return {labelWidth + cellWidth, px(Size::Control)};
@@ -326,7 +337,7 @@ void KValueField::beginEdit() {
     beginInteraction();
     editing_ = true;
     layOutEditor();
-    editor_->setText(compact_ ? QString::number(value_, 'g', 17) : displayedValue());
+    editor_->setText(QString::number(value_, 'g', std::numeric_limits<double>::max_digits10));
     editor_->show();
     editor_->setFocus(Qt::MouseFocusReason);
     // Select all on entry: a click-to-edit that kept the caret where the pointer landed would make
@@ -655,7 +666,9 @@ void KValueField::paintEvent(QPaintEvent* event) {
     const QFontMetrics valueMetrics(painter.font());
     const QRectF text = cellTextRect();
     QRectF unitRect;
-    if (!unit_.isEmpty()) {
+    const bool showUnit =
+        !unit_.isEmpty() && (editing_ || specialValueText_.isEmpty() || value_ != minimum_);
+    if (showUnit) {
         const auto unitWidth = static_cast<qreal>(valueMetrics.horizontalAdvance(unit_));
         unitRect = QRectF(text.right() - unitWidth, text.top(), unitWidth, text.height());
         painter.setPen(inkForState(Color::Muted, state));
@@ -668,7 +681,7 @@ void KValueField::paintEvent(QPaintEvent* event) {
         return;
     }
     painter.setPen(inkForState(Color::Foreground, state));
-    const qreal valueRight = unit_.isEmpty() ? text.right() : unitRect.left() - px(Spacing::XS);
+    const qreal valueRight = showUnit ? unitRect.left() - px(Spacing::XS) : text.right();
     painter.drawText(QRectF(text.left(), text.top(), valueRight - text.left(), text.height()),
                      Qt::AlignVCenter | Qt::AlignRight, displayedValue());
 }

@@ -1,5 +1,6 @@
 #include "properties_registry_row.hpp"
 #include "node_editor_items.hpp"
+#include "numeric_field_projection.hpp"
 #include "properties_sections.hpp"
 #include "properties_value_edits.hpp"
 #include <QEvent>
@@ -338,7 +339,8 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             auto* field = fields_[static_cast<std::size_t>(i)] = new kit::KValueField(controls);
             field->setObjectName("propertiesRegistryValue");
             field->setAccessibleName(label);
-            field->setRange(-1e15, 1e15);
+            field->setRange(std::numeric_limits<double>::lowest(),
+                            std::numeric_limits<double>::max());
             field->setCompact(true);
             if (count == 3)
                 field->setMinimumWidth(kit::px(kit::Size::PropertiesComponentMinWidth));
@@ -350,10 +352,13 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
                 field->setUnit("%");
             if (definition_.schemaKey == document::kTextLineHeightParameterSchemaKey ||
                 definition_.schemaKey == document::kTextSizeParameterSchemaKey)
-                field->setRange(0.01, 1e15);
+                field->setRange(std::numeric_limits<double>::denorm_min(),
+                                definition_.schemaKey == document::kTextSizeParameterSchemaKey
+                                    ? document::kMaximumTextSizePixels
+                                    : std::numeric_limits<double>::max());
             if (definition_.schemaKey == document::kSolidWidthParameterSchemaKey ||
                 definition_.schemaKey == document::kSolidHeightParameterSchemaKey)
-                field->setRange(1, 1e15);
+                field->setRange(1, std::numeric_limits<double>::max());
             if (count > 1)
                 field->setLabel(QString(color_ ? "RGBA" : "XYZ").mid(i, 1));
             if (count > 1 && !color_) {
@@ -375,7 +380,8 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
                     return std::optional(
                         static_cast<document::AnimationComponent>(static_cast<int>(first) + i));
                 });
-            connect(field, &kit::KValueField::valueChanged, this, [this] { commit(); });
+            connect(field, &kit::KValueField::valueChanged, this,
+                    [this, i] { commit(static_cast<std::size_t>(i)); });
         }
     }
     if (color_) {
@@ -556,7 +562,15 @@ void PropertiesRegistryRow::refresh() {
             value = *color;
         if (auto* scalar = std::get_if<double>(&value); scalar && fields_[0])
             if (displayScale() != 0.0)
-                fields_[0]->setValue(*scalar * displayScale());
+                projectNumericField(
+                    *fields_[0], *scalar, displayScale(),
+                    definition_.schemaKey == document::kTextLineHeightParameterSchemaKey ||
+                            definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey
+                        ? QStringLiteral("%")
+                        : fields_[0]->unit(),
+                    definition_.schemaKey == document::kTextLineHeightParameterSchemaKey
+                        ? QStringLiteral("×")
+                        : QStringLiteral("px"));
         if (auto* scalar = std::get_if<double>(&value); scalar && slider_)
             slider_->setValue(*scalar);
         if (auto* integer = std::get_if<std::int64_t>(&value)) {
@@ -685,9 +699,19 @@ double PropertiesRegistryRow::displayScale() const {
     return definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey ? 0.0 : 1.0;
 }
 
-void PropertiesRegistryRow::commit() {
+void PropertiesRegistryRow::commit(const std::optional<std::size_t> component) {
     if (refreshing_ || !isEnabled() || displayScale() == 0.0)
         return;
+    if (component && (definition_.valueKind == document::ParameterValueKind::Vec2d ||
+                      definition_.valueKind == document::ParameterValueKind::Vec3d)) {
+        const std::array axes{document::AnimationComponent::X, document::AnimationComponent::Y,
+                              document::AnimationComponent::Z};
+        if (*component < axes.size() && fields_[*component])
+            (void)session_.setParameterComponentValue(parameter_, axes[*component],
+                                                      fields_[*component]->value());
+        refresh();
+        return;
+    }
     document::ParameterValue value = definition_.defaultValue;
     if (segments_)
         value = propertiesSelectorItems(definition_.schemaKey)[segments_->currentIndex()].second;
@@ -742,7 +766,7 @@ void PropertiesRegistryRow::commit() {
     else if (definition_.valueKind == document::ParameterValueKind::Integer)
         value = static_cast<std::int64_t>(fields_[0]->value());
     else
-        value = fields_[0]->value() / displayScale();
+        value = numericFieldValue(*fields_[0], displayScale());
     (void)session_.setParameterValue(parameter_, value, tr("Set Parameter"));
     refresh();
 }

@@ -153,6 +153,10 @@ void runServiceLoop(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
                 // outstanding, so native acquire/present/retire progresses and the shutdown
                 // snapshot stays current.
                 detail::pumpServicePresentation(core);
+                // Retention targets are ceilings, not allocated bytes. Refresh the rooted
+                // foreground allowance from actual owner-visible device space after native/cache
+                // progress; the next request may borrow every byte not held by real ownership.
+                detail::refreshResidentForegroundCapacity(core);
             } catch (...) { // NOLINT(bugprone-empty-catch)
                 // A single iteration fault must not terminate the service thread; there is no
                 // reporting channel on this owner loop, so the fault is deliberately contained.
@@ -522,6 +526,8 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
     result.residentQualification = core.publishedResidentQualification;
     result.residentDetail = core.publishedResidentDetail;
     result.residentCapacityPlan = core.publishedResidentCapacityPlan;
+    result.foregroundRequestBytes =
+        core.effectivePreviewByteAllowance.load(std::memory_order_relaxed);
     result.allocatorMemory = core.publishedAllocatorMemory;
     result.allocatorMemorySampledAt = core.allocatorMemorySampledAt;
     result.graphQueueTiming = core.publishedGraphQueueTiming;

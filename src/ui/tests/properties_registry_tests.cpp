@@ -392,9 +392,83 @@ void genericKinds() {
             expect(valueRow->findChildren<ui::kit::KValueField*>().size() ==
                        (type == document::kVector2ValueNodeType ? 2 : 3),
                    "vectors render every component");
+            const bool three = type == document::kVector3ValueNodeType;
+            expect(session.setParameterValue(
+                       parameter,
+                       three ? document::ParameterValue{document::Vec3d{2e16, 0, -2e16}}
+                             : document::ParameterValue{document::Vec2d{2e16, 0}},
+                       "Large vector"),
+                   "large vector components are valid document values");
+            auto* refreshed = row(panel, "value");
+            const auto fields = refreshed->findChildren<ui::kit::KValueField*>();
+            expect(fields[0]->value() == 2e16, "Properties projects the actual finite component");
+            fields[1]->setValue(7);
+            if (three)
+                expect(session.effectiveVec3Value(parameter) == document::Vec3d{2e16, 7, -2e16},
+                       "Properties Y edits preserve authoritative X and Z");
+            else
+                expect(session.effectiveVec2Value(parameter) == document::Vec2d{2e16, 7},
+                       "Properties Y edits preserve the formerly clamped X");
         }
     }
 }
+void scaledProjectionGestureKeepsItsUnit() {
+    auto project =
+        document::makeNewProject("Projection gesture", "Main", core::RationalTime::fromInteger(2));
+    const auto id = project.initialCompositionId;
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, id);
+    expect(session.addTextLayer("Text", "Projection"), "projection fixture authors a text layer");
+    ui::PropertiesEditor panel(session);
+    panel.show();
+    QCoreApplication::processEvents();
+    auto* layoutRow = row(panel, "line-height");
+    expect(layoutRow != nullptr, "line height has a registry row");
+    if (!layoutRow)
+        return;
+    const auto parameter =
+        document::ParameterId::fromRaw(layoutRow->property("parameterId").toULongLong());
+    const auto extreme = std::numeric_limits<double>::max();
+    expect(session.setParameterValue(parameter, extreme, "Native line height"),
+           "large finite line height remains authored data");
+    auto* field = layoutRow->findChild<ui::kit::KValueField*>();
+    expect(field && field->value() == extreme && field->unit() == QStringLiteral("×"),
+           "line height exposes its native factor when percentage conversion would overflow");
+    if (!field)
+        return;
+    const auto open = [field] {
+        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QApplication::sendEvent(field, &enter);
+    };
+    const auto typeDigit = [field](const int key, const QString& text) {
+        field->lineEdit()->selectAll();
+        QKeyEvent digit(QEvent::KeyPress, key, Qt::NoModifier, text);
+        QApplication::sendEvent(field->lineEdit(), &digit);
+    };
+    open();
+    typeDigit(Qt::Key_2, "2");
+    expect(field->isEditing() && field->unit() == QStringLiteral("×") &&
+               field->property("numericDisplayScale").toDouble() == 1 &&
+               session.effectiveScalarValue(parameter) == 2,
+           "synchronous Properties refresh leaves a live gesture's projection untouched");
+    typeDigit(Qt::Key_3, "3");
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(field->lineEdit(), &enter);
+    expect(session.effectiveScalarValue(parameter) == 3 && field->value() == 300 &&
+               field->unit() == QStringLiteral("%"),
+           "commit uses the native unit then refreshes to percentage presentation");
+    expect(session.setParameterValue(parameter, extreme, "Native line height"),
+           "the cancel fixture restores native line height");
+    open();
+    typeDigit(Qt::Key_2, "2");
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(field->lineEdit(), &escape);
+    expect(session.effectiveScalarValue(parameter) == extreme && field->value() == extreme &&
+               field->unit() == QStringLiteral("×"),
+           "cancel restores authoritative line height and its matching unit");
+}
+
 void registryRows() {
     auto project =
         document::makeNewProject("Registry", "Main", core::RationalTime::fromInteger(10));
@@ -534,6 +608,7 @@ int main(int argc, char** argv) try {
     QCoreApplication::setOrganizationName("BloomPropertiesRegistryTest");
     QSettings().clear();
     genericKinds();
+    scaledProjectionGestureKeepsItsUnit();
     registryRows();
     upstreamRows();
     drivenTextContent();

@@ -94,6 +94,15 @@ gpuResidentCapacityFromAllocationBudget(const render::GpuAllocationBudget& alloc
     return capacity;
 }
 
+GpuResidentCapacity gpuResidentConstructionCapacity(const GpuResidentCapacity& observed) noexcept {
+    if (observed.deviceLocalBytes == 0) {
+        return {};
+    }
+    return {.source = GpuResidentCapacitySource::DeviceLocalEstimate,
+            .availableBytes = observed.deviceLocalBytes,
+            .deviceLocalBytes = observed.deviceLocalBytes};
+}
+
 GpuResidentCapacityPlan
 gpuResidentCapacityPlanConfigured(const std::uint64_t configuredCeilingBytes) noexcept {
     GpuResidentCapacityPlan plan;
@@ -125,9 +134,11 @@ GpuResidentCapacityPlan gpuResidentCapacityPlanFor(const GpuResidentConfiguredBu
     if (total == 0U) {
         return plan;
     }
-    const std::uint64_t deviceLimit = capacity.isKnown()
-                                          ? capacity.availableBytes / kResidentCapacityClaimDivisor
-                                          : kUnknownResidentPoolBytes;
+    const std::uint64_t deviceLimit =
+        capacity.source == GpuResidentCapacitySource::MemoryBudget ? capacity.availableBytes
+        : capacity.source == GpuResidentCapacitySource::DeviceLocalEstimate
+            ? capacity.availableBytes / kResidentCapacityClaimDivisor
+            : kUnknownResidentPoolBytes;
     if (total <= deviceLimit) {
         // The configured route already fits the resolved device pool: preserve it exactly.
         plan.poolBytes = total;
@@ -159,6 +170,21 @@ GpuResidentCapacityPlan gpuResidentCapacityPlanFor(const GpuResidentConfiguredBu
     }
     finalizeCacheAndEntries(plan);
     return plan;
+}
+
+std::uint64_t gpuResidentForegroundRequestBudget(const GpuResidentCapacity& capacity,
+                                                 const std::uint64_t ownedImageBytes) noexcept {
+    if (capacity.source == GpuResidentCapacitySource::MemoryBudget) {
+        // The live budget already subtracts VMA usage, including retained and in-flight images.
+        return capacity.availableBytes;
+    }
+    const std::uint64_t planningLimit =
+        capacity.source == GpuResidentCapacitySource::DeviceLocalEstimate
+            ? capacity.availableBytes / kResidentCapacityClaimDivisor
+            : kUnknownResidentPoolBytes;
+    // A nominal heap size is not free space. Keep its conservative planning limit, then account
+    // for exact image ownership on this generation; a pinned or retiring image remains charged.
+    return ownedImageBytes < planningLimit ? planningLimit - ownedImageBytes : 0;
 }
 
 } // namespace bloom::runtime

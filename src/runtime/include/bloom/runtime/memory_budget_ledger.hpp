@@ -14,18 +14,14 @@ namespace bloom::runtime {
 inline constexpr std::size_t kDefaultOperationCacheBytes = std::size_t{1} * 1024U * 1024U * 1024U;
 inline constexpr std::size_t kMinimumPreviewFrameCacheByteBudget =
     std::size_t{2} * 1024U * 1024U * 1024U;
-// The low-memory floor: 3 GiB of cache in total, kept from CACHE-1 so a small machine still has a
-// usable RAM preview. This floors the effective cap; pressure can reduce admission below it.
+// Automatic defaults use this total when physical capacity is unavailable, bounded by reported
+// physical capacity on smaller machines. Explicit preferences never inherit this floor.
 inline constexpr std::size_t kFallbackUsableMemoryBudget =
     kMinimumPreviewFrameCacheByteBudget + kDefaultOperationCacheBytes;
 
-// The host reserve also determines when the eviction ladder engages.
-inline constexpr std::size_t kMinimumHostMemoryReserve = std::size_t{8} * 1024U * 1024U * 1024U;
-inline constexpr std::size_t kHostMemoryReservePercent = 40;
 inline constexpr std::size_t kDefaultTotalPhysicalPercent = 50;
-inline constexpr std::size_t kDefaultTotalAvailablePercent = 80;
 
-// Configured ceilings. Live admission budgets are supplied by the ledger callbacks below.
+// Selected per-pool budgets. Real process constraints can separately reduce reusable admission.
 struct MemoryBudgetAllocation final {
     std::size_t usableByteBudget = 0;
     std::size_t operationCacheByteBudget = 0;
@@ -37,7 +33,7 @@ struct MemoryBudgetAllocation final {
 [[nodiscard]] std::size_t physicalMemoryBytes() noexcept;
 
 // Missing availability is distinct from a measured zero. Swap counters are zero on a machine
-// without swap or when the platform cannot report it; availability pressure remains supported.
+// without swap or when the platform cannot report it; observed activity never rewrites targets.
 struct MachineMemorySample final {
     std::optional<std::size_t> availableBytes;
     std::size_t swapTotalBytes = 0;
@@ -59,10 +55,13 @@ memoryBudgetSample(const CancellationToken& cancellation = {}) noexcept;
 enum class MemoryBudgetOwnerKind { ReusableRetention, LiveWork };
 
 struct MemoryBudgetState final {
+    // Selected operation/preview total and that total within the observed absolute OS limit.
+    // Auxiliary registered pools can share a finite limit; inspect owners for actual pool budgets.
     std::size_t configuredBytes = 0;
     std::size_t effectiveBytes = 0;
     std::size_t retainedBytes = 0;
     std::size_t reusableHostCreditBytes = 0;
+    // Hardware capacity only. Live phase admission separately checks fresh usage and reservations.
     std::size_t processingEffectiveBytes = 0;
     ProcessMemorySample process;
     std::optional<std::size_t> processCacheCeilingBytes;
@@ -70,7 +69,7 @@ struct MemoryBudgetState final {
     bool processSampleFresh = false;
     std::uint64_t sampleSerial = 0;
     MachineMemorySample machine;
-    // Admission stays reduced between polls: 100 -> 25 -> 10, then 25 -> 50 -> 100 on recovery.
+    // Compatibility field: named budgets no longer use a percentage retention policy.
     unsigned retentionPercent = 100;
     bool memoryPressure = false;
     bool swapPressure = false;
@@ -86,9 +85,10 @@ class MemoryBudgetLedger final {
     explicit MemoryBudgetLedger(std::size_t physicalMemory = 0,
                                 std::size_t availableMemory = 0) noexcept;
 
-    // Every registered pool gets the same proportional policy. Ceilings are weights as well as
-    // upper bounds; their sum is normalized to the configured total. Registration/removal and
-    // callbacks are serialized, so removal waits for any in-progress callback before destruction.
+    // A registered ceiling is that pool's selected allowance. Only an observed finite OS limit can
+    // require reusable pools to divide a shared total. Live work is separately phase-admitted.
+    // Registration/removal and callbacks are serialized, so removal waits for any in-progress
+    // callback before destruction.
     // Poll on the UI thread when UI-owned pools are registered. Callbacks must not perform I/O,
     // wait for workers, or modify registrations. Cache locks must never enclose ledger calls.
     void registerCache(const void* owner, std::size_t ceiling,
@@ -107,23 +107,20 @@ class MemoryBudgetLedger final {
     void beginProcessSampling();
     [[nodiscard]] MemoryBudgetState state() const;
 
-    // Upper bound for configured override weights. The live cap and callback budgets can be
-    // smaller; an override is never a guaranteed minimum.
+    // Reported physical capacity, or the automatic fallback when unavailable. This is not a clamp
+    // on selected per-pool preferences and is not a whole-process allocation guarantee.
     [[nodiscard]] std::size_t usableByteBudget() const noexcept {
         const std::lock_guard lock(mutex_);
         return usableByteBudget_;
     }
 
-    // The ceiling the DEFAULT split may reach: min(usable, 50% of physical, 80% of available),
-    // never below the 3 GiB low-memory floor. This is the number that keeps Bloom from planning to
-    // own the machine when nobody configured anything.
+    // The automatic split is chosen from physical capacity once, independently of free RAM.
     [[nodiscard]] std::size_t defaultTotalByteBudget() const noexcept {
         const std::lock_guard lock(mutex_);
         return defaultTotalByteBudget_;
     }
 
-    // What this ledger left to the rest of the machine: max(8 GiB, 40% of physical). Also the
-    // threshold the runtime pressure response compares MemAvailable against.
+    // Compatibility accessor. Cache retention has no implicit host-memory reserve.
     [[nodiscard]] std::size_t reserveByteBudget() const noexcept {
         const std::lock_guard lock(mutex_);
         return reserveByteBudget_;
@@ -134,10 +131,8 @@ class MemoryBudgetLedger final {
         return physicalMemory_;
     }
 
-    // Missing overrides split `defaultTotalByteBudget()` 60/40 operation/preview. A single override
-    // keeps its exact value where possible, clamped to `usableByteBudget()`, and reduces the other
-    // allocation. If both overrides exceed the ledger, they are proportionally reduced so neither
-    // setting is silently discarded.
+    // Missing/zero overrides select each pool's automatic default. Every nonzero override is exact
+    // and independent of the other selection, physical capacity, and registered auxiliary pools.
     [[nodiscard]] MemoryBudgetAllocation
     allocate(std::optional<std::size_t> operationOverride = {},
              std::optional<std::size_t> previewOverride = {}) const noexcept;
@@ -154,17 +149,14 @@ class MemoryBudgetLedger final {
         std::function<void(std::size_t)> applyBudget;
     };
     [[nodiscard]] std::size_t cacheByteBudgetLocked(const Cache& cache) const;
-    [[nodiscard]] std::size_t capFor(const MachineMemorySample& sample,
-                                     std::size_t retained) const noexcept;
     // Returns true only while swap is actively growing beyond the entry/sustain threshold. Static
     // occupancy, a first sample, a released sample, a non-advancing clock and missing counters all
     // rebaseline and assert nothing.
     [[nodiscard]] bool observeSwapActivity(const MachineMemorySample& sample, Clock::time_point now,
                                            bool wasSwapPressure) noexcept;
-    void updatePhysicalCapacity(std::size_t physical, std::optional<std::size_t> available);
+    void updatePhysicalCapacity(std::size_t physical);
     void applyBudgetsLocked();
-    void applyProcessCeilingLocked(bool allowGrowth, bool initialize, bool restore,
-                                   Clock::time_point now);
+    void applyProcessCeilingLocked();
     [[nodiscard]] MemoryBudgetState pollHostLocked(MachineMemorySample sample,
                                                    Clock::time_point now);
     std::size_t physicalMemory_;
@@ -172,17 +164,15 @@ class MemoryBudgetLedger final {
     mutable std::recursive_mutex mutex_;
     std::map<const void*, Cache> caches_;
     MemoryBudgetState state_;
-    std::optional<Clock::time_point> lastCapChange_;
-    std::optional<Clock::time_point> recoveryStep_;
     // Swap is judged by change, never by occupancy: these carry the previous valid sample.
     std::optional<std::size_t> lastSwapUsedBytes_;
     std::optional<Clock::time_point> lastSwapSampleTime_;
-    unsigned pressurePolls_ = 0;
     bool hasPolled_ = false;
     bool processSampling_ = false;
+    bool defaultsResolved_ = false;
+    bool configuredTotalSet_ = false;
     std::optional<Clock::time_point> lastProcessSample_;
     ProcessMemoryConstraintHistory processConstraintHistory_;
-    std::optional<Clock::time_point> lastReusableChange_;
     std::size_t usableByteBudget_ = 0;
     std::size_t defaultTotalByteBudget_ = 0;
     std::size_t reserveByteBudget_ = 0;

@@ -1,5 +1,6 @@
 #include "timeline_property_rows.hpp"
 #include "node_editor_items.hpp"
+#include "numeric_field_projection.hpp"
 #include "properties_registry_row.hpp"
 #include "properties_value_edits.hpp"
 #include <QHBoxLayout>
@@ -17,6 +18,7 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <limits>
 #include <memory>
 
 namespace bloom::ui {
@@ -600,8 +602,8 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         color_->setVisible(color.has_value() && !componentRow);
         std::array<double, 4> values{};
         if (vector) {
-            values[0] = vector->x * (scale ? 100 : 1);
-            values[1] = vector->y * (scale ? 100 : 1);
+            values[0] = vector->x;
+            values[1] = vector->y;
         }
         if (vector3)
             values = {vector3->x, vector3->y, vector3->z, 0.0};
@@ -624,15 +626,17 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         }
         for (int i = 0; i < count; ++i) {
             auto* field = fields_[static_cast<std::size_t>(i)];
-            field->setRange(opacity             ? 0
-                            : size || dimension ? 1
-                            : lineHeight        ? 0.01
-                            : scale || rotation ? -100'000
-                                                : -1'000'000,
-                            opacity             ? 100
-                            : size              ? document::kMaximumTextSizePixels
-                            : scale || rotation ? 100'000
-                                                : 1'000'000);
+            if (field->hasLiveEdit()) {
+                field->show();
+                continue;
+            }
+            field->setRange(opacity              ? 0
+                            : dimension          ? 1
+                            : size || lineHeight ? std::numeric_limits<double>::denorm_min()
+                                                 : std::numeric_limits<double>::lowest(),
+                            opacity ? 100
+                            : size  ? document::kMaximumTextSizePixels
+                                    : std::numeric_limits<double>::max());
             field->setDecimals(color ? 3 : opacity || size ? 1 : 2);
             field->setSingleStep(color ? 0.01 : 1);
             field->setUnit(scale || opacity ? "%"
@@ -649,7 +653,8 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
             // reference numbers under the same "reference" suffix Properties uses.
             if (colorValues && colorValues->reference)
                 field->setUnit(QStringLiteral("reference"));
-            field->setValue(values[static_cast<std::size_t>(i)]);
+            projectNumericField(*field, values[static_cast<std::size_t>(i)], scale ? 100 : 1,
+                                field->unit(), scale ? QStringLiteral("×") : field->unit());
             field->show();
         }
         if (role == document::kBlendModeParameterRole) {
@@ -708,7 +713,8 @@ void TimelinePropertyRow::commitValues(const std::size_t index) {
     const auto role = std::string_view(entry.role);
     const double x = fields_[0]->value(), y = fields_[1]->value(), z = fields_[2]->value();
     if (entry.component) {
-        double value = x / (role == document::kScaleParameterRole ? 100 : 1);
+        double value =
+            numericFieldValue(*fields_[0], role == document::kScaleParameterRole ? 100 : 1);
         const auto* record = session_.composition()
                                  ? session_.composition()->parameters().find(entry.parameterId)
                                  : nullptr;
@@ -734,7 +740,8 @@ void TimelinePropertyRow::commitValues(const std::size_t index) {
         const std::array colors{
             document::AnimationComponent::Red, document::AnimationComponent::Green,
             document::AnimationComponent::Blue, document::AnimationComponent::Alpha};
-        double value = fields_[index]->value() / (role == document::kScaleParameterRole ? 100 : 1);
+        double value =
+            numericFieldValue(*fields_[index], role == document::kScaleParameterRole ? 100 : 1);
         if (color) {
             const auto* record = session_.composition()
                                      ? session_.composition()->parameters().find(entry.parameterId)

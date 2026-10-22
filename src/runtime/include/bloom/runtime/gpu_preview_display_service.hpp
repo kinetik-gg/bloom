@@ -203,6 +203,10 @@ struct GpuPreviewDisplayServiceStatus final {
     // installs the resolved cache sublimit through the EXISTING status poll and never queries a
     // device itself.
     GpuResidentCapacityPlan residentCapacityPlan;
+    // Owner-sampled rooted foreground ceiling. This is free/plannable device space after actual
+    // ownership, not another additive part of residentCapacityPlan.poolBytes. Omitted rooted
+    // requests still intersect it with the live delivered host allowance and their phase grant.
+    std::uint64_t foregroundRequestBytes = 0;
     GpuPreviewDisplayServiceCounters counters;
     // Latest owner-observed diagnostic intervals; these never establish painted-frame identity.
     render::GpuAllocatorMemorySnapshot allocatorMemory;

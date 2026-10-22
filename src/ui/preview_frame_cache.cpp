@@ -688,8 +688,26 @@ cacheMemoryBudgetAllocationFromSettings(const QSettings& settings,
 runtime::MemoryBudgetAllocation cacheMemoryBudgetsFromSettings(const QSettings& settings) {
     const auto allocation =
         cacheMemoryBudgetAllocationFromSettings(settings, runtime::processMemoryBudgetLedger());
-    runtime::processMemoryBudgetLedger().setConfiguredTotal(allocation.operationCacheByteBudget +
-                                                            allocation.previewFrameCacheByteBudget);
+    const auto maximum = std::numeric_limits<std::size_t>::max();
+    runtime::processMemoryBudgetLedger().setConfiguredTotal(
+        allocation.operationCacheByteBudget > maximum - allocation.previewFrameCacheByteBudget
+            ? maximum
+            : allocation.operationCacheByteBudget + allocation.previewFrameCacheByteBudget);
+    return allocation;
+}
+
+runtime::MemoryBudgetAllocation
+applyCacheMemoryBudgetsFromSettings(const QSettings& settings, runtime::OperationCache& operations,
+                                    PreviewFrameCache& preview,
+                                    runtime::MemoryBudgetLedger& ledger) {
+    const auto allocation = cacheMemoryBudgetAllocationFromSettings(settings, ledger);
+    const auto maximum = std::numeric_limits<std::size_t>::max();
+    ledger.setConfiguredTotal(
+        allocation.operationCacheByteBudget > maximum - allocation.previewFrameCacheByteBudget
+            ? maximum
+            : allocation.operationCacheByteBudget + allocation.previewFrameCacheByteBudget);
+    operations.setByteBudget(allocation.operationCacheByteBudget);
+    preview.setByteBudget(allocation.previewFrameCacheByteBudget);
     return allocation;
 }
 

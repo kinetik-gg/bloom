@@ -12,6 +12,8 @@ class KPropertyRow final : public QWidget {
                  QWidget* parent = nullptr, bool leadingIndicator = false);
     QSize minimumSizeHint() const override;
     void setLineCount(int lines);
+    // Optional width for wider settings surfaces. Zero keeps the responsive Properties default.
+    void setLabelWidth(int width);
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
@@ -19,6 +21,7 @@ class KPropertyRow final : public QWidget {
   private:
     QLabel* label_;
     bool leadingIndicator_ = false;
+    int labelWidth_ = 0;
 };
 QLabel* makePropertyRowLabel(const QString& text, QWidget* parent);
 class KRow : public QWidget {

@@ -237,10 +237,13 @@ struct PreviewDisplayServiceCore final {
     // Owner-resolved capacity/partition snapshot. Default Unknown/all-zero until the owner resolves
     // it; the UI reads it locklessly with the rest of status().
     GpuResidentCapacityPlan publishedResidentCapacityPlan;
-    // Effective per-request admission allowance after the capacity clamp. Seeded from the
-    // configured options on the constructing thread; the owner may lower it once. Read atomically
-    // by submit() (any thread) and by the owner-thread resident stages.
+    // Effective per-request admission allowance. Seeded from configured options; explicit and
+    // unrooted routes take the fixed capacity-plan share, while the rooted owner samples live free
+    // capacity after actual allocation ownership. Read atomically by submit() and native stages.
     std::atomic<std::uint64_t> effectivePreviewByteAllowance{0};
+    // Owner-thread-only sampling cadence for the rooted live GPU foreground allowance. Native
+    // stage polling may run at 2 ms; heap-budget queries need no such cadence.
+    std::chrono::steady_clock::time_point foregroundCapacitySampledAt{};
     // Bounded cached counters, owner-written atomics and read locklessly/under lock by status().
     std::atomic<std::uint64_t> counterResidentGraphJobs{0};
     std::atomic<std::uint64_t> counterNativeDispatches{0};
@@ -398,6 +401,8 @@ void runGpuStartup(const std::shared_ptr<PreviewDisplayServiceCore>& core, TaskC
 // plan for the UI status poll. Must run after the device exists and BEFORE the presentation
 // registry and resident scene cache are created. Skipped for the packed-only service.
 void resolveResidentCapacity(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
+void refreshResidentForegroundCapacity(const std::shared_ptr<PreviewDisplayServiceCore>& core)
+    noexcept;
 
 // GPU parent starter payload (runs on the service thread): submit the CPU stage child, retain the
 // final completion, and return immediately.

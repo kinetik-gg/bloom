@@ -57,7 +57,7 @@ gate, so production service-backed RAM fill defaults to width one. See the
 - [Preferences](user-guide/preferences.md) — global preferences, which changes take effect immediately,
   which need a restart, and what is project or session state instead.
 - [Memory](user-guide/memory.md) — the cache budgets Bloom chooses, the two override keys, and what
-  "Memory pressure: caches trimmed" means.
+  actual OS limits affect selected targets.
 - [Scripting Bloom with Python](user-guide/python.md) — Python package, transactions and embedding.
 - [Using Bloom from an agent](user-guide/mcp.md) — stdio MCP tools and request limits.
 - [Headless scripting](user-guide/scripting.md) — `bloom-cli`, JSON transactions, and headless
@@ -114,7 +114,8 @@ gate, so production service-backed RAM fill defaults to width one. See the
   real-audio/sustained/platform qualification.
 
 - Reusable cache retention now uses off-UI process-aware sampling, pairing visible Linux cgroup v2
-  limits/usage with conservative reserve and zero reclaimable credit. Cold zero retention preserves
+  limits/usage with zero reclaimable credit. Explicit retention preferences are authoritative;
+  only observed absolute OS limits constrain their combined allowances. Cold zero retention preserves
   foreground preparation and separate live export reservations. Saved requests, configured ceilings
   and effective reusable allowances remain distinct; unsupported platforms disclose host-only fallback.
   Bounded policy/lifetime tests and a private capped helper pass. This is not an aggregate process/OOM

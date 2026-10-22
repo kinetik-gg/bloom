@@ -313,29 +313,27 @@ reservation was an admission ceiling, not actual allocated memory. Two hundred r
 bytes/proof without extra preparation, dispatch or transfer. This is core reuse evidence, not
 normal Viewer/cache-100 playback, clipping, sustained performance or other-platform qualification.
 
-Resident capacity and host/device separation. The resident route sizes its one pool from the
-resolved device allocation budget, never from host RAM alone. On the device owner thread
-`GpuDevice::availableAllocationBudget()` reports either a live `VK_EXT_memory_budget` figure or a
-conservative nominal `DEVICE_LOCAL` estimate, and the runtime partitions that one pool into the
-frame-cache, lease-registry, scene-cache, and per-request sub-budgets with bounded cache headroom,
-clamped so the total can never overcommit the device and never raised above the artist's configured
-ceiling. Host limits and device limits are separate: a host decode/pixel-storage ceiling larger than
-the device share is clamped only for the device stage while the host ceiling is preserved for
-decoding and the CPU fallback, and a zero device ceiling is the honest no-device-admission signal
-that takes the CPU path. A genuinely unresolved device uses a small safe fallback pool; a known-zero
-device is never turned into that fallback.
+Resident capacity and host/device separation. Cache targets govern reusable retention; they must
+not make foreground capacity shrink merely because the user chooses a larger RAM-preview target.
+The device owner observes `GpuDevice::availableAllocationBudget()` through the existing native
+capability boundary. A live `VK_EXT_memory_budget` result already excludes allocated device memory.
+A nominal estimate or unknown fallback must separately account for the owner's live and retiring
+allocations; it is not treated as fresh free memory.
 
-Within that pool the lease-registry/frame-cache, scene-cache, and per-request ledgers are
-partitioned 50/20/30. The per-request ledger is the only one that holds RGBA32F working images, and
-a single source-over or translation step simultaneously holds the merge accumulator, the foreground
-input, and its own new output, plus the native operation's actual VMA allocation, status buffer, and
-staging peak. The request share therefore has to cover roughly three full-size float frames, not the
-two a preview-only reading suggests; a smaller share refuses an ordinary full-resolution composition
-that the device could actually run. Because the partition divides the SAME pool, giving the request
-ledger that room leaves fewer RGBA8 resident frame-cache entries, which is the deliberate trade-off.
-The pool itself is still the resolved device budget clamped to the artist's ceiling, so a
-composition whose real working set exceeds that capacity is refused honestly and falls back rather
-than being claimed as supported.
+Explicit/unrooted resident callers retain an additive capacity plan for lease, scene-cache and
+request ceilings. That legacy plan partitions a bounded pool 50/20/30 with cache headroom; no sum
+can exceed its pool. It is not the active-work policy for ordinary rooted preview. Rooted requests
+without an explicit request override use a separate, non-additive foreground allowance refreshed on
+the GPU owner from actual available capacity. Selecting a larger host cache does not reduce this
+allowance. Existing cache and lease allocations remain owned and accounted; the foreground field
+must not be added to the legacy partition as if it were another reservation.
+
+Each request also passes the shared phase reservation and native resource/capability checks.
+Host decode capacity stays independent of device capacity. Unknown capacity uses an explicit
+fallback; measured zero stays zero. Allocation failure is diagnosed and uses the supported CPU
+fallback without claiming GPU execution. A scene cache with zero retention is valid: it refuses
+insertion while allowing foreground preparation and execution. A native presentation lease still
+requires genuine owned capacity; disabling retention is not permission to discard a live lease.
 
 Resident metadata admission is independent of pixel extent. The lease registry retains its finite
 4096-entry ceiling; the cache uses at most 3584 slots, reserving 512 for in-flight, presented and
@@ -344,7 +342,7 @@ dividing by an assumed 8 MiB frame, and a zero pool remains disabled. Actual nat
 retained metadata and the owner-resolved device clamp remain authoritative. Full and Half retain
 separate resolution/policy keys: 1920×1080 and 960×540 resident RGBA8 display products respectively.
 Working images remain RGBA32F; this count-policy correction changes neither processing precision
-nor the existing lease/scene/request byte split. One hundred packed Half display images occupy
+nor the explicit resident lease/scene/request byte split. One hundred packed Half display images occupy
 about 198 MiB before native alignment and metadata; the actual device charges must still fit the
 cache and lease ledgers. Metadata headroom is a finite allowance, not a guarantee that arbitrary
 concurrent requests fit either byte or entry admission.
@@ -413,8 +411,10 @@ resumes only targets still attached to the live root; `ApplicationShutdownCoordi
 `shutdownQuiescent` only once BOTH task quiescence and native-surface retirement are observed, and the
 application begins service shutdown on `shutdownQuiescent`. `apps/bloom/main.cpp` now constructs the
 resident service overload (GPU scene stage + CPU stage + display fallback), derives the configured
-resident lease/scene-cache/request budgets from the artist's UI frame-cache ceiling, requests Wayland
-presentation only for a bundled loader on a genuine Wayland session, shares the coverage and
+resident retention budgets from the UI frame-cache target, and clears the request override so
+rooted foreground work uses delivered host capacity and owner-observed device availability.
+Ordinary widget preview uses GPU-prepared packed products with native presentation disabled;
+qualified native fixtures select their presentation route explicitly. The root shares the coverage and
 prepared-upload caches and the one shared OCIO resolver/context, and builds a session-refreshing GPU
 scene stage so relative media follows the live session base directory.
 `bloom::ui::GpuViewerBootstrap` caches the service's presentation client/availability and installs
@@ -1128,6 +1128,19 @@ headroom. Omitted scheduler aggregate admission, service request allowance, cont
 limit and preparation executor envelope read these delivered defaults instead of latching startup
 values. Each request remains subject to real phase and device admission; a snapshot is neither
 allocation ownership nor a new independent allowance.
+
+The resident service keeps construction ceilings separate from live free space. For an omitted
+rooted preview limit, the executor's per-image ceiling uses finite device-local size (or the
+bounded unknown-device fallback), while lease, scene, and Viewer retention limits use a nominal
+retention-only pool. A zero free-space sample at startup therefore does not permanently disable
+those owners. The service samples live device availability on its GPU owner and refreshes the
+shared phase report; measured free bytes already exclude VMA allocations. With one reported owner,
+the phase quota adds back only exact root-owned local native backing that remains in its claim
+ledger, so it is subtracted once. Unallocated phase reservations and other allocations receive
+no credit; multiple reported devices retain a conservative common minimum. Nominal estimates
+subtract live and retiring image ownership outside the root's existing claims. Every native
+allocation remains subject to the refreshed phase quota and allocator result. Explicit/unrooted
+additive limits retain their existing capacity plan.
 
 Cold, failed, future-dated or stale default delivery closes new default admission with typed
 AwaitingCapacity. A fresh sample epoch can retry the newest eligible request through existing

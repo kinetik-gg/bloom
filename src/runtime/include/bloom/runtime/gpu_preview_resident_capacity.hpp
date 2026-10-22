@@ -46,9 +46,9 @@ struct GpuResidentCapacity final {
     friend bool operator==(const GpuResidentCapacity&, const GpuResidentCapacity&) = default;
 };
 
-// The whole resident route may claim at most this fraction of a resolved available budget; the rest
-// stays for the process's other GPU consumers and driver overhead. A `DeviceLocalEstimate` is
-// deliberately halved again by this same fraction, so it never behaves like detected free memory.
+// A nominal DEVICE_LOCAL heap size is not available VRAM, so its planning limit keeps this
+// conservative fraction. A live MemoryBudget already reports available space and is used in full.
+// Rooted foreground requests separately sample free capacity and real phase claims.
 inline constexpr std::uint64_t kResidentCapacityClaimDivisor = 2;
 
 // Safe total pool when the device budget is genuinely unknown.
@@ -108,6 +108,13 @@ struct GpuResidentCapacityPlan final {
 [[nodiscard]] GpuResidentCapacity
 gpuResidentCapacityFromAllocationBudget(const render::GpuAllocationBudget& allocation) noexcept;
 
+// Stable construction limit for rooted retention and producer pipelines. Live free bytes can be
+// zero during startup and must not become a lifetime cache/registry/image ceiling. A reported
+// DEVICE_LOCAL heap is only a nominal size and remains subject to the conservative claim divisor;
+// actual allocation still needs the current foreground and shared-root admission checks.
+[[nodiscard]] GpuResidentCapacity
+gpuResidentConstructionCapacity(const GpuResidentCapacity& observed) noexcept;
+
 namespace gpu_resident_capacity_detail {
 
 // Overflow-safe proportional share used where the exact 128-bit multiply path is unavailable. It
@@ -132,8 +139,18 @@ gpuResidentCapacityPlanConfigured(std::uint64_t configuredCeilingBytes) noexcept
 gpuResidentCapacityPlanFor(const GpuResidentConfiguredBudgets& configured,
                            const GpuResidentCapacity& capacity) noexcept;
 
+// A rooted foreground request may use device space that cache/lease ceilings have not actually
+// claimed. This is a NON-additive admission ceiling, sampled on the GPU owner: MemoryBudget is
+// already free space after all VMA allocations, while a nominal/unknown report subtracts the
+// generation's actually owned image bytes from its conservative planning limit. The shared phase
+// reservation and native allocation checks still bound active work; cache targets are retention
+// preferences, not reservations that reduce an otherwise idle foreground request.
+[[nodiscard]] std::uint64_t
+gpuResidentForegroundRequestBudget(const GpuResidentCapacity& capacity,
+                                   std::uint64_t ownedImageBytes) noexcept;
+
 // One request's DEVICE-stage byte budget: the caller's host/decode pixel-storage ceiling clamped
-// down to the owner-resolved GPU request ceiling. A host ceiling larger than the device share is
+// down to the owner-resolved GPU request ceiling. A host ceiling larger than device capacity is
 // clamped, never turned into a GPU refusal; the host ceiling itself is preserved for decoding and
 // the CPU fallback. A zero host ceiling or a zero GPU ceiling yields zero, which is the honest
 // "no device admission" signal the caller turns into the CPU path.

@@ -23,62 +23,41 @@ auto at(int seconds) {
     return MemoryBudgetLedger::Clock::time_point{} + std::chrono::seconds(seconds);
 }
 
-void sequence() {
+void selectedBudgetLifecycle() {
     MemoryBudgetLedger ledger(60 * gib, 60 * gib);
-    std::size_t held = 5 * gib, operation = 0, preview = 0;
+    std::size_t held = 5 * gib, operation = 0, preview = 0, auxiliary = 0, live = 0;
+    ledger.setConfiguredTotal(30 * gib);
     ledger.registerCache(
         &operation, 18 * gib, [&] { return held; }, [&](std::size_t bytes) { operation = bytes; });
     ledger.registerCache(
         &preview, 12 * gib, [] { return 0; }, [&](std::size_t bytes) { preview = bytes; });
-    auto state = ledger.poll({.availableBytes = 20 * gib}, at(0));
-    expect(state.effectiveBytes == 20 * gib && state.configuredBytes == 30 * gib,
-           "cap includes held bytes and follows current contention");
-    expect(state.retentionPercent == 25 && state.memoryNotice && !state.swapNotice,
-           "first pressure poll reduces admission to 25 percent and reports once");
-    expect(operation == 3 * gib && preview == 2 * gib, "all shares scale proportionally");
-    held = 0;
-    state = ledger.poll({.availableBytes = 10 * gib}, at(1));
-    expect(state.effectiveBytes == 20 * gib && state.retentionPercent == 10 && !state.memoryNotice,
-           "cap cooldown is five seconds; second pressure poll reaches 10 percent");
-    state = ledger.poll({.availableBytes = 45 * gib / 2}, at(5));
-    expect(state.effectiveBytes == 20 * gib, "an exact ten percent change stays inside hysteresis");
-    state = ledger.poll({.availableBytes = 23 * gib}, at(5));
-    expect(state.effectiveBytes == 20 * gib, "an eight percent difference is inside hysteresis");
-    state = ledger.poll({.availableBytes = 10 * gib}, at(6));
-    expect(state.effectiveBytes == 8 * gib && state.retentionPercent == 10,
-           "a larger drop applies after the cooldown");
-    expect(operation + preview <= state.effectiveBytes / 10,
-           "all callback allowances remain inside the eviction target");
-    state = ledger.poll({}, at(7));
-    expect(state.memoryPressure && state.retentionPercent == 10,
-           "missing availability cannot assert recovery");
-    state = ledger.poll({.availableBytes = 40 * gib}, at(10));
-    expect(!state.memoryPressure && state.retentionPercent == 10 && state.effectiveBytes == 8 * gib,
-           "recovery starts a ten-second hold before restoring budgets");
-    state = ledger.poll({.availableBytes = 40 * gib}, at(19));
-    expect(state.retentionPercent == 10 && state.effectiveBytes == 8 * gib, "no early restore");
-    state = ledger.poll({.availableBytes = 40 * gib}, at(20));
-    expect(state.retentionPercent == 25 && state.effectiveBytes == 10 * gib, "first recovery step");
-    state = ledger.poll({.availableBytes = 40 * gib}, at(30));
-    expect(state.retentionPercent == 50 && state.effectiveBytes == 25 * gib / 2,
-           "second recovery step");
-    state = ledger.poll({.availableBytes = 40 * gib}, at(40));
-    expect(state.retentionPercent == 100 && state.effectiveBytes == 125 * gib / 8,
-           "third recovery step");
-    state = ledger.poll({.availableBytes = 0}, at(45));
-    expect(state.effectiveBytes == 3 * gib && state.retentionPercent == 25 && state.memoryNotice,
-           "measured zero engages pressure again and respects the 3 GiB floor");
+    ledger.registerCache(
+        &auxiliary, 4 * gib, [] { return 0; }, [&](std::size_t bytes) { auxiliary = bytes; });
+    ledger.registerCache(
+        &live, 2 * gib, [] { return 0; }, [&](std::size_t bytes) { live = bytes; },
+        bloom::runtime::MemoryBudgetOwnerKind::LiveWork);
+    for (int seconds = 0; seconds != 60; ++seconds) {
+        const auto state =
+            ledger.poll({.availableBytes = seconds % 2 == 0 ? 0 : 40 * gib}, at(seconds));
+        expect(state.effectiveBytes == 30 * gib && state.configuredBytes == 30 * gib &&
+                   state.retentionPercent == 100 && !state.memoryPressure && !state.memoryNotice,
+               "host availability never changes the selected reusable budget");
+        expect(operation == 18 * gib && preview == 12 * gib && auxiliary == 4 * gib &&
+                   live == 2 * gib,
+               "auxiliary and live pools never normalize independent selected cache budgets");
+    }
     std::size_t late = 0;
     ledger.registerCache(&late, gib, [] { return 0; }, [&](std::size_t bytes) { late = bytes; });
-    expect(late > 0 && late <= gib / 4,
-           "a cache created during pressure starts with reduced admission immediately");
-    const auto priorLate = late;
-    const auto updatedLate = ledger.setCacheCeiling(&late, 2 * gib);
-    expect(late == updatedLate && late > priorLate,
-           "ceiling changes apply their current allowance inside the serialized callback");
+    expect(late == gib && operation == 18 * gib && preview == 12 * gib,
+           "a newly registered pool receives its exact selection");
+    const auto updatedLate = ledger.setCacheCeiling(&late, 80 * gib);
+    expect(late == 80 * gib && updatedLate == late && operation == 18 * gib,
+           "changing a pool target applies that exact value without shrinking other pools");
     ledger.unregisterCache(&late);
     ledger.unregisterCache(&operation);
     ledger.unregisterCache(&preview);
+    ledger.unregisterCache(&auxiliary);
+    ledger.unregisterCache(&live);
     expect(ledger.cacheByteBudget(&operation) == 0, "removed participants cannot be called again");
 }
 
@@ -100,25 +79,24 @@ void swapActivityPolicy() {
            "static 90 percent swap with ample RAM never trims the caches");
     // Active growth is the signal, even while available memory looks healthy.
     state = ledger.poll(swapSample(4 * gib * 9 / 10 + gib), at(10));
-    expect(state.swapPressure && !state.memoryPressure && state.swapNotice && state.memoryNotice &&
-               state.retentionPercent == 25,
-           "actively rising swap trims the caches");
+    expect(state.swapPressure && !state.memoryPressure && state.swapNotice && !state.memoryNotice &&
+               state.retentionPercent == 100,
+           "actively rising swap is visible without changing cache targets");
     state = ledger.poll(swapSample(4 * gib * 9 / 10 + 2 * gib), at(15));
-    expect(state.retentionPercent == 10 && !state.swapNotice,
-           "persistent swap growth escalates once");
-    // Once growth stops, the episode clears through the ordinary recovery hold and ladder. High
-    // static occupancy does not block recovery.
+    expect(state.retentionPercent == 100 && !state.swapNotice,
+           "persistent swap growth never adds a retention multiplier");
+    // Once growth stops, activity clears. High static occupancy never changes the budget.
     state = ledger.poll(swapSample(4 * gib * 9 / 10 + 2 * gib), at(20));
-    expect(!state.swapPressure && state.retentionPercent == 10,
-           "a static reading after an episode starts the recovery hold");
+    expect(!state.swapPressure && state.retentionPercent == 100,
+           "a static reading clears swap activity without changing retention");
     state = ledger.poll(swapSample(4 * gib * 9 / 10 + 2 * gib), at(29));
-    expect(state.retentionPercent == 10, "no early restore");
+    expect(state.retentionPercent == 100, "swap activity never changes the selected budget");
     state = ledger.poll(swapSample(4 * gib * 9 / 10 + 2 * gib), at(30));
-    expect(state.retentionPercent == 25, "ample RAM recovers a previously pressured cache");
+    expect(state.retentionPercent == 100, "ample RAM leaves the selection unchanged");
     state = ledger.poll(swapSample(4 * gib * 9 / 10 + 2 * gib), at(40));
-    expect(state.retentionPercent == 50, "recovery continues through the ladder");
+    expect(state.retentionPercent == 100, "later samples leave full selected admission");
     state = ledger.poll(swapSample(4 * gib * 9 / 10 + 2 * gib), at(50));
-    expect(state.retentionPercent == 100, "recovery reaches full admission");
+    expect(state.retentionPercent == 100, "retention remains at the selected allowance");
     // Releasing swap rebaselines, so a later rise is measured from the new low.
     state = ledger.poll(swapSample(gib), at(60));
     expect(!state.swapPressure, "a released sample rebaselines without pressure");
@@ -146,31 +124,41 @@ void swapActivityPolicy() {
     expect(!state.swapPressure, "a valid sample after missing counters is a fresh baseline");
 }
 
-void ceilings() {
+void selectedTotalsAndHardwareDefaults() {
     MemoryBudgetLedger small(16 * gib, 16 * gib);
-    expect(small.state().effectiveBytes == 8 * gib, "16 GiB machines start at an 8 GiB cap");
+    expect(small.state().effectiveBytes == 8 * gib &&
+               small.state().processingEffectiveBytes == 16 * gib,
+           "automatic retention selection and independent processing capacity remain distinct");
     small.setConfiguredTotal(std::numeric_limits<std::size_t>::max());
-    expect(small.state().effectiveBytes == 8 * gib, "explicit ceilings cannot bypass physical cap");
+    expect(small.state().effectiveBytes == std::numeric_limits<std::size_t>::max() &&
+               small.state().processingEffectiveBytes == 16 * gib,
+           "explicit cache selections never receive a hidden physical clamp or alter processing");
     std::size_t tiny = 0;
     small.registerCache(&tiny, 1024, [] { return 0; }, [&](std::size_t bytes) { tiny = bytes; });
     small.setConfiguredTotal(1024);
-    auto state = small.poll({.availableBytes = 16 * gib}, at(0));
-    expect(state.effectiveBytes == 3 * gib && tiny <= 1024, "floor never enlarges small overrides");
-    MemoryBudgetLedger busy(60 * gib, 60 * gib);
-    busy.setConfiguredTotal(16 * gib);
-    state = busy.poll({.availableBytes = 40 * gib}, at(0));
-    const auto trimmed = busy.poll({.availableBytes = 2 * gib}, at(5));
-    expect(trimmed.memoryPressure && trimmed.effectiveBytes == 3 * gib,
-           "low RAM trims even with no swap data, so overrides stay ceilings");
-}
-void machineExamplesAndOverflow() {
-    MemoryBudgetLedger sixteen(16 * gib, 16 * gib);
-    std::size_t bytes = 0;
-    sixteen.registerCache(
-        &bytes, 4 * gib, [] { return 4 * gib; }, [&](std::size_t limit) { bytes = limit; });
-    const auto state = sixteen.poll({.availableBytes = 3 * gib}, at(0));
-    expect(state.effectiveBytes == 7 * gib * 4 / 5 && state.retentionPercent == 25,
-           "16 GiB: 3 GiB available plus 4 GiB held gives a 5.6 GiB cap and pressure trimming");
+    auto state = small.poll({.availableBytes = 0}, at(0));
+    expect(state.effectiveBytes == 1024 && tiny == 1024,
+           "automatic floors never enlarge an explicit small selection");
+
+    MemoryBudgetLedger unresolved;
+    const auto fallback = unresolved.allocate();
+    auto sample = bloom::runtime::MemoryBudgetSample{.machine = {.availableBytes = gib},
+                                                     .physicalBytes = 60 * gib};
+    state = unresolved.applySample(sample, at(0));
+    const auto selected = unresolved.allocate();
+    expect(selected.operationCacheByteBudget == 18 * gib &&
+               selected.previewFrameCacheByteBudget == 12 * gib && selected != fallback,
+           "the first verified hardware sample resolves automatic preferences");
+    sample.machine.availableBytes = 0;
+    sample.physicalBytes = 64 * gib;
+    state = unresolved.applySample(sample, at(5));
+    const auto later = unresolved.allocate();
+    expect(
+        later.operationCacheByteBudget == selected.operationCacheByteBudget &&
+            later.previewFrameCacheByteBudget == selected.previewFrameCacheByteBudget &&
+            state.processingEffectiveBytes == 64 * gib,
+        "resolved defaults stay stable while current hardware capacity remains separately visible");
+
     constexpr auto maximum = std::numeric_limits<std::size_t>::max();
     MemoryBudgetLedger huge(60 * gib, 60 * gib);
     std::size_t left = 0, right = 0;
@@ -179,8 +167,8 @@ void machineExamplesAndOverflow() {
     huge.registerCache(
         &right, maximum, [] { return maximum; }, [&](std::size_t limit) { right = limit; });
     const auto saturated = huge.poll({.availableBytes = maximum}, at(0));
-    expect(left + right <= saturated.effectiveBytes,
-           "overflow-sized ceiling sums still divide one aggregate cap");
+    expect(left == maximum && right == maximum && saturated.retainedBytes == maximum,
+           "unconstrained targets remain exact and retained gauges saturate without overflow");
 }
 
 using namespace bloom::runtime;
@@ -214,18 +202,20 @@ void processAdmissionAndFailures() {
            "cold process sampling gates reusable retention only, not live work or processing");
     ledger.setConfiguredTotal(40 * gib);
     auto state = ledger.applySample(processSample(8 * gib, 6 * gib, 0), at(0));
-    expect(state.effectiveBytes == gib / 2 && state.processCacheCeilingBytes == gib &&
+    expect(state.effectiveBytes == 8 * gib && state.processCacheCeilingBytes == 8 * gib &&
                state.reusableHostCreditBytes == 0 && !state.awaitingProcessSample,
-           "first finite sample starts below half paired hard allowance without retained credit");
+           "first finite sample applies the real OS limit without a reserve or hidden haircut");
     const auto requested = state.configuredBytes;
+    state = ledger.applySample(processSample(16 * gib, {}, 1, ProcessMemoryStatus::Partial), at(1));
+    expect(state.processCacheCeilingBytes == 8 * gib && cache == 8 * gib,
+           "an incomplete larger finite limit cannot authorize expanded reusable retention");
     auto partial =
-        processSample(std::size_t{256} * 1024 * 1024, {}, 1, ProcessMemoryStatus::Partial);
-    state = ledger.applySample(partial, at(1));
-    expect(state.effectiveBytes <= std::size_t{224} * 1024 * 1024 &&
+        processSample(std::size_t{256} * 1024 * 1024, {}, 2, ProcessMemoryStatus::Partial);
+    state = ledger.applySample(partial, at(2));
+    expect(state.effectiveBytes == std::size_t{256} * 1024 * 1024 &&
                state.configuredBytes == requested,
-           "partial tighter limit applies immediately inside cooldown while requested ceiling "
-           "persists");
-    state = ledger.applySample(processSample(0, {}, 2, ProcessMemoryStatus::Partial), at(2));
+           "partial tighter OS limit applies immediately while selected preferences persist");
+    state = ledger.applySample(processSample(0, {}, 3, ProcessMemoryStatus::Partial), at(3));
     expect(state.effectiveBytes == 0 && live > 0,
            "finite zero with unread usage defeats the floor");
     auto unknown = processSample(8 * gib, {}, 20, ProcessMemoryStatus::Unavailable);
@@ -249,11 +239,10 @@ void processAdmissionAndFailures() {
     expect(state.effectiveBytes == 0 && !state.processSampleFresh,
            "stale snapshot cannot authorize growth and freshness remains explicit");
     state = ledger.applySample(processSample(8 * gib, 2 * gib, 50), at(50));
-    expect(state.effectiveBytes > 0 && state.effectiveBytes <= 5 * gib / 2,
-           "verified recovery from zero uses bounded half-headroom seed after recovery hold");
+    expect(state.effectiveBytes == 8 * gib,
+           "a fresh complete finite limit restores its actual capacity without a recovery delay");
     const auto before = state.effectiveBytes;
-    state = ledger.applySample(processSample(8 * gib, 8 * gib - before + before / 20 - gib, 51),
-                               at(51));
+    state = ledger.applySample(processSample(before - before / 20, gib, 51), at(51));
     expect(state.effectiveBytes == before - before / 20,
            "even a five-percent newly hard shrink applies without cooldown or hysteresis");
     ledger.unregisterCache(&cache);
@@ -345,14 +334,14 @@ void verifiedConstraintRemovalRecovery() {
     unlimited.process.sampledAt = at(31);
     state = ledger.applySample(unlimited, at(31));
     expect(
-        !state.processCacheCeilingBytes && state.effectiveBytes == prior &&
+        !state.processCacheCeilingBytes && state.effectiveBytes == requested &&
             state.configuredBytes == requested,
-        "fresh same-view explicit max removes old ceiling without instant growth/settings change");
+        "fresh same-view explicit max removes the constraint without changing selected settings");
     unlimited.process.sampledAt = at(40);
     state = ledger.applySample(unlimited, at(40));
-    expect(state.effectiveBytes > prior && state.effectiveBytes <= prior + prior / 4 &&
+    expect(state.effectiveBytes == requested &&
                state.effectiveBytes < state.processingEffectiveBytes,
-           "removed finite ceiling recovers through existing bounded hold and growth policy");
+           "later samples preserve the full selected target without a recovery ladder");
     auto failed = unlimited;
     failed.process.status = ProcessMemoryStatus::Partial;
     failed.process.sampledAt = at(50);
@@ -360,7 +349,7 @@ void verifiedConstraintRemovalRecovery() {
     const auto recovered = state.effectiveBytes;
     state = ledger.applySample(failed, at(50));
     expect(state.effectiveBytes == recovered,
-           "failed later reads do not authorize further recovery");
+           "failed later reads cannot change an already verified selection");
 }
 
 void processHierarchyAndStableFill() {
@@ -370,22 +359,26 @@ void processHierarchyAndStableFill() {
     sample.process.domains.push_back(
         {"/parent", ProcessMemoryLimitKind::Finite, 12 * gib, 11 * gib});
     auto state = hierarchy.applySample(sample, at(0));
-    expect(state.effectiveBytes == 0 && state.processCacheCeilingBytes == 0,
-           "each ancestor's own usage and reserve beats a roomy leaf");
+    expect(state.effectiveBytes == 8 * gib && state.processCacheCeilingBytes == 8 * gib,
+           "the smallest actual ancestor or leaf limit constrains reusable retention");
+    sample.process.domains[1].limitBytes = 4 * gib;
+    sample.process.sampledAt = at(1);
+    state = hierarchy.applySample(sample, at(1));
+    expect(state.effectiveBytes == 4 * gib && state.processCacheCeilingBytes == 4 * gib,
+           "a smaller finite ancestor wins independently of its sampled usage");
     for (const auto limit : {std::size_t{0}, std::size_t{1024}, std::size_t{2} * gib}) {
         MemoryBudgetLedger tiny(60 * gib, 60 * gib);
         tiny.beginProcessSampling();
         const auto result = tiny.applySample(processSample(limit, 0, 0), at(0));
-        expect(result.effectiveBytes <= limit &&
-                   (limit >= std::size_t{16} * 1024 * 1024 || result.effectiveBytes == 0),
-               "tiny process limits never inherit the host cache floor");
+        expect(result.effectiveBytes == limit,
+               "tiny actual process limits never inherit an automatic floor or reserve");
     }
     MemoryBudgetLedger ledger(60 * gib, 60 * gib);
     ledger.beginProcessSampling();
     std::size_t held = 0, allowance = 0;
     unsigned evictions = 0;
     ledger.registerCache(
-        &held, 30 * gib, [&] { return held; },
+        &held, 6 * gib, [&] { return held; },
         [&](const std::size_t value) {
             allowance = value;
             if (held > value) {
@@ -402,13 +395,16 @@ void processHierarchyAndStableFill() {
         stable = held == previous ? stable + 1 : 0;
         previous = held;
     }
-    expect(held > 0 && stable >= 30 && evictions == 0 && state.reusableHostCreditBytes == 0,
-           "zero-credit fill/poll/refill converges positively without recurring eviction cycles");
+    expect(held == 6 * gib && stable >= 30 && evictions == 0 && state.reusableHostCreditBytes == 0,
+           "filling caches does not shrink their selected targets or invent reclaimable credit");
     const auto settled = held;
-    state = ledger.applySample(processSample(8 * gib, 3 * gib + held, 401), at(401));
-    expect(held < settled && evictions == 1 &&
+    state = ledger.applySample(processSample(8 * gib, 3 * gib + held, 400), at(400));
+    expect(held == settled && evictions == 0,
+           "usage changes leave retained targets stable; live phase admission checks headroom");
+    state = ledger.applySample(processSample(4 * gib, 3 * gib + held, 401), at(401));
+    expect(held == 4 * gib && evictions == 1 &&
                state.effectiveBytes <= state.processCacheCeilingBytes,
-           "real unrelated usage immediately trims a settled cache");
+           "an actual lower OS limit immediately trims reusable retention");
     const auto afterPressure = evictions;
     for (int index = 41; index < 80; ++index) {
         state =
@@ -416,7 +412,7 @@ void processHierarchyAndStableFill() {
         held = allowance;
     }
     expect(held > 0 && evictions == afterPressure,
-           "pressure release recovers without an alternating fill/evict loop");
+           "a raised actual OS limit restores the selection without an alternating eviction loop");
     ledger.unregisterCache(&held);
     MemoryBudgetLedger shares(60 * gib, 60 * gib);
     shares.beginProcessSampling();
@@ -427,12 +423,43 @@ void processHierarchyAndStableFill() {
         &second, 12 * gib, [] { return 20 * gib; },
         [&](const std::size_t bytes) { second = bytes; });
     state = shares.applySample(processSample(8 * gib, 6 * gib, 0), at(0));
+    expect(first + second <= state.effectiveBytes && first > second &&
+               state.retainedBytes == 40 * gib && state.reusableHostCreditBytes == 0,
+           "reusable owners share one real OS limit without crediting shared retained gauges");
+    std::size_t auxiliary = 0;
+    shares.registerCache(
+        &auxiliary, 10 * gib, [] { return 0; },
+        [&](const std::size_t bytes) { auxiliary = bytes; });
     expect(
-        first + second <= state.effectiveBytes && first > second &&
-            state.retainedBytes == 40 * gib && state.reusableHostCreditBytes == 0,
-        "many owners split one allowance and shared retained gauges never become reusable credit");
+        first + second + auxiliary <= 8 * gib && first < 18 * gib && second < 12 * gib,
+        "registration immediately reapplies one actual OS constraint across every reusable pool");
+    std::size_t live = 0;
+    shares.registerCache(
+        &live, 20 * gib, [] { return 0; }, [&](const std::size_t bytes) { live = bytes; },
+        MemoryBudgetOwnerKind::LiveWork);
+    expect(live == 20 * gib && first + second + auxiliary <= 8 * gib,
+           "live work stays separately admitted and never reduces reusable shares");
+    static_cast<void>(shares.setCacheCeiling(&first, 6 * gib));
+    expect(first + second + auxiliary <= 8 * gib && first < second,
+           "a target change immediately updates every share of the actual OS constraint");
+    shares.unregisterCache(&auxiliary);
+    expect(first + second <= 8 * gib,
+           "removing a constrained participant restores other shares inside the same OS limit");
+    shares.unregisterCache(&live);
     shares.unregisterCache(&first);
     shares.unregisterCache(&second);
+
+    MemoryBudgetLedger extreme(60 * gib, 60 * gib);
+    extreme.beginProcessSampling();
+    constexpr auto maximum = std::numeric_limits<std::size_t>::max();
+    std::size_t left = 0, right = 0;
+    extreme.registerCache(
+        &left, maximum, [] { return 0; }, [&](const std::size_t bytes) { left = bytes; });
+    extreme.registerCache(
+        &right, maximum, [] { return 0; }, [&](const std::size_t bytes) { right = bytes; });
+    static_cast<void>(extreme.applySample(processSample(maximum, 0, 0), at(0)));
+    expect(left <= maximum - right,
+           "overflow-sized selected targets still share an actual finite OS limit exactly");
 }
 
 int liveProcessProbe() {
@@ -500,7 +527,8 @@ int liveProcessProbe() {
                state.effectiveBytes <= std::size_t{256} * 1024 * 1024 &&
                minimumProcessCacheAllowance(after.process, 0) <=
                    minimumProcessCacheAllowance(before.process, 0),
-           "effective allowance follows measured domain while requested ceiling remains unchanged");
+           "the actual finite domain constrains the target while selected preferences remain "
+           "unchanged");
     return failures == 0 ? 0 : 1;
 #else
     return 77;
@@ -512,10 +540,9 @@ int liveProcessProbe() {
 int main(int argc, char** argv) try {
     if (argc == 2 && std::string_view(argv[1]) == "--live-process-probe")
         return liveProcessProbe();
-    sequence();
+    selectedBudgetLifecycle();
     swapActivityPolicy();
-    ceilings();
-    machineExamplesAndOverflow();
+    selectedTotalsAndHardwareDefaults();
     processAdmissionAndFailures();
     verifiedConstraintRemovalRecovery();
     processHierarchyAndStableFill();

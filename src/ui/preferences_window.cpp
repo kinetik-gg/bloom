@@ -6,6 +6,7 @@
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/radio_group.hpp>
+#include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -22,17 +23,29 @@
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace bloom::ui {
 namespace {
 
 constexpr double kBytesPerGiB = 1024.0 * 1024.0 * 1024.0;
+constexpr auto kMaximumBudgetBytes = std::min<std::uint64_t>(
+    std::numeric_limits<std::uint64_t>::max(), std::numeric_limits<std::size_t>::max());
+constexpr double kMaximumBudgetGiB = static_cast<double>(kMaximumBudgetBytes) / kBytesPerGiB;
+
+[[nodiscard]] std::uint64_t budgetBytesFromGiB(const double value) {
+    const auto bytes = std::round(static_cast<long double>(std::max(0.0, value)) * kBytesPerGiB);
+    return bytes >= static_cast<long double>(kMaximumBudgetBytes)
+               ? kMaximumBudgetBytes
+               : static_cast<std::uint64_t>(bytes);
+}
 
 constexpr auto kRestartBadgeObjectName = "preferencesRestartBadge";
 
@@ -56,12 +69,22 @@ constexpr auto kRestartBadgeObjectName = "preferencesRestartBadge";
     return scroll;
 }
 
+QWidget* addPreferencesRow(QVBoxLayout* layout, QWidget* parent, QLabel* label,
+                           const std::initializer_list<QWidget*> controls) {
+    auto* row = new kit::KPropertyRow(label, nullptr, controls, parent);
+    row->setLabelWidth(kit::px(kit::Size::PreferencesLabelWidth));
+    layout->addWidget(row);
+    return row;
+}
+
 } // namespace
 
 PreferencesWindow::PreferencesWindow(const ApplicationPreferences& current,
                                      const AccelerationStatusProvider* const accelerationStatus,
-                                     QWidget* parent)
-    : QDialog(parent), draft_(current), applied_(current), accelerationStatus_(accelerationStatus) {
+                                     QWidget* parent,
+                                     const runtime::MemoryBudgetLedger& memoryLedger)
+    : QDialog(parent), draft_(current), applied_(current), accelerationStatus_(accelerationStatus),
+      memoryLedger_(memoryLedger) {
     setObjectName(QStringLiteral("preferencesWindow"));
     setWindowTitle(tr("Preferences"));
     resize(880, 620);
@@ -86,6 +109,8 @@ PreferencesWindow::PreferencesWindow(const ApplicationPreferences& current,
     root->addLayout(body, 1);
 
     const auto pages = buildPages();
+    connect(performanceRefreshTimer_, &QTimer::timeout, this,
+            &PreferencesWindow::refreshMemorySummary);
     for (const auto& page : pages) {
         categoryRail_->addOption(page.title);
         pages_->addWidget(page.widget);
@@ -133,6 +158,27 @@ void PreferencesWindow::refreshControls() {
     for (const auto& refresh : refreshCallbacks_) {
         refresh();
     }
+    refreshMemorySummary();
+}
+
+void PreferencesWindow::refreshMemorySummary() {
+    if (memorySummary_ == nullptr)
+        return;
+    const auto allocation =
+        memoryLedger_.allocate(draft_.operationCacheBytes, draft_.ramPreviewBytes);
+    auto summary =
+        tr("Selected budgets: Operation cache %1 GiB · RAM preview %2 GiB.")
+            .arg(static_cast<double>(allocation.operationCacheByteBudget) / kBytesPerGiB, 0, 'f', 2)
+            .arg(static_cast<double>(allocation.previewFrameCacheByteBudget) / kBytesPerGiB, 0, 'f',
+                 2);
+    const auto state = memoryLedger_.state();
+    if (state.awaitingProcessSample)
+        summary += tr("\nChecking system memory limits…");
+    else if (state.processCacheCeilingBytes)
+        summary += tr("\nA system memory limit of %1 GiB applies across caches.")
+                       .arg(static_cast<double>(*state.processCacheCeilingBytes) / kBytesPerGiB, 0,
+                            'f', 2);
+    memorySummary_->setText(summary);
 }
 
 void PreferencesWindow::commitPreferences() {
@@ -157,9 +203,9 @@ kit::KSwitch* PreferencesWindow::addSwitchRow(QVBoxLayout* layout, QWidget* pare
     control->setAccessibleName(label);
     auto* rowLabel = properties::makeRowLabel(label, parent);
     if (restartRequired) {
-        properties::addRow(layout, parent, rowLabel, nullptr, {control, makeRestartBadge(parent)});
+        addPreferencesRow(layout, parent, rowLabel, {control, makeRestartBadge(parent)});
     } else {
-        properties::addRow(layout, parent, rowLabel, nullptr, control);
+        addPreferencesRow(layout, parent, rowLabel, {control});
     }
     return control;
 }
@@ -169,7 +215,7 @@ kit::KDropdown* PreferencesWindow::addDropdownRow(QVBoxLayout* layout, QWidget* 
     auto* control = new kit::KDropdown(parent);
     control->setObjectName(objectName);
     control->setAccessibleName(label);
-    properties::addRow(layout, parent, properties::makeRowLabel(label, parent), nullptr, control);
+    addPreferencesRow(layout, parent, properties::makeRowLabel(label, parent), {control});
     return control;
 }
 
@@ -190,9 +236,9 @@ kit::KValueField* PreferencesWindow::addValueFieldRow(QVBoxLayout* layout, QWidg
     auto* field = properties::makeValueCell(spec, parent);
     auto* rowLabel = properties::makeRowLabel(label, parent);
     if (restartRequired) {
-        properties::addRow(layout, parent, rowLabel, nullptr, {field, makeRestartBadge(parent)});
+        addPreferencesRow(layout, parent, rowLabel, {field, makeRestartBadge(parent)});
     } else {
-        properties::addRow(layout, parent, rowLabel, nullptr, field);
+        addPreferencesRow(layout, parent, rowLabel, {field});
     }
     return field;
 }
@@ -258,7 +304,7 @@ QWidget* PreferencesWindow::buildMemoryPage() {
     layout->setSpacing(kit::px(kit::Spacing::S));
 
     auto* notice = new kit::KLabel(
-        tr("Memory budgets and the disk cache are read when Bloom starts. Changes here take effect "
+        tr("Memory budgets take effect when you click Apply. Disk cache changes take effect "
            "after restart."),
         content);
     notice->setObjectName(QStringLiteral("preferencesRestartNotice"));
@@ -270,13 +316,16 @@ QWidget* PreferencesWindow::buildMemoryPage() {
                                            QStringLiteral("preferences/sections/memory/collapsed"));
     auto* memoryRows = memory->bodyLayout();
 
-    auto* operation =
-        addValueFieldRow(memoryRows, content, QStringLiteral("preferencesOperationCacheBytesField"),
-                         tr("Operation cache budget"), 0.0, 256.0, 2, QStringLiteral("GiB"), true);
+    auto* operation = addValueFieldRow(
+        memoryRows, content, QStringLiteral("preferencesOperationCacheBytesField"),
+        tr("Operation cache budget"), 0.0, kMaximumBudgetGiB, 2, QStringLiteral("GiB"), false);
+    operation->setCompact(false);
+    operation->setSpecialValueText(tr("Automatic"));
+    operation->setFixedWidth(operation->sizeHint().width());
     operation->setValue(static_cast<double>(draft_.operationCacheBytes) / kBytesPerGiB);
     connect(operation, &kit::KValueField::valueChanged, this, [this](const double value) {
-        draft_.operationCacheBytes =
-            static_cast<std::uint64_t>(std::llround(std::max(0.0, value) * kBytesPerGiB));
+        draft_.operationCacheBytes = budgetBytesFromGiB(value);
+        refreshMemorySummary();
         updateApplyEnabled();
     });
     refreshCallbacks_.push_back([this, operation] {
@@ -284,13 +333,16 @@ QWidget* PreferencesWindow::buildMemoryPage() {
         operation->setValue(static_cast<double>(draft_.operationCacheBytes) / kBytesPerGiB);
     });
 
-    auto* ram =
-        addValueFieldRow(memoryRows, content, QStringLiteral("preferencesRamPreviewBytesField"),
-                         tr("RAM preview budget"), 0.0, 256.0, 2, QStringLiteral("GiB"), true);
+    auto* ram = addValueFieldRow(
+        memoryRows, content, QStringLiteral("preferencesRamPreviewBytesField"),
+        tr("RAM preview budget"), 0.0, kMaximumBudgetGiB, 2, QStringLiteral("GiB"), false);
+    ram->setCompact(false);
+    ram->setSpecialValueText(tr("Automatic"));
+    ram->setFixedWidth(ram->sizeHint().width());
     ram->setValue(static_cast<double>(draft_.ramPreviewBytes) / kBytesPerGiB);
     connect(ram, &kit::KValueField::valueChanged, this, [this](const double value) {
-        draft_.ramPreviewBytes =
-            static_cast<std::uint64_t>(std::llround(std::max(0.0, value) * kBytesPerGiB));
+        draft_.ramPreviewBytes = budgetBytesFromGiB(value);
+        refreshMemorySummary();
         updateApplyEnabled();
     });
     refreshCallbacks_.push_back([this, ram] {
@@ -298,11 +350,15 @@ QWidget* PreferencesWindow::buildMemoryPage() {
         ram->setValue(static_cast<double>(draft_.ramPreviewBytes) / kBytesPerGiB);
     });
 
-    auto* hint =
-        new kit::KLabel(tr("A budget of 0 GiB uses the machine-derived default."), content);
+    auto* hint = new kit::KLabel(
+        tr("Automatic chooses a budget for this machine. Enter 0 to restore Automatic."), content);
     hint->setObjectName(QStringLiteral("preferencesMemoryHint"));
     hint->setWordWrap(true);
     memoryRows->addWidget(hint);
+    memorySummary_ = new kit::KLabel(content);
+    memorySummary_->setObjectName(QStringLiteral("preferencesMemorySummary"));
+    memorySummary_->setWordWrap(true);
+    memoryRows->addWidget(memorySummary_);
 
     auto* disk = properties::makeSection(
         layout, content, QStringLiteral("preferencesMediaCacheSection"), tr("Media disk cache"),
@@ -346,16 +402,18 @@ QWidget* PreferencesWindow::buildMemoryPage() {
         const QSignalBlocker blocker(directory);
         directory->setText(QString::fromStdString(draft_.mediaDiskCacheDirectory));
     });
-    properties::addRow(diskRows, content, properties::makeRowLabel(tr("Cache directory"), content),
-                       nullptr, {directory, browse});
+    addPreferencesRow(diskRows, content, properties::makeRowLabel(tr("Cache directory"), content),
+                      {directory, browse, makeRestartBadge(content)});
 
-    auto* budget =
-        addValueFieldRow(diskRows, content, QStringLiteral("preferencesMediaDiskCacheBudgetField"),
-                         tr("Disk cache budget"), 0.0, 1024.0, 2, QStringLiteral("GiB"), true);
+    auto* budget = addValueFieldRow(
+        diskRows, content, QStringLiteral("preferencesMediaDiskCacheBudgetField"),
+        tr("Disk cache budget"), 0.0, kMaximumBudgetGiB, 2, QStringLiteral("GiB"), true);
+    budget->setCompact(false);
+    budget->setSpecialValueText(tr("Automatic"));
+    budget->setFixedWidth(budget->sizeHint().width());
     budget->setValue(static_cast<double>(draft_.mediaDiskCacheBudgetBytes) / kBytesPerGiB);
     connect(budget, &kit::KValueField::valueChanged, this, [this](const double value) {
-        draft_.mediaDiskCacheBudgetBytes =
-            static_cast<std::uint64_t>(std::llround(std::max(0.0, value) * kBytesPerGiB));
+        draft_.mediaDiskCacheBudgetBytes = budgetBytesFromGiB(value);
         updateApplyEnabled();
     });
     refreshCallbacks_.push_back([this, budget] {
@@ -450,7 +508,11 @@ QWidget* PreferencesWindow::buildTimelinePage() {
 
     auto* width =
         addValueFieldRow(rows, content, QStringLiteral("preferencesTimelineLayerColumnWidthField"),
-                         tr("Layer column width"), 80.0, 600.0, 0, QStringLiteral("px"), false);
+                         tr("Layer column width"), 0.0, std::numeric_limits<int>::max(), 0,
+                         QStringLiteral("px"), false);
+    width->setCompact(false);
+    width->setSpecialValueText(tr("Automatic"));
+    width->setFixedWidth(width->sizeHint().width());
     width->setValue(static_cast<double>(draft_.timelineLayerColumnWidth));
     connect(width, &kit::KValueField::valueChanged, this, [this](const double value) {
         draft_.timelineLayerColumnWidth = static_cast<int>(std::llround(value));
@@ -513,7 +575,8 @@ QWidget* PreferencesWindow::buildNodeGraphPage() {
     });
 
     auto* grid = addValueFieldRow(rows, content, QStringLiteral("preferencesNodeGridSizeField"),
-                                  tr("Grid size"), 2.0, 200.0, 0, QStringLiteral("px"), false);
+                                  tr("Grid size"), 1.0, std::numeric_limits<double>::max(), 2,
+                                  QStringLiteral("px"), false);
     grid->setValue(draft_.nodeGridSize);
     connect(grid, &kit::KValueField::valueChanged, this, [this](const double value) {
         draft_.nodeGridSize = std::max(1.0, value);

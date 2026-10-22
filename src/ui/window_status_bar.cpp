@@ -358,12 +358,12 @@ void WindowStatusBar::applyMemoryPressure(runtime::MachineMemorySample sample,
 
 void WindowStatusBar::reportMemoryState(const runtime::MemoryBudgetState& state) {
     if (state.memoryNotice)
-        showTransientMessage(tr("Memory pressure: caches trimmed"));
+        showTransientMessage(tr("Cache budget reduced by system memory limit"));
     if (state.swapNotice) {
         if (state.memoryNotice)
             pendingSwapNotice_ = true;
         else
-            showTransientMessage(tr("Swap pressure: caches trimmed"));
+            showTransientMessage(tr("Swap usage is increasing"));
     }
     refreshMemoryToolTip();
     refreshPreviewCells();
@@ -373,40 +373,52 @@ void WindowStatusBar::refreshMemoryToolTip() {
     const auto state = memoryLedger_.state();
     const auto available = state.machine.availableBytes ? formatBytes(*state.machine.availableBytes)
                                                         : tr("Unavailable");
-    const auto pressure = state.swapPressure             ? tr("Swap pressure")
-                          : state.memoryPressure         ? tr("Memory pressure")
-                          : state.retentionPercent < 100 ? tr("Recovering")
-                                                         : tr("Normal");
-    QString process;
-    if (state.awaitingProcessSample)
-        process = tr("Waiting for process-limit sample");
-    else if (state.process.status == runtime::ProcessMemoryStatus::Unsupported)
-        process = tr("Host-only fallback: process limits unavailable");
-    else if (state.process.status == runtime::ProcessMemoryStatus::NoFiniteVisibleLimit)
-        process = tr("No finite limit in the visible cgroup hierarchy");
-    else if (state.process.status == runtime::ProcessMemoryStatus::Finite &&
-             state.processSampleFresh)
-        process = tr("Linux cgroup v2 limits sampled");
-    else
-        process = tr("Incomplete or stale process sample: previous constraint retained");
-    const auto ceiling = state.processCacheCeilingBytes
-                             ? formatBytes(*state.processCacheCeilingBytes)
-                             : tr("Unavailable");
-    cache_->setToolTip(tr("RAM preview and operation-cache statistics.\n"
-                          "Effective reusable cache allowance: %1 · Configured cache ceiling: %2\n"
-                          "MemAvailable: %3 · Pressure state: %4\n"
-                          "Cache admission: %5% of effective budgets\n"
-                          "%6 · Process cache ceiling: %7\n"
-                          "Live processing uses separate bounded admission")
-                           .arg(formatBytes(state.effectiveBytes),
-                                formatBytes(state.configuredBytes), available, pressure)
-                           .arg(state.retentionPercent)
-                           .arg(process, ceiling));
+    QString reason;
+    if (state.awaitingProcessSample) {
+        reason = tr("Checking system memory limits…");
+    } else if (state.processCacheCeilingBytes) {
+        reason = tr("A system memory limit of %1 applies to combined cache budgets.")
+                     .arg(formatBytes(*state.processCacheCeilingBytes));
+        if (!state.processSampleFresh)
+            reason +=
+                tr(" The last verified limit remains in effect until it can be checked again.");
+    } else if (state.process.status == runtime::ProcessMemoryStatus::NoFiniteVisibleLimit) {
+        reason = tr("No system memory limit was found.");
+    } else {
+        reason = tr("System memory limits are unavailable on this system.");
+    }
+    QString current;
+    if (previewController_ != nullptr)
+        current =
+            tr("RAM preview: %1").arg(formatBytes(previewController_->frameCache().byteBudget()));
+    if (operationCache_ != nullptr) {
+        if (!current.isEmpty())
+            current += tr(" · ");
+        current += tr("Operation cache: %1").arg(formatBytes(operationCache_->byteBudget()));
+    }
+    if (current.isEmpty())
+        current = tr("No active caches");
+    auto tooltip = tr("RAM preview and operation-cache statistics.\n"
+                      "Current cache budget: %1\n"
+                      "Requested cache total: %2 · Available memory: %3\n%4")
+                       .arg(current, formatBytes(state.configuredBytes), available, reason);
+    if (previewController_ != nullptr) {
+        if (const auto& progress = previewController_->ramPreviewProgress(); progress) {
+            tooltip += tr("\n\n%1 retained of %2 requested\n%3 prepared this run\n"
+                          "Longest cached span: %4 frames")
+                           .arg(progress->cachedFrames)
+                           .arg(progress->totalFrames)
+                           .arg(progress->preparedFrames)
+                           .arg(progress->playableFrames);
+        }
+    }
+    cache_->setToolTip(tooltip);
 }
 
 QString WindowStatusBar::cacheToolTipForTest() const { return cache_->toolTip(); }
 
 void WindowStatusBar::refreshPreviewCells() {
+    refreshMemoryToolTip();
     if (!displayedViewer_)
         refreshProbeCell({});
     if (previewController_ == nullptr) {
@@ -455,16 +467,6 @@ void WindowStatusBar::refreshPreviewCells() {
                                                       : kit::color(kit::Color::Warn));
     droppedFrames_->setPalette(droppedPalette);
 
-    if (const auto& progress = previewController_->ramPreviewProgress(); progress) {
-        cache_->setToolTip(
-            tr("%1 retained of %2 requested\n%3 prepared this run\nLongest cached span: %4 frames")
-                .arg(progress->cachedFrames)
-                .arg(progress->totalFrames)
-                .arg(progress->preparedFrames)
-                .arg(progress->playableFrames));
-    } else {
-        refreshMemoryToolTip();
-    }
     const auto previewText = previewCacheText(*previewController_);
     const auto operationText =
         operationCache_ == nullptr ? QString{} : operationCacheText(*operationCache_);
@@ -520,7 +522,7 @@ void WindowStatusBar::clearTransientMessage() {
     refreshMessage();
     if (pendingSwapNotice_) {
         pendingSwapNotice_ = false;
-        showTransientMessage(tr("Swap pressure: caches trimmed"));
+        showTransientMessage(tr("Swap usage is increasing"));
     }
 }
 

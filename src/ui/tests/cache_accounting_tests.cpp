@@ -43,6 +43,7 @@
 #include <map>
 #include <memory>
 #include <new>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -105,6 +106,25 @@ constexpr std::uint32_t kUhdHeight = 2160;
 constexpr std::size_t kUhdBytes =
     std::size_t{kUhdWidth} * kUhdHeight * 4U * sizeof(float); // 126.6 MiB
 constexpr int kImportedImages = 200;
+
+[[nodiscard]] runtime::MemoryBudgetSample
+memorySample(const std::optional<std::size_t> limit,
+             const runtime::MemoryBudgetLedger::Clock::time_point now) {
+    runtime::MemoryBudgetSample sample;
+    sample.physicalBytes = 16 * 1024 * kMebibyte;
+    sample.machine.availableBytes = sample.physicalBytes;
+    sample.process.sampledAt = now;
+    sample.process.source = limit ? runtime::ProcessMemorySource::LinuxCgroupV2
+                                  : runtime::ProcessMemorySource::OtherHostOnly;
+    sample.process.status =
+        limit ? runtime::ProcessMemoryStatus::Finite : runtime::ProcessMemoryStatus::Unsupported;
+    if (limit) {
+        sample.process.membershipPath = "/cache-fixture";
+        sample.process.domains = {
+            {"/cache-fixture", runtime::ProcessMemoryLimitKind::Finite, *limit, 0}};
+    }
+    return sample;
+}
 
 // Resident set size in bytes, or 0 where the platform does not report one. Only Linux is asserted
 // against: this is the only target whose RSS is readable without a platform API, and the budgets it
@@ -249,8 +269,8 @@ void testTwoHundredUhdImportsStayInsideEveryBudget(Expectations& check) {
     }
 }
 
-// CACHEFIX-2: change the machine while imports continue, then keep offering frames after both
-// pressure polls. This catches a trim-only implementation that immediately refills the cache.
+// Keep importing through host contention and a real finite-limit change. Host free-memory
+// readings preserve selected targets; an actual OS limit reduces admission as well as retention.
 void testContentionDuringTwoHundredImports(Expectations& check) {
     constexpr auto gib = 1024 * kMebibyte;
     constexpr auto operationBudget = 640 * kMebibyte;
@@ -259,6 +279,9 @@ void testContentionDuringTwoHundredImports(Expectations& check) {
     constexpr auto trackedBudget = operationBudget + videoBudget + queueBudget;
     constexpr auto slack = 256 * kMebibyte;
     runtime::MemoryBudgetLedger ledger(16 * gib, 16 * gib);
+    const auto origin = runtime::MemoryBudgetLedger::Clock::time_point{};
+    ledger.beginProcessSampling();
+    static_cast<void>(ledger.applySample(memorySample({}, origin), origin));
     runtime::OperationCache operations(operationBudget, ledger);
     bloom::media::video::DecodedVideoCache video(videoBudget, ledger);
     ScratchDirectory scratch("cachefix2-contention");
@@ -269,6 +292,7 @@ void testContentionDuringTwoHundredImports(Expectations& check) {
     const auto baseline = residentBytes();
     auto peak = baseline;
     std::size_t before = 0, first = 0, second = 0;
+    std::size_t operationBytesBeforeLimit = 0;
     const auto tracked = [&] {
         return operations.retainedBytes() + video.residentBytes() +
                disk.statistics().asyncQueueBytes;
@@ -301,22 +325,33 @@ void testContentionDuringTwoHundredImports(Expectations& check) {
             const auto state = ledger.poll({.availableBytes = 2 * gib},
                                            runtime::MemoryBudgetLedger::Clock::time_point{});
             first = tracked();
-            check.expect(state.retentionPercent == 25 && first <= trackedBudget / 4,
-                         "first contention poll trims all tracked caches below 25 percent");
+            check.expect(state.retentionPercent == 100 && !state.memoryPressure &&
+                             first == before && operations.byteBudget() == operationBudget &&
+                             video.byteBudget() == videoBudget &&
+                             disk.asyncQueueByteCapacity() == queueBudget,
+                         "host contention preserves real retained frames and exact owner targets");
+            operationBytesBeforeLimit = operations.retainedBytes();
         }
         if (index == 100) {
-            const auto state = ledger.poll({.availableBytes = 2 * gib},
-                                           runtime::MemoryBudgetLedger::Clock::time_point{} +
-                                               std::chrono::seconds(5));
+            const auto state = ledger.applySample(
+                memorySample(trackedBudget / 10, origin + std::chrono::seconds(5)),
+                origin + std::chrono::seconds(5));
             second = tracked();
-            check.expect(state.retentionPercent == 10 && second < trackedBudget / 4,
-                         "within two polls tracked bytes are below 25 percent despite new offers");
+            check.expect(
+                state.retentionPercent == 100 &&
+                    state.processCacheCeilingBytes == trackedBudget / 10 &&
+                    second <= trackedBudget / 10 &&
+                    operations.byteBudget() + video.byteBudget() + disk.asyncQueueByteCapacity() <=
+                        trackedBudget / 10,
+                "an actual finite OS limit reduces all shared owner budgets and retained bytes");
+            check.expect(
+                operationBytesBeforeLimit > 0 && operations.retainedBytes() == 0,
+                "real operation and decoded-media entries are released when the OS limit falls");
         }
         if (index >= 100)
             check.expect(tracked() <= trackedBudget / 10,
-                         "continuing imports cannot refill beyond the persistent pressure limit");
+                         "continuing imports cannot refill beyond the actual shared OS limit");
     }
-    check.expect(operations.statistics().pressureDrops > 0, "real cache entries were evicted");
     check.expect(disk.asyncQueueByteCapacity() <= queueBudget / 10,
                  "disk queue admission follows the same ledger callback");
     if (baseline != 0 && peak != 0)
@@ -486,6 +521,10 @@ void testAssetProxyAndAudioParticipation(Expectations& check) {
     runtime::TaskSchedulerConfig config;
     config.cpuWorkerCount = 1;
     config.blockingIoWorkerCount = 1;
+    auto& ledger = runtime::processMemoryBudgetLedger();
+    const auto admittedAt = runtime::MemoryBudgetLedger::Clock::now();
+    ledger.beginProcessSampling();
+    static_cast<void>(ledger.applySample(memorySample({}, admittedAt), admittedAt));
     runtime::TaskScheduler scheduler(config);
     bloom::ui::ProjectHost host(scheduler);
     bloom::ui::CompositionSession session(*host.liveDocumentAndStack().first,
@@ -501,20 +540,17 @@ void testAssetProxyAndAudioParticipation(Expectations& check) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     check.expect(assets.proxyCacheBytes() > 0 && assets.decodedAudioBytes() > 0,
                  "real asset controller retains decoded proxy and audio bytes");
-    // Give another participant almost all the configured weight, so tiny real fixtures can test
-    // eviction without allocating gigabytes of audio. It owns no storage itself.
-    auto& ledger = runtime::processMemoryBudgetLedger();
-    const int competingPool = 0;
-    ledger.registerCache(
-        &competingPool, std::size_t{1} << 50U, [] { return 0; }, [](std::size_t) {});
-    static_cast<void>(ledger.poll({.availableBytes = 0}));
-    static_cast<void>(ledger.poll({.availableBytes = 0}));
+    // Explicit finite zero applies through the actual owner callbacks; no invented competing
+    // weight or free-memory policy is needed to evict these small real fixtures.
+    const auto constrainedAt = runtime::MemoryBudgetLedger::Clock::now();
+    const auto constrained = ledger.applySample(memorySample(0, constrainedAt), constrainedAt);
+    check.expect(!constrained.awaitingProcessSample && constrained.processCacheCeilingBytes == 0,
+                 "the cache-owner fixture applies an actual finite-zero OS constraint");
     check.expect(assets.proxyCacheBytes() == 0 && assets.decodedAudioBytes() == 0,
                  "proxy and audio owners evict through the same ledger callbacks");
     for (const auto& asset : session.snapshot().project().assets())
         check.expect(assets.thumbnail(asset.id).isNull() && !assets.audioBuffer(asset.id),
                      "eviction also releases thumbnail aliases and audio lookup handles");
-    ledger.unregisterCache(&competingPool);
     assets.cancel();
     bridge.beginShutdown();
     scheduler.beginShutdown();
@@ -522,7 +558,7 @@ void testAssetProxyAndAudioParticipation(Expectations& check) {
     while (!scheduler.isQuiescent() && timer.elapsed() < 15000)
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     check.expect(scheduler.isQuiescent(),
-                 "pressure cancellation leaves media tasks safe to shut down");
+                 "finite-limit eviction and cancellation leave media tasks safe to shut down");
 }
 
 } // namespace

@@ -16,20 +16,19 @@ saves without closing; Cancel discards anything not applied.
 | Page | What it controls | When it takes effect |
 | --- | --- | --- |
 | General | Audio playback, loop playback | Immediately |
-| Memory & Caches | Operation-cache and RAM-preview budgets, media disk cache enable/directory/budget | After restart |
+| Memory & Caches | Operation-cache and RAM-preview budgets, media disk cache enable/directory/budget | Memory budgets immediately; disk cache after restart |
 | Timeline | Time format, snapping, keyframes, graph editor, layer column width | Immediately |
 | Node Graph | Link style, snap to grid, grid size | Immediately |
 | Viewer | Resolution, background, and the safe-areas, centre-cross, thirds, rulers and pixel-grid overlays | Immediately |
 | Performance | Read-only acceleration status | Not a preference |
 
 Immediate changes reach every open panel: the window hands the committed value to each editor,
-which applies it through the same setters its own menus use. A value marked **Restart** (the memory
-budgets and the disk cache) is read once when Bloom starts, so changing it does not reconfigure the
-running session.
+which applies it through the same setters its own menus use. Memory budgets update the running cache owners on Apply. Values marked **Restart** (the disk
+cache enable, location and disk-space budget) are read when Bloom starts.
 
 ## Memory and disk budgets
 
-A budget of 0 means "use the machine-derived default". See [Memory](memory.md) for how Bloom derives
+**Automatic** (stored as 0) selects the machine-derived default. See [Memory](memory.md) for how Bloom derives
 the defaults, and for the two cache ceilings. The disk cache can be purged at any time from
 **Edit → Purge… → Purge media cache**, which clears the on-disk store and the applicable in-memory
 decoded media off the interface thread; the source files are never changed.

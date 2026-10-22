@@ -528,20 +528,46 @@ void testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(Expectations& expecta
         constexpr auto gib = std::size_t{1024} * 1024 * 1024;
         runtime::MemoryBudgetLedger ledger(16 * gib, 16 * gib);
         ledger.setConfiguredTotal(frameBytes * 4);
+        const auto origin = runtime::MemoryBudgetLedger::Clock::time_point{};
+        runtime::MemoryBudgetSample measured;
+        measured.physicalBytes = 16 * gib;
+        measured.machine.availableBytes = 16 * gib;
+        measured.process.source = runtime::ProcessMemorySource::OtherHostOnly;
+        measured.process.status = runtime::ProcessMemoryStatus::Unsupported;
+        measured.process.sampledAt = origin;
+        ledger.beginProcessSampling();
+        static_cast<void>(ledger.applySample(measured, origin));
         ui::PreviewFrameCache participating(frameBytes * 4, ledger);
         for (const auto& frame : frames)
             participating.insert(frame);
-        const auto state = ledger.poll({.availableBytes = gib});
-        expectations.expect(state.retentionPercent == 25 &&
-                                participating.residentBytes() <= frameBytes &&
-                                participating.byteBudget() <= frameBytes,
-                            "the shared ledger trims preview storage and admission together");
+        const auto heldBeforeContention = participating.residentBytes();
+        const auto state = ledger.poll({.availableBytes = gib}, origin);
+        expectations.expect(
+            state.retentionPercent == 100 && !state.memoryPressure &&
+                participating.residentBytes() == heldBeforeContention &&
+                participating.byteBudget() == frameBytes * 4,
+            "host contention preserves the selected preview budget and cached frames");
+        // Only a real finite system limit reduces reusable admission. The frame handles retained
+        // by the fixture remain valid when the cache drops its own references.
+        measured.process.source = runtime::ProcessMemorySource::LinuxCgroupV2;
+        measured.process.status = runtime::ProcessMemoryStatus::Finite;
+        measured.process.membershipPath = "/preview-cache-fixture";
+        measured.process.domains = {
+            {"/preview-cache-fixture", runtime::ProcessMemoryLimitKind::Finite, frameBytes, 0}};
+        measured.process.sampledAt = origin + std::chrono::seconds(1);
+        static_cast<void>(ledger.applySample(measured, measured.process.sampledAt));
+        expectations.expect(
+            participating.residentBytes() == frameBytes && participating.byteBudget() == frameBytes,
+            "an actual finite system limit trims preview storage and admission together");
+        measured.process.domains[0].limitBytes = frameBytes - 1;
+        measured.process.sampledAt = origin + std::chrono::seconds(2);
+        static_cast<void>(ledger.applySample(measured, measured.process.sampledAt));
         for (const auto& frame : frames)
             participating.insert(frame);
-        static_cast<void>(ledger.poll({.availableBytes = gib}));
-        expectations.expect(participating.residentBytes() == 0 &&
-                                participating.byteBudget() < frameBytes,
-                            "two pressure polls prevent the preview cache from refilling");
+        expectations.expect(
+            participating.residentBytes() == 0 && participating.byteBudget() == frameBytes - 1 &&
+                frames.front()->displayBufferView().has_value(),
+            "a finite limit below one frame prevents refill while caller-held pixels survive");
     }
 
     // A standalone cache with no temporal provenance policy keeps the original conservative rule: a
@@ -878,7 +904,7 @@ void testDefaultBudgetFollowsPhysicalMemory(Expectations& expectations) {
     expectations.expect(budget >= ui::kMinimumPreviewFrameCacheByteBudget,
                         "the default RAM preview budget never drops below the floor");
     expectations.expect(budget == allocation.previewFrameCacheByteBudget,
-                        "the preview cache uses the ledger's effective allocation");
+                        "the preview cache uses the ledger's stable automatic selection");
     expectations.expect(allocation.operationCacheByteBudget +
                                 allocation.previewFrameCacheByteBudget <=
                             allocation.usableByteBudget,

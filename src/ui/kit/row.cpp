@@ -112,6 +112,11 @@ void KPropertyRow::setLineCount(int lines) {
     setProperty("rowLines", count);
     setFixedHeight(px(Size::PropertyRow) * count);
 }
+void KPropertyRow::setLabelWidth(const int width) {
+    labelWidth_ = std::max(0, width);
+    label_->setFixedWidth(labelWidth_ > 0 ? labelWidth_ : px(Size::PropertiesLabelWidth));
+    updateGeometry();
+}
 QSize KPropertyRow::minimumSizeHint() const {
     auto size = QWidget::minimumSizeHint();
     size.setWidth(size.width() - label_->width() + px(Size::PropertiesLabelMinWidth) -
@@ -124,8 +129,10 @@ void KPropertyRow::resizeEvent(QResizeEvent* event) {
         QWidget::resizeEvent(event);
         return;
     }
-    label_->setFixedWidth(px(width() < px(Size::PanelMinWidth) ? Size::PropertiesLabelMinWidth
-                                                               : Size::PropertiesLabelWidth));
+    label_->setFixedWidth(labelWidth_ > 0
+                              ? labelWidth_
+                              : px(width() < px(Size::PanelMinWidth) ? Size::PropertiesLabelMinWidth
+                                                                     : Size::PropertiesLabelWidth));
     QWidget::resizeEvent(event);
 }
 KRow::KRow(QWidget* parent) : QWidget(parent), row_(new QHBoxLayout(this)) {

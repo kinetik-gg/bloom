@@ -66,6 +66,9 @@ class GpuProcessingPhasePolicy final {
     [[nodiscard]] const std::shared_ptr<TaskBudgetView>& budgetView() const noexcept {
         return budgetView_;
     }
+    // Re-report the same ownership epoch as live free capacity changes. Single-owner live reports
+    // reconcile exact root-owned local native backing with the root's existing claim ledger;
+    // unallocated phase reservations and multi-device ownership receive no such credit.
     [[nodiscard]] bool reportDevice(std::uint64_t ownershipEpoch,
                                     render::GpuAllocationBudget) noexcept;
     // A proven owner teardown removes its report. Unproven generations remain bounded/charged;

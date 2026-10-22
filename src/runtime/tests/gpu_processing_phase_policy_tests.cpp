@@ -56,12 +56,10 @@ void lowMemoryHostFinalAdmission() {
         if (finiteAllowance) {
             reading.process.source = ProcessMemorySource::LinuxCgroupV2;
             reading.process.status = ProcessMemoryStatus::Finite;
-            reading.process.domains.push_back(
-                {.path = "/own",
-                 .kind = ProcessMemoryLimitKind::Finite,
-                 .limitBytes = 4 * gib,
-                 .currentBytes =
-                     4 * gib - reserveForProcessMemoryLimit(4 * gib) - *finiteAllowance});
+            reading.process.domains.push_back({.path = "/own",
+                                               .kind = ProcessMemoryLimitKind::Finite,
+                                               .limitBytes = 4 * gib,
+                                               .currentBytes = 4 * gib - *finiteAllowance});
         }
         MemoryBudgetLedger ledger(physical, available.value_or(0));
         ledger.beginProcessSampling();
@@ -77,8 +75,8 @@ void lowMemoryHostFinalAdmission() {
         GpuProcessingPhasePolicy policy;
         deliver(policy, physical, physical);
         require(policy.snapshot().reservations.hostReady &&
-                    policy.snapshot().reservations.hostCapacityBytes == kFallbackUsableMemoryBudget,
-                "7/8GiB host-only processing respects the existing usable-memory floor");
+                    policy.snapshot().reservations.hostCapacityBytes == physical,
+                "small hosts expose measured headroom without a hidden reserve");
         auto grant = final(policy);
         require(grant.status == GpuProcessingPhaseAdmission::Accepted && grant.lease &&
                     grant.lease->sourceByteLimit() >= 64ULL * 48 * 16,
@@ -88,8 +86,7 @@ void lowMemoryHostFinalAdmission() {
                 "small-host final admission releases its exact conservative claim");
         GpuProcessingPhasePolicy oversampled;
         deliver(oversampled, physical, physical * 2);
-        require(oversampled.snapshot().reservations.hostCapacityBytes ==
-                    kFallbackUsableMemoryBudget,
+        require(oversampled.snapshot().reservations.hostCapacityBytes == physical,
                 "overlapping machine counters cannot exceed physically bounded usable memory");
         require(policy.reserve({.pixels = 1, .sourceFree = true, .native = false},
                                now + std::chrono::seconds(11))
@@ -101,7 +98,7 @@ void lowMemoryHostFinalAdmission() {
         GpuProcessingPhasePolicy policy;
         deliver(policy, smallPhysical, available);
         require(policy.snapshot().reservations.hostReady &&
-                    policy.snapshot().reservations.hostCapacityBytes == available * 4 / 5 &&
+                    policy.snapshot().reservations.hostCapacityBytes == available &&
                     final(policy).status == GpuProcessingPhaseAdmission::BudgetRefused,
                 "measured zero and low availability still refuse the actual final minimum");
     }
@@ -128,13 +125,12 @@ void lowMemoryHostFinalAdmission() {
             "a nonfresh delivered sample cannot authorize small-host processing");
     GpuProcessingPhasePolicy unknownPhysical;
     deliver(unknownPhysical, 0, smallPhysical);
-    require(unknownPhysical.snapshot().reservations.hostCapacityBytes ==
-                    kFallbackUsableMemoryBudget &&
+    require(unknownPhysical.snapshot().reservations.hostCapacityBytes == smallPhysical &&
                 final(unknownPhysical).status == GpuProcessingPhaseAdmission::Accepted,
-            "unknown physical capacity caps fresh measured headroom at the fallback ceiling");
+            "unknown physical capacity does not discard valid measured headroom");
     GpuProcessingPhasePolicy unknownPhysicalLow;
     deliver(unknownPhysicalLow, 0, 32 * mib);
-    require(unknownPhysicalLow.snapshot().reservations.hostCapacityBytes == 32 * mib * 4 / 5 &&
+    require(unknownPhysicalLow.snapshot().reservations.hostCapacityBytes == 32 * mib &&
                 final(unknownPhysicalLow).status == GpuProcessingPhaseAdmission::BudgetRefused,
             "unknown physical capacity never promotes low availability to the fallback ceiling");
     GpuProcessingPhasePolicy ordinary;
@@ -153,7 +149,7 @@ void lowMemoryHostFinalAdmission() {
     finite.process.domains.push_back({.path = "/ancestor",
                                       .kind = ProcessMemoryLimitKind::Finite,
                                       .limitBytes = 16 * gib,
-                                      .currentBytes = 15 * gib - 32 * mib});
+                                      .currentBytes = 16 * gib - 32 * mib});
     GpuProcessingPhasePolicy ancestor;
     ancestor.applyHostSample(finite, 64 * gib, now);
     require(ancestor.snapshot().reservations.hostCapacityBytes == 32 * mib &&
@@ -173,10 +169,10 @@ void liveHeadroomDuringCachePressure() {
     auto delivered = ledger.applySample(reading, now);
     GpuProcessingPhasePolicy policy(2);
     policy.applyHostSample(delivered, reading.physicalBytes, now);
-    require(delivered.memoryPressure && delivered.retentionPercent == 25 &&
+    require(!delivered.memoryPressure && delivered.retentionPercent == 100 &&
                 delivered.reusableHostCreditBytes == 0 &&
-                policy.snapshot().reservations.hostCapacityBytes == 22 * gib * 4 / 5,
-            "64GiB/22GiB trims caches while retaining bounded live processing headroom");
+                policy.snapshot().reservations.hostCapacityBytes == 22 * gib,
+            "64GiB/22GiB preserves cache targets and exposes real processing headroom");
     auto cpu = reserveHostEvaluationPhase(policy, 1920ULL * 1080, gib,
                                           GpuProcessingPhaseOutput::FloatFinal);
     require(policy.reportDevice(1, {.source = GpuAllocationBudgetSource::MemoryBudget,
@@ -185,7 +181,7 @@ void liveHeadroomDuringCachePressure() {
             "live native owner supplies its separate device allowance");
     auto native = policy.reserve(preview(), now);
     require(cpu.lease && native.lease,
-            "CPU final and native preview both fit during cache-pressure trimming");
+            "CPU final and native preview fit within shared measured headroom");
     require(policy.reserve(preview(), now).domain == GpuProcessingPhaseDomain::RequestCount,
             "positive host capacity does not bypass request-count bounds");
     const auto held = policy.snapshot().reservations;
@@ -232,8 +228,8 @@ void policy() {
                                     .available_bytes = gib}),
             "first native owner reports its own budget");
     auto grant = policy.reserve(preview(), now);
-    require(grant.lease && policy.snapshot().reservations.hostCapacityBytes == gib,
-            "paired 8GiB/6GiB process reserve limits host envelope to1GiB");
+    require(grant.lease && policy.snapshot().reservations.hostCapacityBytes == 2 * gib,
+            "paired 8GiB/6GiB process counters expose the actual2GiB remaining");
     require(grant.lease->hostBytes() == 1920ULL * 1080 * 8 + 4096,
             "source-free1080 minimum admits under previous1GiB cap");
     grant.lease.reset();
@@ -297,6 +293,67 @@ void policy() {
             "a retired unavailable generation cannot block live replacement forever");
     require(policy.reserve(hostOnly, activeNow).lease != nullptr,
             "CPU route remains host admitted independently of native availability");
+}
+void deviceReportRecoversAfterPressure() {
+    const auto now = GpuProcessingPhasePolicy::Clock::now();
+    GpuProcessingPhasePolicy policy;
+    policy.applyHostSample(sample(now), 60 * gib, now);
+    const GpuAllocationBudget zero{.source = GpuAllocationBudgetSource::MemoryBudget,
+                                   .device_local_bytes = 8 * gib,
+                                   .available_bytes = 0};
+    require(policy.reportDevice(90, zero), "zero free device capacity is reported");
+    require(policy.reserve(preview(), now).status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "a startup zero cannot admit a native phase");
+    auto free = zero;
+    free.available_bytes = gib;
+    require(policy.reportDevice(90, free), "same owner refreshes its live free capacity");
+    auto active = policy.reserve(preview(), now);
+    require(active.lease != nullptr, "native phase recovers after a zero startup sample");
+    free.available_bytes = 64 * 1024 * 1024;
+    require(policy.reportDevice(90, free), "pressure refresh preserves the owner report slot");
+    require(policy.reserve(preview(), now).status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "live free bytes do not credit held phase claims to new work");
+    active.lease.reset();
+    free.available_bytes = gib;
+    require(policy.reportDevice(90, free) && policy.reserve(preview(), now).lease != nullptr,
+            "proven release and recovered free capacity admit the next native phase");
+}
+void liveDeviceReportCreditsOnlyOwnedNativeBacking() {
+    const auto now = GpuProcessingPhasePolicy::Clock::now();
+    GpuProcessingPhasePolicy policy;
+    policy.applyHostSample(sample(now), 60 * gib, now);
+    GpuAllocationBudget report{.source = GpuAllocationBudgetSource::MemoryBudget,
+                               .device_local_bytes = 8 * gib,
+                               .available_bytes = gib};
+    require(policy.reportDevice(91, report), "one native owner reports live free bytes");
+    auto phase = policy.reserve(preview(), now);
+    require(phase.lease != nullptr, "the native phase has a real reserved envelope");
+    const auto held = policy.snapshot().reservations.totalDeviceClaimBytes;
+    constexpr std::uint64_t backing = 16 * 1024 * 1024;
+    auto image = NativeImageStorageToken::reserve(phase.lease, backing,
+                                                  NativeImageStorageIdentity{91, 1, 0, true}, now);
+    require(image.token.has_value() && image.token->promote(),
+            "the phase publishes exact local native image ownership");
+    phase.lease.reset();
+    report.available_bytes -= backing;
+    require(policy.reportDevice(91, report), "the owner refreshes VMA free after allocation");
+    const auto after = policy.snapshot().reservations;
+    require(after.ownedNativeImageBytes == backing && after.totalDeviceClaimBytes == backing &&
+                after.deviceCapacityBytes == gib,
+            "only allocated root ownership is credited against VMA free, not the old phase claim");
+    require(held > backing && policy.reserve(preview(), now).lease != nullptr,
+            "retained backing does not permanently double-charge the recovered free bytes");
+    require(policy.reportDevice(92, report) &&
+                policy.snapshot().reservations.deviceCapacityBytes == gib - backing,
+            "multiple owners never receive unproven cross-device ownership credit");
+    require(policy.retireDeviceReport(92, true) &&
+                policy.snapshot().reservations.deviceCapacityBytes == gib,
+            "retiring the second owner restores exact single-owner accounting");
+    image.token.reset();
+    report.available_bytes += backing;
+    require(policy.reportDevice(91, report) &&
+                policy.snapshot().reservations.totalDeviceClaimBytes == 0,
+            "native release removes its exact claim before the next report");
 }
 void nativeSupplementDeadline() {
     const auto now = GpuProcessingPhasePolicy::Clock::now();
@@ -487,7 +544,7 @@ void deliveredNumericView() {
     auto view = std::make_shared<TaskBudgetView>();
     GpuProcessingPhasePolicy policy(4, {}, view);
     require(!view->load(), "omitted default starts without delivered capacity");
-    const MemoryBudgetAllocation configured{.usableByteBudget = 36 * gib,
+    const MemoryBudgetAllocation configured{.usableByteBudget = 60 * gib,
                                             .operationCacheByteBudget = 18 * gib,
                                             .previewFrameCacheByteBudget = 12 * gib};
     auto delivered = sample(now);
@@ -497,43 +554,41 @@ void deliveredNumericView() {
     delivered.process.domains[0].currentBytes = 0;
     policy.applyHostSample(delivered, 60 * gib, configured, now);
     auto numeric = view->load();
-    require(numeric && numeric->fresh(now) && numeric->aggregateGpuBytes == 6 * gib &&
-                numeric->previewRequestBytes == gib,
-            "fresh delivered live processing shares determine defaults");
+    require(numeric && numeric->fresh(now) && numeric->aggregateGpuBytes == 60 * gib &&
+                numeric->previewRequestBytes == 60 * gib &&
+                numeric->assignedOperationBytes == 18 * gib &&
+                numeric->assignedPreviewBytes == 12 * gib,
+            "retention selections are descriptive, not hidden computation limits");
     auto held = policy.reserve({.pixels = 1, .sourceFree = true, .native = false}, now);
-    require(held.lease != nullptr, "ordinary host phase admitted before default shrink");
+    require(held.lease != nullptr, "ordinary host phase admitted before headroom shrink");
     const auto charged = policy.snapshot().reservations;
     delivered.sampleSerial = 2;
     delivered.process.sampledAt = now + std::chrono::seconds(1);
-    delivered.processingEffectiveBytes = 5 * gib;
+    delivered.machine.availableBytes = 5 * gib;
     policy.applyHostSample(delivered, 60 * gib, configured, delivered.process.sampledAt);
     numeric = view->load();
-    require(numeric && numeric->aggregateGpuBytes == 3 * gib &&
-                numeric->previewRequestBytes == gib / 2 &&
+    require(numeric && numeric->aggregateGpuBytes == 5 * gib &&
+                numeric->previewRequestBytes == 5 * gib &&
                 policy.snapshot().reservations.hostReservedBytes == charged.hostReservedBytes,
-            "live default shrink keeps admitted phase unchanged");
+            "measured headroom shrink preserves admitted phase claims");
     delivered.sampleSerial = 3;
     delivered.process.sampledAt = now + std::chrono::seconds(2);
-    delivered.processingEffectiveBytes = 20 * gib;
+    delivered.machine.availableBytes = 20 * gib;
     policy.applyHostSample(delivered, 60 * gib, configured, delivered.process.sampledAt);
     numeric = view->load();
-    require(numeric && numeric->aggregateGpuBytes == 12 * gib &&
-                numeric->previewRequestBytes == 2 * gib,
-            "fresh delivered recovery grows numeric defaults without revoking held grant");
+    require(numeric && numeric->aggregateGpuBytes == 20 * gib &&
+                numeric->previewRequestBytes == 20 * gib,
+            "fresh actual headroom is available without a percentage recovery ladder");
     auto duplicate = delivered;
     duplicate.process.sampledAt += std::chrono::seconds(5);
-    duplicate.processingEffectiveBytes = 30 * gib;
-    const MemoryBudgetAllocation larger{.usableByteBudget = 36 * gib,
-                                        .operationCacheByteBudget = 30 * gib,
-                                        .previewFrameCacheByteBudget = 20 * gib};
-    policy.applyHostSample(duplicate, 60 * gib, larger, duplicate.process.sampledAt);
+    duplicate.machine.availableBytes = 30 * gib;
+    policy.applyHostSample(duplicate, 60 * gib, configured, duplicate.process.sampledAt);
     require(view->load() == numeric && !view->load()->fresh(now + std::chrono::seconds(13)),
-            "duplicate serial cannot grow numeric shares or extend delivered freshness");
-    auto superseded = delivered;
+            "duplicate serial cannot grow capacity or extend sample freshness");
+    auto superseded = duplicate;
     superseded.sampleSerial = 1;
-    superseded.processingEffectiveBytes = 30 * gib;
     policy.applyHostSample(superseded, 60 * gib, configured, delivered.process.sampledAt);
-    require(view->load() == numeric, "older delivery cannot replace numeric epoch with growth");
+    require(view->load() == numeric, "older delivery cannot replace a newer budget snapshot");
     delivered.sampleSerial = 4;
     delivered.process.sampledAt = now + std::chrono::seconds(3);
     delivered.processSampleFresh = false;
@@ -541,22 +596,24 @@ void deliveredNumericView() {
     numeric = view->load();
     require(numeric && !numeric->fresh(delivered.process.sampledAt) &&
                 policy.snapshot().reservations.hostReservedBytes == charged.hostReservedBytes,
-            "superseded process sampling closes default readiness without freeing live work");
+            "stale sampling closes new admission without freeing live work");
     held.lease.reset();
     require(policy.snapshot().reservations.admittedPhases == 0,
-            "held grant finally releases under default readiness loss");
+            "held grant releases normally under readiness loss");
     auto tinyView = std::make_shared<TaskBudgetView>();
     GpuProcessingPhasePolicy tinyPolicy(4, {}, tinyView);
-    const MemoryBudgetAllocation tiny{.usableByteBudget = 256,
+    const MemoryBudgetAllocation tiny{.usableByteBudget = 60 * gib,
                                       .operationCacheByteBudget = 128,
                                       .previewFrameCacheByteBudget = 64};
     auto tinySample = sample(now);
     tinySample.configuredBytes = 192;
     tinySample.processingEffectiveBytes = 192;
     tinyPolicy.applyHostSample(tinySample, 60 * gib, tiny, now);
-    require(tinyView->load() && tinyView->load()->aggregateGpuBytes == 128 &&
-                tinyView->load()->previewRequestBytes == 16,
-            "tiny explicit configured shares remain exact despite ample phase headroom");
+    require(tinyView->load() && tinyView->load()->aggregateGpuBytes == 2 * gib &&
+                tinyView->load()->previewRequestBytes == 2 * gib &&
+                tinyView->load()->assignedOperationBytes == 128 &&
+                tinyView->load()->assignedPreviewBytes == 64,
+            "tiny explicit caches do not constrain rendering within actual headroom");
     auto emptyView = std::make_shared<TaskBudgetView>();
     GpuProcessingPhasePolicy replay(4, {}, emptyView);
     replay.applyHostSample(tinySample, 60 * gib, now);
@@ -661,6 +718,8 @@ int main(int argc, char** argv) {
         lowMemoryHostFinalAdmission();
         liveHeadroomDuringCachePressure();
         policy();
+        deviceReportRecoversAfterPressure();
+        liveDeviceReportCreditsOnlyOwnedNativeBacking();
         nativeSupplementDeadline();
         monotonicRecoveryAndSlots();
         malformedFallbackCannotRecover();

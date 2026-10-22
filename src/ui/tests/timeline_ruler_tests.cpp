@@ -1299,6 +1299,25 @@ void testComponentRowsAndLaneSelections(Expectations& expectations) {
     const auto layer = *selectedLayer;
     const auto parameter = session.parameterForSelection(document::kPositionParameterRole)->id;
     expectations.expect(
+        session.setParameterValue(parameter, document::Vec2d{2e9, 0}, "Large position"),
+        "large finite position is valid authored data");
+    ui::TimelineLayerEntry fullEntry;
+    fullEntry.layerId = layer;
+    fullEntry.rowKind = ui::TimelineLayerEntry::Kind::Parameter;
+    fullEntry.parameterId = parameter;
+    fullEntry.role = document::kPositionParameterRole;
+    fullEntry.name = "Position";
+    ui::TimelinePropertyRow largeProperty(session, nullptr);
+    largeProperty.bind(fullEntry);
+    const auto largeFields =
+        largeProperty.findChildren<ui::kit::KValueField*>("timelinePropertyValue");
+    expectations.expect(largeFields.size() >= 2 && largeFields[0]->value() == 2e9,
+                        "Timeline displays the actual large position component");
+    if (largeFields.size() >= 2)
+        largeFields[1]->setValue(7);
+    expectations.expect(session.effectiveVec2Value(parameter) == document::Vec2d{2e9, 7},
+                        "Timeline Y editing preserves authoritative large X");
+    expectations.expect(
         session.toggleKeyframe(parameter, document::AnimationComponent::X, time(1)) &&
             session.toggleKeyframe(parameter, document::AnimationComponent::Y, time(1)) &&
             session.toggleKeyframe(parameter, document::AnimationComponent::X, time(2)),

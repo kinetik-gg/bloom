@@ -1,4 +1,5 @@
 #include "node_editor_items.hpp"
+#include "numeric_field_projection.hpp"
 #include "properties_value_edits.hpp"
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/properties_editor.hpp>
@@ -563,8 +564,8 @@ void PropertiesEditor::configureScale() {
     const QSignalBlocker blockX(scaleX_);
     const QSignalBlocker blockY(scaleY_);
     // Stored as a unitless factor, shown as a percentage: an unscaled layer reads 100%.
-    scaleX_->setValue(editable ? value->x * 100.0 : 100.0);
-    scaleY_->setValue(editable ? value->y * 100.0 : 100.0);
+    projectNumericField(*scaleX_, editable ? value->x : 1.0, 100, "%", "×");
+    projectNumericField(*scaleY_, editable ? value->y : 1.0, 100, "%", "×");
     scaleKeyframe_->refresh();
 }
 

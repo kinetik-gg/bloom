@@ -1,4 +1,5 @@
 #include "asset_drop.hpp"
+#include "numeric_field_projection.hpp"
 #include "properties_registry_row.hpp"
 #include "properties_sections.hpp"
 #include "properties_value_edits.hpp"
@@ -66,6 +67,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -561,14 +563,20 @@ class NodeItem final : public QGraphicsObject {
     // PropertiesEditor -- only the target differs.
     [[nodiscard]] AuthoringTarget target() const noexcept { return id_; }
 
-    void commitPosition() {
-        if (refreshing_ || positionX_ == nullptr || positionY_ == nullptr || session_ == nullptr) {
+    void commitPosition(const bool fromX) {
+        if (refreshing_ || session_ == nullptr)
             return;
-        }
-        // Both components in one call, exactly as PropertiesEditor's own commitPosition lambda
-        // does: one gesture is one SetParameterSource/SetKeyframeAtTime transaction, so it is one
-        // undo step.
-        (void)session_->setSelectedPosition(positionX_->value(), positionY_->value(), target());
+        const auto* composition = session_->composition();
+        const auto* node = composition ? composition->graph().findNode(id_) : nullptr;
+        const auto* parameter =
+            node ? parameterForRole(*node, *composition, document::kPositionParameterRole)
+                 : nullptr;
+        auto* field = fromX ? positionX_ : positionY_;
+        if (parameter && field)
+            (void)session_->setParameterComponentValue(parameter->id,
+                                                       fromX ? document::AnimationComponent::X
+                                                             : document::AnimationComponent::Y,
+                                                       field->value());
     }
 
     void commitOpacity() {
@@ -608,19 +616,34 @@ class NodeItem final : public QGraphicsObject {
     // The rest of the Layer Output transform, each through exactly the session method
     // PropertiesEditor's matching row calls, so the two surfaces cannot drift. Scale is authored as
     // a percentage on the card exactly as it is in the panel.
-    void commitAnchor() {
-        if (refreshing_ || anchorX_ == nullptr || anchorY_ == nullptr || session_ == nullptr) {
+    void commitAnchor(const bool fromX) {
+        if (refreshing_ || session_ == nullptr)
             return;
-        }
-        (void)session_->setSelectedAnchor(anchorX_->value(), anchorY_->value(), target());
+        const auto* composition = session_->composition();
+        const auto* node = composition ? composition->graph().findNode(id_) : nullptr;
+        const auto* parameter =
+            node ? parameterForRole(*node, *composition, document::kAnchorParameterRole) : nullptr;
+        auto* field = fromX ? anchorX_ : anchorY_;
+        if (parameter && field)
+            (void)session_->setParameterComponentValue(parameter->id,
+                                                       fromX ? document::AnimationComponent::X
+                                                             : document::AnimationComponent::Y,
+                                                       field->value());
     }
 
-    void commitScale() {
-        if (refreshing_ || scaleX_ == nullptr || scaleY_ == nullptr || session_ == nullptr) {
+    void commitScale(const bool fromX) {
+        if (refreshing_ || session_ == nullptr)
             return;
-        }
-        (void)session_->setSelectedScale(scaleX_->value() / 100.0, scaleY_->value() / 100.0,
-                                         target());
+        const auto* composition = session_->composition();
+        const auto* node = composition ? composition->graph().findNode(id_) : nullptr;
+        const auto* parameter =
+            node ? parameterForRole(*node, *composition, document::kScaleParameterRole) : nullptr;
+        auto* field = fromX ? scaleX_ : scaleY_;
+        if (parameter && field)
+            (void)session_->setParameterComponentValue(parameter->id,
+                                                       fromX ? document::AnimationComponent::X
+                                                             : document::AnimationComponent::Y,
+                                                       numericFieldValue(*field, 100.0));
     }
 
     void commitRotation() {
@@ -818,16 +841,20 @@ class NodeItem final : public QGraphicsObject {
             if (role == document::kPositionParameterRole) {
                 // Range/decimals/step/unit mirror PropertiesEditor's Position editors verbatim, so
                 // the same gesture in either surface produces the same value.
-                positionX_ = makeCardField(QStringLiteral("nodePositionXEditor"), tr("Position X"),
-                                           -1'000'000.0, 1'000'000.0, 2, QStringLiteral("px"));
-                positionY_ = makeCardField(QStringLiteral("nodePositionYEditor"), tr("Position Y"),
-                                           -1'000'000.0, 1'000'000.0, 2, QStringLiteral("px"));
+                positionX_ =
+                    makeCardField(QStringLiteral("nodePositionXEditor"), tr("Position X"),
+                                  std::numeric_limits<double>::lowest(),
+                                  std::numeric_limits<double>::max(), 2, QStringLiteral("px"));
+                positionY_ =
+                    makeCardField(QStringLiteral("nodePositionYEditor"), tr("Position Y"),
+                                  std::numeric_limits<double>::lowest(),
+                                  std::numeric_limits<double>::max(), 2, QStringLiteral("px"));
                 prepareField(positionX_);
                 prepareField(positionY_);
                 registerControlRole(positionX_, document::kPositionParameterRole);
                 registerControlRole(positionY_, document::kPositionParameterRole);
-                bindCell(positionX_, [this] { commitPosition(); });
-                bindCell(positionY_, [this] { commitPosition(); });
+                bindCell(positionX_, [this] { commitPosition(true); });
+                bindCell(positionY_, [this] { commitPosition(false); });
                 valueRows_.push_back({QStringLiteral("X"), positionX_,
                                       makeCardDiamond(document::kPositionParameterRole),
                                       document::kPositionParameterRole,
@@ -837,16 +864,20 @@ class NodeItem final : public QGraphicsObject {
                                       document::AnimationComponent::Y});
             } else if (role == document::kAnchorParameterRole) {
                 // Range/decimals/step/unit mirror PropertiesEditor's Anchor editors verbatim.
-                anchorX_ = makeCardField(QStringLiteral("nodeAnchorXEditor"), tr("Anchor X"),
-                                         -1'000'000.0, 1'000'000.0, 2, QStringLiteral("px"));
-                anchorY_ = makeCardField(QStringLiteral("nodeAnchorYEditor"), tr("Anchor Y"),
-                                         -1'000'000.0, 1'000'000.0, 2, QStringLiteral("px"));
+                anchorX_ =
+                    makeCardField(QStringLiteral("nodeAnchorXEditor"), tr("Anchor X"),
+                                  std::numeric_limits<double>::lowest(),
+                                  std::numeric_limits<double>::max(), 2, QStringLiteral("px"));
+                anchorY_ =
+                    makeCardField(QStringLiteral("nodeAnchorYEditor"), tr("Anchor Y"),
+                                  std::numeric_limits<double>::lowest(),
+                                  std::numeric_limits<double>::max(), 2, QStringLiteral("px"));
                 prepareField(anchorX_);
                 prepareField(anchorY_);
                 registerControlRole(anchorX_, document::kAnchorParameterRole);
                 registerControlRole(anchorY_, document::kAnchorParameterRole);
-                bindCell(anchorX_, [this] { commitAnchor(); });
-                bindCell(anchorY_, [this] { commitAnchor(); });
+                bindCell(anchorX_, [this] { commitAnchor(true); });
+                bindCell(anchorY_, [this] { commitAnchor(false); });
                 valueRows_.push_back(
                     {tr("Anchor X"), anchorX_, makeCardDiamond(document::kAnchorParameterRole),
                      document::kAnchorParameterRole, document::AnimationComponent::X});
@@ -855,15 +886,17 @@ class NodeItem final : public QGraphicsObject {
                                       document::AnimationComponent::Y});
             } else if (role == document::kScaleParameterRole) {
                 scaleX_ = makeCardField(QStringLiteral("nodeScaleXEditor"), tr("Scale X"),
-                                        -100'000.0, 100'000.0, 2, QStringLiteral("%"));
+                                        std::numeric_limits<double>::lowest(),
+                                        std::numeric_limits<double>::max(), 2, QStringLiteral("%"));
                 scaleY_ = makeCardField(QStringLiteral("nodeScaleYEditor"), tr("Scale Y"),
-                                        -100'000.0, 100'000.0, 2, QStringLiteral("%"));
+                                        std::numeric_limits<double>::lowest(),
+                                        std::numeric_limits<double>::max(), 2, QStringLiteral("%"));
                 prepareField(scaleX_);
                 prepareField(scaleY_);
                 registerControlRole(scaleX_, document::kScaleParameterRole);
                 registerControlRole(scaleY_, document::kScaleParameterRole);
-                bindCell(scaleX_, [this] { commitScale(); });
-                bindCell(scaleY_, [this] { commitScale(); });
+                bindCell(scaleX_, [this] { commitScale(true); });
+                bindCell(scaleY_, [this] { commitScale(false); });
                 valueRows_.push_back(
                     {tr("Scale X"), scaleX_, makeCardDiamond(document::kScaleParameterRole),
                      document::kScaleParameterRole, document::AnimationComponent::X});
@@ -872,7 +905,9 @@ class NodeItem final : public QGraphicsObject {
                                       document::AnimationComponent::Y});
             } else if (role == document::kRotationParameterRole) {
                 rotation_ = makeCardField(QStringLiteral("nodeRotationEditor"), tr("Rotation"),
-                                          -100'000.0, 100'000.0, 2, QString::fromUtf8("\u00b0"));
+                                          std::numeric_limits<double>::lowest(),
+                                          std::numeric_limits<double>::max(), 2,
+                                          QString::fromUtf8("\u00b0"));
                 prepareField(rotation_);
                 registerControlRole(rotation_, document::kRotationParameterRole);
                 bindCell(rotation_, [this] { commitRotation(); });
@@ -938,7 +973,8 @@ class NodeItem final : public QGraphicsObject {
                 // Range/decimals/step/unit mirror PropertiesEditor's Size editor verbatim, so the
                 // same gesture in either surface produces the same value.
                 textSize_ =
-                    makeCardField(QStringLiteral("nodeTextSizeEditor"), tr("Text size"), 1.0,
+                    makeCardField(QStringLiteral("nodeTextSizeEditor"), tr("Text size"),
+                                  std::numeric_limits<double>::denorm_min(),
                                   document::kMaximumTextSizePixels, 1, QStringLiteral("px"));
                 prepareField(textSize_);
                 registerControlRole(textSize_, document::kTextSizeParameterRole);
@@ -1112,11 +1148,21 @@ class NodeItem final : public QGraphicsObject {
                 addColorComponentRows(role);
             break;
         }
-        case document::ParameterValueKind::Integer:
+        case document::ParameterValueKind::Integer: {
+            row.text = new kit::KLineEdit;
+            row.text->setObjectName(QStringLiteral("nodeOperandIntegerEditor"));
+            row.text->setAccessibleName(label);
+            row.text->setFont(kit::font(kit::TypeRole::Value));
+            row.text->resize(row.text->sizeHint());
+            prepareField(row.text);
+            registerControlRole(row.text, role);
+            connect(row.text, &QLineEdit::editingFinished, this, [commit] { commit(); });
+            valueRows_.push_back({label, row.text, nullptr, {}});
+            break;
+        }
         case document::ParameterValueKind::Float64:
         case document::ParameterValueKind::Vec2d:
         case document::ParameterValueKind::Vec3d: {
-            const bool integral = declared->valueKind == document::ParameterValueKind::Integer;
             const int components =
                 declared->valueKind == document::ParameterValueKind::Vec3d
                     ? 3
@@ -1128,9 +1174,8 @@ class NodeItem final : public QGraphicsObject {
                         ? label
                         : label + QString::fromUtf8(
                                       kComponentSuffixes[static_cast<std::size_t>(component)]);
-                // Integers get zero decimals and the whole signed range the schema admits; a scalar
-                // gets the same wide finite range every other unitless card field already uses,
-                // because a value-graph operand carries no domain beyond its kind.
+                // Numeric operands preserve every finite value their schema accepts. Semantic
+                // lower bounds still apply to dimensions and line height.
                 const bool dimension =
                     declared->schemaKey == document::kSolidWidthParameterSchemaKey ||
                     declared->schemaKey == document::kSolidHeightParameterSchemaKey;
@@ -1141,13 +1186,13 @@ class NodeItem final : public QGraphicsObject {
                 auto* field =
                     makeCardField(QStringLiteral("nodeOperandEditor"), componentLabel,
                                   dimension    ? 1.0
-                                  : lineHeight ? 0.01
-                                               : -1'000'000'000.0,
-                                  1'000'000'000.0, integral ? 0 : 4,
+                                  : lineHeight ? std::numeric_limits<double>::denorm_min()
+                                               : std::numeric_limits<double>::lowest(),
+                                  std::numeric_limits<double>::max(), 4,
                                   dimension || spacing ? QStringLiteral("px") : QString{});
                 prepareField(field);
                 registerControlRole(field, role);
-                bindCell(field, commit);
+                bindCell(field, [this, index, component] { commitOperand(index, component); });
                 row.numeric[static_cast<std::size_t>(component)] = field;
                 const std::array names{document::AnimationComponent::X,
                                        document::AnimationComponent::Y,
@@ -1196,13 +1241,23 @@ class NodeItem final : public QGraphicsObject {
     // Writes one operand's authored constant. One transaction, one undo entry -- the same shape
     // every other card commit has -- and the value is assembled from the row's own widgets, so the
     // kind the document receives is the kind the registry declared.
-    void commitOperand(const std::size_t index) {
+    void commitOperand(const std::size_t index, const int component = -1) {
         auto* graphScene = qobject_cast<NodeGraphicsScene*>(scene());
         if (refreshing_ || index >= operandRows_.size() || session_ == nullptr ||
             graphScene == nullptr || !graphScene->canSubmit()) {
             return;
         }
         const auto& row = operandRows_[index];
+        if (component >= 0 && (row.kind == document::ParameterValueKind::Vec2d ||
+                               row.kind == document::ParameterValueKind::Vec3d)) {
+            const std::array axes{document::AnimationComponent::X, document::AnimationComponent::Y,
+                                  document::AnimationComponent::Z};
+            const auto axis = static_cast<std::size_t>(component);
+            if (axis < axes.size() && row.numeric[axis])
+                (void)session_->setParameterComponentValue(row.parameterId, axes[axis],
+                                                           row.numeric[axis]->value());
+            return;
+        }
         const auto value = [&]() -> std::optional<document::ParameterValue> {
             if (row.selector != nullptr) {
                 const auto stored = row.selector->itemData(row.selector->currentIndex());
@@ -1251,27 +1306,21 @@ class NodeItem final : public QGraphicsObject {
                     core::Color4d{static_cast<double>(chip.red), static_cast<double>(chip.green),
                                   static_cast<double>(chip.blue), static_cast<double>(chip.alpha)}};
             }
-            case document::ParameterValueKind::Integer:
-                return row.numeric[0] == nullptr
-                           ? std::nullopt
-                           : std::optional(document::ParameterValue{
-                                 static_cast<std::int64_t>(std::llround(row.numeric[0]->value()))});
+            case document::ParameterValueKind::Integer: {
+                bool valid = false;
+                const auto integer = row.text ? row.text->text().toLongLong(&valid) : 0;
+                return valid ? std::optional(
+                                   document::ParameterValue{static_cast<std::int64_t>(integer)})
+                             : std::nullopt;
+            }
             case document::ParameterValueKind::Float64:
                 return row.numeric[0] == nullptr
                            ? std::nullopt
                            : std::optional(document::ParameterValue{row.numeric[0]->value()});
             case document::ParameterValueKind::Vec2d:
-                return row.numeric[0] == nullptr || row.numeric[1] == nullptr
-                           ? std::nullopt
-                           : std::optional(document::ParameterValue{document::Vec2d{
-                                 row.numeric[0]->value(), row.numeric[1]->value()}});
             case document::ParameterValueKind::Vec3d:
-                return row.numeric[0] == nullptr || row.numeric[1] == nullptr ||
-                               row.numeric[2] == nullptr
-                           ? std::nullopt
-                           : std::optional(document::ParameterValue{
-                                 document::Vec3d{row.numeric[0]->value(), row.numeric[1]->value(),
-                                                 row.numeric[2]->value()}});
+                // Numeric component edits are handled above through the authoritative parameter.
+                return std::nullopt;
             }
             return std::nullopt;
         }();
@@ -1420,7 +1469,10 @@ class NodeItem final : public QGraphicsObject {
                             row.toggle->setChecked(held);
                         }
                     } else if constexpr (std::is_same_v<Held, std::int64_t>) {
-                        setComponent(0, static_cast<double>(held));
+                        if (row.text) {
+                            const QSignalBlocker blocker(row.text);
+                            row.text->setText(QString::number(static_cast<qlonglong>(held)));
+                        }
                     } else if constexpr (std::is_same_v<Held, double>) {
                         setComponent(0, held);
                     } else if constexpr (std::is_same_v<Held, document::Vec2d>) {
@@ -1508,8 +1560,8 @@ class NodeItem final : public QGraphicsObject {
             // grid.
             const QSignalBlocker blockX(scaleX_);
             const QSignalBlocker blockY(scaleY_);
-            scaleX_->setValue(value.has_value() ? value->x * 100.0 : 100.0);
-            scaleY_->setValue(value.has_value() ? value->y * 100.0 : 100.0);
+            projectNumericField(*scaleX_, value ? value->x : 1.0, 100, "%", "×");
+            projectNumericField(*scaleY_, value ? value->y : 1.0, 100, "%", "×");
         }
 
         if (rotation_ != nullptr) {

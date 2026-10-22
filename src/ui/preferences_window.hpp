@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/ui/application_preferences.hpp>
 
 #include <QDialog>
@@ -39,10 +40,12 @@ class PreferencesWindow final : public QDialog {
 
   public:
     // `accelerationStatus` may be null, in which case the Performance page reports the CPU-only
-    // truth. It is borrowed and must outlive the dialog.
-    explicit PreferencesWindow(const ApplicationPreferences& current,
-                               const AccelerationStatusProvider* accelerationStatus = nullptr,
-                               QWidget* parent = nullptr);
+    // truth. Both injected providers are borrowed and must outlive the dialog. Memory reads use
+    // only cached ledger state; the dialog never samples the operating system.
+    explicit PreferencesWindow(
+        const ApplicationPreferences& current,
+        const AccelerationStatusProvider* accelerationStatus = nullptr, QWidget* parent = nullptr,
+        const runtime::MemoryBudgetLedger& memoryLedger = runtime::processMemoryBudgetLedger());
 
     [[nodiscard]] ApplicationPreferences preferences() const;
     // Pushes a value into every control. Signals are blocked while refreshing, so this never
@@ -89,6 +92,7 @@ class PreferencesWindow final : public QDialog {
                                const QString& label, bool restartRequired);
 
     void refreshControls();
+    void refreshMemorySummary();
     void commitPreferences();
     void updateApplyEnabled();
 
@@ -98,6 +102,8 @@ class PreferencesWindow final : public QDialog {
     ApplicationPreferences draft_;
     ApplicationPreferences applied_;
     const AccelerationStatusProvider* accelerationStatus_ = nullptr;
+    const runtime::MemoryBudgetLedger& memoryLedger_;
+    QLabel* memorySummary_ = nullptr;
     QStackedWidget* pages_ = nullptr;
     kit::KRadioGroup* categoryRail_ = nullptr;
     QPushButton* applyButton_ = nullptr;

@@ -59,7 +59,7 @@ class PropertiesRegistryRow final : public QWidget {
     void detachFromSession();
 
   private:
-    void commit();
+    void commit(std::optional<std::size_t> component = {});
     void populateFontSelector();
     void populateInputColorSpaceSelector();
     void pollFontCatalogue();

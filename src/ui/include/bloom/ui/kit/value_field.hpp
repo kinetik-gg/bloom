@@ -45,6 +45,11 @@ class KValueField final : public QWidget {
     void setUnit(const QString& unit);
     [[nodiscard]] QString unit() const;
 
+    // Replaces the minimum value and its unit while the cell is at rest (for example, Automatic
+    // for a zero budget). Editing still exposes the numeric value. Empty text restores numbers.
+    void setSpecialValueText(const QString& text);
+    [[nodiscard]] QString specialValueText() const;
+
     void setRange(double minimum, double maximum);
     [[nodiscard]] double minimum() const noexcept;
     [[nodiscard]] double maximum() const noexcept;
@@ -152,6 +157,7 @@ class KValueField final : public QWidget {
     bool stepper_ = false;
     QString label_;
     QString unit_;
+    QString specialValueText_;
     double minimum_ = 0.0;
     double maximum_ = 100.0;
     double step_ = 1.0;

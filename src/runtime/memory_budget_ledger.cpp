@@ -34,11 +34,6 @@ namespace {
     return whole * numerator + remainder * numerator / denominator;
 }
 
-[[nodiscard]] bool exceeds(const std::size_t left, const std::size_t right,
-                           const std::size_t limit) noexcept {
-    return left > limit || right > limit - left;
-}
-
 [[nodiscard]] std::size_t saturatedAdd(const std::size_t left, const std::size_t right) noexcept {
     return left + std::min(right, std::numeric_limits<std::size_t>::max() - left);
 }
@@ -204,46 +199,28 @@ std::size_t startupAvailableMemoryBytes() noexcept {
     return latched;
 }
 
-std::size_t
-MemoryBudgetLedger::reserveForPhysicalMemory(const std::size_t physicalMemory) noexcept {
-    return std::max(kMinimumHostMemoryReserve,
-                    fraction(physicalMemory, kHostMemoryReservePercent, 100));
-}
+std::size_t MemoryBudgetLedger::reserveForPhysicalMemory(const std::size_t) noexcept { return 0; }
 
 std::size_t
 MemoryBudgetLedger::usableByteBudgetForPhysicalMemory(const std::size_t physicalMemory) noexcept {
-    if (physicalMemory == 0)
-        return kFallbackUsableMemoryBudget;
-
-    const auto reserve = reserveForPhysicalMemory(physicalMemory);
-    const auto afterReserve = physicalMemory > reserve ? physicalMemory - reserve : 0;
-    // Keep the historic low-memory floor useful when the reserve would otherwise leave no room for
-    // either cache. Never invent more budget than the machine reports in this fallback branch.
-    const auto lowMemoryFallback = std::min(physicalMemory, kFallbackUsableMemoryBudget);
-    return std::max(afterReserve, lowMemoryFallback);
+    return physicalMemory == 0 ? kFallbackUsableMemoryBudget : physicalMemory;
 }
 
 MemoryBudgetLedger::MemoryBudgetLedger(const std::size_t physicalMemory,
                                        const std::size_t availableMemory) noexcept
-    : physicalMemory_(physicalMemory),
-      usableByteBudget_(usableByteBudgetForPhysicalMemory(physicalMemory)),
-      reserveByteBudget_(physicalMemory == 0 ? kMinimumHostMemoryReserve
-                                             : reserveForPhysicalMemory(physicalMemory)) {
-    // The default total is the most conservative of three independent ceilings, then raised back to
-    // the low-memory floor so a small or busy machine still gets a working cache rather than none.
+    : physicalMemory_(physicalMemory), defaultsResolved_(physicalMemory != 0),
+      usableByteBudget_(usableByteBudgetForPhysicalMemory(physicalMemory)) {
+    // Automatic budgets are selected from hardware capacity, independent of how much other work
+    // happens to be resident at startup. Only actual preferences change a resolved selection.
     auto total = usableByteBudget_;
     if (physicalMemory != 0)
         total = std::min(total, fraction(physicalMemory, kDefaultTotalPhysicalPercent, 100));
-    if (availableMemory != 0)
-        total = std::min(total, fraction(availableMemory, kDefaultTotalAvailablePercent, 100));
     const auto floor = physicalMemory == 0 ? kFallbackUsableMemoryBudget
                                            : std::min(physicalMemory, kFallbackUsableMemoryBudget);
     defaultTotalByteBudget_ = std::min(usableByteBudget_, std::max(total, floor));
-    state_.configuredBytes = std::max(
-        floor, std::min(usableByteBudget_,
-                        physicalMemory == 0 ? usableByteBudget_ : fraction(physicalMemory, 1, 2)));
+    state_.configuredBytes = defaultTotalByteBudget_;
     state_.effectiveBytes = defaultTotalByteBudget_;
-    state_.processingEffectiveBytes = defaultTotalByteBudget_;
+    state_.processingEffectiveBytes = usableByteBudget_;
     if (availableMemory != 0)
         state_.machine.availableBytes = availableMemory;
 }
@@ -266,31 +243,17 @@ MemoryBudgetLedger::allocate(const std::optional<std::size_t> operationOverride,
     const auto defaultPreview =
         std::max(defaultTotalByteBudget_ - defaultOperation, kMinimumPreviewFrameCacheByteBudget);
 
-    std::size_t operation = defaultOperation;
-    std::size_t preview = defaultPreview;
-    if (!operationOverride.has_value() && !previewOverride.has_value()) {
-        // The preview floor can ask for more than the default total left for it; the total wins, so
-        // the operation cache gives the difference back.
-        if (exceeds(operation, preview, defaultTotalByteBudget_))
-            operation = defaultTotalByteBudget_ - std::min(preview, defaultTotalByteBudget_);
-    } else if (operationOverride.has_value() && previewOverride.has_value()) {
-        operation = std::min(*operationOverride, usableByteBudget_);
-        preview = std::min(*previewOverride, usableByteBudget_);
-        if (exceeds(operation, preview, usableByteBudget_)) {
-            const auto total =
-                static_cast<long double>(operation) + static_cast<long double>(preview);
-            operation =
-                static_cast<std::size_t>(static_cast<long double>(operation) *
-                                         static_cast<long double>(usableByteBudget_) / total);
-            preview = usableByteBudget_ - operation;
-        }
-    } else if (operationOverride.has_value()) {
-        operation = std::min(*operationOverride, usableByteBudget_);
-        preview = std::min(defaultPreview, usableByteBudget_ - operation);
-    } else {
-        preview = std::min(*previewOverride, usableByteBudget_);
-        operation = std::min(defaultOperation, usableByteBudget_ - preview);
-    }
+    // Preferences name independent pools. A nonzero value is the selected budget, even when the
+    // two selections exceed the automatic total or physical capacity. A real process constraint
+    // can separately reduce reusable admission; it never rewrites this selection.
+    const auto operation =
+        operationOverride.value_or(0) != 0
+            ? *operationOverride
+            : std::min(defaultOperation,
+                       defaultTotalByteBudget_ - std::min(defaultPreview, defaultTotalByteBudget_));
+    const auto preview = previewOverride.value_or(0) != 0
+                             ? *previewOverride
+                             : std::min(defaultPreview, defaultTotalByteBudget_);
 
     return {.usableByteBudget = usableByteBudget_,
             .operationCacheByteBudget = operation,
@@ -306,11 +269,16 @@ void MemoryBudgetLedger::registerCache(const void* owner, const std::size_t ceil
                            .insert_or_assign(owner, Cache{ceiling, kind, std::move(retained),
                                                           std::move(applyBudget)})
                            .first;
-    // A pool created during pressure must not regain a full ceiling until the next timer tick.
-    // Its owner has initialized its storage before registration and is not published yet.
+    // The new owner initialized its storage before registration and is not published yet.
+    // A finite shared constraint must also update existing participants immediately.
     if (hasPolled_) {
         try {
-            entry->second.applyBudget(cacheByteBudgetLocked(entry->second));
+            if (processSampling_)
+                applyProcessCeilingLocked();
+            if (state_.processCacheCeilingBytes)
+                applyBudgetsLocked();
+            else
+                entry->second.applyBudget(cacheByteBudgetLocked(entry->second));
         } catch (...) {
             caches_.erase(entry);
             throw;
@@ -321,6 +289,10 @@ void MemoryBudgetLedger::registerCache(const void* owner, const std::size_t ceil
 void MemoryBudgetLedger::unregisterCache(const void* owner) {
     const std::lock_guard lock(mutex_);
     caches_.erase(owner);
+    if (hasPolled_ && state_.processCacheCeilingBytes) {
+        applyProcessCeilingLocked();
+        applyBudgetsLocked();
+    }
 }
 
 std::size_t MemoryBudgetLedger::setCacheCeiling(const void* owner, const std::size_t ceiling) {
@@ -329,28 +301,57 @@ std::size_t MemoryBudgetLedger::setCacheCeiling(const void* owner, const std::si
     if (found == caches_.end())
         return ceiling;
     found->second.ceiling = ceiling;
+    if (processSampling_)
+        applyProcessCeilingLocked();
     const auto bytes = hasPolled_ ? cacheByteBudgetLocked(found->second) : ceiling;
     // Apply while still serialized with polls; a caller must not publish an old allowance after
     // a concurrent pressure callback has already reduced it.
-    found->second.applyBudget(bytes);
+    if (state_.processCacheCeilingBytes)
+        applyBudgetsLocked();
+    else
+        found->second.applyBudget(bytes);
     return bytes;
 }
 
 std::size_t MemoryBudgetLedger::cacheByteBudgetLocked(const Cache& participant) const {
-    const auto ceiling = participant.ceiling;
-    long double total = 0;
-    for (const auto& [owner, cache] : caches_)
-        total += static_cast<long double>(cache.ceiling);
-    total = std::max(total, static_cast<long double>(state_.configuredBytes));
-    if (total == 0)
+    if (participant.kind == MemoryBudgetOwnerKind::LiveWork)
+        return participant.ceiling;
+    if (state_.awaitingProcessSample)
         return 0;
-    const auto scaled = static_cast<std::size_t>(
-        static_cast<long double>(ceiling) *
-        std::min(total, static_cast<long double>(participant.kind == MemoryBudgetOwnerKind::LiveWork
-                                                     ? state_.processingEffectiveBytes
-                                                     : state_.effectiveBytes)) /
-        total);
-    return fraction(std::min(ceiling, scaled), state_.retentionPercent, 100);
+    if (!state_.processCacheCeilingBytes)
+        return participant.ceiling;
+    const auto absoluteLimit = *state_.processCacheCeilingBytes;
+    long double total = 0;
+    std::size_t boundedTotal = 0;
+    bool exceedsLimit = false;
+    for (const auto& [owner, cache] : caches_) {
+        if (cache.kind != MemoryBudgetOwnerKind::ReusableRetention)
+            continue;
+        total += static_cast<long double>(cache.ceiling);
+        if (cache.ceiling > absoluteLimit - boundedTotal)
+            exceedsLimit = true;
+        boundedTotal += std::min(cache.ceiling, absoluteLimit - boundedTotal);
+    }
+    if (!exceedsLimit)
+        return participant.ceiling;
+    const auto limit = static_cast<long double>(absoluteLimit);
+    // This split exists only for an observed OS limit. Registered targets remain exact when no
+    // finite constraint exists; auxiliary pools never rewrite the selected preferences.
+    auto remaining = absoluteLimit;
+    for (const auto& [owner, cache] : caches_) {
+        if (cache.kind != MemoryBudgetOwnerKind::ReusableRetention)
+            continue;
+        const auto scaled = static_cast<long double>(cache.ceiling) * limit / total;
+        // Clamp before conversion, including platforms whose long double cannot represent every
+        // size_t. Subtract each assigned share so rounding can never exceed the actual OS limit.
+        const auto bytes = scaled >= static_cast<long double>(remaining)
+                               ? std::min(cache.ceiling, remaining)
+                               : std::min(cache.ceiling, static_cast<std::size_t>(scaled));
+        if (&cache == &participant)
+            return bytes;
+        remaining -= bytes;
+    }
+    return 0;
 }
 
 std::size_t MemoryBudgetLedger::cacheByteBudget(const void* owner) const {
@@ -361,27 +362,13 @@ std::size_t MemoryBudgetLedger::cacheByteBudget(const void* owner) const {
 
 void MemoryBudgetLedger::setConfiguredTotal(const std::size_t bytes) {
     const std::lock_guard lock(mutex_);
+    configuredTotalSet_ = true;
     state_.configuredBytes = bytes;
-    state_.processingEffectiveBytes =
-        capFor(state_.machine, processSampling_ ? 0 : state_.retainedBytes);
     if (!processSampling_)
-        state_.effectiveBytes = state_.processingEffectiveBytes;
+        state_.effectiveBytes = bytes;
     else
-        applyProcessCeilingLocked(false, false, false, Clock::now());
-    lastCapChange_.reset();
-}
-
-std::size_t MemoryBudgetLedger::capFor(const MachineMemorySample& sample,
-                                       const std::size_t retained) const noexcept {
-    auto cap = state_.configuredBytes;
-    if (physicalMemory_ != 0)
-        cap = std::min(cap, fraction(physicalMemory_, 1, 2));
-    if (sample.availableBytes)
-        cap = std::min(cap, fraction(saturatedAdd(*sample.availableBytes, retained), 4, 5));
-    // The policy floor never forces a client above its explicitly smaller ceiling.
-    return std::max(cap, physicalMemory_ == 0
-                             ? kFallbackUsableMemoryBudget
-                             : std::min(physicalMemory_, kFallbackUsableMemoryBudget));
+        applyProcessCeilingLocked();
+    applyBudgetsLocked();
 }
 
 bool MemoryBudgetLedger::observeSwapActivity(const MachineMemorySample& sample,
@@ -418,62 +405,20 @@ MemoryBudgetState MemoryBudgetLedger::pollHostLocked(MachineMemorySample sample,
     for (const auto& [owner, cache] : caches_)
         retained = saturatedAdd(retained, cache.retained());
     state_.retainedBytes = retained;
-    const bool wasPressure = state_.memoryPressure || state_.swapPressure;
+    state_.memoryNotice = false;
     const bool wasSwap = state_.swapPressure;
-    // An unavailable sample cannot assert recovery or discard an existing pressure episode.
-    if (sample.availableBytes)
-        state_.memoryPressure = *sample.availableBytes < reserveByteBudget_;
-    // Swap only asserts while it is actively growing. Missing counters are not evidence of
-    // recovery, so an existing episode is retained until a valid sample clears it through the
-    // baseline reset.
+    // Swap activity remains observable, but does not silently change selected cache budgets.
     const bool swapGrowing = observeSwapActivity(sample, now, wasSwap);
     if (sample.swapTotalBytes != 0)
         state_.swapPressure = swapGrowing;
-    const bool pressure = state_.memoryPressure || state_.swapPressure;
-    state_.memoryNotice = pressure && !wasPressure;
     state_.swapNotice = state_.swapPressure && !wasSwap;
     state_.machine = sample;
-    bool restore = false;
-    if (pressure) {
-        pressurePolls_ = std::min(pressurePolls_ + 1, 2U);
-        state_.retentionPercent =
-            std::min(state_.retentionPercent, pressurePolls_ >= 2 ? 10U : 25U);
-        recoveryStep_.reset();
-    } else if (sample.availableBytes) {
-        pressurePolls_ = 0;
-        if (!recoveryStep_)
-            recoveryStep_ = now;
-        if (now - *recoveryStep_ >= std::chrono::seconds(10)) {
-            restore = true;
-            recoveryStep_ = now;
-            if (state_.retentionPercent < 25)
-                state_.retentionPercent = 25;
-            else if (state_.retentionPercent < 50)
-                state_.retentionPercent = 50;
-            else
-                state_.retentionPercent = 100;
-        }
+    state_.retentionPercent = 100;
+    if (!processSampling_) {
+        state_.effectiveBytes = state_.configuredBytes;
+        state_.memoryPressure = false;
+        state_.memoryNotice = false;
     }
-    auto candidate = capFor(sample, processSampling_ ? 0 : retained);
-    if (candidate > state_.processingEffectiveBytes) {
-        if (!restore)
-            candidate = state_.processingEffectiveBytes;
-        else
-            candidate = std::min(candidate, saturatedAdd(state_.processingEffectiveBytes,
-                                                         state_.processingEffectiveBytes / 4));
-    }
-    const auto difference = candidate > state_.processingEffectiveBytes
-                                ? candidate - state_.processingEffectiveBytes
-                                : state_.processingEffectiveBytes - candidate;
-    if (difference > state_.processingEffectiveBytes / 10 &&
-        (!lastCapChange_ || now - *lastCapChange_ >= std::chrono::seconds(5))) {
-        state_.processingEffectiveBytes = candidate;
-        lastCapChange_ = now;
-    }
-    if (!processSampling_)
-        state_.effectiveBytes = state_.processingEffectiveBytes;
-    else
-        applyProcessCeilingLocked(false, false, restore, now);
     return state_;
 }
 
@@ -493,45 +438,36 @@ void MemoryBudgetLedger::beginProcessSampling() {
     applyBudgetsLocked();
 }
 
-void MemoryBudgetLedger::updatePhysicalCapacity(const std::size_t physical,
-                                                const std::optional<std::size_t> available) {
+void MemoryBudgetLedger::updatePhysicalCapacity(const std::size_t physical) {
     if (physical == 0)
         return;
     physicalMemory_ = physical;
     usableByteBudget_ = usableByteBudgetForPhysicalMemory(physical);
-    reserveByteBudget_ = reserveForPhysicalMemory(physical);
-    auto total = std::min(usableByteBudget_, fraction(physical, 1, 2));
-    if (available)
-        total = std::min(total, fraction(*available, 4, 5));
-    defaultTotalByteBudget_ = std::min(
-        usableByteBudget_, std::max(total, std::min(physical, kFallbackUsableMemoryBudget)));
+    state_.processingEffectiveBytes = usableByteBudget_;
+    if (!defaultsResolved_) {
+        const auto total = fraction(physical, kDefaultTotalPhysicalPercent, 100);
+        defaultTotalByteBudget_ = std::max(total, std::min(physical, kFallbackUsableMemoryBudget));
+        defaultsResolved_ = true;
+        if (!configuredTotalSet_)
+            state_.configuredBytes = defaultTotalByteBudget_;
+    }
 }
 
-void MemoryBudgetLedger::applyProcessCeilingLocked(const bool allowGrowth, const bool initialize,
-                                                   const bool restore,
-                                                   const Clock::time_point now) {
-    auto hard = state_.processingEffectiveBytes;
+void MemoryBudgetLedger::applyProcessCeilingLocked() {
+    const bool wasPressure = state_.memoryPressure;
+    state_.effectiveBytes = state_.configuredBytes;
     if (state_.processCacheCeilingBytes)
-        hard = std::min(hard, *state_.processCacheCeilingBytes);
+        state_.effectiveBytes = std::min(state_.effectiveBytes, *state_.processCacheCeilingBytes);
     if (state_.awaitingProcessSample)
-        hard = 0;
-    if (hard < state_.effectiveBytes) {
-        // A reliable finite ceiling wins immediately over floors, hysteresis and cooldown.
-        state_.effectiveBytes = hard;
-        lastReusableChange_ = now;
-    } else if (allowGrowth && initialize) {
-        state_.effectiveBytes = state_.processCacheCeilingBytes ? hard / 2 : hard;
-        lastReusableChange_ = now;
-    } else if (allowGrowth && restore && hard > state_.effectiveBytes) {
-        const auto halfGap = (hard - state_.effectiveBytes) / 2;
-        const auto step =
-            state_.effectiveBytes == 0 ? halfGap : std::min(state_.effectiveBytes / 4, halfGap);
-        if (step > state_.effectiveBytes / 10 &&
-            (!lastReusableChange_ || now - *lastReusableChange_ >= std::chrono::seconds(5))) {
-            state_.effectiveBytes += step;
-            lastReusableChange_ = now;
-        }
-    }
+        state_.effectiveBytes = 0;
+    state_.memoryPressure = !state_.awaitingProcessSample && state_.processCacheCeilingBytes &&
+                            (state_.configuredBytes > *state_.processCacheCeilingBytes ||
+                             std::any_of(caches_.begin(), caches_.end(), [this](const auto& entry) {
+                                 const auto& cache = entry.second;
+                                 return cache.kind == MemoryBudgetOwnerKind::ReusableRetention &&
+                                        cacheByteBudgetLocked(cache) < cache.ceiling;
+                             }));
+    state_.memoryNotice = state_.memoryPressure && !wasPressure;
 }
 
 MemoryBudgetState MemoryBudgetLedger::poll(MachineMemorySample sample,
@@ -545,7 +481,7 @@ MemoryBudgetState MemoryBudgetLedger::poll(MachineMemorySample sample,
 MemoryBudgetState MemoryBudgetLedger::applySample(MemoryBudgetSample sample,
                                                   const Clock::time_point now) {
     const std::lock_guard lock(mutex_);
-    updatePhysicalCapacity(sample.physicalBytes, sample.machine.availableBytes);
+    updatePhysicalCapacity(sample.physicalBytes);
     if (!processSampling_) {
         static_cast<void>(pollHostLocked(sample.machine, now));
         applyBudgetsLocked();
@@ -558,13 +494,20 @@ MemoryBudgetState MemoryBudgetLedger::applySample(MemoryBudgetSample sample,
     const bool fresh =
         ageSeconds >= 0 && ageSeconds <= 15 && (!lastProcessSample_ || stamp > *lastProcessSample_);
     state_.processSampleFresh = fresh;
-    const auto measured = minimumProcessCacheAllowance(sample.process, 0);
+    // Retained targets use the actual finite domain limit, not remaining headroom. A headroom
+    // target would shrink as caches fill; retained gauges are not unique host ownership and must
+    // never be added back as reclaimable credit. Live phase admission checks fresh usage
+    // separately.
+    std::optional<std::size_t> measured;
+    for (const auto& domain : sample.process.domains) {
+        if (domain.kind == ProcessMemoryLimitKind::Finite)
+            measured = measured ? std::min(*measured, domain.limitBytes) : domain.limitBytes;
+    }
     const bool complete = fresh && (isCompleteProcessMemorySample(sample.process) ||
                                     sample.process.status == ProcessMemoryStatus::Unsupported);
     processConstraintHistory_.recordFinite(
         sample.process, complete && sample.process.status == ProcessMemoryStatus::Finite);
     // Remove only constraints explicitly observed as unlimited in the same verified view.
-    // Effective retention still grows through the existing host/recovery policy below.
     if (complete && processConstraintHistory_.verifiesRemoval(sample.process))
         state_.processCacheCeilingBytes.reset();
     if (measured) {
@@ -572,10 +515,6 @@ MemoryBudgetState MemoryBudgetLedger::applySample(MemoryBudgetSample sample,
             (complete && sample.process.status == ProcessMemoryStatus::Finite))
             state_.processCacheCeilingBytes = measured;
     }
-    const bool measuredRecovery =
-        complete &&
-        (sample.process.status == ProcessMemoryStatus::Finite || !state_.processCacheCeilingBytes);
-    const bool initialize = state_.awaitingProcessSample && measuredRecovery;
     if (complete)
         state_.awaitingProcessSample = false;
     if (fresh)
@@ -583,11 +522,8 @@ MemoryBudgetState MemoryBudgetLedger::applySample(MemoryBudgetSample sample,
     state_.process = std::move(sample.process);
     if (state_.sampleSerial != std::numeric_limits<std::uint64_t>::max())
         ++state_.sampleSerial;
-    // Host pressure/recovery is shared, but cannot authorize process-cap growth on bad input.
-    const auto previousRecovery = recoveryStep_;
     static_cast<void>(pollHostLocked(sample.machine, now));
-    const bool restore = previousRecovery && recoveryStep_ && *previousRecovery != *recoveryStep_;
-    applyProcessCeilingLocked(measuredRecovery, initialize, restore, now);
+    applyProcessCeilingLocked();
     applyBudgetsLocked();
     return state_;
 }

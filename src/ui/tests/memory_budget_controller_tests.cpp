@@ -6,6 +6,7 @@
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/runtime/operation_cache.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
@@ -118,8 +119,8 @@ void heldSampling() {
            "held sample has no backlog, no result/Jobs poll, no GUI I/O or cold retention");
     state->release.count_down();
     expect(spin([&] { return applied == 1; }), "completion delivers sample with Jobs stopped");
-    expect(budget > 0 && budget <= gib / 2 && appliedOnUi && polls == 0 && !owner.sampleActive(),
-           "cache callback applies only on UI within paired process cap");
+    expect(budget == 8 * gib && appliedOnUi && polls == 0 && !owner.sampleActive(),
+           "cache callback applies the actual finite OS limit only on the UI thread");
     owner.beginShutdown();
     owner.requestSample();
     expect(owner.admittedSampleCount() == 1, "shutdown closes sample admission");
@@ -161,16 +162,17 @@ void teardown() {
     scheduler.beginShutdown();
     expect(spin([&] { return scheduler.isQuiescent(); }), "teardown scheduler retires");
 }
-void deliveredSettingsRecovery() {
-    runtime::MemoryBudgetLedger ledger(60 * gib, 60 * gib);
+void liveSettingsAndDeliveredCapacity() {
+    runtime::MemoryBudgetLedger ledger(60 * gib, 22 * gib);
     QTemporaryDir directory;
-    QSettings settings(directory.filePath("recovery.ini"), QSettings::IniFormat);
+    QSettings settings(directory.filePath("live-budgets.ini"), QSettings::IniFormat);
     settings.setValue("playback/operation-cache-bytes", QString::number(18 * gib));
     ui::setRamPreviewByteBudgetInSettings(settings, 12 * gib);
-    const auto configured = ui::cacheMemoryBudgetAllocationFromSettings(settings, ledger);
-    ledger.setConfiguredTotal(configured.operationCacheByteBudget +
-                              configured.previewFrameCacheByteBudget);
     ledger.beginProcessSampling();
+    runtime::OperationCache operations(1, ledger);
+    ui::PreviewFrameCache preview(1, ledger);
+    const auto configured =
+        ui::applyCacheMemoryBudgetsFromSettings(settings, operations, preview, ledger);
     auto view = std::make_shared<runtime::TaskBudgetView>();
     runtime::GpuProcessingPhasePolicy policy(32, {}, view);
     const auto origin = runtime::MemoryBudgetLedger::Clock::time_point{};
@@ -183,40 +185,69 @@ void deliveredSettingsRecovery() {
         measured.process.sampledAt = now;
         const auto applied = ledger.applySample(std::move(measured), now);
         const auto allocation = ui::cacheMemoryBudgetAllocationFromSettings(settings, ledger);
-        expect(allocation == configured && ledger.state().configuredBytes == 30 * gib &&
-                   ledger.state().processingEffectiveBytes == applied.processingEffectiveBytes,
-               "same saved settings allocation is read-only during every delivered sample");
+        expect(
+            allocation == configured && ledger.state().configuredBytes == 30 * gib &&
+                operations.byteBudget() == 18 * gib && preview.byteBudget() == 12 * gib &&
+                applied.processingEffectiveBytes == 60 * gib && applied.retentionPercent == 100 &&
+                !applied.memoryPressure,
+            "delivered free-memory changes preserve exact settings and independent pool budgets");
         policy.applyHostSample(applied, ledger.physicalByteBudget(), allocation, now);
         const auto published = view->load();
-        expect(published && published->sampleSerial == applied.sampleSerial &&
-                   published->aggregateGpuBytes <= applied.processingEffectiveBytes &&
-                   published->previewRequestBytes <= applied.processingEffectiveBytes / 4 &&
-                   published->assignedOperationBytes + published->assignedPreviewBytes <=
-                       applied.processingEffectiveBytes,
-               "published request/aggregate shares use live processing cap, not raw weights");
-        return applied;
+        expect(
+            published && published->sampleSerial == applied.sampleSerial &&
+                published->assignedOperationBytes == 18 * gib &&
+                published->assignedPreviewBytes == 12 * gib &&
+                published->aggregateGpuBytes == available &&
+                published->previewRequestBytes == available,
+            "fresh phase capacity follows actual host availability independently of cache targets");
     };
-    auto state = deliver(0, 20 * gib);
-    expect(state.processingEffectiveBytes == 16 * gib && state.retentionPercent == 25,
-           "pressure establishes initial processing cap");
-    state = deliver(1, 10 * gib);
-    expect(state.processingEffectiveBytes == 16 * gib && state.retentionPercent == 10,
-           "same settings sample preserves five-second shrink cooldown");
-    state = deliver(6, 10 * gib);
-    expect(state.processingEffectiveBytes == 8 * gib, "shrink applies after cooldown");
-    state = deliver(10, 40 * gib);
-    expect(state.processingEffectiveBytes == 8 * gib && state.retentionPercent == 10,
-           "healthy delivery starts recovery hold without immediate default growth");
-    state = deliver(19, 40 * gib);
-    expect(state.processingEffectiveBytes == 8 * gib && state.retentionPercent == 10,
-           "repeated unchanged settings cannot bypass ten-second recovery hold");
-    state = deliver(20, 40 * gib);
+    deliver(0, 22 * gib);
+    deliver(1, 10 * gib);
+    deliver(2, 40 * gib);
+    const auto deliveredSerial = ledger.state().sampleSerial;
+    settings.setValue("playback/operation-cache-bytes", QString::number(3 * gib));
+    ui::setRamPreviewByteBudgetInSettings(settings, 2 * gib);
+    const auto changed =
+        ui::applyCacheMemoryBudgetsFromSettings(settings, operations, preview, ledger);
+    expect(changed.operationCacheByteBudget == 3 * gib &&
+               changed.previewFrameCacheByteBudget == 2 * gib &&
+               operations.byteBudget() == 3 * gib && preview.byteBudget() == 2 * gib &&
+               ledger.state().configuredBytes == 5 * gib &&
+               ledger.state().sampleSerial == deliveredSerial,
+           "applying edited preferences changes both owners immediately without another sample or "
+           "restart");
+    settings.remove("playback/operation-cache-bytes");
+    settings.remove("playback/ram-preview-memory-bytes");
+    const auto automatic =
+        ui::applyCacheMemoryBudgetsFromSettings(settings, operations, preview, ledger);
+    expect(automatic == configured && operations.byteBudget() == 18 * gib &&
+               preview.byteBudget() == 12 * gib,
+           "removing overrides restores the stable hardware-based Automatic targets");
+    std::size_t auxiliary = 0;
+    ledger.registerCache(
+        &auxiliary, 100 * gib, [] { return 0; },
+        [&](const std::size_t bytes) { auxiliary = bytes; });
+    expect(auxiliary == 100 * gib && operations.byteBudget() == 18 * gib &&
+               preview.byteBudget() == 12 * gib,
+           "an auxiliary cache cannot steal selected operation or RAM-preview budgets");
+    auto finite = sample();
+    finite.machine.availableBytes = 22 * gib;
+    finite.process.sampledAt = origin + 3s;
+    const auto constrained = ledger.applySample(finite, origin + 3s);
+    policy.applyHostSample(constrained, ledger.physicalByteBudget(), automatic, origin + 3s);
     const auto published = view->load();
-    expect(state.processingEffectiveBytes == 10 * gib && state.retentionPercent == 25 &&
-               published && published->aggregateGpuBytes == 6 * gib &&
-               published->previewRequestBytes == gib,
-           "first recovery growth stays at 25 percent and publishes proportional defaults");
+    expect(constrained.processCacheCeilingBytes == 8 * gib &&
+               operations.byteBudget() + preview.byteBudget() + auxiliary <= 8 * gib &&
+               operations.byteBudget() > 0 && preview.byteBudget() > 0 &&
+               ledger.state().configuredBytes == 30 * gib &&
+               settings.value("playback/operation-cache-bytes").isNull() &&
+               settings.value("playback/ram-preview-memory-bytes").isNull() && published &&
+               published->previewRequestBytes == 2 * gib && published->aggregateGpuBytes == 2 * gib,
+           "a real finite OS limit bounds shared reusable targets while fresh paired headroom "
+           "bounds work");
+    ledger.unregisterCache(&auxiliary);
 }
+
 void sampledPressurePreviewRecovery() {
     using namespace ui::ram_pipeline_test;
     runtime::MemoryBudgetLedger ledger(64 * gib, 64 * gib);
@@ -314,16 +345,20 @@ void sampledPressurePreviewRecovery() {
            "22 GiB availability is delivered through the actual sampler owner");
     const auto pressure = ledger.state();
     const auto host = policy->snapshot().reservations;
-    expect(pressure.memoryPressure && pressure.retentionPercent == 25 &&
-               pressure.retainedBytes > 0 && cache->size() != 0 &&
-               ledger.physicalByteBudget() == 64 * gib && host.hostReady &&
-               host.hostCapacityBytes && *host.hostCapacityBytes > 0 && view->load() &&
+    expect(!pressure.memoryPressure && pressure.retentionPercent == 100 &&
+               cache->byteBudget() == 12 * gib && pressure.retainedBytes > 0 &&
+               cache->size() != 0 && ledger.physicalByteBudget() == 64 * gib && host.hostReady &&
+               host.hostCapacityBytes && *host.hostCapacityBytes == 22 * gib && view->load() &&
                view->load()->fresh() && view->load()->previewRequestBytes > 0,
-           "pressure trims reusable retention while populated caches keep positive live capacity");
+           "available-memory delivery preserves populated cache targets and publishes actual live "
+           "capacity");
+    cache->setByteBudget(1);
+    expect(cache->size() == 0 && cache->byteBudget() == 1,
+           "a deliberately tiny retention target drops cached frames before independent live work");
     expect(session.setCurrentTime(timeAt(1)) &&
                spin([&] { return readyAt(timeAt(1), runtime::PreviewResolutionPolicy::Full); }) &&
                preparations == 2,
-           "uncached Full preview executes under the delivered pressure budget");
+           "uncached Full preview executes even when the cache target cannot retain one frame");
     preview.setResolutionPolicy(runtime::PreviewResolutionPolicy::Quarter);
     expect(spin([&] { return readyAt(timeAt(1), runtime::PreviewResolutionPolicy::Quarter); }) &&
                preparations == 3 && admittedWithinLiveBudget,
@@ -437,12 +472,14 @@ void coldForegroundAndSettings() {
                                     runtime::MemoryBudgetLedger::Clock::now());
     expect(settings.value("playback/operation-cache-bytes").toULongLong() == 20 * gib &&
                settings.value("playback/ram-preview-memory-bytes").toULongLong() == 20 * gib &&
-               oversized.operationCacheByteBudget + oversized.previewFrameCacheByteBudget ==
-                   36 * gib &&
-               ledger.state().configuredBytes == 36 * gib &&
-               first.cacheToolTipForTest().contains(QStringLiteral("Configured cache ceiling:")) &&
-               !first.cacheToolTipForTest().contains(QStringLiteral("Requested total:")),
-           "oversized raw requests persist; reporting distinguishes resolved configured ceiling");
+               oversized.operationCacheByteBudget == 20 * gib &&
+               oversized.previewFrameCacheByteBudget == 20 * gib &&
+               ledger.state().configuredBytes == 40 * gib &&
+               first.cacheToolTipForTest().contains(QStringLiteral("Requested cache total:")) &&
+               first.cacheToolTipForTest().contains(QStringLiteral("Current cache budget:")) &&
+               first.cacheToolTipForTest().contains(QStringLiteral("combined cache budgets")),
+           "exact selected requests persist while reporting identifies the shared finite system "
+           "limit");
     owner.beginShutdown();
     preview.beginShutdown();
     scheduler.beginShutdown();
@@ -453,7 +490,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     heldSampling();
     teardown();
-    deliveredSettingsRecovery();
+    liveSettingsAndDeliveredCapacity();
     sampledPressurePreviewRecovery();
     coldForegroundAndSettings();
     return failures == 0 ? 0 : 1;

@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <source_location>
 #include <string>
@@ -105,6 +106,57 @@ void testTheCellCarriesAMonospacedNumberAndAUnit(Expectations& expectations) {
     expectations.expect(
         QFontInfo(kit::font(kit::TypeRole::Value)).family().startsWith(kit::monospaceFontFamily()),
         "and it is the bundled monospaced family");
+}
+
+void testSpecialMinimumTextKeepsNumericEditing(Expectations& expectations) {
+    kit::KValueField field;
+    field.setRange(0, 256);
+    field.setUnit(QStringLiteral("GiB"));
+    field.setSpecialValueText(QStringLiteral("Automatic"));
+    field.resize(field.sizeHint());
+    field.show();
+    QCoreApplication::processEvents();
+    expectations.expect(field.value() == 0 && field.displayedValue() == QStringLiteral("Automatic"),
+                        "special minimum text leaves the numeric value intact");
+    pressAt(field, field.cellRect().center());
+    releaseAt(field, field.cellRect().center());
+    expectations.expect(field.isEditing() && field.lineEdit()->text() == QStringLiteral("0"),
+                        "the special minimum still edits as a number");
+    field.lineEdit()->setText(QStringLiteral("8"));
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QCoreApplication::sendEvent(field.lineEdit(), &enter);
+    expectations.expect(!field.isEditing() && field.value() == 8 &&
+                            field.displayedValue() == QStringLiteral("8.00"),
+                        "numeric editing leaves Automatic for the selected budget");
+    field.setValue(0);
+    field.setSpecialValueText({});
+    expectations.expect(field.displayedValue() == QStringLiteral("0.00"),
+                        "clearing special text restores the existing numeric presentation");
+}
+
+void testFiniteExtremesStayExactAndBounded(Expectations& expectations) {
+    kit::KValueField field;
+    field.setRange(std::numeric_limits<double>::lowest(), std::numeric_limits<double>::max());
+    field.setValue(std::numeric_limits<double>::max());
+    expectations.expect(field.value() == std::numeric_limits<double>::max() &&
+                            field.displayedValue().size() < 32 && field.sizeHint().width() < 600,
+                        "finite extremes stay exact with bounded scientific presentation");
+    field.resize(field.sizeHint());
+    field.show();
+    QCoreApplication::processEvents();
+    field.setValue(1.2345678901234567);
+    const auto exact = field.value();
+    pressAt(field, field.cellRect().center());
+    releaseAt(field, field.cellRect().center());
+    expectations.expect(field.lineEdit()->text().toDouble() == exact,
+                        "opening a number editor retains full round-trip precision");
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QCoreApplication::sendEvent(field.lineEdit(), &enter);
+    expectations.expect(field.value() == exact, "an unchanged Enter cannot round authored data");
+    field.setValue(std::numeric_limits<double>::denorm_min());
+    expectations.expect(field.displayedValue().toDouble() ==
+                            std::numeric_limits<double>::denorm_min(),
+                        "a finite subnormal is not presented as zero");
 }
 
 void testTheFieldDoesNotResizeAsDigitsChange(Expectations& expectations) {
@@ -483,6 +535,8 @@ int main(int argc, char** argv) {
     kit::installKinetikTheme(application);
     Expectations expectations;
     testTheCellCarriesAMonospacedNumberAndAUnit(expectations);
+    testSpecialMinimumTextKeepsNumericEditing(expectations);
+    testFiniteExtremesStayExactAndBounded(expectations);
     testTheFieldDoesNotResizeAsDigitsChange(expectations);
     testGeometryPlacesTheLabelAndCell(expectations);
     testTheCellIsTheWholeControlAndEnteringEditDoesNotMoveTheValue(expectations);

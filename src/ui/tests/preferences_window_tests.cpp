@@ -4,18 +4,22 @@
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/radio_group.hpp>
+#include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
 #include <QAbstractButton>
 #include <QApplication>
 #include <QEventLoop>
+#include <QFontMetrics>
 #include <QLabel>
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QString>
 #include <QTimer>
 
+#include <algorithm>
 #include <iostream>
+#include <limits>
 #include <source_location>
 #include <string_view>
 
@@ -208,9 +212,20 @@ void testTimelineKeyframesAndGraphAreMutuallyExclusive(Expectations& check) {
 void testRestartBadgesAndRail(Expectations& check) {
     ui::PreferencesWindow window(samplePreferences());
     const auto badges = window.findChildren<QLabel*>(QStringLiteral("preferencesRestartBadge"));
-    check.expect(badges.size() >= 4, "the restart-only preferences each carry a Restart badge");
-    check.expect(window.findChild<QLabel*>(QStringLiteral("preferencesRestartNotice")) != nullptr,
-                 "the memory page explains the restart requirement");
+    check.expect(badges.size() == 3, "only the three disk cache preferences carry Restart badges");
+    for (const auto* fieldName :
+         {"preferencesOperationCacheBytesField", "preferencesRamPreviewBytesField"}) {
+        const auto* field = window.findChild<ui::kit::KValueField*>(QLatin1StringView(fieldName));
+        check.expect(field != nullptr &&
+                         field->parentWidget()
+                             ->findChildren<QLabel*>(QStringLiteral("preferencesRestartBadge"))
+                             .isEmpty(),
+                     "memory budget rows take effect without restarting");
+    }
+    const auto* notice = window.findChild<QLabel*>(QStringLiteral("preferencesRestartNotice"));
+    check.expect(notice != nullptr && notice->text().contains(QStringLiteral("click Apply")) &&
+                     notice->text().contains(QStringLiteral("Disk cache")),
+                 "the memory page explains Apply and the disk-only restart requirement");
 
     auto* rail = window.findChild<ui::kit::KRadioGroup*>(QStringLiteral("preferencesCategoryRail"));
     auto* pages = window.findChild<QStackedWidget*>(QStringLiteral("preferencesPages"));
@@ -220,6 +235,129 @@ void testRestartBadgesAndRail(Expectations& check) {
     rail->setCurrentIndex(2);
     check.expect(pages != nullptr && pages->currentIndex() == 2,
                  "selecting a category switches the page");
+}
+
+void testAutomaticMemoryBudgetsAreResolved(Expectations& check) {
+    constexpr auto gib = std::size_t{1024} * 1024 * 1024;
+    bloom::runtime::MemoryBudgetLedger ledger(32 * gib, 32 * gib);
+    ui::PreferencesWindow window(ui::ApplicationPreferences{}, nullptr, nullptr, ledger);
+    const auto* operation = window.findChild<ui::kit::KValueField*>(
+        QStringLiteral("preferencesOperationCacheBytesField"));
+    const auto* ram =
+        window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesRamPreviewBytesField"));
+    const auto* summary = window.findChild<QLabel*>(QStringLiteral("preferencesMemorySummary"));
+    check.expect(operation && ram && operation->displayedValue() == QStringLiteral("Automatic") &&
+                     ram->displayedValue() == QStringLiteral("Automatic"),
+                 "zero memory preferences read Automatic");
+    check.expect(summary && summary->text().contains(QStringLiteral("Operation cache 9.60 GiB")) &&
+                     summary->text().contains(QStringLiteral("RAM preview 6.40 GiB")),
+                 "Automatic exposes its resolved machine budgets");
+    auto preferences = samplePreferences();
+    window.setPreferences(preferences);
+    check.expect(summary && summary->text().contains(QStringLiteral("Operation cache 10.00 GiB")) &&
+                     summary->text().contains(QStringLiteral("RAM preview 6.00 GiB")),
+                 "the summary follows explicit selected budgets");
+    ledger.beginProcessSampling();
+    const auto now = bloom::runtime::MemoryBudgetLedger::Clock::now();
+    static_cast<void>(ledger.applySample(
+        {.machine = {.availableBytes = 32 * gib},
+         .physicalBytes = 32 * gib,
+         .process = {.source = bloom::runtime::ProcessMemorySource::LinuxCgroupV2,
+                     .status = bloom::runtime::ProcessMemoryStatus::Finite,
+                     .sampledAt = now,
+                     .membershipPath = "/fixture",
+                     .domains = {{"/fixture", bloom::runtime::ProcessMemoryLimitKind::Finite,
+                                  8 * gib, 6 * gib}}}},
+        now));
+    window.setPreferences(preferences);
+    check.expect(summary &&
+                     summary->text().contains(QStringLiteral("system memory limit of 8.00 GiB")) &&
+                     operation->value() == 10 && ram->value() == 6,
+                 "a real system limit is disclosed without rewriting selected budgets");
+}
+
+void testLargeBudgetPreferencesRemainExactOnApply(Expectations& check) {
+    constexpr auto gib = std::uint64_t{1024} * 1024 * 1024;
+    auto preferences = samplePreferences();
+    preferences.operationCacheBytes = 4096 * gib;
+    preferences.ramPreviewBytes = 8192 * gib;
+    preferences.mediaDiskCacheBudgetBytes = 16384 * gib;
+    ui::PreferencesWindow window(preferences);
+    const auto* operation = window.findChild<ui::kit::KValueField*>(
+        QStringLiteral("preferencesOperationCacheBytesField"));
+    const auto* ram =
+        window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesRamPreviewBytesField"));
+    const auto* disk = window.findChild<ui::kit::KValueField*>(
+        QStringLiteral("preferencesMediaDiskCacheBudgetField"));
+    check.expect(operation && operation->value() == 4096 && ram && ram->value() == 8192 && disk &&
+                     disk->value() == 16384,
+                 "memory and disk budgets have no arbitrary GiB display ceiling");
+    ui::ApplicationPreferences applied;
+    QObject::connect(&window, &ui::PreferencesWindow::preferencesApplied, &window,
+                     [&](const auto& value) { applied = value; });
+    window.findChild<QAbstractButton*>(QStringLiteral("preferencesAudioEnabledSwitch"))
+        ->setChecked(true);
+    window.findChild<QPushButton*>(QStringLiteral("preferencesApplyButton"))->click();
+    check.expect(applied.operationCacheBytes == preferences.operationCacheBytes &&
+                     applied.ramPreviewBytes == preferences.ramPreviewBytes &&
+                     applied.mediaDiskCacheBudgetBytes == preferences.mediaDiskCacheBudgetBytes,
+                 "an unrelated Apply preserves large saved byte counts exactly");
+    auto* editable = window.findChild<ui::kit::KValueField*>(
+        QStringLiteral("preferencesOperationCacheBytesField"));
+    editable->setValue(editable->maximum());
+    check.expect(window.preferences().operationCacheBytes ==
+                     std::min<std::uint64_t>(std::numeric_limits<std::uint64_t>::max(),
+                                             std::numeric_limits<std::size_t>::max()),
+                 "the largest supported field value converts without overflow");
+}
+
+void testPreferenceLabelsRemainReadable(Expectations& check) {
+    ui::PreferencesWindow window(samplePreferences());
+    window.show();
+    window.findChild<ui::kit::KRadioGroup*>(QStringLiteral("preferencesCategoryRail"))
+        ->setCurrentIndex(1);
+    QCoreApplication::processEvents();
+    for (const auto* name :
+         {"preferencesOperationCacheBytesField", "preferencesRamPreviewBytesField",
+          "preferencesMediaDiskCacheBudgetField"}) {
+        const auto* field = window.findChild<ui::kit::KValueField*>(QLatin1StringView(name));
+        const auto* label =
+            field ? field->parentWidget()->findChild<QLabel*>(QStringLiteral("propertiesRowLabel"))
+                  : nullptr;
+        check.expect(label && label->text() == label->toolTip() &&
+                         label->width() >=
+                             QFontMetrics(label->font()).horizontalAdvance(label->text()),
+                     "preference budget labels are readable at the default window size");
+    }
+    auto* label = ui::kit::makePropertyRowLabel(QStringLiteral("Default property"), &window);
+    ui::kit::KPropertyRow defaultRow(label, nullptr, {}, &window);
+    defaultRow.resize(600, defaultRow.height());
+    defaultRow.show();
+    QCoreApplication::processEvents();
+    check.expect(label->width() == ui::kit::px(ui::kit::Size::PropertiesLabelWidth),
+                 "ordinary Properties rows retain their existing label width");
+}
+
+void testGridAndAutomaticWidthMatchRuntime(Expectations& check) {
+    auto preferences = samplePreferences();
+    preferences.nodeGridSize = 1;
+    preferences.timelineLayerColumnWidth = 0;
+    ui::PreferencesWindow window(preferences);
+    auto* grid =
+        window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesNodeGridSizeField"));
+    auto* width = window.findChild<ui::kit::KValueField*>(
+        QStringLiteral("preferencesTimelineLayerColumnWidthField"));
+    check.expect(grid && grid->value() == 1,
+                 "the minimum supported grid size is displayed exactly");
+    check.expect(width && width->value() == 0 &&
+                     width->displayedValue() == QStringLiteral("Automatic"),
+                 "automatic timeline width is not displayed as an authored 80 pixels");
+    grid->setValue(4096);
+    check.expect(window.preferences().nodeGridSize == 4096,
+                 "grid size accepts values above the old arbitrary 200-pixel ceiling");
+    width->setValue(4096);
+    check.expect(window.preferences().timelineLayerColumnWidth == 4096,
+                 "timeline width preserves the supported integer value");
 }
 
 void testPerformancePageReportsCpuOnly(Expectations& check) {
@@ -366,6 +504,10 @@ int main(int argc, char** argv) {
     testRestoreDefaults(check);
     testTimelineKeyframesAndGraphAreMutuallyExclusive(check);
     testRestartBadgesAndRail(check);
+    testAutomaticMemoryBudgetsAreResolved(check);
+    testLargeBudgetPreferencesRemainExactOnApply(check);
+    testPreferenceLabelsRemainReadable(check);
+    testGridAndAutomaticWidthMatchRuntime(check);
     testPerformancePageReportsCpuOnly(check);
     testPerformancePageUsesInjectedProvider(check);
     testPerformancePageRefreshesWhileVisible(check);

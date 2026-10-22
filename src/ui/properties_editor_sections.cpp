@@ -1,3 +1,4 @@
+#include "numeric_field_projection.hpp"
 #include <bloom/ui/kit/controls.hpp>
 #include <memory>
 // Task PROPS-1, deliverable 1: PropertiesEditor's CONSTRUCTION half.
@@ -55,6 +56,7 @@
 #include <QVariant>
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -79,11 +81,8 @@ std::optional<document::LayerId> contextualLayerId(const CompositionSession& ses
     return session.selection().contextualLayer;
 }
 
-// The unbounded-in-practice range Position, Anchor and the RGBA cells all share.
-// kit::KValueField::setRange() always clamps, and both true infinity and the finite double extremes
-// wreck sizeHint(), so this stands in for "no limit": no realistic authored value reaches it, so
-// nothing is ever actually clipped, while sizeHint() stays sane.
-constexpr double kPracticallyUnbounded = 1'000'000.0;
+// These parameters accept finite binary64 values; presentation must not impose a document limit.
+constexpr double kFiniteMaximum = std::numeric_limits<double>::max();
 
 kit::KSwitch* makeToggle(QWidget* parent, const QString& objectName, const QString& accessible) {
     auto* toggle = new kit::KSwitch(parent);
@@ -199,8 +198,8 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
     const ValueCellSpec pixelCell{.objectName = {},
                                   .accessibleName = {},
                                   .subLabel = {},
-                                  .minimum = -kPracticallyUnbounded,
-                                  .maximum = kPracticallyUnbounded,
+                                  .minimum = -kFiniteMaximum,
+                                  .maximum = kFiniteMaximum,
                                   .decimals = 2,
                                   .singleStep = 1.0,
                                   .unit = QStringLiteral("px")};
@@ -236,8 +235,8 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
     rotation_ = makeValueCell({.objectName = QStringLiteral("rotationEditor"),
                                .accessibleName = tr("Rotation"),
                                .subLabel = {},
-                               .minimum = -100'000.0,
-                               .maximum = 100'000.0,
+                               .minimum = -kFiniteMaximum,
+                               .maximum = kFiniteMaximum,
                                .decimals = 2,
                                .singleStep = 1.0,
                                .unit = QString::fromUtf8("°")},
@@ -256,8 +255,8 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
     const ValueCellSpec scaleCell{.objectName = {},
                                   .accessibleName = {},
                                   .subLabel = {},
-                                  .minimum = -100'000.0,
-                                  .maximum = 100'000.0,
+                                  .minimum = -kFiniteMaximum,
+                                  .maximum = kFiniteMaximum,
                                   .decimals = 2,
                                   .singleStep = 1.0,
                                   .unit = QStringLiteral("%")};
@@ -332,8 +331,8 @@ void PropertiesEditor::buildSolidSection(QVBoxLayout* layout) {
     const ValueCellSpec channel{.objectName = {},
                                 .accessibleName = {},
                                 .subLabel = {},
-                                .minimum = -kPracticallyUnbounded,
-                                .maximum = kPracticallyUnbounded,
+                                .minimum = -kFiniteMaximum,
+                                .maximum = kFiniteMaximum,
                                 .decimals = 3,
                                 .singleStep = 0.01,
                                 .unit = {}};
@@ -409,7 +408,7 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
     textSize_ = makeValueCell({.objectName = QStringLiteral("textSizeEditor"),
                                .accessibleName = tr("Text size"),
                                .subLabel = {},
-                               .minimum = 1.0,
+                               .minimum = std::numeric_limits<double>::denorm_min(),
                                .maximum = document::kMaximumTextSizePixels,
                                .decimals = 1,
                                .singleStep = 1.0,
@@ -638,8 +637,11 @@ void PropertiesEditor::bindCommits() {
     // Live changes use the same typed setters as discrete edits. The session holds them until
     // the field's shared editFinished boundary commits one transaction.
     const auto commitPosition = [this](const bool fromX) {
-        double x = positionX_->value();
-        double y = positionY_->value();
+        const auto authoritative = session_.effectiveVec2Value(document::kPositionParameterRole);
+        if (!authoritative)
+            return;
+        double x = fromX ? positionX_->value() : authoritative->x;
+        double y = fromX ? authoritative->y : positionY_->value();
         if (positionLink_->isChecked()) {
             if (const auto current =
                     session_.effectiveVec2Value(document::kPositionParameterRole)) {
@@ -657,17 +659,25 @@ void PropertiesEditor::bindCommits() {
     bindCell(positionY_, document::kPositionParameterRole, document::AnimationComponent::Y,
              [commitPosition] { commitPosition(false); });
 
-    const auto commitAnchor = [this] {
-        (void)session_.setSelectedAnchor(anchorX_->value(), anchorY_->value());
+    const auto commitAnchor = [this](const bool fromX) {
+        const auto* parameter = session_.parameterForSelection(document::kAnchorParameterRole);
+        if (parameter)
+            (void)session_.setParameterComponentValue(parameter->id,
+                                                      fromX ? document::AnimationComponent::X
+                                                            : document::AnimationComponent::Y,
+                                                      (fromX ? anchorX_ : anchorY_)->value());
     };
     bindCell(anchorX_, document::kAnchorParameterRole, document::AnimationComponent::X,
-             commitAnchor);
+             [commitAnchor] { commitAnchor(true); });
     bindCell(anchorY_, document::kAnchorParameterRole, document::AnimationComponent::Y,
-             commitAnchor);
+             [commitAnchor] { commitAnchor(false); });
 
     const auto commitScale = [this](const bool fromX) {
-        double x = scaleX_->value() / 100.0;
-        double y = scaleY_->value() / 100.0;
+        const auto authoritative = session_.effectiveVec2Value(document::kScaleParameterRole);
+        if (!authoritative)
+            return;
+        double x = fromX ? numericFieldValue(*scaleX_, 100) : authoritative->x;
+        double y = fromX ? authoritative->y : numericFieldValue(*scaleY_, 100);
         if (scaleLink_->isChecked()) {
             if (const auto current = session_.effectiveVec2Value(document::kScaleParameterRole)) {
                 // A zero axis carries no ratio to preserve, so proportional linking falls back to

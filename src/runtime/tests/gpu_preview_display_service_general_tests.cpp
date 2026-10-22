@@ -494,9 +494,9 @@ int run(const int argc, char** argv) {
                       << '\n';
         } else {
             expectations.expect(
-                defaultStatus.residentCapacityPlan.requestBytes > kGib,
-                "default-scheduler: the resolved GPU request budget exceeds the old "
-                "fixed 1 GiB ceiling");
+                defaultStatus.foregroundRequestBytes > kGib,
+                "default-scheduler: the rooted foreground budget exceeds the old "
+                "fixed 1 GiB ceiling even when cache retention has a separate partition");
             const auto bigIdentity = makeIdentity(*bigPlan, 1, {}, {}, ViewAdjust{});
             const std::uint64_t hostLimit = 64ULL * kGib;
             auto bigSubmission = defaultService.submit(TaskRequest("default scheduler 6k", owner),

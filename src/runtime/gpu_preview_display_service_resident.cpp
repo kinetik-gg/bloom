@@ -64,11 +64,13 @@ bool createAndQualifyResidentRoute(
         auto executorBudgets =
             core->options.residentExecutorBudgets.value_or(GpuSceneExecutorBudgets{});
         if (!core->options.residentExecutorBudgets && core->options.processingPhasePolicy) {
-            // Construction allocates no image. A reusable-cache startup snapshot is not a
-            // separate producer ceiling for an admitted rooted request. begin() still applies
-            // the actual phase allowance, live-pin charges and native resource limits.
+            // Construction allocates no image. Keep the per-image pipeline ceiling independent
+            // of a transient startup free-space sample; begin() still applies the current phase
+            // allowance, live-pin charges and native resource limits.
+            const auto nominal = gpuResidentConstructionCapacity(
+                gpuResidentCapacityFromAllocationBudget(core->device->availableAllocationBudget()));
             executorBudgets.maxImageBytes = core->options.previewByteAllowance.value_or(
-                core->effectivePreviewByteAllowance.load(std::memory_order_relaxed));
+                nominal.isKnown() ? nominal.availableBytes : kUnknownResidentPoolBytes);
         }
         executorBudgets.collectQueueTimestamps = core->queueTimingRequested();
         auto executor =

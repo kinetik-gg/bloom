@@ -259,6 +259,7 @@ enum class Size : int {
     // The Settings window's category rail: wide enough for the longest category label plus its
     // selection bar, sized in Figma design px through kit::px() like every other Size token.
     PreferencesRailWidth = 180,
+    PreferencesLabelWidth = 184,
     PropertiesCheckBox = 12,
     PropertiesSwatchHeight = 26,
     PropertiesAnchorDot = 8,

@@ -1,4 +1,3 @@
-#include <bloom/runtime/gpu_memory_budget.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
 #include <algorithm>
@@ -18,6 +17,17 @@ std::optional<std::uint64_t> multiply(const std::uint64_t value,
         return {};
     }
     return value * factor;
+}
+std::optional<std::uint64_t> processHeadroom(const ProcessMemorySample& sample) noexcept {
+    std::optional<std::uint64_t> result;
+    for (const auto& domain : sample.domains) {
+        if (domain.kind != ProcessMemoryLimitKind::Finite)
+            continue;
+        const auto current = domain.currentBytes.value_or(0);
+        const auto remaining = domain.limitBytes > current ? domain.limitBytes - current : 0;
+        result = result ? std::min<std::uint64_t>(*result, remaining) : remaining;
+    }
+    return result;
 }
 } // namespace
 std::optional<render::GpuProcessingPhaseRequest>
@@ -74,7 +84,7 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
         processStatus_ = sample.process.status;
         sampleSerial_ = sample.sampleSerial;
     }
-    const auto finite = minimumProcessCacheAllowance(sample.process, 0);
+    const auto finite = processHeadroom(sample.process);
     if (!newerDelivery) {
         // Multiple composition roots may replay the same already-delivered neutral snapshot.
         // A duplicate never closes/reopens readiness or authorizes growth; reliable tighter
@@ -119,16 +129,11 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
     }
     std::optional<std::uint64_t> allowance;
     if (sample.machine.availableBytes) {
-        const auto available = *sample.machine.availableBytes;
-        // Cache-pressure reserve is a retention threshold, not a second deduction from live
-        // availability. Reuse the ledger's active-work percentage without reclaimable credit.
-        // Divide first (including the remainder) so even the largest counter cannot overflow.
-        allowance = available / 100 * kDefaultTotalAvailablePercent +
-                    available % 100 * kDefaultTotalAvailablePercent / 100;
-        const auto usable = MemoryBudgetLedger::usableByteBudgetForPhysicalMemory(physicalBytes);
-        allowance = std::min<std::uint64_t>(
-            *allowance, physicalBytes == 0 ? usable : std::min(physicalBytes, usable));
-        // Unknown physical capacity keeps the existing fallback as a ceiling, never a floor.
+        // Measured headroom bounds new work. Cache preferences and arbitrary reserve percentages
+        // do not limit whether a frame can render; typed phase claims still bound its live peak.
+        allowance = *sample.machine.availableBytes;
+        if (physicalBytes != 0)
+            allowance = std::min<std::uint64_t>(*allowance, physicalBytes);
         if (finiteProcessCeiling_) {
             allowance.emplace(std::min(*allowance, *finiteProcessCeiling_));
         }
@@ -165,33 +170,17 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
     const auto host = current.reservations.hostCapacityBytes.value_or(0);
     const auto hostCeiling = static_cast<std::size_t>(
         std::min<std::uint64_t>(host, std::numeric_limits<std::size_t>::max()));
-    // Configured shares are ceilings/weights, not permission to skip the ledger's timed host
-    // recovery. Scale from the delivered LIVE processing cap, independently of reusable credit.
-    const auto configured =
-        std::max(static_cast<long double>(sample.configuredBytes),
-                 static_cast<long double>(allocation.operationCacheByteBudget) +
-                     static_cast<long double>(allocation.previewFrameCacheByteBudget));
-    const auto live = std::min(sample.processingEffectiveBytes, allocation.usableByteBudget);
-    const auto assigned = [configured, live](const std::size_t ceiling) {
-        return configured == 0
-                   ? std::size_t{0}
-                   : static_cast<std::size_t>(static_cast<long double>(ceiling) *
-                                              std::min(configured, static_cast<long double>(live)) /
-                                              configured);
-    };
-    const auto operation = assigned(allocation.operationCacheByteBudget);
-    const auto preview = assigned(allocation.previewFrameCacheByteBudget);
-    const auto aggregate = std::min(hostCeiling, operation);
-    const auto request = std::min(aggregate, gpuPreviewRequestByteAllowanceFor(preview));
+    // Retention targets are descriptive only. Small caches must not prohibit foreground work.
+    // The shared phase registry and real device quotas enforce concurrent allocation claims.
     static_cast<void>(
         budgetView_->publish({.sampleSerial = current.sampleSerial,
                               .sampledAt = sample.process.sampledAt,
                               .ready = current.reservations.hostReady &&
                                        sample.processSampleFresh && !sample.awaitingProcessSample,
-                              .assignedPreviewBytes = preview,
-                              .assignedOperationBytes = operation,
-                              .previewRequestBytes = request,
-                              .aggregateGpuBytes = aggregate}));
+                              .assignedPreviewBytes = allocation.previewFrameCacheByteBudget,
+                              .assignedOperationBytes = allocation.operationCacheByteBudget,
+                              .previewRequestBytes = hostCeiling,
+                              .aggregateGpuBytes = hostCeiling}));
 }
 bool GpuProcessingPhasePolicy::reportDevice(const std::uint64_t ownershipEpoch,
                                             const render::GpuAllocationBudget report) noexcept {
@@ -235,6 +224,25 @@ bool GpuProcessingPhasePolicy::retireDeviceReport(const std::uint64_t ownershipE
 void GpuProcessingPhasePolicy::applyDeviceReportsLocked() noexcept {
     std::optional<std::uint64_t> minimum;
     bool ready = deviceCount_ != 0;
+    // With one reported device, the root's exact LOCAL native allocations belong to that owner.
+    // A live VMA free-space report has already subtracted their backing, while totalDeviceClaim
+    // still includes their ownership tokens. Credit only this allocated portion before the phase
+    // budget subtracts all claims; unallocated phase reservations remain charged. With several
+    // devices the aggregate root has no per-device ownership split, so use raw free conservatively.
+    std::uint64_t ownedLocalNative = 0;
+    if (deviceCount_ == 1 &&
+        devices_[0].budget.source == render::GpuAllocationBudgetSource::MemoryBudget) {
+        const auto claims = budget_.snapshot();
+        const auto localImages =
+            claims.ownedNativeImageBytes -
+            std::min(claims.ownedNativeImageBytes, claims.ownedNonlocalNativeHostBytes);
+        const auto localBuffers =
+            claims.ownedNativeBufferBytes -
+            std::min(claims.ownedNativeBufferBytes, claims.ownedNonlocalNativeBufferHostBytes);
+        ownedLocalNative = localImages > std::numeric_limits<std::uint64_t>::max() - localBuffers
+                               ? std::numeric_limits<std::uint64_t>::max()
+                               : localImages + localBuffers;
+    }
     for (std::size_t slot = 0; slot < deviceCount_; ++slot) {
         const auto& current = devices_[slot].budget;
         if (current.source == render::GpuAllocationBudgetSource::Unavailable) {
@@ -243,10 +251,14 @@ void GpuProcessingPhasePolicy::applyDeviceReportsLocked() noexcept {
         }
         // The fallback nominal heap estimate is a static planning quota, never free VRAM.
         // Reserve half for opaque driver/native overlap before applying per-request shares.
-        const auto available =
-            current.source == render::GpuAllocationBudgetSource::DeviceLocalEstimate
-                ? current.available_bytes / 2
-                : current.available_bytes;
+        auto available = current.source == render::GpuAllocationBudgetSource::DeviceLocalEstimate
+                             ? current.available_bytes / 2
+                             : current.available_bytes;
+        if (ownedLocalNative != 0) {
+            const auto physicalRoom =
+                current.device_local_bytes > available ? current.device_local_bytes - available : 0;
+            available += std::min(ownedLocalNative, physicalRoom);
+        }
         minimum = minimum ? std::min(*minimum, available) : available;
     }
     budget_.setDeviceCapacity(minimum, ready || (minimum && *minimum == 0));

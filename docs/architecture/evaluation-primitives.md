@@ -660,167 +660,106 @@ state. This metadata is derived runtime state and does not change serialized pla
 `playback/operation-cache-bytes` is the operation allocation from the session's one
 `MemoryBudgetLedger`, which also allocates `playback/ram-preview-memory-bytes`.
 
-The **host reserve** is `max(8 GiB, 40% of physical)`. The **usable budget** is physical memory
-minus that reserve, with the historical 3 GiB fallback bounded by reported physical memory. The
-configured default total is `min(usable, 50% of physical)`, with the same floor. The configured
-operation/preview split remains 60/40, except at the floor where it is 1/2 GiB:
+Cache preferences are independent selected retention targets, not proportional weights in a
+host-pressure policy. Nonzero operation and RAM-preview preferences are honored exactly. A missing,
+invalid or zero value selects that pool's Automatic default; changing one preference does not
+reduce the other, and decoded-video or other auxiliary pools do not subtract from a named target.
 
-| Physical | Reserve | Usable | Configured total | Operation ceiling | Preview ceiling |
-| --- | --- | --- | --- | --- | --- |
-| 8 GiB | 8 GiB | 3 GiB (floor) | 3 GiB (floor) | 1 GiB | 2 GiB |
-| 16 GiB | 8 GiB | 8 GiB | 8 GiB | 4.8 GiB | 3.2 GiB |
-| 32 GiB | 12.8 GiB | 19.2 GiB | 16 GiB | 9.6 GiB | 6.4 GiB |
-| 60 GiB | 24 GiB | 36 GiB | 30 GiB | 18 GiB | 12 GiB |
+Automatic selects a stable total from physical capacity: 50%, with the historical 3 GiB fallback
+bounded by reported physical memory. The operation/preview split is 60/40, with up to 2 GiB assigned
+to preview at the low-memory floor. Physical capacity is resolved once from the first successful
+worker delivery; subsequent free-memory fluctuations do not rewrite these targets.
+
+| Physical | Automatic total | Operation target | Preview target |
+| --- | --- | --- | --- |
+| 8 GiB | 4 GiB | 2 GiB | 2 GiB |
+| 16 GiB | 8 GiB | 4.8 GiB | 3.2 GiB |
+| 32 GiB | 16 GiB | 9.6 GiB | 6.4 GiB |
+| 60 GiB | 30 GiB | 18 GiB | 12 GiB |
+
+These defaults are optional starting values, not physical-capacity ceilings on explicit preferences.
+Selected targets are lazy retention limits, not preallocations or allocation guarantees. Preferences
+Apply updates both live owners immediately without restart or rewriting the selected values.
 
 Production calls `MemoryBudgetLedger::beginProcessSampling()` before constructing cache owners.
-Reusable retention starts at zero until a completed worker sample permits it. Foreground processing
-capacity and actual export reservations use a separate bounded allowance, so cold zero retention
-does not disable frame preparation. Default construction and settings getters perform no OS reads;
-unactivated standalone ledgers retain the legacy host-only policy.
-
-Foreground phase admission uses `min(physical-bounded usable budget, 80% of measured available)`
-when physical memory is known, then applies every finite process ceiling and the existing complete,
-fresh, monotonic sample and readiness requirements. This reuses the ledger's active-work availability
-percentage; the `max(8 GiB, 40% of physical)` reserve remains the cache-pressure threshold and is not
-deducted a second time from available memory. For example, 64 GiB physical with 22 GiB available
-still triggers cache trimming while allowing a fitting phase within 17.6 GiB of live host capacity.
-The physical-bounded low-memory usable floor remains a ceiling, never a guaranteed allocation:
-measured zero refuses growth and missing availability cannot authorize it. With unknown physical
-capacity, 80% of fresh measured availability is capped by the existing 3 GiB fallback ceiling,
-without granting a floor. Duplicate deliveries cannot refresh numeric defaults, and incomplete or
-stale deliveries cannot grow host capacity. Reusable host credit remains zero; held and retained
-claims, native/device and request-count limits remain charged independently of cache retention.
+Reusable retention starts at zero until a complete usable worker sample establishes process-limit
+readiness. This is initial readiness, not a zero-byte OS limit. Foreground processing uses separate
+phase admission. Construction and settings getters never probe the OS.
 
 The application owns one `MemoryBudgetController`, with at most one `BlockingIo` sampling task,
-no sampling backlog and a five-second cadence. A worker captures host/process data; ordinary task
-completion delivers it independently of Jobs monitoring. The UI applies cache callbacks and updates
-cached settings-derived weights. Status bars only observe that cached state. Shutdown cancels and
-stops admission without waiting on a held worker. The first delivered host capacity refreshes
-configured weights without writing settings.
+no sampling backlog and a five-second cadence. Task completion delivers host/process observations
+independently of Jobs monitoring. Cache callbacks apply on the owner thread; status bars and
+Preferences observe cached state. Shutdown cancels and stops admission without waiting on a held
+worker. A preference change requests a new sample but applies retention targets immediately.
 
-Activated host policy uses configured capacity, half of physical memory and 80% of available
-memory, subject to the historical physical-bounded floor. No currently registered retained bytes
-qualify as exclusive reclaimable credit, so production credits **zero** to both host and process
-headroom. An unactivated legacy ledger may still add its registered retained bytes to availability.
-Missing availability omits that host term; measured zero remains a real pressure sample.
+### Actual process constraints and active work
 
-For each visible finite Linux cgroup v2 domain, pair its own limit `L` with its own usage `U`:
+An observed finite OS process/container limit can constrain total reusable retention. Its reusable
+ceiling is the smallest **absolute limit** among visible domains. It is not remaining free memory,
+and no invented reserve is subtracted. Only when the registered reusable targets together exceed
+that absolute limit do those owners divide it proportionally. Selected settings remain unchanged;
+the UI names the combined OS constraint and shows each owner's actual allowance. Auxiliary pools
+participate in this actual shared constraint; they do not reduce named budgets on an unconstrained
+process. `LiveWork` owners are separate from reusable retention.
 
-```text
-reserve P = min(1 GiB, max(16 MiB, L/8))
-domain ceiling = max(0, L - (max(U - reusableHostCredit, 0) + P))
-reusableHostCredit = 0
-hard reusable ceiling = min(host allowance, every finite domain ceiling)
-```
+For active processing, the shared phase policy checks measured available host memory and each
+finite domain's paired `max(0, limit - current usage)`, capped by reported physical capacity when
+known. It does not apply an additional percentage, reserve, cache-budget fraction, or growth delay.
+The delivered request and aggregate capacities describe active work independently of selected cache
+budgets. Measured zero refuses growth; unknown, incomplete or stale observations cannot authorize
+new growth. Held leases, request counts, device limits, cancellation and retirement remain charged.
+Cache counters are not unique physical backing and receive zero reclaimable-memory credit.
 
-The parser follows actual membership and compatible mounts, preserving visible ancestors with a
-bounded 32-domain walk. A finite limit with unavailable usage can still tighten the absolute `L-P`
-bound. Partial, stale, failed and unsupported samples never expand a previously finite constraint.
-Verified no-visible-finite-limit is distinct from unknown or globally unlimited. Removal of an
-observed finite constraint requires fresh monotonic complete paired data from the same verified
-membership, selected mount/filesystem and cgroup/mount namespace view, with explicit `max` and
-valid current usage for every remembered finite domain. The worker checks that view before and
-after scalar reads. Missing, malformed, incomplete, changed-view or stale observations retain the
-constraint, as does failure to retain its bounded history. Initial verified hierarchy-root absence
-can initialize host-only policy but cannot omit a remembered domain from a removal proof. This
-proves removal of observed constraints within the trusted visible view; hidden limits are not
-proved absent. Linux memory-v1 and Windows/macOS process limits remain explicitly Unsupported.
-With no prior finite constraint, explicit unsupported/no-finite results permit host-only best effort.
-Native Windows/macOS execution qualification is still pending.
+The parser follows actual Linux cgroup v2 membership and compatible mounts, preserving visible
+ancestors with a bounded 32-domain walk. A finite domain with missing usage may tighten the absolute
+retention ceiling, but cannot authorize active-work growth. Partial, stale, failed and unsupported
+samples cannot expand a previously observed finite constraint. Fresh, monotonic, complete paired
+samples permit immediate recovery to their measured constraint; there is no half-cap seed,
+ten-second hold, percentage retention ladder, or incremental recovery policy.
 
-Monotonic complete finite samples no more than fifteen seconds old, or verified observed-constraint
-removal as above, authorize measured-ceiling recovery. The first finite sample seeds at most half the hard allowance. Recovery waits ten seconds;
-upward changes retain the five-second/ten-percent gating and grow by at most the smaller of 25% of
-the effective allowance and half the remaining gap. Recovery from zero uses a half-gap seed after
-the hold. Reliable hard shrink applies immediately at any delta, overriding floors, hysteresis and
-cooldown. Reusable retention is bounded by this policy; it is not a whole-process reservation or
-OOM guarantee. GPU/driver allocations, processing scratch, live pins and export admission require
-separate aggregate accounting.
+Removal of an observed constraint requires complete data from the same verified membership,
+selected mount/filesystem and cgroup/mount namespace view, with explicit `max` and valid current
+usage for every remembered finite domain. The worker verifies the view before and after scalar
+reads. Missing, malformed, changed-view or stale observations retain the constraint, as does
+failure to retain its bounded history. Initial verified hierarchy-root absence may establish
+host-only operation but cannot omit a remembered domain from removal proof. Hidden limits are not
+proved absent. Linux memory-v1 and Windows/macOS process limits remain explicitly Unsupported;
+without an observed finite constraint, they use disclosed host-only best effort. Native
+Windows/macOS qualification remains pending.
 
-The phase policy separately consumes verified host headroom for conservative processing admission;
-held leases and request counts survive quota updates, while zero refuses new growth. This is not
-physical allocation accounting. Shared preview/final roots, bounded readiness/release retry, legacy
-admission and required-route validation pass within the first conservative G6B slice; published
-products, shared aliases and later presentation still require allocation-owned accounting.
+These checks are admission and retention accounting, not a whole-process OOM guarantee. Shared
+aliases, allocator overhead, scratch, driver allocations and other live products still require
+allocation-owned accounting. The existing GPU owner partition and final-render request defaults
+have separate restrictions recorded in the user-control audit; this change does not claim to have
+removed every device or export policy.
 
-Missing, invalid or zero settings use the default split. Overrides determine configured ceilings:
-one override reduces the other allocation if necessary; two overcommitted overrides are reduced
-proportionally to the usable budget. They do not bypass the live cap or guarantee a minimum.
-Explicit ceilings below the policy floor stay small. The configured total is the resulting
-operation/preview sum, and every registered pool's ceiling supplies its proportional weight.
-Weights are normalized by `max(configured total, sum of registered ceilings)`, so auxiliary caches
-share the total rather than add unbounded allowances on top. Video's configured allowance is
-reserved from operation space by the composition root. Each reusable callback receives its weighted
-fraction of the effective reusable cap; `LiveWork` uses the separate processing allowance. Both
-are further reduced by the current host-pressure percentage.
+### Retention, diagnostics and lifetime
 
-Linux reads `MemAvailable`, `SwapTotal` and `SwapFree` from `/proc/meminfo`, falling back to
-available physical pages when necessary. Windows reads available physical RAM with
-`GlobalMemoryStatusEx` and actual page-file use with `K32EnumPageFilesW`, rather than treating
-commit charge as swap. macOS uses free plus inactive VM pages as a conservative availability
-estimate, `hw.memsize` for physical RAM and `vm.swapusage` for swap. When swap sampling is
-unavailable, availability pressure remains supported. These policies are Qt-free; OS sampling runs on the worker, cache callbacks run on the UI
-thread, and cache registration/removal serializes against callbacks.
+There is no host-pressure cache-shrinking policy. Low free RAM and active swap growth remain
+observable; neither silently changes a selected cache target. Swap growth is measured relative to
+valid previous samples, not inferred from static swap occupancy. The UI reports increasing swap
+usage without claiming caches were trimmed. A real finite process constraint reports
+**Cache budget reduced by system memory limit**. The tooltip distinguishes selected totals, actual
+operation/preview allowances, observed OS limits and available memory, retaining that explanation
+while RAM-preview progress is shown.
 
-### Memory pressure response
+Operation/decoded-media entries, display previews, decoded video, disk-write queues, proxy
+thumbnails and decoded audio retain their own selected budgets. A lower actual allowance evicts
+reusable entries; publication rechecks admission so an old result cannot refill beyond the current
+limit. Eviction drops only the cache's references. Active decode, viewer/playback pins and pending
+retirement retain ownership until they finish. Active disk writes retain their charge; callbacks
+never perform disk I/O or wait for a writer.
 
-Pressure means availability below the host reserve **or** meaningful active swap growth. Static
-occupancy is not pressure: a swap file can sit nearly full for the life of the boot while RAM is
-plentiful, so a high reading alone never trims. The ledger compares `SwapUsed` against the previous
-valid sample and asserts only when the rise exceeds a time-scaled threshold (at least 16 MiB, or
-4 MiB per second, over the interval); once an episode is active a quarter-sized sustaining
-threshold keeps it latched so a borderline value cannot flap. The first valid sample, a partly
-released sample, and a non-advancing or rolled-back clock rebaseline and assert nothing. Missing
-swap counters also assert no new pressure and drop the growth baseline, but they do not discard an
-active episode; the first valid sample after the gap is a fresh baseline. No swap configured means
-no swap-pressure signal. The ledger applies the host-pressure ladder to registered pools, including live-work admission:
+`ExportResourceLedgerV1` registers as `LiveWork`. Its existing 4 GiB concurrent and 2 GiB per-job
+limits are separate export-contract restrictions, not derived from free RAM or cache preferences.
+Existing reservations remain charged through completion; an expansion beyond the current allowance
+returns `ServiceAllowanceExceeded`. These fixed export limits are an audit follow-up, not a physical
+hardware guarantee.
 
-1. The first pressure poll trims to 25% of effective budgets and reduces admission to the same
-   limits immediately.
-2. A second consecutive pressure poll reduces those limits to 10%. They stay reduced between
-   polls, including while more frames arrive.
-3. Recovery requires an observed healthy sample. The first starts a ten-second hold; subsequent
-   ten-second steps restore the retention percentage through 25%, 50%, then 100%. Cap increases
-   also happen at most once per ten seconds, by at most 25% of the current cap per step, subject to
-   the same 10% hysteresis and the measured hard ceiling/growth rules above. Renewed pressure
-   immediately interrupts recovery.
-
-Operation and decoded-media entries, display previews, decoded video frames, the disk write
-queue, proxy thumbnails, decoded audio and the export frame queue all use the same callback
-boundary. Proxy eviction also drops image aliases in asset/node preview maps. Audio from both
-standalone audio assets and video clips participates. A reduced allowance cancels pending thumbnail
-work; publication checks the current limits again so an old result cannot refill the caches.
-In-flight decode work and references already handed to a viewer or playback are active work, not
-reclaimable cache entries.
-An active disk write keeps its byte charge until it finishes; queued writes are dropped and new
-writes are refused while its charge exceeds the allowance. Pressure callbacks never perform disk
-I/O or wait for the writer.
-
-`ExportResourceLedgerV1` registers its shared reservation state directly with the memory ledger
-through the existing `output` → `runtime` dependency as `LiveWork`, independently of the
-reusable-retention process clamp. Its 4 GiB concurrent allowance is a ceiling
-and proportional weight within the cap; the 2 GiB per-job limit still applies. Pressure lowers
-admission without freeing live products or reducing active reservation charges. New reservations
-and growing expansions that would exceed the current allowance return
-`ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded`. Admission becomes possible as jobs
-release their charges or the ledger gradually restores the allowance. Registration survives the
-facade while reservations remain, and unregisters when the last owner of that shared state is
-destroyed, serialized against any in-progress callback.
-
-The bar reports **Memory pressure: caches trimmed** once per pressure episode. Swap pressure
-also produces a distinct **Swap pressure: caches trimmed** notice; if both start together, it
-follows the existing notice. The cache tooltip distinguishes **Effective reusable cache allowance**
-from the host-resolved
-**Configured cache ceiling**, and reports process provenance/ceiling, availability, pressure state
-and current admission percentage. The configured ceiling is not the sum of raw override values.
-The main cache cell continues to
-show held bytes and the current admission budgets. Configuration and project truth are unchanged.
-
-Separately, and independent of any poll, a cache insert never takes a process past a failed
-allocation. `std::bad_alloc` raised while retaining an entry -- in `OperationCache::store()` or
-`PreviewFrameCache::insert()` -- unwinds the partial insert, counts it (`allocationFailures`), and
-returns. Caching is an optimization: the value the caller produced is untouched and the frame still
-renders.
+If retaining an entry throws `std::bad_alloc`, `OperationCache::store()` and
+`PreviewFrameCache::insert()` unwind the partial insert, count the failure, and preserve the produced
+value. Caching remains an optimization; failure to retain must not invalidate a successfully
+rendered frame.
 
 ### Cache byte accounting
 

@@ -373,6 +373,25 @@ void testForeignThreadCreate(Expectations& expectations, GpuDevice& device) {
     expectations.expect(owner.hasValue(), "the owner thread can still create a cache");
 }
 
+void testZeroRetention(Expectations& expectations, GpuDevice& device, GpuSolid& solid) {
+    auto created = GpuSceneCache::create(device, GpuSceneCacheBudgets{0});
+    expectations.expect(created.hasValue(), "zero retention keeps a valid owner-bound cache");
+    if (!created) {
+        return;
+    }
+    auto image = makeSolidImage(solid, 16, 16, 0.4);
+    expectations.expect(image != nullptr, "zero-retention fixture produces an active image");
+    if (!image) {
+        return;
+    }
+    expectations.expect(created.cache->insert("zero-retention", image) ==
+                            GpuSceneCacheInsertResult::RefusedOverBudget,
+                        "zero retention refuses caching without invalidating active image");
+    expectations.expect(created.cache->retainedBytes() == 0 && created.cache->entryCount() == 0 &&
+                            image->isValid(),
+                        "zero-retention cache remains empty while the active image survives");
+}
+
 // The cache holds no Vulkan handle and dropping entries / destroying it on a foreign thread must
 // not call Vulkan. Run last.
 void testForeignThreadLifetime(Expectations& expectations, GpuDevice& device, GpuSolid& solid) {
@@ -435,6 +454,7 @@ int main(const int argc, char** argv) {
                                foreignSolid ? *foreignSolid : *solid.solid, foreignAvailable);
     testBudgetAndPinning(expectations, *device.device, *solid.solid);
     testPinnedReplacement(expectations, *device.device, *solid.solid);
+    testZeroRetention(expectations, *device.device, *solid.solid);
     testForeignThreadCreate(expectations, *device.device);
     testWrongThread(expectations, *device.device);
     testForeignThreadLifetime(expectations, *device.device, *solid.solid);
