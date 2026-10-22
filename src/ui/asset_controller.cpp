@@ -48,12 +48,40 @@ constexpr std::size_t kProxyCacheByteCapacity = std::size_t{8} * 1024U * 1024U;
     return image.isNull() ? 0 : static_cast<std::size_t>(image.sizeInBytes());
 }
 
-[[nodiscard]] std::size_t audioBufferByteCost(const media::audio::AudioBuffer& buffer) {
-    std::size_t bytes = sizeof(media::audio::AudioBuffer);
+[[nodiscard]] std::optional<std::uint64_t>
+measuredAudioBufferBytes(const media::audio::AudioBuffer& buffer) noexcept {
+    constexpr auto max = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t bytes = sizeof(media::audio::AudioBuffer);
+    if (buffer.planes.capacity() > (max - bytes) / sizeof(std::vector<float>))
+        return {};
     bytes += buffer.planes.capacity() * sizeof(std::vector<float>);
-    for (const auto& plane : buffer.planes)
+    for (const auto& plane : buffer.planes) {
+        if (plane.capacity() > (max - bytes) / sizeof(float))
+            return {};
         bytes += plane.capacity() * sizeof(float);
+    }
     return bytes;
+}
+
+[[nodiscard]] std::size_t audioBufferByteCost(const media::audio::AudioBuffer& buffer) {
+    const auto bytes = measuredAudioBufferBytes(buffer);
+    return bytes && *bytes <= std::numeric_limits<std::size_t>::max()
+               ? static_cast<std::size_t>(*bytes)
+               : std::numeric_limits<std::size_t>::max();
+}
+
+[[nodiscard]] std::shared_ptr<const media::audio::AudioBuffer>
+adoptAudioBuffer(media::audio::AudioBuffer&& decoded,
+                 const std::shared_ptr<render::GpuProcessingPhaseLease>& phase) {
+    // Measure the fully initialized backing after its final move. Only the actual capacity is
+    // credited against a later physical host sample; a phase estimate alone earns no credit.
+    auto backing = std::make_unique<media::audio::AudioBuffer>(std::move(decoded));
+    const auto bytes = measuredAudioBufferBytes(*backing);
+    if (!bytes)
+        return {};
+    if (phase)
+        return render::adoptProcessingHostBacking(std::move(backing), phase, *bytes);
+    return std::shared_ptr<const media::audio::AudioBuffer>(std::move(backing));
 }
 
 struct AudioStorageClaim final {
@@ -1209,22 +1237,19 @@ void AssetController::startThumbnails() {
                                         [&] { return context.isCancellationRequested(); });
                                     if (auto* audio = std::get_if<media::audio::AudioBuffer>(&decoded)) {
                                         const auto summary = media::audio::waveformSummary(*audio, 256);
-                                        if (summary.value())
+                                        if (!summary.value())
+                                            preview.audioDiagnostic =
+                                                media::audio::describeAudioError(*summary.error());
+                                        else if (auto buffer =
+                                                     adoptAudioBuffer(std::move(*audio), phase)) {
                                             results->waveforms.emplace(
                                                 asset.id,
                                                 std::make_shared<const media::audio::WaveformSummary>(
                                                     *summary.value()));
-                                        else
-                                            preview.audioDiagnostic = media::audio::describeAudioError(
-                                                *summary.error());
-                                        keepAudio(asset.id,
-                                                  std::shared_ptr<const media::audio::AudioBuffer>(
-                                                      new media::audio::AudioBuffer(std::move(*audio)),
-                                                      [phase = std::move(phase)](
-                                                          const media::audio::AudioBuffer* owned) {
-                                                          delete owned;
-                                                          (void)phase;
-                                                      }));
+                                            keepAudio(asset.id, buffer);
+                                        } else
+                                            preview.audioDiagnostic =
+                                                "Video audio storage exceeded its admitted phase";
                                     } else
                                         preview.audioDiagnostic =
                                             std::get<media::provider::Unavailable>(decoded).detail;
@@ -1338,20 +1363,20 @@ void AssetController::startThumbnails() {
                                                     preview.audioDiagnostic =
                                                         media::audio::describeAudioError(*summary.error());
                                                 } else {
-                                                    auto buffer = std::shared_ptr<const media::audio::AudioBuffer>(
-                                                        new media::audio::AudioBuffer(
-                                                            std::move(*decoded.value())),
-                                                        [phase = std::move(phase)](
-                                                            const media::audio::AudioBuffer* owned) {
-                                                            delete owned;
-                                                            (void)phase;
-                                                        });
-                                                    results->waveforms.emplace(
-                                                        asset.id,
-                                                        std::make_shared<const media::audio::WaveformSummary>(
-                                                            std::move(*summary.value())));
-                                                    keepAudio(asset.id, buffer);
-                                                    preview.missing = false;
+                                                    if (auto buffer = adoptAudioBuffer(
+                                                            std::move(*decoded.value()), phase)) {
+                                                        results->waveforms.emplace(
+                                                            asset.id,
+                                                            std::make_shared<const media::audio::
+                                                                                 WaveformSummary>(
+                                                                std::move(*summary.value())));
+                                                        keepAudio(asset.id, buffer);
+                                                        preview.missing = false;
+                                                    } else {
+                                                        preview.audioDiagnostic =
+                                                            "Audio storage exceeded its admitted "
+                                                            "phase";
+                                                    }
                                                 }
                                             }
                                         }
