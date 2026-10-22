@@ -48,39 +48,52 @@ constexpr std::size_t kProxyCacheByteCapacity = std::size_t{8} * 1024U * 1024U;
     return image.isNull() ? 0 : static_cast<std::size_t>(image.sizeInBytes());
 }
 
-[[nodiscard]] std::optional<std::uint64_t>
+struct AudioBufferBackingBytes final {
+    std::uint64_t allocated = 0;
+    std::uint64_t initialized = 0;
+};
+
+[[nodiscard]] std::optional<AudioBufferBackingBytes>
 measuredAudioBufferBytes(const media::audio::AudioBuffer& buffer) noexcept {
     constexpr auto max = std::numeric_limits<std::uint64_t>::max();
-    std::uint64_t bytes = sizeof(media::audio::AudioBuffer);
-    if (buffer.planes.capacity() > (max - bytes) / sizeof(std::vector<float>))
+    AudioBufferBackingBytes bytes{sizeof(media::audio::AudioBuffer),
+                                  sizeof(media::audio::AudioBuffer)};
+    const auto add = [max](const std::size_t count, const std::size_t width, std::uint64_t& total) {
+        if (count > (max - total) / width)
+            return false;
+        total += static_cast<std::uint64_t>(count) * static_cast<std::uint64_t>(width);
+        return true;
+    };
+    if (!add(buffer.planes.capacity(), sizeof(std::vector<float>), bytes.allocated) ||
+        !add(buffer.planes.size(), sizeof(std::vector<float>), bytes.initialized))
         return {};
-    bytes += buffer.planes.capacity() * sizeof(std::vector<float>);
     for (const auto& plane : buffer.planes) {
-        if (plane.capacity() > (max - bytes) / sizeof(float))
+        if (!add(plane.capacity(), sizeof(float), bytes.allocated) ||
+            !add(plane.size(), sizeof(float), bytes.initialized))
             return {};
-        bytes += plane.capacity() * sizeof(float);
     }
     return bytes;
 }
 
 [[nodiscard]] std::size_t audioBufferByteCost(const media::audio::AudioBuffer& buffer) {
     const auto bytes = measuredAudioBufferBytes(buffer);
-    return bytes && *bytes <= std::numeric_limits<std::size_t>::max()
-               ? static_cast<std::size_t>(*bytes)
+    return bytes && bytes->allocated <= std::numeric_limits<std::size_t>::max()
+               ? static_cast<std::size_t>(bytes->allocated)
                : std::numeric_limits<std::size_t>::max();
 }
 
 [[nodiscard]] std::shared_ptr<const media::audio::AudioBuffer>
 adoptAudioBuffer(media::audio::AudioBuffer&& decoded,
                  const std::shared_ptr<render::GpuProcessingPhaseLease>& phase) {
-    // Measure the fully initialized backing after its final move. Only the actual capacity is
-    // credited against a later physical host sample; a phase estimate alone earns no credit.
+    // Measure after the final move. The full capacity stays claimed; only initialized elements
+    // earn credit against a later physical sample. A phase estimate alone earns no credit.
     auto backing = std::make_unique<media::audio::AudioBuffer>(std::move(decoded));
     const auto bytes = measuredAudioBufferBytes(*backing);
     if (!bytes)
         return {};
     if (phase)
-        return render::adoptProcessingHostBacking(std::move(backing), phase, *bytes);
+        return render::adoptProcessingHostBacking(std::move(backing), phase, bytes->allocated,
+                                                  bytes->initialized);
     return std::shared_ptr<const media::audio::AudioBuffer>(std::move(backing));
 }
 

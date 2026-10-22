@@ -365,10 +365,11 @@ previews, while broader audio editing is a separate concern.
   diagnostics without publishing a partial buffer. Import reports the typed reason; a rejected
   audio preview shows it in the asset tooltip instead of claiming the source file is missing.
 - The processing lease covers known requested planar storage and one decode chunk. After decode,
-  the owner measures the actual `AudioBuffer` object and planar vector capacities and registers
-  only that proven live backing under the lease. A later physical-memory sample credits those
-  bytes while the owner remains alive; unmaterialized phase estimates earn no credit. The credit
-  is revoked before the owner destroys its vectors, and the claim is released afterward.
+  the owner measures the actual `AudioBuffer` object and planar vector capacities, keeping the
+  full allocation claimed under the lease. A later physical-memory sample credits only the object
+  and initialized vector elements while the owner remains alive; spare capacity and unmaterialized
+  phase estimates earn no credit. The credit is revoked before the owner destroys its vectors,
+  and the claim is released afterward.
   Provider/decoder internal allocations are still opaque and are not credited as owned audio
   storage; complete accounting of those internals remains part of #304.
 - `waveformSummary(buffer, bucketCount)` derives per-bucket minimum and maximum values per channel
