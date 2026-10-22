@@ -44,6 +44,7 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <source_location>
@@ -446,18 +447,59 @@ int main(int argc, char** argv) {
         constexpr std::size_t kCacheEntries = 128;
         constexpr std::size_t kRegistryEntries = kCacheEntries + 16;
         constexpr std::size_t kFrameCount = 140;
-        constexpr std::uint64_t kCacheBytes = 256ULL * 1024ULL * 1024ULL;
+        // Qualification can choose a larger extent; size this entry-cap case from one actual
+        // resident allocation so a byte cap does not preempt its 128-entry assertion.
+        std::uint64_t nativeFrameBytes = 0;
+        std::size_t cacheFrameBytes = 0;
+        {
+            GpuResidentFrameLeaseBudgets probeBudgets;
+            probeBudgets.maxBytes = kBudget;
+            probeBudgets.maxEntries = 1;
+            auto probeRegistry =
+                GpuResidentFrameLeaseRegistry::create(*device.device, probeBudgets);
+            expectations.expect(probeRegistry != nullptr,
+                                "the count-limit probe registry is created");
+            if (probeRegistry == nullptr) {
+                return 1;
+            }
+            std::string failure;
+            auto probe = makeResidentFrame(*device.device, *probeRegistry, *sharedProcessor,
+                                           reportHandle, plan, pipelines, size->first, size->second,
+                                           descriptor, 0, 1, kBudget, failure);
+            expectations.expect(probe != nullptr, "the count-limit probe frame is produced");
+            if (probe == nullptr) {
+                return 1;
+            }
+            nativeFrameBytes = probe->residentFrame()->lease().allocationBytes();
+            cacheFrameBytes = PreviewFrameCache::frameByteCost(*probe);
+        }
+        const bool safeCharges =
+            nativeFrameBytes > 0 && cacheFrameBytes >= nativeFrameBytes &&
+            nativeFrameBytes <= std::numeric_limits<std::uint64_t>::max() /
+                                    static_cast<std::uint64_t>(kRegistryEntries) &&
+            cacheFrameBytes <= std::numeric_limits<std::size_t>::max() / kCacheEntries;
+        expectations.expect(safeCharges,
+                            "actual resident charges can safely size the count-limit budgets");
+        if (!safeCharges) {
+            return 1;
+        }
+        const std::size_t kCacheBytes = cacheFrameBytes * kCacheEntries;
 
         GpuResidentFrameLeaseBudgets registryBudgets;
-        registryBudgets.maxBytes = 256ULL * 1024ULL * 1024ULL;
+        registryBudgets.maxBytes = nativeFrameBytes * static_cast<std::uint64_t>(kRegistryEntries);
         registryBudgets.maxEntries = kRegistryEntries;
+        std::cout << "RESIDENT_COUNT_BUDGET size=" << size->first << 'x' << size->second
+                  << " nativeFrameBytes=" << nativeFrameBytes
+                  << " cacheFrameBytes=" << cacheFrameBytes
+                  << " registryBytes=" << registryBudgets.maxBytes << " cacheBytes=" << kCacheBytes
+                  << '\n';
         auto registry = GpuResidentFrameLeaseRegistry::create(*device.device, registryBudgets);
         expectations.expect(registry != nullptr, "the bounded lease registry is created");
         if (registry == nullptr) {
             return 1;
         }
 
-        PreviewFrameCache cache(kBudget);
+        PreviewFrameCache cache(kCacheBytes);
         cache.setGpuResidentLimits(kCacheBytes, kCacheEntries);
         expectations.expect(cache.gpuResidentByteLimit() == kCacheBytes &&
                                 cache.gpuResidentEntryLimit() == kCacheEntries,
