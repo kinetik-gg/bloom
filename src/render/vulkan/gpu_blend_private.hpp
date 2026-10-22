@@ -17,6 +17,7 @@
 #include "shaders/blend_f64_spirv.inc"
 #include "shaders/blend_portable_spirv.inc"
 #include "shaders/blend_spirv.inc"
+#include "shaders/image_combine_spirv.inc"
 
 #ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
 #include "gpu_scene_executor_fault_injection.hpp"
@@ -35,6 +36,7 @@ namespace bloom::render {
 // BlendV1 bindings: source + backdrop + output storage images, then the error-flag storage buffer.
 inline constexpr std::uint32_t kBlendBindingCount = 4;
 inline constexpr std::uint32_t kBlendPushBytes = 28;
+inline constexpr std::uint32_t kImageCombinePushBytes = 36;
 
 struct BlendPush final {
     std::uint32_t destWidth;
@@ -46,6 +48,13 @@ struct BlendPush final {
     std::uint32_t mode;
 };
 static_assert(sizeof(BlendPush) == kBlendPushBytes);
+
+struct ImageCombinePush final {
+    BlendPush blend;
+    float factor;
+    std::uint32_t channel;
+};
+static_assert(sizeof(ImageCombinePush) == kImageCombinePushBytes);
 
 [[nodiscard]] inline GpuBlendDiagnostic blendDiagnostic(const GpuBlendDiagnosticCode code,
                                                         std::string message) {
@@ -105,6 +114,7 @@ struct GpuBlend::Impl final {
     CompositePipeline pipeline;
     CompositePipeline pipelineF64;
     CompositePipeline pipelinePortable;
+    CompositePipeline pipelineImageCombine;
     bool generalUsesF64 = false;
     vk::raii::DescriptorPool descriptorPool{nullptr};
     vk::raii::DescriptorSet descriptorSet{nullptr};

@@ -772,6 +772,44 @@ else()
         "blend_portable.comp digest is still enforced.")
 endif()
 
+# --- ImageCombineV1: flat RGBA two-input resident shader -----------------------------------------
+set(BLOOM_IMAGE_COMBINE_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/image_combine.comp")
+set(BLOOM_IMAGE_COMBINE_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/image_combine.manifest")
+set(BLOOM_IMAGE_COMBINE_COMP_SHA256
+    "0b7cd760adbffda983c658f3dabd12603b85fbc2d5910c1a55a75ca9667c5a51")
+set(BLOOM_IMAGE_COMBINE_SPV_SHA256
+    "9b9d27deb653e2b38d8d5799c38821c2d80a5640d2c334591b7a41569fa37ded")
+file(SHA256 "${BLOOM_IMAGE_COMBINE_COMP}" bloom_image_combine_comp_sha256)
+if(NOT bloom_image_combine_comp_sha256 STREQUAL BLOOM_IMAGE_COMBINE_COMP_SHA256)
+    message(FATAL_ERROR "image_combine.comp differs from its pinned source digest")
+endif()
+file(READ "${BLOOM_IMAGE_COMBINE_MANIFEST}" bloom_image_combine_manifest_text)
+if(NOT bloom_image_combine_manifest_text MATCHES "${BLOOM_IMAGE_COMBINE_COMP_SHA256}" OR
+   NOT bloom_image_combine_manifest_text MATCHES "${BLOOM_IMAGE_COMBINE_SPV_SHA256}")
+    message(FATAL_ERROR "image_combine.manifest does not bind the source and SPIR-V digests")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_image_combine_generated_spv
+        "${CMAKE_CURRENT_BINARY_DIR}/image_combine.generated.spv")
+    execute_process(COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                    "${BLOOM_IMAGE_COMBINE_COMP}" -o "${bloom_image_combine_generated_spv}"
+                    RESULT_VARIABLE bloom_image_combine_glslang_result)
+    if(NOT bloom_image_combine_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile image_combine.comp")
+    endif()
+    execute_process(COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2
+                    "${bloom_image_combine_generated_spv}"
+                    RESULT_VARIABLE bloom_image_combine_spirv_val_result)
+    if(NOT bloom_image_combine_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected image_combine.comp")
+    endif()
+    file(SHA256 "${bloom_image_combine_generated_spv}" bloom_image_combine_spv_sha256)
+    if(NOT bloom_image_combine_spv_sha256 STREQUAL BLOOM_IMAGE_COMBINE_SPV_SHA256)
+        message(FATAL_ERROR "image_combine.comp regenerated SPIR-V differs from its pinned digest")
+    endif()
+endif()
+
 # --- Fixed CoveredSolidV1 resident-image shader: source pin and regeneration check ---------------
 #
 # Offline artifact from the same tools/gpu-shaders compile/validate/embed recipe (no new generator).

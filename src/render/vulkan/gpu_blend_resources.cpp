@@ -22,6 +22,7 @@ void GpuBlend::Impl::resetPipelineResources() noexcept {
     descriptorSet = vk::raii::DescriptorSet{nullptr};
     descriptorPool = vk::raii::DescriptorPool{nullptr};
     pipelinePortable = CompositePipeline{};
+    pipelineImageCombine = CompositePipeline{};
     pipelineF64 = CompositePipeline{};
     pipeline = CompositePipeline{};
     pipelinesReady = false;
@@ -52,6 +53,13 @@ bool GpuBlend::Impl::createPipeline() {
     if (!createCompositePipeline(*control, vulkan_detail::kBlendSpirvCode,
                                  vulkan_detail::kBlendSpirvByteCount, kBlendBindings,
                                  kBlendBindingCount, kBlendPushBytes, reason, pipeline)) {
+        createDiagnostic = blendDiagnostic(GpuBlendDiagnosticCode::ShaderRejected, reason);
+        return false;
+    }
+    if (!createCompositePipeline(*control, vulkan_detail::kImageCombineSpirvCode,
+                                 vulkan_detail::kImageCombineSpirvByteCount, kBlendBindings,
+                                 kBlendBindingCount, kImageCombinePushBytes, reason,
+                                 pipelineImageCombine)) {
         createDiagnostic = blendDiagnostic(GpuBlendDiagnosticCode::ShaderRejected, reason);
         return false;
     }
