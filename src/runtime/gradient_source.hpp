@@ -30,12 +30,23 @@ gradientPixel(const ResolvedGradient& gradient, const double authorX,
     const double dy = gradient.end.y - gradient.start.y;
     const double px = (authorX - gradient.start.x) * gradient.aspect;
     const double py = authorY - gradient.start.y;
-    const double span2 = dx * dx + dy * dy;
+    const double span = std::hypot(dx, dy);
     double t = 0.0;
-    if (span2 > 0.0 && std::isfinite(span2)) {
-        t = gradient.radial ? std::hypot(px, py) / std::sqrt(span2)
-                            : (px * dx + py * dy) / span2;
+    if (gradient.start.x != gradient.end.x || gradient.start.y != gradient.end.y) {
+        // Squaring a valid span can overflow or underflow and must not turn a nonzero
+        // gradient into the first colour. Normalize before taking the linear projection.
+        if (!(span > 0.0) || !std::isfinite(span) || !std::isfinite(px) ||
+            !std::isfinite(py))
+            return render::ImageResult<render::Rgba32f>::failure(
+                render::ImageError::codeOnly(render::ImageErrorCode::NonFiniteResult));
+        t = gradient.radial ? std::hypot(px, py) / span
+                            : (dx == 0.0 ? 0.0 : (px / span) * (dx / span)) +
+                                  (dy == 0.0 ? 0.0 : (py / span) * (dy / span));
     }
+    // Clamp can saturate an infinite ratio; periodic modes need a finite phase.
+    if (std::isnan(t) || (gradient.repeat != 0 && !std::isfinite(t)))
+        return render::ImageResult<render::Rgba32f>::failure(
+            render::ImageError::codeOnly(render::ImageErrorCode::NonFiniteResult));
     if (gradient.repeat == 1)
         t -= std::floor(t);
     else if (gradient.repeat == 2) {

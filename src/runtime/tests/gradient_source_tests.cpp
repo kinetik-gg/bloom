@@ -59,5 +59,20 @@ int main() {
         std::cerr << "degenerate gradient must choose first colour\n";
         return 1;
     }
+    gradient.aspect = 1;
+    for (const bool radialMode : {false, true}) {
+        gradient.radial = radialMode;
+        gradient.start = {-1e200, 0};
+        gradient.end = {1e200, 0};
+        const auto large = gradientPixel(gradient, 0.5, 0.5);
+        gradient.start = {0, 0};
+        gradient.end = {1e-200, 0};
+        const auto tiny = gradientPixel(gradient, 0.5, 0.5);
+        if (!large || !tiny || !near(large.value()->red(), 0.5F) ||
+            !near(tiny.value()->red(), 1.0F)) {
+            std::cerr << "nonzero extreme gradient spans must not become degenerate\n";
+            return 1;
+        }
+    }
     return 0;
 }
