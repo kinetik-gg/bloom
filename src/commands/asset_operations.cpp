@@ -3,6 +3,7 @@
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
+#include <bloom/core/file_uri.hpp>
 #include <bloom/media/audio/audio.hpp>
 #include <bloom/media/image.hpp>
 
@@ -70,59 +71,19 @@ std::string utf8(const std::filesystem::path& path) {
     const auto bytes = path.generic_u8string();
     return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
 }
-std::string fileUri(const std::filesystem::path& path) {
-    const auto text = utf8(path);
-    std::string uri = text.starts_with("/") ? "file://" : "file:///";
-    constexpr std::string_view hex = "0123456789ABCDEF";
-    for (const char character : text) {
-        const auto byte = static_cast<unsigned char>(character);
-        if ((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
-            (byte >= '0' && byte <= '9') || character == '/' || character == ':' ||
-            character == '-' || character == '_' || character == '.' || character == '~')
-            uri += character;
-        else {
-            uri += '%';
-            uri += hex[byte >> 4U];
-            uri += hex[byte & 15U];
-        }
-    }
-    return uri;
-}
-// document::AssetRecord::validate() (src/document/asset.cpp's validLocator()) forbids a literal
-// ':' or '\\' anywhere in a "project-relative" locator path -- a portability guard against a
-// Windows drive-letter/separator colliding with a path this schema promises is a plain relative
-// join. A GVFS network-share mount is named literally with a colon on this platform (e.g.
-// `smb-share:server=10.10.10.20,share=production`), which a purely lexical relative path can't
-// avoid when the source lives outside the project directory (NETSHARE-1, deliverable 4). Percent-
-// encoding just those two characters keeps the stored path schema-valid without changing the
-// schema itself: on resolve, media::resolveImagePath()'s project-relative candidate then simply
-// doesn't exist on disk (no directory is literally named with a "%3A") and falls through to the
-// always-correct absolute relinkHint below -- the same fallback every other moved/foreign source
-// already relies on. Ordinary imports (no ':' or '\\' anywhere in the relative path) are
-// byte-for-byte unaffected.
-std::string sanitizeRelativePathComponents(const std::string& raw) {
-    std::string encoded;
-    encoded.reserve(raw.size());
-    constexpr std::string_view hex = "0123456789ABCDEF";
-    for (const char character : raw) {
-        if (character == ':' || character == '\\') {
-            encoded += '%';
-            encoded += hex[static_cast<unsigned char>(character) >> 4U];
-            encoded += hex[static_cast<unsigned char>(character) & 15U];
-        } else
-            encoded += character;
-    }
-    return encoded;
-}
 document::AssetLocator locator(const std::filesystem::path& path,
                                const std::filesystem::path& base) {
     const auto absolute = std::filesystem::absolute(path).lexically_normal();
     const auto relative =
         absolute.lexically_relative(std::filesystem::absolute(base).lexically_normal());
-    if (relative.empty())
-        throw std::runtime_error("Image and project must share a filesystem root");
-    return {"file", "project-relative", sanitizeRelativePathComponents(utf8(relative)),
-            fileUri(absolute)};
+    const auto uri = core::fileUriFromAbsolutePath(absolute);
+    if (!uri || uri->size() > 16384)
+        throw std::runtime_error("The asset path cannot be represented as an absolute file URI");
+    const auto relativeText = utf8(relative);
+    if (relative.empty() || relativeText.size() > 4096 ||
+        relativeText.find_first_of(":\\") != std::string::npos)
+        return {"file", "external", *uri, *uri};
+    return {"file", "project-relative", relativeText, *uri};
 }
 std::optional<core::Sha256Digest> digestFile(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);

@@ -750,11 +750,39 @@ void testImageAssetMigration(Expectations& expectations) {
     expectations.expect(asset && asset->asString() == "0", "migration reserves no asset IDs");
 }
 
+void testExternalLocatorVersionStep(Expectations& expectations) {
+    constexpr std::string_view fixture =
+        R"({"schemaVersion":{"major":1,"minor":21},"project":{"assets":[{"locator":{"kind":"file","portability":"project-relative","path":"media/plate.png","relinkHint":"file:///old/plate.png"}}]}})";
+    auto operation = makeOperation();
+    auto parsed = parseFixture(fixture, operation);
+    expectations.expect(static_cast<bool>(parsed), "1.21 locator fixture parses");
+    if (!parsed)
+        return;
+    const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 21}, {1, 22},
+                                             kProductionDocumentMigrationSteps, {}, operation);
+    expectations.expect(migrated.outcome() == MigrationOutcome::Migrated &&
+                            migrated.stepsApplied() == 1,
+                        "1.21 to 1.22 runs one version-only step");
+    const auto* root = migrated.migratedRoot();
+    const auto* version = root ? root->findMember("schemaVersion") : nullptr;
+    const auto* minor = version ? version->findMember("minor") : nullptr;
+    const auto* project = root ? root->findMember("project") : nullptr;
+    const auto* assets = project ? project->findMember("assets") : nullptr;
+    const auto* locator = assets && assets->arrayElements().size() == 1
+                              ? assets->arrayElements()[0].findMember("locator")
+                              : nullptr;
+    const auto* path = locator ? locator->findMember("path") : nullptr;
+    expectations.expect(minor && minor->asNumberToken() == "22" && path &&
+                            path->asString() == "media/plate.png",
+                        "version step preserves the project-relative locator");
+}
+
 } // namespace
 
 int main() try {
     Expectations expectations;
     testImageAssetMigration(expectations);
+    testExternalLocatorVersionStep(expectations);
     testIdentity(expectations);
     testSingleStepGoldenValues(expectations);
     testTwoStepSequencing(expectations);

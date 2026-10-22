@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <bloom/core/utf8.hpp>
+#include <bloom/core/file_uri.hpp>
 #include <bloom/document/asset.hpp>
 #include <bloom/document/persisted_text.hpp>
 
@@ -7,6 +8,10 @@ namespace bloom::document {
 namespace {
 bool validLocator(const AssetLocator& locator) {
     if (locator.kind == "file") {
+        if (locator.portability == "external")
+            return !locator.path.empty() && locator.path.size() <= 16384 &&
+                   locator.relinkHint == locator.path &&
+                   core::absolutePathFromFileUri(locator.path).has_value();
         return locator.portability == "project-relative" && !locator.path.empty() &&
                locator.path.size() <= 4096 && locator.path.front() != '/' &&
                locator.path.find('\\') == std::string::npos &&
@@ -36,6 +41,12 @@ std::string defaultAssetName(const AssetRecord& asset) {
         !asset.fontFamily.empty())
         return asset.fontFamily + (asset.fontStyle.empty() ? "" : " " + asset.fontStyle);
     auto name = asset.locator.path.substr(asset.locator.path.find_last_of("/\\") + 1);
+    if (asset.locator.kind == "file" && asset.locator.portability == "external") {
+        if (const auto resolved = core::absolutePathFromFileUri(asset.locator.path)) {
+            const auto u8 = resolved->filename().u8string();
+            name.assign(reinterpret_cast<const char*>(u8.data()), u8.size());
+        }
+    }
     const auto dot = name.find_last_of('.');
     if (dot != std::string::npos && dot != 0 && name != "..")
         name.resize(dot);

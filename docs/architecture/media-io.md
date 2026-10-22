@@ -67,11 +67,12 @@ cannot open a newly admitted wider-span sequence, which their own validation alr
 The evaluator decodes only on worker execution; UI paint reads cached thumbnails.
 
 The same C++ decoder, filesystem paths and Qt dialogs/drop events serve Linux, macOS and Windows.
-Imports across different filesystem roots are refused explicitly; put the media on the project's
-root before importing. The project-relative locator is preferred. If it is unavailable, the
-absolute file-URI hint supports local recovery, including the first Save As of an unsaved project;
-content-digest verification still applies. Relink records a fresh relative locator for portable
-packaging after such a move. Media is referenced, never embedded or silently copied.
+The project-relative locator is preferred. When roots differ or a relative component cannot be
+stored portably, import records an explicit absolute file-URI locator. Ordinary relative locators
+first resolve beside the project, then use their absolute file-URI hint; external locators resolve
+directly. This also covers the first Save As of an unsaved project. Content-digest verification
+still applies. Relink records a fresh relative locator when the media moves into the project tree.
+Media is referenced, never embedded or silently copied.
 
 This slice does not add movie containers, EXIF orientation, ICC interpretation, metadata
 round-tripping, external codec processes, or a general proxy service. Files are interpreted by

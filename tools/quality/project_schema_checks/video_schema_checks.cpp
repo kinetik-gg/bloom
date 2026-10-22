@@ -284,4 +284,57 @@ void validateManifestSchemaV1_21(const json::Value& schema) {
         json::parse(R"({"$ref":"#/$defs/fixedVersion-1.20"})");
     validateManifestSchemaV1_20(previous);
 }
+void validateDocumentSchemaV1_22(const json::Value& schema) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-document:1.22",
+                       "external locator document id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.22").at("properties").at("minor"),
+                 R"({"const":22})", "external locator document minor");
+    const auto& locator = schema.at("$defs").at("assetLocator-1.11").at("properties");
+    requireExact(locator.at("portability").at("enum"),
+                 R"(["project-relative","external","builtin","system"])",
+                 "external locator portability");
+    requireExact(locator.at("path").at("maxLength"), "16384", "external locator path limit");
+    requireExact(locator.at("relinkHint").at("pattern"),
+                 R"("^(?:[Ff][Ii][Ll][Ee]|font):")", "file URI scheme pattern");
+    auto previous = schema;
+    auto& defs = previous.at("$defs");
+    auto fixed = std::find_if(defs.asObject().begin(), defs.asObject().end(),
+                              [](const auto& member) { return member.first == "fixedVersion-1.22"; });
+    if (fixed == defs.asObject().end())
+        throw std::runtime_error("document 1.22 version is missing");
+    fixed->first = "fixedVersion-1.21";
+    fixed->second.at("properties").at("minor") = json::parse(R"({"const":21})");
+    defs.at("assetLocator-1.11").at("properties").at("portability").at("enum") =
+        json::parse(R"(["project-relative","builtin","system"])");
+    defs.at("assetLocator-1.11").at("properties").at("path").at("maxLength") =
+        json::parse("4096");
+    defs.at("assetLocator-1.11").at("properties").at("relinkHint").at("pattern") =
+        json::parse(R"("^(?:file|font):")");
+    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-document:1.21"));
+    previous.at("properties").at("schemaVersion") =
+        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.21"})");
+    validateDocumentSchemaV1_21(previous);
+}
+void validateManifestSchemaV1_22(const json::Value& schema) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-manifest:1.22",
+                       "external locator manifest id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.22").at("properties").at("minor"),
+                 R"({"const":22})", "external locator manifest minor");
+    auto previous = schema;
+    auto& defs = previous.at("$defs");
+    auto fixed = std::find_if(defs.asObject().begin(), defs.asObject().end(),
+                              [](const auto& member) { return member.first == "fixedVersion-1.22"; });
+    if (fixed == defs.asObject().end())
+        throw std::runtime_error("manifest 1.22 version is missing");
+    fixed->first = "fixedVersion-1.21";
+    fixed->second.at("properties").at("minor") = json::parse(R"({"const":21})");
+    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-manifest:1.21"));
+    defs.at("document-1.0").at("properties").at("schemaVersion") =
+        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.21"})");
+    validateManifestSchemaV1_21(previous);
+}
 } // namespace bloom::quality

@@ -7,9 +7,9 @@
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/color/ocio_cpu_input_processor.hpp>
+#include <bloom/core/file_uri.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/media/image.hpp>
-#include <charconv>
 #include <fstream>
 #include <limits>
 #include <span>
@@ -174,6 +174,14 @@ applyInputProcessor(const std::shared_ptr<const render::Rgba32fImage>& image,
 } // namespace
 std::filesystem::path resolveImagePath(std::string_view relativePath, std::string_view relinkHint,
                                        const std::filesystem::path& projectDirectory) {
+    // A project-relative path cannot contain ':'. An external locator stores its absolute URI
+    // directly in path, so it does not depend on the project directory or a fallback hint.
+    if (relativePath.find(':') != std::string_view::npos)
+        return core::absolutePathFromFileUri(relativePath).value_or(std::filesystem::path{});
+    if (relativePath.empty() || relativePath.front() == '/' ||
+        relativePath.find('\\') != std::string_view::npos ||
+        relativePath.find('\0') != std::string_view::npos)
+        return {};
     const auto relative = std::filesystem::path(
         std::u8string(reinterpret_cast<const char8_t*>(relativePath.data()), relativePath.size()));
     if (!projectDirectory.empty()) {
@@ -182,29 +190,7 @@ std::filesystem::path resolveImagePath(std::string_view relativePath, std::strin
         if (std::filesystem::is_regular_file(candidate, error))
             return candidate;
     }
-    auto uri = std::string(relinkHint);
-    if (!uri.starts_with("file://"))
-        return {};
-    uri.erase(0, 7);
-    std::string path;
-    for (std::size_t index = 0; index < uri.size(); ++index) {
-        if (uri[index] == '%' && index + 2 < uri.size()) {
-            unsigned value = 0;
-            const auto parsed =
-                std::from_chars(uri.data() + index + 1, uri.data() + index + 3, value, 16);
-            if (parsed.ec != std::errc{} || parsed.ptr != uri.data() + index + 3 || value == 0)
-                return {};
-            path += static_cast<char>(value);
-            index += 2;
-        } else
-            path += uri[index];
-    }
-#if defined(_WIN32)
-    if (path.size() > 2 && path[0] == '/' && path[2] == ':')
-        path.erase(0, 1);
-#endif
-    return std::filesystem::path(
-        std::u8string(reinterpret_cast<const char8_t*>(path.data()), path.size()));
+    return core::absolutePathFromFileUri(relinkHint).value_or(std::filesystem::path{});
 }
 ImageResult<std::shared_ptr<const ImageSourceRevision>>
 captureImageSourceRevision(const std::filesystem::path& path, const std::size_t hostByteBudget,

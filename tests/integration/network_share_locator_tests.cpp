@@ -123,22 +123,56 @@ int main() {
     if (!context.ok())
         return 1;
     const auto& prepared = import.prepared().front();
-    context.expect(prepared.locator.path.find("..") != std::string::npos,
-                   "locator path crosses out of the project directory (long ../ chain)");
-    context.expect(prepared.locator.relinkHint.starts_with("file://"),
-                   "locator carries an absolute file:// relink hint");
-    // The GVFS mount directory name carries a literal ':' (smb-share:server=...); the stored
-    // "project-relative" path must stay schema-valid (document::AssetRecord::validate() forbids
-    // ':' and '\\' anywhere in it) even though the real directory on disk is not renamed.
-    context.expect(prepared.locator.path.find(':') == std::string::npos,
-                   "the stored project-relative path never carries a raw ':' from the mount name");
-    context.expect(prepared.locator.path.find("%3A") != std::string::npos ||
-                       prepared.locator.path.find("%3a") != std::string::npos,
-                   "the mount's ':' is percent-encoded rather than dropped");
+    context.expect(prepared.locator.portability == "external",
+                   "a colon-bearing mount uses an external locator");
+    context.expect(prepared.locator.path.starts_with("file://") &&
+                       prepared.locator.path == prepared.locator.relinkHint,
+                   "the external locator stores one absolute URI as its path and hint");
+    context.expect(prepared.locator.path.find("%3A") != std::string::npos,
+                   "the mount's colon is encoded in the URI path");
     document::AssetRecord validated = prepared;
     validated.id = document::AssetId::fromRaw(1);
     context.expect(validated.validate().ok(),
                    "the prepared asset record satisfies document::AssetRecord::validate()");
+    validated.locator.path = "file:///tmp/bad%00.png";
+    validated.locator.relinkHint = validated.locator.path;
+    context.expect(!validated.validate().ok(), "an encoded NUL is not a valid external path");
+    context.expect(media::resolveImagePath(validated.locator.path, validated.locator.relinkHint,
+                                           projectDirectory).empty(),
+                   "a malformed external URI never resolves");
+
+    // Ordinary assets retain relocation by a real project-relative path. The hint may point
+    // to the old location; the relative candidate wins after the project moves.
+    const auto localSource = projectDirectory / "portable.png";
+    writeOnePixelPng(localSource);
+    commands::ImportAssets localImport({localSource}, projectDirectory);
+    context.expect(localImport.prepared().size() == 1 &&
+                       localImport.prepared().front().locator.portability == "project-relative",
+                   "an asset inside the project retains a project-relative locator");
+    const auto movedProjectDirectory = scratchRoot / "moved-project";
+    std::filesystem::create_directories(movedProjectDirectory);
+    std::filesystem::copy_file(localSource, movedProjectDirectory / "portable.png");
+    if (localImport.prepared().size() == 1)
+        context.expect(media::resolveImagePath(localImport.prepared().front().locator.path,
+                                               localImport.prepared().front().locator.relinkHint,
+                                               movedProjectDirectory) ==
+                           movedProjectDirectory / "portable.png",
+                       "a moved project resolves its project-relative asset before the old hint");
+#if !defined(_WIN32)
+    const auto backslashSource = mountDirectory / "back\\slash.png";
+    writeOnePixelPng(backslashSource);
+    commands::ImportAssets backslashImport({backslashSource}, projectDirectory);
+    context.expect(backslashImport.prepared().size() == 1 &&
+                       backslashImport.prepared().front().locator.portability == "external" &&
+                       backslashImport.prepared().front().locator.path.find("%5C") !=
+                           std::string::npos,
+                   "a POSIX backslash component uses an escaped external URI");
+    if (backslashImport.prepared().size() == 1)
+        context.expect(media::resolveImagePath(backslashImport.prepared().front().locator.path,
+                                               backslashImport.prepared().front().locator.relinkHint,
+                                               projectDirectory) == backslashSource,
+                       "a backslash-bearing external path resolves exactly");
+#endif
 
     // The locator must resolve back to the real mounted file: this is exactly what
     // AssetController's thumbnail selection (selectThumbnail() -> media::resolveImagePath()) and
@@ -191,6 +225,8 @@ int main() {
     context.expect(relinkedAsset != nullptr, "relinked asset still present");
     if (relinkedAsset == nullptr)
         return 5;
+    context.expect(relinkedAsset->locator.portability == "external",
+                   "relink preserves explicit external portability");
     const auto resolvedAfterRelink = media::resolveImagePath(
         relinkedAsset->locator.path, relinkedAsset->locator.relinkHint, projectDirectory);
     context.expect(std::filesystem::equivalent(resolvedAfterRelink, relinkPath),
@@ -238,7 +274,8 @@ int main() {
     if (!context.ok())
         return 12;
     const auto& reopenedAsset = reopenedAssets.front();
-    context.expect(reopenedAsset.locator.path == relinkedAsset->locator.path &&
+    context.expect(reopenedAsset.locator.portability == "external" &&
+                       reopenedAsset.locator.path == relinkedAsset->locator.path &&
                        reopenedAsset.locator.relinkHint == relinkedAsset->locator.relinkHint,
                    "the locator survives the save/open round trip byte-for-byte");
     const auto resolvedAfterReopen = media::resolveImagePath(

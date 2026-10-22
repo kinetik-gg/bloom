@@ -200,6 +200,8 @@ migrateAssetInputColorSpaceV1_19(const JsonValue& root, std::pmr::memory_resourc
 [[nodiscard]] MigrationStepOutcome migrateLutAssetsV1_20(const JsonValue& root,
                                                          std::pmr::memory_resource* resource,
                                                          std::pmr::vector<char>& output);
+[[nodiscard]] MigrationStepOutcome migrateExternalFileLocatorsV1_21(
+    const JsonValue& root, std::pmr::memory_resource* resource, std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -221,7 +223,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 17}, {1, 18}, migrateDataBlocksV1_17},
     MigrationStepDescriptor{{1, 18}, {1, 19}, migrateWorkingColorSpaceV1_18},
     MigrationStepDescriptor{{1, 19}, {1, 20}, migrateAssetInputColorSpaceV1_19},
-    MigrationStepDescriptor{{1, 20}, {1, 21}, migrateLutAssetsV1_20}};
+    MigrationStepDescriptor{{1, 20}, {1, 21}, migrateLutAssetsV1_20},
+    MigrationStepDescriptor{{1, 21}, {1, 22}, migrateExternalFileLocatorsV1_21}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

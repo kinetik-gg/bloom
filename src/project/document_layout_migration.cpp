@@ -147,7 +147,8 @@ enum class Step {
     DataBlocks,
     WorkingColorSpace,
     AssetInputColorSpace,
-    LutAssets
+    LutAssets,
+    ExternalFileLocators
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -171,7 +172,8 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
         return false;
     if (step == Step::WorkingColorSpace)
         return false;
-    if (step == Step::AssetInputColorSpace || step == Step::LutAssets)
+    if (step == Step::AssetInputColorSpace || step == Step::LutAssets ||
+        step == Step::ExternalFileLocators)
         return false;
     if (scope == Scope::Composition) {
         return value.findMember(step == Step::NodeLayout   ? "nodeLayout"
@@ -326,7 +328,8 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::DataBlocks           ? "{\"major\":1,\"minor\":18}"
                            : step == Step::WorkingColorSpace    ? "{\"major\":1,\"minor\":19}"
                            : step == Step::AssetInputColorSpace ? "{\"major\":1,\"minor\":20}"
-                                                                : "{\"major\":1,\"minor\":21}");
+                           : step == Step::LutAssets            ? "{\"major\":1,\"minor\":21}"
+                                                                : "{\"major\":1,\"minor\":22}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
                 return false;
@@ -585,6 +588,14 @@ MigrationStepOutcome migrateAssetInputColorSpaceV1_19(const JsonValue& root,
 MigrationStepOutcome migrateLutAssetsV1_20(const JsonValue& root, std::pmr::memory_resource*,
                                            Buffer& output) {
     if (!sourceVersionIs(root, "20") || !transform(root, Scope::Root, Step::LutAssets, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateExternalFileLocatorsV1_21(const JsonValue& root,
+                                                      std::pmr::memory_resource*, Buffer& output) {
+    // Older locators remain project-relative; the new arm only expands what a writer can emit.
+    if (!sourceVersionIs(root, "21") ||
+        !transform(root, Scope::Root, Step::ExternalFileLocators, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }
