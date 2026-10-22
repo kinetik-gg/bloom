@@ -986,7 +986,7 @@ void testImageCombineDrivers() {
     auto channelDefinition = makeDefinition(setAlpha);
     channelDefinition.valueOperations = {
         {NodeId::fromRaw(201), ValueOutputIndex::fromRaw(0), 1,
-         CompiledValueUtility{ValueUtilityKernel::FrameNumber, {}, {}}}};
+         CompiledValueUtility{ValueUtilityKernel::FrameNumber, {}, {}, {}}}};
     channelDefinition.valueOutputCount = 1;
     const auto channelPlan = makePlan(channelDefinition);
     request = requestFor(*channelPlan);
@@ -997,8 +997,8 @@ void testImageCombineDrivers() {
     expect(alpha.frame() && red.frame() && !samePixels(alpha, red) && samePixels(red, redWarm),
            "linked Integer channel changes coverage and cache identity across frames");
 
-    for (const CompiledValue value : {CompiledValue{0.0}, CompiledValue{std::int64_t{-1}},
-                                      CompiledValue{std::int64_t{5}}}) {
+    for (const auto& value : {CompiledValue{0.0}, CompiledValue{std::int64_t{-1}},
+                              CompiledValue{std::int64_t{5}}}) {
         auto invalidDefinition = channelDefinition;
         invalidDefinition.valueOperations.front().kernel = CompiledValuePassthrough{
             {ParameterId::fromRaw(201), value}};
@@ -1014,7 +1014,7 @@ void testImageCombineDrivers() {
     expect(!evaluator.evaluate(invalid, requestFor(*invalid), {}).frame(),
            "Image Combine refuses an invalid channel output index");
 
-    detail::ImageEffectContext context;
+    runtime::detail::ImageEffectContext context;
     const auto& effect = std::get<CompiledImageEffect>(channelPlan->operations()[1]);
     const auto intent = requestFor(*channelPlan).colorIntent;
     const auto alphaPrepared = context.prepare(effect, intent, {}, {}, {}, {}, 1.0, 1.0, 0);
