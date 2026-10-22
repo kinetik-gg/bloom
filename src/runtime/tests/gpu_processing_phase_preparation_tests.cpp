@@ -308,7 +308,8 @@ void mixedAndNestedQuotas() {
     const std::uint64_t sourceAllowance = (*captured.value)->retainedBytes() + 1024;
     // The decoded upload is still96B. Immutable encoded backing/header metadata must now also
     // fit the source working envelope; none may borrow the independent coverage partition.
-    const std::size_t fixedHeadroom = 120ULL * 8 + 1024 + 2ULL * 65536;
+    // Native output and processing scratch each own a separate metadata allowance.
+    const std::size_t fixedHeadroom = 120ULL * 8 + 2ULL * 1024 + 2ULL * 65536;
     const std::size_t headroom = fixedHeadroom + 3 * sourceAllowance;
     sample.process.domains.push_back({.path = "/own",
                                       .kind = ProcessMemoryLimitKind::Finite,
@@ -406,7 +407,7 @@ void mixedAndNestedQuotas() {
                                            {}, zeroCoverage);
     sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
     sample.sampleSerial = 4;
-    sample.process.domains[0].limitBytes = 120ULL * 8 + 1024 + 3 * sourceAllowance;
+    sample.process.domains[0].limitBytes = 120ULL * 8 + 2ULL * 1024 + 3 * sourceAllowance;
     policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
     {
         auto sourceRequest = bloom::gpu_coverage_fixtures::requestFor(*sourceParent);
@@ -422,7 +423,7 @@ void mixedAndNestedQuotas() {
     auto solidParent = bloom::gpu_coverage_plans::nestedParentPlan(solidOnly, 898000, 779);
     sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
     sample.sampleSerial = 5;
-    sample.process.domains[0].limitBytes = 120ULL * 8 + 1024 + 3;
+    sample.process.domains[0].limitBytes = 120ULL * 8 + 2ULL * 1024 + 3;
     policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
     {
         auto solidRequest = bloom::gpu_coverage_fixtures::requestFor(*solidParent);
