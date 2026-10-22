@@ -132,6 +132,10 @@ std::string_view gpuBlendShaderIdentity(const core::BlendMode mode,
                            : std::string_view{"blend-v1-f32-portable"};
 }
 
+std::string_view gpuImageCombineShaderIdentity() noexcept {
+    return vulkan_detail::kImageCombineSpirvDigest;
+}
+
 std::string_view GpuBlend::shaderIdentity(const core::BlendMode mode) const noexcept {
     if (impl_ == nullptr) {
         return {};
@@ -291,9 +295,19 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
     // a request to render Normal. Reject it here: the shader's separable helper falls through to
     // the source value for an unknown mode, so it must never receive one.
     const std::int64_t storedMode = core::blendModeStoredValue(parameters.mode);
-    if (!core::blendModeFromStoredValue(storedMode).has_value()) {
+    if (!parameters.imageCombine && !core::blendModeFromStoredValue(storedMode).has_value()) {
         return makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
                               "the blend mode is not a known core::BlendMode value");
+    }
+    if (parameters.imageCombine &&
+        (static_cast<std::uint8_t>(parameters.imageCombine->kind) >
+             static_cast<std::uint8_t>(GpuImageCombineKind::MultiplyAlpha) ||
+         static_cast<std::uint8_t>(parameters.imageCombine->channel) >
+             static_cast<std::uint8_t>(ImageCoverageChannel::Luma) ||
+         !std::isfinite(parameters.imageCombine->factor) ||
+         parameters.imageCombine->factor < 0.0F || parameters.imageCombine->factor > 1.0F)) {
+        return makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
+                              "the image combine kind, channel or factor is invalid");
     }
     // Resolve the int32 shader offsets safely BEFORE any driver resource is created. A huge int64
     // origin difference is either represented exactly (overlap) or forced transparent (no overlap),
@@ -352,9 +366,12 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
     // hold the documented 2e-6 absolute-or-relative gate, so no device is left on the CPU path.
     const bool generalMode =
         parameters.mode != core::BlendMode::Normal && parameters.mode != core::BlendMode::Add;
-    const CompositePipeline& selected =
-        generalMode ? (impl.generalUsesF64 ? impl.pipelineF64 : impl.pipelinePortable)
-                    : impl.pipeline;
+    const CompositePipeline& selected = parameters.imageCombine
+                                            ? impl.pipelineImageCombine
+                                            : generalMode
+                                                  ? (impl.generalUsesF64 ? impl.pipelineF64
+                                                                         : impl.pipelinePortable)
+                                                  : impl.pipeline;
 
     impl.clearJob();
     const std::uint32_t zeroFlag = 0;
@@ -480,9 +497,18 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
                          sourceHeight,
                          sourceOffsetX,
                          sourceOffsetY,
-                         static_cast<std::uint32_t>(storedMode)};
-    impl.commandBuffer.pushConstants(*selected.pipelineLayout, vk::ShaderStageFlagBits::eCompute, 0,
-                                     sizeof(BlendPush), &push);
+                         parameters.imageCombine
+                             ? 8U + static_cast<std::uint32_t>(parameters.imageCombine->kind)
+                             : static_cast<std::uint32_t>(storedMode)};
+    if (parameters.imageCombine) {
+        const ImageCombinePush combined{push, parameters.imageCombine->factor,
+                                        static_cast<std::uint32_t>(parameters.imageCombine->channel)};
+        impl.commandBuffer.pushConstants(*selected.pipelineLayout, vk::ShaderStageFlagBits::eCompute,
+                                         0, sizeof(ImageCombinePush), &combined);
+    } else {
+        impl.commandBuffer.pushConstants(*selected.pipelineLayout, vk::ShaderStageFlagBits::eCompute,
+                                         0, sizeof(BlendPush), &push);
+    }
     // One invocation per destination pixel: X tiles the row in 256-wide groups, Y is the row.
     const auto groups = static_cast<std::uint32_t>(
         compositeDispatchGroupCount(static_cast<std::uint64_t>(destWidth)));

@@ -113,10 +113,21 @@ PropertiesRowControl propertiesRowControl(std::string_view schemaKey) {
 }
 
 QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view schemaKey) {
+    if (schemaKey == "bloom.blur.edge")
+        return {{QObject::tr("Transparent"), 0}, {QObject::tr("Clamp"), 1}};
     QList<std::pair<QString, std::int64_t>> items;
     const auto add = [&items](const QString& text, const std::int64_t stored) {
         items.append({text, stored});
     };
+    if (schemaKey == "bloom.resize-fit.filter") {
+        add(QObject::tr("Bilinear"), 0);
+        return items;
+    }
+    if (schemaKey == "bloom.resize-fit.policy") {
+        add(QObject::tr("Fit"), 0);
+        add(QObject::tr("Fill"), 1);
+        return items;
+    }
     if (schemaKey == "bloom.ocio-file.interpolation") {
         add(QObject::tr("Linear"), 0);
         add(QObject::tr("Tetrahedral"), 1);

@@ -1,5 +1,9 @@
 #pragma once
 
+#include "pointwise_image_effect.hpp"
+#include "canvas_image_effect.hpp"
+#include "separable_image_effect.hpp"
+
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -9,6 +13,17 @@
 namespace bloom::runtime::detail {
 
 struct PreparedImageEffect final {
+    struct Combine final {
+        ImageCombineMode mode = ImageCombineMode::Mix;
+        float factor = 1.0F;
+        render::ImageCoverageChannel channel = render::ImageCoverageChannel::Alpha;
+    };
+    std::optional<Combine> combine;
+    std::optional<PointwiseAffine> pointwise;
+    std::optional<CanvasMargins> canvas;
+    std::optional<DiscreteImageKernel> discrete;
+    std::optional<ResizeFitKernel> resizeFit;
+    std::optional<PreparedSeparableBlur> blur;
     std::shared_ptr<const color::CpuColorSpaceProcessor> processor;
     std::shared_ptr<const color::CpuColorSpaceProcessor> afterProcessor;
     std::shared_ptr<const color::CpuFileTransformProcessor> fileProcessor;
@@ -16,10 +31,18 @@ struct PreparedImageEffect final {
     std::string cacheIdentity;
     bool cancelled = false;
     [[nodiscard]] bool identity() const noexcept {
-        return !diagnostic && !cancelled ? (!processor || processor->isIdentity()) &&
-                                               (!afterProcessor || afterProcessor->isIdentity()) &&
-                                               (!fileProcessor || fileProcessor->isIdentity())
-                                         : true;
+        if (resizeFit)
+            return false;
+        return !diagnostic && !cancelled
+                   ? (!combine || (combine->mode == ImageCombineMode::Mix &&
+                                   combine->factor == 0.0F)) &&
+                         (!canvas || canvas->identity()) &&
+                         (!discrete || discrete->identity()) &&
+                         (!pointwise || pointwise->identity()) && (!blur || blur->identity()) &&
+                         (!processor || processor->isIdentity()) &&
+                         (!afterProcessor || afterProcessor->isIdentity()) &&
+                         (!fileProcessor || fileProcessor->isIdentity())
+                   : true;
     }
 };
 
@@ -30,7 +53,11 @@ class ImageEffectContext final {
     [[nodiscard]] PreparedImageEffect prepare(const CompiledImageEffect& effect,
                                               const EvaluationColorIntent& intent,
                                               const std::filesystem::path& base = {},
-                                              const CancellationToken& cancellation = {});
+                                              const CancellationToken& cancellation = {},
+                                              std::optional<double> sampledAmount = {},
+                                              std::optional<std::array<double, 4>> canvasMargins = {},
+                                              double horizontalScale = 1.0,
+                                              double verticalScale = 1.0);
 
   private:
     std::mutex mutex_;
@@ -45,6 +72,8 @@ struct ImageEffectResult final {
 
 [[nodiscard]] ImageEffectResult
 applyImageEffect(const PreparedImageEffect& effect, const render::Rgba32fImage& input,
+                 const render::Rgba32fImage* secondary,
                  std::size_t pixelBudget, const CancellationToken& cancellation,
-                 OperationIndex operation, const EvaluationProgressCallback& progress);
+                 OperationIndex operation, const EvaluationProgressCallback& progress,
+                 double horizontalScale = 1.0, double verticalScale = 1.0);
 } // namespace bloom::runtime::detail

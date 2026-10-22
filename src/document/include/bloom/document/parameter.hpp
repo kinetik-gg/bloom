@@ -19,6 +19,19 @@ namespace bloom::document {
 inline constexpr std::string_view kSolidColorParameterSchemaKey = "bloom.solid.color";
 inline constexpr std::string_view kSolidWidthParameterSchemaKey = "bloom.solid.width";
 inline constexpr std::string_view kSolidHeightParameterSchemaKey = "bloom.solid.height";
+inline constexpr std::string_view kCheckerCellWidthParameterSchemaKey = "bloom.checker.cell-width";
+inline constexpr std::string_view kCheckerCellHeightParameterSchemaKey =
+    "bloom.checker.cell-height";
+inline constexpr std::string_view kCheckerWidthParameterSchemaKey = "bloom.checker.width";
+inline constexpr std::string_view kCheckerHeightParameterSchemaKey = "bloom.checker.height";
+// Gradient geometry is expressed in full-resolution source pixel-edge coordinates. A pixel is
+// sampled at its centre. Radial distance uses the composition's physical pixel aspect.
+inline constexpr std::string_view kGradientStartParameterSchemaKey = "bloom.gradient.start";
+inline constexpr std::string_view kGradientEndParameterSchemaKey = "bloom.gradient.end";
+inline constexpr std::string_view kGradientStartColorParameterSchemaKey =
+    "bloom.gradient.start-color";
+inline constexpr std::string_view kGradientEndColorParameterSchemaKey = "bloom.gradient.end-color";
+inline constexpr std::string_view kGradientRepeatParameterSchemaKey = "bloom.gradient.repeat";
 inline constexpr std::string_view kTextParameterSchemaKey = "bloom.text.content";
 inline constexpr std::string_view kTextSizeParameterSchemaKey = "bloom.text.size";
 // Font references are family|style|digest strings. The old integer values remain accepted while
@@ -165,6 +178,9 @@ inline constexpr std::string_view kSolidColorEncoding = "bloom.reference.linear-
 // sees both headers, static_asserts the two equal rather than leaving them to drift -- see
 // src/runtime/cpu_composition_evaluator.cpp.
 inline constexpr double kMaximumTextSizePixels = 4096.0;
+// Neighborhood v1 authors at most 513 coefficients per axis at full resolution. Larger
+// unsupported radii are rejected explicitly, never silently clamped by preview or final render.
+inline constexpr double kMaximumBlurRadiusPixels = 256.0;
 // The size a newly authored text layer starts at.
 inline constexpr double kDefaultTextSizePixels = 72.0;
 
@@ -223,6 +239,8 @@ inline constexpr std::int64_t kDefaultBlendModeValue =
 [[nodiscard]] constexpr bool isVec2AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == "bloom.shape.size" || schemaKey == kPositionParameterSchemaKey ||
            schemaKey == kAnchorParameterSchemaKey || schemaKey == kScaleParameterSchemaKey ||
+           schemaKey == kGradientStartParameterSchemaKey ||
+           schemaKey == kGradientEndParameterSchemaKey ||
            schemaKey == kVector2ValueParameterSchemaKey;
 }
 
@@ -241,7 +259,21 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kTextLetterSpacingParameterSchemaKey ||
            schemaKey == kAudioLevelParameterSchemaKey ||
            schemaKey == "bloom.composition-source.time-offset" ||
-           schemaKey == "bloom.composition-source.time-scale";
+           schemaKey == "bloom.composition-source.time-scale" ||
+           schemaKey == "bloom.exposure.stops" || schemaKey == "bloom.offset.amount" ||
+           schemaKey == "bloom.multiply.factor" || schemaKey == "bloom.image-mix.factor" ||
+           schemaKey == "bloom.crop.left" || schemaKey == "bloom.crop.top" ||
+           schemaKey == "bloom.crop.right" || schemaKey == "bloom.crop.bottom" ||
+           schemaKey == "bloom.pad.left" || schemaKey == "bloom.pad.top" ||
+           schemaKey == "bloom.pad.right" || schemaKey == "bloom.pad.bottom" ||
+           schemaKey == "bloom.multiply-alpha.factor" || schemaKey == "bloom.blur.radius";
+}
+
+[[nodiscard]] constexpr bool isCanvasMarginSchemaKey(const std::string_view schemaKey) noexcept {
+    return schemaKey == "bloom.crop.left" || schemaKey == "bloom.crop.top" ||
+           schemaKey == "bloom.crop.right" || schemaKey == "bloom.crop.bottom" ||
+           schemaKey == "bloom.pad.left" || schemaKey == "bloom.pad.top" ||
+           schemaKey == "bloom.pad.right" || schemaKey == "bloom.pad.bottom";
 }
 
 // The Color4d-valued animatable schemas (task S5): a solid's colour and a text layer's colour.
@@ -257,6 +289,8 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == "bloom.shape.fill-color" || schemaKey == "bloom.shape.stroke-color" ||
            schemaKey == kSolidColorParameterSchemaKey ||
+           schemaKey == kGradientStartColorParameterSchemaKey ||
+           schemaKey == kGradientEndColorParameterSchemaKey ||
            schemaKey == kTextColorParameterSchemaKey || schemaKey == kColorValueParameterSchemaKey;
 }
 
@@ -269,7 +303,8 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 // degrees must be free to wind past a full turn in either direction, so the unit domain belongs to
 // the schema rather than to "scalar values" as a class.
 [[nodiscard]] constexpr bool hasUnitDomainSchemaKey(const std::string_view schemaKey) noexcept {
-    return schemaKey == kOpacityParameterSchemaKey || schemaKey == kAudioLevelParameterSchemaKey;
+    return schemaKey == kOpacityParameterSchemaKey || schemaKey == kAudioLevelParameterSchemaKey ||
+           schemaKey == "bloom.image-mix.factor" || schemaKey == "bloom.multiply-alpha.factor";
 }
 
 // Whether a scalar value under this schema is confined to the text size domain (0, kMaximumText-
@@ -285,6 +320,10 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 // is checked separately by each caller because the diagnostic it produces differs.
 [[nodiscard]] constexpr bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
                                                         const double value) noexcept {
+    if (isCanvasMarginSchemaKey(schemaKey))
+        return value >= 0.0 && value <= 16777216.0;
+    if (schemaKey == "bloom.blur.radius")
+        return value >= 0.0 && value <= kMaximumBlurRadiusPixels;
     if (schemaKey == "bloom.shape.stroke-width")
         return value >= 0.0;
     if (schemaKey == kSolidWidthParameterSchemaKey || schemaKey == kSolidHeightParameterSchemaKey)

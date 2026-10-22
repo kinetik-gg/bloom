@@ -8,6 +8,7 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/shape.hpp>
 #include <bloom/render/embedded_fonts.hpp>
+#include <bloom/render/image_coverage.hpp>
 #include <bloom/runtime/compiled_curves.hpp>
 #include <bloom/runtime/compiled_value_graph.hpp>
 #include <bloom/runtime/operation_index.hpp>
@@ -112,13 +113,45 @@ struct EvaluatedOperationBounds final {
 // A lowered solid source. Its colour is a typed operand rather than a resolved constant (task S5):
 // the solid colour schema is animatable now, so the value is either a constant or an index into the
 // plan's Color4 curve table -- exactly the shape a Layer Output transform operand already had.
+// Linear and radial generators share the Solid source's explicit extent and pixel-window path.
+// Their colours interpolate as straight scene-linear RGBA, then premultiply once for storage.
+struct CompiledGradient final {
+    bool radial = false;
+    CompiledColorParameter endColor;
+    CompiledVec2Parameter start;
+    CompiledVec2Parameter end;
+    document::ParameterId repeatId;
+    std::int64_t repeat = 0; // 0 clamp, 1 repeat, 2 mirror
+    friend bool operator==(const CompiledGradient&, const CompiledGradient&) = default;
+};
+
 struct CompiledSolid {
+    CompiledSolid() = default;
+    CompiledSolid(document::NodeId nodeId, CompiledColorParameter authoredColor,
+                  CompiledScalarParameter authoredWidth, CompiledScalarParameter authoredHeight,
+                  std::optional<CompiledGradient> authoredGradient = {})
+        : sourceNodeId(nodeId), color(std::move(authoredColor)), width(std::move(authoredWidth)),
+          height(std::move(authoredHeight)), gradient(std::move(authoredGradient)) {}
     document::NodeId sourceNodeId;
     CompiledColorParameter color;
     CompiledScalarParameter width;
     CompiledScalarParameter height;
+    std::optional<CompiledGradient> gradient;
 
     friend bool operator==(const CompiledSolid&, const CompiledSolid&) = default;
+};
+
+// Checker colours are straight authored values; cell and canvas dimensions are in authored
+// pixels. The reference and resident paths share a 4x4 sample grid at output resolution.
+struct CompiledChecker final {
+    document::NodeId sourceNodeId;
+    CompiledColorParameter colorA;
+    CompiledColorParameter colorB;
+    std::uint32_t cellWidth = 64;
+    std::uint32_t cellHeight = 64;
+    std::uint32_t width = 1920;
+    std::uint32_t height = 1080;
+    friend bool operator==(const CompiledChecker&, const CompiledChecker&) = default;
 };
 
 // A lowered text source. Size and colour became typed operands in task S5, when both schemas
@@ -175,9 +208,10 @@ struct CompiledCompositionSource final {
                            const CompiledCompositionSource&) = default;
 };
 
-// Image effects preserve the input's data/display windows and content bounds. Kernels operate
-// on straight RGB, preserve alpha, and publish finite premultiplied RGBA32F. Identity and bypass
-// share the input storage exactly. This is the common lowering for subsequent image effects.
+// Image effects publish finite premultiplied RGBA32F. Pointwise colour kernels preserve windows
+// and alpha while operating on straight RGB; neighborhood kernels declare their own associated-
+// RGBA and window/halo policy. Canvas and spatial kernels can change image windows. Identity and
+// bypass share the input storage exactly.
 struct IdentityImageKernel final {
     friend bool operator==(const IdentityImageKernel&, const IdentityImageKernel&) = default;
 };
@@ -194,13 +228,72 @@ struct FileTransformKernel final {
     std::optional<document::AssetRecord> asset;
     friend bool operator==(const FileTransformKernel&, const FileTransformKernel&) = default;
 };
-using ImageEffectKernel = std::variant<IdentityImageKernel, CstKernel, FileTransformKernel>;
+// Scene-linear, straight-RGB affine effects. The sampled parameter is absent for Invert.
+// Every mode preserves alpha and all image windows; no display-referred clamp is implied.
+enum class PointwiseImageEffect : std::uint8_t { Exposure, Offset, Multiply, Invert };
+struct PointwiseImageKernel final {
+    PointwiseImageEffect effect = PointwiseImageEffect::Invert;
+    std::optional<CompiledScalarParameter> amount;
+    friend bool operator==(const PointwiseImageKernel&, const PointwiseImageKernel&) = default;
+};
+enum class ImageCombineMode : std::uint8_t { Mix, SetAlpha, MultiplyAlpha };
+struct ImageCombineKernel final {
+    ImageCombineMode mode = ImageCombineMode::Mix;
+    std::optional<CompiledScalarParameter> factor;
+    render::ImageCoverageChannel channel = render::ImageCoverageChannel::Alpha;
+    friend bool operator==(const ImageCombineKernel&, const ImageCombineKernel&) = default;
+};
+enum class CanvasImageEffect : std::uint8_t { Crop, Pad };
+struct CanvasImageKernel final {
+    CanvasImageEffect effect = CanvasImageEffect::Crop;
+    std::array<CompiledScalarParameter, 4> margins;
+    friend bool operator==(const CanvasImageKernel&, const CanvasImageKernel&) = default;
+};
+// Exact permutations of the stored pixel lattice, with no colour/alpha arithmetic. Odd turns
+// exchange data-window extents at its top-left; the composition display canvas/PAR are retained.
+struct DiscreteImageKernel final {
+    bool horizontal = false;
+    bool vertical = false;
+    std::uint8_t quarterTurns = 0; // clockwise, canonical 0..3
+    [[nodiscard]] bool identity() const noexcept {
+        return !horizontal && !vertical && quarterTurns == 0;
+    }
+    friend bool operator==(const DiscreteImageKernel&, const DiscreteImageKernel&) = default;
+};
+// Constant output geometry. Resize stretches; Fit uses a physical-aspect-preserving fit/fill.
+// Bilinear is the initial explicitly versioned filter (0), shared with Layer Output.
+struct ResizeFitKernel final {
+    std::int64_t width = 1920;
+    std::int64_t height = 1080;
+    std::int64_t pixelAspectNumerator = 1;
+    std::int64_t pixelAspectDenominator = 1;
+    std::int64_t filter = 0;
+    // 0 = Resize (stretch), 1 = Fit (contain), 2 = Fill (cover).
+    std::int64_t policy = 0;
+    friend bool operator==(const ResizeFitKernel&, const ResizeFitKernel&) = default;
+};
+// Neighborhood filters operate on associated RGBA, including coverage. Radius is finite full-
+// resolution pixels in [0,256]; Gaussian sigma is radius/3 and support is ceil(radius).
+enum class SeparableBlurKind : std::uint8_t { Gaussian, Box };
+enum class BlurEdgeMode : std::uint8_t { Transparent, Clamp };
+struct SeparableBlurKernel final {
+    SeparableBlurKind kind = SeparableBlurKind::Gaussian;
+    CompiledScalarParameter radius;
+    BlurEdgeMode edge = BlurEdgeMode::Transparent;
+    friend bool operator==(const SeparableBlurKernel&, const SeparableBlurKernel&) = default;
+};
+using ImageEffectKernel = std::variant<IdentityImageKernel, CstKernel, FileTransformKernel,
+                                       PointwiseImageKernel, ImageCombineKernel, CanvasImageKernel,
+                                       DiscreteImageKernel, ResizeFitKernel, SeparableBlurKernel>;
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
     OperationIndex input;
     ImageEffectKernel kernel;
     bool bypass = false;
     bool look = false;
+    // Second image/matte for flat RGBA combines. The base input owns the output data/display
+    // windows; the second input is sampled by global pixel coordinate and clipped to those windows.
+    std::optional<OperationIndex> secondaryInput{};
     friend bool operator==(const CompiledImageEffect&, const CompiledImageEffect&) = default;
 };
 
@@ -394,7 +487,7 @@ struct CompiledCompositionOutput {
 };
 
 using CompiledOperation =
-    std::variant<CompiledSolid, CompiledText, CompiledImageSource, CompiledVideoSource,
+    std::variant<CompiledSolid, CompiledChecker, CompiledText, CompiledImageSource, CompiledVideoSource,
                  CompiledLayerOutput, CompiledMerge, CompiledCompositionOutput, CompiledShape,
                  CompiledCompositionSource, CompiledImageEffect>;
 

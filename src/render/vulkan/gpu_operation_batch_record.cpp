@@ -46,7 +46,7 @@ bool State::record() {
                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,      nullptr, &buffers[slot],  nullptr};
         };
         std::uint32_t bindingCount = 1;
-        if (job.kind == 0) {
+        if (job.kind == 0 || job.kind == 4) {
             image(0, job.image.get());
         } else {
             image(0, job.source);
@@ -101,7 +101,7 @@ bool State::record() {
         api->vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
                                   1, &barrier);
-        if (job.kind != 0)
+        if (job.kind != 0 && job.kind != 4)
             composite_detail::statusToHost(*control, command, job.metadata[2].buffer,
                                            sizeof(std::uint32_t));
     }

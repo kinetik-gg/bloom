@@ -526,6 +526,10 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     switch (definition.lowering) {
     case NodeLoweringKind::Solid:
         return lowerSolid(node);
+    case NodeLoweringKind::Checker:
+        return lowerChecker(node);
+    case NodeLoweringKind::Gradient:
+        return lowerGradient(node);
     case NodeLoweringKind::CompositionSource:
         return lowerCompositionSource(node);
     case NodeLoweringKind::VideoSource:
@@ -594,6 +598,57 @@ lowerSolid(const document::NodeRecord& node) {
     return runtime::CompiledSolid{node.id, *color, *width, *height};
 }
 
+[[nodiscard]] std::optional<runtime::CompiledOperation>
+lowerChecker(const document::NodeRecord& node) {
+    const auto a = compiledColorParameter(findParameterBinding(node, "colorA"));
+    const auto b = compiledColorParameter(findParameterBinding(node, "colorB"));
+    const auto* cellWidth =
+        parameterConstant<std::int64_t>(findParameterBinding(node, "cellWidth"));
+    const auto* cellHeight =
+        parameterConstant<std::int64_t>(findParameterBinding(node, "cellHeight"));
+    const auto* width = parameterConstant<std::int64_t>(findParameterBinding(node, "width"));
+    const auto* height = parameterConstant<std::int64_t>(findParameterBinding(node, "height"));
+    if (!a || !b || !cellWidth || !cellHeight || !width || !height || *cellWidth < 1 ||
+        *cellHeight < 1 || *width < 1 || *height < 1 || *cellWidth > 16777216 ||
+        *cellHeight > 16777216 || *width > 16777216 || *height > 16777216) {
+        addTopologyFailure(node.id, "Checker parameters could not be lowered.");
+        return std::nullopt;
+    }
+    return runtime::CompiledChecker{node.id,
+                                    *a,
+                                    *b,
+                                    static_cast<std::uint32_t>(*cellWidth),
+                                    static_cast<std::uint32_t>(*cellHeight),
+                                    static_cast<std::uint32_t>(*width),
+                                    static_cast<std::uint32_t>(*height)};
+}
+
+[[nodiscard]] std::optional<runtime::CompiledOperation>
+lowerGradient(const document::NodeRecord& node) {
+    using namespace document;
+    const auto startColor = compiledColorParameter(findParameterBinding(node, "startColor"));
+    const auto endColor = compiledColorParameter(findParameterBinding(node, "endColor"));
+    const auto start = compiledVec2Parameter(findParameterBinding(node, "start"));
+    const auto end = compiledVec2Parameter(findParameterBinding(node, "end"));
+    const auto width = compiledScalarParameter(findParameterBinding(node, "width"));
+    const auto height = compiledScalarParameter(findParameterBinding(node, "height"));
+    const auto* repeatBinding = findParameterBinding(node, "repeat");
+    const auto* repeat = parameterConstant<std::int64_t>(repeatBinding);
+    if (!startColor || !endColor || !start || !end || !width || !height || !repeatBinding ||
+        !repeat || *repeat < 0 || *repeat > 2) {
+        addTopologyFailure(node.id, "Gradient parameters could not be lowered.");
+        return std::nullopt;
+    }
+    runtime::CompiledSolid source{node.id, *startColor, *width, *height};
+    source.gradient = runtime::CompiledGradient{node.typeId == kRadialGradientNodeType,
+                                                *endColor,
+                                                *start,
+                                                *end,
+                                                repeatBinding->parameterId,
+                                                *repeat};
+    return source;
+}
+
 [[nodiscard]] std::optional<runtime::CompiledCompositionSource>
 lowerCompositionSource(const document::NodeRecord& node) {
     if (const auto found = compositionSources_.find(node.id); found != compositionSources_.end())
@@ -642,6 +697,139 @@ lowerImageEffect(const document::NodeRecord& node,
     if (!input) {
         addTopologyFailure(node.id, "Image effect input could not be lowered.");
         return std::nullopt;
+    }
+    if (node.typeId == "bloom.image-mix" || node.typeId == "bloom.set-alpha" ||
+        node.typeId == "bloom.multiply-alpha") {
+        const bool mix = node.typeId == "bloom.image-mix";
+        const bool multiplyAlpha = node.typeId == "bloom.multiply-alpha";
+        const auto second = findInputOperation(node.id, mix ? "second" : "matte", indices);
+        if (!second) {
+            addTopologyFailure(node.id, "Image combine second input could not be lowered.");
+            return std::nullopt;
+        }
+        if (multiplyAlpha) {
+            const auto factor = compiledScalarParameter(findParameterBinding(node, "factor"));
+            const auto* channel =
+                parameterConstant<std::int64_t>(findParameterBinding(node, "channel"));
+            if (factor && channel && *channel >= 0 && *channel <= 4)
+                return runtime::CompiledImageEffect{
+                    node.id,
+                    *input,
+                    runtime::ImageCombineKernel{
+                        runtime::ImageCombineMode::MultiplyAlpha, *factor,
+                        static_cast<render::ImageCoverageChannel>(*channel)},
+                    false,
+                    false,
+                    *second};
+        } else if (mix) {
+            if (const auto factor = compiledScalarParameter(findParameterBinding(node, "factor")))
+                return runtime::CompiledImageEffect{
+                    node.id,
+                    *input,
+                    runtime::ImageCombineKernel{runtime::ImageCombineMode::Mix, *factor,
+                                                render::ImageCoverageChannel::Alpha},
+                    false,
+                    false,
+                    *second};
+        } else {
+            const auto* channel =
+                parameterConstant<std::int64_t>(findParameterBinding(node, "channel"));
+            if (channel && *channel >= 0 && *channel <= 4)
+                return runtime::CompiledImageEffect{
+                    node.id,
+                    *input,
+                    runtime::ImageCombineKernel{
+                        runtime::ImageCombineMode::SetAlpha,
+                        {},
+                        static_cast<render::ImageCoverageChannel>(*channel)},
+                    false,
+                    false,
+                    *second};
+        }
+        addTopologyFailure(node.id, "Image combine parameters could not be lowered.");
+        return std::nullopt;
+    }
+    if (node.typeId == "bloom.flip") {
+        const auto* horizontal = parameterConstant<bool>(findParameterBinding(node, "horizontal"));
+        const auto* vertical = parameterConstant<bool>(findParameterBinding(node, "vertical"));
+        if (horizontal && vertical)
+            return runtime::CompiledImageEffect{
+                node.id, *input, runtime::DiscreteImageKernel{*horizontal, *vertical, 0}};
+    }
+    if (node.typeId == "bloom.rotate-90") {
+        const auto* turns =
+            parameterConstant<std::int64_t>(findParameterBinding(node, "quarterTurns"));
+        if (turns)
+            return runtime::CompiledImageEffect{
+                node.id, *input,
+                runtime::DiscreteImageKernel{false, false,
+                                             static_cast<std::uint8_t>((*turns % 4 + 4) % 4)}};
+    }
+    if (node.typeId == "bloom.gaussian-blur" || node.typeId == "bloom.box-blur") {
+        const auto radius = compiledScalarParameter(findParameterBinding(node, "radius"));
+        const auto* edge = parameterConstant<std::int64_t>(findParameterBinding(node, "edge"));
+        if (radius && edge && *edge >= 0 && *edge <= 1)
+            return runtime::CompiledImageEffect{
+                node.id, *input,
+                runtime::SeparableBlurKernel{node.typeId == "bloom.gaussian-blur"
+                                                 ? runtime::SeparableBlurKind::Gaussian
+                                                 : runtime::SeparableBlurKind::Box,
+                                             *radius, static_cast<runtime::BlurEdgeMode>(*edge)}};
+    }
+    const auto pointwise = [&]() -> std::optional<runtime::PointwiseImageEffect> {
+        if (node.typeId == "bloom.exposure")
+            return runtime::PointwiseImageEffect::Exposure;
+        if (node.typeId == "bloom.offset")
+            return runtime::PointwiseImageEffect::Offset;
+        if (node.typeId == "bloom.multiply")
+            return runtime::PointwiseImageEffect::Multiply;
+        if (node.typeId == "bloom.invert")
+            return runtime::PointwiseImageEffect::Invert;
+        return std::nullopt;
+    }();
+    if (pointwise) {
+        if (*pointwise == runtime::PointwiseImageEffect::Invert)
+            return runtime::CompiledImageEffect{node.id, *input,
+                                                runtime::PointwiseImageKernel{*pointwise, {}}};
+        if (const auto amount = compiledScalarParameter(findParameterBinding(node, "amount")))
+            return runtime::CompiledImageEffect{node.id, *input,
+                                                runtime::PointwiseImageKernel{*pointwise, *amount}};
+    }
+    if (node.typeId == "bloom.crop" || node.typeId == "bloom.pad") {
+        std::array<runtime::CompiledScalarParameter, 4> margins;
+        for (std::size_t i = 0; i < margins.size(); ++i) {
+            const auto parameter = compiledScalarParameter(
+                findParameterBinding(node, std::array{"left", "top", "right", "bottom"}[i]));
+            if (!parameter) {
+                addTopologyFailure(node.id, "Canvas margin could not be lowered.");
+                return std::nullopt;
+            }
+            margins[i] = *parameter;
+        }
+        return runtime::CompiledImageEffect{
+            node.id, *input,
+            runtime::CanvasImageKernel{node.typeId == "bloom.crop"
+                                           ? runtime::CanvasImageEffect::Crop
+                                           : runtime::CanvasImageEffect::Pad,
+                                       margins}};
+    }
+    if (node.typeId == "bloom.resize" || node.typeId == "bloom.fit") {
+        const auto* width = parameterConstant<std::int64_t>(findParameterBinding(node, "width"));
+        const auto* height = parameterConstant<std::int64_t>(findParameterBinding(node, "height"));
+        const auto* numerator =
+            parameterConstant<std::int64_t>(findParameterBinding(node, "pixelAspectNumerator"));
+        const auto* denominator =
+            parameterConstant<std::int64_t>(findParameterBinding(node, "pixelAspectDenominator"));
+        const auto* filter = parameterConstant<std::int64_t>(findParameterBinding(node, "filter"));
+        const auto* bypass = parameterConstant<bool>(findParameterBinding(node, "bypass"));
+        const auto* policy = parameterConstant<std::int64_t>(findParameterBinding(node, "policy"));
+        if (width && height && numerator && denominator && filter && bypass &&
+            (node.typeId == "bloom.resize" || policy))
+            return runtime::CompiledImageEffect{
+                node.id, *input,
+                runtime::ResizeFitKernel{*width, *height, *numerator, *denominator, *filter,
+                                         node.typeId == "bloom.resize" ? 0 : *policy + 1},
+                *bypass};
     }
     if (node.typeId == "bloom.ocio-colour-space-transform") {
         const auto* from = parameterConstant<std::string>(findParameterBinding(node, "from"));

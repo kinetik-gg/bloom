@@ -69,6 +69,49 @@ void connectNodes(ui::CompositionSession& session, document::NodeId source, docu
     expect(session.executeNodeTransaction(std::move(transaction)).changed(),
            "connect upstream fixture");
 }
+void discreteImageRows() {
+    auto project =
+        document::makeNewProject("Discrete", "Main", core::RationalTime::fromInteger(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    ui::PropertiesEditor properties(session);
+    properties.show();
+    const auto flip = addNode(session, "bloom.flip");
+    expect(flip.isValid(), "Flip is discoverable through generic AddNode");
+    session.selectNode(flip);
+    QCoreApplication::processEvents();
+    auto* horizontal = row(properties, "horizontal");
+    auto* vertical = row(properties, "vertical");
+    auto* toggle = horizontal ? horizontal->findChild<ui::kit::KSwitch*>() : nullptr;
+    expect(toggle && vertical && vertical->findChild<ui::kit::KSwitch*>(),
+           "Flip presents both axis controls");
+    if (toggle) {
+        toggle->setChecked(false);
+        expect(session.undo(), "Flip axis edit is command-backed and undoable");
+        expect(session.redo(), "Flip axis edit redoes");
+    }
+    const auto rotate = addNode(session, "bloom.rotate-90");
+    expect(rotate.isValid(), "Rotate 90 is discoverable through generic AddNode");
+    session.selectNode(rotate);
+    QCoreApplication::processEvents();
+    auto* turns = row(properties, "quarterTurns");
+    auto* field = turns ? turns->findChild<QLineEdit*>("propertiesRegistryInteger") : nullptr;
+    expect(field != nullptr, "Rotate 90 presents its integer quarter-turn control");
+    if (field) {
+        field->setText("-3");
+        QMetaObject::invokeMethod(field, "editingFinished", Qt::DirectConnection);
+        const auto* node = session.composition()->graph().findNode(rotate);
+        const auto parameter = node->parameters.front().parameterId;
+        const auto* record = session.composition()->parameters().find(parameter);
+        expect(std::get<std::int64_t>(
+                   std::get<document::ConstantValueSource>(record->source).value) == -3,
+               "Rotate 90 publishes signed quarter turns through a command");
+        expect(session.undo(), "Rotate 90 parameter edit undoes");
+        expect(session.redo(), "Rotate 90 parameter edit redoes");
+    }
+}
+
 void colourEffectRows() {
     auto project = document::makeNewProject("Colour", "Main", core::RationalTime::fromInteger(10));
     const auto composition = project.initialCompositionId;
@@ -613,6 +656,7 @@ int main(int argc, char** argv) try {
     upstreamRows();
     drivenTextContent();
     colourEffectRows();
+    discreteImageRows();
     widthRule();
     videoRows();
     QSettings().clear();

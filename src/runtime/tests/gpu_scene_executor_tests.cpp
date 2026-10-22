@@ -498,6 +498,8 @@ void testVectorLeaves(Expectations& expectations, GpuSceneExecutor& executor,
 
 #include "gpu_scene_executor_native_tests.ipp"
 
+#include "gpu_scene_executor_gradient_tests.ipp"
+
 #include "gpu_scene_executor_benchmark_tests.ipp"
 
 // Depends on the shared phase/caller measurement helpers above.
@@ -558,6 +560,7 @@ int main(const int argc, char** argv) {
         }
 
         testFixtures(expectations, *executor.executor, oracle);
+        testGradientProduction(expectations, *device.device, oracle);
         testEmptyInactive(expectations, *executor.executor, oracle);
         testCoveredByteExact(expectations, *executor.executor, oracle);
         testVectorLeaves(expectations, *executor.executor, oracle);

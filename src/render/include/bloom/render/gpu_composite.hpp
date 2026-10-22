@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -79,8 +80,8 @@ struct GpuCompositeDiagnostic final {
 
 // Validated inputs for TranslationOpacityBilinearV1. The source is shared immutable ownership
 // (retained for the job's lifetime) so it can come straight from the content cache. `outputWindow`
-// is the output DATA window only; the output DISPLAY window and pixel aspect are preserved from the
-// source so a nonzero-origin composition keeps its geometry. Translation is Float64 and opacity is
+// is the output DATA window; the optional output DISPLAY window supports explicit canvas changes,
+// while ordinary layer placement inherits the source display. Pixel aspect is preserved. Translation is Float64 and opacity is
 // already rounded once to Float32 by the CPU primitive.
 struct GpuTranslationParameters final {
     std::shared_ptr<const GpuImage> source;
@@ -88,6 +89,9 @@ struct GpuTranslationParameters final {
     double translationX = 0.0;
     double translationY = 0.0;
     float opacity = 1.0F;
+    // Canvas operations may deliberately change the display window. Ordinary layer placement
+    // leaves this empty and inherits the source display window.
+    std::optional<ImageWindow> outputDisplayWindow;
 };
 
 // Validated inputs for SourceOverV1. `source` is the foreground, `destination` the backdrop; both

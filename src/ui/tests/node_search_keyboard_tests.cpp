@@ -500,8 +500,11 @@ void testSearchKeyboardAndMenus() {
             for (auto* entry : colour->actions())
                 colourNodes.append(entry->text());
         expect(colourNodes.contains("OCIO Colour Space Transform") &&
-                   colourNodes.contains("OCIO File Transform") && colourNodes.size() == 2,
-               "Colour offers both image-effect nodes");
+                   colourNodes.contains("OCIO File Transform") &&
+                   colourNodes.contains("Exposure") && colourNodes.contains("Offset") &&
+                   colourNodes.contains("Multiply") && colourNodes.contains("Invert") &&
+                   colourNodes.size() == 6,
+               "Colour offers the registered image-effect nodes");
         auto* output = named(menu, "nodeAddCompositionOutputAction");
         expect(output != nullptr && !output->isEnabled() && !output->toolTip().isEmpty(),
                "a singleton already present is listed disabled with its refusal");

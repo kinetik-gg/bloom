@@ -470,6 +470,7 @@ emitMergeCommand(const CompiledMerge& stack, const CompiledCompositionPlan& plan
     }
     GpuSceneSolidCommand base{.sourceOperation = operationIndex,
                               .pixel = render::Rgba32f::transparent(),
+                              .gradient = std::nullopt,
                               .dataWindow = descriptor.dataWindow(),
                               .displayWindow = descriptor.displayWindow(),
                               .pixelAspect = descriptor.pixelAspect(),
@@ -491,6 +492,7 @@ emitMergeCommand(const CompiledMerge& stack, const CompiledCompositionPlan& plan
                                    .sourceKey = entry.key,
                                    .destinationKey = accumulatorKey,
                                    .mode = entry.mode,
+                                   .imageCombine = {},
                                    .sourceWindow = entry.window,
                                    .outputWindow = descriptor.dataWindow(),
                                    .pixelAspect = descriptor.pixelAspect(),

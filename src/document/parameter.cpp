@@ -182,12 +182,22 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* value = std::get_if<double>(&constant.value);
         return value && std::isfinite(*value) && isScalarWithinSchemaDomain(schemaKey, *value);
     }
-    if (schemaKey == kSolidColorParameterSchemaKey) {
+    if (schemaKey == kSolidColorParameterSchemaKey ||
+        schemaKey == kGradientStartColorParameterSchemaKey ||
+        schemaKey == kGradientEndColorParameterSchemaKey) {
         const auto* color = std::get_if<bloom::core::Color4d>(&constant.value);
         return color != nullptr && color->isValid();
     }
-    if (schemaKey == kPositionParameterSchemaKey || schemaKey == kAnchorParameterSchemaKey ||
-        schemaKey == kScaleParameterSchemaKey) {
+    if (schemaKey == kCheckerCellWidthParameterSchemaKey ||
+        schemaKey == kCheckerCellHeightParameterSchemaKey ||
+        schemaKey == kCheckerWidthParameterSchemaKey ||
+        schemaKey == kCheckerHeightParameterSchemaKey) {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value != nullptr && *value >= 1 && *value <= 16777216;
+    }
+    if (schemaKey == kGradientStartParameterSchemaKey ||
+        schemaKey == kGradientEndParameterSchemaKey || schemaKey == kPositionParameterSchemaKey ||
+        schemaKey == kAnchorParameterSchemaKey || schemaKey == kScaleParameterSchemaKey) {
         // One rule for all three Vec2d transform values: finite, otherwise unbounded. Scale is
         // deliberately NOT confined to positive numbers -- a negative factor mirrors the axis and
         // zero collapses the layer, both of which evaluation renders rather than refuses -- and
@@ -214,6 +224,10 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr && bloom::core::blendModeFromStoredValue(*stored).has_value();
     }
+    if (schemaKey == kGradientRepeatParameterSchemaKey) {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value && *value >= 0 && *value <= 2;
+    }
     if (schemaKey == kAudioLevelParameterSchemaKey) {
         const auto* level = std::get_if<double>(&constant.value);
         return level != nullptr && std::isfinite(*level) &&
@@ -230,10 +244,53 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* value = std::get_if<double>(&constant.value);
         return value && std::isfinite(*value);
     }
+    if (isCanvasMarginSchemaKey(schemaKey)) {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value != nullptr && std::isfinite(*value) &&
+               isScalarWithinSchemaDomain(schemaKey, *value);
+    }
+    if (schemaKey == "bloom.blur.radius") {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value && std::isfinite(*value) && *value >= 0.0 &&
+               *value <= kMaximumBlurRadiusPixels;
+    }
+    if (schemaKey == "bloom.blur.edge") {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value && *value >= 0 && *value <= 1;
+    }
+    if (schemaKey == "bloom.exposure.stops" || schemaKey == "bloom.offset.amount" ||
+        schemaKey == "bloom.multiply.factor") {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value != nullptr && std::isfinite(*value);
+    }
+    if (schemaKey == "bloom.image-mix.factor" || schemaKey == "bloom.multiply-alpha.factor") {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value != nullptr && std::isfinite(*value) && *value >= 0.0 && *value <= 1.0;
+    }
+    if (schemaKey == "bloom.set-alpha.channel" || schemaKey == "bloom.multiply-alpha.channel") {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value != nullptr && *value >= 0 && *value <= 4;
+    }
     if (schemaKey == "bloom.ocio-cst.from" || schemaKey == "bloom.ocio-cst.to" ||
         schemaKey == "bloom.ocio-file.process-space") {
         const auto* value = std::get_if<std::string>(&constant.value);
         return value && value->size() <= 256 && value->find('\0') == std::string::npos;
+    }
+    if (schemaKey == "bloom.flip.horizontal" || schemaKey == "bloom.flip.vertical")
+        return std::holds_alternative<bool>(constant.value);
+    if (schemaKey == "bloom.rotate-90.quarter-turns")
+        return std::holds_alternative<std::int64_t>(constant.value);
+    if (schemaKey.starts_with("bloom.resize-fit.")) {
+        if (schemaKey == "bloom.resize-fit.bypass")
+            return std::holds_alternative<bool>(constant.value);
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        if (!value)
+            return false;
+        if (schemaKey == "bloom.resize-fit.filter")
+            return *value == 0;
+        if (schemaKey == "bloom.resize-fit.policy")
+            return *value >= 0 && *value <= 1;
+        return *value >= 1 && *value <= 32768;
     }
     if (schemaKey == "bloom.ocio-effect.bypass" || schemaKey == "bloom.ocio-effect.look")
         return std::holds_alternative<bool>(constant.value);
@@ -321,7 +378,8 @@ constantMatchesSchema(const std::string_view schemaKey,
 
 [[nodiscard]] bool isValidSourceForSchema(const std::string_view schemaKey,
                                           const bloom::document::ParameterSource& source) {
-    if ((schemaKey.starts_with("bloom.ocio-") || schemaKey == "bloom.shape.path") &&
+    if ((schemaKey.starts_with("bloom.ocio-") || schemaKey.starts_with("bloom.resize-fit.") ||
+         schemaKey == "bloom.shape.path") &&
         !std::holds_alternative<bloom::document::ConstantValueSource>(source))
         return false;
     if (!isGenericallyValidSource(source)) {

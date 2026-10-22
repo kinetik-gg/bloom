@@ -1,0 +1,32 @@
+{
+  "schema": "bloom.gpu.shader.manifest.v1",
+  "generator": "tools/gpu-shaders compile/validate/embed recipe",
+  "generatorRevision": 1,
+  "operation": "ImageCombineV1",
+  "entrypoint": "main",
+  "shader": {
+    "language": "GLSL_460",
+    "stage": "compute",
+    "sha256": "0b7cd760adbffda983c658f3dabd12603b85fbc2d5910c1a55a75ca9667c5a51",
+    "spirvSha256": "9b9d27deb653e2b38d8d5799c38821c2d80a5640d2c334591b7a41569fa37ded",
+    "localSizeX": 256,
+    "localSizeY": 1,
+    "localSizeZ": 1
+  },
+  "bindings": [
+    {"set": 0, "binding": 0, "kind": "storage-image", "access": "readonly", "format": "rgba32f", "role": "second-image-or-matte"},
+    {"set": 0, "binding": 1, "kind": "storage-image", "access": "readonly", "format": "rgba32f", "role": "base-image"},
+    {"set": 0, "binding": 2, "kind": "storage-image", "access": "writeonly", "format": "rgba32f", "role": "premultiplied-output"},
+    {"set": 0, "binding": 3, "kind": "storage-buffer", "access": "readwrite", "element": "uint", "role": "error-flag"}
+  ],
+  "pushConstant": {
+    "byteCount": 36,
+    "fields": ["destWidth", "destHeight", "sourceWidth", "sourceHeight", "sourceOffsetX", "sourceOffsetY", "mode", "factor", "channel"]
+  },
+  "contracts": {
+    "alignment": "Second input sampled at the base image's global integer pixel coordinate; outside its data window is transparent black",
+    "alpha": "finite premultiplied RGBA32F; matte RGB channel extraction uses straight scene-linear colour and zero coverage for zero alpha",
+    "nonFinitePolicy": "input non-finite/subnormal or non-finite result sets a status flag; never publish a flagged image",
+    "modes": "8 Image Mix; 9 Set Alpha; 10 Multiply Alpha"
+  }
+}

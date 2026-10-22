@@ -384,6 +384,7 @@ spliceParentScene(const Fixture& fixture, const CompiledCompositionSource& sourc
     commands.push_back(GpuSceneSolidCommand{.index = 0,
                                             .sourceOperation = OperationIndex::fromRaw(0),
                                             .pixel = fixture.solidPixel,
+                                            .gradient = std::nullopt,
                                             .dataWindow = fixture.data,
                                             .displayWindow = fixture.display,
                                             .pixelAspect = fixture.aspect,

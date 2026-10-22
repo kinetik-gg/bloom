@@ -43,6 +43,7 @@ namespace bloom::runtime {
 enum class GpuSceneExecutorStepKind : std::uint8_t {
     Solid,        // GpuSolid::begin: a solid command, a merge transparent base, or a transparent
                   // composition output.
+    Gradient,     // Native GradientV1 batch compute; never a CPU-render/upload surrogate.
     CoveredSolid, // GpuSolid::beginCoveredResident/beginCovered: the R8 coverage path.
     // The native GpuPathCoverage compute dispatch for one vector source's coverage geometry. It
     // does not publish an image; on Ready the covered fill is started from the resident mask.
@@ -82,6 +83,8 @@ struct GpuSceneExecutorStep final {
     // Solid / merge base / transparent output. The windows are optional because ImageWindow has no
     // default constructor.
     render::Rgba32f solidPixel = render::Rgba32f::transparent();
+    std::optional<render::GpuSolidParameters::Checker> checker;
+    std::optional<render::GpuBatchGradient> gradient;
     std::optional<render::ImageWindow> solidDataWindow;
     std::optional<render::ImageWindow> solidDisplayWindow;
     core::PixelAspectRatio solidPixelAspect = core::PixelAspectRatio::square();
@@ -98,6 +101,7 @@ struct GpuSceneExecutorStep final {
     std::optional<render::Rgba32fImageDescriptor> uploadDescriptor;
     // Translation output data window plus GPU-local translation and opacity.
     std::optional<render::ImageWindow> outputWindow;
+    std::optional<render::ImageWindow> outputDisplayWindow;
     double translationX = 0.0;
     double translationY = 0.0;
     float translationOpacity = 1.0F;
@@ -105,8 +109,10 @@ struct GpuSceneExecutorStep final {
     // the output data window is `outputWindow`.
     render::GpuAffineMatrix affineMatrix;
     float affineOpacity = 1.0F;
+    std::optional<render::Rgba32fImageDescriptor> affineOutputDescriptor{};
     // Blend: `input` is the foreground source, `destination` the backdrop.
     core::BlendMode blendMode = core::kDefaultBlendMode;
+    std::optional<render::GpuImageCombineParameters> imageCombine;
     // OCIO ProcessEffect: the immutable prepared command (descriptor + artifact + identity).
     // `input` is the resident RGBA32F source; the output window/display window/pixel aspect are
     // `outputWindow` plus the scene command's preserved display geometry (carried through the scene
@@ -215,9 +221,10 @@ pointResampleFieldsValid(const GpuScenePointResampleCommand& resample) noexcept 
         if (!affineFieldsFinite(*affine)) {
             return {};
         }
-        return makeGpuSceneAffineSemanticKey(
-            affine->inputKey, affine->sourceWindow, affine->matrix, affine->opacity,
-            affine->outputWindow, affine->pixelAspect, std::string{kAffineArtifactToken});
+        return makeGpuSceneAffineSemanticKey(affine->inputKey, affine->sourceWindow, affine->matrix,
+                                             affine->opacity, affine->outputWindow,
+                                             affine->pixelAspect, std::string{kAffineArtifactToken},
+                                             affine->outputDescriptor);
     }
     if (const auto* resample = std::get_if<GpuScenePointResampleCommand>(&command)) {
         if (!pointResampleFieldsValid(*resample)) {
@@ -279,9 +286,14 @@ descriptorMatches(const GpuSceneCommand& command, const render::GpuImage& image,
             return false;
         }
         if (translationInput != nullptr) {
-            return image.displayWindow() == translationInput->displayWindow() &&
+            return image.displayWindow() ==
+                       (translation->outputDisplayWindow.has_value()
+                            ? translation->outputDisplayWindow
+                            : translationInput->displayWindow()) &&
                    image.pixelAspect() == translationInput->pixelAspect();
         }
+        if (translation->outputDisplayWindow.has_value())
+            return image.displayWindow() == translation->outputDisplayWindow;
         return true;
     }
     if (const auto* upload = std::get_if<GpuSceneUploadCommand>(&command)) {
@@ -293,6 +305,9 @@ descriptorMatches(const GpuSceneCommand& command, const render::GpuImage& image,
         if (!windowsEqual(image.dataWindow(), affine->outputWindow)) {
             return false;
         }
+        if (affine->outputDescriptor)
+            return image.displayWindow() == affine->outputDescriptor->displayWindow() &&
+                   image.pixelAspect() == affine->outputDescriptor->pixelAspect();
         if (translationInput != nullptr) {
             return image.displayWindow() == translationInput->displayWindow() &&
                    image.pixelAspect() == translationInput->pixelAspect();
@@ -358,8 +373,14 @@ expectedDescriptorOf(const PreparedGpuScene& scene, const GpuSceneCommandIndex i
                 if (!source.has_value()) {
                     return std::nullopt;
                 }
-                return SceneDescriptorInfo{item.outputWindow, source->display, source->pixelAspect};
+                return SceneDescriptorInfo{item.outputWindow,
+                                           item.outputDisplayWindow.value_or(source->display),
+                                           source->pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuSceneAffineCommand>) {
+                if (item.outputDescriptor)
+                    return SceneDescriptorInfo{item.outputWindow,
+                                               item.outputDescriptor->displayWindow(),
+                                               item.outputDescriptor->pixelAspect()};
                 const auto source = expectedDescriptorOf(scene, item.input, depth + 1);
                 if (!source.has_value()) {
                     return std::nullopt;

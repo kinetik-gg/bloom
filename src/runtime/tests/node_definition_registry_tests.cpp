@@ -129,7 +129,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // that adding a node type is a deliberate edit here. MEDIA-1 adds one Image source definition,
     // AUDIO-2 adds one Audio source definition, COMP-SRC adds Composition source, and LB-1 adds the
     // Layer Bounds value readout. MEDIA-3 adds Video; COLOR-3 adds CST and File Transform.
-    expectations.expect(registry.definitions().size() == 112,
+    expectations.expect(registry.definitions().size() == 120,
                         "startup contribution includes every built-in definition");
 
     for (const auto& [kind, version] : std::array<std::pair<std::string_view, std::uint32_t>, 4>{
@@ -146,6 +146,14 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
         registry.find(document::kSolidSourceNodeType, document::kSolidSourceNodeSchemaVersion);
     expectations.expect(registry.isFrozen() && solid != nullptr,
                         "freeze publishes deterministic definitions");
+    const auto* checker = registry.find(document::kCheckerSourceNodeType,
+                                        document::kCheckerSourceNodeSchemaVersion);
+    const auto* multiplyAlpha = registry.find("bloom.multiply-alpha", 1);
+    expectations.expect(checker && checker->parameters.size() == 6 &&
+                            checker->inputs.size() == 2 && multiplyAlpha &&
+                            multiplyAlpha->inputs.size() == 4 &&
+                            multiplyAlpha->parameters.size() == 2,
+                        "Checker and Multiply Alpha publish linkable artist controls");
     registry.freeze();
     expectations.expect(registry.find(document::kSolidSourceNodeType,
                                       document::kSolidSourceNodeSchemaVersion) == solid,

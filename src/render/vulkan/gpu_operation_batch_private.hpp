@@ -3,6 +3,7 @@
 #include "gpu_affine_private.hpp"
 #include "gpu_solid_private.hpp"
 #include "shaders/solid_spirv.inc"
+#include "shaders/gradient_spirv.inc"
 
 #include <bloom/render/gpu_operation_batch.hpp>
 
@@ -20,13 +21,13 @@ struct Job final {
     const GpuImageImpl* source = nullptr;
     const GpuImageImpl* destination = nullptr;
     VkDescriptorSet descriptors = VK_NULL_HANDLE;
-    std::array<std::uint32_t, 6> push{};
+    std::array<std::uint32_t, 24> push{};
     std::uint32_t pushBytes = 0;
     std::size_t kind = 0;
 };
 struct State final {
     std::shared_ptr<vulkan_detail::DeviceAllocatorState> control;
-    std::array<CompositePipeline, 4> pipelines;
+    std::array<CompositePipeline, 5> pipelines;
     VkDescriptorPool descriptors = VK_NULL_HANDLE;
     VkCommandPool commandPool = VK_NULL_HANDLE;
     VkCommandBuffer command = VK_NULL_HANDLE;

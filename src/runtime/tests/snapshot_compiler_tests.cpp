@@ -1912,6 +1912,10 @@ int main() {
     Expectations expectations;
     try {
         testImageEffectLowering(expectations);
+        testMultiplyInvertLowering(expectations);
+        testExposureOffsetLowering(expectations);
+        testCanvasLowering(expectations);
+        testBlurLowering(expectations);
         testLiveValueOverrideOwners(expectations);
         testOverrideVectorKindsAndLimits(expectations);
         testLayerFlagsAndRangeLowering(expectations);

@@ -31,6 +31,17 @@ struct SolidPushConstants final {
 };
 static_assert(sizeof(SolidPushConstants) == 24);
 
+struct CheckerPushConstants final {
+    float colorA[4];
+    float colorB[4];
+    std::uint32_t width, height;
+    std::uint32_t authorWidth, authorHeight;
+    std::uint32_t cellWidth, cellHeight;
+    std::uint32_t compositionWidth, compositionHeight;
+    std::uint32_t proxyWidth, proxyHeight;
+};
+static_assert(sizeof(CheckerPushConstants) == 72);
+
 // Shared diagnostic constructor, defined in gpu_solid.cpp, so both the ordinary
 // and covered translation units build the same typed diagnostic values.
 [[nodiscard]] GpuSolidDiagnostic gpuSolidDiagnostic(GpuSolidDiagnosticCode code,
@@ -146,6 +157,7 @@ struct GpuSolid::Impl final {
     // object and may be destroyed from any thread.
     void resetPipelineResources() noexcept;
     [[nodiscard]] bool createPipeline();
+    [[nodiscard]] bool createCheckerPipeline();
     // Builds the CoveredSolidV1 shader module, descriptor layout, pipeline
     // layout, pipeline, descriptor pool, and descriptor set.
     [[nodiscard]] bool createCoveredPipeline();
@@ -174,6 +186,10 @@ struct GpuSolid::Impl final {
     vk::raii::DescriptorSetLayout descriptorSetLayout{nullptr};
     vk::raii::PipelineLayout pipelineLayout{nullptr};
     vk::raii::Pipeline pipeline{nullptr};
+    vk::raii::ShaderModule checkerShaderModule{nullptr};
+    vk::raii::PipelineLayout checkerPipelineLayout{nullptr};
+    vk::raii::Pipeline checkerPipeline{nullptr};
+    bool checkerAttempted = false;
     vk::raii::DescriptorPool descriptorPool{nullptr};
     vk::raii::DescriptorSet descriptorSet{nullptr};
     vk::raii::CommandPool commandPool{nullptr};

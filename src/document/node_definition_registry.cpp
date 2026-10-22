@@ -129,8 +129,40 @@ template <typename Definition>
     using namespace bloom::document;
     switch (definition.lowering) {
     case NodeLoweringKind::ImageEffect:
-        return definition.inputs ==
-                   std::vector<InputPortDefinition>{{"input", SocketValueKind::Image}} &&
+        if (definition.key.typeId == "bloom.image-mix" ||
+            definition.key.typeId == "bloom.set-alpha") {
+            const bool mix = definition.key.typeId == "bloom.image-mix";
+            return definition.key.schemaVersion == 1 && definition.inputs.size() == 3 &&
+                   hasLeadingImageInput(definition, "input") &&
+                   definition.inputs[1] == InputPortDefinition{mix ? "second" : "matte",
+                                                               SocketValueKind::Image, true} &&
+                   hasParameterSockets(definition, 2) &&
+                   hasParameter(definition, 0, mix ? "factor" : "channel",
+                                mix ? "bloom.image-mix.factor" : "bloom.set-alpha.channel",
+                                mix ? ParameterValueKind::Float64 : ParameterValueKind::Integer,
+                                mix) &&
+                   definition.outputs ==
+                       std::vector<OutputPortDefinition>{{"image", SocketValueKind::Image}} &&
+                   !definition.layerSlotInput && !definition.audioLayerSlotInput;
+        }
+        if (definition.key.typeId == "bloom.multiply-alpha") {
+            return definition.key.schemaVersion == 1 && definition.inputs.size() == 4 &&
+                   hasLeadingImageInput(definition, "input") &&
+                   definition.inputs[1] ==
+                       InputPortDefinition{"matte", SocketValueKind::Image, true} &&
+                   hasParameterSockets(definition, 2) &&
+                   hasParameter(definition, 0, "factor", "bloom.multiply-alpha.factor",
+                                ParameterValueKind::Float64, true, true) &&
+                   hasParameter(definition, 1, "channel", "bloom.multiply-alpha.channel",
+                                ParameterValueKind::Integer) &&
+                   definition.outputs ==
+                       std::vector<OutputPortDefinition>{{"image", SocketValueKind::Image}} &&
+                   !definition.layerSlotInput && !definition.audioLayerSlotInput;
+        }
+        return (definition.inputs ==
+                    std::vector<InputPortDefinition>{{"input", SocketValueKind::Image}} ||
+                (hasLeadingImageInput(definition, "input") &&
+                 hasParameterSockets(definition, 1))) &&
                definition.outputs ==
                    std::vector<OutputPortDefinition>{{"image", SocketValueKind::Image}} &&
                !definition.layerSlotInput && !definition.audioLayerSlotInput;
@@ -147,6 +179,48 @@ template <typename Definition>
                             ParameterValueKind::Color4d,
                             isAnimatableSchemaKey(kSolidColorParameterSchemaKey)) &&
                hasParameterSockets(definition, 0) && !definition.layerSlotInput.has_value();
+    case NodeLoweringKind::Checker:
+        return hasCanonicalKey(definition, kCheckerSourceNodeType,
+                               kCheckerSourceNodeSchemaVersion) &&
+               definition.inputs.size() == 2 && definition.parameters.size() == 6 &&
+               hasImageOutput(definition, "image") &&
+               hasParameter(definition, 0, "colorA", kSolidColorParameterSchemaKey,
+                            ParameterValueKind::Color4d, true) &&
+               hasParameter(definition, 1, "colorB", kSolidColorParameterSchemaKey,
+                            ParameterValueKind::Color4d, true) &&
+               hasParameter(definition, 2, "cellWidth", kCheckerCellWidthParameterSchemaKey,
+                            ParameterValueKind::Integer) &&
+               hasParameter(definition, 3, "cellHeight", kCheckerCellHeightParameterSchemaKey,
+                            ParameterValueKind::Integer) &&
+               hasParameter(definition, 4, "width", kCheckerWidthParameterSchemaKey,
+                            ParameterValueKind::Integer) &&
+               hasParameter(definition, 5, "height", kCheckerHeightParameterSchemaKey,
+                            ParameterValueKind::Integer) &&
+               definition.inputs[0].name == "colorA" &&
+               definition.inputs[0].valueKind == SocketValueKind::Color &&
+               !definition.inputs[0].required && definition.inputs[1].name == "colorB" &&
+               definition.inputs[1].valueKind == SocketValueKind::Color &&
+               !definition.inputs[1].required && !definition.layerSlotInput;
+    case NodeLoweringKind::Gradient:
+        return (hasCanonicalKey(definition, kLinearGradientNodeType, kGradientNodeSchemaVersion) ||
+                hasCanonicalKey(definition, kRadialGradientNodeType, kGradientNodeSchemaVersion)) &&
+               definition.inputs.empty() && hasImageOutput(definition, "image") &&
+               definition.outputs.size() == 1 && definition.parameters.size() == 7 &&
+               hasParameter(definition, 0, "startColor", kGradientStartColorParameterSchemaKey,
+                            ParameterValueKind::Color4d, true) &&
+               hasParameter(definition, 1, "endColor", kGradientEndColorParameterSchemaKey,
+                            ParameterValueKind::Color4d, true) &&
+               hasParameter(definition, 2, "start", kGradientStartParameterSchemaKey,
+                            ParameterValueKind::Vec2d, true) &&
+               hasParameter(definition, 3, "end", kGradientEndParameterSchemaKey,
+                            ParameterValueKind::Vec2d, true) &&
+               hasParameter(definition, 4, "width", kSolidWidthParameterSchemaKey,
+                            ParameterValueKind::Float64, true) &&
+               hasParameter(definition, 5, "height", kSolidHeightParameterSchemaKey,
+                            ParameterValueKind::Float64, true) &&
+               hasParameter(definition, 6, "repeat", kGradientRepeatParameterSchemaKey,
+                            ParameterValueKind::Integer) &&
+               !definition.layerSlotInput;
     case NodeLoweringKind::VideoSource:
         return hasCanonicalKey(definition, "bloom.video-source", 1) &&
                hasOutput(definition, "image", SocketValueKind::Image) &&
@@ -378,6 +452,62 @@ template <typename Definition>
     return definition;
 }
 
+[[nodiscard]] NodeDefinition checkerDefinition() {
+    using namespace bloom::document;
+    NodeDefinition definition{
+        {std::string(kCheckerSourceNodeType), kCheckerSourceNodeSchemaVersion},
+        NodeLoweringKind::Checker,
+        {},
+        {{"image", SocketValueKind::Image}},
+        {{"colorA", std::string(kSolidColorParameterSchemaKey), ParameterValueKind::Color4d, true,
+          true, bloom::core::Color4d{0.18, 0.18, 0.18, 1.0}},
+         {"colorB", std::string(kSolidColorParameterSchemaKey), ParameterValueKind::Color4d, true,
+          true, bloom::core::Color4d{0.5, 0.5, 0.5, 1.0}},
+         {"cellWidth", std::string(kCheckerCellWidthParameterSchemaKey),
+          ParameterValueKind::Integer, true, false, std::int64_t{64}},
+         {"cellHeight", std::string(kCheckerCellHeightParameterSchemaKey),
+          ParameterValueKind::Integer, true, false, std::int64_t{64}},
+         {"width", std::string(kCheckerWidthParameterSchemaKey), ParameterValueKind::Integer, true,
+          false, std::int64_t{1920}},
+         {"height", std::string(kCheckerHeightParameterSchemaKey), ParameterValueKind::Integer,
+          true, false, std::int64_t{1080}}},
+        std::nullopt,
+        NodeCardinality::Many,
+        NodeCategory::Sources};
+    for (const auto& parameter : std::span(definition.parameters).first(2))
+        definition.inputs.push_back({parameter.role,
+                                     parameter.valueKind == ParameterValueKind::Color4d
+                                         ? SocketValueKind::Color
+                                         : SocketValueKind::Scalar,
+                                     false});
+    return definition;
+}
+
+[[nodiscard]] NodeDefinition gradientDefinition(const std::string_view type) {
+    using namespace bloom::document;
+    return {{std::string(type), kGradientNodeSchemaVersion},
+            NodeLoweringKind::Gradient,
+            {},
+            {{"image", SocketValueKind::Image}},
+            {{"startColor", std::string(kGradientStartColorParameterSchemaKey),
+              ParameterValueKind::Color4d, true, true, bloom::core::Color4d{0, 0, 0, 1}},
+             {"endColor", std::string(kGradientEndColorParameterSchemaKey),
+              ParameterValueKind::Color4d, true, true, bloom::core::Color4d{1, 1, 1, 1}},
+             {"start", std::string(kGradientStartParameterSchemaKey), ParameterValueKind::Vec2d,
+              true, true, Vec2d{0, 0}},
+             {"end", std::string(kGradientEndParameterSchemaKey), ParameterValueKind::Vec2d, true,
+              true, Vec2d{1, 0}},
+             {"width", std::string(kSolidWidthParameterSchemaKey), ParameterValueKind::Float64,
+              true, true, 1.0},
+             {"height", std::string(kSolidHeightParameterSchemaKey), ParameterValueKind::Float64,
+              true, true, 1.0},
+             {"repeat", std::string(kGradientRepeatParameterSchemaKey), ParameterValueKind::Integer,
+              true, false, std::int64_t{0}}},
+            std::nullopt,
+            NodeCardinality::Many,
+            NodeCategory::Sources};
+}
+
 [[nodiscard]] NodeDefinition layerOutputDefinition() {
     using namespace bloom::document;
     std::vector<InputPortDefinition> inputs{
@@ -499,6 +629,33 @@ template <typename Definition>
         NodeCategory::Color};
 }
 
+[[nodiscard]] NodeDefinition resizeFitDefinition(const bool fit) {
+    NodeDefinition definition{
+        {fit ? "bloom.fit" : "bloom.resize", 1},
+        NodeLoweringKind::ImageEffect,
+        {{"input", SocketValueKind::Image}},
+        {{"image", SocketValueKind::Image}},
+        {{"width", "bloom.resize-fit.width", ParameterValueKind::Integer, true, false,
+          std::int64_t{1920}},
+         {"height", "bloom.resize-fit.height", ParameterValueKind::Integer, true, false,
+          std::int64_t{1080}},
+         {"pixelAspectNumerator", "bloom.resize-fit.pixel-aspect-numerator",
+          ParameterValueKind::Integer, true, false, std::int64_t{1}},
+         {"pixelAspectDenominator", "bloom.resize-fit.pixel-aspect-denominator",
+          ParameterValueKind::Integer, true, false, std::int64_t{1}},
+         {"filter", "bloom.resize-fit.filter", ParameterValueKind::Integer, true, false,
+          std::int64_t{0}},
+         {"bypass", "bloom.resize-fit.bypass", ParameterValueKind::Boolean, true, false, false}},
+        std::nullopt,
+        NodeCardinality::Many,
+        NodeCategory::Compositing};
+    if (fit)
+        definition.parameters.push_back({"policy", "bloom.resize-fit.policy",
+                                         ParameterValueKind::Integer, true, false,
+                                         std::int64_t{0}});
+    return definition;
+}
+
 [[nodiscard]] NodeDefinition cstDefinition() {
     return {
         {"bloom.ocio-colour-space-transform", 1},
@@ -508,6 +665,111 @@ template <typename Definition>
         {{"from", "bloom.ocio-cst.from", ParameterValueKind::String, true, false, std::string{}},
          {"to", "bloom.ocio-cst.to", ParameterValueKind::String, true, false, std::string{}},
          {"bypass", "bloom.ocio-effect.bypass", ParameterValueKind::Boolean, true, false, false}},
+        std::nullopt,
+        NodeCardinality::Many,
+        NodeCategory::Color};
+}
+
+[[nodiscard]] NodeDefinition pointwiseImageDefinition(const char* typeId, const char* parameterKey,
+                                                      const double neutral) {
+    NodeDefinition definition{{typeId, 1},
+                              NodeLoweringKind::ImageEffect,
+                              {{"input", SocketValueKind::Image}},
+                              {{"image", SocketValueKind::Image}},
+                              {},
+                              std::nullopt,
+                              NodeCardinality::Many,
+                              NodeCategory::Color};
+    if (parameterKey != nullptr) {
+        definition.parameters.push_back(
+            {"amount", parameterKey, ParameterValueKind::Float64, true, true, neutral});
+        definition.inputs.push_back({"amount", SocketValueKind::Scalar, false});
+    }
+    return definition;
+}
+
+[[nodiscard]] NodeDefinition imageCombineDefinition(const bool mix) {
+    return {
+        {mix ? "bloom.image-mix" : "bloom.set-alpha", 1},
+        NodeLoweringKind::ImageEffect,
+        {{"input", SocketValueKind::Image},
+         {mix ? "second" : "matte", SocketValueKind::Image},
+         {mix ? "factor" : "channel", mix ? SocketValueKind::Scalar : SocketValueKind::Integer,
+          false}},
+        {{"image", SocketValueKind::Image}},
+        {{mix ? "factor" : "channel", mix ? "bloom.image-mix.factor" : "bloom.set-alpha.channel",
+          mix ? ParameterValueKind::Float64 : ParameterValueKind::Integer, true, mix,
+          mix ? bloom::document::ParameterValue{1.0}
+              : bloom::document::ParameterValue{std::int64_t{0}}}},
+        std::nullopt,
+        NodeCardinality::Many,
+        NodeCategory::Compositing};
+}
+
+[[nodiscard]] NodeDefinition canvasImageDefinition(const char* typeId) {
+    NodeDefinition definition{{typeId, 1},
+                              NodeLoweringKind::ImageEffect,
+                              {{"input", SocketValueKind::Image}},
+                              {{"image", SocketValueKind::Image}},
+                              {},
+                              std::nullopt,
+                              NodeCardinality::Many,
+                              NodeCategory::Compositing};
+    for (const char* side : {"left", "top", "right", "bottom"}) {
+        definition.parameters.push_back(
+            {side, std::string(typeId) + "." + side, ParameterValueKind::Float64, true, true, 0.0});
+        definition.inputs.push_back({side, SocketValueKind::Scalar, false});
+    }
+    return definition;
+}
+
+[[nodiscard]] NodeDefinition multiplyAlphaDefinition() {
+    return {
+        {"bloom.multiply-alpha", 1},
+        NodeLoweringKind::ImageEffect,
+        {{"input", SocketValueKind::Image},
+         {"matte", SocketValueKind::Image},
+         {"factor", SocketValueKind::Scalar, false},
+         {"channel", SocketValueKind::Integer, false}},
+        {{"image", SocketValueKind::Image}},
+        {{"factor", "bloom.multiply-alpha.factor", ParameterValueKind::Float64, true, true, 1.0},
+         {"channel", "bloom.multiply-alpha.channel", ParameterValueKind::Integer, true, false,
+          std::int64_t{0}}},
+        std::nullopt,
+        NodeCardinality::Many,
+        NodeCategory::Compositing};
+}
+
+[[nodiscard]] NodeDefinition discreteImageDefinition(const bool rotate) {
+    NodeDefinition definition{{rotate ? "bloom.rotate-90" : "bloom.flip", 1},
+                              NodeLoweringKind::ImageEffect,
+                              {{"input", SocketValueKind::Image}},
+                              {{"image", SocketValueKind::Image}},
+                              {},
+                              std::nullopt,
+                              NodeCardinality::Many,
+                              NodeCategory::Utilities};
+    if (rotate) {
+        definition.parameters.push_back({"quarterTurns", "bloom.rotate-90.quarter-turns",
+                                         ParameterValueKind::Integer, true, false,
+                                         std::int64_t{1}});
+    } else {
+        definition.parameters.push_back({"horizontal", "bloom.flip.horizontal",
+                                         ParameterValueKind::Boolean, true, false, true});
+        definition.parameters.push_back(
+            {"vertical", "bloom.flip.vertical", ParameterValueKind::Boolean, true, false, false});
+    }
+    return definition;
+}
+
+[[nodiscard]] NodeDefinition blurDefinition(const char* typeId) {
+    return {
+        {typeId, 1},
+        NodeLoweringKind::ImageEffect,
+        {{"input", SocketValueKind::Image}, {"radius", SocketValueKind::Scalar, false}},
+        {{"image", SocketValueKind::Image}},
+        {{"radius", "bloom.blur.radius", ParameterValueKind::Float64, true, true, 0.0},
+         {"edge", "bloom.blur.edge", ParameterValueKind::Integer, true, false, std::int64_t{0}}},
         std::nullopt,
         NodeCardinality::Many,
         NodeCategory::Color};
@@ -708,18 +970,37 @@ bool NodeDefinitionRegistry::containsType(const std::string_view typeId) const n
 }
 
 bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
-    std::vector<NodeDefinition> definitions{shapeDefinition(),
-                                            solidDefinition(),
-                                            layerOutputDefinition(),
-                                            layerStackDefinition(),
-                                            compositionOutputDefinition(),
-                                            textDefinition(),
-                                            imageDefinition(),
-                                            cstDefinition(),
-                                            fileTransformDefinition(),
-                                            videoDefinition(),
-                                            audioDefinition(),
-                                            compositionSourceDefinition()};
+    std::vector<NodeDefinition> definitions{
+        shapeDefinition(),
+        solidDefinition(),
+        checkerDefinition(),
+        gradientDefinition(kLinearGradientNodeType),
+        gradientDefinition(kRadialGradientNodeType),
+        layerOutputDefinition(),
+        layerStackDefinition(),
+        compositionOutputDefinition(),
+        textDefinition(),
+        imageDefinition(),
+        cstDefinition(),
+        fileTransformDefinition(),
+        pointwiseImageDefinition("bloom.exposure", "bloom.exposure.stops", 0.0),
+        pointwiseImageDefinition("bloom.offset", "bloom.offset.amount", 0.0),
+        pointwiseImageDefinition("bloom.multiply", "bloom.multiply.factor", 1.0),
+        pointwiseImageDefinition("bloom.invert", nullptr, 0.0),
+        imageCombineDefinition(true),
+        imageCombineDefinition(false),
+        canvasImageDefinition("bloom.crop"),
+        canvasImageDefinition("bloom.pad"),
+        multiplyAlphaDefinition(),
+        discreteImageDefinition(false),
+        discreteImageDefinition(true),
+        resizeFitDefinition(false),
+        resizeFitDefinition(true),
+        blurDefinition("bloom.gaussian-blur"),
+        blurDefinition("bloom.box-blur"),
+        videoDefinition(),
+        audioDefinition(),
+        compositionSourceDefinition()};
     // The value library is appended, not interleaved: the five above are the structural node types
     // a composition is built out of, and reading them first in one place is what makes the
     // registry's own contract legible.

@@ -68,6 +68,7 @@ using detail::GpuSceneVectorChain;
 // working-space-specific operation cannot silently mis-colour.
 [[nodiscard]] bool isWorkingSpaceAgnosticOperation(const CompiledOperation& operation) noexcept {
     return std::holds_alternative<CompiledSolid>(operation) ||
+           std::holds_alternative<CompiledChecker>(operation) ||
            std::holds_alternative<CompiledText>(operation) ||
            std::holds_alternative<CompiledShape>(operation) ||
            std::holds_alternative<CompiledImageSource>(operation) ||
@@ -448,6 +449,16 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                     *solid, *plan, resolved, index, operationIndex, fullWindow, fullDisplayWindow,
                     fullPixelAspect, hScale, vScale, emit, chargeTransient, commandForOperation,
                     keyOf, outputWindowOf, bounds, vectors)) {
+                return fail(error->code, error->message);
+            }
+            continue;
+        }
+
+        if (const auto* checker = std::get_if<CompiledChecker>(&operation)) {
+            if (const auto error = detail::emitCheckerCommand(
+                    *checker, *plan, resolved, index, operationIndex, fullDisplayWindow,
+                    fullPixelAspect, hScale, vScale, emit, chargeTransient, commandForOperation, keyOf,
+                    outputWindowOf, bounds)) {
                 return fail(error->code, error->message);
             }
             continue;

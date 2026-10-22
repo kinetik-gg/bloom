@@ -81,6 +81,7 @@ template <typename Alternative> struct GpuImageEffectCoverageTraits;
     }
 
 BLOOM_GPU_REQUIRED_OPERATION(CompiledSolid, "solid source");
+BLOOM_GPU_REQUIRED_OPERATION(CompiledChecker, "checker source");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledText, "text source");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledImageSource, "image source");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledVideoSource, "video source");
@@ -102,6 +103,12 @@ BLOOM_GPU_REQUIRED_OPERATION(CompiledImageEffect, "image effect");
 BLOOM_GPU_REQUIRED_EFFECT(IdentityImageKernel, "identity image effect kernel");
 BLOOM_GPU_REQUIRED_EFFECT(CstKernel, "colour-space transform kernel");
 BLOOM_GPU_REQUIRED_EFFECT(FileTransformKernel, "file transform kernel");
+BLOOM_GPU_REQUIRED_EFFECT(PointwiseImageKernel, "scene-linear pointwise image effect kernel");
+BLOOM_GPU_REQUIRED_EFFECT(ImageCombineKernel, "flat RGBA two-image combine kernel");
+BLOOM_GPU_REQUIRED_EFFECT(CanvasImageKernel, "crop or pad canvas image effect kernel");
+BLOOM_GPU_REQUIRED_EFFECT(DiscreteImageKernel, "exact flip/quarter-turn image kernel");
+BLOOM_GPU_REQUIRED_EFFECT(ResizeFitKernel, "Resize/Fit bilinear kernel");
+BLOOM_GPU_REQUIRED_EFFECT(SeparableBlurKernel, "premultiplied separable neighborhood filter");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT
@@ -365,6 +372,8 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     using document::NodeLoweringKind;
     switch (lowering) {
     case NodeLoweringKind::Solid:
+    case NodeLoweringKind::Checker:
+    case NodeLoweringKind::Gradient:
     case NodeLoweringKind::Shape:
     case NodeLoweringKind::Text:
     case NodeLoweringKind::ImageSource:
@@ -405,7 +414,10 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     using document::NodeLoweringKind;
     switch (lowering) {
     case NodeLoweringKind::Solid:
+    case NodeLoweringKind::Gradient:
         return "operation.CompiledSolid";
+    case NodeLoweringKind::Checker:
+        return "operation.CompiledChecker";
     case NodeLoweringKind::Shape:
         return "operation.CompiledShape";
     case NodeLoweringKind::Text:

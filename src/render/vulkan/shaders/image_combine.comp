@@ -1,0 +1,84 @@
+#version 460
+// Flat RGBA image combine. Inputs stay resident. Source is the second image/matte;
+// backdrop is the first image. Both use composition-space integer pixel centres.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D bloom_source;
+layout(set = 0, binding = 1, rgba32f) uniform readonly image2D bloom_backdrop;
+layout(set = 0, binding = 2, rgba32f) uniform writeonly image2D bloom_output;
+layout(set = 0, binding = 3) buffer BloomImageCombineError { uint flags[]; } bloom_error;
+
+layout(push_constant) uniform BloomImageCombinePush {
+    uint destWidth;
+    uint destHeight;
+    uint sourceWidth;
+    uint sourceHeight;
+    int sourceOffsetX;
+    int sourceOffsetY;
+    uint mode;              // 8=Image Mix, 9=Set Alpha, 10=Multiply Alpha
+    float factor;           // finite unit factor, validated by host
+    uint channel;           // 0=A, 1=R, 2=G, 3=B, 4=scene-linear luma
+} bloom_push;
+
+bool subnormal(float value) {
+    uint bits = floatBitsToUint(value) & 0x7fffffffu;
+    return bits != 0u && bits < 0x00800000u;
+}
+uint pixelErrors(vec4 value) {
+    uint result = 0u;
+    if (any(isnan(value)) || any(isinf(value))) result |= 1u;
+    if (subnormal(value.x) || subnormal(value.y) || subnormal(value.z) ||
+        subnormal(value.w)) result |= 4u;
+    return result;
+}
+float coverage(vec4 matte) {
+    if (bloom_push.channel == 0u) return matte.a;
+    if (matte.a <= 0.0) return 0.0;
+    float value = 0.0;
+    if (bloom_push.channel == 1u) value = matte.r / matte.a;
+    else if (bloom_push.channel == 2u) value = matte.g / matte.a;
+    else if (bloom_push.channel == 3u) value = matte.b / matte.a;
+    else value = dot(matte.rgb, vec3(0.2126, 0.7152, 0.0722)) / matte.a;
+    return clamp(value, 0.0, 1.0);
+}
+
+void main() {
+    uvec2 index = gl_GlobalInvocationID.xy;
+    if (index.x >= bloom_push.destWidth || index.y >= bloom_push.destHeight) return;
+    ivec2 destination = ivec2(index);
+    ivec2 sourceLocal = destination + ivec2(bloom_push.sourceOffsetX,
+                                               bloom_push.sourceOffsetY);
+    bool inside = sourceLocal.x >= 0 && sourceLocal.y >= 0 &&
+                  sourceLocal.x < int(bloom_push.sourceWidth) &&
+                  sourceLocal.y < int(bloom_push.sourceHeight);
+    vec4 a = imageLoad(bloom_backdrop, destination);
+    vec4 b = inside ? imageLoad(bloom_source, sourceLocal) : vec4(0.0);
+    uint errors = pixelErrors(a);
+    if (inside) errors |= pixelErrors(b);
+    if (errors != 0u) {
+        atomicOr(bloom_error.flags[0], errors);
+        imageStore(bloom_output, destination, a);
+        return;
+    }
+    vec4 result = vec4(0.0);
+    if (bloom_push.mode == 8u) {
+        float t = bloom_push.factor;
+        result = a * (1.0 - t) + b * t;
+    } else if (bloom_push.mode == 9u) {
+        float alpha = coverage(b);
+        result = a.a > 0.0 ? vec4(a.rgb * (alpha / a.a), alpha)
+                           : vec4(0.0, 0.0, 0.0, alpha);
+    } else if (bloom_push.mode == 10u) {
+        float amount = clamp(coverage(b) * bloom_push.factor, 0.0, 1.0);
+        result = a * amount;
+    } else {
+        atomicOr(bloom_error.flags[0], 2u);
+        imageStore(bloom_output, destination, a);
+        return;
+    }
+    if (any(isnan(result)) || any(isinf(result))) {
+        atomicOr(bloom_error.flags[0], 2u);
+        imageStore(bloom_output, destination, a);
+        return;
+    }
+    imageStore(bloom_output, destination, result);
+}

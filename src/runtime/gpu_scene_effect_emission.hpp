@@ -19,10 +19,16 @@
 //  * any preparation refusal other than a genuine identity fails closed (Unsupported) so the caller
 //    takes the existing CPU reference path; it is never substituted with an identity result.
 
+#include "canvas_image_effect.hpp"
+#include "discrete_image_effect.hpp"
+#include "gpu_scene_layer_emission.hpp"
 #include "gpu_scene_preparation_common.hpp"
 #include "gpu_scene_vector_emission.hpp"
 #include "input_color_context.hpp"
 #include "layer_parent_transform.hpp"
+#include "pointwise_image_effect.hpp"
+#include "resize_fit_geometry.hpp"
+#include "separable_image_effect.hpp"
 
 #include <bloom/media/image.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
@@ -31,6 +37,7 @@
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
+#include <cmath>
 #include <cstddef>
 #include <filesystem>
 #include <limits>
@@ -74,14 +81,29 @@ gpuSceneCommandDescriptorOf(const std::vector<GpuSceneCommand>& commands,
     return std::visit(
         [&](const auto& item) -> std::optional<GpuSceneCommandDescriptor> {
             using T = std::decay_t<decltype(item)>;
-            if constexpr (std::is_same_v<T, GpuSceneTranslationCommand> ||
-                          std::is_same_v<T, GpuSceneAffineCommand>) {
+            if constexpr (std::is_same_v<T, GpuSceneAffineCommand>) {
+                if (item.outputDescriptor)
+                    return GpuSceneCommandDescriptor{item.outputWindow,
+                                                     item.outputDescriptor->displayWindow(),
+                                                     item.outputDescriptor->pixelAspect()};
+                const auto source = gpuSceneCommandDescriptorOf(commands, item.input, depth + 1);
+                if (!source)
+                    return std::nullopt;
+                return GpuSceneCommandDescriptor{item.outputWindow, source->display,
+                                                 source->pixelAspect};
+            } else if constexpr (std::is_same_v<T, GpuSceneTranslationCommand>) {
                 const auto source = gpuSceneCommandDescriptorOf(commands, item.input, depth + 1);
                 if (!source.has_value()) {
                     return std::nullopt;
                 }
-                return GpuSceneCommandDescriptor{item.outputWindow, source->display,
-                                                 source->pixelAspect};
+                return GpuSceneCommandDescriptor{
+                    item.outputWindow,
+                    [&]() {
+                        if constexpr (std::is_same_v<T, GpuSceneTranslationCommand>)
+                            return item.outputDisplayWindow.value_or(source->display);
+                        return source->display;
+                    }(),
+                    source->pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuSceneBlendCommand>) {
                 const auto backdrop =
                     gpuSceneCommandDescriptorOf(commands, item.destination, depth + 1);
@@ -145,7 +167,12 @@ struct GpuSceneEffectEmission final {
     std::size_t consumedLeaf = kNoVectorLeaf;
     bool consumedText = false;
     bool consumedShape = false;
+    std::size_t consumedSecondLeaf = kNoVectorLeaf;
+    bool consumedSecondText = false;
+    bool consumedSecondShape = false;
 };
+
+#include "gpu_scene_resize_fit_emission.ipp"
 
 // Emits the scene command(s) for one reachable CompiledImageEffect. Returns nullopt on success and
 // a fail-closed failure otherwise.
@@ -180,11 +207,257 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         std::holds_alternative<IdentityImageKernel>(effect.kernel)) {
         return identity();
     }
+    if (const auto* discrete = std::get_if<DiscreteImageKernel>(&effect.kernel)) {
+        if (discrete->quarterTurns > 3)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan, "Invalid quarter turn");
+        const auto inputWindow = outputWindowOf[inputValue];
+        if (discrete->identity() || !inputWindow)
+            return identity();
+        // The CPU lattice supports int64 origins. The affine map is Float64 host metadata;
+        // outside this exact-integer domain, use the explicit CPU fallback rather than round.
+        constexpr std::int64_t exactOriginLimit = std::int64_t{1} << 52;
+        if (inputWindow->originX() < -exactOriginLimit ||
+            inputWindow->originY() < -exactOriginLimit ||
+            inputWindow->maxXExclusive() > exactOriginLimit ||
+            inputWindow->maxYExclusive() > exactOriginLimit)
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
+                        "Discrete image origin exceeds exact GPU affine coordinates");
+        const auto window = discreteOutputWindow(*discrete, *inputWindow);
+        if (!window)
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
+                        "Discrete image output window overflows");
+        GpuSceneCommandIndex inputCommand = commandForOperation[inputValue];
+        std::string inputKey = keyOf[inputValue];
+        if (inputCommand == kInvalidGpuSceneCommand) {
+            const auto& chain = vectors[inputValue];
+            if (!chain || chain->source >= plan.operations().size())
+                return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                            "Discrete image input cannot be materialized");
+            if (const auto error = emitVectorLeafLayer(
+                    plan.operations()[chain->source], plan, resolved, chain->matrix, *inputWindow,
+                    ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale,
+                    chain->opacity, false, ctx.allowance, operationIndex, nullptr,
+                    ctx.coverageCache, cancellation, emit, charge, chargeCoverage, inputCommand,
+                    inputKey, result.consumedText, result.consumedShape))
+                return error;
+            result.consumedLeaf = chain->source;
+        }
+        const auto matrix = discreteAffineMatrix(*discrete, *inputWindow);
+        result.key =
+            makeGpuSceneAffineSemanticKey(inputKey, *inputWindow, matrix, 1.0F, *window.value(),
+                                          ctx.fullPixelAspect, std::string{kGpuAffineSpirvSha256});
+        if (const auto error = charge(window.value()->extent().width(),
+                                      window.value()->extent().height(), sizeof(render::Rgba32f)))
+            return error;
+        result.command = emit(GpuSceneAffineCommand{.sourceOperation = operationIndex,
+                                                    .input = inputCommand,
+                                                    .inputKey = inputKey,
+                                                    .sourceWindow = *inputWindow,
+                                                    .outputWindow = *window.value(),
+                                                    .matrix = matrix,
+                                                    .opacity = 1.0F,
+                                                    .pixelAspect = ctx.fullPixelAspect,
+                                                    .semanticKey = result.key});
+        result.window = *window.value();
+        result.local = {static_cast<double>(window.value()->originX()) / ctx.hScale,
+                        static_cast<double>(window.value()->originY()) / ctx.vScale,
+                        static_cast<double>(window.value()->maxXExclusive()) / ctx.hScale,
+                        static_cast<double>(window.value()->maxYExclusive()) / ctx.vScale};
+        result.output = result.local;
+        return std::nullopt;
+    }
+    if (const auto* kernel = std::get_if<ResizeFitKernel>(&effect.kernel))
+        return emitResizeFitCommand(*kernel, effect.input, operationIndex, ctx, cancellation, emit,
+                                    charge, chargeCoverage, result);
     const auto* cst = std::get_if<CstKernel>(&effect.kernel);
     const auto* file = std::get_if<FileTransformKernel>(&effect.kernel);
-    if (cst == nullptr && file == nullptr) {
+    const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel);
+    const auto* combine = std::get_if<ImageCombineKernel>(&effect.kernel);
+    if (combine != nullptr) {
+        if (!effect.secondaryInput || effect.secondaryInput->value() >= plan.operations().size() ||
+            static_cast<std::uint8_t>(combine->mode) >
+                static_cast<std::uint8_t>(ImageCombineMode::MultiplyAlpha) ||
+            static_cast<std::uint8_t>(combine->channel) >
+                static_cast<std::uint8_t>(render::ImageCoverageChannel::Luma))
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Image combine kernel or second input is invalid");
+        const auto secondValue = effect.secondaryInput->value();
+        if (!outputWindowOf[inputValue])
+            return identity();
+        if (!outputWindowOf[secondValue])
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                        "Image combine second input has no resident image");
+        float factor = 1.0F;
+        if (combine->factor) {
+            const auto sampled = resolveParameter(*combine->factor, plan, resolved);
+            if (!sampled || !std::isfinite(sampled->value) || sampled->value < 0.0 ||
+                sampled->value > 1.0)
+                return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                            "Image combine factor is outside its unit domain");
+            factor = static_cast<float>(sampled->value);
+        } else if (combine->mode != ImageCombineMode::SetAlpha) {
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Image combine factor is missing");
+        }
+        if (combine->mode == ImageCombineMode::Mix && factor == 0.0F)
+            return identity();
+
+        // Both image inputs may be deferred vector leaves. Materialize each through the same
+        // native coverage route the ordinary image-effect path uses before the two-input dispatch.
+        const auto residentInput = [&](const std::size_t value, GpuSceneCommandIndex& command,
+                                       std::string& key, std::size_t& consumedLeaf,
+                                       bool& consumedText,
+                                       bool& consumedShape) -> std::optional<GpuSceneLeafFailure> {
+            command = commandForOperation[value];
+            key = keyOf[value];
+            if (command != kInvalidGpuSceneCommand)
+                return std::nullopt;
+            const auto& chain = vectors[value];
+            if (!chain || chain->source >= plan.operations().size())
+                return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                            "Image combine vector input is not materializable");
+            const auto error = emitVectorLeafLayer(
+                plan.operations()[chain->source], plan, resolved, chain->matrix,
+                *outputWindowOf[value], ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale,
+                ctx.vScale, chain->opacity, false, ctx.allowance, operationIndex, nullptr,
+                ctx.coverageCache, cancellation, emit, charge, chargeCoverage, command, key,
+                consumedText, consumedShape);
+            if (!error)
+                consumedLeaf = chain->source;
+            return error;
+        };
+        GpuSceneCommandIndex baseCommand = kInvalidGpuSceneCommand;
+        GpuSceneCommandIndex secondCommand = kInvalidGpuSceneCommand;
+        std::string baseKey;
+        std::string secondKey;
+        if (const auto error = residentInput(inputValue, baseCommand, baseKey, result.consumedLeaf,
+                                             result.consumedText, result.consumedShape))
+            return error;
+        if (const auto error =
+                residentInput(secondValue, secondCommand, secondKey, result.consumedSecondLeaf,
+                              result.consumedSecondText, result.consumedSecondShape))
+            return error;
+        const auto baseDescriptor = gpuSceneCommandDescriptorOf(*ctx.commands, baseCommand, 0);
+        const auto secondDescriptor = gpuSceneCommandDescriptorOf(*ctx.commands, secondCommand, 0);
+        if (!baseDescriptor || !secondDescriptor)
+            return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                        "Image combine resident descriptors are not derivable");
+        const auto outputWindow = baseDescriptor->data;
+        if (const auto error = charge(outputWindow.extent().width(), outputWindow.extent().height(),
+                                      sizeof(render::Rgba32f)))
+            return error;
+        const render::GpuImageCombineParameters parameters{
+            static_cast<render::GpuImageCombineKind>(combine->mode), factor, combine->channel};
+        GpuSceneBlendCommand command{.sourceOperation = operationIndex,
+                                     .source = secondCommand,
+                                     .destination = baseCommand,
+                                     .sourceKey = secondKey,
+                                     .destinationKey = baseKey,
+                                     .mode = core::BlendMode::Normal,
+                                     .imageCombine = parameters,
+                                     .sourceWindow = secondDescriptor->data,
+                                     .outputWindow = outputWindow,
+                                     .pixelAspect = baseDescriptor->pixelAspect,
+                                     .artifactDigest =
+                                         std::string(render::gpuImageCombineShaderIdentity()),
+                                     .semanticKey = {}};
+        command.semanticKey = makeGpuSceneBlendSemanticKey(
+            secondKey, baseKey, command.mode, command.sourceWindow, command.outputWindow,
+            command.pixelAspect, command.artifactDigest, command.imageCombine);
+        result.command = emit(std::move(command));
+        result.key = makeGpuSceneBlendSemanticKey(
+            secondKey, baseKey, core::BlendMode::Normal, secondDescriptor->data, outputWindow,
+            baseDescriptor->pixelAspect, std::string(render::gpuImageCombineShaderIdentity()),
+            parameters);
+        result.window = outputWindow;
+        // Mix can add pixels where only the second image has content; Set Alpha can assign
+        // coverage to a transparent base pixel. Use the whole base data window as conservative
+        // content bounds so downstream ROI never silently drops those pixels.
+        result.local = boundsForWindow(outputWindow, ctx.hScale, ctx.vScale);
+        result.output = result.local;
+        return std::nullopt;
+    }
+    const auto* canvas = std::get_if<CanvasImageKernel>(&effect.kernel);
+    const auto* blurKernel = std::get_if<SeparableBlurKernel>(&effect.kernel);
+    std::optional<PreparedSeparableBlur> blur;
+    if (cst == nullptr && file == nullptr && pointwise == nullptr && canvas == nullptr &&
+        blurKernel == nullptr) {
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
-                    "An image effect kernel is not a supported colour transform");
+                    "An image effect kernel is not supported");
+    }
+
+    if (canvas != nullptr) {
+        std::array<double, 4> sides{};
+        for (std::size_t i = 0; i < sides.size(); ++i) {
+            const auto sampled = resolveParameter(canvas->margins[i], plan, resolved);
+            if (!sampled)
+                return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                            "Canvas margin is not evaluable");
+            sides[i] = sampled->value;
+        }
+        const CanvasMargins margins{canvas->effect, sides};
+        if (margins.identity() || !outputWindowOf[inputValue])
+            return identity();
+        const auto sourceWindow = *outputWindowOf[inputValue];
+        const auto outputWindow = canvasOutputWindow(sourceWindow, margins, ctx.hScale, ctx.vScale);
+        if (!outputWindow)
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                        "Canvas margins leave an invalid data window");
+        GpuSceneCommandIndex inputCommand = commandForOperation[inputValue];
+        std::string inputKey = keyOf[inputValue];
+        if (inputCommand == kInvalidGpuSceneCommand) {
+            const auto& chain = vectors[inputValue];
+            if (!chain || chain->source >= plan.operations().size())
+                return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                            "Canvas input vector chain is not materializable");
+            if (const auto error = emitVectorLeafLayer(
+                    plan.operations()[chain->source], plan, resolved, chain->matrix, sourceWindow,
+                    ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale,
+                    chain->opacity, false, ctx.allowance, operationIndex, nullptr,
+                    ctx.coverageCache, cancellation, emit, charge, chargeCoverage, inputCommand,
+                    inputKey, result.consumedText, result.consumedShape))
+                return error;
+            result.consumedLeaf = chain->source;
+        }
+        const auto descriptor = gpuSceneCommandDescriptorOf(commands, inputCommand, 0);
+        if (!descriptor || descriptor->data != sourceWindow)
+            return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                        "Canvas input descriptor does not match its data window");
+        const auto displayWindow =
+            canvasOutputWindow(descriptor->display, margins, ctx.hScale, ctx.vScale);
+        if (!displayWindow)
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                        "Canvas margins leave an invalid display window");
+        const double deltaX = static_cast<double>(sourceWindow.originX() - outputWindow->originX());
+        const double deltaY = static_cast<double>(sourceWindow.originY() - outputWindow->originY());
+        OperationKey commandKey;
+        commandKey.add(std::string{"gpu-canvas-translation-v1"});
+        commandKey.add(inputKey);
+        addWindowToKey(commandKey, sourceWindow);
+        addWindowToKey(commandKey, *outputWindow);
+        addWindowToKey(commandKey, *displayWindow);
+        addPixelAspectToKey(commandKey, descriptor->pixelAspect);
+        commandKey.add(deltaX);
+        commandKey.add(deltaY);
+        commandKey.add(std::string{kGpuTranslationOpacitySpirvSha256});
+        result.key = commandKey.digest();
+        if (const auto error = charge(outputWindow->extent().width(),
+                                      outputWindow->extent().height(), sizeof(render::Rgba32f)))
+            return error;
+        GpuSceneTranslationCommand command{.sourceOperation = operationIndex,
+                                           .input = inputCommand,
+                                           .sourceWindow = sourceWindow,
+                                           .outputWindow = *outputWindow,
+                                           .outputDisplayWindow = *displayWindow,
+                                           .translationX = deltaX,
+                                           .translationY = deltaY,
+                                           .opacity = 1.0F,
+                                           .semanticKey = result.key};
+        result.command = emit(std::move(command));
+        result.window = *outputWindow;
+        result.local = boundsForWindow(*outputWindow, ctx.hScale, ctx.vScale);
+        result.output = result.local;
+        return std::nullopt;
     }
 
     const std::string working{request.colorIntent.workingColorSpaceId};
@@ -195,7 +468,48 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     // Resolve the exact CPU chain for this kernel, short-circuiting every case the CPU treats as an
     // identity passthrough before any geometry or GPU work happens.
     std::vector<GpuOcioTransformSpec> legs;
-    if (cst != nullptr) {
+    if (blurKernel != nullptr) {
+        const auto sampled = resolveParameter(blurKernel->radius, plan, resolved);
+        blur = prepareSeparableBlur(*blurKernel,
+                                    sampled ? std::optional{sampled->value} : std::nullopt,
+                                    ctx.hScale, ctx.vScale);
+        if (!blur)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Blur radius is out of domain");
+        if (blur->identity())
+            return identity();
+        for (unsigned axis = 0; axis < 2; ++axis) {
+            GpuOcioTransformSpec leg;
+            leg.kind = GpuOcioTransformKind::SeparableBlur;
+            leg.blurWeights = axis == 0 ? blur->horizontal : blur->vertical;
+            leg.blurVertical = axis == 1;
+            leg.blurEdge = static_cast<std::uint8_t>(blur->edge);
+            legs.push_back(std::move(leg));
+        }
+    } else if (pointwise != nullptr) {
+        std::optional<double> amount;
+        if (pointwise->amount.has_value()) {
+            const auto sampled = resolveParameter(*pointwise->amount, plan, resolved);
+            if (!sampled) {
+                return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                            "Pointwise effect amount is not evaluable");
+            }
+            amount = sampled->value;
+        }
+        const auto affine = pointwiseAffine(*pointwise, amount);
+        if (!affine) {
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                        "Pointwise effect amount cannot be represented");
+        }
+        if (affine->identity()) {
+            return identity();
+        }
+        GpuOcioTransformSpec leg;
+        leg.kind = GpuOcioTransformKind::PointwiseAffine;
+        leg.affineScale = affine->scale;
+        leg.affineOffset = affine->offset;
+        legs.push_back(std::move(leg));
+    } else if (cst != nullptr) {
         const std::string from = cst->fromId.empty() ? working : cst->fromId;
         const std::string to = cst->toId.empty() ? working : cst->toId;
         if (from == to) {
@@ -281,9 +595,12 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                     "The OCIO configuration for the image effect is unavailable");
     }
+    const auto filterWindow = blur ? blurOutputWindow(*blur, *inputWindow) : inputWindow;
+    if (!filterWindow)
+        return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation, "Blur halo overflows");
     const GpuOcioCommandGeometry geometry{
-        .width = static_cast<std::uint32_t>(inputWindow->extent().width()),
-        .height = static_cast<std::uint32_t>(inputWindow->extent().height())};
+        .width = static_cast<std::uint32_t>(filterWindow->extent().width()),
+        .height = static_cast<std::uint32_t>(filterWindow->extent().height())};
     std::vector<std::shared_ptr<const PreparedGpuOcioCommand>> programs;
     programs.reserve(legs.size());
     for (const auto& leg : legs) {
@@ -343,7 +660,32 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
                     "The image effect input descriptor is not derivable");
     }
-    const auto outputWindow = descriptor->data;
+    const auto outputWindow = blur ? *filterWindow : descriptor->data;
+    if (blur && outputWindow != descriptor->data) {
+        if (const auto error = charge(outputWindow.extent().width(), outputWindow.extent().height(),
+                                      sizeof(render::Rgba32f)))
+            return error;
+        OperationKey paddingKey;
+        paddingKey.add(inputKey);
+        paddingKey.add(std::string("blur-transparent-halo-v1"));
+        paddingKey.add(outputWindow.originX());
+        paddingKey.add(outputWindow.originY());
+        paddingKey.add(outputWindow.extent().width());
+        paddingKey.add(outputWindow.extent().height());
+        inputKey = paddingKey.bytes();
+        inputCommand = emit(GpuSceneTranslationCommand{
+            .index = kInvalidGpuSceneCommand,
+            .sourceOperation = operationIndex,
+            .input = inputCommand,
+            .sourceWindow = descriptor->data,
+            .outputWindow = outputWindow,
+            .translationX =
+                static_cast<double>(descriptor->data.originX() - outputWindow.originX()),
+            .translationY =
+                static_cast<double>(descriptor->data.originY() - outputWindow.originY()),
+            .opacity = 1.0F,
+            .semanticKey = inputKey});
+    }
 
     // Emit the prepared legs as one resident RGBA32F chain. Each command's descriptor equals the
     // original input's, so every leg reuses `descriptor`.
@@ -371,7 +713,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     result.command = currentCommand;
     result.key = std::move(currentKey);
     result.window = outputWindow;
-    result.local = bounds[inputValue].output;
+    result.local =
+        blur ? boundsForWindow(outputWindow, ctx.hScale, ctx.vScale) : bounds[inputValue].output;
     result.output = result.local;
     return std::nullopt;
 }
@@ -420,6 +763,12 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
         if (emitted.consumedShape) {
             shapeConsumed[emitted.consumedLeaf] = true;
         }
+    }
+    if (emitted.consumedSecondLeaf != kNoVectorLeaf) {
+        if (emitted.consumedSecondText)
+            textConsumed[emitted.consumedSecondLeaf] = true;
+        if (emitted.consumedSecondShape)
+            shapeConsumed[emitted.consumedSecondLeaf] = true;
     }
     return std::nullopt;
 }

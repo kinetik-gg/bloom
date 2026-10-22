@@ -10,7 +10,7 @@
 //  * Process effect arm reads finite premultiplied RGBA32F. It reproduces the CPU image-effect
 //    flow exactly: un-premultiply RGB with one binary32 divide (alpha == 0 => straight +0 RGB and
 //    the input pixel is copied unchanged), apply the OCIO function to straight RGB only, keep the
-//    original alpha, re-premultiply, and publish finite premultiplied RGBA32F.
+//    original alpha, re-premultiply, validate the stored RGB, and publish finite premultiplied RGBA32F.
 //  * Display arm reads finite premultiplied RGBA32F, un-premultiplies the same way, calls the OCIO
 //    function with the alpha lane 1.0 and discards the returned alpha, keeps the original alpha,
 //    applies the caller's declared display clamp and packing to straight RGBA8
@@ -114,6 +114,9 @@ enum class OcioGpuProgramStage : std::uint8_t {
     ProcessEffect,
     // Display: straight-RGB display result for the caller's clamp/packing step.
     DisplayPacking,
+    // A bounded image neighborhood function receives an integer local coordinate and returns
+    // associated RGBA. The same resident I/O, finite-status and native retirement contract applies.
+    ProcessNeighborhood,
 };
 
 // Checked ceilings applied before a program is accepted. The producer enforces these against the

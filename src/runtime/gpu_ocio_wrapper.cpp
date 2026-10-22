@@ -132,10 +132,11 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
         }
         const bool display = program.stage == render::OcioGpuProgramStage::DisplayPacking;
         const bool effect = program.stage == render::OcioGpuProgramStage::ProcessEffect;
-        if (!display && !effect) {
+        const bool neighborhood = program.stage == render::OcioGpuProgramStage::ProcessNeighborhood;
+        if (!display && !effect && !neighborhood) {
             return failure(GpuOcioWrapperError::UnsupportedStage);
         }
-        if (effect && !viewAdjust.neutral()) {
+        if ((effect || neighborhood) && !viewAdjust.neutral()) {
             return failure(GpuOcioWrapperError::UnsupportedViewAdjust);
         }
         const bool adjusted = display && !viewAdjust.neutral();
@@ -191,40 +192,55 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
         out << "  if (index >= bloom_ocio_push.pixelCount) { return; }\n";
         out << "  ivec2 c = ivec2(int(index % bloom_ocio_push.width), int(index / "
                "bloom_ocio_push.width));\n";
-        out << "  vec4 p = imageLoad(bloom_ocio_input, c);\n";
-        out << "  float a = p.a;\n";
-        if (effect) {
-            // Exact CPU image-effect semantics: an alpha-zero source pixel is copied through
-            // unchanged, including any hidden RGB, and is never un-premultiplied or transformed.
-            out << "  if (a == 0.0) { imageStore(bloom_ocio_output, c, p); return; }\n";
-            out << "  vec3 s = vec3(bloom_ocio_cpu_div(p.r, a), bloom_ocio_cpu_div(p.g, a), "
-                   "bloom_ocio_cpu_div(p.b, a));\n";
+        if (neighborhood) {
+            out << "  vec4 p = " << program.functionName << "(c);\n";
+            out << "  if (any(isnan(p)) || any(isinf(p)) || p.a < 0.0 || p.a > 1.0) { "
+                   "bloom_ocio_status.flags[0] = 1u; return; }\n";
+            out << "  imageStore(bloom_ocio_output, c, p);\n";
         } else {
-            out << "  vec3 s = (a != 0.0) ? vec3(bloom_ocio_cpu_div(p.r, a), "
-                   "bloom_ocio_cpu_div(p.g, a), bloom_ocio_cpu_div(p.b, a)) : vec3(0.0);\n";
-        }
-        out << "  if (any(isnan(s)) || any(isinf(s))) { bloom_ocio_status.flags[0] = 1u; return; "
-               "}\n";
-        out << "  vec4 t = " << program.functionName << "(vec4(s, 1.0));\n";
-        out << "  if (any(isnan(t.rgb)) || any(isinf(t.rgb))) { bloom_ocio_status.flags[0] = 1u; "
-               "return; }\n";
-        if (display) {
-            if (adjusted) {
-                out << "  vec3 adjusted = vec3(bloom_ocio_view_adjust(t.r), "
-                       "bloom_ocio_view_adjust(t.g), bloom_ocio_view_adjust(t.b));\n";
-                out << "  uint r = bloom_ocio_quantize(adjusted.r);\n";
-                out << "  uint g = bloom_ocio_quantize(adjusted.g);\n";
-                out << "  uint b = bloom_ocio_quantize(adjusted.b);\n";
+            out << "  vec4 p = imageLoad(bloom_ocio_input, c);\n";
+            out << "  float a = p.a;\n";
+            if (effect) {
+                // Exact CPU image-effect semantics: an alpha-zero source pixel is copied through
+                // unchanged, including any hidden RGB, and is never un-premultiplied or
+                // transformed.
+                out << "  if (a == 0.0) { imageStore(bloom_ocio_output, c, p); return; }\n";
+                out << "  vec3 s = vec3(bloom_ocio_cpu_div(p.r, a), bloom_ocio_cpu_div(p.g, a), "
+                       "bloom_ocio_cpu_div(p.b, a));\n";
             } else {
-                out << "  uint r = bloom_ocio_quantize(t.r);\n";
-                out << "  uint g = bloom_ocio_quantize(t.g);\n";
-                out << "  uint b = bloom_ocio_quantize(t.b);\n";
+                out << "  vec3 s = (a != 0.0) ? vec3(bloom_ocio_cpu_div(p.r, a), "
+                       "bloom_ocio_cpu_div(p.g, a), bloom_ocio_cpu_div(p.b, a)) : vec3(0.0);\n";
             }
-            out << "  uint qa = bloom_ocio_quantize(a);\n";
-            out << "  bloom_ocio_output.words[index] = r | (g << 8) | (b << 16) | (qa << 24);\n";
-        } else {
-            out << "  imageStore(bloom_ocio_output, c, vec4(bloom_ocio_cpu_premul(t.rgb, a), "
-                   "a));\n";
+            out << "  if (any(isnan(s)) || any(isinf(s))) { bloom_ocio_status.flags[0] = 1u; "
+                   "return; "
+                   "}\n";
+            out << "  vec4 t = " << program.functionName << "(vec4(s, 1.0));\n";
+            out << "  if (any(isnan(t.rgb)) || any(isinf(t.rgb))) { bloom_ocio_status.flags[0] = "
+                   "1u; "
+                   "return; }\n";
+            if (display) {
+                if (adjusted) {
+                    out << "  vec3 adjusted = vec3(bloom_ocio_view_adjust(t.r), "
+                           "bloom_ocio_view_adjust(t.g), bloom_ocio_view_adjust(t.b));\n";
+                    out << "  uint r = bloom_ocio_quantize(adjusted.r);\n";
+                    out << "  uint g = bloom_ocio_quantize(adjusted.g);\n";
+                    out << "  uint b = bloom_ocio_quantize(adjusted.b);\n";
+                } else {
+                    out << "  uint r = bloom_ocio_quantize(t.r);\n";
+                    out << "  uint g = bloom_ocio_quantize(t.g);\n";
+                    out << "  uint b = bloom_ocio_quantize(t.b);\n";
+                }
+                out << "  uint qa = bloom_ocio_quantize(a);\n";
+                out << "  bloom_ocio_output.words[index] = r | (g << 8) | (b << 16) | (qa << "
+                       "24);\n";
+            } else {
+                // The CPU reference validates the stored premultiplied pixel, not just the
+                // straight-RGB intermediate. Never publish a non-finite resident process pixel.
+                out << "  vec3 premultiplied = bloom_ocio_cpu_premul(t.rgb, a);\n";
+                out << "  if (any(isnan(premultiplied)) || any(isinf(premultiplied))) { "
+                       "bloom_ocio_status.flags[0] = 1u; return; }\n";
+                out << "  imageStore(bloom_ocio_output, c, vec4(premultiplied, a));\n";
+            }
         }
         out << "}\n";
 

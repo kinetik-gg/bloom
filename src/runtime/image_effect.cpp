@@ -1,7 +1,9 @@
 #include "image_effect.hpp"
 #include "cpu_composition_evaluator_support.hpp"
+#include "discrete_image_effect.hpp"
 #include "input_color_context.hpp"
 #include "operation_key.hpp"
+#include "resize_fit_geometry.hpp"
 
 #include <algorithm>
 #include <array>
@@ -57,15 +59,106 @@ processorFailure(const color::OcioColorSpaceProcessorError error) {
     }
     return refusal(EvaluationDiagnosticCode::ColorTransformFailed, "TransformBuildFailed");
 }
+[[nodiscard]] EvaluationDiagnostic spatialFailure(const EvaluationDiagnosticCode code,
+                                                  std::string reason) {
+    return {code, DiagnosticSeverity::Error, {}, "Resize/Fit: " + reason, std::move(reason)};
+}
 } // namespace
 
 PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effect,
                                                 const EvaluationColorIntent& intent,
                                                 const std::filesystem::path& base,
-                                                const CancellationToken& cancellation) {
+                                                const CancellationToken& cancellation,
+                                                const std::optional<double> sampledAmount,
+                                                const std::optional<std::array<double, 4>> canvasMargins,
+                                                const double horizontalScale,
+                                                const double verticalScale) {
     if (effect.bypass || std::holds_alternative<IdentityImageKernel>(effect.kernel))
         return {};
     PreparedImageEffect prepared;
+    if (const auto* canvas = std::get_if<CanvasImageKernel>(&effect.kernel)) {
+        if (!canvasMargins) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
+                                          "Canvas margins are not evaluable");
+            return prepared;
+        }
+        prepared.canvas = CanvasMargins{canvas->effect, *canvasMargins};
+        OperationKey key;
+        key.add(canvas->effect);
+        for (const auto margin : *canvasMargins)
+            key.add(margin);
+        prepared.cacheIdentity = key.bytes();
+        return prepared;
+    }
+    if (const auto* combine = std::get_if<ImageCombineKernel>(&effect.kernel)) {
+        if (!effect.secondaryInput ||
+            static_cast<std::uint8_t>(combine->mode) >
+                static_cast<std::uint8_t>(ImageCombineMode::MultiplyAlpha) ||
+            static_cast<std::uint8_t>(combine->channel) >
+                static_cast<std::uint8_t>(render::ImageCoverageChannel::Luma) ||
+            (combine->mode == ImageCombineMode::SetAlpha) != !combine->factor ||
+            (combine->factor && (!sampledAmount || !std::isfinite(*sampledAmount) ||
+                                 *sampledAmount < 0.0 || *sampledAmount > 1.0))) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                          "Image combine parameters are invalid");
+            return prepared;
+        }
+        const float factor = combine->factor ? static_cast<float>(*sampledAmount) : 1.0F;
+        prepared.combine = PreparedImageEffect::Combine{combine->mode, factor, combine->channel};
+        OperationKey combineKey;
+        combineKey.add(combine->mode);
+        combineKey.add(static_cast<double>(factor));
+        combineKey.add(combine->channel);
+        prepared.cacheIdentity = combineKey.bytes();
+        return prepared;
+    }
+    if (const auto* discrete = std::get_if<DiscreteImageKernel>(&effect.kernel)) {
+        prepared.discrete = *discrete;
+        OperationKey key;
+        key.add(std::string("discrete-image-v1"));
+        key.add(discrete->horizontal);
+        key.add(discrete->vertical);
+        key.add(static_cast<std::uint64_t>(discrete->quarterTurns));
+        prepared.cacheIdentity = key.bytes();
+        return prepared;
+    }
+    if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel)) {
+        prepared.pointwise = pointwiseAffine(*pointwise, sampledAmount);
+        if (!prepared.pointwise) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                          "Pointwise effect parameter cannot be represented");
+            return prepared;
+        }
+        OperationKey pointwiseKey;
+        pointwiseKey.add(pointwise->effect);
+        pointwiseKey.add(static_cast<double>(prepared.pointwise->scale));
+        pointwiseKey.add(static_cast<double>(prepared.pointwise->offset));
+        prepared.cacheIdentity = pointwiseKey.bytes();
+        return prepared;
+    }
+    if (const auto* kernel = std::get_if<ResizeFitKernel>(&effect.kernel)) {
+        prepared.resizeFit = *kernel;
+        return prepared;
+    }
+    if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel)) {
+        prepared.blur =
+            prepareSeparableBlur(*blur, sampledAmount, horizontalScale, verticalScale);
+        if (!prepared.blur) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
+                                          "Blur radius or scale is out of domain");
+            return prepared;
+        }
+        OperationKey blurKey;
+        blurKey.add(blur->kind);
+        blurKey.add(blur->edge);
+        for (const auto weight : prepared.blur->horizontal)
+            blurKey.add(double(weight));
+        blurKey.add(std::string("vertical"));
+        for (const auto weight : prepared.blur->vertical)
+            blurKey.add(double(weight));
+        prepared.cacheIdentity = blurKey.bytes();
+        return prepared;
+    }
     OperationKey key;
     key.add(std::string(intent.ocioConfigUri));
     const auto revision = intent.ocioConfigRevision.toLowercaseHex();
@@ -163,11 +256,150 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
 }
 
 ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
-                                   const render::Rgba32fImage& input, const std::size_t pixelBudget,
+                                   const render::Rgba32fImage& input,
+                                   const render::Rgba32fImage* secondary,
+                                   const std::size_t pixelBudget,
                                    const CancellationToken& cancellation,
                                    const OperationIndex operation,
-                                   const EvaluationProgressCallback& progress) {
+                                   const EvaluationProgressCallback& progress,
+                                   const double horizontalScale, const double verticalScale) {
+    if (effect.discrete)
+        return applyDiscreteImageEffect(*effect.discrete, input, pixelBudget, cancellation,
+                                        operation, progress);
+    if (effect.blur)
+        return applySeparableBlur(*effect.blur, input, pixelBudget, cancellation, operation,
+                                  progress);
     ImageEffectResult result;
+    if (effect.canvas) {
+        const auto source = input.descriptor()->dataWindow();
+        const auto window = canvasOutputWindow(source, *effect.canvas, horizontalScale,
+                                               verticalScale);
+        const auto display = canvasOutputWindow(input.descriptor()->displayWindow(),
+                                                *effect.canvas, horizontalScale, verticalScale);
+        if (!window || !display) {
+            result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
+                                        "Canvas margins leave an invalid data window");
+            return result;
+        }
+        const auto descriptor = render::Rgba32fImageDescriptor::create(
+            *window, *display, input.descriptor()->pixelAspect());
+        if (!descriptor) {
+            result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
+                                        "Canvas output descriptor is invalid");
+            return result;
+        }
+        auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), pixelBudget);
+        if (!builder) {
+            result.diagnostic = refusal(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
+                                        "Canvas output exceeds the pixel storage budget");
+            return result;
+        }
+        const auto view = input.view();
+        if (!view) {
+            result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                        "Canvas input is invalid");
+            return result;
+        }
+        const auto transparent = render::Rgba32f::transparent();
+        reportProgress(progress, {EvaluationProgressStage::Operation, operation, 0,
+                                  window->extent().height()});
+        for (auto y = window->originY(); y < window->maxYExclusive(); ++y) {
+            if (cancellation.isCancellationRequested()) {
+                result.cancelled = true;
+                return result;
+            }
+            auto target = builder.value()->row(y);
+            if (!target) {
+                result.diagnostic = refusal(EvaluationDiagnosticCode::InternalInvariant,
+                                            "Canvas output row is unavailable");
+                return result;
+            }
+            for (std::size_t i = 0; i < target.value()->size(); ++i) {
+                if ((i & 4095U) == 0 && cancellation.isCancellationRequested()) {
+                    result.cancelled = true;
+                    return result;
+                }
+                const auto x = window->originX() + static_cast<std::int64_t>(i);
+                if (source.contains(x, y)) {
+                    const auto pixel = view.value()->read(x, y);
+                    if (!pixel) {
+                        result.diagnostic = refusal(EvaluationDiagnosticCode::InternalInvariant,
+                                                    "Canvas input pixel is unavailable");
+                        return result;
+                    }
+                    (*target.value())[i] = *pixel.value();
+                } else {
+                    (*target.value())[i] = transparent;
+                }
+            }
+            reportProgress(progress, {EvaluationProgressStage::Operation, operation,
+                                      static_cast<std::uint64_t>(y - window->originY() + 1),
+                                      window->extent().height()});
+        }
+        auto frozen = std::move(*builder.value()).freeze();
+        if (!frozen) {
+            result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                        "Canvas output validation failed");
+            return result;
+        }
+        result.image = std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
+        return result;
+    }
+    if (effect.resizeFit) {
+        if (cancellation.isCancellationRequested()) {
+            result.cancelled = true;
+            return result;
+        }
+        const auto geometry = resolveResizeFitGeometry(*effect.resizeFit, *input.descriptor(),
+                                                       horizontalScale, verticalScale);
+        if (!geometry) {
+            result.diagnostic = spatialFailure(EvaluationDiagnosticCode::InvalidParameter,
+                                               "Resize/Fit output geometry is not representable");
+            return result;
+        }
+        auto target = render::Rgba32fImageBuilder::create(geometry->descriptor, pixelBudget);
+        if (!target) {
+            result.diagnostic =
+                spatialFailure(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
+                               "Resize/Fit output exceeds the pixel storage budget");
+            return result;
+        }
+        const auto source = input.view();
+        if (!source) {
+            result.diagnostic = spatialFailure(EvaluationDiagnosticCode::InvalidPixel,
+                                               "Resize/Fit input image is invalid");
+            return result;
+        }
+        const auto window = geometry->descriptor.dataWindow();
+        const ParentedLayerTransform transform{geometry->matrix, input.descriptor()->dataWindow(),
+                                               1.0, 1.0, 1.0F};
+        for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
+            if (cancellation.isCancellationRequested()) {
+                result.cancelled = true;
+                return result;
+            }
+            const auto row = target.value()->row(y);
+            if (!row || transform.row(*source.value(), window, y, *row.value())) {
+                result.diagnostic = spatialFailure(EvaluationDiagnosticCode::InvalidPixel,
+                                                   "Resize/Fit produced an invalid row");
+                return result;
+            }
+            reportProgress(progress, {EvaluationProgressStage::Operation, operation,
+                                      static_cast<std::uint64_t>(y + 1), window.extent().height()});
+        }
+        if (cancellation.isCancellationRequested()) {
+            result.cancelled = true;
+            return result;
+        }
+        auto frozen = std::move(*target.value()).freeze();
+        if (!frozen) {
+            result.diagnostic = spatialFailure(EvaluationDiagnosticCode::InvalidPixel,
+                                               "Resize/Fit output validation failed");
+            return result;
+        }
+        result.image = std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
+        return result;
+    }
     auto builder = render::Rgba32fImageBuilder::create(*input.descriptor(), pixelBudget);
     if (!builder) {
         result.diagnostic = refusal(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
@@ -181,6 +413,97 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
         return result;
     }
     const auto window = input.descriptor()->dataWindow();
+    if (effect.combine) {
+        if (secondary == nullptr || secondary->descriptor() == nullptr) {
+            result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                        "Image combine second input is unavailable");
+            return result;
+        }
+        const auto secondView = secondary->view();
+        if (!secondView) {
+            result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                        "Image combine second input is invalid");
+            return result;
+        }
+        const auto secondWindow = secondary->descriptor()->dataWindow();
+        const auto total = window.extent().height();
+        reportProgress(progress, {EvaluationProgressStage::Operation, operation, 0, total});
+        for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
+            if (cancellation.isCancellationRequested()) {
+                result.cancelled = true;
+                return result;
+            }
+            const auto sourceRow = view.value()->row(y);
+            auto targetRow = builder.value()->row(y);
+            if (!sourceRow || !targetRow) {
+                result.diagnostic = refusal(EvaluationDiagnosticCode::InternalInvariant,
+                                            "Image combine base row is unavailable");
+                return result;
+            }
+            std::optional<std::span<const render::Rgba32f>> secondRow;
+            if (y >= secondWindow.originY() && y < secondWindow.maxYExclusive()) {
+                const auto fetched = secondView.value()->row(y);
+                if (!fetched) {
+                    result.diagnostic = refusal(EvaluationDiagnosticCode::InternalInvariant,
+                                                "Image combine second row is unavailable");
+                    return result;
+                }
+                secondRow = *fetched.value();
+            }
+            for (std::size_t column = 0; column < sourceRow.value()->size(); ++column) {
+                if ((column & 4095U) == 0 && cancellation.isCancellationRequested()) {
+                    result.cancelled = true;
+                    return result;
+                }
+                const auto x = window.originX() + static_cast<std::int64_t>(column);
+                const auto base = (*sourceRow.value())[column];
+                const auto matte = secondRow && x >= secondWindow.originX() &&
+                                           x < secondWindow.maxXExclusive()
+                                       ? (*secondRow)[static_cast<std::size_t>(x - secondWindow.originX())]
+                                       : render::Rgba32f::transparent();
+                render::ImageResult<render::Rgba32f> pixel =
+                    render::ImageResult<render::Rgba32f>::success(base);
+                if (effect.combine->mode == ImageCombineMode::SetAlpha) {
+                    pixel = render::setImageAlpha(
+                        base, render::imageCoverage(matte, effect.combine->channel));
+                } else {
+                    const double weight = effect.combine->mode == ImageCombineMode::Mix
+                                              ? static_cast<double>(effect.combine->factor)
+                                              : static_cast<double>(render::imageCoverage(
+                                                    matte, effect.combine->channel)) *
+                                                    static_cast<double>(effect.combine->factor);
+                    const double baseWeight = effect.combine->mode == ImageCombineMode::Mix
+                                                  ? 1.0 - weight : weight;
+                    const double matteWeight = effect.combine->mode == ImageCombineMode::Mix
+                                                   ? weight : 0.0;
+                    pixel = render::Rgba32f::fromPremultiplied(
+                        static_cast<float>(baseWeight * static_cast<double>(base.red()) +
+                                           matteWeight * static_cast<double>(matte.red())),
+                        static_cast<float>(baseWeight * static_cast<double>(base.green()) +
+                                           matteWeight * static_cast<double>(matte.green())),
+                        static_cast<float>(baseWeight * static_cast<double>(base.blue()) +
+                                           matteWeight * static_cast<double>(matte.blue())),
+                        static_cast<float>(baseWeight * static_cast<double>(base.alpha()) +
+                                           matteWeight * static_cast<double>(matte.alpha())));
+                }
+                if (!pixel) {
+                    result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                                "Image combine produced invalid premultiplied RGB");
+                    return result;
+                }
+                (*targetRow.value())[column] = *pixel.value();
+            }
+        }
+        auto frozen = std::move(*builder.value()).freeze();
+        if (!frozen) {
+            result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                        "Image combine image validation failed");
+            return result;
+        }
+        result.image = std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
+        reportProgress(progress, {EvaluationProgressStage::Operation, operation, total, total});
+        return result;
+    }
     const auto total = window.extent().height();
     reportProgress(progress, {EvaluationProgressStage::Operation, operation, 0, total});
     for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
@@ -231,6 +554,14 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                 result.diagnostic = refusal(EvaluationDiagnosticCode::ColorTransformFailed,
                                             "OCIO could not return finite working RGB");
                 return result;
+            }
+            if (effect.pointwise) {
+                for (auto& pixel : straight) {
+                    for (std::size_t channel = 0; channel < 3; ++channel) {
+                        pixel[channel] = pixel[channel] * effect.pointwise->scale +
+                                         effect.pointwise->offset;
+                    }
+                }
             }
             for (std::size_t i = 0; i < count; ++i) {
                 const auto alpha = (*source.value())[x + i].alpha();

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <span>
 #include <string>
 #include <utility>
@@ -169,6 +170,47 @@ buildOcioGpuProgramForCst(const ResolvedBloomNeutralConfig& resolved, const std:
         appendText(semanticBytes, toId);
         return extract(processor, render::OcioGpuProgramStage::ProcessEffect,
                        kOcioGpuCstSemanticsId, std::move(semanticBytes),
+                       resolved.expectedRevision(), limits);
+    } catch (const std::exception&) {
+        return render::OcioGpuProgramResult::failure(
+            render::OcioGpuProgramError::TransformBuildFailed);
+    }
+}
+
+render::OcioGpuProgramResult buildOcioGpuProgramForPointwiseAffine(
+    const ResolvedBloomNeutralConfig& resolved, const float scale, const float offset,
+    const render::OcioGpuProgramLimits& limits) noexcept {
+    if (!std::isfinite(scale) || !std::isfinite(offset)) {
+        return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
+    }
+    if (scale == 1.0F && offset == 0.0F) {
+        return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::IdentityTransform);
+    }
+    try {
+        auto transform = OCIO::MatrixTransform::Create();
+        const double matrix[16]{static_cast<double>(scale), 0.0, 0.0, 0.0,
+                                0.0, static_cast<double>(scale), 0.0, 0.0,
+                                0.0, 0.0, static_cast<double>(scale), 0.0,
+                                0.0, 0.0, 0.0, 1.0};
+        const double offsets[4]{static_cast<double>(offset), static_cast<double>(offset),
+                                static_cast<double>(offset), 0.0};
+        transform->setMatrix(matrix);
+        transform->setOffset(offsets);
+        const auto processor = resolved.impl().config()->getProcessor(
+            OCIO::Context::Create(), transform, OCIO::TRANSFORM_DIR_FORWARD);
+        if (!processor) {
+            return render::OcioGpuProgramResult::failure(
+                render::OcioGpuProgramError::TransformBuildFailed);
+        }
+        std::vector<std::byte> semanticBytes;
+        std::uint32_t scaleBits = 0;
+        std::uint32_t offsetBits = 0;
+        std::memcpy(&scaleBits, &scale, sizeof(scaleBits));
+        std::memcpy(&offsetBits, &offset, sizeof(offsetBits));
+        appendU32(semanticBytes, scaleBits);
+        appendU32(semanticBytes, offsetBits);
+        return extract(processor, render::OcioGpuProgramStage::ProcessEffect,
+                       kOcioGpuPointwiseAffineSemanticsId, std::move(semanticBytes),
                        resolved.expectedRevision(), limits);
     } catch (const std::exception&) {
         return render::OcioGpuProgramResult::failure(

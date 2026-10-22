@@ -387,6 +387,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     add_executable(bloom_render_gpu_blend_test
         gpu_blend_native_tests.cpp
         gpu_blend_portable_native_tests.cpp
+        gpu_image_combine_native_tests.cpp
         gpu_blend_benchmark_tests.cpp
         gpu_blend_native_support.hpp)
     target_link_libraries(bloom_render_gpu_blend_test PRIVATE bloom_render)

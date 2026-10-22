@@ -286,15 +286,21 @@ GpuAffineDiagnostic GpuAffine::beginAffineMatrix(const GpuAffineMatrixParameters
                               "the affine map metadata exceeds the byte budget");
     }
     const auto map = prepareAffineMatrixMap(parameters.matrix, parameters.outputWindow);
-    return impl_->beginPrepared(parameters.source, parameters.outputWindow, map, parameters.opacity,
-                                byteBudget);
+    if (parameters.outputDescriptor &&
+        parameters.outputDescriptor->dataWindow() != parameters.outputWindow)
+        return makeDiagnostic(GpuAffineDiagnosticCode::InvalidArgument,
+                              "the affine output descriptor disagrees with its data window");
+    return impl_->beginPrepared(
+        parameters.source, parameters.outputWindow, map, parameters.opacity, byteBudget,
+        parameters.outputDescriptor ? &*parameters.outputDescriptor : nullptr);
 }
 
 GpuAffineDiagnostic GpuAffine::Impl::beginPrepared(const std::shared_ptr<const GpuImage>& source,
                                                    const ImageWindow outputWindow,
                                                    const GpuAffineMap& affineMap,
                                                    const float opacity,
-                                                   const std::uint64_t byteBudget) {
+                                                   const std::uint64_t byteBudget,
+                                                   const Rgba32fImageDescriptor* output) {
     if (!onOwnerThread()) {
         return makeDiagnostic(GpuAffineDiagnosticCode::WrongThread,
                               "beginAffine must run on the device owner thread");
@@ -389,8 +395,8 @@ GpuAffineDiagnostic GpuAffine::Impl::beginPrepared(const std::shared_ptr<const G
     // Data window is the requested output window; DISPLAY window and pixel aspect are preserved
     // from the source so a nonzero-origin composition keeps its geometry.
     resident->dataWindow = outputWindow;
-    resident->displayWindow = source->displayWindow();
-    resident->pixelAspect = source->pixelAspect();
+    resident->displayWindow = output ? output->displayWindow() : source->displayWindow();
+    resident->pixelAspect = output ? output->pixelAspect() : source->pixelAspect();
     resident->generation = control->generation;
     if (!createResidentImage(*control, outputWidth, outputHeight, *resident)) {
         return makeDiagnostic(GpuAffineDiagnosticCode::AllocationFailed,

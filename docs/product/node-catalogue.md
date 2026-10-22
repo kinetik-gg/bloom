@@ -54,8 +54,9 @@ level's dependencies.
 | `F1` | Image, Image Sequence | Stable asset identity, source interpretation, windows, channels, and missing-frame policy |
 | `C1` | Video Source | Built on Linux: worker-only FFmpeg decode, asset/start frame/loop/colour controls, image and audio outputs, exact CFR timing and preserved alpha; native macOS/Windows providers remain unavailable |
 | `C1` | Shape | Built: one parametric/path source with shared fill and stroke; viewer drawing tools follow |
-| `C1` | Linear Gradient, Radial Gradient, Four-Point Gradient | Explicit interpolation space, repeat mode, and alpha behavior |
-| `C1` | Checker, Grid, Color Bars | Deterministic diagnostic and design generators |
+| `C1` | Linear Gradient, Radial Gradient | Built: animated source-pixel endpoints and scene-linear straight RGBA interpolation with independent alpha, Clamp/Repeat/Mirror, explicit extent, native GradientV1 preparation and CPU reference |
+| `C1` | Four-Point Gradient | Planned multi-corner source with explicit interpolation and alpha behavior |
+| `C1` | Checker, Grid, Color Bars | Checker built with two colours, cell/canvas size and deterministic proxy sampling; Grid and Color Bars remain planned |
 | `M1` | Noise, Fractal Noise, Voronoi | Seeded, versioned procedural output with stable CPU/GPU semantics |
 | `M1` | Repeater, Scatter | Instance-like repetition without eagerly duplicating authoring data |
 | `M1` | Audio Spectrum, Audio Waveform | Deterministic audio-analysis-driven image generation |
@@ -65,9 +66,9 @@ level's dependencies.
 | Level | Planned nodes | Important behavior |
 | --- | --- | --- |
 | `F1` | Transform 2D | Position, anchor, scale, rotation, opacity, defined sampling, and transparent borders |
-| `F1` | Resize, Fit | Explicit output extent, pixel aspect, filter, and fit/fill policy |
-| `C1` | Crop, Pad, Reformat | Preserve and deliberately change data/display windows and canvas semantics |
-| `C1` | Flip, Mirror, Rotate 90 | Exact discrete transforms where possible |
+| `F1` | Resize, Fit | Built: explicit output extent and PAR, premultiplied bilinear resampling, centred Fit/Fill, shared CPU/GPU affine paths; constant geometry in schema 1, native qualification pending |
+| `C1` | Crop, Pad, Reformat | Crop and Pad built: four animated pixel margins change data/display windows with exact pixel mapping; Reformat remains planned |
+| `C1` | Flip, Mirror, Rotate 90 | Flip and Rotate 90 v1 are built: exact pixel permutations, both Flip axes, signed integer clockwise quarter turns. Mirror remains a retained candidate. |
 | `C1` | Tile, Repeat | Defined edge and repeat modes |
 | `C1` | Corner Pin, Perspective Transform | Checked projective mapping with explicit invalid-transform diagnostics |
 | `M1` | Align, Distribute, Auto-Orient | Layout operations over stable bounds and transform identities |
@@ -83,13 +84,19 @@ level's dependencies.
 | `F1` | Mix | Controlled interpolation between images with explicit mask and factor policy |
 | `C1` | Merge | Named compositing operator and blend mode with declared alpha equation |
 | `C1` | Matte | Explicit image-derived coverage, channel, inversion, space, and time policy |
-| `C1` | Set Alpha, Replace Alpha, Multiply Alpha | Alpha changes remain distinct from RGB color transforms |
+| `C1` | Set Alpha, Replace Alpha, Multiply Alpha | Set Alpha and Multiply Alpha built with image matte channels; Replace Alpha remains planned |
 | `C1` | Premultiply, Unpremultiply | Explicit association conversion with defined zero-alpha behavior |
 | `C1` | Channel Split, Channel Combine | Typed construction and extraction of color, alpha, and data channels |
 | `C1` | Channel Copy, Channel Shuffle, Remove Channels | Preserve arbitrary channels and never infer color meaning from position alone |
 | `C1` | Holdout | Explicit coverage removal with a documented alpha equation |
 | `V1` | Deep Merge, Deep Holdout, Deep To Image | Optional deep-image path; never implied by flat RGBA support |
 | `V1` | Depth Composite | Explicit depth units, ordering, invalid-data behavior, and antialiasing policy |
+
+The initial flat-RGBA Image Mix node interpolates two images by an animated unit factor. Its
+base input owns the output window; the second input is aligned in composition space and is
+transparent outside its data window. Set Alpha reads a second image as coverage, with an
+Alpha/Red/Green/Blue/Luma selector. A dedicated per-pixel Mix mask is reserved for the
+separate Matte node and integration step.
 
 ## Color And Grade
 
@@ -101,15 +108,15 @@ keeps display transforms out of scene/process pixels.
 | --- | --- | --- |
 | `C1` | OCIO Colour Space Transform | Built: reusable image-effect lowering, exact-config source/destination spaces, working-space defaults, alpha-preserving conversion and typed pass-through diagnostics |
 | `C1` | OCIO File Transform | Built: LUT assets, working/process-space conversion, interpolation, direction and look bypass; supervised Linux execution, typed unavailable fallback on macOS/Windows |
-| `C1` | Exposure | Scene-linear light scaling |
-| `C1` | Offset, Multiply | Declared scene/process space; no implicit clamp |
+| `C1` | Exposure | Built: stops scale scene-linear straight RGB by `2^stops`; alpha is preserved |
+| `C1` | Offset, Multiply | Built: scene-linear straight RGB with unchanged alpha and no implicit clamp. Offset adds an amount; Multiply scales by a factor with neutral value 1, including for negative and HDR RGB. |
 | `C1` | Lift/Gamma/Gain | Explicit grading model and working space |
 | `C1` | Contrast, Pivot | Declared pivot and processing space |
 | `C1` | Levels | Explicit black/white points, gamma, channel policy, and optional clamp |
 | `C1` | Curves | Versioned interpolation with explicit RGB, channel, or luminance behavior |
 | `C1` | Hue/Saturation, Vibrance | Declared perceptual model and working space |
 | `C1` | White Balance | Declared chromatic-adaptation model and working space |
-| `C1` | Invert | Separate color, alpha, and mask modes |
+| `C1` | Invert | Scene-linear color mode maps straight RGB to `1 - RGB` and preserves alpha. Separate alpha and mask modes remain planned. |
 | `C1` | Luminance | Declared coefficients and source encoding; produces scalar or mask data |
 | `V1` | Gamut Compress, Tone Map | Explicit rendering model; never an automatic hidden repair |
 | `V1` | Color Match | Analysis plus an inspectable, reproducible transform result |
@@ -119,7 +126,7 @@ keeps display transforms out of scene/process pixels.
 
 | Level | Planned nodes | Important behavior |
 | --- | --- | --- |
-| `C1` | Gaussian Blur, Box Blur | Explicit radius units, edge mode, alpha policy, and region expansion |
+| `C1` | Gaussian Blur, Box Blur | Implemented shared separable neighborhood path; [radius, edges, alpha and halo contract](../architecture/image-filters.md); grouped native/platform qualification pending |
 | `C1` | Directional Blur, Radial Blur | Stable spatial convention and bounded sampling |
 | `C1` | Sharpen, Unsharp Mask | Defined kernel and HDR behavior |
 | `C1` | Dilate/Erode, Edge Detect | Separate color-image and mask/data modes |

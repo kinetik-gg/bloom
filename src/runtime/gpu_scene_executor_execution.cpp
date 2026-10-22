@@ -240,9 +240,13 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
             return std::nullopt;
         }
         return render::GpuSolidParameters{step.solidPixel, *step.solidDataWindow,
-                                          *step.solidDisplayWindow, step.solidPixelAspect};
+                                          *step.solidDisplayWindow, step.solidPixelAspect,
+                                          step.checker};
     };
     switch (step.kind) {
+    case GpuSceneExecutorStepKind::Gradient:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::Unsupported,
+                              "GradientV1 native batch preparation was unavailable");
     case GpuSceneExecutorStepKind::Solid: {
         const auto parameters = solidParameters();
         if (!parameters.has_value()) {
@@ -291,7 +295,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
         }
         const render::GpuTranslationParameters parameters{images[step.input], *step.outputWindow,
                                                           step.translationX, step.translationY,
-                                                          step.translationOpacity};
+                                                          step.translationOpacity,
+                                                          step.outputDisplayWindow};
         const auto native = composite->beginTranslation(parameters, remaining);
         if (native.code != render::GpuCompositeDiagnosticCode::None) {
             return diagnosticFromComposite(native);
@@ -333,7 +338,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
                                   "an affine step is incomplete before dispatch");
         }
         const render::GpuAffineMatrixParameters parameters{images[step.input], *step.outputWindow,
-                                                           step.affineMatrix, step.affineOpacity};
+                                                           step.affineMatrix, step.affineOpacity,
+                                                           step.affineOutputDescriptor};
         const auto native = affine->beginAffineMatrix(parameters, remaining);
         if (native.code != render::GpuAffineDiagnosticCode::None) {
             return diagnosticFromAffine(native);
@@ -351,7 +357,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
                                   "a blend step is incomplete before dispatch");
         }
         const render::GpuBlendParameters parameters{images[step.input], images[step.destination],
-                                                    step.blendMode};
+                                                    step.blendMode, step.imageCombine};
         const auto native = blend->beginBlend(parameters, remaining);
         if (native.code != render::GpuBlendDiagnosticCode::None) {
             return diagnosticFromBlend(native);

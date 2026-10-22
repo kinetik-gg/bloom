@@ -63,9 +63,11 @@ using bloom::gpu_coverage_fixtures::codeName;
 using bloom::gpu_coverage_fixtures::format;
 using bloom::gpu_coverage_fixtures::LayerValues;
 using bloom::gpu_coverage_fixtures::publish;
+using bloom::gpu_coverage_plans::imageCombinePlan;
 using bloom::gpu_coverage_fixtures::requestFor;
 using bloom::gpu_coverage_fixtures::twoLayerPlan;
 using bloom::runtime::CompiledColorParameter;
+using bloom::runtime::CompiledChecker;
 using bloom::runtime::CompiledCompositionSource;
 using bloom::runtime::CompiledImageEffect;
 using bloom::runtime::CompiledImageSource;
@@ -81,6 +83,8 @@ using bloom::runtime::EvaluationRequest;
 using bloom::runtime::GpuCoverageFixtureCriterion;
 using bloom::runtime::ImageEffectKernel;
 using bloom::runtime::OperationIndex;
+using bloom::runtime::PointwiseImageEffect;
+using bloom::runtime::PointwiseImageKernel;
 using bloom::runtime::PreparedGpuSceneDiagnosticCode;
 
 using bloom::gpu_coverage_gate::classifyFixtureExecution;
@@ -97,6 +101,7 @@ using bloom::gpu_coverage_gate::structuralFixtureFailures;
 using bloom::gpu_coverage_plans::AffineAxis;
 using bloom::gpu_coverage_plans::basePlan;
 using bloom::gpu_coverage_plans::effectPlan;
+using bloom::gpu_coverage_plans::gradient;
 using bloom::gpu_coverage_plans::layerOnLayerPlan;
 using bloom::gpu_coverage_plans::modifiedLayer;
 using bloom::gpu_coverage_plans::nestedBranchReusePlans;
@@ -290,6 +295,20 @@ displayProofRunner(const bool customView) {
         add(std::string{id}, GpuCoverageFixtureCriterion::Prepared,
             "src/runtime gpu scene preparation tests", [] { return runBuilder(basePlan()); });
     }
+    const auto checkerPlan = [] {
+        return withSource(
+            CompiledChecker{NodeId::fromRaw(94700),
+                            CompiledColorParameter{ParameterId::fromRaw(94701),
+                                                   bloom::core::Color4d{-2.0, 0.5, 4.0, 0.5}},
+                            CompiledColorParameter{ParameterId::fromRaw(94702),
+                                                   bloom::core::Color4d{3.0, -1.0, 0.25, 0.75}},
+                            3, 2, 6, 5},
+            94700);
+    };
+    add("operation.CompiledChecker", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Checker CPU and native parity tests", [checkerPlan] {
+            return runBuilder(checkerPlan());
+        });
     add("operation.CompiledText", GpuCoverageFixtureCriterion::Prepared,
         "src/render text_raster + text source tests",
         [] { return runBuilder(withSource(text(95000), 95000, nullptr, 0.6)); });
@@ -333,6 +352,8 @@ displayProofRunner(const bool customView) {
 
     addImageEffectPlan("effect.IdentityImageKernel", bloom::runtime::IdentityImageKernel{}, 100000,
                        {});
+    addImageEffectPlan("effect.ResizeFitKernel", bloom::runtime::ResizeFitKernel{10, 7}, 103000,
+                       "src/runtime Resize/Fit production affine preparation");
     add(
         "effect.CstKernel", GpuCoverageFixtureCriterion::Prepared,
         "src/color OCIO image effect tests", [] { return runCstEffectFixture(101000); }, {},
@@ -341,6 +362,42 @@ displayProofRunner(const bool customView) {
         "effect.FileTransformKernel", GpuCoverageFixtureCriterion::Prepared,
         "src/color OCIO image effect tests", [] { return runFileTransformFixture(102000); }, {},
         FixturePrerequisite::PackagedShaderTools);
+    const auto pointwise = [](const PointwiseImageEffect kind, const double value,
+                              const std::uint64_t idBase) {
+        return PointwiseImageKernel{
+            kind, CompiledScalarParameter{ParameterId::fromRaw(idBase + 1), value}};
+    };
+    add("effect.PointwiseImageKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime pointwise image effect tests", [pointwise] {
+            return runBuilder(effectPlan(pointwise(PointwiseImageEffect::Exposure, 1.25, 103100),
+                                         103100));
+        }, {}, FixturePrerequisite::PackagedShaderTools);
+    add("effect.ImageCombineKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime image combine production scene preparation", [] {
+            return runBuilder(imageCombinePlan(bloom::runtime::ImageCombineMode::Mix, 103200));
+        });
+    const auto canvas = [](const bloom::runtime::CanvasImageEffect kind,
+                           const std::uint64_t base) {
+        std::array<CompiledScalarParameter, 4> margins{
+            CompiledScalarParameter{ParameterId::fromRaw(base + 1), 1.0},
+            CompiledScalarParameter{ParameterId::fromRaw(base + 2), 0.0},
+            CompiledScalarParameter{ParameterId::fromRaw(base + 3), 1.0},
+            CompiledScalarParameter{ParameterId::fromRaw(base + 4), 0.0}};
+        return bloom::runtime::CanvasImageKernel{kind, margins};
+    };
+    add("effect.CanvasImageKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime canvas image effect tests", [canvas] {
+            return runBuilder(effectPlan(canvas(bloom::runtime::CanvasImageEffect::Crop, 104100),
+                                         104100));
+        });
+
+    addImageEffectPlan("effect.DiscreteImageKernel",
+                       bloom::runtime::DiscreteImageKernel{false, false, 1}, 103200,
+                       "src/runtime exact discrete image tests");
+    addImageEffectPlan("node.bloom.flip", bloom::runtime::DiscreteImageKernel{true, false, 0},
+                       103300, "src/runtime exact discrete image tests");
+    addImageEffectPlan("node.bloom.rotate-90", bloom::runtime::DiscreteImageKernel{false, false, 1},
+                       103400, "src/runtime exact discrete image tests");
 
     // Every one of the eight blend modes is emitted by the real production builder now: Normal
     // stays the retained SourceOver merge, every other mode an explicit BlendV1 fold.
@@ -433,6 +490,16 @@ displayProofRunner(const bool customView) {
     // explicit list cannot satisfy it, so it cannot reuse another node's fixture.
     add("node.bloom.solid-source", GpuCoverageFixtureCriterion::Prepared,
         "src/document node_definition_registry tests", [] { return runBuilder(basePlan()); });
+    addImageEffectPlan("node.bloom.resize", bloom::runtime::ResizeFitKernel{10, 7}, 104000,
+                       "src/runtime Resize production affine preparation");
+    addImageEffectPlan("node.bloom.fit", bloom::runtime::ResizeFitKernel{10, 7, 1, 1, 0, 1}, 105000,
+                       "src/runtime Fit production affine preparation");
+    add("node.bloom.linear-gradient", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime gradient source and native batch tests",
+        [] { return runBuilder(withSource(gradient(false, 140000), 140000)); });
+    add("node.bloom.radial-gradient", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime gradient source and native batch tests",
+        [] { return runBuilder(withSource(gradient(true, 141000), 141000)); });
     add("node.bloom.layer-output", GpuCoverageFixtureCriterion::Prepared,
         "src/document node_definition_registry tests", [] { return runBuilder(basePlan()); });
     add("node.bloom.layer-stack", GpuCoverageFixtureCriterion::Prepared,
@@ -479,6 +546,93 @@ displayProofRunner(const bool customView) {
     add(
         "node.bloom.ocio-file-transform", GpuCoverageFixtureCriterion::Prepared,
         "src/color OCIO image effect tests", [] { return runFileTransformFixture(109000); }, {},
+        FixturePrerequisite::PackagedShaderTools);
+    add("node.bloom.exposure", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime pointwise image effect tests", [pointwise] {
+            return runBuilder(effectPlan(pointwise(PointwiseImageEffect::Exposure, 1.25, 110100),
+                                         110100));
+        }, {}, FixturePrerequisite::PackagedShaderTools);
+    add("node.bloom.offset", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime pointwise image effect tests", [pointwise] {
+            return runBuilder(effectPlan(pointwise(PointwiseImageEffect::Offset, -0.35, 110200),
+                                         110200));
+        }, {}, FixturePrerequisite::PackagedShaderTools);
+    add("node.bloom.multiply", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime pointwise image effect parity tests", [pointwise] {
+            return runBuilder(effectPlan(pointwise(PointwiseImageEffect::Multiply, -2.0, 114000),
+                                         114000));
+        }, {}, FixturePrerequisite::PackagedShaderTools);
+    add("node.bloom.invert", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime pointwise image effect parity tests", [] {
+            return runBuilder(effectPlan(
+                bloom::runtime::PointwiseImageKernel{PointwiseImageEffect::Invert, {}}, 114100));
+        }, {}, FixturePrerequisite::PackagedShaderTools);
+    add("node.bloom.image-mix", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime image combine production scene preparation", [] {
+            return runBuilder(imageCombinePlan(bloom::runtime::ImageCombineMode::Mix, 110300));
+        });
+    add("node.bloom.set-alpha", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime image combine production scene preparation", [] {
+            return runBuilder(imageCombinePlan(bloom::runtime::ImageCombineMode::SetAlpha,
+                                               110400));
+        });
+    add("node.bloom.crop", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime canvas image effect tests", [canvas] {
+            return runBuilder(effectPlan(canvas(bloom::runtime::CanvasImageEffect::Crop, 110500),
+                                         110500));
+        });
+    add("node.bloom.pad", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime canvas image effect tests", [canvas] {
+            return runBuilder(effectPlan(canvas(bloom::runtime::CanvasImageEffect::Pad, 110600),
+                                         110600));
+        });
+    add("node.bloom.multiply-alpha", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime image combine production scene preparation", [] {
+            return runBuilder(imageCombinePlan(bloom::runtime::ImageCombineMode::MultiplyAlpha,
+                                               110700));
+        });
+    add("node.bloom.checker-source", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Checker CPU and native parity tests", [checkerPlan] {
+            return runBuilder(checkerPlan());
+        });
+    const auto runBlur = [](const bloom::runtime::SeparableBlurKind kind) {
+        FixtureRun combined;
+        combined.prepared = true;
+        for (const auto edge :
+             {bloom::runtime::BlurEdgeMode::Transparent, bloom::runtime::BlurEdgeMode::Clamp}) {
+            const auto plan = effectPlan(
+                bloom::runtime::SeparableBlurKernel{
+                    kind, {ParameterId::fromRaw(111101), 2.0}, edge},
+                111100);
+            auto request = requestFor(*plan);
+            auto frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+            const auto roiWindow = bloom::render::ImageWindow::create(1, 1, 3, 2);
+            request.roi = *roiWindow.value();
+            frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+        }
+        combined.evidence = "production separable blur: transparent/clamp and ROI";
+        return combined;
+    };
+    add(
+        "effect.SeparableBlurKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime separable image effect tests",
+        [runBlur] { return runBlur(bloom::runtime::SeparableBlurKind::Gaussian); }, {},
+        FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.gaussian-blur", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime separable image effect tests",
+        [runBlur] { return runBlur(bloom::runtime::SeparableBlurKind::Gaussian); }, {},
+        FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.box-blur", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime separable image effect tests",
+        [runBlur] { return runBlur(bloom::runtime::SeparableBlurKind::Box); }, {},
         FixturePrerequisite::PackagedShaderTools);
     return list;
 }

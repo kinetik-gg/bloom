@@ -22,11 +22,14 @@
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
+#include <bloom/render/image_coverage.hpp>
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace bloom::render {
 
@@ -61,10 +64,28 @@ struct GpuBlendDiagnostic final {
 // Validated inputs for BlendV1. `source` is the foreground; `destination` the backdrop. Both are
 // shared immutable ownership retained for the job's lifetime and never mutated. `mode` is the
 // durable core::BlendMode value; an unknown stored integer cannot reach this type.
+enum class GpuImageCombineKind : std::uint8_t { Mix, SetAlpha, MultiplyAlpha };
+
+struct GpuImageCombineParameters final {
+    GpuImageCombineKind kind = GpuImageCombineKind::Mix;
+    float factor = 1.0F;
+    ImageCoverageChannel channel = ImageCoverageChannel::Alpha;
+};
+
 struct GpuBlendParameters final {
+    GpuBlendParameters(std::shared_ptr<const GpuImage> sourceImage,
+                       std::shared_ptr<const GpuImage> destinationImage,
+                       const core::BlendMode blendMode,
+                       std::optional<GpuImageCombineParameters> combine = {})
+        : source(std::move(sourceImage)), destination(std::move(destinationImage)),
+          mode(blendMode), imageCombine(combine) {}
+
     std::shared_ptr<const GpuImage> source;
     std::shared_ptr<const GpuImage> destination;
     core::BlendMode mode = core::BlendMode::Normal;
+    // Dedicated flat-RGBA image operators use the same bounded two-input resident lifecycle.
+    // The source is the second image/matte, and the destination is the base image.
+    std::optional<GpuImageCombineParameters> imageCombine;
 };
 
 struct GpuBlendBudgets final {
@@ -91,6 +112,7 @@ enum class GpuBlendKernelPolicy : std::uint8_t {
 // this, so a capability or policy change can never serve a wrongly keyed image.
 [[nodiscard]] std::string_view gpuBlendShaderIdentity(core::BlendMode mode,
                                                       bool float64Selected) noexcept;
+[[nodiscard]] std::string_view gpuImageCombineShaderIdentity() noexcept;
 
 struct GpuBlendCreateResult;
 

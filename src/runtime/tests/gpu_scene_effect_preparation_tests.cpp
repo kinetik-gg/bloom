@@ -10,6 +10,7 @@
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
 #include <bloom/runtime/input_color_context.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -102,6 +103,123 @@ findOcioCommand(const bloom::runtime::PreparedGpuScene& scene) {
         }
     }
     return nullptr;
+}
+
+void testCanvasPreparation(Expectations& expectations) {
+    const auto window = [](const std::int64_t x, const std::int64_t y,
+                           const std::uint64_t width, const std::uint64_t height) {
+        const auto created = bloom::render::ImageWindow::create(x, y, width, height);
+        return *created.value();
+    };
+    const auto kernel = [](const bloom::runtime::CanvasImageEffect effect,
+                           const std::array<double, 4> sides) {
+        std::array<bloom::runtime::CompiledScalarParameter, 4> parameters{
+            bloom::runtime::CompiledScalarParameter{ParameterId::fromRaw(8001), sides[0]},
+            bloom::runtime::CompiledScalarParameter{ParameterId::fromRaw(8002), sides[1]},
+            bloom::runtime::CompiledScalarParameter{ParameterId::fromRaw(8003), sides[2]},
+            bloom::runtime::CompiledScalarParameter{ParameterId::fromRaw(8004), sides[3]}};
+        return bloom::runtime::CanvasImageKernel{effect, parameters};
+    };
+    for (const auto kind : {bloom::runtime::CanvasImageEffect::Crop,
+                            bloom::runtime::CanvasImageEffect::Pad}) {
+        const auto plan = effectPlan({solidLeaf(800)},
+                                     kernel(kind, kind == bloom::runtime::CanvasImageEffect::Crop
+                                                      ? std::array<double, 4>{1, 0, 1, 0}
+                                                      : std::array<double, 4>{2, 1, 0, 0}),
+                                     8000);
+        const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+        expectations.expect(prepared.hasValue(), "canvas effect prepares through the GPU scene");
+        if (!prepared)
+            continue;
+        const auto index = prepared.scene->commandForOperation()[1];
+        const auto* command = std::get_if<bloom::runtime::GpuSceneTranslationCommand>(
+            &prepared.scene->commands()[index]);
+        expectations.expect(command != nullptr,
+                            "canvas effect emits a real resident GPU translation pass");
+        if (!command)
+            continue;
+        const auto expected = kind == bloom::runtime::CanvasImageEffect::Crop
+                                  ? window(1, 0, 6, 6)
+                                  : window(-2, -1, 10, 7);
+        expectations.expect(command->outputWindow == expected &&
+                                command->outputDisplayWindow == expected,
+                            "GPU canvas data and display windows match the authored margins");
+        expectations.expect(command->translationX ==
+                                (kind == bloom::runtime::CanvasImageEffect::Crop ? -1.0 : 2.0) &&
+                                command->translationY ==
+                                    (kind == bloom::runtime::CanvasImageEffect::Crop ? 0.0 : 1.0),
+                            "GPU canvas maps unchanged source coordinates by exact integer axes");
+    }
+}
+
+void testDiscretePreparation(Expectations& expectations) {
+    for (const auto kernel : {bloom::runtime::DiscreteImageKernel{true, false, 0},
+                              bloom::runtime::DiscreteImageKernel{false, true, 0},
+                              bloom::runtime::DiscreteImageKernel{false, false, 1},
+                              bloom::runtime::DiscreteImageKernel{false, false, 2},
+                              bloom::runtime::DiscreteImageKernel{false, false, 3}}) {
+        const auto plan = effectPlan({solidLeaf(400)}, kernel, 4000);
+        const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+        expectations.expect(prepared.hasValue(), "discrete production scene prepares without OCIO");
+        if (!prepared)
+            continue;
+        const auto index = prepared.scene->commandForOperation()[1];
+        const auto* affine =
+            std::get_if<bloom::runtime::GpuSceneAffineCommand>(&prepared.scene->commands()[index]);
+        expectations.expect(
+            affine && affine->opacity == 1.0F &&
+                affine->outputWindow.extent().width() == ((kernel.quarterTurns & 1U) ? 6U : 8U) &&
+                affine->outputWindow.extent().height() == ((kernel.quarterTurns & 1U) ? 8U : 6U),
+            "discrete effect emits a genuine resident affine pass and exact data extents");
+    }
+}
+
+void testResizeFitPreparation(Expectations& expectations) {
+    for (const std::int64_t policy : {0, 1, 2}) {
+        const bloom::runtime::ResizeFitKernel kernel{10, 10, 2, 1, 0, policy};
+        const auto plan = effectPlan({solidLeaf(8000)}, kernel, 8100);
+        auto request = requestFor(*plan);
+        const auto prepared = CpuGpuSceneBuilder{}.build(plan, request);
+        expectations.expect(prepared.hasValue(),
+                            "Resize/Fit prepares through the production builder");
+        if (!prepared)
+            continue;
+        const auto command = prepared.scene->commandForOperation()[1];
+        const auto* affine = std::get_if<bloom::runtime::GpuSceneAffineCommand>(
+            &prepared.scene->commands()[command]);
+        expectations.expect(affine && affine->outputDescriptor &&
+                                affine->outputDescriptor->displayWindow().extent().width() == 10 &&
+                                affine->outputDescriptor->displayWindow().extent().height() == 10 &&
+                                affine->pixelAspect == *bloom::core::PixelAspectRatio::create(2, 1),
+                            "Resize/Fit emits a real affine with the authored extent and PAR");
+        CpuCompositionEvaluator evaluator;
+        const auto cpu = evaluator.evaluate(plan, request, {});
+        std::vector<std::shared_ptr<const Rgba32fImage>> images;
+        const bool replayed = replayScene(*prepared.scene, images);
+        bool matches = cpu.frame() && replayed && images[prepared.scene->outputCommand()];
+        if (matches) {
+            const auto expected = cpu.frame()->processImage().pixels();
+            const auto actual = images[prepared.scene->outputCommand()]->pixels();
+            matches = expected.size() == actual.size();
+            for (std::size_t i = 0; matches && i < expected.size(); ++i)
+                for (std::size_t channel = 0; channel < 4; ++channel)
+                    matches =
+                        matches &&
+                        std::abs(expected[i].components()[channel] -
+                                 actual[i].components()[channel]) <=
+                            2e-6F * std::max(1.0F, std::abs(expected[i].components()[channel]));
+        }
+        expectations.expect(matches,
+                            "prepared Resize/Fit command replay matches the CPU reference");
+        const auto roi = ImageWindow::create(2, 1, 3, 3);
+        request.roi = *roi.value();
+        const auto clipped = CpuGpuSceneBuilder{}.build(plan, request);
+        const auto cpuRoi = evaluator.evaluate(plan, request, {});
+        expectations.expect(clipped && cpuRoi.frame() &&
+                                clipped.scene->outputDescriptor().dataWindow() ==
+                                    cpuRoi.frame()->processImage().descriptor()->dataWindow(),
+                            "Resize/Fit preserves the production ROI route");
+    }
 }
 
 void testIdentityAndRefusals(Expectations& expectations) {
@@ -309,7 +427,10 @@ void testRealFileTransform(Expectations& expectations, const std::string& workin
 int main() {
     try {
         Expectations expectations;
+        testResizeFitPreparation(expectations);
         testIdentityAndRefusals(expectations);
+        testCanvasPreparation(expectations);
+        testDiscretePreparation(expectations);
 
         const auto config = bloom::runtime::detail::resolveInputColorConfig(
             bloom::runtime::EvaluationColorIntent::LinearRec709Scene);

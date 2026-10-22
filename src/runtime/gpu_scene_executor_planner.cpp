@@ -45,10 +45,13 @@ using gpu_scene_executor_detail::makeDiagnostic;
         if (blend == nullptr) {
             return {};
         }
-        return makeGpuSceneBlendSemanticKey(blendCommand->sourceKey, blendCommand->destinationKey,
-                                            blendCommand->mode, blendCommand->sourceWindow,
-                                            blendCommand->outputWindow, blendCommand->pixelAspect,
-                                            actualBlendArtifactToken(*blend, blendCommand->mode));
+        return makeGpuSceneBlendSemanticKey(
+            blendCommand->sourceKey, blendCommand->destinationKey, blendCommand->mode,
+            blendCommand->sourceWindow, blendCommand->outputWindow, blendCommand->pixelAspect,
+            blendCommand->imageCombine
+                ? std::string(render::gpuImageCombineShaderIdentity())
+                : actualBlendArtifactToken(*blend, blendCommand->mode),
+            blendCommand->imageCombine);
     }
     return effectiveCommandKey(command);
 }
@@ -111,11 +114,14 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
                                   "a solid command has an empty window");
         }
         GpuSceneExecutorStep step;
-        step.kind = GpuSceneExecutorStepKind::Solid;
+        step.kind = solidCommand->gradient ? GpuSceneExecutorStepKind::Gradient
+                                           : GpuSceneExecutorStepKind::Solid;
         step.command = index;
         step.cacheKey = solidCommand->semanticKey;
         step.cacheOnComplete = true;
         step.solidPixel = solidCommand->pixel;
+        step.checker = solidCommand->checker;
+        step.gradient = solidCommand->gradient;
         step.solidDataWindow = solidCommand->dataWindow;
         step.solidDisplayWindow = solidCommand->displayWindow;
         step.solidPixelAspect = solidCommand->pixelAspect;
@@ -221,6 +227,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.cacheKey = translation->semanticKey;
         step.cacheOnComplete = true;
         step.outputWindow = translation->outputWindow;
+        step.outputDisplayWindow = translation->outputDisplayWindow;
         step.translationX = translation->translationX;
         step.translationY = translation->translationY;
         step.translationOpacity = translation->opacity;
@@ -230,6 +237,11 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
     }
 
     if (const auto* affineCommand = std::get_if<GpuSceneAffineCommand>(&command)) {
+        if (affineCommand->outputDescriptor &&
+            (affineCommand->outputDescriptor->dataWindow() != affineCommand->outputWindow ||
+             affineCommand->outputDescriptor->pixelAspect() != affineCommand->pixelAspect))
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "an affine output descriptor disagrees with its geometry");
         if (!affineFieldsFinite(*affineCommand)) {
             color[index] = 2;
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
@@ -259,6 +271,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.outputWindow = affineCommand->outputWindow;
         step.affineMatrix = affineCommand->matrix;
         step.affineOpacity = affineCommand->opacity;
+        step.affineOutputDescriptor = affineCommand->outputDescriptor;
         steps.push_back(std::move(step));
         color[index] = 2;
         return {};
@@ -293,6 +306,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.cacheOnComplete = true;
         step.outputWindow = blendCommand->outputWindow;
         step.blendMode = blendCommand->mode;
+        step.imageCombine = blendCommand->imageCombine;
         steps.push_back(std::move(step));
         color[index] = 2;
         return {};

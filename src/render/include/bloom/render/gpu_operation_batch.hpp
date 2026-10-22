@@ -5,6 +5,7 @@
 #include <bloom/render/gpu_solid.hpp>
 
 #include <cstdint>
+#include <array>
 #include <memory>
 #include <span>
 #include <string>
@@ -24,6 +25,22 @@ struct GpuBatchImageRef final {
 struct GpuBatchSolid final {
     GpuSolidParameters parameters;
 };
+struct GpuBatchGradient final {
+    GpuBatchGradient(ImageWindow data, ImageWindow display, core::PixelAspectRatio aspect)
+        : dataWindow(data), displayWindow(display), pixelAspect(aspect) {}
+    ImageWindow dataWindow;
+    ImageWindow displayWindow;
+    core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
+    std::array<float, 4> first{}; // straight scene-linear RGBA
+    std::array<float, 4> second{};
+    std::array<float, 4> endpoints{}; // startX, startY, endX, endY in author pixels
+    float inverseHorizontalScale = 1.0F;
+    float inverseVerticalScale = 1.0F;
+    float exactWidth = 0.0F;
+    float exactHeight = 0.0F;
+    std::uint32_t repeat = 0; // clamp, repeat, mirror
+    bool radial = false;
+};
 struct GpuBatchTranslation final {
     GpuBatchImageRef source;
     ImageWindow outputWindow;
@@ -36,13 +53,15 @@ struct GpuBatchAffine final {
     ImageWindow outputWindow;
     GpuAffineMatrix matrix;
     float opacity;
+    std::optional<Rgba32fImageDescriptor> outputDescriptor{};
 };
 struct GpuBatchSourceOver final {
     GpuBatchImageRef source;
     GpuBatchImageRef destination;
 };
 using GpuBatchOperation =
-    std::variant<GpuBatchSolid, GpuBatchTranslation, GpuBatchAffine, GpuBatchSourceOver>;
+    std::variant<GpuBatchSolid, GpuBatchTranslation, GpuBatchAffine, GpuBatchSourceOver,
+                 GpuBatchGradient>;
 
 enum class GpuOperationBatchCode : std::uint8_t {
     None,

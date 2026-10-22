@@ -36,7 +36,7 @@ inline constexpr std::uint32_t kGpuOcioWrapperWorkgroupSize = 64;
 // sampling-adapter version: a change to any of those semantics must never reuse an artifact
 // compiled by an older wrapper. Folded into the prepared command identity (see the wrapper
 // source digest and this version).
-inline constexpr std::string_view kGpuOcioWrapperVersion = "bloom-ocio-wrapper-v2-dispatch2d";
+inline constexpr std::string_view kGpuOcioWrapperVersion = "bloom-ocio-wrapper-v3-finite-output";
 
 enum class GpuOcioWrapperError : std::uint8_t {
     None,
@@ -95,8 +95,8 @@ struct GpuOcioWrapperResult final {
 //    is dispatched 1D (groupsY == 1) and is byte-for-byte the previous mapping. This keeps
 //    `ceil(pixelCount / workGroupSizeX)` from exceeding maxComputeWorkGroupCount[0] for images
 //    above ~4.19M pixels;
-//  * non-finite straight input or non-finite OCIO output raises the status word and writes no pixel
-//    so the native consumer fails the frame rather than publishing a non-finite value.
+//  * non-finite straight input, OCIO output, or premultiplied process output raises the status word
+//    and writes no pixel, so the native consumer fails the frame before publication.
 [[nodiscard]] GpuOcioWrapperResult
 buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& program,
                         ViewAdjust viewAdjust = {}) noexcept;

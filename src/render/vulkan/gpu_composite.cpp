@@ -374,10 +374,11 @@ GpuCompositeDiagnostic GpuComposite::beginTranslation(const GpuTranslationParame
 
     auto resident = std::make_unique<GpuImageImpl>();
     resident->state = impl.control;
-    // Data window is the requested output window; DISPLAY window and pixel aspect are preserved
-    // from the source so a nonzero-origin composition keeps its geometry.
+    // Canvas operations can author a new display window. Other translation users inherit it.
     resident->dataWindow = parameters.outputWindow;
-    resident->displayWindow = parameters.source->displayWindow();
+    resident->displayWindow = parameters.outputDisplayWindow.has_value()
+                                  ? parameters.outputDisplayWindow
+                                  : parameters.source->displayWindow();
     resident->pixelAspect = parameters.source->pixelAspect();
     resident->generation = impl.control->generation;
     if (!createResidentImage(*impl.control, outputWidth, outputHeight, *resident)) {

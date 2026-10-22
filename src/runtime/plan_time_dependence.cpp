@@ -51,7 +51,12 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
             [&](const auto& step) {
                 using Step = std::decay_t<decltype(step)>;
                 if constexpr (std::is_same_v<Step, CompiledSolid>)
-                    return parameter(step.color) || parameter(step.width) || parameter(step.height);
+                    return parameter(step.color) || parameter(step.width) || parameter(step.height) ||
+                           (step.gradient &&
+                            (parameter(step.gradient->endColor) || parameter(step.gradient->start) ||
+                             parameter(step.gradient->end)));
+                else if constexpr (std::is_same_v<Step, CompiledChecker>)
+                    return parameter(step.colorA) || parameter(step.colorB);
                 else if constexpr (std::is_same_v<Step, CompiledShape>)
                     return parameter(step.size) || parameter(step.fillColor) ||
                            parameter(step.strokeColor) || parameter(step.strokeWidth);
@@ -60,7 +65,22 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                     return true;
                 else if constexpr (std::is_same_v<Step, CompiledImageSource>)
                     return step.asset && step.asset->kind == document::AssetKind::Sequence;
-                else if constexpr (std::is_same_v<Step, CompiledText>)
+                else if constexpr (std::is_same_v<Step, CompiledImageEffect>) {
+                    if (input(step.input) ||
+                        (step.secondaryInput && input(*step.secondaryInput)))
+                        return true;
+                    if (step.bypass)
+                        return false;
+                    if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&step.kernel))
+                        return pointwise->amount && parameter(*pointwise->amount);
+                    if (const auto* canvas = std::get_if<CanvasImageKernel>(&step.kernel))
+                        return std::ranges::any_of(canvas->margins, parameter);
+                    if (const auto* combine = std::get_if<ImageCombineKernel>(&step.kernel))
+                        return combine->factor && parameter(*combine->factor);
+                    if (const auto* blur = std::get_if<SeparableBlurKernel>(&step.kernel))
+                        return parameter(blur->radius);
+                    return false;
+                } else if constexpr (std::is_same_v<Step, CompiledText>)
                     return parameter(step.color) || parameter(step.size) ||
                            driven(step.drivenContent) ||
                            (parameter(step.layout.lineHeight) ||

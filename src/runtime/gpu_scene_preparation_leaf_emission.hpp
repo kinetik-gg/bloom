@@ -8,6 +8,8 @@
 // the command vector, the per-operation maps, the running budget, and the coverage cache.
 
 #include "gpu_scene_effect_emission.hpp"
+#include "checker_image.hpp"
+#include "gradient_source.hpp"
 #include "gpu_scene_preparation_common.hpp"
 #include "gpu_scene_preparation_private.hpp"
 
@@ -74,6 +76,43 @@ template <typename Emit, typename Charge>
     const auto solidWindow = descriptor.value()->dataWindow();
     const auto solidDisplay = descriptor.value()->displayWindow();
     const auto solidAspect = descriptor.value()->pixelAspect();
+    std::optional<render::GpuBatchGradient> gpuGradient;
+    if (solid.gradient) {
+        const auto endColor = resolveParameter(solid.gradient->endColor, plan, resolved);
+        const auto start = resolveParameter(solid.gradient->start, plan, resolved);
+        const auto end = resolveParameter(solid.gradient->end, plan, resolved);
+        if (!endColor || !start || !end || !endColor->value.isValid() ||
+            !std::isfinite(start->value.x) || !std::isfinite(start->value.y) ||
+            !std::isfinite(end->value.x) || !std::isfinite(end->value.y))
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Gradient endpoints are not evaluable");
+        gpuGradient.emplace(render::GpuBatchGradient{solidWindow, solidDisplay, solidAspect});
+        gpuGradient->first = {static_cast<float>(color->value.red),
+                              static_cast<float>(color->value.green),
+                              static_cast<float>(color->value.blue),
+                              static_cast<float>(color->value.alpha)};
+        gpuGradient->second = {static_cast<float>(endColor->value.red),
+                               static_cast<float>(endColor->value.green),
+                               static_cast<float>(endColor->value.blue),
+                               static_cast<float>(endColor->value.alpha)};
+        gpuGradient->endpoints = {static_cast<float>(start->value.x),
+                                  static_cast<float>(start->value.y),
+                                  static_cast<float>(end->value.x),
+                                  static_cast<float>(end->value.y)};
+        const bool authorDegenerate = start->value.x == end->value.x &&
+                                      start->value.y == end->value.y;
+        const bool deviceDegenerate = gpuGradient->endpoints[0] == gpuGradient->endpoints[2] &&
+                                      gpuGradient->endpoints[1] == gpuGradient->endpoints[3];
+        if (authorDegenerate != deviceDegenerate)
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
+                        "Gradient endpoint separation is below Float32 device precision");
+        gpuGradient->inverseHorizontalScale = static_cast<float>(1.0 / hScale);
+        gpuGradient->inverseVerticalScale = static_cast<float>(1.0 / vScale);
+        gpuGradient->exactWidth = static_cast<float>(exactWidth);
+        gpuGradient->exactHeight = static_cast<float>(exactHeight);
+        gpuGradient->repeat = static_cast<std::uint32_t>(solid.gradient->repeat);
+        gpuGradient->radial = solid.gradient->radial;
+    }
     auto& entry = bounds[index];
     entry.local = boundsForWindow(solidWindow, hScale, vScale);
     entry.local.right = width->value;
@@ -82,7 +121,7 @@ template <typename Emit, typename Charge>
     outputWindowOf[index] = solidWindow;
 
     OperationKey key;
-    key.add(std::string{"gpu-solid-v1"});
+    key.add(std::string{gpuGradient ? "gpu-gradient-v1" : "gpu-solid-v1"});
     key.add(std::bit_cast<std::uint32_t>(pixel.value()->red()));
     key.add(std::bit_cast<std::uint32_t>(pixel.value()->green()));
     key.add(std::bit_cast<std::uint32_t>(pixel.value()->blue()));
@@ -90,7 +129,21 @@ template <typename Emit, typename Charge>
     addWindowToKey(key, solidWindow);
     addWindowToKey(key, solidDisplay);
     addPixelAspectToKey(key, solidAspect);
-    key.add(std::string{kGpuSolidSpirvSha256});
+    if (gpuGradient) {
+        for (const auto component : gpuGradient->first)
+            key.add(std::bit_cast<std::uint32_t>(component));
+        for (const auto component : gpuGradient->second)
+            key.add(std::bit_cast<std::uint32_t>(component));
+        for (const auto component : gpuGradient->endpoints)
+            key.add(std::bit_cast<std::uint32_t>(component));
+        key.add(std::bit_cast<std::uint32_t>(gpuGradient->inverseHorizontalScale));
+        key.add(std::bit_cast<std::uint32_t>(gpuGradient->inverseVerticalScale));
+        key.add(std::bit_cast<std::uint32_t>(gpuGradient->exactWidth));
+        key.add(std::bit_cast<std::uint32_t>(gpuGradient->exactHeight));
+        key.add(gpuGradient->repeat);
+        key.add(gpuGradient->radial);
+    }
+    key.add(std::string{gpuGradient ? kGpuGradientSpirvSha256 : kGpuSolidSpirvSha256});
     keyOf[index] = key.digest();
 
     if (const auto error = charge(solidWindow.extent().width(), solidWindow.extent().height(),
@@ -99,12 +152,108 @@ template <typename Emit, typename Charge>
     }
     GpuSceneSolidCommand command{.sourceOperation = operationIndex,
                                  .pixel = *pixel.value(),
+                                 .checker = std::nullopt,
+                                 .gradient = std::move(gpuGradient),
                                  .dataWindow = solidWindow,
                                  .displayWindow = solidDisplay,
                                  .pixelAspect = solidAspect,
                                  .semanticKey = keyOf[index]};
     commandForOperation[index] = emit(std::move(command));
-    vectors[index] = GpuSceneVectorChain{index, {}, 1.0};
+    if (!solid.gradient)
+        vectors[index] = GpuSceneVectorChain{index, {}, 1.0};
+    return std::nullopt;
+}
+
+template <typename Emit, typename Charge>
+[[nodiscard]] std::optional<GpuSceneLeafFailure> emitCheckerCommand(
+    const CompiledChecker& checker, const CompiledCompositionPlan& plan,
+    const ResolvedEvaluation& resolved, const std::size_t index,
+    const OperationIndex operationIndex, const render::ImageWindow fullDisplayWindow,
+    const core::PixelAspectRatio fullPixelAspect, const double hScale, const double vScale,
+    Emit&& emit, Charge&& charge, std::vector<GpuSceneCommandIndex>& commandForOperation,
+    std::vector<std::string>& keyOf,
+    std::vector<std::optional<render::ImageWindow>>& outputWindowOf,
+    std::vector<EvaluatedOperationBounds>& bounds) {
+    const auto colorA = resolveParameter(checker.colorA, plan, resolved);
+    const auto colorB = resolveParameter(checker.colorB, plan, resolved);
+    if (!colorA || !colorB)
+        return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                    "Checker colors could not be resolved");
+    const auto a = render::solidPixelFromStraightLinearRec709Scene(colorA->value);
+    const auto b = render::solidPixelFromStraightLinearRec709Scene(colorB->value);
+    if (!a || !b)
+        return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                    "Checker colors are not evaluable");
+    const auto proxyWidth = static_cast<std::uint32_t>(fullDisplayWindow.extent().width());
+    const auto proxyHeight = static_cast<std::uint32_t>(fullDisplayWindow.extent().height());
+    const CheckerGeometry geometry{checker.width, checker.height, checker.cellWidth,
+                                   checker.cellHeight, plan.format().width(),
+                                   plan.format().height(), proxyWidth, proxyHeight};
+    if (!geometry.valid())
+        return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                    "Checker geometry exceeds supported bounds");
+    for (const auto value : {geometry.authorWidth, geometry.authorHeight, geometry.cellWidth,
+                             geometry.cellHeight, geometry.compositionWidth,
+                             geometry.compositionHeight, geometry.proxyWidth,
+                             geometry.proxyHeight})
+        if (value > kCheckerMaximumNativeDimension)
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                        "Checker native dimensions exceed 16384; CPU fallback is required");
+    const auto width = (std::uint64_t{checker.width} * proxyWidth +
+                        geometry.compositionWidth - 1) / geometry.compositionWidth;
+    const auto height = (std::uint64_t{checker.height} * proxyHeight +
+                         geometry.compositionHeight - 1) / geometry.compositionHeight;
+    if (width == 0 || height == 0 || width > kCheckerMaximumNativeDimension ||
+        height > kCheckerMaximumNativeDimension)
+        return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                    "Checker native output exceeds 16384; CPU fallback is required");
+    const auto window = render::ImageWindow::create(0, 0, width, height);
+    if (!window)
+        return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan, "Checker bounds are invalid");
+    const auto descriptor = render::Rgba32fImageDescriptor::create(
+        *window.value(), fullDisplayWindow, fullPixelAspect);
+    if (!descriptor)
+        return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                    "Checker descriptor is invalid");
+    const auto dataWindow = descriptor.value()->dataWindow();
+    auto& entry = bounds[index];
+    entry.local = boundsForWindow(dataWindow, hScale, vScale);
+    entry.local.right = checker.width;
+    entry.local.bottom = checker.height;
+    entry.output = entry.local;
+    outputWindowOf[index] = dataWindow;
+    OperationKey key;
+    key.add(std::string{"gpu-checker-v1"});
+    for (const auto pixel : {*a.value(), *b.value()}) {
+        key.add(std::bit_cast<std::uint32_t>(pixel.red()));
+        key.add(std::bit_cast<std::uint32_t>(pixel.green()));
+        key.add(std::bit_cast<std::uint32_t>(pixel.blue()));
+        key.add(std::bit_cast<std::uint32_t>(pixel.alpha()));
+    }
+    for (const auto value : {checker.width, checker.height, checker.cellWidth,
+                             checker.cellHeight, geometry.compositionWidth,
+                             geometry.compositionHeight, proxyWidth, proxyHeight})
+        key.add(value);
+    addWindowToKey(key, dataWindow);
+    addWindowToKey(key, descriptor.value()->displayWindow());
+    addPixelAspectToKey(key, fullPixelAspect);
+    key.add(std::string{kGpuCheckerSpirvSha256});
+    keyOf[index] = key.digest();
+    if (const auto error = charge(width, height, sizeof(render::Rgba32f)))
+        return error;
+    GpuSceneSolidCommand command{.sourceOperation = operationIndex,
+                                 .pixel = *a.value(),
+                                 .checker = render::GpuSolidParameters::Checker{
+                                     *b.value(), checker.width, checker.height,
+                                     checker.cellWidth, checker.cellHeight,
+                                     geometry.compositionWidth, geometry.compositionHeight,
+                                     proxyWidth, proxyHeight},
+                                 .gradient = std::nullopt,
+                                 .dataWindow = dataWindow,
+                                 .displayWindow = descriptor.value()->displayWindow(),
+                                 .pixelAspect = fullPixelAspect,
+                                 .semanticKey = keyOf[index]};
+    commandForOperation[index] = emit(std::move(command));
     return std::nullopt;
 }
 

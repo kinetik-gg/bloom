@@ -36,6 +36,9 @@
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/gpu_affine.hpp>
+#include <bloom/render/gpu_blend.hpp>
+#include <bloom/render/gpu_solid.hpp>
+#include <bloom/render/gpu_operation_batch.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/render/path_raster.hpp>
 #include <bloom/runtime/cancellation.hpp>
@@ -145,6 +148,8 @@ struct GpuSceneSolidCommand final {
     OperationIndex sourceOperation = OperationIndex::fromRaw(0);
     // The exact resolved premultiplied lin_rec709_scene pixel the CPU solid primitive produced.
     render::Rgba32f pixel = render::Rgba32f::transparent();
+    std::optional<render::GpuSolidParameters::Checker> checker = std::nullopt;
+    std::optional<render::GpuBatchGradient> gradient;
     render::ImageWindow dataWindow;
     render::ImageWindow displayWindow;
     core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
@@ -157,6 +162,8 @@ struct GpuSceneTranslationCommand final {
     GpuSceneCommandIndex input = kInvalidGpuSceneCommand;
     render::ImageWindow sourceWindow;
     render::ImageWindow outputWindow;
+    // Canvas operations supply this; ordinary layer translations inherit the input display.
+    std::optional<render::ImageWindow> outputDisplayWindow{};
     // The GPU translation is local to the OUTPUT window and already accounts for the output/source
     // window origin difference, so replay reproduces the CPU LayerTransform translation-only
     // sample.
@@ -266,6 +273,7 @@ struct GpuSceneAffineCommand final {
     // Diagnostics/back-compat only: the executor NEVER uses this for a cache lookup or insertion;
     // it recomputes the effective key from the fields above and the actual device selection.
     std::string semanticKey;
+    std::optional<render::Rgba32fImageDescriptor> outputDescriptor{};
 };
 
 // A BlendV1 composite of two resident inputs under an explicit core::BlendMode. `source` is the
@@ -284,6 +292,7 @@ struct GpuSceneBlendCommand final {
     std::string sourceKey;
     std::string destinationKey;
     core::BlendMode mode = core::kDefaultBlendMode;
+    std::optional<render::GpuImageCombineParameters> imageCombine;
     // The source data window and the output data window (== destination data window).
     render::ImageWindow sourceWindow;
     render::ImageWindow outputWindow;
@@ -411,7 +420,8 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
                               const render::GpuAffineMatrix& matrix, const float opacity,
                               const render::ImageWindow& outputWindow,
                               const core::PixelAspectRatio& pixelAspect,
-                              const std::string& artifactDigest) {
+                              const std::string& artifactDigest,
+                              const std::optional<render::Rgba32fImageDescriptor>& output = {}) {
     std::string key = "affine-bilinear-v1|in=";
     key.append(inputKey);
     gpu_scene_key_detail::appendSemanticWindow(key, sourceWindow);
@@ -432,19 +442,33 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
     gpu_scene_key_detail::appendSemanticPixelAspect(key, pixelAspect);
     key.append("|artifact=");
     key.append(artifactDigest);
+    if (output) {
+        key.append("|output-descriptor=");
+        gpu_scene_key_detail::appendSemanticWindow(key, output->dataWindow());
+        gpu_scene_key_detail::appendSemanticWindow(key, output->displayWindow());
+        gpu_scene_key_detail::appendSemanticPixelAspect(key, output->pixelAspect());
+    }
     return key;
 }
 
 [[nodiscard]] inline std::string makeGpuSceneBlendSemanticKey(
     const std::string& sourceKey, const std::string& destinationKey, const core::BlendMode mode,
     const render::ImageWindow& sourceWindow, const render::ImageWindow& outputWindow,
-    const core::PixelAspectRatio& pixelAspect, const std::string& artifactDigest) {
+    const core::PixelAspectRatio& pixelAspect, const std::string& artifactDigest,
+    const std::optional<render::GpuImageCombineParameters>& imageCombine = {}) {
     std::string key = "blend-v1|src=";
     key.append(sourceKey);
     key.append("|dst=");
     key.append(destinationKey);
     key.append("|mode=");
     key.append(std::to_string(static_cast<unsigned>(mode)));
+    if (imageCombine) {
+        key.append("|image-combine=");
+        key.append(std::to_string(static_cast<unsigned>(imageCombine->kind)));
+        key.append("|channel=");
+        key.append(std::to_string(static_cast<unsigned>(imageCombine->channel)));
+        gpu_scene_key_detail::appendSemanticFloatBits(key, imageCombine->factor);
+    }
     gpu_scene_key_detail::appendSemanticWindow(key, sourceWindow);
     gpu_scene_key_detail::appendSemanticWindow(key, outputWindow);
     gpu_scene_key_detail::appendSemanticPixelAspect(key, pixelAspect);

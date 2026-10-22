@@ -1,9 +1,12 @@
 #include "cpu_composition_evaluator_support.hpp"
+#include "checker_image.hpp"
 #include "cpu_composition_resolution.hpp"
 #include "image_effect.hpp"
+#include "gradient_source.hpp"
 #include "image_source.hpp"
 #include "layer_parent_transform.hpp"
 #include "operation_key.hpp"
+#include "resize_fit_geometry.hpp"
 #include "video_source.hpp"
 #include <bloom/media/video/colour.hpp>
 #include <bloom/render/path_raster.hpp>
@@ -60,6 +63,7 @@ static_assert(document::kMaximumTextSizePixels == render::kMaximumTextPixelSize,
         Overloaded{
             [&subject](const CompiledShape& shape) { subject.nodeId = shape.sourceNodeId; },
             [&subject](const CompiledSolid& solid) { subject.nodeId = solid.sourceNodeId; },
+            [&subject](const CompiledChecker& checker) { subject.nodeId = checker.sourceNodeId; },
             [&subject](const CompiledCompositionSource& source) {
                 subject.nodeId = source.sourceNodeId;
             },
@@ -324,15 +328,44 @@ enum class ScalarDomain : std::uint8_t {
     return true;
 }
 
+[[nodiscard]] bool hasValidVec2CurveReference(const CompiledVec2Parameter& parameter,
+                                              const CompiledCompositionPlan& plan,
+                                              const std::size_t index,
+                                              EvaluationDiagnostic& failure) {
+    if (!parameter.id.isValid() ||
+        (std::holds_alternative<Vec2CurveIndex>(parameter.source) &&
+         std::get<Vec2CurveIndex>(parameter.source).value() >= plan.vec2Curves().size())) {
+        failure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                             "Gradient endpoint references an invalid animation curve", {},
+                             subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
+        failure.subject.parameterId = parameter.id;
+        return false;
+    }
+    return true;
+}
+
 [[nodiscard]] bool hasExpectedInputKinds(const CompiledCompositionPlan& plan,
                                          const std::size_t index, EvaluationDiagnostic& failure) {
     const auto& operation = plan.operations()[index];
     return std::visit(
         Overloaded{
             [&plan, index, &failure](const CompiledSolid& solid) {
-                return hasValidColorCurveReference(solid.color, plan, index, failure) &&
+                const auto gradientValid = !solid.gradient ||
+                    (solid.gradient->repeatId.isValid() && solid.gradient->repeat >= 0 &&
+                     solid.gradient->repeat <= 2 &&
+                     hasValidColorCurveReference(solid.gradient->endColor, plan, index, failure) &&
+                     hasValidVec2CurveReference(solid.gradient->start, plan, index, failure) &&
+                     hasValidVec2CurveReference(solid.gradient->end, plan, index, failure));
+                return gradientValid &&
+                       hasValidColorCurveReference(solid.color, plan, index, failure) &&
                        hasValidScalarCurveReference(solid.width, plan, index, failure) &&
                        hasValidScalarCurveReference(solid.height, plan, index, failure);
+            },
+            [&plan, index, &failure](const CompiledChecker& checker) {
+                return hasValidColorCurveReference(checker.colorA, plan, index, failure) &&
+                       hasValidColorCurveReference(checker.colorB, plan, index, failure) &&
+                       checker.cellWidth > 0 && checker.cellHeight > 0 && checker.width > 0 &&
+                       checker.height > 0;
             },
             [&plan, index, &failure](const CompiledCompositionSource& source) {
                 const auto& mapping = source.timeMapping;
@@ -349,6 +382,46 @@ enum class ScalarDomain : std::uint8_t {
             },
             [index, &plan, &failure](const CompiledImageEffect& effect) {
                 bool validKernel = true;
+                if (const auto* combine = std::get_if<ImageCombineKernel>(&effect.kernel)) {
+                    validKernel = effect.secondaryInput.has_value() &&
+                                  effect.secondaryInput->value() < index &&
+                                  static_cast<std::uint8_t>(combine->mode) <=
+                                      static_cast<std::uint8_t>(ImageCombineMode::MultiplyAlpha) &&
+                                  static_cast<std::uint8_t>(combine->channel) <=
+                                      static_cast<std::uint8_t>(render::ImageCoverageChannel::Luma) &&
+                                  ((combine->mode == ImageCombineMode::SetAlpha &&
+                                    !combine->factor) ||
+                                   (combine->mode != ImageCombineMode::SetAlpha &&
+                                    combine->factor.has_value() &&
+                                    hasValidScalarCurveReference(*combine->factor, plan, index,
+                                                                 failure)));
+                } else if (effect.secondaryInput) {
+                    validKernel = false;
+                }
+                if (const auto* discrete = std::get_if<DiscreteImageKernel>(&effect.kernel))
+                    validKernel = discrete->quarterTurns <= 3;
+                if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel)) {
+                    const bool invert = pointwise->effect == PointwiseImageEffect::Invert;
+                    validKernel = static_cast<std::uint8_t>(pointwise->effect) <=
+                                      static_cast<std::uint8_t>(PointwiseImageEffect::Invert) &&
+                                  (invert ? !pointwise->amount
+                                          : pointwise->amount.has_value() &&
+                                                hasValidScalarCurveReference(*pointwise->amount,
+                                                                             plan, index, failure));
+                }
+                if (const auto* canvas = std::get_if<CanvasImageKernel>(&effect.kernel)) {
+                    validKernel = static_cast<std::uint8_t>(canvas->effect) <=
+                                  static_cast<std::uint8_t>(CanvasImageEffect::Pad);
+                    for (const auto& margin : canvas->margins)
+                        validKernel = validKernel &&
+                                      hasValidScalarCurveReference(margin, plan, index, failure);
+                }
+                if (const auto* resize = std::get_if<ResizeFitKernel>(&effect.kernel))
+                    validKernel = detail::validResizeFitKernel(*resize);
+                if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel))
+                    validKernel = static_cast<unsigned>(blur->kind) <= 1 &&
+                                  static_cast<unsigned>(blur->edge) <= 1 &&
+                                  hasValidScalarCurveReference(blur->radius, plan, index, failure);
                 if (const auto* file = std::get_if<FileTransformKernel>(&effect.kernel))
                     validKernel = file->interpolation >= 0 && file->interpolation <= 2 &&
                                   file->direction >= 0 && file->direction <= 1 &&
@@ -418,6 +491,7 @@ enum class ScalarDomain : std::uint8_t {
                     }
                     const auto& input = plan.operations()[layer.input.value()];
                     return std::holds_alternative<CompiledSolid>(input) ||
+                           std::holds_alternative<CompiledChecker>(input) ||
                            std::holds_alternative<CompiledShape>(input) ||
                            std::holds_alternative<CompiledText>(input) ||
                            std::holds_alternative<CompiledImageEffect>(input) ||
@@ -905,10 +979,24 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
             Overloaded{
                 [&](const CompiledSolid& solid) {
                     static_cast<void>(registerColor(solid.color, "color", operationSubject));
+                    if (solid.gradient) {
+                        static_cast<void>(registerColor(solid.gradient->endColor, "endColor",
+                                                        operationSubject));
+                        static_cast<void>(registerVec2(solid.gradient->start, "start",
+                                                       operationSubject));
+                        static_cast<void>(registerVec2(solid.gradient->end, "end",
+                                                       operationSubject));
+                        static_cast<void>(registerParameter(solid.gradient->repeatId,
+                                                            operationSubject));
+                    }
                     static_cast<void>(registerScalar(solid.width, "width", ScalarDomain::Dimension,
                                                      operationSubject));
                     static_cast<void>(registerScalar(solid.height, "height",
                                                      ScalarDomain::Dimension, operationSubject));
+                },
+                [&](const CompiledChecker& checker) {
+                    static_cast<void>(registerColor(checker.colorA, "colorA", operationSubject) &&
+                                      registerColor(checker.colorB, "colorB", operationSubject));
                 },
                 [&](const CompiledShape& shape) {
                     static_cast<void>(
@@ -1525,9 +1613,15 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
         // conservative, including nested merges and parented transforms. Geometry is never clipped.
         std::vector<bool> fullSupport(plan->operations().size(), false);
         if (request.roi) {
-            for (const auto& operation : plan->operations())
+            for (const auto& operation : plan->operations()) {
                 if (const auto* layer = std::get_if<CompiledLayerOutput>(&operation))
                     fullSupport[layer->input.value()] = true;
+                if (const auto* effect = std::get_if<CompiledImageEffect>(&operation);
+                    effect && (std::holds_alternative<DiscreteImageKernel>(effect->kernel) ||
+                               std::holds_alternative<ResizeFitKernel>(effect->kernel) ||
+                               std::holds_alternative<SeparableBlurKernel>(effect->kernel)))
+                    fullSupport[effect->input.value()] = true;
+            }
             for (std::size_t i = fullSupport.size(); i-- > 0;)
                 if (fullSupport[i])
                     forEachInput(plan->operations()[i],
@@ -1648,15 +1742,64 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             }
             std::optional<detail::PreparedImageEffect> preparedEffect;
             if (const auto* effect = std::get_if<CompiledImageEffect>(&plan->operations()[index])) {
-                preparedEffect = request.bypassLookNodes && effect->look
-                                     ? detail::PreparedImageEffect{}
-                                     : imageEffectContext()->prepare(*effect, request.colorIntent,
-                                                                     mediaBase, cancellation);
+                std::optional<double> pointwiseAmount;
+                std::optional<std::array<double, 4>> canvasMargins;
+                if (const auto* canvas = std::get_if<CanvasImageKernel>(&effect->kernel)) {
+                    std::array<double, 4> values{};
+                    bool evaluable = true;
+                    for (std::size_t i = 0; i < values.size(); ++i) {
+                        const auto sampled = detail::resolveParameter(canvas->margins[i], *plan,
+                                                                       resolved);
+                        if (!sampled) {
+                            evaluable = false;
+                            break;
+                        }
+                        values[i] = sampled->value;
+                    }
+                    if (evaluable)
+                        canvasMargins = values;
+                }
+                if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect->kernel);
+                    pointwise && pointwise->amount) {
+                    const auto sampled =
+                        detail::resolveParameter(*pointwise->amount, *plan, resolved);
+                    if (sampled)
+                        pointwiseAmount = sampled->value;
+                }
+                if (const auto* combine = std::get_if<ImageCombineKernel>(&effect->kernel);
+                    combine && combine->factor) {
+                    const auto sampled =
+                        detail::resolveParameter(*combine->factor, *plan, resolved);
+                    if (sampled)
+                        pointwiseAmount = sampled->value;
+                }
+                if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect->kernel)) {
+                    const auto sampled = detail::resolveParameter(blur->radius, *plan, resolved);
+                    if (sampled)
+                        pointwiseAmount = sampled->value;
+                }
+                preparedEffect =
+                    request.bypassLookNodes && effect->look
+                        ? detail::PreparedImageEffect{}
+                        : imageEffectContext()->prepare(*effect, request.colorIntent, mediaBase,
+                                                        cancellation, pointwiseAmount,
+                                                        canvasMargins, resolved.horizontalScale,
+                                                        resolved.verticalScale);
                 if (preparedEffect->cancelled)
                     return EvaluationResult::cancelled();
+                if (preparedEffect->diagnostic &&
+                    std::holds_alternative<SeparableBlurKernel>(effect->kernel))
+                    return EvaluationResult::failed(*preparedEffect->diagnostic);
                 if (preparedEffect->diagnostic) {
                     auto warning = *preparedEffect->diagnostic;
                     warning.subject = operationSubject;
+                    if (std::holds_alternative<PointwiseImageKernel>(effect->kernel) ||
+                        std::holds_alternative<ImageCombineKernel>(effect->kernel) ||
+                        std::holds_alternative<CanvasImageKernel>(effect->kernel)) {
+                        return EvaluationResult::failed(
+                            diagnostic(warning.code, "Image effect cannot be evaluated",
+                                       warning.detail, operationSubject));
+                    }
                     imageWarnings.push_back(std::move(warning));
                 }
             }
@@ -1728,7 +1871,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 layerMatrices[index] = matrix;
             }
             const auto& operation = plan->operations()[index];
-            if (std::holds_alternative<CompiledSolid>(operation) ||
+            if ((std::holds_alternative<CompiledSolid>(operation) &&
+                 !std::get<CompiledSolid>(operation).gradient) ||
                 std::holds_alternative<CompiledShape>(operation) ||
                 std::holds_alternative<CompiledText>(operation))
                 vectors[index] = VectorChain{index, {}, 1};
@@ -1803,6 +1947,21 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             parameter(step.color);
                             parameter(step.width);
                             parameter(step.height);
+                            key.add(step.gradient.has_value());
+                            if (step.gradient) {
+                                key.add(step.gradient->radial);
+                                parameter(step.gradient->endColor);
+                                parameter(step.gradient->start);
+                                parameter(step.gradient->end);
+                                key.add(step.gradient->repeat);
+                            }
+                        } else if constexpr (std::is_same_v<Step, CompiledChecker>) {
+                            parameter(step.colorA);
+                            parameter(step.colorB);
+                            key.add(step.cellWidth);
+                            key.add(step.cellHeight);
+                            key.add(step.width);
+                            key.add(step.height);
                         } else if constexpr (std::is_same_v<Step, CompiledShape>) {
                             key.add(step.kind);
                             parameter(step.size);
@@ -1832,9 +1991,41 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             key.add(std::string(request.colorIntent.ocioConfigUri));
                             key.add(preparedEffect->cacheIdentity);
                             key.add(step.kernel.index());
+                            if (const auto* resize = std::get_if<ResizeFitKernel>(&step.kernel)) {
+                                key.add(std::string{"resize-fit-bilinear-v1"});
+                                key.add(resize->width);
+                                key.add(resize->height);
+                                key.add(resize->pixelAspectNumerator);
+                                key.add(resize->pixelAspectDenominator);
+                                key.add(resize->filter);
+                                key.add(resize->policy);
+                            }
                             if (const auto* cst = std::get_if<CstKernel>(&step.kernel)) {
                                 key.add(cst->fromId);
                                 key.add(cst->toId);
+                            }
+                            if (const auto* pointwise =
+                                    std::get_if<PointwiseImageKernel>(&step.kernel)) {
+                                key.add(pointwise->effect);
+                                if (pointwise->amount)
+                                    parameter(*pointwise->amount);
+                            }
+                            if (const auto* combine =
+                                    std::get_if<ImageCombineKernel>(&step.kernel)) {
+                                key.add(combine->mode);
+                                key.add(combine->channel);
+                                if (combine->factor)
+                                    parameter(*combine->factor);
+                            }
+                            if (const auto* canvas = std::get_if<CanvasImageKernel>(&step.kernel)) {
+                                key.add(canvas->effect);
+                                for (const auto& margin : canvas->margins)
+                                    parameter(margin);
+                            }
+                            if (const auto* blur = std::get_if<SeparableBlurKernel>(&step.kernel)) {
+                                key.add(blur->kind);
+                                key.add(blur->edge);
+                                parameter(blur->radius);
                             }
                             if (const auto* file = std::get_if<FileTransformKernel>(&step.kernel)) {
                                 key.add(file->lutAssetId);
@@ -1955,6 +2146,28 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     "Solid color is not evaluable");
                                 return;
                             }
+                            std::optional<detail::ResolvedGradient> gradient;
+                            if (solid.gradient) {
+                                const auto endColor = detail::resolveParameter(
+                                    solid.gradient->endColor, *plan, resolved);
+                                const auto start = detail::resolveParameter(
+                                    solid.gradient->start, *plan, resolved);
+                                const auto end = detail::resolveParameter(
+                                    solid.gradient->end, *plan, resolved);
+                                if (!endColor || !start || !end || !endColor->value.isValid() ||
+                                    !std::isfinite(start->value.x) || !std::isfinite(start->value.y) ||
+                                    !std::isfinite(end->value.x) || !std::isfinite(end->value.y)) {
+                                    operationFailure = diagnostic(
+                                        EvaluationDiagnosticCode::InvalidParameter,
+                                        "Gradient endpoints are not evaluable", {}, operationSubject);
+                                    return;
+                                }
+                                const auto aspect = fullDescriptor.pixelAspect();
+                                gradient = detail::ResolvedGradient{
+                                    color->value, endColor->value, start->value, end->value,
+                                    solid.gradient->repeat, solid.gradient->radial,
+                                    static_cast<double>(aspect.numerator()) / aspect.denominator()};
+                            }
                             auto descriptor = fullDescriptor;
                             double exactWidth =
                                 static_cast<double>(descriptor.dataWindow().extent().width());
@@ -2032,14 +2245,32 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             const auto solidPixel = *pixel.value();
                             const auto outcome = runRowBandPass(
                                 rowBands, cancellation, height, window.originY(),
-                                [&image, solidPixel, exactWidth, exactHeight, window,
-                                 &operationSubject](const std::int64_t y) -> RowFailure {
+                                [&image, solidPixel, gradient, horizontalScale = resolved.horizontalScale,
+                                 verticalScale = resolved.verticalScale, exactWidth, exactHeight,
+                                 window, &operationSubject](const std::int64_t y) -> RowFailure {
                                     auto row = image.row(y);
                                     if (!row) {
                                         return imageDiagnostic(
                                             *row.error(), operationSubject,
                                             "Solid output row could not be addressed");
                                     }
+                                    if (gradient) {
+                                        for (std::size_t x = 0; x < row.value()->size(); ++x) {
+                                            const double fullX =
+                                                (static_cast<double>(window.originX()) +
+                                                 static_cast<double>(x) + 0.5) /
+                                                horizontalScale;
+                                            const double fullY = (static_cast<double>(y) + 0.5) /
+                                                                 verticalScale;
+                                            const auto value = detail::gradientPixel(*gradient,
+                                                                                    fullX, fullY);
+                                            if (!value)
+                                                return imageDiagnostic(
+                                                    *value.error(), operationSubject,
+                                                    "Gradient pixel is not finite");
+                                            (*row.value())[x] = *value.value();
+                                        }
+                                    } else
                                     render::fillSolidRow(*row.value(), solidPixel);
                                     const auto verticalCoverage =
                                         std::clamp(exactHeight - static_cast<double>(y), 0.0, 1.0);
@@ -2058,15 +2289,16 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                        0.0, 1.0);
                                         if (coverage == 1.0)
                                             continue;
+                                        const auto base = (*row.value())[x];
                                         const auto value = render::Rgba32f::fromPremultiplied(
                                             static_cast<float>(
-                                                static_cast<double>(solidPixel.red()) * coverage),
+                                                static_cast<double>(base.red()) * coverage),
                                             static_cast<float>(
-                                                static_cast<double>(solidPixel.green()) * coverage),
+                                                static_cast<double>(base.green()) * coverage),
                                             static_cast<float>(
-                                                static_cast<double>(solidPixel.blue()) * coverage),
+                                                static_cast<double>(base.blue()) * coverage),
                                             static_cast<float>(
-                                                static_cast<double>(solidPixel.alpha()) *
+                                                static_cast<double>(base.alpha()) *
                                                 coverage));
                                         if (!value)
                                             return imageDiagnostic(
@@ -2090,6 +2322,121 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 operationFailure =
                                     imageDiagnostic(*frozen.error(), operationSubject,
                                                     "Solid process image could not be published");
+                                return;
+                            }
+                            produced.emplace(std::move(*frozen.value()));
+                        },
+                        [&](const CompiledChecker& checker) {
+                            const auto colorA = detail::resolveParameter(checker.colorA, *plan, resolved);
+                            const auto colorB = detail::resolveParameter(checker.colorB, *plan, resolved);
+                            if (!colorA || !colorB) {
+                                operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                                                              "Checker colors could not be resolved", {},
+                                                              operationSubject);
+                                return;
+                            }
+                            const auto a = render::solidPixelFromStraightLinearRec709Scene(colorA->value);
+                            const auto b = render::solidPixelFromStraightLinearRec709Scene(colorB->value);
+                            if (!a || !b) {
+                                operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                                              "Checker colors are not evaluable", {},
+                                                              operationSubject);
+                                return;
+                            }
+                            const auto proxyWidth = static_cast<std::uint32_t>(
+                                fullDescriptor.displayWindow().extent().width());
+                            const auto proxyHeight = static_cast<std::uint32_t>(
+                                fullDescriptor.displayWindow().extent().height());
+                            const detail::CheckerGeometry geometry{
+                                checker.width, checker.height, checker.cellWidth, checker.cellHeight,
+                                plan->format().width(), plan->format().height(), proxyWidth,
+                                proxyHeight};
+                            if (!geometry.valid()) {
+                                operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                                              "Checker geometry exceeds supported bounds", {},
+                                                              operationSubject);
+                                return;
+                            }
+                            const std::uint64_t width =
+                                (std::uint64_t{checker.width} * proxyWidth +
+                                 geometry.compositionWidth - 1) / geometry.compositionWidth;
+                            const std::uint64_t height =
+                                (std::uint64_t{checker.height} * proxyHeight +
+                                 geometry.compositionHeight - 1) / geometry.compositionHeight;
+                            if (width > 16777216 || height > 16777216) {
+                                operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                                              "Checker output exceeds supported extent", {},
+                                                              operationSubject);
+                                return;
+                            }
+                            const auto window = render::ImageWindow::create(0, 0, width, height);
+                            if (!window) {
+                                operationFailure = imageDiagnostic(*window.error(), operationSubject,
+                                                                   "Checker bounds are invalid");
+                                return;
+                            }
+                            auto local = render::Rgba32fImageDescriptor::create(
+                                *window.value(), fullDescriptor.displayWindow(),
+                                fullDescriptor.pixelAspect());
+                            if (!local) {
+                                operationFailure = imageDiagnostic(*local.error(), operationSubject,
+                                                                   "Checker descriptor is invalid");
+                                return;
+                            }
+                            auto descriptor = *local.value();
+                            bounds[index].local = detail::boundsForWindow(
+                                descriptor.dataWindow(), resolved.horizontalScale,
+                                resolved.verticalScale);
+                            bounds[index].local.right = checker.width;
+                            bounds[index].local.bottom = checker.height;
+                            bounds[index].output = bounds[index].local;
+                            if (!clipDescriptor(descriptor, index))
+                                return;
+                            auto builder = render::Rgba32fImageBuilder::create(
+                                descriptor, remainingPixelBudget());
+                            if (!builder) {
+                                operationFailure = imageDiagnostic(*builder.error(), operationSubject,
+                                                                   "Checker image could not be allocated");
+                                return;
+                            }
+                            const auto data = descriptor.dataWindow();
+                            reportRowPassStarted(progress, operationIndex, data.extent().height());
+                            auto& image = *builder.value();
+                            const auto outcome = runRowBandPass(
+                                rowBands, cancellation, data.extent().height(), data.originY(),
+                                [&image, geometry, a = *a.value(), b = *b.value(),
+                                 &operationSubject](const std::int64_t y) -> RowFailure {
+                                    auto row = image.row(y);
+                                    if (!row)
+                                        return imageDiagnostic(*row.error(), operationSubject,
+                                                               "Checker row could not be addressed");
+                                    for (std::size_t column = 0; column < row.value()->size(); ++column) {
+                                        const auto x = static_cast<std::uint32_t>(
+                                            image.descriptor()->dataWindow().originX() +
+                                            static_cast<std::int64_t>(column));
+                                        const auto counts = detail::checkerSampleCounts(
+                                            geometry, x, static_cast<std::uint32_t>(y));
+                                        const auto pixel = detail::checkerPixel(a, b, counts);
+                                        if (!pixel)
+                                            return imageDiagnostic(*pixel.error(), operationSubject,
+                                                                   "Checker pixel is invalid");
+                                        (*row.value())[column] = *pixel.value();
+                                    }
+                                    return std::nullopt;
+                                });
+                            if (outcome.cancelled) {
+                                operationCancelled = true;
+                                return;
+                            }
+                            if (outcome.failure || outcome.incomplete) {
+                                operationFailure = rowPassFailure(outcome, operationSubject);
+                                return;
+                            }
+                            reportRowPassFinished(progress, operationIndex, data.extent().height());
+                            auto frozen = std::move(*builder.value()).freeze();
+                            if (!frozen) {
+                                operationFailure = imageDiagnostic(*frozen.error(), operationSubject,
+                                                                   "Checker image could not be published");
                                 return;
                             }
                             produced.emplace(std::move(*frozen.value()));
@@ -2142,19 +2489,42 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             bounds[index].output = bounds[index].local;
                             if (slots[index] && !preparedEffect->identity()) {
                                 auto result = detail::applyImageEffect(
-                                    *preparedEffect, *slots[index], remainingPixelBudget(),
-                                    cancellation, operationIndex, progress);
+                                    *preparedEffect, *slots[index],
+                                    effect.secondaryInput && slots[effect.secondaryInput->value()]
+                                        ? slots[effect.secondaryInput->value()].get()
+                                        : nullptr,
+                                    remainingPixelBudget(), cancellation, operationIndex, progress,
+                                    resolved.horizontalScale, resolved.verticalScale);
                                 if (result.cancelled) {
                                     operationCancelled = true;
                                     return;
                                 }
                                 if (result.diagnostic) {
                                     result.diagnostic->subject = operationSubject;
+                                    if (std::holds_alternative<PointwiseImageKernel>(effect.kernel) ||
+                                        std::holds_alternative<ImageCombineKernel>(effect.kernel) ||
+                                        std::holds_alternative<CanvasImageKernel>(effect.kernel)) {
+                                        operationFailure =
+                                            diagnostic(result.diagnostic->code,
+                                                       "Image effect cannot be evaluated",
+                                                       result.diagnostic->detail, operationSubject);
+                                        return;
+                                    }
+                                    if (std::holds_alternative<DiscreteImageKernel>(
+                                            effect.kernel) || preparedEffect->resizeFit ||
+                                        preparedEffect->blur) {
+                                        operationFailure = std::move(*result.diagnostic);
+                                        return;
+                                    }
                                     imageWarnings.push_back(std::move(*result.diagnostic));
                                     effectApplicationFailed = true;
                                     contentHashes[index] += ":effect-failed";
                                 } else if (result.image) {
                                     slots[index] = std::move(result.image);
+                                    bounds[index].local = detail::boundsForWindow(
+                                        slots[index]->descriptor()->dataWindow(),
+                                        resolved.horizontalScale, resolved.verticalScale);
+                                    bounds[index].output = bounds[index].local;
                                 }
                             }
                             reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
@@ -3128,9 +3498,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             }
             const auto source = processImage->pixels();
             if (source.size() != descriptor->layout().pixelCount) {
-                return EvaluationResult::failed(diagnostic(
-                    EvaluationDiagnosticCode::InternalInvariant,
-                    "Composition Output pixel storage does not match its descriptor"));
+                return EvaluationResult::failed(
+                    diagnostic(EvaluationDiagnosticCode::InternalInvariant,
+                               "Composition Output pixel storage does not match its descriptor"));
             }
             const auto window = descriptor->dataWindow();
             for (std::int64_t y = window.originY(); y < window.maxYExclusive(); ++y) {
@@ -3151,13 +3521,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 return EvaluationResult::failed(imageDiagnostic(
                     *frozen.error(), {}, "Final process image could not be published"));
             }
-            auto owned = std::make_shared<const render::Rgba32fImage>(
-                std::move(*frozen.value()));
-            if (!render::PackedHostStorageAuthority::promoteFinalProduct(
-                    owned->storageAuthority(), {})) {
-                return EvaluationResult::failed(diagnostic(
-                    EvaluationDiagnosticCode::InternalInvariant,
-                    "Final process image ownership could not be published"));
+            auto owned = std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
+            if (!render::PackedHostStorageAuthority::promoteFinalProduct(owned->storageAuthority(),
+                                                                         {})) {
+                return EvaluationResult::failed(
+                    diagnostic(EvaluationDiagnosticCode::InternalInvariant,
+                               "Final process image ownership could not be published"));
             }
             processImage = std::move(owned);
         }

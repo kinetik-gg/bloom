@@ -292,6 +292,44 @@ kernel in the stage; the translate-only case is a path inside this one.
   picture of the full-resolution frame, a rotated layer included, rather than pretending device
   pixels are square.
 
+### Resize And Fit
+
+`bloom.resize` and `bloom.fit` schema 1 lower through the image-effect boundary to the shared
+`ResizeFitKernel`. Resize stretches the input display canvas independently in X and Y. Fit defaults
+to centred Fit (contain); Fill (cover) instead crops centred overflow. Both compute physical aspect
+from the source and target pixel aspect ratios. Source data-window offsets and overscan remain
+sampling coordinates; they do not redefine the source display canvas.
+
+Both nodes expose constant width, height, pixel-aspect numerator/denominator, a Bilinear filter
+selector, and bypass. Fit also exposes Fit/Fill. Dimensions and ratio terms are positive integers
+up to 32768; zero, negative, unsupported filter/policy values, and driven/animated geometry are
+rejected. Bilinear is the only filter in this version. The generic registered-node commands provide
+Add, parameter edits, duplication, undo/redo, and project persistence; Properties reads these same
+schemas and selectors.
+
+The output data/display canvas starts at zero with the authored extent and PAR. A proxy scales the
+extent with ceiling and derives its exact PAR to preserve the authored physical aspect. The
+Composition Output still chooses the composition render extent. Fit letterboxes with transparent
+black; Fill clips to the target canvas. The existing inverse-mapped affine primitive interpolates
+premultiplied RGBA directly, preserving finite signed/HDR RGB and alpha, with transparent-black
+taps outside the source data window. This initial bilinear filter has no additional downsampling
+antialiasing prefilter.
+
+CPU and GPU share checked geometry. The CPU uses the existing parented affine row reference; GPU
+preparation emits resident `GpuSceneAffineCommand` work using `AffineBilinearV1`, including for
+preview and final-render evaluation. An optional checked output descriptor on individual and batched
+affine work carries the new display canvas/PAR without a pixel readback. Deferred vector inputs
+materialize through existing native coverage before this resample. No CPU-rendered Resize/Fit
+output is uploaded as a GPU implementation.
+
+Cache identity covers every geometry/filter/policy value, input identity, windows/PAR, proxy and ROI;
+the executor independently keys the actual affine map, output descriptor and shader. Spatial inputs
+retain full support for ROI requests. CPU work checks cancellation per row and before publication,
+reports row progress, and refuses invalid geometry or output-budget exhaustion. Native work uses
+the existing executor allocation, cancellation, cache pin and proven-retirement ownership. Native
+numeric parity, warm-cache and batch checks are included in the existing harnesses and remain
+subject to their device qualification; macOS/Windows retain the explicit CPU fallback contract.
+
 ### Blending
 
 The Layer Stack stage folds each entry through one blend kernel carrying that entry's own Layer Output
@@ -513,6 +551,25 @@ RGB is not clamped, valid alpha remains in `[0, 1]`, and transparent borders are
 future Color Mix or grade operation defines its own space and alpha contract; generic scalar Mix
 does not define color interpolation.
 
+### Multiply and Invert image effects
+
+The `bloom.multiply` and `bloom.invert` Color nodes use the composition's declared scene-linear
+working RGB. A canonical process pixel is premultiplied, so both effects first recover straight RGB
+for nonzero alpha, apply their operation independently to each color channel, then multiply by the
+original alpha. Alpha and the input image's display/data windows are unchanged. Zero-alpha pixels
+remain canonical transparent black; hidden straight RGB is not reconstructed. Neither effect
+changes a mask, alpha, or display encoding.
+
+Multiply uses an animatable finite scalar `factor` with neutral value `1`: `rgb' = rgb * factor`.
+Invert's initial color mode has no parameter: `rgb' = 1 - rgb`. Both accept negative and HDR RGB
+and never clamp them. Thus an input channel of `2` becomes `-1` after Invert, while `-0.25`
+becomes `1.25`; a negative Multiply factor may reverse signs. A result that cannot be represented
+as finite Float32 produces a typed diagnostic and a pass-through rather than a saturated or
+silently clamped pixel.
+The sampled factor, operation kind, and input image identity participate in the process cache key;
+the same math applies to preview and final routes. Separate alpha and mask inversion modes require
+their own typed contracts and are not implied by this color mode.
+
 ## Viewer Analysis Requests
 
 `EvaluationRequest`, `ProcessFrameIdentity`, and `PreviewRequestIdentity` carry an optional `roi`:
@@ -597,6 +654,37 @@ identity, device capability, and fallback are semantic contracts rather than bac
 The planned artist-facing vocabulary is maintained in
 [`../product/node-catalogue.md`](../product/node-catalogue.md).
 
+## Linear and radial gradient sources
+
+`bloom.linear-gradient` and `bloom.radial-gradient` version 1 are independent image-producing
+authoring nodes. Each stores animatable start/end straight RGBA colours and start/end `Vec2d`
+coordinates, animatable width/height, and a static integer repeat selector (`0` Clamp, `1`
+Repeat, `2` Mirror). New nodes use the composition extent. Linear starts at the left edge and ends
+at the right edge; radial starts at the composition centre and ends at the right edge. The source
+has a local data window from `(0,0)` to its resolved extent and inherits the composition display
+window and pixel aspect. Authored coordinates are full-resolution local pixel-edge coordinates;
+sampling uses pixel centres. The proxy request maps centres back to author space using the exact
+horizontal and vertical resolution scales, so controls and composition geometry do not drift.
+
+Linear `t` is projection onto the start-to-end vector. Radial `t` is distance from start divided by
+the start-to-end distance. Horizontal distances are multiplied by physical pixel aspect in both
+formulas. A zero-length vector chooses the first colour. Clamp confines `t` to `[0,1]`, Repeat
+uses its fractional part, and Mirror folds over period two. The two authored colours interpolate
+in the effective scene-linear working space as straight RGB and independent alpha; the result is
+premultiplied once for the process image. Negative and HDR RGB are retained when the resulting
+Float32 process pixel is finite. The fractional right/bottom extent coverage scales the final
+premultiplied pixel. ROI clips the requested output while preserving full source coordinates and
+the composition display window.
+
+The CPU evaluator shades rows with the shared cancellation and pixel budget gate. The GPU scene
+preparer resolves the same animation operands and windows and emits a semantic key containing both
+straight colours, endpoints, repeat mode, scales, extent, pixel aspect, and the pinned GradientV1
+shader digest. The native operation batch executes the gradient compute shader into a resident
+RGBA32F image, including single-generator batches; no full-frame CPU upload stands in for that
+shader. Its normal completion uses the same fence proof, cancellation, image budget, and retirement
+rules as other native batch operations. Native unavailability is reported explicitly and the
+portable CPU reference remains the supported fallback.
+
 ## Image Effect Lowering
 
 COLOR-3 advances compiled-plan semantics to **8** and CPU evaluator semantics to **9**.
@@ -604,7 +692,9 @@ Animation semantics remains **2** and image primitive semantics remains **7**. E
 fixtures are unchanged; version-bearing identity digests are independently re-derived.
 
 `CompiledImageEffect` contains its source node identity, an earlier input `OperationIndex`, a
-closed kernel variant, and bypass state. Its bounds and time dependence follow its input. The
+closed kernel variant, and bypass state. Colour-effect bounds follow their input; canvas effects
+derive new windows and bounds from their sampled margins. Time dependence follows the input and
+any animated or driven margin. The
 initial identity kernel shares immutable input storage, including vector coverage when bypassed.
 Colour kernels use the straight-RGB alpha rule in
 [`layer-graph-model.md`](layer-graph-model.md#image-effects). Future effects add kernels to this
@@ -618,6 +708,48 @@ values plus file digest, format, interpolation and direction. Preparation is tas
 uses cancellable chunks, and diagnostics survive warm frame memo hits. The process-space wrapper
 is skipped for a proven identity LUT to retain bit identity. Canonical identity `.cube` tables
 with the default unit domain are exact no-ops, including negative and HDR input.
+
+`PointwiseImageKernel` adds scene-linear affine RGB processing. Exposure samples an animatable
+amount in stops and scales straight RGB by `2^stops`; Offset samples an animatable amount and adds
+it to each straight RGB channel. Both preserve alpha and the input data/display windows, leave
+negative and HDR RGB unclamped, and turn transparent black into transparent black. A zero amount
+is an exact identity. The sampled value and binary32 affine coefficients enter the effect cache
+identity. The CPU reference uses cancellable row chunks; GPU preparation extracts an OCIO
+`MatrixTransform` from the same coefficients and emits a resident `ProcessEffect` command through
+the existing bounded scene executor. A preparation failure takes the explicit CPU fallback.
+
+`CanvasImageKernel` adds Crop and Pad with nonnegative, animatable left/top/right/bottom margins
+in full-resolution pixels. Each margin is rounded independently to the nearest output-grid pixel
+for proxy evaluation. Crop removes those rows and columns from both data and display windows;
+Pad expands both windows and fills the new data border with transparent black. Pixel aspect is
+unchanged. A Crop that would empty either window fails with an explicit diagnostic;
+invalid GPU preparation reports Unsupported and selects the CPU reference path.
+No resampling or color conversion occurs: unchanged premultiplied pixels, including negative/HDR
+RGB and partial alpha, are copied exactly. The CPU copies in cancellable rows and 4096-pixel
+chunks; the production GPU scene emits a resident TranslationOpacity pass with integer sampling
+coordinates and an explicit output display window. Both preview and final routes use the same
+scene executor. Cache identity includes mode, sampled margins, input content, data/display windows,
+pixel aspect, resolution, and the GPU shader artifact. The output uses ordinary pixel-budget
+admission and retired resident-image ownership.
+
+Checker is an image source with two animatable straight scene-linear RGBA colours, integer cell
+width/height, and integer authored canvas width/height. It classifies a fixed 4×4 grid of samples
+per output pixel in authored coordinates, using the full composition-to-proxy ratio; samples
+outside the authored canvas are transparent. Its CPU reference and resident CheckerV1 compute
+shader use the same integer-rational positions. Source-local data starts at (0,0), while the
+display window and pixel aspect follow the composition. The GPU preparation requires each source,
+composition and proxy dimension to be at most 16,384 because the shader uses bounded unsigned
+32-bit products; larger valid documents receive an explicit Unsupported/CPU fallback diagnostic.
+The single shader dispatch has constant work per pixel regardless of cell frequency. Resolved
+colours, dimensions, windows and shader digest participate in cache identity.
+
+Multiply Alpha consumes a base image and a matte at matching global pixel coordinates. It reads
+the selected Alpha, straight Red/Green/Blue, or Luma matte channel, treats absent matte pixels as
+zero coverage, and multiplies the base premultiplied RGBA by the clamped coverage and animatable
+unit factor. Zero-alpha matte RGB contributes zero; negative and HDR matte channels are clamped
+only after extraction. The base image retains its data/display windows and pixel aspect. CPU and
+resident two-image GPU paths share the coverage contract, with normal cancellation and budget
+admission. The factor, channel and both input content identities invalidate cached output.
 
 The plan also carries `bypass` and `look`; `EvaluationRequest::bypassLookNodes` skips only marked
 nodes. Bypass shares upstream image storage and bounds. Active colour transforms materialize the
@@ -878,3 +1010,41 @@ At the composition-source landing, compiled-plan semantics was **7**, animation 
 existing arms' pixel semantics are unchanged. The independent `s5-identity-oracle.py` audit
 reproduced all plan-6 analysis/output pins before deriving plan-7 pins, preserving the four
 preimage lengths (PNG analysis 1922, EXR analysis 1485, PNG output 669, EXR output 567 bytes).
+
+## Exact Flip And Rotate 90 Image Nodes
+
+`bloom.flip` v1 and `bloom.rotate-90` v1 lower to the required `DiscreteImageKernel` image-effect
+alternative. Flip has static Boolean horizontal (default true) and vertical (default false)
+controls. Rotate 90 has one static signed integer `quarterTurns` control (default 1), normalized
+modulo four; positive turns are clockwise. Generic AddNode/parameter commands own edits and undo;
+the versioned definitions and parameter records use ordinary project persistence.
+
+These nodes permute the stored pixel lattice without colour conversion, unpremultiplication,
+filtering, alpha arithmetic or HDR clipping. Flip reflects within the input data rectangle.
+Rotation exchanges data width/height on odd turns and retains the data rectangle's top-left
+origin on every turn, including negative and off-canvas origins. The display canvas and pixel
+aspect ratio are retained: an image operation does not resize the composition. Full overscan is
+retained for downstream transforms; Composition Output/ROI determines the final visible crop.
+The CPU reference copies exact premultiplied RGBA32F samples with row/chunk cancellation,
+progress and the existing checked allocation budget. Invalid output windows or failed allocation
+fail evaluation rather than publishing an unchanged final image.
+
+GPU preview and all final routes use the same production scene builder and resident affine
+executor. A signed permutation matrix with integer translations produces zero fractional sample
+weights, so the existing affine shader's explicit zero-factor branches select the exact source tap;
+there is no host full-frame pixel preparation. The ordinary GPU capability, allocation, cancellation,
+cache-key, live-pin and retirement contracts apply. CPU fallback remains explicit on unsupported
+native devices/platforms, and for data origins beyond the exact Float64 integer-coordinate
+domain (absolute coordinate above 2^52). Windows/macOS native qualification is pending, as for the shared affine
+backend. Tests cover every turn, both axes, nonsquare off-canvas windows, signed/HDR/partial-alpha
+sample preservation, exact affine sample bases/zero weights, production preparation, warm cache,
+Properties command undo, and verified archive reopen. A separate native image-effect harness adds
+an asymmetric stroked image fixture for both axes, their combination, and turns 1/2/3; it requires
+exact CPU/GPU pixels, a real resident affine dispatch, no executor readback, and warm cache reuse.
+That harness and the required coverage gate must run on a device before claiming native parity.
+
+## Separable neighborhood filtering
+
+Gaussian Blur and Box Blur share the CPU/GPU kernel, explicit data-window halo and edge policy
+defined in [Image Filters](image-filters.md). Unlike pointwise colour kernels, they filter associated
+RGBA and may expand the data window. Preview and final rendering use the same production scene path.

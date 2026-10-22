@@ -11,6 +11,12 @@ add_executable(bloom_runtime_gpu_task_test task_gpu_executor_tests.cpp)
 add_executable(bloom_runtime_registry_test node_definition_registry_tests.cpp)
 add_executable(bloom_runtime_snapshot_compiler_test snapshot_compiler_tests.cpp)
 add_executable(bloom_runtime_cpu_composition_evaluator_test cpu_composition_evaluator_tests.cpp)
+add_executable(bloom_runtime_gradient_source_test gradient_source_tests.cpp)
+target_include_directories(bloom_runtime_gradient_source_test PRIVATE ..)
+target_link_libraries(bloom_runtime_gradient_source_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_gradient_source_test)
+bloom_add_test(NAME bloom.runtime.gradient_source COMMAND bloom_runtime_gradient_source_test
+    LABELS runtime unit TIMEOUT 30)
 add_executable(bloom_runtime_animation_sampling_test animation_sampling_tests.cpp)
 add_executable(bloom_runtime_curve_compilation_test curve_compilation_tests.cpp)
 add_executable(bloom_runtime_qualified_display_preparation_test qualified_display_preparation_tests.cpp)
@@ -74,6 +80,15 @@ bloom_enable_strict_floating_point(bloom_runtime_animation_sampling_test)
 bloom_enable_strict_floating_point(bloom_runtime_qualified_display_preparation_test)
 
 include(BloomTesting)
+
+add_executable(bloom_runtime_checker_native_test checker_image_native_tests.cpp)
+target_link_libraries(bloom_runtime_checker_native_test PRIVATE bloom_render)
+target_include_directories(bloom_runtime_checker_native_test PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+bloom_enable_warnings(bloom_runtime_checker_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_checker_native_test)
+bloom_add_test(NAME bloom.runtime.checker_native COMMAND bloom_runtime_checker_native_test
+    LABELS unit gpu runtime)
+set_tests_properties(bloom.runtime.checker_native PROPERTIES SKIP_RETURN_CODE 77)
 
 # Manual, CPU-only private-share qualification. The owning script creates and tears down its own
 # loopback SSHFS fixture; ordinary CTest never creates network services or mounts.
@@ -232,13 +247,36 @@ bloom_add_test(
     LABELS unit runtime media color
 )
 
+add_executable(bloom_runtime_separable_image_effect_test separable_image_effect_tests.cpp)
+target_include_directories(bloom_runtime_separable_image_effect_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_separable_image_effect_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_separable_image_effect_test)
+bloom_enable_strict_floating_point(bloom_runtime_separable_image_effect_test)
+bloom_add_test(NAME bloom.runtime.separable-image-effects COMMAND bloom_runtime_separable_image_effect_test
+               LABELS unit runtime render TIMEOUT 30)
+
 bloom_find_dependency(OpenColorIO)
 add_executable(bloom_runtime_image_effect_test image_effect_tests.cpp)
+add_executable(bloom_runtime_checker_image_test checker_image_tests.cpp)
+target_include_directories(bloom_runtime_checker_image_test PRIVATE ..)
+target_link_libraries(bloom_runtime_checker_image_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_runtime_checker_image_test)
+bloom_enable_strict_floating_point(bloom_runtime_checker_image_test)
+bloom_add_test(NAME bloom.runtime.checker_image COMMAND bloom_runtime_checker_image_test
+    LABELS runtime unit gpu TIMEOUT 30)
 target_include_directories(bloom_runtime_image_effect_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(bloom_runtime_image_effect_test PRIVATE bloom_runtime_evaluator OpenColorIO::OpenColorIO)
 bloom_enable_warnings(bloom_runtime_image_effect_test)
 bloom_enable_strict_floating_point(bloom_runtime_image_effect_test)
 bloom_add_test(NAME bloom.runtime.image-effects COMMAND bloom_runtime_image_effect_test LABELS unit runtime color)
+bloom_add_test(NAME bloom.runtime.discrete-image-effects COMMAND bloom_runtime_image_effect_test --discrete-only LABELS unit runtime image)
+
+add_executable(bloom_runtime_resize_fit_kernel_test resize_fit_kernel_tests.cpp)
+target_include_directories(bloom_runtime_resize_fit_kernel_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_resize_fit_kernel_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_resize_fit_kernel_test)
+bloom_enable_strict_floating_point(bloom_runtime_resize_fit_kernel_test)
+bloom_add_test(NAME bloom.runtime.resize-fit-kernel COMMAND bloom_runtime_resize_fit_kernel_test LABELS unit runtime render)
 
 # Bounded runtime qualification for the embedded Bloom Neutral v1 display operation. The hardware
 # body is compiled unconditionally and depends only on runtime create() availability, so the same

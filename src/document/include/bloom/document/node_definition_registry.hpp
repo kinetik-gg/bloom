@@ -192,6 +192,8 @@ enum class NodeCardinality : std::uint8_t {
 
 enum class NodeLoweringKind {
     Solid,
+    Checker,
+    Gradient,
     Shape,
     Text,
     ImageSource,
@@ -264,6 +266,8 @@ enum class NodeLoweringKind {
         return true;
     case NodeLoweringKind::Shape:
     case NodeLoweringKind::Solid:
+    case NodeLoweringKind::Checker:
+    case NodeLoweringKind::Gradient:
     case NodeLoweringKind::Text:
     case NodeLoweringKind::VideoSource:
     case NodeLoweringKind::ImageSource:

@@ -192,8 +192,11 @@ replayScene(const PreparedGpuScene& scene, std::vector<std::shared_ptr<const Rgb
                 return false;
             }
             const auto descriptor = Rgba32fImageDescriptor::create(
-                affine->outputWindow, input->descriptor()->displayWindow(),
-                input->descriptor()->pixelAspect());
+                affine->outputWindow,
+                affine->outputDescriptor ? affine->outputDescriptor->displayWindow()
+                                         : input->descriptor()->displayWindow(),
+                affine->outputDescriptor ? affine->outputDescriptor->pixelAspect()
+                                         : input->descriptor()->pixelAspect());
             if (!descriptor) {
                 return false;
             }
