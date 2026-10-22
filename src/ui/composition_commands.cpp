@@ -346,12 +346,18 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
     };
     const auto refreshValidity = [&] {
         const auto rate = parseRate(fields.frameRate->text());
-        const bool valid = rate.has_value() && canonicalDuration.has_value();
+        const bool hiddenFrameCount =
+            unit == DurationUnit::Frames && canonicalDuration && fields.duration->text().isEmpty();
+        const bool valid = rate.has_value() && canonicalDuration.has_value() && !hiddenFrameCount;
         if (!rate) {
             fields.error->setText(
                 positiveSecondsSyntax(fields.frameRate->text())
-                    ? QObject::tr("Frame-rate numerator and denominator must fit 32 bits.")
-                    : QObject::tr("Enter a positive frame rate as a number or N/D."));
+                    ? QObject::tr("Frame rate exceeds the representable rational range.")
+                    : QObject::tr("Enter a positive frame rate as an integer, decimal, or N/D."));
+            fields.error->show();
+        } else if (hiddenFrameCount) {
+            fields.error->setText(
+                QObject::tr("Duration cannot be shown as a whole frame count; switch to Seconds."));
             fields.error->show();
         } else if (!canonicalDuration) {
             const bool overflow =

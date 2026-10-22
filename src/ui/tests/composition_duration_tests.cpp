@@ -383,6 +383,9 @@ void testExtremeInheritedDurationStaysExact(Expectations& expectations) {
             }
             expect.expect(duration->text().isEmpty(),
                           "extreme duration: unrepresentable frame count is left blank");
+            expect.expect(
+                !ok->isEnabled(),
+                "extreme duration: an empty frame field cannot silently add a composition");
             rate->setText(QStringLiteral("25"));
             unit->setCurrentIndex(1);
             expect.expect(duration->text() == QString::number(static_cast<qlonglong>(
@@ -589,7 +592,7 @@ void testOverflowValidation(Expectations& expectations) {
             }
             rate->setText(QStringLiteral("4294967296/1"));
             expect.expect(!ok->isEnabled() && error->isVisible() &&
-                              error->text().contains(QStringLiteral("Frame-rate")),
+                              error->text().contains(QStringLiteral("Frame rate")),
                           "out-of-range uint32 rate is diagnosed");
             rate->setText(QStringLiteral("1/4294967295"));
             duration->setText(QStringLiteral("9223372036854775807"));
