@@ -1712,8 +1712,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
         std::vector<EvaluatedOperationBounds> bounds(plan->operations().size());
         const auto remainingPixelBudget = [&] {
             auto remaining = request.pixelStorageByteLimit;
+            // Identity effects and graph branches can hold the same immutable image in several
+            // slots. Rgba32fImage uniquely owns its storage, so charge each image only once.
+            std::unordered_set<const render::Rgba32fImage*> residentImages;
             for (const auto& slot : slots) {
-                if (!slot)
+                if (!slot || !residentImages.insert(slot.get()).second)
                     continue;
                 const auto bytes = slot->pixels().size_bytes();
                 if (bytes > remaining)
@@ -2171,7 +2174,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             const auto hit =
                 cache ? cache->find(key.bytes(), plan->sourceRevision()) : std::nullopt;
             if (hit) {
-                if (hit->image && hit->image->pixels().size_bytes() > remainingPixelBudget())
+                const bool alreadyResident = hit->image && std::ranges::any_of(
+                    slots, [&](const auto& slot) { return slot == hit->image; });
+                if (hit->image && !alreadyResident &&
+                    hit->image->pixels().size_bytes() > remainingPixelBudget())
                     return EvaluationResult::failed(
                         diagnostic(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
                                    "Cached operation exceeds the resident pixel budget", {},

@@ -584,6 +584,72 @@ void testSpatialEffectBudgets() {
     }
 }
 
+void testAliasedBlurBudgets() {
+    for (const auto kind :
+         {runtime::SeparableBlurKind::Gaussian, runtime::SeparableBlurKind::Box}) {
+        auto definition = planWith({runtime::SeparableBlurKernel{
+            kind, {document::ParameterId::fromRaw(90), 0.0}, runtime::BlurEdgeMode::Clamp}})
+                              ->copyDefinition();
+        definition.format = *document::CompositionFormat::create(1, 1);
+        definition.operations.resize(2);
+        definition.operations.emplace_back(runtime::CompiledMerge{
+            document::NodeId::fromRaw(101),
+            {{document::LayerSlotId::fromRaw(1), {}, runtime::OperationIndex::fromRaw(1)}}});
+        definition.operations.emplace_back(runtime::CompiledCompositionOutput{
+            document::NodeId::fromRaw(102), runtime::OperationIndex::fromRaw(2)});
+        definition.output = runtime::OperationIndex::fromRaw(3);
+        const auto plan = std::make_shared<const runtime::CompiledCompositionPlan>(definition);
+        auto request = requestFor(*plan);
+        // Blur retains its upstream support; ROI clips the merge to one pixel.
+        // The 4x2 source/identity allocation plus the 1x1 merged output is 128+16 bytes.
+        const auto roiWindow = render::ImageWindow::create(0, 0, 1, 1);
+        request.roi = *roiWindow.value();
+        request.pixelStorageByteLimit = 144;
+        runtime::CpuCompositionEvaluator evaluator;
+        const auto cold = evaluator.evaluate(plan, request, {});
+        const auto warm = evaluator.evaluate(plan, request, {});
+        if (!cold.frame() || !warm.frame()) {
+            for (const auto& diagnostic : cold.diagnostics())
+                std::cerr << "cold alias budget: " << diagnostic.summary << ' '
+                          << diagnostic.detail << '\n';
+            for (const auto& diagnostic : warm.diagnostics())
+                std::cerr << "warm alias budget: " << diagnostic.summary << ' '
+                          << diagnostic.detail << '\n';
+        }
+        expect(cold.frame() && samePixels(cold, warm) &&
+                   warm.frame()->operationCacheStatistics().hits > 0,
+               "cached zero-radius blur reuses resident storage without charging it again");
+        request.bypassOperationCache = true;
+        request.pixelStorageByteLimit = 143;
+        expect(!evaluator.evaluate(plan, request, {}).frame(),
+               "alias reuse does not waive the merged output allocation budget");
+
+        // Retain the original source alongside the zero-radius alias while a second blur runs.
+        definition.operations.resize(2);
+        definition.operations.emplace_back(runtime::CompiledImageEffect{
+            document::NodeId::fromRaw(12), runtime::OperationIndex::fromRaw(1),
+            runtime::SeparableBlurKernel{kind, {document::ParameterId::fromRaw(91), 1.0},
+                                         runtime::BlurEdgeMode::Clamp}, false});
+        definition.operations.emplace_back(runtime::CompiledMerge{
+            document::NodeId::fromRaw(101),
+            {{document::LayerSlotId::fromRaw(1), {}, runtime::OperationIndex::fromRaw(0)},
+             {document::LayerSlotId::fromRaw(2), {}, runtime::OperationIndex::fromRaw(2)}}});
+        definition.operations.emplace_back(runtime::CompiledCompositionOutput{
+            document::NodeId::fromRaw(102), runtime::OperationIndex::fromRaw(3)});
+        definition.output = runtime::OperationIndex::fromRaw(4);
+        const auto branched = std::make_shared<const runtime::CompiledCompositionPlan>(
+            std::move(definition));
+        auto branchedRequest = requestFor(*branched);
+        branchedRequest.bypassOperationCache = true;
+        branchedRequest.pixelStorageByteLimit = 384;
+        expect(evaluator.evaluate(branched, branchedRequest, {}).frame() != nullptr,
+               "branched blur charges its shared source once plus both scratch buffers");
+        branchedRequest.pixelStorageByteLimit = 383;
+        expect(!evaluator.evaluate(branched, branchedRequest, {}).frame(),
+               "branched blur still refuses below its true three-buffer peak");
+    }
+}
+
 void testCst() {
     runtime::CpuCompositionEvaluator evaluator;
     const auto source = planWith({});
@@ -1041,6 +1107,7 @@ int main(const int argc, char** argv) {
         if (argc == 2 && std::string_view(argv[1]) == "--blur-only") {
             testBlurEvaluation();
             testSpatialEffectBudgets();
+            testAliasedBlurBudgets();
             return failures == 0 ? 0 : 1;
         }
         if (argc == 2 && std::string_view(argv[1]) == "--discrete-only") {
@@ -1058,6 +1125,7 @@ int main(const int argc, char** argv) {
         testUnaryImageEffectInputArity();
         testBlurEvaluation();
         testSpatialEffectBudgets();
+        testAliasedBlurBudgets();
         testLookBypass();
         testFileTransform();
         testMultiplyAndInvert();
