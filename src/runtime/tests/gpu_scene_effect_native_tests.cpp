@@ -392,6 +392,90 @@ void runPointwise(Expectations& expectations, GpuDevice& device, GpuSceneCache& 
     }
 }
 
+void runCanvas(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    for (const auto kind : {bloom::runtime::CanvasImageEffect::Crop,
+                            bloom::runtime::CanvasImageEffect::Pad}) {
+        for (const bool proxy : {false, true}) {
+            const auto base = effectPlan(CstKernel{},
+                                         kind == bloom::runtime::CanvasImageEffect::Crop
+                                             ? 7000 : 8000);
+            auto definition = base->copyDefinition();
+            auto& solid = std::get<CompiledSolid>(definition.operations[0]);
+            solid.width.source = 8.0;
+            solid.height.source = 6.0;
+            std::array<CompiledScalarParameter, 4> margins{
+                CompiledScalarParameter{ParameterId::fromRaw(9001), 1.0},
+                CompiledScalarParameter{ParameterId::fromRaw(9002), 1.0},
+                CompiledScalarParameter{ParameterId::fromRaw(9003), 1.0},
+                CompiledScalarParameter{ParameterId::fromRaw(9004), 0.0}};
+            if (kind == bloom::runtime::CanvasImageEffect::Pad)
+                margins = {CompiledScalarParameter{ParameterId::fromRaw(9001), 2.0},
+                           CompiledScalarParameter{ParameterId::fromRaw(9002), 1.0},
+                           CompiledScalarParameter{ParameterId::fromRaw(9003), 2.0},
+                           CompiledScalarParameter{ParameterId::fromRaw(9004), 1.0}};
+            std::get<CompiledImageEffect>(definition.operations[1]).kernel =
+                bloom::runtime::CanvasImageKernel{kind, margins};
+            const auto plan = std::make_shared<const CompiledCompositionPlan>(
+                std::move(definition));
+            auto request = requestFor(*plan);
+            if (proxy) {
+                const auto extent = bloom::render::ImageExtent::create(6, 5);
+                request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+            }
+            const auto prepared = CpuGpuSceneBuilder{}.build(plan, request);
+            expectations.expect(prepared.hasValue(),
+                                "canvas native: production scene prepares");
+            if (!prepared)
+                continue;
+            const auto commandIndex = prepared.scene->commandForOperation()[1];
+            const auto* command =
+                std::get_if<bloom::runtime::GpuSceneTranslationCommand>(
+                    &prepared.scene->commands()[commandIndex]);
+            expectations.expect(command && command->outputDisplayWindow.has_value(),
+                                "canvas native: resident translation changes the display window");
+            if (!command)
+                continue;
+            auto oracleRequest = request;
+            oracleRequest.bypassOperationCache = true;
+            const CpuCompositionEvaluator evaluator;
+            const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+            expectations.expect(oracle.frame() != nullptr,
+                                "canvas native: CPU reference evaluates");
+            if (!oracle.frame())
+                continue;
+            auto executor = GpuSceneExecutor::create(device, cache);
+            expectations.expect(executor.hasValue(), "canvas native: executor creates");
+            if (!executor)
+                continue;
+            const auto cold = runScene(*executor.executor, prepared.scene);
+            expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready,
+                                "canvas native: cold GPU run completes");
+            if (cold.pollResult != GpuSceneExecutorPollResult::Ready)
+                continue;
+            std::string detail;
+            expectations.expect(parity(cold.pixels, oracle.frame()->processImage().pixels(),
+                                       detail),
+                                "canvas native: CPU/GPU pixels agree at full/proxy: " + detail);
+            const auto& descriptor = *oracle.frame()->processImage().descriptor();
+            expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                    cold.displayWindow == descriptor.displayWindow() &&
+                                    cold.pixelAspect == descriptor.pixelAspect(),
+                                "canvas native: final descriptor matches CPU");
+            const auto coldCounters = executor.executor->counters();
+            expectations.expect(coldCounters.translationDispatches > 0 &&
+                                    coldCounters.readbacks == 0,
+                                "canvas native: pixels execute resident with no intermediate readback");
+            const auto warm = runScene(*executor.executor, prepared.scene);
+            expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                    parity(warm.pixels, oracle.frame()->processImage().pixels(),
+                                           detail) &&
+                                    executor.executor->counters().translationDispatches ==
+                                        coldCounters.translationDispatches,
+                                "canvas native: warm image is reused without a new translation");
+        }
+    }
+}
+
 #if defined(__linux__)
 void runFileTransform(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                       const std::string& working, const std::string& process) {
@@ -471,6 +555,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                const std::string& from, const std::string& to) {
     runCst(expectations, device, cache, from, to);
     runPointwise(expectations, device, cache);
+    runCanvas(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
 #endif

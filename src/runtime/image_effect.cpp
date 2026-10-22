@@ -63,10 +63,25 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
                                                 const EvaluationColorIntent& intent,
                                                 const std::filesystem::path& base,
                                                 const CancellationToken& cancellation,
-                                                const std::optional<double> sampledAmount) {
+                                                const std::optional<double> sampledAmount,
+                                                const std::optional<std::array<double, 4>> canvasMargins) {
     if (effect.bypass || std::holds_alternative<IdentityImageKernel>(effect.kernel))
         return {};
     PreparedImageEffect prepared;
+    if (const auto* canvas = std::get_if<CanvasImageKernel>(&effect.kernel)) {
+        if (!canvasMargins) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
+                                          "Canvas margins are not evaluable");
+            return prepared;
+        }
+        prepared.canvas = CanvasMargins{canvas->effect, *canvasMargins};
+        OperationKey key;
+        key.add(canvas->effect);
+        for (const auto margin : *canvasMargins)
+            key.add(margin);
+        prepared.cacheIdentity = key.bytes();
+        return prepared;
+    }
     if (const auto* combine = std::get_if<ImageCombineKernel>(&effect.kernel)) {
         if (!effect.secondaryInput ||
             static_cast<std::uint8_t>(combine->mode) >
@@ -205,8 +220,84 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                                    const std::size_t pixelBudget,
                                    const CancellationToken& cancellation,
                                    const OperationIndex operation,
-                                   const EvaluationProgressCallback& progress) {
+                                   const EvaluationProgressCallback& progress,
+                                   const double horizontalScale, const double verticalScale) {
     ImageEffectResult result;
+    if (effect.canvas) {
+        const auto source = input.descriptor()->dataWindow();
+        const auto window = canvasOutputWindow(source, *effect.canvas, horizontalScale,
+                                               verticalScale);
+        const auto display = canvasOutputWindow(input.descriptor()->displayWindow(),
+                                                *effect.canvas, horizontalScale, verticalScale);
+        if (!window || !display) {
+            result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
+                                        "Canvas margins leave an invalid data window");
+            return result;
+        }
+        const auto descriptor = render::Rgba32fImageDescriptor::create(
+            *window, *display, input.descriptor()->pixelAspect());
+        if (!descriptor) {
+            result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
+                                        "Canvas output descriptor is invalid");
+            return result;
+        }
+        auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), pixelBudget);
+        if (!builder) {
+            result.diagnostic = refusal(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
+                                        "Canvas output exceeds the pixel storage budget");
+            return result;
+        }
+        const auto view = input.view();
+        if (!view) {
+            result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                        "Canvas input is invalid");
+            return result;
+        }
+        const auto transparent = render::Rgba32f::transparent();
+        reportProgress(progress, {EvaluationProgressStage::Operation, operation, 0,
+                                  window->extent().height()});
+        for (auto y = window->originY(); y < window->maxYExclusive(); ++y) {
+            if (cancellation.isCancellationRequested()) {
+                result.cancelled = true;
+                return result;
+            }
+            auto target = builder.value()->row(y);
+            if (!target) {
+                result.diagnostic = refusal(EvaluationDiagnosticCode::InternalInvariant,
+                                            "Canvas output row is unavailable");
+                return result;
+            }
+            for (std::size_t i = 0; i < target.value()->size(); ++i) {
+                if ((i & 4095U) == 0 && cancellation.isCancellationRequested()) {
+                    result.cancelled = true;
+                    return result;
+                }
+                const auto x = window->originX() + static_cast<std::int64_t>(i);
+                if (source.contains(x, y)) {
+                    const auto pixel = view.value()->read(x, y);
+                    if (!pixel) {
+                        result.diagnostic = refusal(EvaluationDiagnosticCode::InternalInvariant,
+                                                    "Canvas input pixel is unavailable");
+                        return result;
+                    }
+                    (*target.value())[i] = *pixel.value();
+                } else {
+                    (*target.value())[i] = transparent;
+                }
+            }
+            reportProgress(progress, {EvaluationProgressStage::Operation, operation,
+                                      static_cast<std::uint64_t>(y - window->originY() + 1),
+                                      window->extent().height()});
+        }
+        auto frozen = std::move(*builder.value()).freeze();
+        if (!frozen) {
+            result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                        "Canvas output validation failed");
+            return result;
+        }
+        result.image = std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
+        return result;
+    }
     auto builder = render::Rgba32fImageBuilder::create(*input.descriptor(), pixelBudget);
     if (!builder) {
         result.diagnostic = refusal(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,

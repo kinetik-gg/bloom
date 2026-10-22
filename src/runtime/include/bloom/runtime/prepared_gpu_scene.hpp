@@ -158,6 +158,8 @@ struct GpuSceneTranslationCommand final {
     GpuSceneCommandIndex input = kInvalidGpuSceneCommand;
     render::ImageWindow sourceWindow;
     render::ImageWindow outputWindow;
+    // Canvas operations supply this; ordinary layer translations inherit the input display.
+    std::optional<render::ImageWindow> outputDisplayWindow;
     // The GPU translation is local to the OUTPUT window and already accounts for the output/source
     // window origin difference, so replay reproduces the CPU LayerTransform translation-only
     // sample.

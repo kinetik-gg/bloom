@@ -24,6 +24,7 @@
 #include "input_color_context.hpp"
 #include "layer_parent_transform.hpp"
 #include "pointwise_image_effect.hpp"
+#include "canvas_image_effect.hpp"
 
 #include <bloom/media/image.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
@@ -82,7 +83,14 @@ gpuSceneCommandDescriptorOf(const std::vector<GpuSceneCommand>& commands,
                 if (!source.has_value()) {
                     return std::nullopt;
                 }
-                return GpuSceneCommandDescriptor{item.outputWindow, source->display,
+                return GpuSceneCommandDescriptor{item.outputWindow,
+                                                 [&]() {
+                                                     if constexpr (std::is_same_v<T,
+                                                                                   GpuSceneTranslationCommand>)
+                                                         return item.outputDisplayWindow.value_or(
+                                                             source->display);
+                                                     return source->display;
+                                                 }(),
                                                  source->pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuSceneBlendCommand>) {
                 const auto backdrop =
@@ -292,9 +300,84 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         result.output = result.local;
         return std::nullopt;
     }
-    if (cst == nullptr && file == nullptr && pointwise == nullptr) {
+    const auto* canvas = std::get_if<CanvasImageKernel>(&effect.kernel);
+    if (cst == nullptr && file == nullptr && pointwise == nullptr && canvas == nullptr) {
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                     "An image effect kernel is not supported");
+    }
+
+    if (canvas != nullptr) {
+        std::array<double, 4> sides{};
+        for (std::size_t i = 0; i < sides.size(); ++i) {
+            const auto sampled = resolveParameter(canvas->margins[i], plan, resolved);
+            if (!sampled)
+                return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                            "Canvas margin is not evaluable");
+            sides[i] = sampled->value;
+        }
+        const CanvasMargins margins{canvas->effect, sides};
+        if (margins.identity() || !outputWindowOf[inputValue])
+            return identity();
+        const auto sourceWindow = *outputWindowOf[inputValue];
+        const auto outputWindow = canvasOutputWindow(sourceWindow, margins, ctx.hScale, ctx.vScale);
+        if (!outputWindow)
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                        "Canvas margins leave an invalid data window");
+        GpuSceneCommandIndex inputCommand = commandForOperation[inputValue];
+        std::string inputKey = keyOf[inputValue];
+        if (inputCommand == kInvalidGpuSceneCommand) {
+            const auto& chain = vectors[inputValue];
+            if (!chain || chain->source >= plan.operations().size())
+                return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                            "Canvas input vector chain is not materializable");
+            if (const auto error = emitVectorLeafLayer(
+                    plan.operations()[chain->source], plan, resolved, chain->matrix, sourceWindow,
+                    ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale,
+                    chain->opacity, false, ctx.allowance, operationIndex, nullptr,
+                    ctx.coverageCache, cancellation, emit, charge, chargeCoverage,
+                    inputCommand, inputKey, result.consumedText, result.consumedShape))
+                return error;
+            result.consumedLeaf = chain->source;
+        }
+        const auto descriptor = gpuSceneCommandDescriptorOf(commands, inputCommand, 0);
+        if (!descriptor || descriptor->data != sourceWindow)
+            return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                        "Canvas input descriptor does not match its data window");
+        const auto displayWindow = canvasOutputWindow(descriptor->display, margins,
+                                                       ctx.hScale, ctx.vScale);
+        if (!displayWindow)
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                        "Canvas margins leave an invalid display window");
+        const double deltaX = static_cast<double>(sourceWindow.originX() - outputWindow->originX());
+        const double deltaY = static_cast<double>(sourceWindow.originY() - outputWindow->originY());
+        OperationKey commandKey;
+        commandKey.add(std::string{"gpu-canvas-translation-v1"});
+        commandKey.add(inputKey);
+        addWindowToKey(commandKey, sourceWindow);
+        addWindowToKey(commandKey, *outputWindow);
+        addWindowToKey(commandKey, *displayWindow);
+        addPixelAspectToKey(commandKey, descriptor->pixelAspect);
+        commandKey.add(deltaX);
+        commandKey.add(deltaY);
+        commandKey.add(std::string{kGpuTranslationOpacitySpirvSha256});
+        result.key = commandKey.digest();
+        if (const auto error = charge(outputWindow->extent().width(),
+                                      outputWindow->extent().height(), sizeof(render::Rgba32f)))
+            return error;
+        GpuSceneTranslationCommand command{.sourceOperation = operationIndex,
+                                           .input = inputCommand,
+                                           .sourceWindow = sourceWindow,
+                                           .outputWindow = *outputWindow,
+                                           .outputDisplayWindow = *displayWindow,
+                                           .translationX = deltaX,
+                                           .translationY = deltaY,
+                                           .opacity = 1.0F,
+                                           .semanticKey = result.key};
+        result.command = emit(std::move(command));
+        result.window = *outputWindow;
+        result.local = boundsForWindow(*outputWindow, ctx.hScale, ctx.vScale);
+        result.output = result.local;
+        return std::nullopt;
     }
 
     const std::string working{request.colorIntent.workingColorSpaceId};

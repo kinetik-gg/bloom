@@ -176,9 +176,9 @@ struct CompiledCompositionSource final {
                            const CompiledCompositionSource&) = default;
 };
 
-// Image effects preserve the input's data/display windows and content bounds. Kernels operate
-// on straight RGB, preserve alpha, and publish finite premultiplied RGBA32F. Identity and bypass
-// share the input storage exactly. This is the common lowering for subsequent image effects.
+// Colour image effects preserve input windows and bounds, operate on straight RGB, preserve alpha,
+// and publish finite premultiplied RGBA32F. Canvas kernels change both data and display windows
+// without modifying retained pixels. Identity and bypass share the input storage exactly.
 struct IdentityImageKernel final {
     friend bool operator==(const IdentityImageKernel&, const IdentityImageKernel&) = default;
 };
@@ -210,9 +210,15 @@ struct ImageCombineKernel final {
     render::ImageCoverageChannel channel = render::ImageCoverageChannel::Alpha;
     friend bool operator==(const ImageCombineKernel&, const ImageCombineKernel&) = default;
 };
+enum class CanvasImageEffect : std::uint8_t { Crop, Pad };
+struct CanvasImageKernel final {
+    CanvasImageEffect effect = CanvasImageEffect::Crop;
+    std::array<CompiledScalarParameter, 4> margins;
+    friend bool operator==(const CanvasImageKernel&, const CanvasImageKernel&) = default;
+};
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
-                 ImageCombineKernel>;
+                 ImageCombineKernel, CanvasImageKernel>;
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
     OperationIndex input;

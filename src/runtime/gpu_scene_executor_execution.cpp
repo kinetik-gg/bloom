@@ -291,7 +291,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
         }
         const render::GpuTranslationParameters parameters{images[step.input], *step.outputWindow,
                                                           step.translationX, step.translationY,
-                                                          step.translationOpacity};
+                                                          step.translationOpacity,
+                                                          step.outputDisplayWindow};
         const auto native = composite->beginTranslation(parameters, remaining);
         if (native.code != render::GpuCompositeDiagnosticCode::None) {
             return diagnosticFromComposite(native);

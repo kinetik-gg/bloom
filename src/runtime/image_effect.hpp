@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pointwise_image_effect.hpp"
+#include "canvas_image_effect.hpp"
 
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
@@ -18,6 +19,7 @@ struct PreparedImageEffect final {
     };
     std::optional<Combine> combine;
     std::optional<PointwiseAffine> pointwise;
+    std::optional<CanvasMargins> canvas;
     std::shared_ptr<const color::CpuColorSpaceProcessor> processor;
     std::shared_ptr<const color::CpuColorSpaceProcessor> afterProcessor;
     std::shared_ptr<const color::CpuFileTransformProcessor> fileProcessor;
@@ -27,6 +29,7 @@ struct PreparedImageEffect final {
     [[nodiscard]] bool identity() const noexcept {
         return !diagnostic && !cancelled ? (!combine || (combine->mode == ImageCombineMode::Mix &&
                                                          combine->factor == 0.0F)) &&
+                                          (!canvas || canvas->identity()) &&
                                                (!pointwise || pointwise->identity()) &&
                                                (!processor || processor->isIdentity()) &&
                                                (!afterProcessor || afterProcessor->isIdentity()) &&
@@ -43,7 +46,8 @@ class ImageEffectContext final {
                                               const EvaluationColorIntent& intent,
                                               const std::filesystem::path& base = {},
                                               const CancellationToken& cancellation = {},
-                                              std::optional<double> sampledAmount = {});
+                                              std::optional<double> sampledAmount = {},
+                                              std::optional<std::array<double, 4>> canvasMargins = {});
 
   private:
     std::mutex mutex_;
@@ -60,5 +64,6 @@ struct ImageEffectResult final {
 applyImageEffect(const PreparedImageEffect& effect, const render::Rgba32fImage& input,
                  const render::Rgba32fImage* secondary,
                  std::size_t pixelBudget, const CancellationToken& cancellation,
-                 OperationIndex operation, const EvaluationProgressCallback& progress);
+                 OperationIndex operation, const EvaluationProgressCallback& progress,
+                 double horizontalScale = 1.0, double verticalScale = 1.0);
 } // namespace bloom::runtime::detail

@@ -243,7 +243,18 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == "bloom.composition-source.time-offset" ||
            schemaKey == "bloom.composition-source.time-scale" ||
            schemaKey == "bloom.exposure.stops" || schemaKey == "bloom.offset.amount" ||
-           schemaKey == "bloom.multiply.factor" || schemaKey == "bloom.image-mix.factor";
+           schemaKey == "bloom.multiply.factor" || schemaKey == "bloom.image-mix.factor" ||
+           schemaKey == "bloom.crop.left" || schemaKey == "bloom.crop.top" ||
+           schemaKey == "bloom.crop.right" || schemaKey == "bloom.crop.bottom" ||
+           schemaKey == "bloom.pad.left" || schemaKey == "bloom.pad.top" ||
+           schemaKey == "bloom.pad.right" || schemaKey == "bloom.pad.bottom";
+}
+
+[[nodiscard]] constexpr bool isCanvasMarginSchemaKey(const std::string_view schemaKey) noexcept {
+    return schemaKey == "bloom.crop.left" || schemaKey == "bloom.crop.top" ||
+           schemaKey == "bloom.crop.right" || schemaKey == "bloom.crop.bottom" ||
+           schemaKey == "bloom.pad.left" || schemaKey == "bloom.pad.top" ||
+           schemaKey == "bloom.pad.right" || schemaKey == "bloom.pad.bottom";
 }
 
 // The Color4d-valued animatable schemas (task S5): a solid's colour and a text layer's colour.
@@ -288,6 +299,8 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 // is checked separately by each caller because the diagnostic it produces differs.
 [[nodiscard]] constexpr bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
                                                         const double value) noexcept {
+    if (isCanvasMarginSchemaKey(schemaKey))
+        return value >= 0.0 && value <= 16777216.0;
     if (schemaKey == "bloom.shape.stroke-width")
         return value >= 0.0;
     if (schemaKey == kSolidWidthParameterSchemaKey || schemaKey == kSolidHeightParameterSchemaKey)

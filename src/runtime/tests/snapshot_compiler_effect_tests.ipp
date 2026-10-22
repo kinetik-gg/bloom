@@ -164,3 +164,96 @@ void testExposureOffsetLowering(Expectations& expectations) {
                             "pointwise lowering retains mode and editable parameter identity");
     }
 }
+
+void testCanvasLowering(Expectations& expectations) {
+    using namespace document;
+    for (const auto* type : {"bloom.crop", "bloom.pad"}) {
+        auto project = makeProject(singleLayerOptions());
+        auto* composition = project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        const auto effectId = NodeId::fromRaw(940);
+        const auto* definition = builtInNodeDefinitions().find(type, 1);
+        require(definition != nullptr && definition->parameters.size() == 4,
+                "canvas definition has four margins");
+        std::vector<ParameterBinding> bindings;
+        std::uint64_t next = 940;
+        for (const auto& parameter : definition->parameters) {
+            const auto id = ParameterId::fromRaw(next++);
+            require(composition->parameters().insert(
+                        {id, parameter.schemaKey, ConstantValueSource{1.0}}),
+                    "canvas margin is valid");
+            bindings.push_back({parameter.role, id});
+        }
+        require(graph.addNode({effectId, definition->key.typeId, std::move(bindings), 1}),
+                "canvas node is accepted");
+        require(graph.eraseEdge(kFirstSourceEdge), "source edge is removed");
+        require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
+                               NodeInputRef{effectId, "input"}}),
+                "source feeds canvas effect");
+        require(graph.addEdge({EdgeId::fromRaw(940), {effectId, "image"},
+                               NodeInputRef{kFirstLayerNode,
+                                            std::string(kLayerOutputContentInputPort)}}),
+                "canvas effect feeds Layer");
+        expectations.expect(project.validate().ok(), "canvas graph is valid document truth");
+        runtime::NodeDefinitionRegistry registry;
+        require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+        registry.freeze();
+        const auto result = compile(std::move(project), registry);
+        expectations.expect(result.plan != nullptr, "canvas graph compiles");
+        if (!result.plan)
+            continue;
+        const auto effect = std::ranges::find_if(result.plan->operations(), [](const auto& op) {
+            return std::holds_alternative<runtime::CompiledImageEffect>(op);
+        });
+        expectations.expect(effect != result.plan->operations().end(),
+                            "canvas node lowers through the image-effect operation");
+        if (effect == result.plan->operations().end())
+            continue;
+        const auto* kernel = std::get_if<runtime::CanvasImageKernel>(
+            &std::get<runtime::CompiledImageEffect>(*effect).kernel);
+        expectations.expect(kernel &&
+                                kernel->effect ==
+                                    (std::string_view(type) == "bloom.crop"
+                                         ? runtime::CanvasImageEffect::Crop
+                                         : runtime::CanvasImageEffect::Pad) &&
+                                kernel->margins[0].id == ParameterId::fromRaw(940) &&
+                                kernel->margins[3].id == ParameterId::fromRaw(943),
+                            "canvas lowering retains mode and editable margin identities");
+        const auto effectIndex = static_cast<std::size_t>(
+            std::distance(result.plan->operations().begin(), effect));
+        expectations.expect(!result.plan->operationTimeDependent(
+                                runtime::OperationIndex::fromRaw(effectIndex)),
+                            "constant canvas margins remain time invariant");
+        auto animatedDefinition = result.plan->copyDefinition();
+        auto& animatedKernel = std::get<runtime::CanvasImageKernel>(
+            std::get<runtime::CompiledImageEffect>(
+                animatedDefinition.operations[effectIndex]).kernel);
+        animatedKernel.margins[0].source = runtime::ScalarCurveIndex::fromRaw(0);
+        animatedDefinition.scalarCurves.push_back(
+            runtime::CompiledScalarCurve{AnimationCurveId::fromRaw(940),
+                                         {{KeyframeId::fromRaw(940),
+                                           core::RationalTime::fromInteger(0), 0.0},
+                                          {KeyframeId::fromRaw(941),
+                                           core::RationalTime::fromInteger(1), 1.0}}});
+        const auto animated = std::make_shared<const runtime::CompiledCompositionPlan>(
+            std::move(animatedDefinition));
+        expectations.expect(animated->operationTimeDependent(
+                                runtime::OperationIndex::fromRaw(effectIndex)) &&
+                                animated->operationTimeDependent(animated->output()),
+                            "animated canvas margin invalidates itself and downstream output");
+        auto drivenDefinition = result.plan->copyDefinition();
+        auto& drivenKernel = std::get<runtime::CanvasImageKernel>(
+            std::get<runtime::CompiledImageEffect>(drivenDefinition.operations[effectIndex]).kernel);
+        drivenKernel.margins[3].source = runtime::ValueOutputIndex::fromRaw(0);
+        drivenDefinition.valueOperations = {
+            {NodeId::fromRaw(950), runtime::ValueOutputIndex::fromRaw(0), 2,
+             runtime::CompiledValueTime{}}};
+        drivenDefinition.valueOutputCount = 2;
+        const auto driven = std::make_shared<const runtime::CompiledCompositionPlan>(
+            std::move(drivenDefinition));
+        expectations.expect(driven->operationTimeDependent(
+                                runtime::OperationIndex::fromRaw(effectIndex)) &&
+                                driven->operationTimeDependent(driven->output()),
+                            "driven canvas margin invalidates itself and downstream output");
+    }
+}

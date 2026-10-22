@@ -104,6 +104,7 @@ BLOOM_GPU_REQUIRED_EFFECT(CstKernel, "colour-space transform kernel");
 BLOOM_GPU_REQUIRED_EFFECT(FileTransformKernel, "file transform kernel");
 BLOOM_GPU_REQUIRED_EFFECT(PointwiseImageKernel, "scene-linear pointwise image effect kernel");
 BLOOM_GPU_REQUIRED_EFFECT(ImageCombineKernel, "flat RGBA two-image combine kernel");
+BLOOM_GPU_REQUIRED_EFFECT(CanvasImageKernel, "crop or pad canvas image effect kernel");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT

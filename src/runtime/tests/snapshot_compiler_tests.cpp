@@ -1914,6 +1914,7 @@ int main() {
         testImageEffectLowering(expectations);
         testMultiplyInvertLowering(expectations);
         testExposureOffsetLowering(expectations);
+        testCanvasLowering(expectations);
         testLiveValueOverrideOwners(expectations);
         testOverrideVectorKindsAndLimits(expectations);
         testLayerFlagsAndRangeLowering(expectations);

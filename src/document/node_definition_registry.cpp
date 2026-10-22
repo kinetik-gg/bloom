@@ -568,6 +568,23 @@ template <typename Definition>
             NodeCategory::Compositing};
 }
 
+[[nodiscard]] NodeDefinition canvasImageDefinition(const char* typeId) {
+    NodeDefinition definition{{typeId, 1},
+                              NodeLoweringKind::ImageEffect,
+                              {{"input", SocketValueKind::Image}},
+                              {{"image", SocketValueKind::Image}},
+                              {},
+                              std::nullopt,
+                              NodeCardinality::Many,
+                              NodeCategory::Compositing};
+    for (const char* side : {"left", "top", "right", "bottom"}) {
+        definition.parameters.push_back(
+            {side, std::string(typeId) + "." + side, ParameterValueKind::Float64, true, true, 0.0});
+        definition.inputs.push_back({side, SocketValueKind::Scalar, false});
+    }
+    return definition;
+}
+
 [[nodiscard]] NodeDefinition imageDefinition() {
     using namespace bloom::document;
     return {
@@ -778,6 +795,8 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
                                             pointwiseImageDefinition("bloom.invert", nullptr, 0.0),
                                             imageCombineDefinition(true),
                                             imageCombineDefinition(false),
+                                            canvasImageDefinition("bloom.crop"),
+                                            canvasImageDefinition("bloom.pad"),
                                             videoDefinition(),
                                             audioDefinition(),
                                             compositionSourceDefinition()};

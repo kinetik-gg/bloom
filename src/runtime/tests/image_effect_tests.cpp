@@ -125,6 +125,92 @@ void testExposureAndOffset() {
     check(runtime::PointwiseImageEffect::Offset, -0.25, {-0.1875F, -0.035F, 0.875F});
 }
 
+void testCanvasEffects() {
+    const auto window = [](const std::int64_t x, const std::int64_t y,
+                           const std::uint64_t width, const std::uint64_t height) {
+        const auto created = render::ImageWindow::create(x, y, width, height);
+        return *created.value();
+    };
+    const auto data = render::ImageWindow::create(-3, 2, 4, 3);
+    const auto display = render::ImageWindow::create(-5, 0, 10, 8);
+    expect(data && display, "canvas fixture windows are valid");
+    if (!data || !display)
+        return;
+    const auto aspect = core::PixelAspectRatio::create(4, 3);
+    const auto descriptor = render::Rgba32fImageDescriptor::create(*data.value(), *display.value(),
+                                                                    *aspect);
+    expect(static_cast<bool>(descriptor), "canvas fixture descriptor is valid");
+    if (!descriptor)
+        return;
+    auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), 1U << 20U);
+    expect(static_cast<bool>(builder), "canvas fixture storage is available");
+    if (!builder)
+        return;
+    const auto pixel = render::Rgba32f::fromPremultiplied(-0.25F, 0.75F, 2.5F, 0.5F);
+    expect(static_cast<bool>(pixel), "signed HDR premultiplied pixel is valid");
+    if (!pixel)
+        return;
+    for (auto y = data.value()->originY(); y < data.value()->maxYExclusive(); ++y) {
+        auto row = builder.value()->row(y);
+        std::fill(row.value()->begin(), row.value()->end(), *pixel.value());
+    }
+    auto source = std::move(*builder.value()).freeze();
+    expect(static_cast<bool>(source), "canvas fixture freezes");
+    if (!source)
+        return;
+    const auto run = [&](const runtime::CanvasImageEffect kind,
+                         const std::array<double, 4> sides, const double scaleX = 1.0,
+                         const double scaleY = 1.0) {
+        runtime::detail::PreparedImageEffect effect;
+        effect.canvas = runtime::detail::CanvasMargins{kind, sides};
+        return runtime::detail::applyImageEffect(effect, *source.value(), nullptr, 1U << 20U, {},
+                                                 runtime::OperationIndex::fromRaw(0), {},
+                                                 scaleX, scaleY);
+    };
+    const auto cropped = run(runtime::CanvasImageEffect::Crop, {1, 1, 1, 0});
+    expect(cropped.image && cropped.image->descriptor()->dataWindow() ==
+                                window(-2, 3, 2, 2),
+           "crop moves a negative-origin data window and removes exact edge pixels");
+    if (cropped.image) {
+        expect(cropped.image->descriptor()->displayWindow() ==
+                   window(-4, 1, 8, 7) &&
+                   cropped.image->descriptor()->pixelAspect() == *aspect,
+               "crop narrows display window and preserves pixel aspect");
+        const auto sample = cropped.image->read(-2, 3);
+        expect(sample && *sample.value() == *pixel.value(),
+               "crop preserves signed HDR and partial alpha exactly");
+    }
+    const auto padded = run(runtime::CanvasImageEffect::Pad, {2, 1, 0, 2});
+    expect(padded.image && padded.image->descriptor()->dataWindow() ==
+                               window(-5, 1, 6, 6),
+           "pad grows the data window without shifting source pixels");
+    if (padded.image) {
+        const auto transparent = padded.image->read(-5, 1);
+        const auto retained = padded.image->read(-3, 2);
+        expect(transparent && *transparent.value() == render::Rgba32f::transparent() &&
+                   retained && *retained.value() == *pixel.value(),
+               "pad writes transparent border and preserves interior pixels");
+        expect(padded.image->descriptor()->displayWindow() ==
+                   window(-7, -1, 12, 11) &&
+                   padded.image->descriptor()->pixelAspect() == *aspect,
+               "pad expands display window and preserves pixel aspect");
+    }
+    const auto proxy = run(runtime::CanvasImageEffect::Crop, {2, 2, 0, 0}, 0.5, 0.5);
+    expect(proxy.image && proxy.image->descriptor()->dataWindow() ==
+                              window(-2, 3, 3, 2),
+           "proxy crop rounds authored margins once on each axis");
+    const auto empty = run(runtime::CanvasImageEffect::Crop, {4, 0, 0, 0});
+    expect(!empty.image && empty.diagnostic,
+           "crop that removes its entire data window refuses with a diagnostic");
+    runtime::detail::PreparedImageEffect limited;
+    limited.canvas = runtime::detail::CanvasMargins{runtime::CanvasImageEffect::Pad, {2, 1, 0, 2}};
+    const auto refused = runtime::detail::applyImageEffect(
+        limited, *source.value(), nullptr, sizeof(render::Rgba32f), {},
+        runtime::OperationIndex::fromRaw(0), {});
+    expect(!refused.image && refused.diagnostic,
+           "pad obeys the output pixel storage budget");
+}
+
 void testCst() {
     runtime::CpuCompositionEvaluator evaluator;
     const auto source = planWith({});
@@ -471,6 +557,7 @@ int main() {
     try {
         testCst();
         testExposureAndOffset();
+        testCanvasEffects();
         testLookBypass();
         testFileTransform();
         testMultiplyAndInvert();

@@ -66,7 +66,7 @@ level's dependencies.
 | --- | --- | --- |
 | `F1` | Transform 2D | Position, anchor, scale, rotation, opacity, defined sampling, and transparent borders |
 | `F1` | Resize, Fit | Explicit output extent, pixel aspect, filter, and fit/fill policy |
-| `C1` | Crop, Pad, Reformat | Preserve and deliberately change data/display windows and canvas semantics |
+| `C1` | Crop, Pad, Reformat | Crop and Pad built: four animated pixel margins change data/display windows with exact pixel mapping; Reformat remains planned |
 | `C1` | Flip, Mirror, Rotate 90 | Exact discrete transforms where possible |
 | `C1` | Tile, Repeat | Defined edge and repeat modes |
 | `C1` | Corner Pin, Perspective Transform | Checked projective mapping with explicit invalid-transform diagnostics |

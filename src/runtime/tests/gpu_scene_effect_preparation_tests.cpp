@@ -104,6 +104,53 @@ findOcioCommand(const bloom::runtime::PreparedGpuScene& scene) {
     return nullptr;
 }
 
+void testCanvasPreparation(Expectations& expectations) {
+    const auto window = [](const std::int64_t x, const std::int64_t y,
+                           const std::uint64_t width, const std::uint64_t height) {
+        const auto created = bloom::render::ImageWindow::create(x, y, width, height);
+        return *created.value();
+    };
+    const auto kernel = [](const bloom::runtime::CanvasImageEffect effect,
+                           const std::array<double, 4> sides) {
+        std::array<bloom::runtime::CompiledScalarParameter, 4> parameters{
+            bloom::runtime::CompiledScalarParameter{ParameterId::fromRaw(8001), sides[0]},
+            bloom::runtime::CompiledScalarParameter{ParameterId::fromRaw(8002), sides[1]},
+            bloom::runtime::CompiledScalarParameter{ParameterId::fromRaw(8003), sides[2]},
+            bloom::runtime::CompiledScalarParameter{ParameterId::fromRaw(8004), sides[3]}};
+        return bloom::runtime::CanvasImageKernel{effect, parameters};
+    };
+    for (const auto kind : {bloom::runtime::CanvasImageEffect::Crop,
+                            bloom::runtime::CanvasImageEffect::Pad}) {
+        const auto plan = effectPlan({solidLeaf(800)},
+                                     kernel(kind, kind == bloom::runtime::CanvasImageEffect::Crop
+                                                      ? std::array<double, 4>{1, 0, 1, 0}
+                                                      : std::array<double, 4>{2, 1, 0, 0}),
+                                     8000);
+        const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+        expectations.expect(prepared.hasValue(), "canvas effect prepares through the GPU scene");
+        if (!prepared)
+            continue;
+        const auto index = prepared.scene->commandForOperation()[1];
+        const auto* command = std::get_if<bloom::runtime::GpuSceneTranslationCommand>(
+            &prepared.scene->commands()[index]);
+        expectations.expect(command != nullptr,
+                            "canvas effect emits a real resident GPU translation pass");
+        if (!command)
+            continue;
+        const auto expected = kind == bloom::runtime::CanvasImageEffect::Crop
+                                  ? window(1, 0, 6, 6)
+                                  : window(-2, -1, 10, 7);
+        expectations.expect(command->outputWindow == expected &&
+                                command->outputDisplayWindow == expected,
+                            "GPU canvas data and display windows match the authored margins");
+        expectations.expect(command->translationX ==
+                                (kind == bloom::runtime::CanvasImageEffect::Crop ? -1.0 : 2.0) &&
+                                command->translationY ==
+                                    (kind == bloom::runtime::CanvasImageEffect::Crop ? 0.0 : 1.0),
+                            "GPU canvas maps unchanged source coordinates by exact integer axes");
+    }
+}
+
 void testIdentityAndRefusals(Expectations& expectations) {
     // An identity CST aliases the input command exactly.
     const auto identity =
@@ -310,6 +357,7 @@ int main() {
     try {
         Expectations expectations;
         testIdentityAndRefusals(expectations);
+        testCanvasPreparation(expectations);
 
         const auto config = bloom::runtime::detail::resolveInputColorConfig(
             bloom::runtime::EvaluationColorIntent::LinearRec709Scene);

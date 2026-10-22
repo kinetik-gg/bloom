@@ -623,7 +623,9 @@ Animation semantics remains **2** and image primitive semantics remains **7**. E
 fixtures are unchanged; version-bearing identity digests are independently re-derived.
 
 `CompiledImageEffect` contains its source node identity, an earlier input `OperationIndex`, a
-closed kernel variant, and bypass state. Its bounds and time dependence follow its input. The
+closed kernel variant, and bypass state. Colour-effect bounds follow their input; canvas effects
+derive new windows and bounds from their sampled margins. Time dependence follows the input and
+any animated or driven margin. The
 initial identity kernel shares immutable input storage, including vector coverage when bypassed.
 Colour kernels use the straight-RGB alpha rule in
 [`layer-graph-model.md`](layer-graph-model.md#image-effects). Future effects add kernels to this
@@ -646,6 +648,20 @@ is an exact identity. The sampled value and binary32 affine coefficients enter t
 identity. The CPU reference uses cancellable row chunks; GPU preparation extracts an OCIO
 `MatrixTransform` from the same coefficients and emits a resident `ProcessEffect` command through
 the existing bounded scene executor. A preparation failure takes the explicit CPU fallback.
+
+`CanvasImageKernel` adds Crop and Pad with nonnegative, animatable left/top/right/bottom margins
+in full-resolution pixels. Each margin is rounded independently to the nearest output-grid pixel
+for proxy evaluation. Crop removes those rows and columns from both data and display windows;
+Pad expands both windows and fills the new data border with transparent black. Pixel aspect is
+unchanged. A Crop that would empty either window reports a diagnostic and leaves the input intact
+on the CPU path; invalid GPU preparation reports Unsupported and selects the CPU reference path.
+No resampling or color conversion occurs: unchanged premultiplied pixels, including negative/HDR
+RGB and partial alpha, are copied exactly. The CPU copies in cancellable rows and 4096-pixel
+chunks; the production GPU scene emits a resident TranslationOpacity pass with integer sampling
+coordinates and an explicit output display window. Both preview and final routes use the same
+scene executor. Cache identity includes mode, sampled margins, input content, data/display windows,
+pixel aspect, resolution, and the GPU shader artifact. The output uses ordinary pixel-budget
+admission and retired resident-image ownership.
 
 The plan also carries `bypass` and `look`; `EvaluationRequest::bypassLookNodes` skips only marked
 nodes. Bypass shares upstream image storage and bounds. Active colour transforms materialize the

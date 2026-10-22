@@ -230,6 +230,11 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* value = std::get_if<double>(&constant.value);
         return value && std::isfinite(*value);
     }
+    if (isCanvasMarginSchemaKey(schemaKey)) {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value != nullptr && std::isfinite(*value) &&
+               isScalarWithinSchemaDomain(schemaKey, *value);
+    }
     if (schemaKey == "bloom.exposure.stops" || schemaKey == "bloom.offset.amount" ||
         schemaKey == "bloom.multiply.factor") {
         const auto* value = std::get_if<double>(&constant.value);

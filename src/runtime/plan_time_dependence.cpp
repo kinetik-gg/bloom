@@ -61,9 +61,18 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                 else if constexpr (std::is_same_v<Step, CompiledImageSource>)
                     return step.asset && step.asset->kind == document::AssetKind::Sequence;
                 else if constexpr (std::is_same_v<Step, CompiledImageEffect>) {
-                    const auto* pointwise = std::get_if<PointwiseImageKernel>(&step.kernel);
-                    return input(step.input) || (!step.bypass && pointwise && pointwise->amount &&
-                                                 parameter(*pointwise->amount));
+                    if (input(step.input) ||
+                        (step.secondaryInput && input(*step.secondaryInput)))
+                        return true;
+                    if (step.bypass)
+                        return false;
+                    if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&step.kernel))
+                        return pointwise->amount && parameter(*pointwise->amount);
+                    if (const auto* canvas = std::get_if<CanvasImageKernel>(&step.kernel))
+                        return std::ranges::any_of(canvas->margins, parameter);
+                    if (const auto* combine = std::get_if<ImageCombineKernel>(&step.kernel))
+                        return combine->factor && parameter(*combine->factor);
+                    return false;
                 } else if constexpr (std::is_same_v<Step, CompiledText>)
                     return parameter(step.color) || parameter(step.size) ||
                            driven(step.drivenContent) ||
@@ -81,12 +90,6 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                 else if constexpr (std::is_same_v<Step, CompiledMerge>)
                     return std::ranges::any_of(
                         step.entries, [&](const auto& entry) { return input(entry.input); });
-                else if constexpr (std::is_same_v<Step, CompiledImageEffect>) {
-                    const auto* combine = std::get_if<ImageCombineKernel>(&step.kernel);
-                    return input(step.input) ||
-                           (step.secondaryInput && input(*step.secondaryInput)) ||
-                           (combine && combine->factor && parameter(*combine->factor));
-                }
                 else
                     return input(step.input);
             },

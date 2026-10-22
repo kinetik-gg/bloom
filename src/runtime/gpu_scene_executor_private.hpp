@@ -98,6 +98,7 @@ struct GpuSceneExecutorStep final {
     std::optional<render::Rgba32fImageDescriptor> uploadDescriptor;
     // Translation output data window plus GPU-local translation and opacity.
     std::optional<render::ImageWindow> outputWindow;
+    std::optional<render::ImageWindow> outputDisplayWindow;
     double translationX = 0.0;
     double translationY = 0.0;
     float translationOpacity = 1.0F;
@@ -280,9 +281,14 @@ descriptorMatches(const GpuSceneCommand& command, const render::GpuImage& image,
             return false;
         }
         if (translationInput != nullptr) {
-            return image.displayWindow() == translationInput->displayWindow() &&
+            return image.displayWindow() ==
+                       (translation->outputDisplayWindow.has_value()
+                            ? translation->outputDisplayWindow
+                            : translationInput->displayWindow()) &&
                    image.pixelAspect() == translationInput->pixelAspect();
         }
+        if (translation->outputDisplayWindow.has_value())
+            return image.displayWindow() == translation->outputDisplayWindow;
         return true;
     }
     if (const auto* upload = std::get_if<GpuSceneUploadCommand>(&command)) {
@@ -359,7 +365,9 @@ expectedDescriptorOf(const PreparedGpuScene& scene, const GpuSceneCommandIndex i
                 if (!source.has_value()) {
                     return std::nullopt;
                 }
-                return SceneDescriptorInfo{item.outputWindow, source->display, source->pixelAspect};
+                return SceneDescriptorInfo{item.outputWindow,
+                                           item.outputDisplayWindow.value_or(source->display),
+                                           source->pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuSceneAffineCommand>) {
                 const auto source = expectedDescriptorOf(scene, item.input, depth + 1);
                 if (!source.has_value()) {

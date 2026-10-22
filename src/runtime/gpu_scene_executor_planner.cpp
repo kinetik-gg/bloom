@@ -224,6 +224,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.cacheKey = translation->semanticKey;
         step.cacheOnComplete = true;
         step.outputWindow = translation->outputWindow;
+        step.outputDisplayWindow = translation->outputDisplayWindow;
         step.translationX = translation->translationX;
         step.translationY = translation->translationY;
         step.translationOpacity = translation->opacity;

@@ -100,6 +100,10 @@ std::span<const QString> nodeCategoryOrder() {
 }
 
 QString displayTypeName(const std::string_view typeId) {
+    if (typeId == "bloom.crop")
+        return QCoreApplication::translate("node_editor", "Crop");
+    if (typeId == "bloom.pad")
+        return QCoreApplication::translate("node_editor", "Pad");
     if (typeId == "bloom.exposure")
         return QCoreApplication::translate("node_editor", "Exposure");
     if (typeId == "bloom.offset")

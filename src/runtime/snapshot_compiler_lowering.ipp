@@ -690,6 +690,24 @@ lowerImageEffect(const document::NodeRecord& node,
             return runtime::CompiledImageEffect{
                 node.id, *input, runtime::PointwiseImageKernel{*pointwise, *amount}};
     }
+    if (node.typeId == "bloom.crop" || node.typeId == "bloom.pad") {
+        std::array<runtime::CompiledScalarParameter, 4> margins;
+        for (std::size_t i = 0; i < margins.size(); ++i) {
+            const auto parameter = compiledScalarParameter(
+                findParameterBinding(node, std::array{"left", "top", "right", "bottom"}[i]));
+            if (!parameter) {
+                addTopologyFailure(node.id, "Canvas margin could not be lowered.");
+                return std::nullopt;
+            }
+            margins[i] = *parameter;
+        }
+        return runtime::CompiledImageEffect{
+            node.id, *input,
+            runtime::CanvasImageKernel{node.typeId == "bloom.crop"
+                                           ? runtime::CanvasImageEffect::Crop
+                                           : runtime::CanvasImageEffect::Pad,
+                                       margins}};
+    }
     if (node.typeId == "bloom.ocio-colour-space-transform") {
         const auto* from = parameterConstant<std::string>(findParameterBinding(node, "from"));
         const auto* to = parameterConstant<std::string>(findParameterBinding(node, "to"));

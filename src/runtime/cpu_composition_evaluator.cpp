@@ -374,6 +374,13 @@ enum class ScalarDomain : std::uint8_t {
                                                 hasValidScalarCurveReference(*pointwise->amount,
                                                                              plan, index, failure));
                 }
+                if (const auto* canvas = std::get_if<CanvasImageKernel>(&effect.kernel)) {
+                    validKernel = static_cast<std::uint8_t>(canvas->effect) <=
+                                  static_cast<std::uint8_t>(CanvasImageEffect::Pad);
+                    for (const auto& margin : canvas->margins)
+                        validKernel = validKernel &&
+                                      hasValidScalarCurveReference(margin, plan, index, failure);
+                }
                 if (const auto* file = std::get_if<FileTransformKernel>(&effect.kernel))
                     validKernel = file->interpolation >= 0 && file->interpolation <= 2 &&
                                   file->direction >= 0 && file->direction <= 1 &&
@@ -1674,6 +1681,22 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             std::optional<detail::PreparedImageEffect> preparedEffect;
             if (const auto* effect = std::get_if<CompiledImageEffect>(&plan->operations()[index])) {
                 std::optional<double> pointwiseAmount;
+                std::optional<std::array<double, 4>> canvasMargins;
+                if (const auto* canvas = std::get_if<CanvasImageKernel>(&effect->kernel)) {
+                    std::array<double, 4> values{};
+                    bool evaluable = true;
+                    for (std::size_t i = 0; i < values.size(); ++i) {
+                        const auto sampled = detail::resolveParameter(canvas->margins[i], *plan,
+                                                                       resolved);
+                        if (!sampled) {
+                            evaluable = false;
+                            break;
+                        }
+                        values[i] = sampled->value;
+                    }
+                    if (evaluable)
+                        canvasMargins = values;
+                }
                 if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect->kernel);
                     pointwise && pointwise->amount) {
                     const auto sampled =
@@ -1692,14 +1715,15 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     request.bypassLookNodes && effect->look
                         ? detail::PreparedImageEffect{}
                         : imageEffectContext()->prepare(*effect, request.colorIntent, mediaBase,
-                                                        cancellation, pointwiseAmount);
+                                                        cancellation, pointwiseAmount, canvasMargins);
                 if (preparedEffect->cancelled)
                     return EvaluationResult::cancelled();
                 if (preparedEffect->diagnostic) {
                     auto warning = *preparedEffect->diagnostic;
                     warning.subject = operationSubject;
                     if (std::holds_alternative<PointwiseImageKernel>(effect->kernel) ||
-                        std::holds_alternative<ImageCombineKernel>(effect->kernel)) {
+                        std::holds_alternative<ImageCombineKernel>(effect->kernel) ||
+                        std::holds_alternative<CanvasImageKernel>(effect->kernel)) {
                         return EvaluationResult::failed(
                             diagnostic(warning.code, "Image effect cannot be evaluated",
                                        warning.detail, operationSubject));
@@ -1895,6 +1919,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 key.add(combine->channel);
                                 if (combine->factor)
                                     parameter(*combine->factor);
+                            }
+                            if (const auto* canvas = std::get_if<CanvasImageKernel>(&step.kernel)) {
+                                key.add(canvas->effect);
+                                for (const auto& margin : canvas->margins)
+                                    parameter(margin);
                             }
                             if (const auto* file = std::get_if<FileTransformKernel>(&step.kernel)) {
                                 key.add(file->lutAssetId);
@@ -2206,8 +2235,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     effect.secondaryInput && slots[effect.secondaryInput->value()]
                                         ? slots[effect.secondaryInput->value()].get()
                                         : nullptr,
-                                    remainingPixelBudget(),
-                                    cancellation, operationIndex, progress);
+                                    remainingPixelBudget(), cancellation, operationIndex, progress,
+                                    resolved.horizontalScale, resolved.verticalScale);
                                 if (result.cancelled) {
                                     operationCancelled = true;
                                     return;
@@ -2227,6 +2256,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     contentHashes[index] += ":effect-failed";
                                 } else if (result.image) {
                                     slots[index] = std::move(result.image);
+                                    bounds[index].local = detail::boundsForWindow(
+                                        slots[index]->descriptor()->dataWindow(),
+                                        resolved.horizontalScale, resolved.verticalScale);
+                                    bounds[index].output = bounds[index].local;
                                 }
                             }
                             reportProgress(progress, {.stage = EvaluationProgressStage::Operation,

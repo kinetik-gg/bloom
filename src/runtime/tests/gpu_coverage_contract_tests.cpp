@@ -358,6 +358,20 @@ displayProofRunner(const bool customView) {
         "src/runtime image combine production scene preparation", [] {
             return runBuilder(imageCombinePlan(bloom::runtime::ImageCombineMode::Mix, 103200));
         });
+    const auto canvas = [](const bloom::runtime::CanvasImageEffect kind,
+                           const std::uint64_t base) {
+        std::array<CompiledScalarParameter, 4> margins{
+            CompiledScalarParameter{ParameterId::fromRaw(base + 1), 1.0},
+            CompiledScalarParameter{ParameterId::fromRaw(base + 2), 0.0},
+            CompiledScalarParameter{ParameterId::fromRaw(base + 3), 1.0},
+            CompiledScalarParameter{ParameterId::fromRaw(base + 4), 0.0}};
+        return bloom::runtime::CanvasImageKernel{kind, margins};
+    };
+    add("effect.CanvasImageKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime canvas image effect tests", [canvas] {
+            return runBuilder(effectPlan(canvas(bloom::runtime::CanvasImageEffect::Crop, 104100),
+                                         104100));
+        });
 
     // Every one of the eight blend modes is emitted by the real production builder now: Normal
     // stays the retained SourceOver merge, every other mode an explicit BlendV1 fold.
@@ -525,6 +539,16 @@ displayProofRunner(const bool customView) {
         "src/runtime image combine production scene preparation", [] {
             return runBuilder(imageCombinePlan(bloom::runtime::ImageCombineMode::SetAlpha,
                                                110400));
+        });
+    add("node.bloom.crop", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime canvas image effect tests", [canvas] {
+            return runBuilder(effectPlan(canvas(bloom::runtime::CanvasImageEffect::Crop, 110500),
+                                         110500));
+        });
+    add("node.bloom.pad", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime canvas image effect tests", [canvas] {
+            return runBuilder(effectPlan(canvas(bloom::runtime::CanvasImageEffect::Pad, 110600),
+                                         110600));
         });
     return list;
 }
