@@ -113,6 +113,9 @@ PropertiesRowControl propertiesRowControl(std::string_view schemaKey) {
 }
 
 QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view schemaKey) {
+    if (schemaKey == document::kGradientRepeatParameterSchemaKey)
+        return {{QObject::tr("Clamp"), 0}, {QObject::tr("Repeat"), 1},
+                {QObject::tr("Mirror"), 2}};
     if (schemaKey == "bloom.blur.edge")
         return {{QObject::tr("Transparent"), 0}, {QObject::tr("Clamp"), 1}};
     QList<std::pair<QString, std::int64_t>> items;
