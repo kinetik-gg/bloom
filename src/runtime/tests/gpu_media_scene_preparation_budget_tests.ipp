@@ -44,9 +44,11 @@ sharedSourcePlan(const std::vector<document::AssetRecord>& assets, const std::ui
     const auto outputIndex = OperationIndex::fromRaw(operations.size());
     operations.emplace_back(
         CompiledCompositionOutput{document::NodeId::fromRaw(idBase + 1001), mergeIndex});
-    return publish(CompiledCompositionPlanDefinition{document::Revision::fromRaw(7), kProjectId,
-                                                     kCompositionId, format(8, 8),
-                                                     std::move(operations), outputIndex});
+    CompiledCompositionPlanDefinition definition{
+        document::Revision::fromRaw(7), kProjectId, kCompositionId, format(8, 8),
+        std::move(operations),          outputIndex};
+    definition.duration = RationalTime::fromInteger(100);
+    return publish(std::move(definition));
 }
 
 void testSharedSourceBackingCharge(Expectations& expectations,

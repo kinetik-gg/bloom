@@ -103,8 +103,8 @@ void testProxiedStill(Expectations& expectations, bloom::render::GpuDevice& devi
                         "proxy: the resample consumes the full-resolution upload at fractional "
                         "scales");
 
-    // A changed proxy is a different resample/output but must NOT re-decode: the raw upload
-    // identity is independent of the proxy scales and display descriptor.
+    // A changed proxy is a different resample/output but must NOT re-decode: the raw pixel
+    // backing is shared while each resident upload command carries its own display descriptor.
     {
         const auto otherExtent = bloom::render::ImageExtent::create(3, 2);
         if (otherExtent) {
@@ -116,7 +116,8 @@ void testProxiedStill(Expectations& expectations, bloom::render::GpuDevice& devi
                 otherPrepared ? firstResample(*otherPrepared.scene) : nullptr;
             expectations.expect(
                 otherPrepared && otherUpload != nullptr && otherResample != nullptr &&
-                    otherUpload->semanticKey == upload->semanticKey &&
+                    otherUpload->image == upload->image &&
+                    otherUpload->semanticKey != upload->semanticKey &&
                     otherPrepared.scene->mediaStatistics().uploadCacheHits == 1 &&
                     otherPrepared.scene->mediaStatistics().uploadCacheMisses == 0 &&
                     otherPrepared.scene->mediaStatistics().imageConversions == 0 &&

@@ -574,10 +574,10 @@ void testRejectedRetirementWithLiveEncoder(Fixture& f, const std::filesystem::pa
         f.scheduler, f.compiler, f.publications, f.artifacts, f.ledger, std::move(request),
         *retirement);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-    // One approved frame opens the encoder and retains its queue reservation. Waiting for eight
-    // CPU-fallback analyses added unrelated rendering latency to this shutdown ownership test.
-    while (!(runner->encodedFrames() >= 1 &&
-             runner->stage() == host::SequenceExportStageV1::AwaitingApproval) &&
+    // Approval applies to the full range, so the first encoded frame advances directly to the
+    // next analysis. Stop there while the encoder and its queue reservation are still live.
+    while (!(runner->encodedFrames() == 1 &&
+             runner->stage() == host::SequenceExportStageV1::Analyzing) &&
            std::chrono::steady_clock::now() < deadline) {
         runner->poll();
         if (runner->stage() == host::SequenceExportStageV1::AwaitingApproval &&
@@ -591,8 +591,8 @@ void testRejectedRetirementWithLiveEncoder(Fixture& f, const std::filesystem::pa
             break;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    if (runner->stage() != host::SequenceExportStageV1::AwaitingApproval ||
-        runner->encodedFrames() < 1 || pid.load() <= 0 || f.ledger.chargedBytes() == 0) {
+    if (runner->stage() != host::SequenceExportStageV1::Analyzing ||
+        runner->encodedFrames() != 1 || pid.load() <= 0 || f.ledger.chargedBytes() == 0) {
         std::cerr << "Held encoder fixture: stage=" << static_cast<int>(runner->stage())
                   << " encoded=" << runner->encodedFrames() << " pid=" << pid.load()
                   << " charged=" << f.ledger.chargedBytes();
@@ -600,8 +600,8 @@ void testRejectedRetirementWithLiveEncoder(Fixture& f, const std::filesystem::pa
             std::cerr << " failure=" << runner->result()->failure->detail;
         std::cerr << '\n';
     }
-    check(runner->stage() == host::SequenceExportStageV1::AwaitingApproval &&
-              runner->encodedFrames() >= 1 && pid.load() > 0 && f.ledger.chargedBytes() > 0,
+    check(runner->stage() == host::SequenceExportStageV1::Analyzing &&
+              runner->encodedFrames() == 1 && pid.load() > 0 && f.ledger.chargedBytes() > 0,
           "held encoder and ledger reservation before shutdown");
     f.scheduler.beginShutdown();
     std::vector<std::unique_ptr<host::SequenceExportRunnerV1>> rejected;
@@ -631,7 +631,11 @@ void testRejectedRetirementWithLiveEncoder(Fixture& f, const std::filesystem::pa
           "fifth live runner is refused before acquiring export resources");
     retirement->beginShutdown();
     runner->cancel();
-    runner->poll();
+    const auto cancelDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!runner->result() && std::chrono::steady_clock::now() < cancelDeadline) {
+        runner->poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     check(runner->result() && runner->result()->failure &&
               runner->result()->failure->reason == media::provider::Error::Cancelled,
           "held encoder ticket remains valid after shutdown and scheduler admission close");

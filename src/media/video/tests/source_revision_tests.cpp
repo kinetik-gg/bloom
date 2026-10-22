@@ -238,8 +238,31 @@ void retainedWorker(const std::filesystem::path& source, const std::filesystem::
         const auto probe = product(session.probe());
         const video::SourceRevisionAccess retained{video::SourceRevisionPolicy::Retained};
         const auto index = product(session.index(probe, {}, retained));
-        check(index.keyframes.size() == 4 && launches.size() == 1,
+        check(launches.size() == 1,
               "probe and index reopen the same anonymous input in one worker");
+        // The MOV fixture also carries one keyed timecode/data packet. The demux index covers
+        // every stream, while the frame oracle below reads the four video keyframes.
+        check(probe.streams.size() == 2 && probe.streams[0].kind == provider::MediaKind::Video &&
+                  probe.streams[1].kind == provider::MediaKind::Data &&
+                  index.keyframes.size() == 5,
+              "retained demux index keeps video and timecode stream key packets");
+        constexpr std::array<provider::Rational, 4> videoKeyTimes{
+            {{0, 1}, {1, 2}, {1, 1}, {3, 2}}};
+        std::size_t videoKeys = 0, dataKeys = 0;
+        for (const auto& key : index.keyframes) {
+            if (key.stream == 0) {
+                check(videoKeys < videoKeyTimes.size() &&
+                          key.pts == videoKeyTimes[videoKeys] && key.dts == key.pts,
+                      "retained index preserves every exact video keyframe time");
+                ++videoKeys;
+            } else {
+                check(key.stream == 1 && key.pts == provider::Rational{0, 1} &&
+                          key.dts == key.pts,
+                      "retained index preserves the timecode packet");
+                ++dataKeys;
+            }
+        }
+        check(videoKeys == 4 && dataKeys == 1, "retained index covers both fixture streams");
         for (unsigned request = 0; request < 100; ++request) {
             const auto ordinal = request % 48U;
             const auto divisor = std::gcd(ordinal, 24U);
@@ -253,14 +276,17 @@ void retainedWorker(const std::filesystem::path& source, const std::filesystem::
         for (const auto ordinal : {47U, 0U, 36U, 1U, 35U, 12U}) {
             const auto frame =
                 product(session.frame(probe, 0, ordinal, 0, nullptr, {}, {}, {}, {}, retained));
-            check(std::to_integer<unsigned>(frame->planes.front().bytes.front()) ==
-                      16U + ordinal * 3U,
-                  "retained random seeks return the requested frame");
+            const auto divisor = std::gcd(ordinal, 24U);
+            check(frame->pts == provider::Rational{ordinal / divisor, 24U / divisor} &&
+                      std::to_integer<unsigned>(frame->planes.front().bytes.front()) ==
+                          16U + ordinal * 3U,
+                  "retained random seeks return the requested frame and exact time");
         }
         check(launches.size() == 1 && quota->residentBytes() == size && quota->residentFiles() == 1,
               "100 frame requests amortize one worker and one indexed source within quota");
         for (unsigned ordinal = 0; ordinal < 20; ++ordinal)
             (void)product(session.frame(probe, 0, ordinal, 0, nullptr, {}, {}, {}, {}, retained));
+        check(launches.size() == 1, "retained worker stays live through its 128th call");
         (void)product(session.frame(probe, 0, 20, 0, nullptr, {}, {}, {}, {}, retained));
         check(launches.size() == 2, "bounded retained worker rotates after its 128-call lifetime");
         reaped(launches.front());
