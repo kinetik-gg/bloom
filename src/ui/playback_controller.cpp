@@ -2,6 +2,7 @@
 
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/audio_device_control.hpp>
 
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/document/project.hpp>
@@ -120,7 +121,11 @@ PlaybackController::PlaybackController(CompositionSession& session,
             &PlaybackController::handleSnapshotChanged);
 }
 
-PlaybackController::~PlaybackController() { pause(); }
+PlaybackController::~PlaybackController() {
+    pause();
+    if (audioControl_)
+        audioControl_->setCompletionHandler({});
+}
 
 void PlaybackController::installWindowShortcut(QWidget& window) {
     auto* action = new QAction(tr("Play/Pause"), &window);
@@ -132,12 +137,40 @@ void PlaybackController::installWindowShortcut(QWidget& window) {
     connect(action, &QAction::triggered, this, &PlaybackController::toggle);
 }
 
-void PlaybackController::setAudioEngine(
-    std::unique_ptr<media::audio::playback::AudioEngine> engine) {
+void PlaybackController::setAudioDeviceControl(AudioDeviceControl* control) {
     Q_ASSERT(QThread::currentThread() == thread());
     pause();
-    audioEngine_ = std::move(engine);
+    if (audioControl_)
+        audioControl_->setCompletionHandler({});
+    audioControl_ = control;
+    if (audioControl_)
+        audioControl_->setCompletionHandler(
+            [this](const std::uint64_t generation, const bool playing,
+                   const bool transportStarted) {
+                handleAudioCompletion(generation, playing, transportStarted);
+            });
     audioClockActive_ = false;
+    audioStartPending_ = false;
+}
+
+void PlaybackController::useWallClock() {
+    const bool wasAudioMaster = audioClockActive_;
+    audioClockActive_ = false;
+    // play() and work-area changes already establish the wall origin. A delayed stop/failure or
+    // repeated empty mix while wall is master must not throw away elapsed time on every callback.
+    if (!wasAudioMaster || state_ != PlaybackState::Playing)
+        return;
+    const auto* composition = session_.composition();
+    const auto mapping = composition ? mappingForComposition(*composition) : std::nullopt;
+    if (!mapping) {
+        pause();
+        return;
+    }
+    startClock_ = clock_();
+    startFrameIndex_ = mapping->nearestFrameIndex(session_.currentTime());
+    appliedOffset_ = 0;
+    lastAppliedFrameIndex_ = startFrameIndex_;
+    scheduleTick(wakeCap_);
 }
 
 void PlaybackController::setAudioEnabled(const bool enabled) {
@@ -146,32 +179,30 @@ void PlaybackController::setAudioEnabled(const bool enabled) {
         return;
     }
     audioEnabled_ = enabled;
-    if (!audioEnabled_ && audioEngine_) {
-        const bool wasMaster = audioClockActive_;
-        audioEngine_->stop();
-        audioClockActive_ = false;
-        if (wasMaster && state_ == PlaybackState::Playing) {
-            const auto* composition = session_.composition();
-            const auto mapping = composition ? mappingForComposition(*composition) : std::nullopt;
-            if (!mapping) {
-                pause();
-                return;
-            }
-            startClock_ = clock_();
-            startFrameIndex_ = mapping->nearestFrameIndex(session_.currentTime());
-            appliedOffset_ = 0;
-            lastAppliedFrameIndex_ = startFrameIndex_;
-            scheduleTick(wakeCap_);
-        }
+    if (!audioEnabled_ && audioControl_) {
+        expectedAudioGeneration_ = audioControl_->requestStop();
+        audioStartPending_ = false;
+        useWallClock();
     }
 }
 
 void PlaybackController::setAudioMix(runtime::AudioMixDescription description,
                                      std::vector<media::audio::playback::AudioClip> clips) {
     Q_ASSERT(QThread::currentThread() == thread());
+    const bool hadClips = audioClipsAvailable_;
+    audioClipsAvailable_ = !clips.empty();
     audioMix_ = std::move(description);
-    if (audioEngine_) {
-        audioEngine_->replaceClips(std::move(clips));
+    if (audioControl_) {
+        expectedAudioGeneration_ = audioControl_->replaceClips(std::move(clips));
+        if (!audioClipsAvailable_) {
+            expectedAudioGeneration_ = audioControl_->requestStop();
+            audioStartPending_ = false;
+            useWallClock();
+        } else if (!hadClips && state_ == PlaybackState::Playing && audioEnabled_) {
+            audioAlignmentRetried_ = false;
+            audioStartPending_ = true;
+            expectedAudioGeneration_ = audioControl_->requestSeek(session_.currentTime());
+        }
     }
 }
 
@@ -234,18 +265,15 @@ void PlaybackController::play() {
     runRangeEnd_ = range.end;
 
     audioClockActive_ = false;
-    if (audioEnabled_ && audioEngine_ && audioMix_.has_value() && !audioMix_->clips.empty()) {
+    audioStartPending_ = false;
+    if (audioEnabled_ && audioControl_ && audioClipsAvailable_) {
         const auto anchor = mapping->timeForFrame(startFrameIndex_);
         if (!anchor)
             return;
         // Match the established nearest-grid wall origin while preserving immediate session time.
-        const auto status = audioEngine_->play(*anchor.value());
-        audioClockActive_ = !status.has_value();
-        if (status.has_value()) {
-            qWarning("Audio playback could not start (error %d, observed %llu)",
-                     static_cast<int>(status->code),
-                     static_cast<unsigned long long>(status->observed));
-        }
+        audioAlignmentRetried_ = false;
+        audioStartPending_ = true;
+        expectedAudioGeneration_ = audioControl_->requestPlay(*anchor.value());
     }
 
     state_ = PlaybackState::Playing;
@@ -261,10 +289,10 @@ void PlaybackController::pause() {
         return;
     }
     state_ = PlaybackState::Stopped;
+    audioStartPending_ = false;
     timer_.stop();
-    if (audioEngine_) {
-        audioEngine_->stop();
-    }
+    if (audioControl_)
+        expectedAudioGeneration_ = audioControl_->requestStop();
     audioClockActive_ = false;
     previewController_.setPlaybackActive(false);
     previewController_.endDroppedFrameCounting();
@@ -304,15 +332,15 @@ void PlaybackController::tick() {
     scheduleTick(wakeCap_);
     std::optional<std::uint64_t> frameOffset;
     std::optional<std::uint64_t> untilNextFrame;
-    if (audioClockActive_ && audioEngine_) {
-        const auto position = audioEngine_->positionNow();
+    if (audioClockActive_ && audioControl_) {
+        const auto position = audioControl_->positionNow();
         const auto audioFrame = mapping->frameOffsetForTime(position);
         if (!audioFrame || *audioFrame < startFrameIndex_) {
             return;
         }
         frameOffset = *audioFrame - startFrameIndex_;
         untilNextFrame =
-            mapping->nanosecondsUntilNextFrame(position, audioEngine_->playbackRateRatio());
+            mapping->nanosecondsUntilNextFrame(position, audioControl_->playbackRateRatio());
     } else {
         const auto now = clock_();
         const auto elapsed = elapsedNanoseconds(now, startClock_);
@@ -457,16 +485,15 @@ void PlaybackController::handleWorkAreaChanged() {
     applyingOwnTimeChange_ = true;
     (void)session_.setCurrentTime(*anchor.value());
     applyingOwnTimeChange_ = false;
-    if (audioClockActive_ && audioEngine_) {
-        if (const auto status = audioEngine_->seek(*anchor.value()); status) {
-            qWarning("Audio range seek failed (error %d)", static_cast<int>(status->code));
-            audioEngine_->stop();
-            audioClockActive_ = false;
-        }
+    if (audioEnabled_ && audioControl_ && audioClipsAvailable_) {
+        useWallClock();
+        audioAlignmentRetried_ = false;
+        audioStartPending_ = true;
+        expectedAudioGeneration_ = audioControl_->requestSeek(*anchor.value());
     }
     const auto period =
-        audioClockActive_ && audioEngine_
-            ? mapping->nanosecondsUntilNextFrame(*anchor.value(), audioEngine_->playbackRateRatio())
+        audioEnabled_ && audioControl_ && audioClipsAvailable_
+            ? mapping->nanosecondsUntilNextFrame(*anchor.value(), audioControl_->playbackRateRatio())
             : mapping->nanosecondsUntilNextFrame(core::RationalTime{});
     if (!period || *period > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
         pause();
@@ -490,19 +517,61 @@ void PlaybackController::handleCompositionChanged() {
     Q_ASSERT(QThread::currentThread() == thread());
     pause();
     audioMix_.reset();
-    if (audioEngine_) {
-        audioEngine_->clearClips();
-    }
+    audioClipsAvailable_ = false;
+    if (audioControl_)
+        (void)audioControl_->replaceClips({});
 }
 
 void PlaybackController::handleCurrentTimeChanged() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (state_ == PlaybackState::Playing && !applyingOwnTimeChange_) {
-        if (audioEngine_) {
-            (void)audioEngine_->seek(session_.currentTime());
-        }
         pause();
     }
+}
+
+void PlaybackController::handleAudioCompletion(const std::uint64_t generation, const bool playing,
+                                               const bool transportStarted) {
+    if (generation != expectedAudioGeneration_ || state_ != PlaybackState::Playing ||
+        !audioEnabled_ || !audioControl_)
+        return;
+    if (!playing) {
+        audioStartPending_ = false;
+        useWallClock();
+        return;
+    }
+    // A mix-only update during a live run must not compare the unwrapped device clock with the
+    // loop-wrapped session time. It is only a start handoff when an earlier start was still pending.
+    if (!transportStarted && !audioStartPending_)
+        return;
+    if (!audioStartPending_)
+        return;
+    const auto* composition = session_.composition();
+    const auto mapping = composition ? mappingForComposition(*composition) : std::nullopt;
+    if (!mapping)
+        return;
+    const auto deviceFrame = mapping->frameOffsetForTime(audioControl_->positionNow());
+    const auto currentFrame = mapping->nearestFrameIndex(session_.currentTime());
+    if (!deviceFrame || *deviceFrame < currentFrame ||
+        (currentFrame != std::numeric_limits<std::uint64_t>::max() &&
+         *deviceFrame > currentFrame + 1)) {
+        // A delayed device start must not pull the already advancing visual clock backward.
+        useWallClock();
+        if (!audioAlignmentRetried_) {
+            audioAlignmentRetried_ = true;
+            audioStartPending_ = true;
+            expectedAudioGeneration_ = audioControl_->requestSeek(session_.currentTime());
+        } else {
+            audioStartPending_ = false;
+            expectedAudioGeneration_ = audioControl_->requestStop();
+        }
+        return;
+    }
+    audioClockActive_ = true;
+    audioStartPending_ = false;
+    startFrameIndex_ = currentFrame;
+    appliedOffset_ = 0;
+    lastAppliedFrameIndex_ = currentFrame;
+    scheduleTick(wakeCap_);
 }
 
 } // namespace bloom::ui

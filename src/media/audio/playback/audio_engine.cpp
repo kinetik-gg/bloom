@@ -187,7 +187,9 @@ AudioEngine::AudioEngine(std::unique_ptr<Backend> backend)
 AudioEngine::AudioEngine(std::unique_ptr<Backend> backend, const Config config)
     : backend_(std::move(backend)), config_(config),
       ring_(std::make_unique<SpscRing>(config.ringBufferFrames, config.channels)),
-      mixScratch_(kMixerBlockFrames * config.channels) {}
+      mixScratch_(kMixerBlockFrames * config.channels) {
+    clockState_.store(std::make_shared<const ClockState>(), std::memory_order_release);
+}
 
 AudioEngine::~AudioEngine() { stop(); }
 
@@ -198,13 +200,18 @@ AudioEngine::ClipId AudioEngine::addClip(AudioClip clip) {
 }
 
 void AudioEngine::replaceClips(std::vector<AudioClip> clips) {
-    std::scoped_lock lock(controlMutex_);
-    clips_ = std::move(clips);
+    {
+        std::scoped_lock lock(controlMutex_);
+        clips_.swap(clips);
+    } // Old decoded refs are released outside the mixer mutex.
 }
 
 void AudioEngine::clearClips() noexcept {
-    std::scoped_lock lock(controlMutex_);
-    clips_.clear();
+    std::vector<AudioClip> old;
+    {
+        std::scoped_lock lock(controlMutex_);
+        old.swap(clips_);
+    }
 }
 
 bool AudioEngine::removeClip(const ClipId id) {
@@ -232,7 +239,11 @@ bool AudioEngine::updateClip(const ClipId id, const float level, const bool mute
 }
 
 AudioStatus AudioEngine::play(const RationalTime at) {
-    stop();
+    return play(at, silenceGeneration());
+}
+
+AudioStatus AudioEngine::play(const RationalTime at, const std::uint64_t silenceGeneration) {
+    stopAfterSilenceRequest();
     if (!backend_ || config_.rate == 0 || config_.channels == 0 || config_.ringBufferFrames == 0) {
         return errorStatus(AudioErrorCode::InvalidAudioFormat);
     }
@@ -240,9 +251,15 @@ AudioStatus AudioEngine::play(const RationalTime at) {
         std::scoped_lock lock(controlMutex_);
         clockOrigin_ = at;
         framesProduced_ = 0;
-        framesWritten_.store(0, std::memory_order_release);
+        writtenAtOrigin_ = framesWritten_.load(std::memory_order_acquire);
+        clockState_.store(std::make_shared<const ClockState>(ClockState{
+                              clockOrigin_, writtenAtOrigin_, playbackRate_, playbackRateNumerator_,
+                              playbackRateDenominator_}),
+                          std::memory_order_release);
         ring_->clear();
     }
+    ringWakeEpoch_.fetch_add(1, std::memory_order_release);
+    ringWakeEpoch_.notify_all();
     playing_.store(true, std::memory_order_release);
     const auto status = backend_->start(config_.rate, config_.channels, &backendCallback, this);
     if (status.has_value()) {
@@ -252,11 +269,22 @@ AudioStatus AudioEngine::play(const RationalTime at) {
     if (dynamic_cast<NullBackend*>(backend_.get()) == nullptr) {
         mixerThread_ = std::thread(&AudioEngine::mixerLoop, this);
     }
+    auto expected = (silenceGeneration << 1) | 1;
+    (void)silenceState_.compare_exchange_strong(expected, silenceGeneration << 1,
+                                                std::memory_order_acq_rel);
     return std::nullopt;
 }
 
 void AudioEngine::stop() noexcept {
+    requestSilence();
+    stopAfterSilenceRequest();
+}
+
+void AudioEngine::stopAfterSilenceRequest() noexcept {
+    silenceState_.fetch_or(1, std::memory_order_release);
     playing_.store(false, std::memory_order_release);
+    ringWakeEpoch_.fetch_add(1, std::memory_order_release);
+    ringWakeEpoch_.notify_all();
     if (backend_) {
         backend_->stop();
     }
@@ -264,6 +292,9 @@ void AudioEngine::stop() noexcept {
 }
 
 AudioStatus AudioEngine::seek(const RationalTime at) {
+    // Allocate before stopping the backend. A failed allocation must not strand a live mixer with
+    // its device stopped and no restart path.
+    auto nextClock = std::make_shared<ClockState>();
     const auto wasPlaying = playing_.load(std::memory_order_acquire);
     if (wasPlaying && backend_) {
         backend_->stop();
@@ -272,13 +303,20 @@ AudioStatus AudioEngine::seek(const RationalTime at) {
         std::scoped_lock lock(controlMutex_);
         clockOrigin_ = at;
         framesProduced_ = 0;
-        framesWritten_.store(0, std::memory_order_release);
+        writtenAtOrigin_ = framesWritten_.load(std::memory_order_acquire);
+        *nextClock = ClockState{clockOrigin_, writtenAtOrigin_, playbackRate_,
+                                playbackRateNumerator_, playbackRateDenominator_};
+        clockState_.store(std::move(nextClock), std::memory_order_release);
         ring_->clear();
     }
+    ringWakeEpoch_.fetch_add(1, std::memory_order_release);
+    ringWakeEpoch_.notify_all();
     if (wasPlaying && backend_) {
         const auto status = backend_->start(config_.rate, config_.channels, &backendCallback, this);
         if (status.has_value()) {
             playing_.store(false, std::memory_order_release);
+            ringWakeEpoch_.fetch_add(1, std::memory_order_release);
+            ringWakeEpoch_.notify_all();
             joinMixer();
             return status;
         }
@@ -296,9 +334,17 @@ bool AudioEngine::setRate(const double rate) noexcept {
     }
     const auto divisor = std::gcd(scaled, std::int64_t{1'000'000});
     std::scoped_lock lock(controlMutex_);
+    std::shared_ptr<const ClockState> state;
+    try {
+        state = std::make_shared<const ClockState>(ClockState{
+            clockOrigin_, writtenAtOrigin_, rate, scaled / divisor, 1'000'000 / divisor});
+    } catch (...) {
+        return false;
+    }
     playbackRate_ = rate;
     playbackRateNumerator_ = scaled / divisor;
     playbackRateDenominator_ = 1'000'000 / divisor;
+    clockState_.store(std::move(state), std::memory_order_release);
     return true;
 }
 
@@ -323,20 +369,21 @@ AudioStatus AudioEngine::renderForTesting(const std::size_t frames) {
 }
 
 RationalTime AudioEngine::playbackRateRatio() const noexcept {
-    std::scoped_lock lock(controlMutex_);
-    return RationalTime::create(playbackRateNumerator_, playbackRateDenominator_)
+    const auto state = clockState_.load(std::memory_order_acquire);
+    return RationalTime::create(state->rateNumerator, state->rateDenominator)
         .value_or(RationalTime{});
 }
 
 RationalTime AudioEngine::positionNow() const noexcept {
-    std::scoped_lock lock(controlMutex_);
-    const auto frames = framesWritten_.load(std::memory_order_acquire);
-    if (playbackRateNumerator_ == playbackRateDenominator_) {
+    const auto state = clockState_.load(std::memory_order_acquire);
+    const auto totalWritten = framesWritten_.load(std::memory_order_acquire);
+    const auto frames = totalWritten - state->writtenAtOrigin;
+    if (state->rateNumerator == state->rateDenominator) {
         const auto numerator =
-            static_cast<long double>(clockOrigin_.numerator()) * config_.rate +
-            static_cast<long double>(frames) * static_cast<long double>(clockOrigin_.denominator());
+            static_cast<long double>(state->origin.numerator()) * config_.rate +
+            static_cast<long double>(frames) * static_cast<long double>(state->origin.denominator());
         const auto denominator =
-            static_cast<long double>(clockOrigin_.denominator()) * config_.rate;
+            static_cast<long double>(state->origin.denominator()) * config_.rate;
         if (numerator >= static_cast<long double>(std::numeric_limits<std::int64_t>::min()) &&
             numerator <= static_cast<long double>(std::numeric_limits<std::int64_t>::max()) &&
             denominator <= static_cast<long double>(std::numeric_limits<std::int64_t>::max())) {
@@ -347,18 +394,18 @@ RationalTime AudioEngine::positionNow() const noexcept {
             }
         }
     }
-    const auto seconds = clockOrigin_.toSeconds() + static_cast<double>(frames) * playbackRate_ /
-                                                        static_cast<double>(config_.rate);
+    const auto seconds = state->origin.toSeconds() + static_cast<double>(frames) * state->rate /
+                                                      static_cast<double>(config_.rate);
     constexpr auto precision = 1'000'000'000.0;
     const auto scaled = seconds * precision;
     if (!std::isfinite(scaled) ||
         scaled < static_cast<double>(std::numeric_limits<std::int64_t>::min()) ||
         scaled > static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
-        return clockOrigin_;
+        return state->origin;
     }
     return RationalTime::create(static_cast<std::int64_t>(std::llround(scaled)),
                                 static_cast<std::int64_t>(precision))
-        .value_or(clockOrigin_);
+        .value_or(state->origin);
 }
 
 void AudioEngine::backendCallback(void* userData, const std::span<float> output) noexcept {
@@ -366,19 +413,29 @@ void AudioEngine::backendCallback(void* userData, const std::span<float> output)
     const auto frames = engine.ring_->pop(output);
     const auto samplesWritten = frames * engine.config_.channels;
     std::fill(output.begin() + static_cast<std::ptrdiff_t>(samplesWritten), output.end(), 0.0F);
+    if ((engine.silenceState_.load(std::memory_order_acquire) & 1U) != 0)
+        std::fill(output.begin(), output.end(), 0.0F);
     engine.framesWritten_.fetch_add(output.size() / engine.config_.channels,
                                     std::memory_order_release);
+    if (frames != 0) {
+        engine.ringWakeEpoch_.fetch_add(1, std::memory_order_release);
+        engine.ringWakeEpoch_.notify_one();
+    }
 }
 
 void AudioEngine::mixerLoop() noexcept {
     while (playing_.load(std::memory_order_acquire)) {
         const auto frames = std::min(kMixerBlockFrames, ring_->freeFrames());
         if (frames == 0) {
-            std::this_thread::yield();
+            const auto epoch = ringWakeEpoch_.load(std::memory_order_acquire);
+            if (playing_.load(std::memory_order_acquire) && ring_->freeFrames() == 0)
+                ringWakeEpoch_.wait(epoch, std::memory_order_acquire);
             continue;
         }
         if (!produceBlock(frames)) {
-            std::this_thread::yield();
+            const auto epoch = ringWakeEpoch_.load(std::memory_order_acquire);
+            if (playing_.load(std::memory_order_acquire) && ring_->freeFrames() == 0)
+                ringWakeEpoch_.wait(epoch, std::memory_order_acquire);
         }
     }
 }

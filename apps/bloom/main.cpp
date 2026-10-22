@@ -1,4 +1,5 @@
 #include "deferred_editor_teardown.hpp"
+#include "audio_device_process_teardown.hpp"
 #include "packed_host_process_teardown.hpp"
 #include "sequence_export_process_teardown.hpp"
 
@@ -22,6 +23,7 @@
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/audio_playback_session.hpp>
+#include <bloom/ui/audio_device_control.hpp>
 #include <bloom/ui/background_preview_controller.hpp>
 #include <bloom/ui/cache_purge_controller.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
@@ -195,6 +197,11 @@ int main(int argc, char* argv[]) try {
         return 1;
     }
     auto& taskUiBridge = *taskUiBridgeOwner;
+    bloom::ui::AudioDeviceControl audioDeviceControl(
+        taskScheduler, taskUiBridge,
+        std::make_unique<bloom::media::audio::playback::AudioEngine>(
+            bloom::media::audio::playback::makeMiniaudioBackend()));
+    bloom::app::AudioDeviceProcessTeardown audioDeviceTeardown(audioDeviceControl);
     const auto processingPhasePolicy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(
         32, packedHostRetirement, taskBudgetView);
     bloom::ui::MemoryBudgetController memoryBudgetController(
@@ -402,6 +409,9 @@ int main(int argc, char* argv[]) try {
     gpuExportProvider->prepare(taskScheduler);
     bool shutdownQuiescent = false;
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);
+    shutdownCoordinator.setAudioRetirement(
+        [&] { audioDeviceControl.beginShutdown(); },
+        [&] { return audioDeviceControl.retirementComplete(); });
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
                      &memoryBudgetController, &bloom::ui::MemoryBudgetController::beginShutdown);
@@ -505,10 +515,13 @@ int main(int argc, char* argv[]) try {
     application.setQuitOnLastWindowClosed(false);
     QSettings settings;
     auto& playback = previewController.playbackController();
-    bloom::ui::AudioPlaybackSession audioPlaybackSession(compositionSession, snapshotCompiler,
-                                                         compiledPlanCache, cpuEvaluator);
-    playback.setAudioEngine(std::make_unique<bloom::media::audio::playback::AudioEngine>(
-        bloom::media::audio::playback::makeMiniaudioBackend()));
+    bloom::ui::AudioPlaybackSession audioPlaybackSession(
+        compositionSession, taskScheduler, taskUiBridge, snapshotCompiler, compiledPlanCache,
+        cpuEvaluator);
+    playback.setAudioDeviceControl(&audioDeviceControl);
+    QObject::connect(&shutdownCoordinator,
+                     &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
+                     &audioPlaybackSession, &bloom::ui::AudioPlaybackSession::beginShutdown);
     playback.setAudioEnabled(
         settings.value(QStringLiteral("playback/audio-enabled"), true).toBool());
     const auto applyAudioMix = [&] {

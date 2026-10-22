@@ -9,6 +9,7 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/ui/audio_playback_session.hpp>
+#include <bloom/ui/audio_device_control.hpp>
 #include <bloom/ui/composition_plan_cache.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/playback_controller.hpp>
@@ -99,17 +100,28 @@ int run(int argc, char** argv) {
               << '\n';
 
     // Same wiring as apps/bloom/main.cpp.
-    ui::PlaybackController playback(
-        fixture.session, *fixture.preview, [] { return std::chrono::steady_clock::now(); }, 16ms);
-    ui::AudioPlaybackSession audioPlaybackSession(fixture.session, fixture.compiler,
-                                                  std::make_shared<ui::CompiledPlanCache>(),
-                                                  fixture.evaluator);
     auto backendOwner = std::make_unique<media::audio::playback::NullBackend>();
     auto* backend = backendOwner.get();
     auto engineOwner =
         std::make_unique<media::audio::playback::AudioEngine>(std::move(backendOwner));
     auto* engine = engineOwner.get();
-    playback.setAudioEngine(std::move(engineOwner));
+    ui::AudioDeviceControl audioDeviceControl(fixture.scheduler, fixture.bridge,
+                                              std::move(engineOwner));
+    ui::PlaybackController playback(
+        fixture.session, *fixture.preview, [] { return std::chrono::steady_clock::now(); }, 16ms);
+    playback.setAudioDeviceControl(&audioDeviceControl);
+    ui::AudioPlaybackSession audioPlaybackSession(
+        fixture.session, fixture.scheduler, fixture.bridge, fixture.compiler,
+        std::make_shared<ui::CompiledPlanCache>(), fixture.evaluator);
+    const auto awaitMix = [&] {
+        QElapsedTimer timer;
+        timer.start();
+        while ((!audioPlaybackSession.mix() ||
+                audioPlaybackSession.revision() != fixture.session.snapshot().revision()) &&
+               timer.elapsed() < 15000)
+            QTest::qWait(10);
+        return audioPlaybackSession.mix().has_value();
+    };
     std::size_t appliedClips = 0;
     const auto applyAudioMix = [&] {
         const auto& mix = audioPlaybackSession.mix();
@@ -137,7 +149,7 @@ int run(int argc, char** argv) {
                      applyAudioMix);
     QObject::connect(fixture.assets.get(), &ui::AssetController::changed, &playback, applyAudioMix);
     require(audioPlaybackSession.refresh(), "stage 2: mix derived from the live revision");
-    applyAudioMix();
+    require(awaitMix(), "stage 2: worker-published live mix");
     const auto& mix = audioPlaybackSession.mix();
     if (!mix.has_value())
         throw std::runtime_error("stage 3: published mix");
@@ -149,7 +161,12 @@ int run(int argc, char** argv) {
     (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(0));
     playback.play();
     require(playback.state() == ui::PlaybackState::Playing, "stage 5: transport playing");
-    require(engine->isPlaying(), "stage 5: engine playing");
+    QElapsedTimer playWait;
+    playWait.start();
+    while (!playback.audioClockActive() && playWait.elapsed() < 5000)
+        QTest::qWait(10);
+    require(engine->isPlaying() && playback.audioClockActive(),
+            "stage 5: worker-started engine playing");
     require(!engine->renderForTesting(4096).has_value(), "stage 6: render");
     float peak = 0.0F;
     for (const float sample : backend->captured())
@@ -168,6 +185,7 @@ int run(int argc, char** argv) {
         commands::Transaction move("Move nodes", fixture.session.snapshot().revision());
         move.emplace<commands::MoveNodes>(fixture.session.compositionId(), std::move(positions));
         require(fixture.session.executeTransaction(std::move(move)).succeeded(), "move nodes");
+        require(awaitMix(), "stage 7: worker republished layout-only mix");
         const auto& moved = audioPlaybackSession.mix();
         require(moved.has_value() && !moved->clips.empty(),
                 "stage 7: mix survives a layout-only edit");
@@ -278,6 +296,7 @@ int run(int argc, char** argv) {
                 "stage 10: same slot before and after the audio hand-wire");
 
         require(audioPlaybackSession.refresh(), "stage 10: mix recompiles");
+        require(awaitMix(), "stage 10: worker published hand-wired mix");
         const auto& handWired = audioPlaybackSession.mix();
         if (!handWired.has_value())
             throw std::runtime_error("stage 10: hand-wired mix");
@@ -296,11 +315,21 @@ int run(int argc, char** argv) {
             document::NodeInputRef{outputNode,
                                    std::string(document::kCompositionOutputAudioInputPort)});
         require(fixture.session.executeTransaction(std::move(connect)).succeeded(), label);
+        require(awaitMix(), label);
         const auto& wired = audioPlaybackSession.mix();
         require(wired.has_value() && wired->clips.size() == 1, label);
     };
     wire(layerNode, document::kLayerOutputAudioOutputPort, "stage 8: layer wired to output");
     wire(sourceNode, document::kAudioSourceOutputPort, "stage 9: source wired to output");
+    audioPlaybackSession.beginShutdown();
+    playback.pause();
+    audioDeviceControl.beginShutdown();
+    QElapsedTimer shutdownWait;
+    shutdownWait.start();
+    while (!audioDeviceControl.retirementComplete() && shutdownWait.elapsed() < 5000)
+        QTest::qWait(10);
+    require(audioDeviceControl.retirementComplete(), "audio device retired before bridge close");
+    audioDeviceControl.drainAfterEventLoop();
     std::cout << "audio transport ok\n";
     return 0;
 }

@@ -115,9 +115,26 @@ class AudioEngine final {
     // The returned error is empty on success. `at` is the rational transport position at which
     // playback begins; the backend callback's written-frame count advances from there.
     AudioStatus play(core::RationalTime at);
+    // A UI-published play may finish device start after a newer pause. Only its captured silence
+    // generation may unmute the callback; a newer requestSilence always wins.
+    AudioStatus play(core::RationalTime at, std::uint64_t silenceGeneration);
     void stop() noexcept;
+    // Used by the serialized device worker after the UI has already invalidated older play
+    // intents. Physical stop must not invalidate a newer play queued during backend stop/join.
+    void stopAfterSilenceRequest() noexcept;
     AudioStatus seek(core::RationalTime at);
     [[nodiscard]] bool setRate(double rate) noexcept;
+    // Safe on the UI thread: the callback zeros output immediately while device stop is queued.
+    void requestSilence() noexcept {
+        auto current = silenceState_.load(std::memory_order_acquire);
+        while (!silenceState_.compare_exchange_weak(current, ((current + 2) | 1U),
+                                                    std::memory_order_acq_rel,
+                                                    std::memory_order_acquire)) {
+        }
+    }
+    [[nodiscard]] std::uint64_t silenceGeneration() const noexcept {
+        return silenceState_.load(std::memory_order_acquire) >> 1;
+    }
 
     // Pulls exactly `frames` through a NullBackend. It is deliberately unavailable for a device
     // backend so production playback always has the asynchronous mixer/callback boundary.
@@ -134,6 +151,13 @@ class AudioEngine final {
 
   private:
     class SpscRing;
+    struct ClockState final {
+        core::RationalTime origin{};
+        std::uint64_t writtenAtOrigin = 0;
+        double rate = 1.0;
+        std::int64_t rateNumerator = 1;
+        std::int64_t rateDenominator = 1;
+    };
 
     static constexpr std::size_t kMixerBlockFrames = 512;
 
@@ -150,9 +174,14 @@ class AudioEngine final {
     mutable std::mutex controlMutex_;
     std::vector<AudioClip> clips_;
     std::atomic<bool> playing_{false};
+    // Low bit is callback silence; high bits are the UI request generation.
+    std::atomic<std::uint64_t> silenceState_{1};
     std::atomic<std::uint64_t> framesWritten_{0};
+    std::atomic<std::uint64_t> ringWakeEpoch_{0};
+    std::atomic<std::shared_ptr<const ClockState>> clockState_;
     std::thread mixerThread_;
     std::uint64_t framesProduced_ = 0;
+    std::uint64_t writtenAtOrigin_ = 0;
     core::RationalTime clockOrigin_{};
     double playbackRate_ = 1.0;
     std::int64_t playbackRateNumerator_ = 1;

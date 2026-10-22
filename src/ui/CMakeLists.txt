@@ -346,6 +346,7 @@ target_sources(
         composition_preview_result.cpp
         composition_session.cpp
         audio_playback_session.cpp
+        audio_device_control.cpp
         composition_session_drivers.cpp
         composition_session_keyframes.cpp
         driven_value_resolver.cpp
@@ -460,6 +461,7 @@ target_sources(
             include/bloom/ui/composition_plan_cache.hpp
             include/bloom/ui/composition_preview_controller.hpp
             include/bloom/ui/audio_playback_session.hpp
+            include/bloom/ui/audio_device_control.hpp
             include/bloom/ui/composition_preview_cpu_stage.hpp
             include/bloom/ui/composition_preview_gpu_scene_stage.hpp
             include/bloom/ui/composition_preview_pipeline.hpp

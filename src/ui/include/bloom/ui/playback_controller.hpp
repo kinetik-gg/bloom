@@ -22,6 +22,7 @@ namespace bloom::ui {
 
 class CompositionSession;
 class CompositionPreviewController;
+class AudioDeviceControl;
 
 // Transport state for composition preview playback (issue #105). Only two states exist: a paused
 // transport and a playing one both freeze/advance the SAME CompositionSession::currentTime(), so
@@ -62,9 +63,10 @@ class PlaybackController final : public QObject {
     // One action on the window, independent of panel visibility or lifetime. Text entry keeps
     // Space via Qt's ShortcutOverride mechanism, just like the window's backtick shortcut.
     void installWindowShortcut(QWidget& window);
-    void setAudioEngine(std::unique_ptr<media::audio::playback::AudioEngine> engine);
+    void setAudioDeviceControl(AudioDeviceControl* control);
     void setAudioEnabled(bool enabled);
     [[nodiscard]] bool isAudioEnabled() const noexcept { return audioEnabled_; }
+    [[nodiscard]] bool audioClockActive() const noexcept { return audioClockActive_; }
     void setAudioMix(runtime::AudioMixDescription description,
                      std::vector<media::audio::playback::AudioClip> clips);
 
@@ -101,6 +103,8 @@ class PlaybackController final : public QObject {
     void handleCurrentTimeChanged();
     void handleWorkAreaChanged();
     void handleSnapshotChanged();
+    void handleAudioCompletion(std::uint64_t generation, bool playing, bool transportStarted);
+    void useWallClock();
     void scheduleTick(std::chrono::nanoseconds untilNextFrame);
 
     CompositionSession& session_;
@@ -124,10 +128,14 @@ class PlaybackController final : public QObject {
     // True by default: every transport Bloom has shipped so far loops, and the footer's toggle is
     // what makes the other half of that statement reachable rather than a promise.
     bool looping_ = true;
-    std::unique_ptr<media::audio::playback::AudioEngine> audioEngine_;
+    AudioDeviceControl* audioControl_ = nullptr;
+    std::uint64_t expectedAudioGeneration_ = 0;
+    bool audioAlignmentRetried_ = false;
     std::optional<runtime::AudioMixDescription> audioMix_;
+    bool audioClipsAvailable_ = false;
     bool audioEnabled_ = true;
     bool audioClockActive_ = false;
+    bool audioStartPending_ = false;
 };
 
 } // namespace bloom::ui

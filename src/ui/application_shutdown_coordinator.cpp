@@ -28,6 +28,9 @@ ApplicationShutdownCoordinator::ApplicationShutdownCoordinator(
     gpuRetirementPollTimer_.setInterval(5);
     connect(&gpuRetirementPollTimer_, &QTimer::timeout, this,
             &ApplicationShutdownCoordinator::pollGpuExportRetirement);
+    audioRetirementPollTimer_.setInterval(5);
+    connect(&audioRetirementPollTimer_, &QTimer::timeout, this,
+            &ApplicationShutdownCoordinator::pollAudioRetirement);
     hostRetirementPollTimer_.setInterval(5);
     connect(&hostRetirementPollTimer_, &QTimer::timeout, this,
             &ApplicationShutdownCoordinator::pollPackedHostRetirement);
@@ -76,6 +79,15 @@ void ApplicationShutdownCoordinator::setGpuExportRetirement(
     gpuExportRetirementComplete_ = !gpuRetirementComplete_;
 }
 
+void ApplicationShutdownCoordinator::setAudioRetirement(
+    GpuRetirementBegin beginAudioRetirement, GpuRetirementComplete audioRetirementComplete) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    Q_ASSERT(!shuttingDown_);
+    audioRetirementBegin_ = std::move(beginAudioRetirement);
+    audioRetirementDone_ = std::move(audioRetirementComplete);
+    audioRetirementComplete_ = !audioRetirementDone_;
+}
+
 void ApplicationShutdownCoordinator::setNativeSurfaceSource(NativeSurfaceSource source) {
     Q_ASSERT(QThread::currentThread() == thread());
     Q_ASSERT(!shuttingDown_);
@@ -98,7 +110,11 @@ void ApplicationShutdownCoordinator::beginShutdown() {
     // considers outstanding so a genuine future occurrence is self-explaining instead of silently
     // unresponsive.
     stuckShutdownDiagnosticTimer_.start(5'000);
-    taskUiBridge_.beginShutdown();
+    if (audioRetirementBegin_) {
+        audioRetirementBegin_();
+        audioRetirementPollTimer_.start();
+    }
+    pollAudioRetirement();
     // GPU final-render retirement is the third half of the contract: signal the evaluator owner
     // (non-blocking) and then poll genuine completion from the UI event loop. The UI never blocks
     // on the native owner; retirement completes asynchronously and only then is quiescence
@@ -119,6 +135,20 @@ void ApplicationShutdownCoordinator::beginShutdown() {
     // synchronous quiescence must still publish exactly once, so the final state is re-evaluated
     // after both halves are settled. Idempotent: quiescencePublished_ guards a duplicate emission,
     // and a pending/refused native retirement leaves surfaceRetirementComplete_ false.
+    publishQuiescenceIfReady();
+}
+
+void ApplicationShutdownCoordinator::pollAudioRetirement() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!shuttingDown_ || taskAdmissionClosed_)
+        return;
+    if (!audioRetirementComplete_ && audioRetirementDone_ && audioRetirementDone_())
+        audioRetirementComplete_ = true;
+    if (!audioRetirementComplete_)
+        return;
+    audioRetirementPollTimer_.stop();
+    taskAdmissionClosed_ = true;
+    taskUiBridge_.beginShutdown();
     publishQuiescenceIfReady();
 }
 

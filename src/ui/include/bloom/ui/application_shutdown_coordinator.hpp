@@ -42,6 +42,12 @@ class ApplicationShutdownCoordinator final : public QObject {
     void setGpuExportRetirement(GpuRetirementBegin beginGpuRetirement,
                                 GpuRetirementComplete gpuRetirementComplete);
 
+    // Audio's terminal BlockingIo cleanup is admitted before general task admission closes.
+    // The completion predicate may also select the explicit post-event-loop root fallback when
+    // scheduler admission is permanently unavailable.
+    void setAudioRetirement(GpuRetirementBegin beginAudioRetirement,
+                            GpuRetirementComplete audioRetirementComplete);
+
     // Starts only after task/native/export prerequisites are satisfied. The begin step stops
     // preview producers and releases UI/cache pins, then closes the explicit host retirement
     // owner. The event loop polls actual exit only; collection happens after event processing.
@@ -77,6 +83,7 @@ class ApplicationShutdownCoordinator final : public QObject {
     void logStillShuttingDownDiagnostic() const;
     void beginNativeSurfaceRetirement();
     void pollGpuExportRetirement();
+    void pollAudioRetirement();
     void pollPackedHostRetirement();
     void publishQuiescenceIfReady();
 
@@ -85,17 +92,22 @@ class ApplicationShutdownCoordinator final : public QObject {
     NativeSurfaceSource nativeSurfaceSource_;
     GpuRetirementBegin gpuRetirementBegin_;
     GpuRetirementComplete gpuRetirementComplete_;
+    GpuRetirementBegin audioRetirementBegin_;
+    GpuRetirementComplete audioRetirementDone_;
     GpuRetirementBegin hostRetirementBegin_;
     GpuRetirementComplete hostExitAcknowledged_;
     NativeSurfaceRetirementGate surfaceRetirementGate_;
     std::string nativeSurfaceRefusalDiagnostic_;
     QTimer stuckShutdownDiagnosticTimer_;
     QTimer gpuRetirementPollTimer_;
+    QTimer audioRetirementPollTimer_;
     QTimer hostRetirementPollTimer_;
     bool shuttingDown_ = false;
     bool taskQuiescence_ = false;
     bool surfaceRetirementComplete_ = false;
     bool gpuExportRetirementComplete_ = true;
+    bool audioRetirementComplete_ = true;
+    bool taskAdmissionClosed_ = false;
     bool hostRetirementStarted_ = false;
     bool hostRetirementComplete_ = true;
     bool quiescencePublished_ = false;

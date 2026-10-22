@@ -15,6 +15,7 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/composition_editors.hpp>
+#include <bloom/ui/audio_device_control.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -226,6 +227,17 @@ struct SessionFixture final {
           controller(session, scheduler, bridge, pipeline.pipeline) {}
 };
 
+struct TestAudioOwner final {
+    bloom::ui::AudioDeviceControl control;
+    TestAudioOwner(SessionFixture& fixture,
+                   std::unique_ptr<bloom::media::audio::playback::AudioEngine> engine)
+        : control(fixture.scheduler, fixture.bridge, std::move(engine)) {}
+    ~TestAudioOwner() {
+        control.beginShutdown();
+        control.drainAfterEventLoop();
+    }
+};
+
 // Drains the fixture's scheduler the same way every SessionFixture-based test in
 // timeline_ruler_tests.cpp/composition_preview_controller_tests.cpp does, so no background worker
 // thread outlives the test process.
@@ -396,17 +408,20 @@ void testAudioMasterFloorLoopAndDisableReanchor(Expectations& expectations) {
     namespace audio = media::audio::playback;
     SessionFixture fixture(makeTestProject("Audio master", time(2)));
     ManualClock clock;
-    ui::PlaybackController playback(fixture.session, fixture.controller,
-                                    [&clock] { return clock.now; });
     auto owned = std::make_unique<audio::AudioEngine>(std::make_unique<audio::NullBackend>(),
                                                       audio::AudioEngine::Config{1000, 2, 4096});
     auto* engine = owned.get();
-    playback.setAudioEngine(std::move(owned));
+    TestAudioOwner audioOwner(fixture, std::move(owned));
+    ui::PlaybackController playback(fixture.session, fixture.controller,
+                                    [&clock] { return clock.now; });
+    playback.setAudioDeviceControl(&audioOwner.control);
     runtime::AudioMixDescription mix;
     mix.clips.push_back(
         {document::NodeId::fromRaw(1), document::AssetId::fromRaw(1), time(0), time(10)});
     playback.setAudioMix(std::move(mix), {audio::AudioClip{nullptr, time(0)}});
     playback.play();
+    expectations.expect(waitUntil([&] { return playback.audioClockActive(); }),
+                        "audio master starts on the device worker");
     clock.advance(20s);
     playback.tick();
     expectations.expect(fixture.session.currentTime() == time(0),
@@ -423,6 +438,19 @@ void testAudioMasterFloorLoopAndDisableReanchor(Expectations& expectations) {
     playback.tick();
     expectations.expect(fixture.session.currentTime() == time(30, 25),
                         "unclamped audio frame offset keeps exact loop progress beyond duration");
+    runtime::AudioMixDescription republished;
+    republished.clips.push_back(
+        {document::NodeId::fromRaw(1), document::AssetId::fromRaw(1), time(0), time(10)});
+    playback.setAudioMix(std::move(republished), {audio::AudioClip{nullptr, time(0)}});
+    expectations.expect(waitUntil([&] { return audioOwner.control.isIdle(); }),
+                        "looped audio mix replacement reaches worker");
+    expectations.expect(playback.audioClockActive() && engine->isPlaying() &&
+                            audioOwner.control.positionNow() >= time(16, 5),
+                        "mix-only completion preserves the unwrapped audio master after a loop");
+    expectations.expect(!engine->renderForTesting(40), "looped audio continues after mix update");
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(31, 25),
+                        "looped mix update never restarts or freezes audio time");
     playback.setLooping(false);
     expectations.expect(!engine->renderForTesting(1000), "audio nonloop end advances");
     playback.tick();
@@ -431,6 +459,8 @@ void testAudioMasterFloorLoopAndDisableReanchor(Expectations& expectations) {
                         "nonloop audio stops exactly on work-area last frame");
     playback.setLooping(true);
     playback.play();
+    expectations.expect(waitUntil([&] { return playback.audioClockActive(); }),
+                        "resumed audio master starts on the device worker");
     expectations.expect(!engine->renderForTesting(80), "audio resumes from last-frame origin");
     playback.tick();
     expectations.expect(fixture.session.currentTime() == time(1, 25),
@@ -450,6 +480,232 @@ void testAudioMasterFloorLoopAndDisableReanchor(Expectations& expectations) {
     finishFixture(fixture, expectations);
 }
 
+struct DelayedStopGate final {
+    std::mutex mutex;
+    std::condition_variable ready;
+    bool entered = false;
+    bool open = false;
+};
+
+class DelayedStopBackend final : public bloom::media::audio::playback::Backend {
+  public:
+    explicit DelayedStopBackend(std::shared_ptr<DelayedStopGate> gate) : gate_(std::move(gate)) {}
+    bloom::media::audio::playback::AudioStatus start(std::uint32_t, std::uint32_t, Callback,
+                                                      void*) noexcept override {
+        return std::nullopt;
+    }
+    void stop() noexcept override {
+        std::unique_lock lock(gate_->mutex);
+        gate_->entered = true;
+        gate_->ready.notify_all();
+        gate_->ready.wait(lock, [&] { return gate_->open; });
+    }
+
+  private:
+    std::shared_ptr<DelayedStopGate> gate_;
+};
+
+void testRepeatedEmptyMixAndDelayedStopPreserveWallClock(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Wall audio silence", time(4)));
+    ManualClock clock;
+    auto gate = std::make_shared<DelayedStopGate>();
+    auto engine = std::make_unique<media::audio::playback::AudioEngine>(
+        std::make_unique<DelayedStopBackend>(gate));
+    TestAudioOwner audioOwner(fixture, std::move(engine));
+    ui::PlaybackController playback(fixture.session, fixture.controller,
+                                    [&clock] { return clock.now; });
+    playback.setAudioDeviceControl(&audioOwner.control);
+    playback.play();
+    playback.setAudioMix({}, {});
+    const bool held = waitUntil([&] {
+        const std::lock_guard lock(gate->mutex);
+        return gate->entered;
+    });
+    for (int update = 1; update <= 4; ++update) {
+        clock.advance(20ms);
+        playback.setAudioMix({}, {});
+        playback.tick();
+        expectations.expect(fixture.session.currentTime() == time(update / 2, 25),
+                            "repeated empty mixes preserve cumulative wall time");
+    }
+    {
+        const std::lock_guard lock(gate->mutex);
+        gate->open = true;
+    }
+    gate->ready.notify_all();
+    expectations.expect(held && waitUntil([&] { return audioOwner.control.isIdle(); }),
+                        "delayed stop completion reaches an already wall-driven transport");
+    clock.advance(40ms);
+    playback.tick();
+    expectations.expect(playback.state() == ui::PlaybackState::Playing &&
+                            !playback.audioClockActive() &&
+                            fixture.session.currentTime() == time(3, 25),
+                        "delayed stop completion does not reanchor or freeze wall playback");
+    playback.pause();
+    finishFixture(fixture, expectations);
+}
+
+struct DelayedFailureGate final {
+    std::mutex mutex;
+    std::condition_variable ready;
+    bool entered = false;
+    bool open = false;
+    std::atomic<int> starts{0};
+};
+
+class DelayedFailureBackend final : public bloom::media::audio::playback::Backend {
+  public:
+    explicit DelayedFailureBackend(std::shared_ptr<DelayedFailureGate> gate)
+        : gate_(std::move(gate)) {}
+    bloom::media::audio::playback::AudioStatus start(std::uint32_t, std::uint32_t, Callback,
+                                                      void*) noexcept override {
+        if (gate_->starts.fetch_add(1) == 0) {
+            std::unique_lock lock(gate_->mutex);
+            gate_->entered = true;
+            gate_->ready.notify_all();
+            gate_->ready.wait(lock, [&] { return gate_->open; });
+            return std::nullopt;
+        }
+        return bloom::media::audio::AudioError::codeOnly(
+            bloom::media::audio::AudioErrorCode::BackendStartFailed);
+    }
+    void stop() noexcept override {}
+
+  private:
+    std::shared_ptr<DelayedFailureGate> gate_;
+};
+
+void testDelayedAudioStartFailureKeepsWallTransport(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Delayed audio failure", time(4)));
+    ManualClock clock;
+    auto gate = std::make_shared<DelayedFailureGate>();
+    auto engine = std::make_unique<media::audio::playback::AudioEngine>(
+        std::make_unique<DelayedFailureBackend>(gate));
+    TestAudioOwner audioOwner(fixture, std::move(engine));
+    ui::PlaybackController playback(fixture.session, fixture.controller,
+                                    [&clock] { return clock.now; });
+    playback.setAudioDeviceControl(&audioOwner.control);
+    runtime::AudioMixDescription mix;
+    mix.clips.push_back(
+        {document::NodeId::fromRaw(1), document::AssetId::fromRaw(1), time(0), time(4)});
+    playback.setAudioMix(std::move(mix),
+                         {media::audio::playback::AudioClip{nullptr, time(0)}});
+    playback.play();
+    const bool held = waitUntil([&] {
+        const std::lock_guard lock(gate->mutex);
+        return gate->entered;
+    });
+    clock.advance(500ms);
+    playback.tick();
+    const auto beforeRelease = fixture.session.currentTime();
+    {
+        const std::lock_guard lock(gate->mutex);
+        gate->open = true;
+    }
+    gate->ready.notify_all();
+    expectations.expect(held && beforeRelease == time(12, 25),
+                        "held device start leaves wall playback responsive");
+    expectations.expect(waitUntil([&] {
+                            return gate->starts.load() >= 2 && audioOwner.control.isIdle();
+                        }),
+                        "delayed first start triggers one alignment retry and typed failure");
+    expectations.expect(playback.state() == ui::PlaybackState::Playing &&
+                            !playback.audioClockActive() &&
+                            fixture.session.currentTime() == beforeRelease,
+                        "failed retry leaves the visual transport on its current wall frame");
+    clock.advance(40ms);
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(13, 25),
+                        "failed delayed audio restart cannot freeze the playing transport");
+    playback.pause();
+    finishFixture(fixture, expectations);
+}
+
+struct TwoStageStartGate final {
+    std::mutex mutex;
+    std::condition_variable ready;
+    int entered = 0;
+    int allowed = 0;
+};
+
+class TwoStageDelayedBackend final : public bloom::media::audio::playback::Backend {
+  public:
+    explicit TwoStageDelayedBackend(std::shared_ptr<TwoStageStartGate> gate)
+        : gate_(std::move(gate)) {}
+    bloom::media::audio::playback::AudioStatus start(std::uint32_t, std::uint32_t, Callback,
+                                                      void*) noexcept override {
+        std::unique_lock lock(gate_->mutex);
+        const int attempt = ++gate_->entered;
+        gate_->ready.notify_all();
+        gate_->ready.wait(lock, [&] { return gate_->allowed >= attempt; });
+        return std::nullopt;
+    }
+    void stop() noexcept override {}
+
+  private:
+    std::shared_ptr<TwoStageStartGate> gate_;
+};
+
+void testSecondLateAlignmentStopsAudioAndKeepsWallTransport(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Twice delayed audio", time(4)));
+    ManualClock clock;
+    auto gate = std::make_shared<TwoStageStartGate>();
+    auto engine = std::make_unique<media::audio::playback::AudioEngine>(
+        std::make_unique<TwoStageDelayedBackend>(gate));
+    TestAudioOwner audioOwner(fixture, std::move(engine));
+    ui::PlaybackController playback(fixture.session, fixture.controller,
+                                    [&clock] { return clock.now; });
+    playback.setAudioDeviceControl(&audioOwner.control);
+    runtime::AudioMixDescription mix;
+    mix.clips.push_back(
+        {document::NodeId::fromRaw(1), document::AssetId::fromRaw(1), time(0), time(4)});
+    playback.setAudioMix(std::move(mix),
+                         {media::audio::playback::AudioClip{nullptr, time(0)}});
+    playback.play();
+    const auto entered = [&](const int count) {
+        return waitUntil([&] {
+            const std::lock_guard lock(gate->mutex);
+            return gate->entered >= count;
+        });
+    };
+    const auto release = [&](const int count) {
+        {
+            const std::lock_guard lock(gate->mutex);
+            gate->allowed = count;
+        }
+        gate->ready.notify_all();
+    };
+    const bool firstHeld = entered(1);
+    clock.advance(500ms);
+    playback.tick();
+    release(1);
+    const bool secondHeld = entered(2);
+    clock.advance(500ms);
+    playback.tick();
+    const auto beforeRelease = fixture.session.currentTime();
+    release(2);
+    expectations.expect(firstHeld && secondHeld && beforeRelease == time(1),
+                        "both delayed starts leave the wall clock advancing");
+    expectations.expect(waitUntil([&] {
+                            return audioOwner.control.isIdle() &&
+                                   !audioOwner.control.isPlaying();
+                        }),
+                        "second late alignment stops the device");
+    expectations.expect(playback.state() == ui::PlaybackState::Playing &&
+                            !playback.audioClockActive() &&
+                            fixture.session.currentTime() == beforeRelease,
+                        "second alignment refusal clears the audio master without a time jump");
+    clock.advance(40ms);
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(26, 25),
+                        "wall transport continues after second late alignment");
+    playback.pause();
+    finishFixture(fixture, expectations);
+}
+
 void testSharedSubframeOriginAndNonOneAudioRates(Expectations& expectations) {
     using namespace bloom;
     namespace audio = media::audio::playback;
@@ -458,21 +714,26 @@ void testSharedSubframeOriginAndNonOneAudioRates(Expectations& expectations) {
             SessionFixture fixture(makeTestProject("Subframe origin", time(4)));
             (void)fixture.session.setCurrentTime(origin);
             ManualClock clock;
+            audio::AudioEngine* engine = nullptr;
+            std::unique_ptr<TestAudioOwner> audioOwner;
             ui::PlaybackController playback(fixture.session, fixture.controller,
                                             [&clock] { return clock.now; });
-            audio::AudioEngine* engine = nullptr;
             if (useAudio) {
                 auto owned =
                     std::make_unique<audio::AudioEngine>(std::make_unique<audio::NullBackend>(),
                                                          audio::AudioEngine::Config{1000, 2, 4096});
                 engine = owned.get();
-                playback.setAudioEngine(std::move(owned));
+                audioOwner = std::make_unique<TestAudioOwner>(fixture, std::move(owned));
+                playback.setAudioDeviceControl(&audioOwner->control);
                 runtime::AudioMixDescription mix;
                 mix.clips.push_back({document::NodeId::fromRaw(1), document::AssetId::fromRaw(1),
                                      time(0), time(10)});
                 playback.setAudioMix(std::move(mix), {audio::AudioClip{nullptr, time(0)}});
             }
             playback.play();
+            if (useAudio)
+                expectations.expect(waitUntil([&] { return playback.audioClockActive(); }),
+                                    "subframe audio worker start delivered");
             expectations.expect(fixture.session.currentTime() == origin,
                                 "play preserves immediate exact subframe session time");
             clock.advance(39ms);
@@ -492,6 +753,9 @@ void testSharedSubframeOriginAndNonOneAudioRates(Expectations& expectations) {
             playback.pause();
             (void)fixture.session.setCurrentTime(origin);
             playback.play();
+            if (useAudio)
+                expectations.expect(waitUntil([&] { return playback.audioClockActive(); }),
+                                    "subframe audio worker resume delivered");
             clock.advance(40ms);
             if (engine)
                 expectations.expect(!engine->renderForTesting(40), "silent audio resume");
@@ -510,18 +774,21 @@ void testSharedSubframeOriginAndNonOneAudioRates(Expectations& expectations) {
                             }),
                             "non-one fixture opening is ready");
         ManualClock clock;
-        ui::PlaybackController playback(fixture.session, fixture.controller,
-                                        [&clock] { return clock.now; });
         auto owned = std::make_unique<audio::AudioEngine>(
             std::make_unique<audio::NullBackend>(), audio::AudioEngine::Config{1000, 2, 4096});
         auto* engine = owned.get();
         expectations.expect(engine->setRate(speed), "existing non-one audio speed is supported");
-        playback.setAudioEngine(std::move(owned));
+        TestAudioOwner audioOwner(fixture, std::move(owned));
+        ui::PlaybackController playback(fixture.session, fixture.controller,
+                                        [&clock] { return clock.now; });
+        playback.setAudioDeviceControl(&audioOwner.control);
         runtime::AudioMixDescription mix;
         mix.clips.push_back(
             {document::NodeId::fromRaw(1), document::AssetId::fromRaw(1), time(0), time(10)});
         playback.setAudioMix(std::move(mix), {audio::AudioClip{nullptr, time(0)}});
         playback.play();
+        expectations.expect(waitUntil([&] { return playback.audioClockActive(); }),
+                            "non-one audio worker start delivered");
         const auto wallFrames = speed == 2.0 ? std::size_t{20} : std::size_t{80};
         const auto budget = speed == 2.0 ? 20ms : 80ms;
         expectations.expect(!engine->renderForTesting(wallFrames - 1),
@@ -1782,6 +2049,9 @@ int main(int argc, char** argv) try {
     testCachedFramesUseElapsedClock(expectations);
     testTransportRationalRateBoundaries(expectations);
     testAudioMasterFloorLoopAndDisableReanchor(expectations);
+    testRepeatedEmptyMixAndDelayedStopPreserveWallClock(expectations);
+    testDelayedAudioStartFailureKeepsWallTransport(expectations);
+    testSecondLateAlignmentStopsAudioAndKeepsWallTransport(expectations);
     testSharedSubframeOriginAndNonOneAudioRates(expectations);
     testRateChangesEmptyGridAndInvalidClock(expectations);
     testLiveWorkAreaEditsReanchorSafely(expectations);

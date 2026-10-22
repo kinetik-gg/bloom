@@ -1221,6 +1221,12 @@ add_test(NAME bloom.ui.audio-transport COMMAND bloom_audio_transport_test)
 set_tests_properties(bloom.ui.audio-transport PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1")
 
+add_executable(bloom_ui_audio_device_control_test audio_device_control_tests.cpp)
+target_link_libraries(bloom_ui_audio_device_control_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_audio_device_control_test)
+bloom_add_test(NAME bloom.ui.audio-device-control COMMAND bloom_ui_audio_device_control_test
+    LABELS ui audio TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_live_value_edit_test live_value_edit_tests.cpp)
 target_include_directories(bloom_live_value_edit_test PRIVATE ..)
 target_link_libraries(bloom_live_value_edit_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
