@@ -436,14 +436,14 @@ void ProjectHost::handleRecoveryOffer(host::SessionRecoveryOffer offer) {
     if (!recoveryDecisionProvider_) {
         return;
     }
-    protectedRecoveryOfferPath_ = offer->recoveryPath;
-    if (!recoveryDecisionProvider_(offer->recoveryPath)) {
+    protectedRecoveryOfferPath_ = offer.recoveryPath;
+    if (!recoveryDecisionProvider_(offer.recoveryPath)) {
         protectedRecoveryOfferPath_.reset();
         return;
     }
     // Recovering IS opening: the recovery file is an ordinary Bloom archive, so it goes through
     // the same Open the artist would run on it themselves, unsaved-change prompt included.
-    confirmUnsavedChanges([this, path = offer->recoveryPath] {
+    confirmUnsavedChanges([this, path = offer.recoveryPath] {
         beginOpen(path);
         if (activity_ != ProjectHostActivity::Opening) {
             protectedRecoveryOfferPath_.reset();

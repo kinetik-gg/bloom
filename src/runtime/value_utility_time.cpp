@@ -58,8 +58,9 @@ struct UInt128 final {
                                                const std::uint32_t bits) noexcept {
     if (bits == 0 || (value.high == 0 && value.low == 0))
         return value;
-    const auto used =
-        value.high != 0 ? 128U - std::countl_zero(value.high) : 64U - std::countl_zero(value.low);
+    const auto used = value.high != 0
+                          ? 128U - static_cast<unsigned>(std::countl_zero(value.high))
+                          : 64U - static_cast<unsigned>(std::countl_zero(value.low));
     if (bits > 128U - used)
         return std::nullopt;
     if (bits >= 64U)

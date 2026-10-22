@@ -296,6 +296,10 @@ def run_named(args: argparse.Namespace, report: dict, env: dict[str, str], logs:
     if args.target:
         command = ["cmake", "--build", str(build_dir), "--config", args.config,
                    "--parallel", str(args.jobs), "--target", *dict.fromkeys(args.target)]
+        if args.keep_going:
+            if not cache_values(build_dir).get("CMAKE_GENERATOR", "").startswith("Ninja"):
+                raise ValidationError("--keep-going requires a Ninja build directory")
+            command += ["--", "-k", "0"]
         if execute(report, command, ROOT, env, logs / "build.log", args.build_timeout_seconds):
             raise ValidationError("Named target build failed")
     if args.test:
@@ -451,6 +455,8 @@ def parser() -> argparse.ArgumentParser:
                         help="Wait at most this long for the shared lock (default: fail fast)")
     common.add_argument("--build-timeout-seconds", type=int, default=3600)
     common.add_argument("--test-timeout-seconds", type=int, default=1800)
+    common.add_argument("--keep-going", action="store_true",
+                        help="Collect independent Ninja compile failures in one build attempt")
     modes = command.add_subparsers(dest="mode", required=True)
     focused = modes.add_parser("focused", parents=[common], help="Build selected targets and/or run exact CTest names")
     focused.add_argument("--target", action="append", default=[], help="Repeat for each narrow CMake target")
