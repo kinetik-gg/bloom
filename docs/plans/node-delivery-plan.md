@@ -1,10 +1,23 @@
 # Planned node delivery
 
-Status: source-audited inventory and bounded implementation plan; planned nodes are not completed
+Status: first 18 nodes implemented and locally checked; later chunks remain planned
 
 Updated: 2026-10-23
 
 Owner: [issue #331](https://github.com/kinetik-gg/bloom/issues/331).
+
+## Delivered checkpoint
+
+Exposure, Offset, Multiply, Invert, Linear Gradient, Radial Gradient, Checker, Image Mix, Set Alpha,
+Multiply Alpha, Crop, Pad, Flip, Rotate 90, Resize, Fit, Gaussian Blur and Box Blur are implemented.
+Six independent audit groups supplied fixes integrated before the final optimized application build.
+Ten CPU/UI/persistence groups and five required-device native GPU groups passed at the node milestone;
+the final session/audio integration group passes 21 cases at `79a81217`. Native execution was not
+repeated after changes confined to audio, undo, recovery and test fixtures. This is bounded local
+Linux evidence, not final-source qualification of every export route or Windows/macOS execution.
+
+Standalone Transform 2D, Matte Blur and chunks #338–#349 remain planned. The inventory below records
+the original audit baseline rather than claiming those delivered nodes remain absent.
 
 ## Verified inventory
 

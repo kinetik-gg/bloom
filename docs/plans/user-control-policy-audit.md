@@ -97,22 +97,36 @@ Final render has a separate availableRAM/4 allowance and synchronous OS sampling
 
 First replace repeated synchronous sampling/default fractions with one captured off-UI capacity/admission view for still/range/video/headless. Then qualify configurable/capability-based output bounds across analysis/adapters/reservation identity; preserve representability, codec/device limits, exact peaks, cancellation, one final readback, and atomic verified publication. Tests must cover low retention with valid render, actual capacity refusal/recovery, large output analysis, all production routes. Do not use unbounded numeric maxima as invented capacity.
 
-## Verified follow-up work, not part of this milestone's completion claim
+## Final bounded closeout
 
-- [#350: Undo retention ownership](https://github.com/kinetik-gg/bloom/issues/350): a small
-  edit can count unchanged live payload against the 512 MiB history allowance. Separate active
-  storage from history retention while preserving the newest atomic undo step and redo integrity.
-- [#351: Recovery association](https://github.com/kinetik-gg/bloom/issues/351): recovery discovery
-  applies the caller project's timestamp and path to candidates without proving project identity.
-  Match identity before filtering or offering candidates; no automatic-overwrite claim is made.
+- [#350: Undo retention ownership](https://github.com/kinetik-gg/bloom/issues/350): implemented
+  incremental accounting for history-owned storage, excluding unchanged active payload. Admission
+  preserves the newest atomic undo step in both directions; large shared-payload, replacement,
+  branching and repeated undo/redo regressions pass.
+- [#351: Recovery association](https://github.com/kinetik-gg/bloom/issues/351): implemented
+  digest-bound ownership companions and worker-side candidate validation. Timestamp filtering uses
+  each candidate's identified project; legacy candidates keep unknown ownership. Two-project,
+  equal-time, corrupt-candidate and asynchronous host regressions pass.
+- [#329: Audio windowing](https://github.com/kinetik-gg/bloom/issues/329): standalone WAV/MP3
+  playback now retains an admitted 4096-frame PCM window instead of a full decoded clip. Waveform
+  scans stream on workers; seek, cancellation, source checks and diagnostics remain explicit.
+  MP3 backward seeking can decode a prefix. Video audio still uses the existing buffered path.
+
+The optimized application and 21 local regression cases pass at `79a81217`. This final group covers
+commands, persistence, recovery, audio, node UI and GPU preparation coverage; it does not repeat native
+execution. The preceding 18-node milestone has five passing required-device native groups at
+`a91eb621`, with no subsequent production GPU pixel changes. No GitHub Actions were used.
+
+## Remaining planned work
+
 - [#352: Video provider capacity](https://github.com/kinetik-gg/bloom/issues/352): image/sequence
   metadata now follows representability and caller decode admission, but the video provider still
   supports at most 16,384-axis / 16,777,216-pixel frames and 1,000,000 index entries. These are
   current provider implementation limits, not user cache settings or measured hardware limits.
   Negotiate capacity and bound indexing/transport before expanding those capabilities.
 
-These issues are explicit planned follow-ups. They remain open; this sprint does not claim every
-policy or planned media/node capability is implemented.
+Video provider expansion and native Windows cross-drive/UNC media qualification remain open.
+This closeout does not claim every policy or planned media/node capability is implemented.
 
 ## Validation and supervision
 
