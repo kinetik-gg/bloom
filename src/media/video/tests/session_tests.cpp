@@ -302,6 +302,94 @@ void colourInterpretation(const std::filesystem::path& directory) {
               "colour fixtures carry their tags through decode");
     }
 }
+// Issue #367: variable cadence, display orientation, interlace and RGB-coded streams.
+unsigned high(const bloom::media::provider::CpuPlane& plane, std::uint32_t x, std::uint32_t y) {
+    return std::to_integer<unsigned>(
+        plane.bytes[static_cast<std::size_t>(y) * plane.stride + std::size_t{x} * 2U + 1U]);
+}
+void timingAndLayout(const std::filesystem::path& directory) {
+    using namespace bloom::media;
+    const video::SourceRevisionAccess preview{video::SourceRevisionPolicy::Retained, true};
+    {
+        video::VideoDecodeSession session(directory / "vfr-h264.mp4");
+        const auto probe = std::get<provider::ProbeResult>(session.probe());
+        check(probe.streams[0].frameCount == 21,
+              "a variable-cadence stream exposes its nominal 24/1 slots");
+        // Packets at 0,1,2,4,5,8,9,10,14,15,16,20: each slot shows the last frame at or before it.
+        for (const auto& [slot, shown] : std::array<std::pair<unsigned, unsigned>, 8>{
+                 {{0, 0}, {3, 2}, {4, 4}, {7, 5}, {13, 10}, {16, 16}, {19, 16}, {20, 20}}}) {
+            const auto decoded = session.frame(probe, 0, slot, 0, nullptr, {}, {}, {}, {}, preview);
+            check(std::holds_alternative<Frame>(decoded) &&
+                      frameLuma(std::get<Frame>(decoded)) == 16 + shown * 3,
+                  "variable cadence maps a slot to the frame presented at its time");
+        }
+        check(std::holds_alternative<provider::Unavailable>(
+                  session.frame(probe, 0, 21, 0, nullptr, {}, {}, {}, {}, preview)),
+              "a slot past the duration is refused");
+    }
+    {
+        video::VideoDecodeSession session(directory / "rotated-h264.mp4");
+        const auto probe = std::get<provider::ProbeResult>(session.probe());
+        check(probe.streams[0].width == 48 && probe.streams[0].height == 64,
+              "a 90-degree display matrix reports display dimensions");
+        const auto decoded = session.frame(probe, 0, 7, 0, nullptr);
+        check(std::holds_alternative<Frame>(decoded), "rotated decode");
+        const auto& frame = *std::get<Frame>(decoded);
+        check(frame.format == provider::PixelFormat::Yuva444p16 && frame.planes[0].width == 48 &&
+                  frame.planes[0].height == 64,
+              "the rotated product is display-oriented");
+        // Coded (x, y) is displayed at (47 - y, x) after a clockwise quarter turn.
+        for (const auto& [x, y] :
+             std::array<std::pair<unsigned, unsigned>, 3>{{{0, 0}, {2, 40}, {20, 13}}}) {
+            const auto coded = x == 20 && y == 10 ? 220U : 16U + 7U * 3U;
+            check(high(frame.planes[0], 47 - y, x) == coded,
+                  "pixels land at their display-oriented position");
+        }
+    }
+    {
+        video::VideoDecodeSession session(directory / "anamorphic-h264.mp4");
+        const auto probe = std::get<provider::ProbeResult>(session.probe());
+        check(probe.streams[0].width == 128 && probe.streams[0].height == 48,
+              "a 2:1 sample aspect ratio reports square-pixel display dimensions");
+        const auto decoded = session.frame(probe, 0, 7, 0, nullptr);
+        check(std::holds_alternative<Frame>(decoded), "anamorphic decode");
+        const auto& plane = std::get<Frame>(decoded)->planes[0];
+        check(plane.width == 128 && plane.height == 48 && high(plane, 4, 30) == 16 + 7 * 3 &&
+                  high(plane, 46, 10) == 220,
+              "anamorphic pixels are resampled to square pixels at decode");
+    }
+    {
+        video::VideoDecodeSession session(directory / "interlaced-prores.mov");
+        const auto probe = std::get<provider::ProbeResult>(session.probe());
+        const auto decoded = session.frame(probe, 0, 3, 0, nullptr);
+        check(std::holds_alternative<Frame>(decoded), "interlaced decode is no longer refused");
+        const auto& plane = std::get<Frame>(decoded)->planes[0];
+        const auto background = high(plane, 0, 2);
+        check(std::abs(static_cast<int>(background) - static_cast<int>(16 + 3 * 3)) <= 2 &&
+                  std::abs(static_cast<int>(high(plane, 0, 1)) - static_cast<int>(background)) <= 1,
+              "the dominant (top) field is kept and the other field rebuilt from it");
+    }
+    {
+        video::VideoDecodeSession session(directory / "rgb-tiff.mov");
+        const auto probe = std::get<provider::ProbeResult>(session.probe());
+        const auto decoded = session.frame(probe, 0, 2, 0, nullptr);
+        check(std::holds_alternative<Frame>(decoded), "RGB-coded decode is no longer refused");
+        const auto& frame = *std::get<Frame>(decoded);
+        check(frame.format == provider::PixelFormat::Rgba16 && frame.colour.matrix == 0,
+              "RGB-coded video keeps RGB with its identity matrix tag");
+        const auto window = bloom::render::ImageWindow::create(0, 0, 64, 48);
+        const auto descriptor = bloom::render::Rgba32fImageDescriptor::create(
+            *window.value(), *window.value(), bloom::core::PixelAspectRatio::square());
+        const auto converted = video::videoToInputColorSpace(frame, 0, "space", *descriptor.value(),
+                                                             1, 1, std::size_t{64} * 48 * 16);
+        check(std::holds_alternative<bloom::render::Rgba32fImage>(converted), "RGB converts");
+        const auto pixel = std::get<bloom::render::Rgba32fImage>(converted).pixels()[0];
+        check(std::abs(pixel.red() - (16.0F + 6.0F) * 256.0F / 65535.0F) < 1e-6F &&
+                  pixel.green() == 0.0F && std::abs(pixel.blue() - 0.5F) < 1e-4F &&
+                  pixel.alpha() == 1.0F,
+              "RGB samples pass through without a YUV matrix");
+    }
+}
 } // namespace
 int main(int argc, char** argv) {
     try {
@@ -309,6 +397,7 @@ int main(int argc, char** argv) {
         run(argv[1]);
         retainedRouting(argv[1]);
         colourInterpretation(argv[1]);
+        timingAndLayout(argv[1]);
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;

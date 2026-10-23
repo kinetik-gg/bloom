@@ -124,15 +124,15 @@ unsigned luma(unsigned frame, unsigned x, unsigned y) {
     }
     return 16 + frame * 3;
 }
-std::vector<std::uint8_t> h264Frame(unsigned frame) {
-    const bool key = frame % 12 == 0;
+std::vector<std::uint8_t> h264Frame(unsigned frame, bool forceKey = false) {
+    const bool key = forceKey || frame % 12 == 0;
     Bits s;
     s.ue(0);
     s.ue(key ? 2 : 0);
     s.ue(0);
-    s.number(frame % 12, 4);
+    s.number(key ? 0 : frame % 12, 4);
     if (key) {
-        s.ue(frame / 12);
+        s.ue(forceKey ? frame % 2 : frame / 12);
         s.bit(0);
         s.bit(0);
     } else {
@@ -296,6 +296,145 @@ void fixture(const std::filesystem::path& path, bool prores, bool alpha = false,
     }
     require(av_write_trailer(out.format) >= 0, "Fixture mux trailer");
 }
+// Issue #367 timing/metadata fixtures, 64x48 with the numbered luma pattern.
+enum class Special { Vfr, Rotated, Interlaced, Rgb, Anamorphic };
+void special(const std::filesystem::path& path, const Special kind) {
+    Output out;
+    require(out.frame && out.packet, "Fixture allocation");
+    require(avformat_alloc_output_context2(&out.format, nullptr, "mov", path.c_str()) >= 0,
+            "Fixture mux allocation");
+    auto* stream = avformat_new_stream(out.format, nullptr);
+    require(stream, "Fixture video stream");
+    stream->time_base = {1, 24};
+    stream->avg_frame_rate = {24, 1};
+    auto& vp = *stream->codecpar;
+    vp.codec_type = AVMEDIA_TYPE_VIDEO;
+    vp.width = 64;
+    vp.height = 48;
+    vp.color_primaries = AVCOL_PRI_BT709;
+    vp.color_trc = AVCOL_TRC_BT709;
+    vp.color_space = kind == Special::Rgb ? AVCOL_SPC_RGB : AVCOL_SPC_BT709;
+    vp.color_range = kind == Special::Rgb ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
+    const bool encoded = kind == Special::Interlaced || kind == Special::Rgb;
+    if (encoded) {
+        const auto* encoder =
+            avcodec_find_encoder_by_name(kind == Special::Rgb ? "tiff" : "prores_ks");
+        require(encoder, "Intake fixture encoder missing");
+        out.codec = avcodec_alloc_context3(encoder);
+        require(out.codec, "Fixture encoder allocation");
+        out.codec->width = 64;
+        out.codec->height = 48;
+        out.codec->pix_fmt = kind == Special::Rgb ? AV_PIX_FMT_RGB48LE : AV_PIX_FMT_YUV422P10LE;
+        out.codec->time_base = {1, 24};
+        out.codec->framerate = {24, 1};
+        out.codec->thread_count = 1;
+        out.codec->color_primaries = vp.color_primaries;
+        out.codec->color_trc = vp.color_trc;
+        out.codec->colorspace = vp.color_space;
+        out.codec->color_range = vp.color_range;
+        out.codec->flags |= AV_CODEC_FLAG_GLOBAL_HEADER | AV_CODEC_FLAG_BITEXACT;
+        if (kind == Special::Interlaced) {
+            out.codec->profile = 2;
+            out.codec->flags |= AV_CODEC_FLAG_INTERLACED_DCT;
+            out.codec->field_order = AV_FIELD_TT;
+        }
+        require(avcodec_open2(out.codec, encoder, nullptr) >= 0, "Fixture encoder open");
+        require(avcodec_parameters_from_context(&vp, out.codec) >= 0, "Fixture encoder metadata");
+        out.frame->width = 64;
+        out.frame->height = 48;
+        out.frame->format = out.codec->pix_fmt;
+        require(av_frame_get_buffer(out.frame, 32) >= 0, "Fixture image buffer");
+    } else {
+        vp.codec_id = AV_CODEC_ID_H264;
+        const auto header = h264Header();
+        vp.extradata =
+            static_cast<std::uint8_t*>(av_mallocz(header.size() + AV_INPUT_BUFFER_PADDING_SIZE));
+        require(vp.extradata, "Fixture codec header");
+        std::memcpy(vp.extradata, header.data(), header.size());
+        vp.extradata_size = static_cast<int>(header.size());
+        vp.format = AV_PIX_FMT_YUV420P;
+        if (kind == Special::Anamorphic) {
+            // 2:1 sample aspect ratio: 64x48 coded pixels display as 128x48.
+            stream->sample_aspect_ratio = {2, 1};
+            vp.sample_aspect_ratio = {2, 1};
+        }
+        if (kind == Special::Rotated) {
+            // Display matrix: rotate the coded picture 90 degrees clockwise for display.
+            auto* side =
+                av_packet_side_data_new(&vp.coded_side_data, &vp.nb_coded_side_data,
+                                        AV_PKT_DATA_DISPLAYMATRIX, 9 * sizeof(std::int32_t), 0);
+            require(side, "Fixture display matrix");
+            av_display_rotation_set(reinterpret_cast<std::int32_t*>(side->data), -90.0);
+        }
+    }
+    require(avio_open(&out.format->pb, path.c_str(), AVIO_FLAG_WRITE) >= 0, "Fixture file open");
+    AVDictionary* muxOptions = nullptr;
+    if (!encoded)
+        av_dict_set(&muxOptions, "brand", "isom", 0);
+    const auto headerStatus = avformat_write_header(out.format, &muxOptions);
+    av_dict_free(&muxOptions);
+    require(headerStatus >= 0, "Fixture mux header");
+    // Variable cadence: frames at 0,1,2,4,5,8,9,10,14,15,16,20 (24/1 timebase), each one frame
+    // number n showing its own presentation slot; every frame is an IDR so any cadence decodes.
+    constexpr std::array<unsigned, 12> vfr{0, 1, 2, 4, 5, 8, 9, 10, 14, 15, 16, 20};
+    for (unsigned n = 0; n < 12; ++n) {
+        av_packet_unref(out.packet);
+        const auto pts = kind == Special::Vfr ? vfr[n] : n;
+        if (encoded) {
+            require(av_frame_make_writable(out.frame) >= 0, "Fixture writable frame");
+            for (unsigned y = 0; y < 48; ++y) {
+                auto* row =
+                    out.frame->data[0] + static_cast<std::ptrdiff_t>(y) * out.frame->linesize[0];
+                for (unsigned x = 0; x < 64; ++x) {
+                    if (kind == Special::Rgb) {
+                        // R carries the numbered luma pattern, G a horizontal ramp, B constant.
+                        const std::array<unsigned, 3> rgb{luma(n, x, y) * 256U, x * 1024U, 32768U};
+                        for (unsigned c = 0; c < 3; ++c) {
+                            row[x * 6 + c * 2] = static_cast<std::uint8_t>(rgb[c] & 255U);
+                            row[x * 6 + c * 2 + 1] = static_cast<std::uint8_t>(rgb[c] >> 8U);
+                        }
+                    } else {
+                        // Interlaced: the top field carries frame n, the bottom field 255 - n.
+                        const auto value = (y % 2 == 0 ? luma(n, x, y) : 200U) * 4U;
+                        row[x * 2] = static_cast<std::uint8_t>(value & 255U);
+                        row[x * 2 + 1] = static_cast<std::uint8_t>(value >> 8U);
+                    }
+                }
+            }
+            if (kind == Special::Interlaced)
+                for (unsigned plane = 1; plane < 3; ++plane)
+                    for (unsigned y = 0; y < 48; ++y)
+                        for (unsigned x = 0; x < 32; ++x) {
+                            auto* pixel =
+                                out.frame->data[plane] +
+                                static_cast<std::ptrdiff_t>(y) * out.frame->linesize[plane] +
+                                static_cast<std::ptrdiff_t>(x) * 2;
+                            pixel[0] = 0;
+                            pixel[1] = 2;
+                        }
+            out.frame->flags = kind == Special::Interlaced
+                                   ? AV_FRAME_FLAG_INTERLACED | AV_FRAME_FLAG_TOP_FIELD_FIRST
+                                   : 0;
+            out.frame->pts = pts;
+            require(avcodec_send_frame(out.codec, out.frame) >= 0 &&
+                        avcodec_receive_packet(out.codec, out.packet) >= 0,
+                    "Fixture special encode");
+        } else {
+            const auto bytes = h264Frame(pts, true);
+            require(av_new_packet(out.packet, static_cast<int>(bytes.size())) >= 0,
+                    "Fixture packet allocation");
+            std::memcpy(out.packet->data, bytes.data(), bytes.size());
+            out.packet->flags = AV_PKT_FLAG_KEY;
+        }
+        out.packet->pts = pts;
+        out.packet->dts = pts;
+        out.packet->duration = 1;
+        out.packet->stream_index = stream->index;
+        av_packet_rescale_ts(out.packet, {1, 24}, stream->time_base);
+        require(av_interleaved_write_frame(out.format, out.packet) >= 0, "Fixture special mux");
+    }
+    require(av_write_trailer(out.format) >= 0, "Fixture mux trailer");
+}
 } // namespace
 bool generateFixtures(const std::string& directory) {
     try {
@@ -308,6 +447,11 @@ bool generateFixtures(const std::string& directory) {
         fixture(path / "untagged-h264.mp4", false, false, {1, 1, 1, false}, 12);
         fixture(path / "pq2020-h264.mp4", false, false, {9, 16, 9, true}, 12);
         fixture(path / "hlg2020-h264.mp4", false, false, {9, 18, 9, true}, 12);
+        special(path / "vfr-h264.mp4", Special::Vfr);
+        special(path / "rotated-h264.mp4", Special::Rotated);
+        special(path / "interlaced-prores.mov", Special::Interlaced);
+        special(path / "rgb-tiff.mov", Special::Rgb);
+        special(path / "anamorphic-h264.mp4", Special::Anamorphic);
         std::ofstream provenance(path / "provenance.txt");
         provenance
             << "MEDIA-3 generated-read-v1\nFFmpeg 8.1.2 qualified intake mux/ProRes encode\n"
@@ -315,14 +459,18 @@ bool generateFixtures(const std::string& directory) {
                "Luma background 16+3*N; seven-segment frame numbers; Rec.709 limited\n"
                "Additional ProRes 4444 alpha fixture uses 512/1023 opacity\n"
                "12-frame H.264 colour fixtures: untagged, BT.2020/PQ, BT.2020/HLG\n"
+               "12-frame timing fixtures: VFR and 90-degree display-matrix H.264 (all IDR),\n"
+               "top-field-first interlaced ProRes 422, RGB48 TIFF in MOV, 2:1 SAR H.264\n"
                "PCM mono 48000 Hz: sample[n]=((n%997)-498)/1024\n"
                "Original synthetic content; generated at test time; no external media\n";
         const auto specification =
             provider::ffmpegHandshake().declarations.front().evidence.fixtures.toLowercaseHex();
         provenance << "Generator SHA-256: "
                    << std::string(specification.begin(), specification.end()) << '\n';
-        for (const auto* name : {"numbered-h264.mp4", "numbered-prores.mov", "alpha-prores.mov",
-                                 "untagged-h264.mp4", "pq2020-h264.mp4", "hlg2020-h264.mp4"}) {
+        for (const auto* name :
+             {"numbered-h264.mp4", "numbered-prores.mov", "alpha-prores.mov", "untagged-h264.mp4",
+              "pq2020-h264.mp4", "hlg2020-h264.mp4", "vfr-h264.mp4", "rotated-h264.mp4",
+              "interlaced-prores.mov", "rgb-tiff.mov", "anamorphic-h264.mp4"}) {
             const auto identity = sourceIdentity((path / name).string()).first.toLowercaseHex();
             provenance << name << " SHA-256: " << std::string(identity.begin(), identity.end())
                        << '\n';

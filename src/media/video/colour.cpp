@@ -47,7 +47,8 @@ constexpr std::string_view kOverride =
         missing.emplace_back("colour primaries");
     if (needTransfer && (tags.transfer <= 0 || tags.transfer == 2))
         missing.emplace_back("transfer characteristics");
-    if (!knownMatrix(tags.matrix) && tags.matrix != kMatrixBt2020Cl)
+    // Matrix 0 (identity) is the declared matrix of an RGB-coded stream, not a missing tag.
+    if (!knownMatrix(tags.matrix) && tags.matrix != kMatrixBt2020Cl && tags.matrix != 0)
         missing.emplace_back("matrix coefficients");
     if (!knownRange(tags.range))
         missing.emplace_back("range");
@@ -152,9 +153,16 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
                       std::string(kOverride)
                 : "Video stream has no " + missing + " tag" + std::string(kOverride)};
     }
-    const bool wide = frame.format == PixelFormat::Yuva444p16;
+    // RGB-coded streams arrive as packed RGBA16 and need no YUV matrix; they are interpreted
+    // only through a config input space.
+    const bool rgbCoded = frame.format == PixelFormat::Rgba16;
+    const bool wide = frame.format == PixelFormat::Yuva444p16 || rgbCoded;
     if (!wide && frame.format != PixelFormat::Yuv420p8)
         return Unavailable{Error::Unavailable, "Video pixel layout is not qualified"};
+    if (rgbCoded && !configManaged)
+        return Unavailable{Error::Unavailable,
+                           "RGB-coded video is interpreted only through the colour config" +
+                               std::string(kOverride)};
     const auto width = frame.planes[0].width, height = frame.planes[0].height;
     const auto w = static_cast<std::uint32_t>(std::max(1.0, std::ceil(width * horizontalScale)));
     const auto h = static_cast<std::uint32_t>(std::max(1.0, std::ceil(height * verticalScale)));
@@ -178,6 +186,13 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
             convertedRow.resize(w);
         for (std::uint32_t x = 0; x < w; ++x) {
             const auto sx = std::min(width - 1, static_cast<std::uint32_t>(x / horizontalScale));
+            if (rgbCoded) {
+                std::array<float, 4> sample{};
+                for (std::uint32_t c = 0; c < 4; ++c)
+                    sample[c] = component(frame.planes[0], sx * 4U + c, sy, true) / 65535.0F;
+                convertedRow[x] = sample;
+                continue;
+            }
             const auto yCode = component(frame.planes[0], sx, sy, wide);
             const auto uCode =
                 wide ? component(frame.planes[1], sx, sy, true) : chroma(frame.planes[1], sx, sy);
@@ -254,7 +269,7 @@ VideoInputColorSpaceResolution resolveVideoInputColorSpace(
     }
     if (const auto missing = missingTags(tags, true); !missing.empty())
         return refuse("Video stream has no " + missing + " tag" + std::string(kOverride));
-    if (tags.primaries != 1 || tags.matrix != kMatrixBt709)
+    if (tags.primaries != 1 || (tags.matrix != kMatrixBt709 && tags.matrix != 0))
         return refuse("Rec.2020 or other non-Rec.709 video without a PQ or HLG transfer has no "
                       "automatic config space" +
                       std::string(kOverride));

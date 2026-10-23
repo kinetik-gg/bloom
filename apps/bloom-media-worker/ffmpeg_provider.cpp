@@ -17,6 +17,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/channel_layout.h>
+#include <libavutil/display.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
@@ -51,7 +52,7 @@ struct Input {
     AVFrame* transfer = av_frame_alloc();
     SwsContext* scale = nullptr;
     // Source layout the cached conversion context was built for.
-    std::array<int, 5> scaleKey{};
+    std::array<int, 6> scaleKey{};
     SwrContext* resample = nullptr;
     std::unique_ptr<platform::WorkerSnapshotInput> snapshot;
     AVIOContext* io = nullptr;
@@ -120,6 +121,48 @@ std::pair<Digest, std::uint64_t> sourceIdentity(const std::string& path) {
     require(input.eof() && total == size, "Media source read failed", Error::Io);
     return {hasher.finalize(), size};
 }
+// Display orientation from the stream's display matrix: clockwise quarter turns and a horizontal
+// mirror, applied to decoded pixels as source interpretation. Non-right angles are not applied.
+struct Orientation final {
+    unsigned quarterTurns = 0;
+    bool mirror = false;
+    [[nodiscard]] bool identity() const { return quarterTurns == 0 && !mirror; }
+};
+Orientation orientation(const AVCodecParameters& p) {
+    const auto* side =
+        av_packet_side_data_get(p.coded_side_data, p.nb_coded_side_data, AV_PKT_DATA_DISPLAYMATRIX);
+    if (side == nullptr || side->size < 9 * sizeof(std::int32_t))
+        return {};
+    const auto* matrix = reinterpret_cast<const std::int32_t*>(side->data);
+    const auto degrees = av_display_rotation_get(matrix);
+    if (!std::isfinite(degrees))
+        return {};
+    // av_display_rotation_get is counter-clockwise; display needs the clockwise correction.
+    const auto clockwise = std::lround(-degrees);
+    if (clockwise % 90 != 0)
+        return {};
+    Orientation result;
+    result.quarterTurns = static_cast<unsigned>(((clockwise / 90) % 4 + 4) % 4);
+    const auto determinant =
+        static_cast<double>(matrix[0]) * matrix[4] - static_cast<double>(matrix[1]) * matrix[3];
+    result.mirror = determinant < 0;
+    return result;
+}
+// Square-pixel width for a non-square sample aspect ratio (container value first, then the
+// bitstream's). Anamorphic pictures are resampled horizontally to square pixels at decode, so the
+// rest of Bloom sees display geometry; a missing or unit SAR keeps the coded width.
+int displayWidth(const AVStream& stream) {
+    auto sar = stream.sample_aspect_ratio;
+    if (sar.num <= 0 || sar.den <= 0)
+        sar = stream.codecpar->sample_aspect_ratio;
+    const auto width = stream.codecpar->width;
+    if (sar.num <= 0 || sar.den <= 0 || sar.num == sar.den)
+        return width;
+    const auto scaled = av_rescale(width, sar.num, sar.den);
+    require(scaled > 0 && scaled <= static_cast<std::int64_t>(Limits::dimension),
+            "Display width exceeds limits", Error::Oversized);
+    return static_cast<int>(scaled);
+}
 ColourTags colour(const AVCodecParameters& p) {
     return {p.color_primaries, p.color_trc, p.color_space, p.color_range};
 }
@@ -176,15 +219,31 @@ ProbeResult probe(Input& input, const Digest& digest, std::uint64_t bytes) {
         }
         if (p.codec_type == AVMEDIA_TYPE_VIDEO) {
             extent(p.width, p.height);
-            s.width = static_cast<std::uint32_t>(p.width);
-            s.height = static_cast<std::uint32_t>(p.height);
+            const auto turn = orientation(p);
+            const auto width = displayWidth(stream);
+            extent(width, p.height);
+            s.width = static_cast<std::uint32_t>(turn.quarterTurns % 2 ? p.height : width);
+            s.height = static_cast<std::uint32_t>(turn.quarterTurns % 2 ? width : p.height);
             const auto rate = av_guess_frame_rate(input.format, input.format->streams[i], nullptr);
             require(rate.num > 0 && rate.den > 0, "Video rate unavailable", Error::Unavailable);
             s.rate = rational(rate.num, rate.den);
+            // A variable-cadence stream is addressed on its nominal grid (see video()), so its
+            // frame count is the number of nominal slots its duration covers, not its packets.
+            if (stream.duration != AV_NOPTS_VALUE && stream.duration > 0) {
+                const auto slots =
+                    av_rescale_q_rnd(stream.duration, stream.time_base, av_inv_q(rate),
+                                     static_cast<AVRounding>(AV_ROUND_UP | AV_ROUND_PASS_MINMAX));
+                if (slots > 0 && stream.nb_frames > 0 &&
+                    (slots > stream.nb_frames + 1 || slots + 1 < stream.nb_frames))
+                    s.frameCount = static_cast<std::uint64_t>(slots);
+            }
             const auto* name = av_get_pix_fmt_name(static_cast<AVPixelFormat>(p.format));
             s.pixelFormat = name ? name : "unknown";
-            s.format =
-                p.format == AV_PIX_FMT_YUV420P ? PixelFormat::Yuv420p8 : PixelFormat::Yuva444p16;
+            const auto* layout = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(p.format));
+            s.format = p.format == AV_PIX_FMT_YUV420P && turn.identity() ? PixelFormat::Yuv420p8
+                       : layout && (layout->flags & AV_PIX_FMT_FLAG_RGB) != 0
+                           ? PixelFormat::Rgba16
+                           : PixelFormat::Yuva444p16;
             s.colour = colour(p);
         } else if (p.codec_type == AVMEDIA_TYPE_AUDIO) {
             s.kind = MediaKind::Audio;
@@ -265,6 +324,10 @@ void decoder(Input& input, const AVStream& stream, AVBufferRef* device) {
             "Invalid codec parameters");
     input.codec->max_pixels = Limits::pixels;
     input.codec->err_recognition = AV_EF_CRCCHECK | AV_EF_BITSTREAM | AV_EF_BUFFER | AV_EF_EXPLODE;
+    // The TIFF decoder treats every unrecognized (often purely descriptive) tag as an error under
+    // AV_EF_EXPLODE, including tags its own encoder writes; decoding errors still fail the frame.
+    if (stream.codecpar->codec_id == AV_CODEC_ID_TIFF)
+        input.codec->err_recognition &= ~AV_EF_EXPLODE;
     if (device) {
         input.codec->thread_count = 1;
         input.codec->hw_device_ctx = av_buffer_ref(device);
@@ -325,6 +388,83 @@ bool next(Input& input, unsigned stream, bool& eof) {
         }
     }
 }
+// Field-aware interpretation of an interlaced frame: the temporally first (dominant) field is kept
+// and each line of the other field is rebuilt as the mean of the dominant-field lines above and
+// below it (edges repeat). The result is one progressive picture at the frame's presentation time,
+// deterministic and without temporal reconstruction.
+void deinterlace(FrameProduct& product, const bool topFieldFirst) {
+    const unsigned keep = topFieldFirst ? 0U : 1U;
+    // Every non-8-bit product stores 16-bit little-endian samples.
+    const bool wide = product.format != PixelFormat::Yuv420p8;
+    for (auto& plane : product.planes) {
+        const auto samples = plane.stride / (wide ? 2U : 1U);
+        if (plane.height < 2)
+            continue;
+        auto* bytes = reinterpret_cast<std::uint8_t*>(plane.bytes.data());
+        const auto sample = [&](std::uint32_t row, std::uint32_t x) -> unsigned {
+            const auto* at =
+                bytes + static_cast<std::size_t>(row) * plane.stride + x * (wide ? 2U : 1U);
+            return wide ? static_cast<unsigned>(at[0] | (at[1] << 8U)) : at[0];
+        };
+        for (std::uint32_t y = 0; y < plane.height; ++y) {
+            if (y % 2U == keep)
+                continue;
+            // Nearest dominant-field rows above and below (within the plane).
+            const auto above = y == 0 ? y + 1 : y - 1;
+            const auto below = y + 1 < plane.height ? y + 1 : above;
+            auto* row = bytes + static_cast<std::size_t>(y) * plane.stride;
+            for (std::uint32_t x = 0; x < samples; ++x) {
+                const auto value = (sample(above, x) + sample(below, x) + 1U) / 2U;
+                if (wide) {
+                    row[2U * x] = static_cast<std::uint8_t>(value & 255U);
+                    row[2U * x + 1U] = static_cast<std::uint8_t>(value >> 8U);
+                } else
+                    row[x] = static_cast<std::uint8_t>(value);
+            }
+        }
+    }
+}
+// Applies a display orientation to full-resolution planes (16-bit samples, RGBA16 pixels).
+void orient(FrameProduct& product, const Orientation turn) {
+    for (auto& plane : product.planes) {
+        const auto pixelBytes = product.format == PixelFormat::Rgba16 ? 8U : 2U;
+        const auto width = plane.width, height = plane.height;
+        const bool swap = turn.quarterTurns % 2 != 0;
+        CpuPlane rotated;
+        rotated.width = swap ? height : width;
+        rotated.height = swap ? width : height;
+        rotated.stride = rotated.width * pixelBytes;
+        rotated.bytes.resize(static_cast<std::size_t>(rotated.stride) * rotated.height);
+        for (std::uint32_t y = 0; y < height; ++y)
+            for (std::uint32_t x = 0; x < width; ++x) {
+                // Mirror first (horizontal), then turn clockwise.
+                const auto mx = turn.mirror ? width - 1 - x : x;
+                std::uint32_t dx = mx, dy = y;
+                switch (turn.quarterTurns) {
+                case 1:
+                    dx = height - 1 - y;
+                    dy = mx;
+                    break;
+                case 2:
+                    dx = width - 1 - mx;
+                    dy = height - 1 - y;
+                    break;
+                case 3:
+                    dx = y;
+                    dy = width - 1 - mx;
+                    break;
+                default:
+                    break;
+                }
+                std::memcpy(rotated.bytes.data() + static_cast<std::size_t>(dy) * rotated.stride +
+                                static_cast<std::size_t>(dx) * pixelBytes,
+                            plane.bytes.data() + static_cast<std::size_t>(y) * plane.stride +
+                                static_cast<std::size_t>(x) * pixelBytes,
+                            pixelBytes);
+            }
+        plane = std::move(rotated);
+    }
+}
 FrameProduct frame(Input& input, const AVStream& stream) {
     auto* decoded = input.frame;
     if (decoded->format == AV_PIX_FMT_VAAPI) {
@@ -335,8 +475,8 @@ FrameProduct frame(Input& input, const AVStream& stream) {
         decoded = input.transfer;
     }
     extent(decoded->width, decoded->height);
-    require((decoded->flags & AV_FRAME_FLAG_INTERLACED) == 0,
-            "Interlaced video is not qualified for this preview path", Error::Unavailable);
+    const bool interlaced = (decoded->flags & AV_FRAME_FLAG_INTERLACED) != 0;
+    const bool topFieldFirst = (decoded->flags & AV_FRAME_FLAG_TOP_FIELD_FIRST) != 0;
     FrameProduct product;
     product.pts = timestamp(decoded->best_effort_timestamp, stream.time_base);
     product.colour = {decoded->color_primaries, decoded->color_trc, decoded->colorspace,
@@ -364,17 +504,31 @@ FrameProduct frame(Input& input, const AVStream& stream) {
         format == AV_PIX_FMT_NV12 && product.colour.range != AVCOL_RANGE_JPEG && leftSited;
     // The compact 4:2:0 product carries left-sited chroma, which the host reconstructs with a
     // filter. Other sitings are reconstructed here, where the frame's chroma location is known.
-    const bool direct = (format == AV_PIX_FMT_YUV420P && leftSited) || nv12;
-    product.format = direct ? PixelFormat::Yuv420p8 : PixelFormat::Yuva444p16;
+    // A rotated or mirrored picture is reconstructed to full-resolution planes first, so its
+    // chroma siting stays correct after the turn.
+    const auto turn = orientation(*stream.codecpar);
+    const auto outputWidth = displayWidth(stream);
+    const bool anamorphic = outputWidth != stream.codecpar->width;
+    const bool direct =
+        turn.identity() && !anamorphic && ((format == AV_PIX_FMT_YUV420P && leftSited) || nv12);
+    // RGB codecs (QuickTime Animation, PNG/TIFF in MOV, GBR planar) keep RGB: one packed
+    // RGBA 16-bit plane, with alpha when the source has it and opaque otherwise.
+    const auto* layout = av_pix_fmt_desc_get(format);
+    require(layout != nullptr, "Pixel layout unavailable", Error::Unavailable);
+    const bool rgb = (layout->flags & AV_PIX_FMT_FLAG_RGB) != 0;
+    product.format = direct ? PixelFormat::Yuv420p8
+                     : rgb  ? PixelFormat::Rgba16
+                            : PixelFormat::Yuva444p16;
     std::array<std::uint8_t*, 4> data{};
     std::array<int, 4> strides{};
-    for (unsigned i = 0; i < (direct ? 3U : 4U); ++i) {
+    for (unsigned i = 0; i < (direct ? 3U : rgb ? 1U : 4U); ++i) {
         CpuPlane plane;
         plane.width = static_cast<std::uint32_t>(direct && i != 0 ? (decoded->width + 1) / 2
-                                                                  : decoded->width);
+                                                 : direct         ? decoded->width
+                                                                  : outputWidth);
         plane.height = static_cast<std::uint32_t>(direct && i != 0 ? (decoded->height + 1) / 2
                                                                    : decoded->height);
-        plane.stride = plane.width * (direct ? 1U : 2U);
+        plane.stride = plane.width * (direct ? 1U : rgb ? 8U : 2U);
         plane.bytes.resize(static_cast<std::size_t>(plane.stride) * plane.height);
         product.planes.push_back(std::move(plane));
         data[i] = reinterpret_cast<std::uint8_t*>(product.planes.back().bytes.data());
@@ -403,15 +557,12 @@ FrameProduct frame(Input& input, const AVStream& stream) {
                                 static_cast<std::ptrdiff_t>(y) * decoded->linesize[i],
                             product.planes[i].stride);
     } else {
-        const auto* desc = av_pix_fmt_desc_get(format);
-        require(desc && (desc->flags & AV_PIX_FMT_FLAG_RGB) == 0,
-                "RGB codec format is not qualified", Error::Unavailable);
         // Filtered chroma reconstruction honouring the frame's chroma siting. Source and
         // destination share coefficients and range, so no matrix or range change occurs. The
         // context is reused across a retained decoder's frames while the layout is unchanged.
         const int fullRange = product.colour.range == AVCOL_RANGE_JPEG ? 1 : 0;
-        const std::array<int, 5> key{decoded->width, decoded->height, decoded->format, fullRange,
-                                     static_cast<int>(siting)};
+        const std::array<int, 6> key{decoded->width, decoded->height, decoded->format,
+                                     fullRange,      outputWidth,     static_cast<int>(siting)};
         if (!input.scale || input.scaleKey != key) {
             sws_freeContext(input.scale);
             input.scale = sws_alloc_context();
@@ -423,9 +574,11 @@ FrameProduct frame(Input& input, const AVStream& stream) {
             require(av_opt_set_int(options, "srcw", decoded->width, 0) >= 0 &&
                         av_opt_set_int(options, "srch", decoded->height, 0) >= 0 &&
                         av_opt_set_int(options, "src_format", decoded->format, 0) >= 0 &&
-                        av_opt_set_int(options, "dstw", decoded->width, 0) >= 0 &&
+                        av_opt_set_int(options, "dstw", outputWidth, 0) >= 0 &&
                         av_opt_set_int(options, "dsth", decoded->height, 0) >= 0 &&
-                        av_opt_set_int(options, "dst_format", AV_PIX_FMT_YUVA444P16LE, 0) >= 0 &&
+                        av_opt_set_int(options, "dst_format",
+                                       rgb ? AV_PIX_FMT_RGBA64LE : AV_PIX_FMT_YUVA444P16LE,
+                                       0) >= 0 &&
                         av_opt_set_int(options, "sws_flags",
                                        SWS_BILINEAR | SWS_ACCURATE_RND | SWS_BITEXACT, 0) >= 0 &&
                         av_opt_set_int(options, "src_h_chr_pos", horizontal, 0) >= 0 &&
@@ -442,6 +595,10 @@ FrameProduct frame(Input& input, const AVStream& stream) {
                           data.data(), strides.data()) == decoded->height,
                 "Pixel layout conversion failed");
     }
+    if (interlaced)
+        deinterlace(product, topFieldFirst);
+    if (!turn.identity())
+        orient(product, turn);
     assignPlaneDigests(product.planes);
     require(validLayout(product), "Invalid video product");
     return product;
@@ -454,6 +611,9 @@ struct VideoCursor final {
     // Presentation timestamp of the last frame this decoder returned.
     std::optional<std::int64_t> position;
     bool indexed = false;
+    // Packet presentation times do not follow the nominal cadence (phone, screen and OBS
+    // recordings). Requests then name a slot on the nominal grid instead of a packet ordinal.
+    bool variable = false;
     bool eof = false;
 };
 
@@ -516,19 +676,39 @@ FrameProduct video(Input& input, const CallRequest& request, AVBufferRef* device
         require(read == AVERROR_EOF, "Malformed video packets");
         std::ranges::sort(cursor.timestamps);
         std::ranges::sort(cursor.keyframes);
-        for (std::size_t i = 0; i < cursor.timestamps.size(); ++i) {
+        require(!cursor.timestamps.empty() &&
+                    std::ranges::adjacent_find(cursor.timestamps) == cursor.timestamps.end(),
+                "Duplicate or missing video presentation timestamps", Error::Unavailable);
+        for (std::size_t i = 0; i < cursor.timestamps.size() && !cursor.variable; ++i) {
             const auto expected =
                 av_rescale_q(static_cast<std::int64_t>(i), av_inv_q(rate), stream.time_base);
             require(expected >= 0 && start <= std::numeric_limits<std::int64_t>::max() - expected,
                     "Frame timestamp overflow");
-            require(cursor.timestamps[i] == start + expected,
-                    "Variable frame rate is not qualified for ordinal preview", Error::Unavailable);
+            cursor.variable = cursor.timestamps[i] != start + expected;
         }
         cursor.indexed = true;
     }
-    require(request.frame < cursor.timestamps.size(), "Frame is outside the video duration",
-            Error::Unavailable);
-    const auto target = cursor.timestamps[request.frame];
+    // Constant cadence: frame N is the Nth presentation. Variable cadence: frame N is the
+    // presentation shown at nominal time start + N / rate (the last packet presented at or before
+    // it), so composition time maps to source time by timestamp, not by packet count.
+    std::int64_t target = 0;
+    if (!cursor.variable) {
+        require(request.frame < cursor.timestamps.size(), "Frame is outside the video duration",
+                Error::Unavailable);
+        target = cursor.timestamps[request.frame];
+    } else {
+        const auto slot = av_rescale_q(static_cast<std::int64_t>(request.frame), av_inv_q(rate),
+                                       stream.time_base);
+        require(slot >= 0 && start <= std::numeric_limits<std::int64_t>::max() - slot,
+                "Frame timestamp overflow", Error::Oversized);
+        const auto time = start + slot;
+        const auto end = stream.duration != AV_NOPTS_VALUE && stream.duration > 0
+                             ? start + stream.duration
+                             : cursor.timestamps.back() + 1;
+        require(time < end, "Frame is outside the video duration", Error::Unavailable);
+        const auto shown = std::ranges::upper_bound(cursor.timestamps, time);
+        target = shown == cursor.timestamps.begin() ? cursor.timestamps.front() : *std::prev(shown);
+    }
     av_frame_unref(input.frame);
     if (!continueForward(cursor, target)) {
         cursor.position.reset();

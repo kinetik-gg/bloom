@@ -1380,8 +1380,36 @@ exact requested CFR presentation timestamp. A retained decoder keeps its present
 a later request whose nearest preceding key packet is at or before that position decodes forward
 without seeking (for example every second frame of a 50p source in a 25p composition), and only a
 backward request or one past a later key packet seeks. A missing exact timestamp, unsupported layout or
-unavailable rate is a typed refusal. Variable-frame-rate ordinal indexing and interlaced preview
-are not yet qualified. Audio requests name a starting sample and exact count; decoding from
+unavailable rate is a typed refusal.
+
+Footage timing and layout (issue #367), all applied by the worker as source interpretation so the
+rest of Bloom sees display geometry:
+
+- Variable frame rate. When packet presentation times do not follow the nominal cadence, frame N
+  means nominal slot N: the frame presented at `start + N / rate` (the last packet at or before
+  it). Probe reports the number of nominal slots the duration covers as the frame count, so
+  composition time maps to source time by timestamp rather than by packet count. Duplicate or
+  missing presentation timestamps remain typed refusals.
+- Seeking always lands at the decode time of the key packet presented at or before the target, so
+  B-frame and open-GOP streams (leading pictures before a CRA/I picture) decode the target from the
+  previous GOP rather than refusing it.
+- Display orientation. A display matrix with a right-angle rotation and/or horizontal mirror is
+  applied to the decoded planes after full-resolution chroma reconstruction; probe reports the
+  displayed width and height. Non-right angles are not applied.
+- Sample aspect ratio. A non-square SAR (container value first, then the bitstream's) is resampled
+  horizontally to square pixels with the same bit-exact bilinear `sws` pass; probe reports the
+  square-pixel width.
+- Interlace. An interlaced frame keeps its temporally first field (top or bottom per the frame's
+  field order) and rebuilds the other field's lines as the mean of the neighbouring kept lines.
+  This is deterministic single-frame field interpretation, not temporal deinterlacing.
+- RGB-coded streams (the intake's TIFF-in-MOV) decode to one packed RGBA16 plane with their
+  identity matrix tag and are interpreted only through a config input space. The TIFF decoder runs
+  without `AV_EF_EXPLODE`, which otherwise rejects descriptive tags its own encoder writes.
+
+Drop-frame timecode is preserved in the timecode string (`;`); field order, an explicit timecode
+type, and selecting among several audio streams need document fields and UI that other lanes own.
+
+Audio requests name a starting sample and exact count; decoding from
 the beginning preserves codec priming and refuses timestamp gaps or overlaps. A retained worker
 keeps a separate audio reader and its decode position: a block that starts where the previous
 block ended continues the same pass, including samples already decoded past that end, so N
