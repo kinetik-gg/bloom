@@ -3,12 +3,14 @@
 #include <cctype>
 #include <charconv>
 #include <limits>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
 
 namespace bloom::media {
 namespace {
+constexpr std::size_t kMaxReportedMemberFailures = 32;
 struct NumberedName {
     std::string prefix;
     std::string suffix;
@@ -68,6 +70,7 @@ ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
             return {{}, "Sequence directory is unreadable"};
         std::size_t count = 0;
         bool mixedPadding = false;
+        std::size_t failedMembers = 0;
         for (const auto end = std::filesystem::directory_iterator{}; iterator != end;
              iterator.increment(error)) {
             if (error)
@@ -87,8 +90,17 @@ ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
                 manifest.diagnostics.emplace_back("Sequence mixes frame-number padding");
             }
             const auto probe = probeImage(iterator->path(), cancel);
-            if (!probe.value.has_value())
-                return {{}, probe.diagnostic, probe.cancelled};
+            if (!probe.value.has_value()) {
+                if (probe.cancelled || (cancel && cancel()))
+                    return {{}, {}, true};
+                // ADR 0026 / #373 batch policy: one unreadable member never aborts the sequence.
+                // It is reported and its frame becomes a gap that holds the preceding frame.
+                if (++failedMembers <= kMaxReportedMemberFailures)
+                    manifest.diagnostics.push_back("Frame " + std::to_string(candidate->frame) +
+                                                   " is unreadable and is treated as a gap: " +
+                                                   probe.diagnostic);
+                continue;
+            }
             manifest.members.push_back(
                 {candidate->frame, iterator->path(), probe.value->contentDigest});
             if (progress)
@@ -118,6 +130,10 @@ ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
                 }
             }
         }
+        if (failedMembers > kMaxReportedMemberFailures)
+            manifest.diagnostics.push_back(
+                std::to_string(failedMembers - kMaxReportedMemberFailures) +
+                " further unreadable frames are treated as gaps");
         if (manifest.hasGaps())
             manifest.diagnostics.emplace_back("Sequence gaps hold the preceding frame");
         return {std::move(manifest), {}};

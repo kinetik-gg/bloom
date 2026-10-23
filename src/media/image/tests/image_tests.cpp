@@ -496,6 +496,22 @@ int main() {
                      "EXR files scan as numbered image sequences");
     }
     {
+        exr(scratch.file("broken.0001.exr"), false, Imf::HALF);
+        {
+            std::ofstream bad(scratch.file("broken.0002.exr"), std::ios::binary);
+            bad.write("v/1\x01garbage", 12);
+        }
+        exr(scratch.file("broken.0003.exr"), false, Imf::HALF);
+        const auto sequence = media::scanSequence(scratch.file("broken.0001.exr"));
+        check.expect(sequence.value.has_value() && sequence.value->members.size() == 2 &&
+                         sequence.value->gaps == std::vector<std::int64_t>{2} &&
+                         std::ranges::any_of(sequence.value->diagnostics,
+                                             [](const std::string& line) {
+                                                 return line.starts_with("Frame 2 is unreadable");
+                                             }),
+                     "an unreadable sequence member is a reported gap, not a failed scan");
+    }
+    {
         png(scratch.file("stereo0001_left.png"));
         png(scratch.file("stereo0002_left.png"));
         png(scratch.file("stereo0001_right.png"));
