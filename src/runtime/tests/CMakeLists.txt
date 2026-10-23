@@ -538,6 +538,7 @@ target_link_libraries(bloom_runtime_gpu_coverage_contract_test
     PRIVATE bloom_runtime_evaluator bloom_render bloom_media_video OpenEXR::OpenEXR)
 target_include_directories(bloom_runtime_gpu_coverage_contract_test
     PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS}
+            "${CMAKE_CURRENT_SOURCE_DIR}/.."
             "${PROJECT_SOURCE_DIR}/tests/support")
 # The shared runtime OCIO context for the effect/working-space fixtures is built from the REAL tools
 # staged beside this gate executable by bloom_package_gpu_shader_tools (the same packaging the

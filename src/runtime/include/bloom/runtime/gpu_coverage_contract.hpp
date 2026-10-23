@@ -247,6 +247,14 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
     out.push_back(GpuFeatureCoverageEntry{
         "feature.color.working_space_transform", "decode-to-working-space colour transform",
         GpuCoverageDisposition::Required, "src/color OCIO processor tests"});
+    // ADR 0024 layer-owned time. Mapping a layer's clock is host parameter resolution, but every
+    // axis must reach the production preview and final routes with CPU parity: start/speed,
+    // Time Remap, out-of-extent modes, and an upstream shared by layers on different clocks.
+    for (const auto* id : {"feature.layer.time.offset_speed", "feature.layer.time.remap",
+                           "feature.layer.time.extent_modes", "feature.layer.time.shared_upstream"})
+        out.push_back(GpuFeatureCoverageEntry{id, "layer-owned time axis",
+                                              GpuCoverageDisposition::Required,
+                                              "src/runtime layer time production scene preparation"});
     // #361 matte axes. Invert and an absent matte are pixel semantics of the resident
     // ImageCombineV1 dispatch, never host preparation: an absent matte binds the base image and an
     // empty matte extent rather than skipping, failing or falling back to the CPU.

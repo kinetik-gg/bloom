@@ -4,6 +4,7 @@
 // CompiledCompositionPlan that the production CpuGpuSceneBuilder accepts; the driver keeps only the
 // fixture catalogue and the gate loop.
 
+#include "../plan_time_scopes.hpp"
 #include "gpu_coverage_fixture_support.hpp"
 
 #include <bloom/core/blend_mode.hpp>
@@ -231,6 +232,52 @@ matteCombinePlan(const bloom::runtime::ImageCombineMode mode, const std::uint64_
                                                            OperationIndex::fromRaw(5)}};
         definition.output = OperationIndex::fromRaw(6);
     }
+    return publish(std::move(definition));
+}
+
+// ADR 0024 layer time axes. Solid A's width is animated over [0, 2) s so the content time each
+// clock resolves is visible in pixels; the scope pass places operations on their clocks exactly as
+// the compiler does.
+enum class LayerTimeAxis { OffsetSpeed, Remap, ExtentModes, SharedUpstream };
+
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+layerTimePlan(const LayerTimeAxis axis, const std::uint64_t idBase) {
+    using bloom::runtime::CompiledKeyframeInterpolation;
+    using bloom::runtime::CompiledLayerTime;
+    auto definition = basePlan()->copyDefinition();
+    definition.duration = RationalTime::fromInteger(4);
+    definition.scalarCurves = {bloom::runtime::CompiledScalarCurve{
+        bloom::document::AnimationCurveId::fromRaw(idBase),
+        {{bloom::document::KeyframeId::fromRaw(idBase + 1), RationalTime::fromInteger(0), 2.0,
+          CompiledKeyframeInterpolation::Linear},
+         {bloom::document::KeyframeId::fromRaw(idBase + 2), RationalTime::fromInteger(2), 8.0,
+          CompiledKeyframeInterpolation::Linear}}}};
+    auto& solid = std::get<CompiledSolid>(definition.operations[0]);
+    solid.width.source = bloom::runtime::ScalarCurveIndex::fromRaw(0);
+    auto& layerA = std::get<CompiledLayerOutput>(definition.operations[1]);
+    auto& layerB = std::get<CompiledLayerOutput>(definition.operations[3]);
+    switch (axis) {
+    case LayerTimeAxis::OffsetSpeed:
+        layerA.time = CompiledLayerTime{.startTime = *RationalTime::create(-1, 2),
+                                        .speed = *bloom::document::LayerSpeed::create(2, 1)};
+        break;
+    case LayerTimeAxis::Remap:
+        layerA.time = CompiledLayerTime{
+            .timeRemap = CompiledScalarParameter{ParameterId::fromRaw(idBase + 5), 1.25}};
+        break;
+    case LayerTimeAxis::ExtentModes:
+        layerA.time = CompiledLayerTime{.startTime = *RationalTime::create(-3, 2),
+                                        .extentDuration = RationalTime::fromInteger(1),
+                                        .afterMode = bloom::document::LayerTimeMode::Loop};
+        break;
+    case LayerTimeAxis::SharedUpstream:
+        layerB.input = OperationIndex::fromRaw(0);
+        layerA.time = CompiledLayerTime{.startTime = *RationalTime::create(-1, 2)};
+        layerB.time = CompiledLayerTime{.startTime = *RationalTime::create(-5, 4)};
+        break;
+    }
+    if (bloom::runtime::detail::scopeLayerTime(definition))
+        throw std::logic_error("layer time fixture exceeds the clock limits");
     return publish(std::move(definition));
 }
 

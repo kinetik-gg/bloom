@@ -17,6 +17,7 @@
 #include <bloom/render/text_raster.hpp>
 
 #include <algorithm>
+#include <set>
 #include <array>
 #include <cmath>
 #include <limits>
@@ -1020,6 +1021,7 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
         color4CurveFields[curveIndex] = field;
         return true;
     };
+    std::set<std::pair<std::size_t, document::NodeId>> clockCopies;
     for (std::size_t index = 0; index < plan->operations().size() && !parameterFailure.has_value();
          ++index) {
         if (cancellation.isCancellationRequested()) {
@@ -1027,6 +1029,12 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
         }
         const auto operationSubject =
             subjectFor(OperationIndex::fromRaw(index), plan->operations()[index]);
+        // ADR 0024: an operation copied onto several time clocks shares its parameter and curve
+        // identities with its other copies; they are claimed once, by the first copy.
+        if (!plan->clocks().empty() && operationSubject.nodeId &&
+            !clockCopies.emplace(plan->operations()[index].index(), *operationSubject.nodeId)
+                 .second)
+            continue;
         std::visit(
             Overloaded{
                 [&](const CompiledSolid& solid) {

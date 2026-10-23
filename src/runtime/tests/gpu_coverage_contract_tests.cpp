@@ -589,6 +589,20 @@ displayProofRunner(const bool customView) {
         });
     // #361 matte axes: the inverted selector and an absent matte (a trimmed matte Layer with no
     // image) both prepare through the production builder's resident combine dispatch.
+    // ADR 0024 layer time axes: start/speed, Time Remap, out-of-extent modes and an upstream shared
+    // by two layers on different clocks, all prepared through the production builder.
+    using bloom::gpu_coverage_plans::LayerTimeAxis;
+    for (const auto& [id, axis, base] :
+         {std::tuple{"feature.layer.time.offset_speed", LayerTimeAxis::OffsetSpeed, 111000},
+          std::tuple{"feature.layer.time.remap", LayerTimeAxis::Remap, 111100},
+          std::tuple{"feature.layer.time.extent_modes", LayerTimeAxis::ExtentModes, 111200},
+          std::tuple{"feature.layer.time.shared_upstream", LayerTimeAxis::SharedUpstream, 111300}})
+        add(id, GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime layer time production scene preparation",
+            [axis = axis, base = base] {
+                return runBuilder(bloom::gpu_coverage_plans::layerTimePlan(
+                    axis, static_cast<std::uint64_t>(base)));
+            });
     add("feature.matte.invert", GpuCoverageFixtureCriterion::Prepared,
         "src/render ImageCombineV1 native + image combine production scene preparation", [] {
             return runBuilder(matteCombinePlan(bloom::runtime::ImageCombineMode::SetAlpha, 110800,
