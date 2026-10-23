@@ -162,6 +162,12 @@ class ResolvedBloomNeutralConfig final {
     [[nodiscard]] std::string_view sRgbTextureColorSpaceId() const&& = delete;
     [[nodiscard]] std::string_view rec709VideoColorSpaceId() const& noexcept;
     [[nodiscard]] std::string_view rec709VideoColorSpaceId() const&& = delete;
+    // Rec.2100 PQ/HLG input spaces for HDR video, searched across active and inactive spaces
+    // because configs usually hide these display-referred spaces from pickers. Empty when absent.
+    [[nodiscard]] std::string_view rec2100PqColorSpaceId() const& noexcept;
+    [[nodiscard]] std::string_view rec2100PqColorSpaceId() const&& = delete;
+    [[nodiscard]] std::string_view rec2100HlgColorSpaceId() const& noexcept;
+    [[nodiscard]] std::string_view rec2100HlgColorSpaceId() const&& = delete;
 
     // Opaque handle consumed only by ocio_cpu_display_processor.hpp's processor builder within
     // this same library; not part of the public color-value surface.
@@ -183,7 +189,9 @@ class ResolvedBloomNeutralConfig final {
                                std::string configName, std::vector<OcioColorSpaceInfo> colorSpaces,
                                std::vector<DisplayViewEntry> displays,
                                std::string sRgbTextureColorSpaceId,
-                               std::string rec709VideoColorSpaceId) noexcept;
+                               std::string rec709VideoColorSpaceId,
+                               std::string rec2100PqColorSpaceId,
+                               std::string rec2100HlgColorSpaceId) noexcept;
 
     std::unique_ptr<Impl> impl_;
     core::Sha256Digest expectedRevision_;
@@ -196,6 +204,8 @@ class ResolvedBloomNeutralConfig final {
     std::vector<DisplayViewEntry> displays_;
     std::string sRgbTextureColorSpaceId_;
     std::string rec709VideoColorSpaceId_;
+    std::string rec2100PqColorSpaceId_;
+    std::string rec2100HlgColorSpaceId_;
 };
 
 class [[nodiscard]] OcioBuiltInResolutionResult final {

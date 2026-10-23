@@ -68,6 +68,8 @@ struct InputColorSpaceMappings final {
     std::vector<bloom::color::OcioColorSpaceInfo> spaces;
     std::string sRgbTexture;
     std::string rec709Video;
+    std::string rec2100Pq;
+    std::string rec2100Hlg;
 };
 
 [[nodiscard]] bool containsInsensitive(const std::string_view value,
@@ -140,6 +142,20 @@ struct InputColorSpaceMappings final {
             result.rec709Video = space.id;
             break;
         }
+    }
+    // Rec.2100 video interpretation targets. Configs commonly declare these display-referred
+    // spaces inactive (hidden from pickers); OCIO still builds processors from them by name.
+    for (int index = 0;
+         index < config->getNumColorSpaces(OCIO::SEARCH_REFERENCE_SPACE_ALL, OCIO::COLORSPACE_ALL);
+         ++index) {
+        const char* const name = config->getColorSpaceNameByIndex(OCIO::SEARCH_REFERENCE_SPACE_ALL,
+                                                                  OCIO::COLORSPACE_ALL, index);
+        if (!isNonDataColorSpace(config, name) || !containsInsensitive(name, "2100"))
+            continue;
+        if (result.rec2100Pq.empty() && containsInsensitive(name, "pq"))
+            result.rec2100Pq = name;
+        if (result.rec2100Hlg.empty() && containsInsensitive(name, "hlg"))
+            result.rec2100Hlg = name;
     }
     return result;
 }
@@ -232,14 +248,17 @@ ResolvedBloomNeutralConfig::ResolvedBloomNeutralConfig(
     std::string processColorSpaceId, std::string outputColorSpaceId, std::string displayName,
     std::string viewName, std::string configName, std::vector<OcioColorSpaceInfo> colorSpaces,
     std::vector<DisplayViewEntry> displays, std::string sRgbTextureColorSpaceId,
-    std::string rec709VideoColorSpaceId) noexcept
+    std::string rec709VideoColorSpaceId, std::string rec2100PqColorSpaceId,
+    std::string rec2100HlgColorSpaceId) noexcept
     : impl_(std::move(impl)), expectedRevision_(expectedRevision),
       processColorSpaceId_(std::move(processColorSpaceId)),
       outputColorSpaceId_(std::move(outputColorSpaceId)), displayName_(std::move(displayName)),
       viewName_(std::move(viewName)), configName_(std::move(configName)),
       colorSpaces_(std::move(colorSpaces)), displays_(std::move(displays)),
       sRgbTextureColorSpaceId_(std::move(sRgbTextureColorSpaceId)),
-      rec709VideoColorSpaceId_(std::move(rec709VideoColorSpaceId)) {}
+      rec709VideoColorSpaceId_(std::move(rec709VideoColorSpaceId)),
+      rec2100PqColorSpaceId_(std::move(rec2100PqColorSpaceId)),
+      rec2100HlgColorSpaceId_(std::move(rec2100HlgColorSpaceId)) {}
 
 ResolvedBloomNeutralConfig::ResolvedBloomNeutralConfig(ResolvedBloomNeutralConfig&&) noexcept =
     default;
@@ -270,6 +289,12 @@ std::string_view ResolvedBloomNeutralConfig::sRgbTextureColorSpaceId() const& no
 }
 std::string_view ResolvedBloomNeutralConfig::rec709VideoColorSpaceId() const& noexcept {
     return rec709VideoColorSpaceId_;
+}
+std::string_view ResolvedBloomNeutralConfig::rec2100PqColorSpaceId() const& noexcept {
+    return rec2100PqColorSpaceId_;
+}
+std::string_view ResolvedBloomNeutralConfig::rec2100HlgColorSpaceId() const& noexcept {
+    return rec2100HlgColorSpaceId_;
 }
 const ResolvedBloomNeutralConfig::Impl& ResolvedBloomNeutralConfig::impl() const& noexcept {
     return *impl_;
@@ -480,7 +505,8 @@ resolveOcioBuiltIn(const OcioConfigLocatorKind locatorKind, const std::string_vi
                               : displayView->display),
         displayView->display, displayView->view,
         config->getName() == nullptr ? std::string(locatorValue) : std::string(config->getName()),
-        inputMappings.spaces, *displays, inputMappings.sRgbTexture, inputMappings.rec709Video);
+        inputMappings.spaces, *displays, inputMappings.sRgbTexture, inputMappings.rec709Video,
+        inputMappings.rec2100Pq, inputMappings.rec2100Hlg);
 
     auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Ready);
     result.recomputedRevision_ = recomputed;

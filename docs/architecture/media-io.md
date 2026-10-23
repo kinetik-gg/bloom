@@ -1475,12 +1475,39 @@ content check; scrubbing does not decode the complete audio clip again.
 No operation-cache or memory-ledger implementation changes are required.
 
 Colour conversion preserves stream tags when a decoder omits them from its frame. The provider
-copies YUV420P8 directly or expands YUV/alpha to bounded YUVA444P16 planes. `src/media/video`
-performs the qualified Rec.709 matrix/range step, while `src/color` applies the resolved OCIO
-input-id-to-working-space transform on straight RGB before alpha is restored. No missing primaries,
-matrix or range is inferred. Rec.2020, HLG and PQ return typed `Unavailable` on the unqualified
-path, including when a legacy transfer override is supplied. Raw and linear compatibility overrides
-retain their historical transfer-only behavior; an explicit config id is recorded separately.
+copies left-sited YUV420P8 directly; any other layout or chroma siting is expanded to bounded
+YUVA444P16 by bit-exact bilinear chroma reconstruction at the frame's H.273 chroma location
+(unspecified 4:2:0 siting is the H.273 default, left). The host reconstructs YUV420P8 chroma with
+the same left-sited bilinear filter rather than nearest neighbour. `src/media/video` performs the
+matrix/range step and `src/color` applies the resolved OCIO input-id-to-working-space transform on
+straight RGB before alpha is restored; the GPU route uploads the same host-prepared pre-OCIO RGB
+and runs that transform as a GPU OCIO effect.
+
+Issue #365 interpretation rules:
+
+- Automatic resolution never infers a missing tag. An untagged or partly tagged stream is refused
+  with a diagnostic that names each missing tag (colour primaries, transfer characteristics, matrix
+  coefficients, range) and the override that resolves it: an input colour space for the asset
+  (Assets, Input Colour…) or its Video node.
+- An explicit input colour space is the artist's interpretation and overrides missing tags. The
+  space supplies primaries and transfer; the stream supplies its YUV matrix and range. When those
+  are untagged too, the matrix follows the chosen space's gamut family (BT.2020 non-constant
+  luminance for a Rec.2020/Rec.2100 space, otherwise BT.709) and the range is video (limited).
+- Supported YUV matrices are BT.709, BT.601 (470BG/SMPTE 170M) and BT.2020 non-constant luminance.
+  BT.2020 constant luminance is refused by name.
+- PQ and HLG streams resolve automatically to the config's Rec.2100 PQ or HLG colour space,
+  searched among active and inactive spaces because configs usually hide these display-referred
+  spaces from pickers. The pinned ACES 1.3 CG config provides `Rec.2100-PQ - Display` and no HLG
+  space; Bloom Neutral provides neither. A missing space is refused with a diagnostic that names
+  it. Other Rec.2020 streams need an explicit space.
+- On the unmanaged legacy path (no config space), Rec.2020, PQ and HLG stay typed `Unavailable`,
+  including under a legacy transfer override. Raw and linear compatibility overrides keep their
+  transfer-only behaviour.
+
+Generated untagged, BT.2020/PQ and BT.2020/HLG H.264 fixtures check tag plumbing, and GPU/CPU
+input-to-working parity is tested for tagged Rec.709 and explicitly interpreted untagged H.264.
+Measured GPU parity of the ACES CG Rec.2100 PQ input transform is 2.19e-6 relative at a linear value
+of 52.37, just outside the 2e-6 gate, so PQ GPU parity is an open item.
 
 Tests generate 48-frame H.264 MP4 and ProRes 422 MOV fixtures with burned-in frame numbers and
 48 kHz PCM, using the intake libraries in a worker-only fixture generator. An additional ProRes 4444

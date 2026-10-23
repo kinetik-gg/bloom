@@ -224,12 +224,91 @@ void retainedRouting(const std::filesystem::path& directory) {
               video::estimatedDecodeWorkerBytes(16384, 16384) == std::size_t{2} << 30U,
           "worker estimate scales with extent and is bounded by the worker address space");
 }
+// Issue #365: matrix selection, explicit interpretation of untagged streams, filtered 4:2:0
+// chroma, and tag plumbing from the generated colour fixtures.
+bloom::media::provider::FrameProduct yuv420(std::array<unsigned, 2> cb, std::array<unsigned, 2> cr,
+                                            bloom::media::provider::ColourTags tags) {
+    using namespace bloom::media::provider;
+    FrameProduct frame;
+    frame.format = PixelFormat::Yuv420p8;
+    frame.colour = tags;
+    const auto plane = [](std::uint32_t w, std::uint32_t h, std::vector<unsigned> values) {
+        CpuPlane p;
+        p.width = w;
+        p.height = h;
+        p.stride = w;
+        for (const auto v : values)
+            p.bytes.push_back(static_cast<std::byte>(v));
+        p.digest = digestBytes(p.bytes);
+        return p;
+    };
+    frame.planes.push_back(plane(4, 2, {126, 126, 126, 126, 126, 126, 126, 126}));
+    frame.planes.push_back(plane(2, 1, {cb[0], cb[1]}));
+    frame.planes.push_back(plane(2, 1, {cr[0], cr[1]}));
+    return frame;
+}
+void colourInterpretation(const std::filesystem::path& directory) {
+    using namespace bloom::media;
+    const auto window = bloom::render::ImageWindow::create(0, 0, 4, 2);
+    const auto descriptor = bloom::render::Rgba32fImageDescriptor::create(
+        *window.value(), *window.value(), bloom::core::PixelAspectRatio::square());
+    const auto convert = [&](const provider::FrameProduct& frame, std::string_view id) {
+        return video::videoToInputColorSpace(frame, 0, id, *descriptor.value(), 1, 1,
+                                             std::size_t{4} * 2 * 16);
+    };
+    // BT.2020 and BT.709 matrices differ on the same chroma; the explicit-space path accepts both.
+    const auto saturated709 = convert(yuv420({200, 200}, {60, 60}, {1, 1, 1, 1}), "space");
+    const auto saturated2020 = convert(yuv420({200, 200}, {60, 60}, {9, 16, 9, 1}), "space");
+    check(std::holds_alternative<bloom::render::Rgba32fImage>(saturated709) &&
+              std::holds_alternative<bloom::render::Rgba32fImage>(saturated2020),
+          "BT.709 and BT.2020 matrices convert through a config-managed space");
+    const auto red2020 = std::get<bloom::render::Rgba32fImage>(saturated2020).pixels()[0].red();
+    const auto red709 = std::get<bloom::render::Rgba32fImage>(saturated709).pixels()[0].red();
+    const auto expected2020 =
+        (126.0F - 16.0F) / 219.0F + 2.0F * (1.0F - 0.2627F) * (-68.0F / 224.0F);
+    check(std::abs(red2020 - expected2020) < 1e-5F && std::abs(red709 - red2020) > 1e-3F,
+          "BT.2020 non-constant-luminance matrix reference value");
+    // Untagged: refused on the unmanaged path with named tags, accepted with an explicit space.
+    const auto untagged = yuv420({128, 128}, {128, 128}, {2, 2, 2, 0});
+    const auto refused =
+        video::videoToSceneLinear(untagged, 0, *descriptor.value(), 1, 1, std::size_t{4} * 2 * 16);
+    check(std::holds_alternative<provider::Unavailable>(refused) &&
+              std::get<provider::Unavailable>(refused).detail.find("matrix coefficients") !=
+                  std::string::npos,
+          "an untagged frame names its missing tags");
+    const auto interpreted = convert(untagged, "Rec.2100-PQ - Display");
+    check(std::holds_alternative<bloom::render::Rgba32fImage>(interpreted) &&
+              std::abs(std::get<bloom::render::Rgba32fImage>(interpreted).pixels()[0].red() -
+                       110.0F / 219.0F) < 1e-5F,
+          "an explicit space interprets an untagged frame as limited range");
+    const auto constant = convert(yuv420({128, 128}, {128, 128}, {9, 1, 10, 1}), "space");
+    check(std::holds_alternative<provider::Unavailable>(constant), "BT.2020 CL is refused");
+    // Filtered chroma: odd columns interpolate between left-sited chroma samples.
+    const auto ramp = convert(yuv420({100, 200}, {128, 128}, {1, 1, 1, 1}), "space");
+    const auto& pixels = std::get<bloom::render::Rgba32fImage>(ramp).pixels();
+    const auto blue = [&](unsigned x) { return pixels[x].blue(); };
+    check(std::abs(blue(1) - (blue(0) + blue(2)) / 2.0F) < 1e-5F && blue(0) < blue(1) &&
+              blue(1) < blue(2) && std::abs(blue(3) - blue(2)) < 1e-6F,
+          "4:2:0 chroma is reconstructed with a filter, not nearest neighbour");
+    // The decoder reports the generated fixtures' tags exactly.
+    for (const auto& [name, tags] : std::array<std::pair<const char*, provider::ColourTags>, 3>{
+             {{"untagged-h264.mp4", {2, 2, 2, 0}},
+              {"pq2020-h264.mp4", {9, 16, 9, 1}},
+              {"hlg2020-h264.mp4", {9, 18, 9, 1}}}}) {
+        video::VideoDecodeSession session(directory / name);
+        const auto probe = std::get<provider::ProbeResult>(session.probe());
+        const auto decoded = session.frame(probe, 0, 3, 0, nullptr);
+        check(std::holds_alternative<Frame>(decoded) && std::get<Frame>(decoded)->colour == tags,
+              "colour fixtures carry their tags through decode");
+    }
+}
 } // namespace
 int main(int argc, char** argv) {
     try {
         check(argc == 2, "fixture directory");
         run(argv[1]);
         retainedRouting(argv[1]);
+        colourInterpretation(argv[1]);
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;

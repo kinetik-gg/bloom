@@ -168,12 +168,60 @@ void testVideoRules(Expectations& expectations) {
                             linear.id == config->processColorSpaceId(),
                         "sRGB and linear container tags map to config spaces");
     expectations.expect(hdr.id.empty() && !hdr.warning.empty(),
-                        "Rec.2020/HLG/PQ container tags remain typed refused");
+                        "PQ tags refuse when the config has no Rec.2100 PQ space");
 
     const auto explicitLog = bloom::media::video::resolveVideoInputColorSpace(
         *config, ColourTags{1, 1, 1, 1}, 0, "ARRI LogC3");
     expectations.expect(explicitLog.id == "ARRI LogC3" && !explicitLog.automatic,
                         "an explicit LogC3 pick overrides Rec.709 container tags");
+    // Issue #365: missing tags name themselves and the interpretation that resolves them; PQ
+    // and HLG resolve to a config's Rec.2100 spaces, and an explicit pick overrides missing tags.
+    const auto untagged =
+        bloom::media::video::resolveVideoInputColorSpace(*config, ColourTags{2, 2, 2, 0}, 0, {});
+    expectations.expect(untagged.id.empty() &&
+                            untagged.warning.find("colour primaries") != std::string::npos &&
+                            untagged.warning.find("matrix coefficients") != std::string::npos &&
+                            untagged.warning.find("range") != std::string::npos &&
+                            untagged.warning.find("Input Colour") != std::string::npos,
+                        "an untagged stream names its missing tags and the override");
+    const auto explicitUntagged = bloom::media::video::resolveVideoInputColorSpace(
+        *config, ColourTags{2, 2, 2, 0}, 0, "lin_rec709_scene");
+    expectations.expect(explicitUntagged.id == "lin_rec709_scene" &&
+                            explicitUntagged.warning.empty(),
+                        "an explicit interpretation overrides missing tags");
+    const auto constantLuminance =
+        bloom::media::video::resolveVideoInputColorSpace(*config, ColourTags{9, 1, 10, 1}, 0, {});
+    expectations.expect(constantLuminance.id.empty() &&
+                            constantLuminance.warning.find("constant-luminance") !=
+                                std::string::npos,
+                        "BT.2020 constant luminance is refused by name");
+    expectations.expect(hdr.warning.find("Rec.2100 PQ") != std::string::npos,
+                        "a config without PQ names the missing Rec.2100 space");
+    if (auto aces = acesConfig()) {
+        const auto pq =
+            bloom::media::video::resolveVideoInputColorSpace(*aces, ColourTags{9, 16, 9, 1}, 0, {});
+        const auto hlg =
+            bloom::media::video::resolveVideoInputColorSpace(*aces, ColourTags{9, 18, 9, 1}, 0, {});
+        // The ACES CG config declares its Rec.2100 spaces inactive; they still resolve by name.
+        expectations.expect(pq.automatic && pq.id == aces->rec2100PqColorSpaceId() &&
+                                pq.id.find("2100") != std::string::npos,
+                            "a PQ stream resolves to the config's Rec.2100 PQ input space");
+        // The pinned CG config lists Rec.2100-HLG as inactive without defining it.
+        expectations.expect(aces->rec2100HlgColorSpaceId().empty() && hlg.id.empty() &&
+                                hlg.warning.find("Rec.2100 HLG") != std::string::npos,
+                            "a config without an HLG space names it and the override");
+        const auto pqUntaggedMatrix =
+            bloom::media::video::resolveVideoInputColorSpace(*aces, ColourTags{9, 16, 2, 0}, 0, {});
+        expectations.expect(pqUntaggedMatrix.id.empty() &&
+                                pqUntaggedMatrix.warning.find("matrix coefficients") !=
+                                    std::string::npos,
+                            "PQ without a matrix tag needs an explicit interpretation");
+        std::string pqDiagnostic;
+        expectations.expect(static_cast<bool>(bloom::runtime::detail::prepareInputColorProcessor(
+                                *aces, {pq.id, pq.name, {}, false, true}, pqDiagnostic)),
+                            "the Rec.2100 PQ input processor builds");
+    } else
+        expectations.expect(false, "ACES config resolves for Rec.2100 rules");
     std::string diagnostic;
     const auto missing = bloom::runtime::detail::prepareInputColorProcessor(
         *config, {"missing-input", "missing-input", {}, false, false}, diagnostic);

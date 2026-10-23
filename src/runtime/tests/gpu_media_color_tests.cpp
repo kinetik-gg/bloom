@@ -33,6 +33,7 @@
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <tuple>
 
 #include <array>
 #include <atomic>
