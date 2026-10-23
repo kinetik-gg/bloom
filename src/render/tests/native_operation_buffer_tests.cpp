@@ -114,7 +114,7 @@ void operationCycles(GpuDevice& device) {
     vmaCalculateStatistics(state->allocator, &baseline);
     for (int iteration = 0; iteration != 10; ++iteration) {
         auto phase = admit(device, budget);
-        require(composite.composite->beginTranslation({source, window, 0, 0, 0.5F}, kBudget).code ==
+        require(composite.composite->beginTranslation({source, window, 0, 0, 0.5F, std::nullopt}, kBudget).code ==
                         GpuCompositeDiagnosticCode::None &&
                     budget.snapshot().ownedNativeBuffers == 5,
                 "translation owns two axes, two staging allocations and status");
@@ -291,7 +291,7 @@ void unknownForeignComposite(GpuDevice& device) {
     budget.setHostCapacity(kBudget, true);
     budget.setDeviceCapacity(kBudget, true);
     auto phase = admit(device, budget);
-    require(operation.composite->beginTranslation({source, window, 0, 0, 1}, kBudget).code ==
+    require(operation.composite->beginTranslation({source, window, 0, 0, 1, std::nullopt}, kBudget).code ==
                 GpuCompositeDiagnosticCode::None,
             "real rooted submission prepared before foreign destruction");
     composite_detail::compositeRetirementFault().store(
