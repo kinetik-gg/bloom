@@ -80,6 +80,9 @@ OperationResult AddNode::apply(document::Draft& draft) const {
     document::NodeRecord node{*nodeId, definition->key.typeId, {}, definition->key.schemaVersion};
     std::vector<OperationOutput> outputs{{std::string(kAddNodeOutput), *nodeId}};
     for (const auto& parameter : definition->parameters) {
+        // ADR 0024: Time Remap is bound only by EnableLayerTimeRemap; its absence means disabled.
+        if (parameter.schemaKey == document::kTimeRemapParameterSchemaKey)
+            continue;
         const auto parameterId = draft.ids().allocateParameter();
         if (!parameterId)
             return detail::exhaustedIds();

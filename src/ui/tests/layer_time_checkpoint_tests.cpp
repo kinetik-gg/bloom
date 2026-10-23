@@ -55,7 +55,7 @@ struct Fixture {
     }
     document::LayerId place(const document::CompositionId source) {
         commands::Transaction add("Add layer", document.snapshot().revision());
-        add.emplace<ui::AddCompositionSource>(initial.initialCompositionId, source,
+        add.emplace<ui::node_editor::AddCompositionSource>(initial.initialCompositionId, source,
                                               document::Vec2d{}, true);
         const auto result = commands.execute(std::move(add));
         const auto layer = result.outputId<document::LayerId>("layer");
@@ -88,6 +88,7 @@ struct Fixture {
             compiler.compile({document.snapshot(), initial.initialCompositionId}, {});
         if (!compiled.plan)
             throw std::runtime_error("outer composition compiles");
+
         runtime::CpuCompositionEvaluator evaluator;
         const auto result = evaluator.evaluate(
             compiled.plan,
