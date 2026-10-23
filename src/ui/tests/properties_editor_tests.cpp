@@ -316,6 +316,43 @@ void testAnimatedParameterShowsGoldStaticShowsDim(Expectations& expectations) {
                         "the still-constant Position parameter paints the dimmed indicator");
 }
 
+// #358: a playhead move refreshes every row's value in place. It never rebuilds the panel or
+// re-walks the upstream graph, so playback costs one value refresh per frame.
+void testTimeChangeRefreshesValuesWithoutRebuilding(Expectations& expectations) {
+    auto newProject = document::makeNewProject("Playback Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+    (void)animateParameter(document, stack, compositionId, ids.opacity);
+    commands::Transaction key("Second key", document.snapshot().revision());
+    key.emplace<commands::SetKeyframeAtTimeForParameter>(compositionId, ids.opacity, time(5), 0.25);
+    expectations.expect(stack.execute(std::move(key)).changed(), "a second opacity key exists");
+
+    ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
+    session.selectLayer(ids.layer);
+    ui::PropertiesEditor properties(session);
+    auto* opacityField = properties.findChild<ui::kit::KValueField*>("opacityEditor");
+    expectations.expect(opacityField != nullptr, "the opacity cell resolves");
+    if (opacityField == nullptr)
+        return;
+    const auto before = properties.work();
+    const auto atZero = opacityField->value();
+    for (int frame = 1; frame <= 60; ++frame)
+        static_cast<void>(session.setCurrentTime(
+            core::RationalTime::create(frame, 12).value_or(core::RationalTime{})));
+    static_cast<void>(session.setCurrentTime(time(5)));
+    const auto after = properties.work();
+    expectations.expect(after.fullRebuilds == before.fullRebuilds &&
+                            after.upstreamWalks == before.upstreamWalks,
+                        "playhead moves never rebuild Properties or walk the upstream graph");
+    expectations.expect(after.valueRefreshes >= before.valueRefreshes + 60,
+                        "every playhead move refreshes values once");
+    expectations.expect(opacityField->value() != atZero,
+                        "the in-place refresh shows the curve's value at the new time");
+}
+
 // Task P2 (owner review 2026-09-12: "hover is for the component being interacted, not the whole
 // row"): a row entering hover must paint NOTHING of its own -- the row is a plain container now,
 // and every hover affordance comes from the kit control it lays out.
@@ -1244,6 +1281,7 @@ int main(int argc, char** argv) {
     testTornDownFontRowNeverPollsItsDeadSession(expectations);
     testSelectionShowsGroupedRowsWithValuesAndUnits(expectations);
     testAnimatedParameterShowsGoldStaticShowsDim(expectations);
+    testTimeChangeRefreshesValuesWithoutRebuilding(expectations);
     testRowNeverPaintsWholeRowHover(expectations);
     testNoSelectionShowsDocumentProperties(expectations);
     testSelectionSwapUpdatesRows(expectations);
