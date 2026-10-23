@@ -55,7 +55,7 @@ NativeHost::NativeHost(std::shared_ptr<Session> session,
     }
     ownsGpuExportProvider_ = gpuExportProvider_ == nullptr;
     if (ownsGpuExportProvider_) {
-        gpuExportProvider_ = rootRetirements_->createOwnedProvider();
+        gpuExportProvider_ = rootRetirements_->sharedProvider();
     }
     facade_ = std::make_unique<Facade>(*session_);
     subscription_ = facade_->events.subscribe([this](const commands::CommandEvent& event) {

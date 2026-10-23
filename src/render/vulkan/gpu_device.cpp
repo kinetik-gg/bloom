@@ -11,7 +11,6 @@
 
 #include <array>
 #include <atomic>
-#include <cstdio>
 #include <mutex>
 #include <cassert>
 #include <cstdint>
@@ -477,16 +476,15 @@ void DynamicLibrary::close() noexcept {
 }
 
 namespace {
-std::atomic<int> diagActiveTeardowns{0}; // DIAG-355: step-1 experiment only.
+// Native device teardown is serialized process-wide. Several devices destroyed concurrently on
+// different owner threads deadlock inside at least one vendor driver (vkDestroyDevice never
+// returns); one-at-a-time teardown is cheap and portable. Scripting additionally shares one device
+// per interpreter, so this is a guard rather than the primary fix.
 std::mutex nativeTeardownMutex;
 } // namespace
 
 DeviceAllocatorState::~DeviceAllocatorState() {
     assert(owner == std::this_thread::get_id());
-    const int already = diagActiveTeardowns.fetch_add(1);
-    if (already > 0)
-        std::fprintf(stderr, "BLOOM-DIAG concurrent native device teardown (%d already)\n",
-                     already);
     const std::lock_guard serialized(nativeTeardownMutex);
     if (processingPhase) {
         processingPhase->markUnproven();
@@ -501,7 +499,6 @@ DeviceAllocatorState::~DeviceAllocatorState() {
     physicalDevice.clear();
     instance.clear();
     loader = DynamicLibrary{};
-    diagActiveTeardowns.fetch_sub(1);
 }
 
 } // namespace vulkan_detail
