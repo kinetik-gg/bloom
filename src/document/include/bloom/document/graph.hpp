@@ -2,6 +2,7 @@
 
 #include <bloom/document/ids.hpp>
 #include <bloom/document/layer_stack.hpp>
+#include <bloom/document/layer_time.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/validation.hpp>
@@ -37,7 +38,8 @@ inline constexpr std::string_view kAudioSourceNodeType = "bloom.audio-source";
 // I/O upgrades it on decode by injecting the three parameters at their defaults, which reproduce
 // the version-1 picture exactly (see src/project/document_node_schema_upgrade.cpp and
 // docs/architecture/project-format.md, "Node Schema Upgrades").
-inline constexpr std::uint32_t kLayerOutputNodeSchemaVersion = 4;
+// Schema 5 (ADR 0024) declares the optional animatable Time Remap parameter.
+inline constexpr std::uint32_t kLayerOutputNodeSchemaVersion = 5;
 inline constexpr std::uint32_t kLayerStackNodeSchemaVersion = 2;
 inline constexpr std::uint32_t kSolidSourceNodeSchemaVersion = 2;
 inline constexpr std::uint32_t kCheckerSourceNodeSchemaVersion = 1;
@@ -87,6 +89,7 @@ inline constexpr std::string_view kScaleParameterRole = "scale";
 inline constexpr std::string_view kRotationParameterRole = "rotation";
 inline constexpr std::string_view kOpacityParameterRole = "opacity";
 inline constexpr std::string_view kBlendModeParameterRole = "blendMode";
+inline constexpr std::string_view kTimeRemapParameterRole = "timeRemap";
 
 struct NodeRecord {
     NodeId id;
@@ -140,9 +143,12 @@ struct LayerOutputBoundary {
     bool solo = false;
     bool locked = false;
     core::RationalTime inPoint{};
-    // Zero means the composition duration, including for boundaries created before insertion.
+    // Zero means the composition duration, including for boundaries created before insertion. An
+    // explicit range is in placement time and may extend past either composition bound.
     core::RationalTime outPoint{};
     std::optional<LayerId> parent{};
+    // Layer-owned time (ADR 0024). Identity by default.
+    LayerTiming timing{};
     [[nodiscard]] core::RationalTime endPoint(core::RationalTime duration) const noexcept {
         return outPoint == core::RationalTime{} ? duration : outPoint;
     }

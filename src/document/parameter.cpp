@@ -206,6 +206,11 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* value = std::get_if<Vec2d>(&constant.value);
         return value != nullptr && std::isfinite(value->x) && std::isfinite(value->y);
     }
+    if (schemaKey == kTimeRemapParameterSchemaKey) {
+        // Seconds of content time; any finite value (the out-of-extent modes govern the rest).
+        const auto* seconds = std::get_if<double>(&constant.value);
+        return seconds != nullptr && std::isfinite(*seconds);
+    }
     if (schemaKey == kRotationParameterSchemaKey) {
         // Degrees, finite and unbounded: an animated rotation must be able to wind past 360 and
         // below zero, so only a non-finite value is rejected.

@@ -45,6 +45,8 @@ target_sources(
         plan_time_dependence.cpp
         curve_compilation.cpp
         snapshot_compiler.cpp
+        plan_time_scopes.cpp
+        snapshot_compiler_layer_time.ipp
         snapshot_compiler_lowering.ipp
         snapshot_compiler_support.hpp
         snapshot_compiler_value_graph.ipp
@@ -72,6 +74,7 @@ target_sources(
     bloom_runtime_evaluator
     PRIVATE
         operation_cache.cpp
+        cpu_layer_time_resolution.cpp
         video_source.cpp
         video_source.hpp
         image_source.cpp

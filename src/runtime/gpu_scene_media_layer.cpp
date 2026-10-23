@@ -90,19 +90,26 @@ std::optional<GpuSceneLeafFailure> screenUnsupportedLayers(const CompiledComposi
         if (layer == nullptr) {
             continue;
         }
-        if (request.time < layer->inPoint ||
-            (layer->outPoint.has_value() && request.time >= *layer->outPoint)) {
+        // ADR 0024: visibility on the placement clock, operands on the layer's own clock.
+        const auto operationIndex = OperationIndex::fromRaw(index);
+        const auto placementTime =
+            timeForClock(resolved, request.time, plan.placementClock(operationIndex));
+        if (!placementTime || *placementTime < layer->inPoint ||
+            (layer->outPoint.has_value() && *placementTime >= *layer->outPoint)) {
             continue;
         }
+        if (!timeForClock(resolved, request.time, plan.operationClock(operationIndex)))
+            continue;
+        const auto& layerResolved = resolvedForClock(resolved, plan.operationClock(operationIndex));
         // Resolve only to fail closed on a genuinely unevaluable layer before any media decode.
         // Full affine, parent composition, non-Normal blends and generic (merge/layer) inputs are
         // covered by the builder, so they are no longer screened here.
-        const auto position = resolveParameter(layer->position, plan, resolved);
-        const auto anchor = resolveParameter(layer->anchor, plan, resolved);
-        const auto scale = resolveParameter(layer->scale, plan, resolved);
-        const auto rotation = resolveParameter(layer->rotation, plan, resolved);
-        const auto opacity = resolveParameter(layer->opacity, plan, resolved);
-        const auto blend = resolveParameter(*layer, resolved);
+        const auto position = resolveParameter(layer->position, plan, layerResolved);
+        const auto anchor = resolveParameter(layer->anchor, plan, layerResolved);
+        const auto scale = resolveParameter(layer->scale, plan, layerResolved);
+        const auto rotation = resolveParameter(layer->rotation, plan, layerResolved);
+        const auto opacity = resolveParameter(layer->opacity, plan, layerResolved);
+        const auto blend = resolveParameter(*layer, layerResolved);
         if (!position || !anchor || !scale || !rotation || !opacity || !blend) {
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                         "Layer parameters are not evaluable");

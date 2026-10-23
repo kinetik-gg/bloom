@@ -388,16 +388,22 @@ lower(const std::vector<document::NodeId>& order) {
     if (!audioMix.has_value()) {
         return {};
     }
-    return std::make_shared<const runtime::CompiledCompositionPlan>(
-        runtime::CompiledCompositionPlanDefinition{
-            request_.snapshot.revision(), request_.snapshot.project().id(), request_.compositionId,
-            composition_->format(), std::move(operations), output->second,
-            std::move(curveTables->scalar), std::move(curveTables->vec2),
-            std::move(curveTables->vec3), std::move(curveTables->color4),
-            std::move(valueOperations_), valueOutputCount_,
-            runtime::kCompiledCompositionPlanSemanticsVersion,
-            runtime::kAnimationSamplingSemanticsVersion, !request_.parameterOverrides.empty(),
-            *audioMix, std::move(nestedPlans_), composition_->duration()});
+    runtime::CompiledCompositionPlanDefinition definition{
+        request_.snapshot.revision(), request_.snapshot.project().id(), request_.compositionId,
+        composition_->format(), std::move(operations), output->second,
+        std::move(curveTables->scalar), std::move(curveTables->vec2),
+        std::move(curveTables->vec3), std::move(curveTables->color4),
+        std::move(valueOperations_), valueOutputCount_,
+        runtime::kCompiledCompositionPlanSemanticsVersion,
+        runtime::kAnimationSamplingSemanticsVersion, !request_.parameterOverrides.empty(),
+        *audioMix, std::move(nestedPlans_), composition_->duration()};
+    // ADR 0024: place every operation on its layer time clock.
+    if (const auto failure = runtime::detail::scopeLayerTime(definition)) {
+        addFailure(runtime::CompileDiagnosticCode::TimeScopeLimit, subject({}, "layerTime"),
+                   failure->summary, "Reduce the number of retimed layers sharing upstream nodes.");
+        return {};
+    }
+    return std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
 }
 
 [[nodiscard]] std::optional<runtime::CompositionAudioMix> lowerAudioMix() {
@@ -1225,6 +1231,9 @@ lowerLayerOutput(const document::NodeRecord& node,
         }
         parentIndex = found->second;
     }
+    const auto time = lowerLayerTime(node, *boundary->second);
+    if (!time)
+        return std::nullopt;
     return runtime::CompiledLayerOutput{node.id,
                                         boundary->second->layerId,
                                         *input,
@@ -1238,7 +1247,8 @@ lowerLayerOutput(const document::NodeRecord& node,
                                         boundary->second->inPoint,
                                         boundary->second->endPoint(composition_->duration()),
                                         drivenBlendMode,
-                                        parentIndex};
+                                        parentIndex,
+                                        *time};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

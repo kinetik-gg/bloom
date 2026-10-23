@@ -371,10 +371,15 @@ ValidationResult Composition::validate() const {
     if (!safeAreas_.isValid())
         result.add(ValidationCode::InvalidValue, "safeAreas", "Invalid composition safe areas");
     for (const auto& layer : graph().layerOutputs()) {
-        if (layer.inPoint < core::RationalTime{} || layer.inPoint >= layer.endPoint(duration_) ||
-            layer.endPoint(duration_) > duration_)
+        // ADR 0024: an explicit range is in placement time and may extend past either composition
+        // bound (keeping a frame inside is a gesture rule). A stored zero outPoint stays the
+        // full-duration sentinel, so an explicit end is never zero or negative.
+        if (layer.outPoint < core::RationalTime{} || layer.inPoint >= layer.endPoint(duration_))
             result.add(ValidationCode::InvalidValue, "graph.layerOutputs.range",
                        "Invalid layer range");
+        if (!layer.timing.isValid())
+            result.add(ValidationCode::InvalidValue, "graph.layerOutputs.timing",
+                       "Invalid layer timing");
     }
     result.append("parameters", parameters().validate());
     result.append("animationCurves", animationCurves().validate());

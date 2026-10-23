@@ -36,6 +36,7 @@ target_sources(
             include/bloom/document/node_layout.hpp
             include/bloom/document/ids.hpp
             include/bloom/document/layer_stack.hpp
+            include/bloom/document/layer_time.hpp
             include/bloom/document/new_project.hpp
             include/bloom/document/parameter.hpp
             include/bloom/document/shape.hpp

@@ -79,6 +79,9 @@ inline constexpr std::string_view kOpacityParameterSchemaKey = "bloom.layer.opac
 // neither isScalarAnimatableSchemaKey() nor isVec2AnimatableSchemaKey() accepts it and no curve can
 // be created over it.
 inline constexpr std::string_view kBlendModeParameterSchemaKey = "bloom.layer.blend-mode";
+// ADR 0024: optional Layer Output Time Remap, Float64 seconds of content time sampled at layer
+// time. Any finite value is admitted; the out-of-extent modes govern values outside the extent.
+inline constexpr std::string_view kTimeRemapParameterSchemaKey = "bloom.layer.time-remap";
 inline constexpr std::string_view kAudioLevelParameterSchemaKey = "bloom.audio.level";
 inline constexpr std::string_view kImageInputColorSpaceIdParameterRole = "inputColorSpaceId";
 inline constexpr std::string_view kImageInputColorSpaceIdParameterSchemaKey =
@@ -252,6 +255,7 @@ inline constexpr std::int64_t kDefaultBlendModeValue =
 isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == "bloom.shape.stroke-width" || schemaKey == kOpacityParameterSchemaKey ||
            schemaKey == kRotationParameterSchemaKey || schemaKey == kTextSizeParameterSchemaKey ||
+           schemaKey == kTimeRemapParameterSchemaKey ||
            schemaKey == kScalarValueParameterSchemaKey ||
            schemaKey == kSolidWidthParameterSchemaKey ||
            schemaKey == kSolidHeightParameterSchemaKey ||

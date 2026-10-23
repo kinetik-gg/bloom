@@ -87,6 +87,8 @@ constexpr std::array kLayerOutputBindings{
                              bloom::document::kOpacityParameterSchemaKey},
     ExpectedParameterBinding{bloom::document::kBlendModeParameterRole,
                              bloom::document::kBlendModeParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kTimeRemapParameterRole,
+                             bloom::document::kTimeRemapParameterSchemaKey, false},
 };
 
 [[nodiscard]] std::span<const ExpectedParameterBinding>
@@ -107,8 +109,12 @@ expectedBindings(const bloom::document::NodeRecord& node) noexcept {
                                        : std::span(kTextSourceBindings);
     }
     if (node.typeId == kLayerOutputNodeType &&
-        (node.schemaVersion == kLayerOutputNodeSchemaVersion || node.schemaVersion == 3)) {
-        return kLayerOutputBindings;
+        (node.schemaVersion == kLayerOutputNodeSchemaVersion || node.schemaVersion == 4 ||
+         node.schemaVersion == 3)) {
+        // Schemas 3 and 4 never declared Time Remap; the document migration rewrites them to 5.
+        if (node.schemaVersion == kLayerOutputNodeSchemaVersion)
+            return kLayerOutputBindings;
+        return std::span(kLayerOutputBindings).first(6);
     }
     return {};
 }

@@ -44,7 +44,26 @@ struct ResolvedEvaluation final {
     // computed in preflight beside the curve samples and from the SAME request time -- so a Time
     // node and an animation curve in one plan can never disagree about when "now" is.
     std::vector<CompiledValue> valueOutputs;
+    // ADR 0024 layer time. clockTimes[k] is clock k's time this request (nullopt = absent content)
+    // and clockResolutions[k] its curve samples and value outputs; both are empty for a plan with no
+    // retimed layer, and entry 0 is never read (this object is clock 0).
+    std::vector<std::optional<core::RationalTime>> clockTimes;
+    std::vector<ResolvedEvaluation> clockResolutions;
 };
+
+// The resolution an operation's operands use on clock `clock`.
+[[nodiscard]] inline const ResolvedEvaluation& resolvedForClock(const ResolvedEvaluation& base,
+                                                               const std::uint32_t clock) noexcept {
+    return clock == 0 || clock >= base.clockResolutions.size() ? base
+                                                               : base.clockResolutions[clock];
+}
+// Clock `clock`'s time, or nullopt when its content is absent (a None out-of-extent mode).
+[[nodiscard]] inline std::optional<core::RationalTime>
+timeForClock(const ResolvedEvaluation& base, const core::RationalTime requestTime,
+             const std::uint32_t clock) noexcept {
+    return clock == 0 || clock >= base.clockTimes.size() ? std::optional{requestTime}
+                                                         : base.clockTimes[clock];
+}
 
 struct PreflightOutcome final {
     std::optional<ResolvedEvaluation> resolved;
@@ -64,6 +83,15 @@ struct PreflightOutcome final {
             .resolved = std::nullopt, .diagnostic = std::nullopt, .cancelled = true};
     }
 };
+
+// ADR 0024: resolves every layer time clock of `plan` for this request on top of the clock-0
+// resolution `base`, attaching clockTimes/clockResolutions. A plan with no clocks is returned as is.
+[[nodiscard]] PreflightOutcome resolveLayerClocks(const std::shared_ptr<const CompiledCompositionPlan>& plan,
+                                                  const EvaluationRequest& request,
+                                                  ResolvedEvaluation base,
+                                                  const CancellationToken& cancellation,
+                                                  OperationCache* cache,
+                                                  OperationCacheStatistics* statistics);
 
 [[nodiscard]] EvaluationDiagnostic diagnostic(EvaluationDiagnosticCode code, std::string summary,
                                               std::string detail = {},

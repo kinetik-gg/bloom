@@ -18,7 +18,9 @@ CompiledCompositionPlan::CompiledCompositionPlan(CompiledCompositionPlanDefiniti
       planSemanticsVersion_(definition.planSemanticsVersion),
       animationSamplingSemanticsVersion_(definition.animationSamplingSemanticsVersion),
       audioMix_(std::move(definition.audioMix)), nestedPlans_(std::move(definition.nestedPlans)),
-      duration_(definition.duration) {
+      duration_(definition.duration), clocks_(std::move(definition.clocks)),
+      operationClocks_(std::move(definition.operationClocks)),
+      placementClocks_(std::move(definition.placementClocks)) {
     analyzeTimeDependence();
 }
 
@@ -33,6 +35,8 @@ bool operator==(const CompiledCompositionPlan& lhs, const CompiledCompositionPla
            lhs.planSemanticsVersion_ == rhs.planSemanticsVersion_ &&
            lhs.animationSamplingSemanticsVersion_ == rhs.animationSamplingSemanticsVersion_ &&
            lhs.audioMix_ == rhs.audioMix_ && lhs.duration_ == rhs.duration_ &&
+           lhs.clocks_ == rhs.clocks_ && lhs.operationClocks_ == rhs.operationClocks_ &&
+           lhs.placementClocks_ == rhs.placementClocks_ &&
            std::ranges::equal(lhs.nestedPlans_, rhs.nestedPlans_,
                               [](const auto& left, const auto& right) {
                                   return left == right || (left && right && *left == *right);
@@ -57,7 +61,10 @@ CompiledCompositionPlanDefinition CompiledCompositionPlan::copyDefinition() cons
             .bypassOperationCache = bypassOperationCache_,
             .audioMix = audioMix_,
             .nestedPlans = nestedPlans_,
-            .duration = duration_};
+            .duration = duration_,
+            .clocks = clocks_,
+            .operationClocks = operationClocks_,
+            .placementClocks = placementClocks_};
 }
 
 } // namespace bloom::runtime

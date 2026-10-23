@@ -404,7 +404,9 @@ emitMergeCommand(const CompiledMerge& stack, const CompiledCompositionPlan& plan
         if (const auto* layerOutput =
                 std::get_if<CompiledLayerOutput>(&plan.operations()[entry->input.value()]);
             layerOutput != nullptr && entry->layerId.isValid()) {
-            const auto blend = resolveParameter(*layerOutput, resolved);
+            // ADR 0024: a retimed layer's driven mode is read on its own layer clock.
+            const auto blend = resolveParameter(
+                *layerOutput, resolvedForClock(resolved, plan.operationClock(entry->input)));
             if (!blend) {
                 return GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::InvalidPlan,
                                            "Layer blend mode could not be resolved"};

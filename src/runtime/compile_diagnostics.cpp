@@ -44,6 +44,10 @@ std::string_view compileDiagnosticCodeId(const CompileDiagnosticCode code) noexc
         return "bloom.runtime.compile.font-asset-unavailable";
     case CompileDiagnosticCode::TopologyInvariant:
         return "bloom.runtime.compile.topology-invariant";
+    case CompileDiagnosticCode::TimeScopeLimit:
+        return "bloom.runtime.compile.time-scope-limit";
+    case CompileDiagnosticCode::LayerExtentUnresolved:
+        return "bloom.runtime.compile.layer-extent-unresolved";
     }
     return "bloom.runtime.compile.unknown-diagnostic";
 }

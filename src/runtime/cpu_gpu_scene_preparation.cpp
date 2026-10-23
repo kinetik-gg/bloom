@@ -202,8 +202,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                         : PreparedGpuSceneDiagnosticCode::PreflightFailure,
                     std::move(message));
     }
-    const detail::ResolvedEvaluation& resolved = *checked.resolved;
-    if (resolved.imageDescriptor.dataWindow().extent().width() == 0) {
+    const detail::ResolvedEvaluation& frameResolved = *checked.resolved;
+    if (frameResolved.imageDescriptor.dataWindow().extent().width() == 0) {
         return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
                     "Preflight produced an invalid process descriptor");
     }
@@ -225,7 +225,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             envelope.requestedExecutorBytes =
                 phase_.policy->snapshot().reservations.deviceCapacityBytes.value_or(0);
         }
-        const auto extent = resolved.imageDescriptor.dataWindow().extent();
+        const auto extent = frameResolved.imageDescriptor.dataWindow().extent();
         envelope.pixels = static_cast<std::uint64_t>(extent.width()) * extent.height();
         envelope.requestedSourceBytes = request.pixelStorageByteLimit;
         envelope.sourceFree = true;
@@ -316,8 +316,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     }
 
     const auto fullDescriptor = render::Rgba32fImageDescriptor::create(
-        resolved.imageDescriptor.displayWindow(), resolved.imageDescriptor.displayWindow(),
-        resolved.imageDescriptor.pixelAspect());
+        frameResolved.imageDescriptor.displayWindow(), frameResolved.imageDescriptor.displayWindow(),
+        frameResolved.imageDescriptor.pixelAspect());
     if (!fullDescriptor) {
         return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
                     "Composition descriptor is invalid");
@@ -326,15 +326,15 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     const auto fullDisplayWindow = fullDescriptor.value()->displayWindow();
     const auto fullPixelAspect = fullDescriptor.value()->pixelAspect();
 
-    const double hScale = resolved.horizontalScale;
-    const double vScale = resolved.verticalScale;
+    const double hScale = frameResolved.horizontalScale;
+    const double vScale = frameResolved.verticalScale;
 
     // Screen every reachable layer for an unsupported blend or transform BEFORE any media leaf is
     // resolved or decoded, so a graph containing an unsupported layer never prepares -- and never
     // decodes -- its media. An inactive layer, exactly as in the CPU evaluator, publishes nothing
     // and is therefore not screened.
     if (const auto error =
-            detail::screenUnsupportedLayers(*plan, request, resolved, cancellation)) {
+            detail::screenUnsupportedLayers(*plan, request, frameResolved, cancellation)) {
         return fail(error->code, error->message);
     }
 
@@ -448,6 +448,17 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         }
         const OperationIndex operationIndex = OperationIndex::fromRaw(index);
         const auto& operation = plan->operations()[index];
+        // ADR 0024: operands, media and nested time on the operation's clock, layer visibility on
+        // its placement clock. An absent clock publishes nothing, exactly as the CPU reference.
+        const auto operandClock = plan->operationClock(operationIndex);
+        const auto& resolved = detail::resolvedForClock(frameResolved, operandClock);
+        const auto operandTime = detail::timeForClock(frameResolved, request.time, operandClock);
+        const auto placementTime = detail::timeForClock(frameResolved, request.time,
+                                                        plan->placementClock(operationIndex));
+        if (!operandTime || !placementTime)
+            continue;
+        auto clockRequest = request;
+        clockRequest.time = *operandTime;
 
         if (const auto* solid = std::get_if<CompiledSolid>(&operation)) {
             if (const auto error = detail::emitSolidCommand(
@@ -504,7 +515,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                     : remainingSource;
             detail::GpuSceneUploadLeafResult leaf;
             const auto error = detail::buildAndEmitMediaLeaf(
-                operation, operationIndex, request, *plan, resolved, mediaContext_, ocioContext_,
+                operation, operationIndex, clockRequest, *plan, resolved, mediaContext_, ocioContext_,
                 remainingBudget, hScale, vScale, chargeRetained, chargeTransient, cancellation,
                 mediaStatistics, emit, outputWindowOf[index], commandForOperation[index],
                 keyOf[index], leaf);
@@ -518,7 +529,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         if (const auto* effect = std::get_if<CompiledImageEffect>(&operation)) {
             const detail::GpuSceneEffectEmissionContext effectContext{
                 .plan = plan.get(),
-                .request = &request,
+                .request = &clockRequest,
                 .resolved = &resolved,
                 .vectors = &vectors,
                 .commandForOperation = &commandForOperation,
@@ -552,7 +563,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             detail::GpuSceneNestedResult nested;
             const auto sourceBytesBefore = sourceBackings->chargedBytes;
             const auto error = detail::prepareNestedComposition(
-                *source, *plan, request, resolved, hScale, vScale, detail::nestedCompositionDepth(),
+                *source, *plan, clockRequest, resolved, hScale, vScale, detail::nestedCompositionDepth(),
                 allowance, retainedBytes, cancellation,
                 [this, &phaseLease, &sourceBackings, sourceAllowance, coverageAllowance,
                  coverageBytes, foregroundLimit = request.pixelStorageByteLimit](
@@ -669,8 +680,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 vectors[index] = *chained;
             }
             // The CPU Layer Output stage publishes no image and no bounds outside its active range.
-            if (request.time < layer->inPoint ||
-                (layer->outPoint.has_value() && request.time >= *layer->outPoint)) {
+            if (*placementTime < layer->inPoint ||
+                (layer->outPoint.has_value() && *placementTime >= *layer->outPoint)) {
                 continue;
             }
             if (scale->value.x == 0.0 || scale->value.y == 0.0 || inputLocal.empty()) {
@@ -880,7 +891,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     const GpuSceneCommandIndex outputCommand = commandForOperation[request.output.value()];
     auto scene = std::shared_ptr<const PreparedGpuScene>(new PreparedGpuScene(
         std::move(commands), std::move(commandForOperation), outputCommand, std::move(identity),
-        std::move(bounds), resolved.imageDescriptor, mediaStatistics));
+        std::move(bounds), frameResolved.imageDescriptor, mediaStatistics));
     // Nested builders borrow the root phase and must not retire its preparation scratch while
     // siblings can still decode. The shared backing ledger deduplicates all nested source pixels.
     if (phaseLease && !phase_.admittedLease &&

@@ -345,7 +345,7 @@ template <typename Definition>
         return hasCanonicalKey(definition, kLayerOutputNodeType, kLayerOutputNodeSchemaVersion) &&
                hasLeadingImageInput(definition, kLayerOutputContentInputPort, false) &&
                hasImageOutput(definition, kLayerOutputOutputPort) &&
-               definition.parameters.size() == 6 &&
+               definition.parameters.size() == 7 &&
                hasParameter(definition, 0, kPositionParameterRole, kPositionParameterSchemaKey,
                             ParameterValueKind::Vec2d, true) &&
                hasParameter(definition, 1, kAnchorParameterRole, kAnchorParameterSchemaKey,
@@ -358,7 +358,10 @@ template <typename Definition>
                             ParameterValueKind::Float64, true) &&
                hasParameter(definition, 5, kBlendModeParameterRole, kBlendModeParameterSchemaKey,
                             ParameterValueKind::Integer) &&
-               (definition.inputs.size() == 8 && definition.outputs.size() == 2 &&
+               // Schema 5 (ADR 0024): the optional, animatable Time Remap comes last.
+               hasParameter(definition, 6, kTimeRemapParameterRole, kTimeRemapParameterSchemaKey,
+                            ParameterValueKind::Float64, true, false) &&
+               (definition.inputs.size() == 9 && definition.outputs.size() == 2 &&
                 definition.inputs[1].name == kLayerOutputAudioInputPort &&
                 definition.inputs[1].valueKind == SocketValueKind::Audio &&
                 !definition.inputs[1].required &&
@@ -529,7 +532,7 @@ template <typename Definition>
     std::vector<InputPortDefinition> inputs{
         {std::string(kLayerOutputContentInputPort), SocketValueKind::Image, false}};
     inputs.push_back({std::string(kLayerOutputAudioInputPort), SocketValueKind::Audio, false});
-    for (const auto& parameter : std::array<InputPortDefinition, 6>{
+    for (const auto& parameter : std::array<InputPortDefinition, 7>{
              InputPortDefinition{std::string(kPositionParameterRole), SocketValueKind::Vector2,
                                  false},
              InputPortDefinition{std::string(kAnchorParameterRole), SocketValueKind::Vector2,
@@ -540,6 +543,8 @@ template <typename Definition>
              InputPortDefinition{std::string(kOpacityParameterRole), SocketValueKind::Scalar,
                                  false},
              InputPortDefinition{std::string(kBlendModeParameterRole), SocketValueKind::Integer,
+                                 false},
+             InputPortDefinition{std::string(kTimeRemapParameterRole), SocketValueKind::Scalar,
                                  false}})
         inputs.push_back(parameter);
     std::vector<OutputPortDefinition> outputs{
@@ -564,7 +569,10 @@ template <typename Definition>
              // which an enable/disable keyframe model would express and an interpolated curve
              // would not.
              {std::string(kBlendModeParameterRole), std::string(kBlendModeParameterSchemaKey),
-              ParameterValueKind::Integer, true, false, kDefaultBlendModeValue}},
+              ParameterValueKind::Integer, true, false, kDefaultBlendModeValue},
+             // ADR 0024: absent means Time Remap is disabled. EnableLayerTimeRemap binds it.
+             {std::string(kTimeRemapParameterRole), std::string(kTimeRemapParameterSchemaKey),
+              ParameterValueKind::Float64, false, true, 0.0}},
             std::nullopt,
             NodeCardinality::Many,
             NodeCategory::Layers,

@@ -1,6 +1,7 @@
 #include <bloom/runtime/compiled_plan_cache.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 
+#include "plan_time_scopes.hpp"
 #include "snapshot_compiler_support.hpp"
 
 #include <bloom/document/animation.hpp>
@@ -873,6 +874,7 @@ class CompilePass final {
         }
     }
 
+#include "snapshot_compiler_layer_time.ipp"
 #include "snapshot_compiler_lowering.ipp"
 #include "snapshot_compiler_value_graph.ipp"
 

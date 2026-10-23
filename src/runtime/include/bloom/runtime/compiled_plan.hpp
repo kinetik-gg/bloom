@@ -439,6 +439,20 @@ struct CompiledText {
 // named modes, which is exactly what a driver expresses and a curve cannot. It lives HERE, on the
 // layer boundary that owns it, rather than on the stack entry that consumes it -- the stack entry
 // is the ordering of layers, and the mode is a property of the layer.
+// ADR 0024: a Layer Output's own clock and its upstream's content clock. Present only for a layer
+// whose timing is not identity; the extent is already resolved (a Source extent names no node
+// here). The Time Remap operand is sampled on the layer clock.
+struct CompiledLayerTime final {
+    core::RationalTime startTime{};
+    document::LayerSpeed speed{};
+    std::optional<CompiledScalarParameter> timeRemap{};
+    std::optional<core::RationalTime> extentDuration{};
+    document::FrameRate extentFrameRate = document::FrameRate::framesPerSecond24();
+    document::LayerTimeMode beforeMode = document::LayerTimeMode::None;
+    document::LayerTimeMode afterMode = document::LayerTimeMode::None;
+    friend bool operator==(const CompiledLayerTime&, const CompiledLayerTime&) = default;
+};
+
 struct CompiledLayerOutput {
     document::NodeId sourceNodeId;
     document::LayerId layerId;
@@ -464,6 +478,8 @@ struct CompiledLayerOutput {
     std::optional<ValueOutputIndex> drivenBlendMode{};
     // Plan v4: authored transform dependency, evaluated before this boundary.
     std::optional<OperationIndex> parent{};
+    // Plan v9 (ADR 0024): absent for identity timing.
+    std::optional<CompiledLayerTime> time{};
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };
 
@@ -496,6 +512,21 @@ using CompiledOperation =
                  CompiledLayerOutput, CompiledMerge, CompiledCompositionOutput, CompiledShape,
                  CompiledCompositionSource, CompiledImageEffect>;
 
+// ADR 0024 time clocks. Clock 0 is the plan's own clock (the request time). A Layer clock maps its
+// parent clock through a layer's start time and speed; a Content clock (whose parent is that Layer
+// clock) applies the layer's Time Remap and out-of-extent modes, and may be absent. Every
+// operation evaluates its operands on operationClock(i) and is consumed on placementClock(i); the
+// two differ only for a retimed Layer Output (layer clock vs. the clock it is placed in). A plan
+// with no retimed layer has no clocks and is exactly the pre-v9 operation list.
+enum class CompiledClockKind : std::uint8_t { Plan, Layer, Content };
+struct CompiledTimeClock final {
+    CompiledClockKind kind = CompiledClockKind::Plan;
+    std::uint32_t parent = 0;
+    // The (placement-clock copy of the) Layer Output whose CompiledLayerTime defines this clock.
+    OperationIndex layer = OperationIndex::fromRaw(0);
+    friend bool operator==(const CompiledTimeClock&, const CompiledTimeClock&) = default;
+};
+
 // Mutable construction storage is deliberately a distinct type. Publishing a plan copies or moves
 // this complete definition into private storage, so retaining or changing the definition cannot
 // change evaluation or identity semantics after publication.
@@ -523,6 +554,10 @@ struct CompiledCompositionPlanDefinition final {
     CompositionAudioMix audioMix{};
     std::vector<std::shared_ptr<const CompiledCompositionPlan>> nestedPlans{};
     core::RationalTime duration{};
+    // ADR 0024. Empty means every operation is on clock 0.
+    std::vector<CompiledTimeClock> clocks{};
+    std::vector<std::uint32_t> operationClocks{};
+    std::vector<std::uint32_t> placementClocks{};
 
     friend bool operator==(const CompiledCompositionPlanDefinition&,
                            const CompiledCompositionPlanDefinition&) = default;
@@ -545,6 +580,18 @@ class CompiledCompositionPlan final {
         return nestedPlans_;
     }
     [[nodiscard]] core::RationalTime duration() const noexcept { return duration_; }
+    // ADR 0024 clocks; clock 0 is implicit and always present.
+    [[nodiscard]] std::span<const CompiledTimeClock> clocks() const& noexcept { return clocks_; }
+    [[nodiscard]] std::span<const CompiledTimeClock> clocks() const&& = delete;
+    [[nodiscard]] std::size_t clockCount() const noexcept {
+        return clocks_.empty() ? 1 : clocks_.size();
+    }
+    [[nodiscard]] std::uint32_t operationClock(const OperationIndex index) const noexcept {
+        return index.value() < operationClocks_.size() ? operationClocks_[index.value()] : 0;
+    }
+    [[nodiscard]] std::uint32_t placementClock(const OperationIndex index) const noexcept {
+        return index.value() < placementClocks_.size() ? placementClocks_[index.value()] : 0;
+    }
     [[nodiscard]] bool bypassOperationCache() const noexcept { return bypassOperationCache_; }
     [[nodiscard]] bool operationTimeDependent(OperationIndex index) const noexcept {
         return index.value() >= operationTimeDependent_.size() ||
@@ -622,6 +669,9 @@ class CompiledCompositionPlan final {
     CompositionAudioMix audioMix_{};
     std::vector<std::shared_ptr<const CompiledCompositionPlan>> nestedPlans_;
     core::RationalTime duration_{};
+    std::vector<CompiledTimeClock> clocks_;
+    std::vector<std::uint32_t> operationClocks_;
+    std::vector<std::uint32_t> placementClocks_;
 };
 
 } // namespace bloom::runtime

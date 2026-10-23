@@ -1420,8 +1420,7 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
         const auto* channel = output < valueGraph.outputs.size()
                                   ? std::get_if<std::int64_t>(&valueGraph.outputs[output])
                                   : nullptr;
-        if (!channel || *channel < 0 ||
-            *channel > static_cast<std::int64_t>(render::ImageCoverageChannel::Luma)) {
+        if (!channel || !render::matteSelectionFromStoredValue(*channel)) {
             auto subject = subjectFor(OperationIndex::fromRaw(index), plan->operations()[index]);
             subject.field = "channel";
             return PreflightOutcome::failure(diagnostic(
@@ -1432,7 +1431,7 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
         }
     }
 
-    return PreflightOutcome::success(
+    return resolveLayerClocks(plan, request,
         ResolvedEvaluation{.imageDescriptor = *descriptorResult.value(),
                            .horizontalScale = horizontalScale,
                            .verticalScale = verticalScale,
@@ -1442,7 +1441,10 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                            .scalarCurveValues = std::move(scalarCurveValues),
                            .vec2CurveValues = std::move(vec2CurveValues),
                            .color4CurveValues = std::move(color4CurveValues),
-                           .valueOutputs = std::move(valueGraph.outputs)});
+                           .valueOutputs = std::move(valueGraph.outputs),
+                           .clockTimes = {},
+                           .clockResolutions = {}},
+        cancellation, cache, statistics);
 }
 
 [[nodiscard]] EvaluationResult unexpectedAllocationFailure() {
@@ -1664,14 +1666,21 @@ EvaluationPixelStoragePlan CpuCompositionEvaluator::planPreflightPixelStorage(
                     outputBytes.assign(operations.size(), resolved.imageBytes);
                     childPeaks.assign(operations.size(), 0);
                 }
+                // ADR 0024: a composition source inside a retimed layer maps its own clock's time;
+                // on an absent clock it is not evaluated at all.
+                const auto clock = current->operationClock(OperationIndex::fromRaw(index));
+                const auto sourceTime = detail::timeForClock(resolved, currentRequest.time, clock);
+                if (!sourceTime)
+                    continue;
+                const auto& clockResolved = detail::resolvedForClock(resolved, clock);
                 const auto offset =
-                    detail::resolveParameter(source->timeMapping.offset, *current, resolved);
+                    detail::resolveParameter(source->timeMapping.offset, *current, clockResolved);
                 const auto scale =
-                    detail::resolveParameter(source->timeMapping.scale, *current, resolved);
+                    detail::resolveParameter(source->timeMapping.scale, *current, clockResolved);
                 const auto& nested = current->nestedPlans()[source->nestedPlanIndex];
                 const auto nestedTime =
                     offset && scale
-                        ? mapCompositionTime(currentRequest.time, offset->value, scale->value,
+                        ? mapCompositionTime(*sourceTime, offset->value, scale->value,
                                              nested->duration(), nested->format().frameRate(),
                                              source->timeMapping.loopMode)
                         : std::nullopt;
@@ -1791,10 +1800,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 diagnostic(EvaluationDiagnosticCode::InternalInvariant,
                            "Evaluation preflight produced no result or diagnostic"));
         }
-        auto resolved = std::move(*checked.resolved);
+        auto frameResolved = std::move(*checked.resolved);
         const auto fullDescriptorResult = render::Rgba32fImageDescriptor::create(
-            resolved.imageDescriptor.displayWindow(), resolved.imageDescriptor.displayWindow(),
-            resolved.imageDescriptor.pixelAspect());
+            frameResolved.imageDescriptor.displayWindow(), frameResolved.imageDescriptor.displayWindow(),
+            frameResolved.imageDescriptor.pixelAspect());
         if (!fullDescriptorResult)
             return EvaluationResult::failed(imageDiagnostic(*fullDescriptorResult.error(), {},
                                                             "Composition descriptor is invalid"));
@@ -1861,6 +1870,17 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
         };
         std::shared_ptr<const render::Rgba32fImage> processImage;
         std::vector<std::string> contentHashes(plan->operations().size());
+        const auto releaseInputs = [&](const std::size_t index) {
+            if (index == request.output.value())
+                return;
+            forEachInput(plan->operations()[index], [&](const OperationIndex input) {
+                auto& remaining = frameResolved.remainingConsumers[input.value()];
+                --remaining;
+                if (remaining == 0) {
+                    slots[input.value()].reset();
+                }
+            });
+        };
         std::vector<detail::LayerMatrix> layerMatrices(plan->operations().size());
 
         struct VectorChain {
@@ -1876,6 +1896,19 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             }
             const auto operationIndex = OperationIndex::fromRaw(index);
             const auto operationSubject = subjectFor(operationIndex, plan->operations()[index]);
+            // ADR 0024: an operation resolves its operands, and selects media, on its operand clock
+            // and is tested for layer visibility on its placement clock. An operation on an absent
+            // clock (a None out-of-extent mode) produces nothing, like a layer outside its range.
+            const auto operandClock = plan->operationClock(operationIndex);
+            const auto& resolved = detail::resolvedForClock(frameResolved, operandClock);
+            const auto operandTime = detail::timeForClock(frameResolved, request.time, operandClock);
+            const auto placementTime = detail::timeForClock(frameResolved, request.time,
+                                                            plan->placementClock(operationIndex));
+            if (!operandTime || !placementTime) {
+                contentHashes[index] = "absent-layer-time";
+                releaseInputs(index);
+                continue;
+            }
             std::optional<render::Rgba32fImage> produced;
             std::optional<EvaluationDiagnostic> operationFailure;
             bool operationCancelled = false;
@@ -1892,7 +1925,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 const auto& nested = plan->nestedPlans()[source->nestedPlanIndex];
                 if (offset && scale)
                     nestedTime = mapCompositionTime(
-                        request.time, offset->value, scale->value, nested->duration(),
+                        *operandTime, offset->value, scale->value, nested->duration(),
                         nested->format().frameRate(), source->timeMapping.loopMode);
                 if (!nestedTime)
                     return EvaluationResult::failed(diagnostic(
@@ -2006,7 +2039,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             std::optional<detail::ImageSourceSelection> selectedImage;
             if (const auto* source = std::get_if<CompiledImageSource>(&plan->operations()[index])) {
                 selectedImage = detail::selectImageSource(
-                    *source, request.time, plan->format().frameRate(), mediaBase, cancellation,
+                    *source, *operandTime, plan->format().frameRate(), mediaBase, cancellation,
                     request.colorIntent, imageMemoryCache,
                     (explicitBypass || request.requireVerifiedMediaSources)
                         ? MediaSourceRevisionPolicy::Revalidate
@@ -2030,7 +2063,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             std::optional<detail::VideoSourceSelection> selectedVideo;
             if (const auto* source = std::get_if<CompiledVideoSource>(&plan->operations()[index])) {
                 selectedVideo = detail::selectVideoSource(
-                    *source, request.time, plan->format().frameRate(), mediaBase, *videoContext(),
+                    *source, *operandTime, plan->format().frameRate(), mediaBase, *videoContext(),
                     !explicitBypass, cancellation, request.colorIntent,
                     (explicitBypass || request.requireVerifiedMediaSources)
                         ? MediaSourceRevisionPolicy::Revalidate
@@ -2112,7 +2145,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 }
                 key.add(plan->operationTimeDependent(operationIndex));
                 if (plan->operationTimeDependent(operationIndex))
-                    key.add(request.time);
+                    key.add(*operandTime);
                 key.add(plan->operations()[index].index());
                 const auto& keyedVector = vectors[index];
                 if (keyedVector) {
@@ -2291,8 +2324,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             authored(step.blendModeParameterId,
                                      core::blendModeStoredValue(step.blendMode),
                                      step.drivenBlendMode);
-                            key.add(request.time >= step.inPoint &&
-                                    (!step.outPoint || request.time < *step.outPoint));
+                            key.add(*placementTime >= step.inPoint &&
+                                    (!step.outPoint || *placementTime < *step.outPoint));
                         } else if constexpr (std::is_same_v<Step, CompiledMerge>) {
 
                             key.add(step.entries.size());
@@ -3014,8 +3047,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             produced.emplace(std::move(*frozen.value()));
                         },
                         [&](const CompiledLayerOutput& layer) {
-                            if (request.time < layer.inPoint ||
-                                (layer.outPoint && request.time >= *layer.outPoint))
+                            if (*placementTime < layer.inPoint ||
+                                (layer.outPoint && *placementTime >= *layer.outPoint))
                                 return;
                             const auto position =
                                 detail::resolveParameter(layer.position, *plan, resolved);
@@ -3420,8 +3453,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 if (layerOutput != nullptr && entry->layerId.isValid()) {
                                     // Task DRIVE-1: the mode may be driven, so it is READ here
                                     // rather than copied out of the plan.
-                                    const auto resolvedMode =
-                                        detail::resolveParameter(*layerOutput, resolved);
+                                    // ADR 0024: a retimed layer's driven mode is read on its
+                                    // own layer clock, not the Merge's.
+                                    const auto resolvedMode = detail::resolveParameter(
+                                        *layerOutput,
+                                        detail::resolvedForClock(
+                                            frameResolved, plan->operationClock(entry->input)));
                                     if (!resolvedMode.has_value()) {
                                         auto modeSubject = operationSubject;
                                         modeSubject.parameterId = layerOutput->blendModeParameterId;
@@ -3641,15 +3678,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                          .values = {},
                          .bounds = bounds[index]});
             }
-            if (index != request.output.value()) {
-                forEachInput(plan->operations()[index], [&](const OperationIndex input) {
-                    auto& remaining = resolved.remainingConsumers[input.value()];
-                    --remaining;
-                    if (remaining == 0) {
-                        slots[input.value()].reset();
-                    }
-                });
-            }
+            releaseInputs(index);
         }
 
         if (std::ranges::any_of(plan->valueOperations(), [](const auto& operation) {
@@ -3666,7 +3695,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                   {},
                                                   {}};
             postMemoization.pass = ValueGraphPass::PostImage;
-            postMemoization.initialOutputs = resolved.valueOutputs;
+            postMemoization.initialOutputs = frameResolved.valueOutputs;
             postMemoization.evaluatedBounds = bounds;
             auto postValues =
                 evaluateValueGraph(plan->valueOperations(), plan->valueOutputCount(), request.time,
@@ -3687,7 +3716,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                          DiagnosticSeverity::Warning, std::move(valueSubject),
                                          valueDiagnostic.summary, valueDiagnostic.detail});
             }
-            resolved.valueOutputs = std::move(postValues.outputs);
+            frameResolved.valueOutputs = std::move(postValues.outputs);
         }
 
         if (!processImage || cancellation.isCancellationRequested()) {
@@ -3761,7 +3790,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
         };
         auto frame = std::shared_ptr<const ProcessFrame>(new ProcessFrame(
             std::move(identity), std::move(processImage), frameStatistics, std::move(bounds),
-            std::move(resolved.valueOutputs), std::move(contentHashes[request.output.value()])));
+            std::move(frameResolved.valueOutputs), std::move(contentHashes[request.output.value()])));
         if (statistics)
             *statistics = std::move(frameStatistics);
         return EvaluationResult::evaluated(std::move(frame), std::move(imageWarnings));

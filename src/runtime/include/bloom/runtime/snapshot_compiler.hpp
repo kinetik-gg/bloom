@@ -44,6 +44,11 @@ enum class CompileDiagnosticCode {
     BoundsReadoutDrivesImageOperation,
     FontAssetUnavailable,
     TopologyInvariant,
+    // ADR 0024: too many layer time clocks or scoped operation copies.
+    TimeScopeLimit,
+    // ADR 0024: a Source content extent names no resolvable media or composition length; the
+    // layer compiles with an Unbounded extent.
+    LayerExtentUnresolved,
 };
 
 [[nodiscard]] std::string_view compileDiagnosticCodeId(CompileDiagnosticCode code) noexcept;

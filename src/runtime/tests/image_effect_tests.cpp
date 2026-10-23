@@ -1181,6 +1181,17 @@ void testImageCombineDrivers() {
         expect(!result.frame() && !result.diagnostics().empty(),
                "Image Combine refuses non-Integer and out-of-domain channel drivers");
     }
+    {
+        // #361: a driver may select an inverted matte (5-9) through the evaluator, not only
+        // through effect preparation.
+        auto invertedDefinition = channelDefinition;
+        invertedDefinition.valueOperations.front().kernel = CompiledValuePassthrough{
+            {ParameterId::fromRaw(201), CompiledValue{std::int64_t{6}}}};
+        const auto inverted = makePlan(std::move(invertedDefinition));
+        const auto result = evaluator.evaluate(inverted, requestFor(*inverted), {});
+        expect(result.frame() && !samePixels(result, red),
+               "a driven inverted matte selector (6) evaluates and differs from plain red");
+    }
     auto invalidIndex = channelDefinition;
     std::get<ImageCombineKernel>(std::get<CompiledImageEffect>(invalidIndex.operations[1]).kernel)
         .drivenChannel = ValueOutputIndex::fromRaw(100);

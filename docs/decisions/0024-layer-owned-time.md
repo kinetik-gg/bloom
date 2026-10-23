@@ -1,6 +1,6 @@
 # ADR 0024: Layer-Owned Time
 
-Status: proposed
+Status: accepted (owner approval 2026-10-23)
 
 Date: 2026-10-23
 
