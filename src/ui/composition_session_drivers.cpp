@@ -142,6 +142,13 @@ QString CompositionSession::valueOutputText(const document::NodeId nodeId,
     return found == valueOutputText_.end() ? QString{} : found->second;
 }
 
+CompositionSession::DrivenValueWork CompositionSession::drivenValueWork() const noexcept {
+    if (drivenValues_ == nullptr)
+        return {};
+    return {.probeCompiles = drivenValues_->work().probeCompiles.load(),
+            .evaluations = drivenValues_->work().evaluations.load()};
+}
+
 void CompositionSession::refreshDrivenValues() {
     const auto* current = composition();
     std::vector<document::ParameterId> driven;

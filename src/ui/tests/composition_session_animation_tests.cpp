@@ -264,6 +264,29 @@ void testDriverChainAccessors() {
             "and after one refresh the driven parameter reads back a resolved value");
     require(session.drivenValueText(ids.opacity).isEmpty(),
             "while a parameter that is not driven resolves to nothing");
+
+    // #358: playback moves the playhead every frame. The driver probe compiles once for this
+    // document state; every later time is one value evaluation of the cached plan.
+    const auto first = session.drivenValueWork();
+    require(first.probeCompiles == 1 && first.evaluations >= 1,
+            "the first resolution compiles the probe once");
+    for (int frame = 1; frame <= 30; ++frame) {
+        const auto before = session.drivenValueWork().evaluations;
+        static_cast<void>(
+            session.setCurrentTime(core::RationalTime::create(frame, 12).value_or(time(0))));
+        session.refreshDrivenValues();
+        QElapsedTimer step;
+        step.start();
+        while (session.drivenValueWork().evaluations == before && step.elapsed() < 5000) {
+            QCoreApplication::processEvents();
+            QThread::msleep(1);
+        }
+    }
+    const auto played = session.drivenValueWork();
+    require(played.probeCompiles == first.probeCompiles,
+            "thirty playhead moves never recompile the driver probe");
+    require(played.evaluations >= first.evaluations + 30,
+            "each playhead move evaluates the cached value graph");
 }
 
 void testComponentDiamondsAndSelections() {

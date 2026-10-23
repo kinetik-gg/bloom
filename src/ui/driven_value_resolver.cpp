@@ -8,6 +8,8 @@
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <chrono>
+#include <mutex>
+#include <optional>
 #include <thread>
 
 namespace bloom::ui {
@@ -63,8 +65,36 @@ QString valueText(const runtime::CompiledValue& value) {
         value);
 }
 } // namespace
+struct DrivenValueResolver::ProbeCache final {
+    std::mutex mutex;
+    // The entry keeps its snapshot alive, so its project address can never be reused by another
+    // document state while the key is compared.
+    std::optional<document::Snapshot> snapshot;
+    document::CompositionId composition;
+    std::vector<document::ParameterId> parameters;
+    runtime::SnapshotCompileResult compiled;
+
+    [[nodiscard]] std::optional<runtime::SnapshotCompileResult>
+    find(const document::Snapshot& state, const document::CompositionId id,
+         const std::vector<document::ParameterId>& asked) {
+        const std::lock_guard lock(mutex);
+        if (snapshot && snapshot->revision() == state.revision() &&
+            &snapshot->project() == &state.project() && composition == id && parameters == asked)
+            return compiled;
+        return std::nullopt;
+    }
+    void store(const document::Snapshot& state, const document::CompositionId id,
+               std::vector<document::ParameterId> asked, runtime::SnapshotCompileResult result) {
+        const std::lock_guard lock(mutex);
+        snapshot = state;
+        composition = id;
+        parameters = std::move(asked);
+        compiled = std::move(result);
+    }
+};
 DrivenValueResolver::DrivenValueResolver(CompositionSession& session, QObject* parent)
-    : QObject(parent), session_(session), timer_(new QTimer(this)) {
+    : QObject(parent), session_(session), probeCache_(std::make_shared<ProbeCache>()),
+      timer_(new QTimer(this)) {
     timer_->setInterval(16);
     connect(timer_, &QTimer::timeout, this, [this] { poll(); });
 }
@@ -109,12 +139,23 @@ void DrivenValueResolver::start() {
             "Resolve Properties Drivers",
             {runtime::TaskOwnerKind::Application, runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Interactive},
-        [snapshot, compositionId, time, parameters](runtime::TaskContext& context) {
+        [snapshot, compositionId, time, parameters, cache = probeCache_,
+         work = work_](runtime::TaskContext& context) {
             auto values = std::make_shared<Values>();
             for (auto parameter : parameters)
                 values->parameters[parameter] = QObject::tr("Unavailable");
-            const auto compiled =
-                compileDriverProbe(snapshot, compositionId, parameters, context.cancellation());
+            auto cached = cache->find(snapshot, compositionId, parameters);
+            if (!cached) {
+                ++work->probeCompiles;
+                auto fresh =
+                    compileDriverProbe(snapshot, compositionId, parameters, context.cancellation());
+                if (context.isCancellationRequested())
+                    return runtime::TaskResult<std::shared_ptr<Values>>::cancelled();
+                cache->store(snapshot, compositionId, parameters, fresh);
+                cached = std::move(fresh);
+            }
+            const auto& compiled = *cached;
+            ++work->evaluations;
             if (context.isCancellationRequested())
                 return runtime::TaskResult<std::shared_ptr<Values>>::cancelled();
             const auto* composition = snapshot.project().findComposition(compositionId);
