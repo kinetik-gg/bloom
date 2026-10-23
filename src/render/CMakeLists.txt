@@ -1060,6 +1060,7 @@ target_sources(
         gpu_affine_host.cpp
         gpu_point_resample_host.cpp
         image.cpp
+        channel_set_image.cpp
         image_types.cpp
         ocio_gpu_program.cpp
         text_glyph_source.hpp
@@ -1069,6 +1070,7 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/render/channel_set_image.hpp
             include/bloom/render/cpu_image_primitives.hpp
             include/bloom/render/display_buffer.hpp
             include/bloom/render/embedded_fonts.hpp
