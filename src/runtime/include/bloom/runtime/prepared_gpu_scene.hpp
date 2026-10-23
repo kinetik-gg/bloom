@@ -292,7 +292,7 @@ struct GpuSceneBlendCommand final {
     std::string sourceKey;
     std::string destinationKey;
     core::BlendMode mode = core::kDefaultBlendMode;
-    std::optional<render::GpuImageCombineParameters> imageCombine;
+    std::optional<render::GpuImageCombineParameters> imageCombine{};
     // The source data window and the output data window (== destination data window).
     render::ImageWindow sourceWindow;
     render::ImageWindow outputWindow;

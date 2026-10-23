@@ -91,7 +91,7 @@ struct GpuTranslationParameters final {
     float opacity = 1.0F;
     // Canvas operations may deliberately change the display window. Ordinary layer placement
     // leaves this empty and inherits the source display window.
-    std::optional<ImageWindow> outputDisplayWindow;
+    std::optional<ImageWindow> outputDisplayWindow{};
 };
 
 // Validated inputs for SourceOverV1. `source` is the foreground, `destination` the backdrop; both

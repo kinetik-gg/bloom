@@ -47,8 +47,8 @@ struct ResolvedEvaluation final {
     // ADR 0024 layer time. clockTimes[k] is clock k's time this request (nullopt = absent content)
     // and clockResolutions[k] its curve samples and value outputs; both are empty for a plan with no
     // retimed layer, and entry 0 is never read (this object is clock 0).
-    std::vector<std::optional<core::RationalTime>> clockTimes;
-    std::vector<ResolvedEvaluation> clockResolutions;
+    std::vector<std::optional<core::RationalTime>> clockTimes{};
+    std::vector<ResolvedEvaluation> clockResolutions{};
 };
 
 // The resolution an operation's operands use on clock `clock`.
