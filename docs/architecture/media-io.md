@@ -532,13 +532,21 @@ for this slice.
 **Immutable still-source revisions (2026-10-13).** A worker captures one bounded encoded byte vector,
 hashes those exact bytes in cancellation-aware chunks and probes that vector. PNG/JPEG callbacks and
 the OpenEXR input stream subsequently decode the same immutable bytes. The revision is runtime
-state; its SHA-256 must match the selected asset or sequence-member digest. Neither timestamps,
-file size, a pathname nor an open mutable source handle proves content identity. A concurrent path
+state; its SHA-256 must match the selected asset or sequence-member digest. A concurrent path
 replacement cannot change an admitted revision's decoder input.
 
-`EvaluationRequest::mediaSourceRevisionPolicy` defaults to `Revalidate`: source capture and digest
-validation precede CPU operation memoization and GPU prepared-upload lookup, including nested
-evaluation. Final/headless requests retain that default. The production GPU final preparation and host output-
+**Identity-verified sources (2026-10-23, [ADR 0025](../decisions/0025-identity-verified-media-sources.md)).**
+Every full source hash or capture records the file identity (length, modification and
+status-change times, volume and file id) observed before and after the pass in the bounded
+process-wide `platform::VerifiedSourceDigests` memo. While a later observation of the same path is
+identical, the recorded digest stands for the bytes; any difference forces a full rehash, and a
+changed digest still reports `SourceChanged` and the relink diagnostic. A pathname or size alone
+never proves content. Whole-file reads are counted by `platform::sourceReadWork()`.
+
+`EvaluationRequest::mediaSourceRevisionPolicy` defaults to `Revalidate`: source verification
+precedes CPU operation memoization and GPU prepared-upload lookup, including nested evaluation. A
+retained still revision is reused under `Revalidate` only after an identity observation of the
+original matches the memoized digest; otherwise the source is captured and hashed again. Final/headless requests retain that default. The production GPU final preparation and host output-
 analysis CPU fallback explicitly force `Revalidate`, including when passed a copied interactive
 request that says `Retained`. CPU final callers also set `requireVerifiedMediaSources`, which forces
 fresh source verification and fails unavailable/changed media before memoization instead of accepting
@@ -584,10 +592,13 @@ not a sustained-throughput qualification.
 
 **Immutable Linux video-source revisions (2026-10-13).** Supported movie imports, frame/audio
 reads and demux indexing capture a local regular file once into bounded private spool storage while
-hashing the exact chunks written. Capture subtracts snapshot/temporary-path metadata from the current host working allowance,
+hashing the exact chunks written. A live capture is indexed by digest (non-owning), so a second
+session for the same verified digest — Assets thumbnails and audio, preview, export — adopts it
+instead of copying the movie again. Capture subtracts snapshot/temporary-path metadata from the current host working allowance,
 then uses the remaining allowance for a chunk buffer of at most 64 KiB, without a fixed buffer floor.
 It never retains the
-whole encoded movie in RAM. The original source pathname never authorizes hash elision. Before a
+whole encoded movie in RAM. The original pathname authorizes hash elision only through an identical
+identity observation recorded by a full hash (ADR 0025). Before a
 revision is published, the write descriptor is closed, the temporary filename and private directory
 are removed, and only an owning read-only file descriptor remains. The SHA-256 and captured length
 are tied to that host-created type. Publication also verifies that the no-follow read-only open has
@@ -613,8 +624,9 @@ Capture exposes chunk cancellation/progress and numeric read/hash stage costs. S
 contains asset digest, locator/relink hint and base directory. `Retained` can reuse captured bytes for
 interactive edits, including uncached frame decode when the artist path disappears, with zero source
 I/O/hash. Read-only gestures may look up existing sessions/revisions/frames but cannot insert new ones.
-`Revalidate` captures the original before decoded/prepared cache lookup; production final preparation
-forces it even for an explicitly copied `Retained` request. A changed digest or missing original is
+`Revalidate` observes the original's identity before decoded/prepared cache lookup and recaptures
+only when it changed or is unknown; production final preparation forces it even for an explicitly
+copied `Retained` request. A changed digest or missing original is
 reported before cached pixels are accepted. Media refresh/reconnect removes both decoded frames and
 source sessions. Sessions are installed before capture, so an in-flight old session may finish its
 own revision but cannot repopulate the refreshed session list.
@@ -626,9 +638,9 @@ video producer attachment, so retained sessions cannot prevent host-worker exit 
 remains alive. Bootstrap/library verification and session construction hold no UI-close mutex;
 refresh generations reject construction that finishes after invalidation. Unbound headless sessions
 release on their calling worker.
-The current qualification scope is Linux. macOS retains its existing fresh-verification video path
-without advertising retained-video hash elision; Windows retains the explicit worker unavailable
-fallback. Neither is described as qualified by this Linux implementation.
+The current qualification scope is Linux. macOS verifies video sources through the same
+identity memo before each path-based worker call; Windows retains the explicit worker unavailable
+fallback and verifies through the same memo. Neither is described as qualified by this Linux implementation.
 
 **Controls.** `media/disk-cache-enabled` (default on), `media/disk-cache-budget-bytes`, and
 `media/disk-cache-directory` in QSettings; **Edit → Purge… → Purge media cache** clears every entry

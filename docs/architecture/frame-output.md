@@ -270,7 +270,10 @@ approve anything, its dependent worker stages perform, in order:
 1. cheap blocking-I/O target preflight, including canonical target identity and no-follow observed
    destination state;
 2. CPU evaluation or exact immutable `ProcessFrame` reuse under the closed output limits;
-   Final preparation forces `MediaSourceRevisionPolicy::Revalidate`. CPU final boundaries also set
+   Final preparation forces `MediaSourceRevisionPolicy::Revalidate`, an identity check against
+   verified revisions that rehashes only a changed or unknown source (ADR 0025). A sequence
+   export retains one CPU-fallback evaluator for its range so per-frame revalidation reads no
+   source bytes. CPU final boundaries also set
    `requireVerifiedMediaSources`, rejecting changed/unavailable media before memoized pixels can be
    accepted. A preview `Retained` request never carries source availability authority into final
    output. Any future exact `ProcessFrame` reuse must first revalidate every media dependency from
