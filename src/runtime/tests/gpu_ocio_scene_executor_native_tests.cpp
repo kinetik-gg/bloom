@@ -119,6 +119,7 @@ constexpr int kSkipExit = 77;
 
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR
 constexpr std::uint64_t kBudget = std::uint64_t{1} << 32;
+constexpr std::uint64_t kFixtureSourceBudget = 64 * 1024;
 
 // Every helper and test below drives real OCIO shader preparation from
 // BLOOM_GPUSHADER_TOOLS_DIR, so this whole section is compiled only when the shader tools are
@@ -458,9 +459,10 @@ void testScene(Expectations& expectations, GpuDevice& device,
                                     coldClaims.ownedNativeImageBytes,
                             "actual scene program and image cache detach the originating phase");
         auto next = root.reserve({.fixedHostBytes = 1,
+                                  .requestedSourceBytes = kFixtureSourceBudget,
+                                  .minimumSourceBytes = kFixtureSourceBudget,
                                   .requestedExecutorBytes = kBudget,
-                                  .minimumExecutorBytes = kBudget,
-                                  .sourceFree = true});
+                                  .minimumExecutorBytes = kBudget});
         lease = std::move(next.lease);
         if (!lease || !device.retainProcessingPhase(lease)) {
             expectations.expect(false, "same-root new phase admits textured scene cache reuse");
@@ -566,6 +568,108 @@ void testScene(Expectations& expectations, GpuDevice& device,
     }
 }
 
+void testCancelledEffectReleasesPhase(Expectations& expectations, GpuDevice& device,
+                                      const bloom::color::ResolvedBloomNeutralConfig& aces,
+                                      const GpuOcioCompileOptions& options,
+                                      bloom::render::GpuProcessingPhaseBudget& root) {
+    Fixture fixture{.data = window(0, 0, kWidth, kHeight),
+                    .display = window(0, 0, kWidth, kHeight),
+                    .aspect = PixelAspectRatio::square(),
+                    .uploadPixels = fixturePixels(kWidth, kHeight),
+                    .uploadImage = nullptr};
+    auto built = makeImage(fixture.data, fixture.display, fixture.aspect, fixture.uploadPixels);
+    expectations.expect(built.has_value(), "cancelled OCIO fixture image builds");
+    if (!built)
+        return;
+    fixture.uploadImage = std::make_shared<const Rgba32fImage>(std::move(*built));
+    GpuOcioProgramPreparer preparer;
+    GpuOcioTransformSpec spec;
+    spec.kind = GpuOcioTransformKind::Cst;
+    spec.fromId = "ACES2065-1";
+    spec.toId = "ACEScg";
+    const auto prepared =
+        preparer.prepare(aces, spec, GpuOcioCommandGeometry{kWidth, kHeight}, options);
+    expectations.expect(prepared.hasValue(), "cancelled OCIO effect prepares");
+    if (!prepared)
+        return;
+    const auto scene = buildScene(fixture, prepared.command);
+    auto cache = GpuSceneCache::create(device);
+    expectations.expect(cache.hasValue(), "cancelled OCIO scene cache hosts");
+    if (!cache)
+        return;
+    auto executor = GpuSceneExecutor::create(device, *cache.cache, {});
+    expectations.expect(executor.hasValue(), "cancelled OCIO scene executor hosts");
+    if (!executor)
+        return;
+
+    // Fill the device ceiling with one phase. A retired but unpublished OCIO output must not
+    // retain this whole envelope merely because its native program stays cached for reuse.
+    auto admission = root.reserve({.fixedHostBytes = 1,
+                                   .requestedSourceBytes = kFixtureSourceBudget,
+                                   .minimumSourceBytes = kFixtureSourceBudget,
+                                   .requestedExecutorBytes = kBudget * 2,
+                                   .minimumExecutorBytes = kBudget * 2});
+    expectations.expect(admission.lease && device.retainProcessingPhase(admission.lease),
+                        "cancelled effect admits a capacity-one phase");
+    if (!admission.lease)
+        return;
+    const std::weak_ptr<bloom::render::GpuProcessingPhaseLease> origin = admission.lease;
+    const auto begun = executor.executor->begin(scene, kBudget);
+    expectations.expect(begun.code == GpuSceneExecutorDiagnosticCode::None,
+                        "cancelled effect scene begins");
+    if (begun.code != GpuSceneExecutorDiagnosticCode::None)
+        return;
+    auto poll = GpuSceneExecutorPollResult::Pending;
+    for (std::uint32_t attempt = 0;
+         attempt < 100'000 && executor.executor->counters().ocioEffectDispatches == 0 &&
+         poll == GpuSceneExecutorPollResult::Pending;
+         ++attempt)
+        poll = executor.executor->poll();
+    expectations.expect(executor.executor->counters().ocioEffectDispatches == 1 &&
+                            poll == GpuSceneExecutorPollResult::Pending,
+                        "cancel starts after the actual OCIO effect submission");
+    if (poll != GpuSceneExecutorPollResult::Pending ||
+        executor.executor->counters().ocioEffectDispatches != 1)
+        return;
+    executor.executor->cancel();
+    do {
+        poll = executor.executor->poll();
+    } while (poll == GpuSceneExecutorPollResult::Pending);
+    expectations.expect(poll == GpuSceneExecutorPollResult::Failure &&
+                            executor.executor->diagnostic().code ==
+                                GpuSceneExecutorDiagnosticCode::Cancelled &&
+                            !executor.executor->hasUnretiredSubmission(),
+                        "the cancelled OCIO effect proves native retirement");
+    cache.cache->clear();
+    device.retireProcessingPhase(admission.lease->id(), true);
+    admission.lease.reset();
+    expectations.expect(origin.expired() && root.snapshot().admittedPhases == 0 &&
+                            root.snapshot().deviceReservedBytes == 0,
+                        "the cancelled effect output releases its full request phase");
+
+    auto next = root.reserve({.fixedHostBytes = 1,
+                              .requestedSourceBytes = kFixtureSourceBudget,
+                              .minimumSourceBytes = kFixtureSourceBudget,
+                              .requestedExecutorBytes = kBudget,
+                              .minimumExecutorBytes = kBudget});
+    expectations.expect(next.lease && device.retainProcessingPhase(next.lease),
+                        "a new GPU request admits after the cancelled OCIO effect");
+    if (!next.lease)
+        return;
+    expectations.expect(runScene(expectations, *executor.executor, scene, "after-cancel"),
+                        "the cached OCIO program executes another request");
+    auto output = executor.executor->takeImage();
+    expectations.expect(output != nullptr, "the request after cancellation publishes an image");
+    device.retireProcessingPhase(next.lease->id(), true);
+    next.lease.reset();
+    output.reset();
+    cache.cache->clear();
+    executor.executor.reset();
+    expectations.expect(root.snapshot().admittedPhases == 0 &&
+                            root.snapshot().totalDeviceClaimBytes == 0,
+                        "cancelled OCIO effect and reused program leave no device claim");
+}
+
 #endif // BLOOM_GPUSHADER_TOOLS_DIR
 
 } // namespace
@@ -615,9 +719,10 @@ int main(int argc, char** argv) {
     root.setHostCapacity(kBudget * 2, true);
     root.setDeviceCapacity(kBudget * 2, true);
     auto admission = root.reserve({.fixedHostBytes = 1,
+                                   .requestedSourceBytes = kFixtureSourceBudget,
+                                   .minimumSourceBytes = kFixtureSourceBudget,
                                    .requestedExecutorBytes = kBudget,
-                                   .minimumExecutorBytes = kBudget,
-                                   .sourceFree = true});
+                                   .minimumExecutorBytes = kBudget});
     expectations.expect(admission.lease && device.device->retainProcessingPhase(admission.lease),
                         "actual OCIO scene uses the admitted native-image root");
     if (!admission.lease)
@@ -631,6 +736,7 @@ int main(int argc, char** argv) {
                             retired.ownedNonlocalNativeHostBytes == 0 &&
                             retired.totalDeviceClaimBytes == 0 && retired.totalHostClaimBytes == 0,
                         "actual OCIO cache/executor/outputs free backing before complete credit");
+    testCancelledEffectReleasesPhase(expectations, *device.device, *aces, compileOptions(), root);
     if (expectations.failures() != 0) {
         std::cerr << expectations.failures() << " OCIO scene executor expectation(s) failed\n";
         return 1;

@@ -640,16 +640,15 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
                   current.qualification != nullptr && current.qualification->eligible();
     }
     // Two DISTINCT budgets. `pixelStorageByteLimit` is the caller's HOST pixel-storage ceiling for
-    // decoding and the CPU fallback and is never lowered here. The device stage admits the request
-    // with the host ceiling clamped down to the owner-resolved GPU request ceiling: a large host
-    // ceiling is clamped, never treated as an oversize GPU request. A zero device ceiling (or zero
-    // host ceiling) is zero device admission, which honestly takes the CPU path.
-    const std::size_t gpuAllowance = static_cast<std::size_t>(gpuResidentRequestBudget(
-        static_cast<std::uint64_t>(pixelStorageByteLimit),
-        deliveredDefault ? std::min<std::uint64_t>(
-                               core->effectivePreviewByteAllowance.load(std::memory_order_relaxed),
-                               deliveredDefault->previewRequestBytes)
-                         : static_cast<std::uint64_t>(core->previewByteAllowance())));
+    // decoding and the CPU fallback. Rooted native execution uses its owner-resolved DEVICE
+    // ceiling: host source storage must not cap GPU intermediates or vice versa. Legacy explicit
+    // injected configurations retain their combined per-request allowance.
+    const std::size_t gpuAllowance =
+        deliveredDefault ? static_cast<std::size_t>(
+                               core->effectivePreviewByteAllowance.load(std::memory_order_relaxed))
+                         : static_cast<std::size_t>(gpuResidentRequestBudget(
+                               static_cast<std::uint64_t>(pixelStorageByteLimit),
+                               static_cast<std::uint64_t>(core->previewByteAllowance())));
     // In resident mode the per-request stage decides between the general display program (which may
     // be a non-default display/view and a non-neutral ViewAdjust), the startup Neutral fast path,
     // and the CPU fallback. The submit gate therefore must NOT preempt a non-neutral request: doing
@@ -680,9 +679,15 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
         request.owner, request.groupId, request.sourceVersion, request.coalescingKey);
     TaskRequest cpuRequest = request;
     try {
+        // Rooted resident requests have not allocated pixels at queue admission. Their shared
+        // processing phase admits host preparation and native backing before allocation. Charging
+        // the whole device ceiling here as additional request-owned host storage rejects queued
+        // previews spuriously and sends them to an unrelated CPU budget. Keep queue/count bounds;
+        // explicit and unrooted legacy routes retain their original additive byte admission.
+        const auto queuedPixelBytes = deliveredDefault && residentMode ? 0 : gpuAllowance;
         auto submission = core->scheduler->submitGpu<PreviewPreparationResultHandle>(
             std::move(request), core->generation,
-            GpuTaskAdmission{.queuedCommandBytes = 0, .requestOwnedBytes = gpuAllowance},
+            GpuTaskAdmission{.queuedCommandBytes = 0, .requestOwnedBytes = queuedPixelBytes},
             [core, residentMode, stageSubmission = std::move(stageSubmission)](
                 TaskContext& context,
                 GpuTaskCompletion<PreviewPreparationResultHandle> completion) mutable {

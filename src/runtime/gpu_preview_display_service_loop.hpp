@@ -62,8 +62,19 @@ runCpuPipeline(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core,
     if (context.isCancellationRequested()) {
         return Result::cancelled();
     }
-    auto phase = detail::reservePreviewCpuPhase(core->options.processingPhasePolicy, snapshot,
-                                                identity, pixelStorageByteLimit);
+    auto planned =
+        detail::planPreviewCpuStorage(core->options.cpuStoragePlanner, snapshot, identity,
+                                      pixelStorageByteLimit, overrides, context);
+    if (planned.state() == TaskState::Cancelled)
+        return Result::cancelled(planned.diagnostics());
+    if (planned.state() == TaskState::Failed)
+        return Result::failed(planned.diagnostics());
+    if (!planned.value())
+        return Result::failed(previewDiagnostic("bloom.runtime.gpu-preview-missing-storage-plan",
+                                                "The CPU storage planner returned no peak."));
+    auto phase =
+        detail::reservePreviewCpuPhase(core->options.processingPhasePolicy, snapshot, identity,
+                                       pixelStorageByteLimit, {}, *planned.value());
     if (context.isCancellationRequested()) {
         return Result::cancelled();
     }

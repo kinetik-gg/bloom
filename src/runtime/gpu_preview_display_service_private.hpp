@@ -59,12 +59,12 @@ void processServiceCachePurge(const std::shared_ptr<PreviewDisplayServiceCore>& 
 
 inline constexpr std::size_t kMaxAcceptedServiceRoots = 512;
 
-// One accepted GPU display request. All fields are touched only on the service thread except
-// `completion` which the service thread consumes while the scheduler owns the caller's own parent
-// handle independently.
+// One accepted GPU display request. The CPU child also publishes cpuNativePhase before its result
+// becomes visible; the service thread reads that field only after consuming the child result.
+// Other fields are service-thread owned except `completion`, whose caller handle is independent.
 struct PreviewDisplayStageRecord final {
-    // Legacy packed route: the paired phase precedes all heavy stage/mailbox owners so its last
-    // local release follows their destruction. An unproven native control keeps its own alias.
+    // Legacy packed route: the paired phase is retained through CPU evaluation and published with
+    // the successful child result. An unproven native control keeps its own alias.
     std::shared_ptr<render::GpuProcessingPhaseLease> cpuNativePhase;
     GpuTaskCompletion<PreviewPreparationResultHandle> completion;
     TaskHandle<PreviewCpuStageOutcomeHandle> stageChild;
@@ -368,8 +368,8 @@ struct PreviewDisplayServiceCore final {
         if (!options.previewByteAllowance && options.processingPhasePolicy &&
             options.processingPhasePolicy->budgetView()) {
             const auto delivered = options.processingPhasePolicy->budgetView()->load();
-            return delivered && delivered->fresh()
-                       ? std::min(ownerCeiling, delivered->previewRequestBytes)
+            return delivered && delivered->fresh() && delivered->previewRequestBytes != 0
+                       ? ownerCeiling
                        : 0;
         }
         return ownerCeiling;

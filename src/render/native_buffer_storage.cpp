@@ -14,17 +14,20 @@ NativeBufferStorageToken::NativeBufferStorageToken(std::shared_ptr<GpuProcessing
                                                    const bool upload,
                                                    const bool processing) noexcept
     : state_(phase->state_), origin_(std::move(phase)), originId_(origin_->id_), bytes_(bytes),
-      identity_(identity), upload_(upload), processing_(processing) {}
+      identity_(identity), upload_(upload), processing_(processing),
+      supplementalHost_(processing || (upload && origin_->sourcePreparationFinished_)) {}
 NativeBufferStorageToken::NativeBufferStorageToken(GpuProcessingRootIdentity root,
                                                    const std::uint64_t bytes,
                                                    NativeBufferStorageIdentity identity) noexcept
     : state_(std::const_pointer_cast<detail::GpuProcessingPhaseBudgetState>(std::move(root))),
-      bytes_(bytes), identity_(identity), processing_(true), presentation_(true) {}
+      bytes_(bytes), identity_(identity), processing_(true), supplementalHost_(true),
+      presentation_(true) {}
 NativeBufferStorageToken::NativeBufferStorageToken(NativeBufferStorageToken&& other) noexcept
     : state_(std::move(other.state_)), origin_(std::move(other.origin_)),
       publishedOrigin_(std::move(other.publishedOrigin_)),
       originId_(std::exchange(other.originId_, 0)), bytes_(std::exchange(other.bytes_, 0)),
       identity_(other.identity_), upload_(other.upload_), processing_(other.processing_),
+      supplementalHost_(other.supplementalHost_),
       published_(std::exchange(other.published_, false)),
       presentation_(std::exchange(other.presentation_, false)) {}
 NativeBufferStorageToken&
@@ -39,6 +42,7 @@ NativeBufferStorageToken::operator=(NativeBufferStorageToken&& other) noexcept {
         identity_ = other.identity_;
         upload_ = other.upload_;
         processing_ = other.processing_;
+        supplementalHost_ = other.supplementalHost_;
         published_ = std::exchange(other.published_, false);
         presentation_ = std::exchange(other.presentation_, false);
     }
@@ -113,7 +117,8 @@ NativeBufferStorageGrant NativeBufferStorageToken::reserveInPartition(
         (!upload && !processing && !identity.deviceLocal &&
          bytes > phase->remainingOutputHostBytes_))
         return refuse(GpuProcessingPhaseDomain::Host);
-    if (processing && !identity.deviceLocal) {
+    const bool supplementalHost = processing || (upload && phase->sourcePreparationFinished_);
+    if (supplementalHost && !identity.deviceLocal) {
         auto& state = *phase->state_;
         if (counters.hostReady && now > state.hostValidUntil) {
             counters.hostReady = false;
@@ -125,8 +130,9 @@ NativeBufferStorageGrant NativeBufferStorageToken::reserveInPartition(
         if (bytes > remaining(*counters.hostCapacityBytes, counters.totalHostClaimBytes))
             return refuse(GpuProcessingPhaseDomain::Host);
     }
-    // Native ownership transfers existing debit. Only nonlocal processing adds host credit;
-    // output/upload convert protected host debit. No half-transaction escapes on refusal.
+    // Native ownership transfers existing device debit. After CPU preparation, uploads and
+    // processing acquire only their actual nonlocal host backing; output/legacy upload still
+    // transfer protected host debit. No half-transaction escapes on refusal.
     if (upload)
         phase->remainingUploadBytes_ -= bytes;
     phase->remainingDeviceBytes_ -= bytes;
@@ -134,7 +140,7 @@ NativeBufferStorageGrant NativeBufferStorageToken::reserveInPartition(
     counters.ownedNativeBufferBytes += bytes;
     ++counters.ownedNativeBuffers;
     if (!identity.deviceLocal) {
-        if (processing) {
+        if (supplementalHost) {
             counters.totalHostClaimBytes += bytes;
         } else {
             if (!upload)
@@ -170,7 +176,7 @@ bool NativeBufferStorageToken::reconcile(const std::uint64_t actual,
     }
     counters.ownedNativeBufferBytes -= returned;
     if (!identity_.deviceLocal) {
-        if (processing_) {
+        if (supplementalHost_) {
             counters.totalHostClaimBytes -= returned;
         } else {
             if (!upload_)
@@ -272,7 +278,7 @@ void NativeBufferStorageToken::reset() noexcept {
             counters.deviceReservedBytes += bytes_;
         }
         if (!identity_.deviceLocal) {
-            if (processing_) {
+            if (supplementalHost_) {
                 counters.totalHostClaimBytes -= bytes_;
             } else {
                 if (!upload_)

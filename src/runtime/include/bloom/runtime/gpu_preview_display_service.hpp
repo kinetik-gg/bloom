@@ -243,6 +243,7 @@ struct GpuPreviewDisplayServiceOptions final {
     // Explicit composition-root injection, shared with final rendering; no physical accounting
     // claim.
     std::shared_ptr<GpuProcessingPhasePolicy> processingPhasePolicy = {};
+    PreviewCpuStoragePlanner cpuStoragePlanner = {};
     bool enabled = false;
     GpuPreviewDisplayProductMode product = GpuPreviewDisplayProductMode::NativeResident;
     std::filesystem::path loaderPath;

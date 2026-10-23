@@ -427,17 +427,18 @@ void testInactiveAndMuteSolo(Expectations& expectations, const CpuCompositionEva
 }
 
 void testBudgetRefusal(Expectations& expectations) {
-    const auto plan =
-        twoLayerPlan(format(4096, 4096), LayerValues{.position = {2048.0, 2048.0}},
-                     LayerValues{.position = {1000.3, 1000.7}}, 4096.0, 4096.0, 21000);
+    const auto plan = twoLayerPlan(format(16, 16), LayerValues{.position = {8.0, 8.0}},
+                                   LayerValues{.position = {4.0, 4.0}}, 16.0, 16.0, 21000);
     auto request = requestFor(*plan);
-    request.pixelStorageByteLimit = 1U << 20U; // 1 MiB, far below a 4096x4096 RGBA32F output.
+    request.pixelStorageByteLimit = 16U * 16U * sizeof(Rgba32f);
+    const auto cpu = CpuCompositionEvaluator{}.evaluate(plan, request, {});
+    expectations.expect(cpu.frame() == nullptr,
+                        "one host frame cannot hold the CPU graph's live intermediates");
     const auto prepared = CpuGpuSceneBuilder{}.build(plan, request);
-    expectations.expect(!prepared.hasValue(), "a huge scene under a tiny budget fails closed");
-    expectations.expect(!prepared.hasValue() &&
-                            prepared.diagnostic.code ==
-                                PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
-                        "the failure is a diagnosed pixel-storage budget, not an allocation throw");
+    expectations.expect(prepared.hasValue(),
+                        "GPU command preparation does not charge nonexistent CPU intermediates");
+    // Native execution still uses its independent device lease and actual allocation limits.
+    // Retained host media/coverage budget refusals are covered by their preparation fixtures.
 }
 
 #include "gpu_scene_coverage_budget_tests.ipp"

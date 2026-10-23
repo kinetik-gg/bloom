@@ -236,6 +236,47 @@ void testPendingReferenceUsesReferencePath(Expectations& expectations) {
                         "Pending prepares an unqualified reference frame");
 }
 
+void testStoragePlannerReportsBranchedPeakAndOriginalCap(Expectations& expectations) {
+    Fixture fixture;
+    auto project = makeProject();
+    const auto compositionId = project.initialCompositionId;
+    bloom::document::Document document(std::move(project.project));
+    bloom::commands::CommandStack commands(document);
+    bloom::ui::CompositionSession session(document, commands, compositionId);
+    expectations.expect(
+        session.addSolidLayer(QStringLiteral("First"), bloom::core::Color4d{0.2, 0.4, 0.8, 1.0}) &&
+            session.addSolidLayer(QStringLiteral("Second"),
+                                  bloom::core::Color4d{0.8, 0.4, 0.2, 1.0}),
+        "the storage-planning fixture creates two image branches");
+    const auto snapshot = session.snapshot();
+    const auto identity = identityFor(snapshot, compositionId);
+    auto planner = bloom::ui::makeCompositionPreviewCpuStoragePlanner(
+        fixture.compiler, fixture.evaluator, std::make_shared<bloom::ui::CompiledPlanCache>());
+    constexpr std::size_t oneFrame = 4 * 3 * 16;
+    const auto planned = runOnWorker<std::size_t>(
+        fixture.scheduler, [&planner, &snapshot, &identity](bloom::runtime::TaskContext& context) {
+            return planner(snapshot, identity, bloom::ui::kDefaultPreviewPixelStorageByteLimit, {},
+                           context);
+        });
+    expectations.expect(planned && planned->state() == bloom::runtime::TaskState::Succeeded &&
+                            planned->value() && *planned->value() > oneFrame,
+                        "CPU planner reports a branched live-image peak above one frame");
+    if (!planned || !planned->value() || *planned->value() == 0)
+        return;
+    const auto underCap = runOnWorker<std::size_t>(
+        fixture.scheduler, [&planner, &snapshot, &identity,
+                            limit = *planned->value() - 1](bloom::runtime::TaskContext& context) {
+            return planner(snapshot, identity, limit, {}, context);
+        });
+    expectations.expect(
+        underCap && underCap->state() == bloom::runtime::TaskState::Failed &&
+            !underCap->diagnostics().empty() &&
+            underCap->diagnostics().front().code ==
+                std::string(bloom::runtime::evaluationDiagnosticCodeId(
+                    bloom::runtime::EvaluationDiagnosticCode::PixelStorageBudgetExceeded)),
+        "the original caller cap below that peak fails with a typed storage diagnostic");
+}
+
 void testDefaultQualifiedUsesQualifiedPath(Expectations& expectations) {
     Fixture fixture;
     auto project = makeProject();
@@ -350,6 +391,7 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     Expectations expectations;
+    testStoragePlannerReportsBranchedPeakAndOriginalCap(expectations);
     testPendingReferenceUsesReferencePath(expectations);
     testDefaultQualifiedUsesQualifiedPath(expectations);
     testFailedProviderFailsClosed(expectations);

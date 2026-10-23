@@ -66,24 +66,23 @@ ProcessingHostBackingToken::ProcessingHostBackingToken(
     : phase_(std::move(phase)), allocatedBytes_(allocatedBytes),
       initializedBytes_(initializedBytes), materialized_(true) {}
 ProcessingHostBackingToken::ProcessingHostBackingToken(ProcessingHostBackingToken&& other) noexcept
-    : phase_(std::move(other.phase_)),
-      allocatedBytes_(std::exchange(other.allocatedBytes_, 0)),
+    : phase_(std::move(other.phase_)), allocatedBytes_(std::exchange(other.allocatedBytes_, 0)),
       initializedBytes_(std::exchange(other.initializedBytes_, 0)),
       materialized_(std::exchange(other.materialized_, false)) {}
 ProcessingHostBackingToken::~ProcessingHostBackingToken() {
     retireBeforeFree();
     releaseAfterFree();
 }
-std::optional<ProcessingHostBackingToken> ProcessingHostBackingToken::transfer(
-    const std::shared_ptr<GpuProcessingPhaseLease>& phase,
-    const std::uint64_t allocatedBytes, const std::uint64_t initializedBytes) noexcept {
+std::optional<ProcessingHostBackingToken>
+ProcessingHostBackingToken::transfer(const std::shared_ptr<GpuProcessingPhaseLease>& phase,
+                                     const std::uint64_t allocatedBytes,
+                                     const std::uint64_t initializedBytes) noexcept {
     if (!phase || initializedBytes == 0 || initializedBytes > allocatedBytes)
         return {};
     const std::lock_guard lock(phase->state_->mutex);
     auto& state = *phase->state_;
     auto& counters = state.counters;
-    if (phase->id_ == 0 || phase->unproven_ ||
-        allocatedBytes > phase->remainingOutputHostBytes_ ||
+    if (phase->id_ == 0 || phase->unproven_ || allocatedBytes > phase->remainingOutputHostBytes_ ||
         allocatedBytes > phase->remainingHostBytes_)
         return {};
     // The allocation was constructed while the fixed phase claim was held. The full allocated
@@ -125,8 +124,34 @@ void ProcessingHostBackingToken::releaseAfterFree() noexcept {
 } // namespace detail
 
 std::uint64_t GpuProcessingPhaseLease::revisionAfterOwnRelease() const noexcept {
+    const std::lock_guard lock(state_->mutex);
     return admissionRevision_ == std::numeric_limits<std::uint64_t>::max() ? admissionRevision_
                                                                            : admissionRevision_ + 1;
+}
+
+bool GpuProcessingPhaseLease::finishSourcePreparation(
+    const std::uint64_t retainedSourceBytes) noexcept {
+    const std::lock_guard lock(state_->mutex);
+    if (id_ == 0 || unproven_ || sourcePreparationFinished_ || retainedSourceBytes > sourceBytes_ ||
+        remainingUploadBytes_ != sourceBytes_)
+        return false;
+    // S/C/U protected preparation before actual source sizes were known. Only actual S survives.
+    // Uploads start after this handoff; their actual backing is admitted separately, so alignment
+    // and memory-type requirements never need an invented estimate here. Admission proved 3*S fits.
+    const auto released = 3 * sourceBytes_ - retainedSourceBytes;
+    if (released > remainingHostBytes_)
+        return false;
+    sourcePreparationFinished_ = true;
+    remainingHostBytes_ -= released;
+    state_->counters.hostReservedBytes -= released;
+    state_->counters.totalHostClaimBytes -= released;
+    if (released != 0) {
+        incrementSaturating(state_->counters.admissionRevision);
+        // This phase's own partial release must not make a later failed request retry itself.
+        // Increment only its own watermark, preserving intervening independent release events.
+        incrementSaturating(admissionRevision_);
+    }
+    return true;
 }
 
 bool GpuProcessingPhaseLease::isUnproven() const noexcept {

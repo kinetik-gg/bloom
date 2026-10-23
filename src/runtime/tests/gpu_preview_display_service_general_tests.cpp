@@ -687,6 +687,59 @@ int run(const int argc, char** argv) {
         std::filesystem::remove_all(mediaDirectory, ignoredCleanup);
     }
 
+    // A rooted resident request owns no pixels at scheduler submission: its real host/device
+    // storage is admitted later by the processing phase. One byte of scheduler-owned capacity
+    // therefore still admits this native request, while queue and task counts remain bounded.
+    {
+        auto rootedConfig = schedulerConfig();
+        rootedConfig.budgetView = root.view;
+        rootedConfig.gpuRequestOwnedByteCapacity = 1;
+        TaskScheduler rootedScheduler(rootedConfig);
+        auto rootedOptions = root.configured(options.loaderPath);
+        rootedOptions.previewByteAllowance.reset();
+        GpuPreviewDisplayService rootedService(
+            rootedScheduler, generalStageFunction(neutralPlan, builder, programService, processor),
+            generalCpuStageFunction(neutralPlan, processor, evaluator), generalFallback(processor),
+            rootedOptions);
+        const bool rootedTerminal = waitUntil(
+            [&] {
+                return rootedService.status().state != GpuPreviewDisplayServiceState::Initializing;
+            },
+            90s);
+        const auto rootedStatus = rootedService.status();
+        const bool rootedReady = rootedTerminal &&
+                                 rootedStatus.state == GpuPreviewDisplayServiceState::Ready &&
+                                 rootedStatus.presentationClient != nullptr;
+        expectations.expect(rootedReady,
+                            "rooted scheduler fixture reaches a presentable native service");
+        if (rootedReady) {
+            const auto before = rootedStatus.counters;
+            const auto identity = makeIdentity(*neutralPlan, 1, {}, {}, ViewAdjust{});
+            auto submission = rootedService.submit(TaskRequest("rooted one-byte scheduler", owner),
+                                                   snapshot, identity, kBudget, {});
+            const auto result = awaitResult(submission.handle, 60s);
+            std::shared_ptr<const bloom::runtime::PreparedPreviewFrame> frame;
+            const auto after = rootedService.status().counters;
+            expectations.expect(submission.status == TaskSubmissionStatus::Accepted &&
+                                    isResidentPrepared(result, 1, frame) &&
+                                    after.gpuAdmissionRefusals == before.gpuAdmissionRefusals &&
+                                    after.cpuFallbacks == before.cpuFallbacks,
+                                "rooted resident request admits real GPU work with no speculative "
+                                "scheduler pixel claim");
+        }
+        rootedService.beginShutdown();
+        expectations.expect(waitUntil(
+                                [&] {
+                                    return rootedService.status().state ==
+                                           GpuPreviewDisplayServiceState::Stopped;
+                                },
+                                60s),
+                            "rooted scheduler fixture owner drains and stops");
+        rootedScheduler.beginShutdown();
+        expectations.expect(waitUntil([&] { return rootedScheduler.isQuiescent(); }, 30s),
+                            "rooted scheduler fixture reaches quiescence");
+    }
+
     // Explicit small scheduler capacity is an INTENTIONAL refusal: the service must record the
     // bounded-admission refusal and take the honest CPU path, never silently substitute a GPU
     // frame.

@@ -111,6 +111,14 @@ using PreviewCpuStageFunction = std::function<TaskResult<PreviewCpuStageOutcomeH
     const document::Snapshot&, const PreviewRequestIdentity&, std::size_t,
     const std::vector<SnapshotParameterOverride>&, TaskContext&)>;
 
+// Optional pixel-free planning seam. A successful value is the compiled graph's preflight
+// live-image minimum; zero permits an Unsupported stage result. Execution-time output bounds may
+// require more storage and remain checked against the original caller limit.
+// The service runs this on a CPU worker before reserving the processing phase.
+using PreviewCpuStoragePlanner = std::function<TaskResult<std::size_t>(
+    const document::Snapshot&, const PreviewRequestIdentity&, std::size_t,
+    const std::vector<SnapshotParameterOverride>&, TaskContext&)>;
+
 // Apply a display product to an already-evaluated stage's ProcessFrame and produce the final
 // PreviewPreparationResult. It must not compile or evaluate anything. The stage already owns the
 // request identity and the display budget it was evaluated under, so the fallback reads them from

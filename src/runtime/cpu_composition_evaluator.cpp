@@ -237,6 +237,50 @@ template <typename Value>
     return !std::holds_alternative<CompiledCompositionOutput>(operation);
 }
 
+struct PixelStoragePeak final {
+    std::optional<std::size_t> bytes = {};
+    bool cancelled = false;
+};
+
+// The one liveness walk used by ordinary preflight and by recursive storage planning. Nested
+// output sizes and child transient peaks are supplied only by the latter.
+[[nodiscard]] PixelStoragePeak
+pixelStoragePeak(const CompiledCompositionPlan& plan, const std::vector<std::size_t>& consumers,
+                 const std::size_t defaultImageBytes, const CancellationToken& cancellation,
+                 const std::span<const std::size_t> outputBytes = {},
+                 const std::span<const std::size_t> childPeaks = {}) {
+    auto remaining = consumers;
+    std::size_t resident = 0;
+    std::size_t peak = 0;
+    for (std::size_t index = 0; index < plan.operations().size(); ++index) {
+        if (cancellation.isCancellationRequested())
+            return {.cancelled = true};
+        if (!childPeaks.empty()) {
+            std::size_t withChild = 0;
+            if (!checkedAdd(resident, childPeaks[index], withChild))
+                return {};
+            peak = std::max(peak, withChild);
+        }
+        if (isImageProducing(plan.operations()[index])) {
+            std::size_t next = 0;
+            if (!checkedAdd(resident, outputBytes.empty() ? defaultImageBytes : outputBytes[index],
+                            next))
+                return {};
+            resident = next;
+            peak = std::max(peak, resident);
+        }
+        if (index == plan.output().value())
+            continue;
+        forEachInput(plan.operations()[index], [&](const OperationIndex input) {
+            auto& count = remaining[input.value()];
+            --count;
+            if (count == 0)
+                resident -= outputBytes.empty() ? defaultImageBytes : outputBytes[input.value()];
+        });
+    }
+    return {.bytes = peak};
+}
+
 // Which domain an authored scalar field declares. A compiled plan names parameters by identity, not
 // by schema key, so the domain travels with the operand from its call site instead of being guessed
 // from the value kind. The values mirror document::hasUnitDomainSchemaKey()/
@@ -1323,33 +1367,13 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
     }
 
     const auto imageBytes = descriptorResult.value()->layout().pixelStorageBytes;
-    auto remaining = consumers;
-    std::size_t residentBytes = 0;
-    std::size_t peakBytes = 0;
-    for (std::size_t index = 0; index < operationCount; ++index) {
-        if (cancellation.isCancellationRequested()) {
-            return PreflightOutcome::cancellation();
-        }
-        if (isImageProducing(plan->operations()[index])) {
-            if (!checkedAdd(residentBytes, imageBytes, residentBytes)) {
-                return PreflightOutcome::failure(
-                    diagnostic(EvaluationDiagnosticCode::ArithmeticOverflow,
-                               "Evaluation working set overflowed"));
-            }
-            peakBytes = std::max(peakBytes, residentBytes);
-        }
-        if (index == request.output.value()) {
-            continue;
-        }
-        forEachInput(plan->operations()[index],
-                     [&remaining, &residentBytes, imageBytes](const OperationIndex input) {
-                         auto& count = remaining[input.value()];
-                         --count;
-                         if (count == 0) {
-                             residentBytes -= imageBytes;
-                         }
-                     });
-    }
+    const auto simulated = pixelStoragePeak(*plan, consumers, imageBytes, cancellation);
+    if (simulated.cancelled)
+        return PreflightOutcome::cancellation();
+    if (!simulated.bytes)
+        return PreflightOutcome::failure(diagnostic(EvaluationDiagnosticCode::ArithmeticOverflow,
+                                                    "Evaluation working set overflowed"));
+    const auto peakBytes = *simulated.bytes;
     if (peakBytes > request.pixelStorageByteLimit) {
         return PreflightOutcome::failure(
             diagnostic(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
@@ -1413,6 +1437,7 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                            .horizontalScale = horizontalScale,
                            .verticalScale = verticalScale,
                            .imageBytes = imageBytes,
+                           .peakPixelStorageBytes = peakBytes,
                            .remainingConsumers = std::move(consumers),
                            .scalarCurveValues = std::move(scalarCurveValues),
                            .vec2CurveValues = std::move(vec2CurveValues),
@@ -1602,6 +1627,115 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
 }
 
 #include "vector_geometry.ipp"
+
+EvaluationPixelStoragePlan CpuCompositionEvaluator::planPreflightPixelStorage(
+    const std::shared_ptr<const CompiledCompositionPlan>& plan, const EvaluationRequest& request,
+    const CancellationToken& cancellation) const {
+    try {
+        const auto calculate =
+            [&](auto&& self, const std::shared_ptr<const CompiledCompositionPlan>& current,
+                const EvaluationRequest& currentRequest) -> EvaluationPixelStoragePlan {
+            // The ordinary preflight supplies the resolved time mapping and proxy scale. Its
+            // hypothetical ceiling lets this planner measure demand before admission.
+            auto hypothetical = currentRequest;
+            hypothetical.pixelStorageByteLimit = std::numeric_limits<std::size_t>::max();
+            auto checked =
+                detail::preflight(current, hypothetical, cancellation, {}, nullptr, nullptr);
+            if (checked.cancelled || cancellation.isCancellationRequested())
+                return {.cancelled = true};
+            if (!checked.resolved)
+                return {.diagnostic = checked.diagnostic.value_or(
+                            detail::diagnostic(EvaluationDiagnosticCode::InternalInvariant,
+                                               "Evaluation storage preflight produced no result"))};
+            const auto& resolved = *checked.resolved;
+            std::size_t peak = resolved.peakPixelStorageBytes;
+            const auto& operations = current->operations();
+            std::vector<std::size_t> outputBytes;
+            std::vector<std::size_t> childPeaks;
+            for (std::size_t index = 0; index < operations.size(); ++index) {
+                const auto* source = std::get_if<CompiledCompositionSource>(&operations[index]);
+                if (!source)
+                    continue;
+                if (source->nestedPlanIndex >= current->nestedPlans().size())
+                    return {.diagnostic =
+                                detail::diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                                                   "Composition source references no nested plan")};
+                if (outputBytes.empty()) {
+                    outputBytes.assign(operations.size(), resolved.imageBytes);
+                    childPeaks.assign(operations.size(), 0);
+                }
+                const auto offset =
+                    detail::resolveParameter(source->timeMapping.offset, *current, resolved);
+                const auto scale =
+                    detail::resolveParameter(source->timeMapping.scale, *current, resolved);
+                const auto& nested = current->nestedPlans()[source->nestedPlanIndex];
+                const auto nestedTime =
+                    offset && scale
+                        ? mapCompositionTime(currentRequest.time, offset->value, scale->value,
+                                             nested->duration(), nested->format().frameRate(),
+                                             source->timeMapping.loopMode)
+                        : std::nullopt;
+                if (!nestedTime)
+                    return {.diagnostic = detail::diagnostic(
+                                EvaluationDiagnosticCode::ArithmeticOverflow,
+                                "Composition source time cannot be represented")};
+                auto childRequest = currentRequest;
+                childRequest.time = *nestedTime;
+                childRequest.output = nested->output();
+                childRequest.roi.reset();
+                childRequest.finalOutputPhase.reset();
+                childRequest.pixelStorageByteLimit = std::numeric_limits<std::size_t>::max();
+                if (std::holds_alternative<ProxyResolution>(currentRequest.resolution)) {
+                    const auto extent = render::ImageExtent::create(
+                        static_cast<std::uint64_t>(std::max(
+                            1.0, std::ceil(nested->format().width() * resolved.horizontalScale))),
+                        static_cast<std::uint64_t>(std::max(
+                            1.0, std::ceil(nested->format().height() * resolved.verticalScale))));
+                    if (!extent)
+                        return {.diagnostic =
+                                    detail::diagnostic(EvaluationDiagnosticCode::ArithmeticOverflow,
+                                                       "Nested composition extent is invalid")};
+                    childRequest.resolution = ProxyResolution{*extent.value()};
+                }
+                const auto child = self(self, nested, childRequest);
+                if (child.cancelled || child.diagnostic)
+                    return child;
+                if (!child.requiredPreflightBytes || !child.outputImageBytes)
+                    return {.diagnostic =
+                                detail::diagnostic(EvaluationDiagnosticCode::InternalInvariant,
+                                                   "Nested storage plan produced no peak")};
+                childPeaks[index] = *child.requiredPreflightBytes;
+                outputBytes[index] = *child.outputImageBytes;
+            }
+            if (!outputBytes.empty()) {
+                const auto simulated = detail::pixelStoragePeak(
+                    *current, resolved.remainingConsumers, resolved.imageBytes, cancellation,
+                    outputBytes, childPeaks);
+                if (simulated.cancelled)
+                    return {.cancelled = true};
+                if (!simulated.bytes)
+                    return {.diagnostic =
+                                detail::diagnostic(EvaluationDiagnosticCode::ArithmeticOverflow,
+                                                   "Evaluation working set overflowed")};
+                peak = *simulated.bytes;
+            }
+            if (peak > currentRequest.pixelStorageByteLimit)
+                return {.diagnostic = detail::diagnostic(
+                            EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
+                            "Evaluation exceeds its pixel-storage budget",
+                            "requiredPeakBytes=" + std::to_string(peak) + " byteLimit=" +
+                                std::to_string(currentRequest.pixelStorageByteLimit))};
+            return {.requiredPreflightBytes = peak, .outputImageBytes = resolved.imageBytes};
+        };
+        return calculate(calculate, plan, request);
+    } catch (const std::bad_alloc&) {
+        return {.diagnostic = detail::diagnostic(EvaluationDiagnosticCode::AllocationFailure,
+                                                 "Evaluation storage preflight allocation failed")};
+    } catch (const std::length_error&) {
+        return {.diagnostic = detail::diagnostic(EvaluationDiagnosticCode::AllocationFailure,
+                                                 "Evaluation storage preflight allocation failed")};
+    }
+}
 
 EvaluationResult CpuCompositionEvaluator::evaluate(
     std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& borrowedRequest,

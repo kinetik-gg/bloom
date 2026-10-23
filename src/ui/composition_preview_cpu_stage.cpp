@@ -13,6 +13,7 @@
 #include <bloom/document/project.hpp>
 
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <new>
 #include <optional>
@@ -117,6 +118,81 @@ using detail::isNeutralIntent;
 using detail::missingResultDiagnostic;
 using detail::selectDisplayProcessor;
 using detail::validateStageRequest;
+
+runtime::PreviewCpuStoragePlanner
+makeCompositionPreviewCpuStoragePlanner(const runtime::SnapshotCompiler& compiler,
+                                        const runtime::CpuCompositionEvaluator& evaluator,
+                                        CompiledPlanCacheHandle planCache) {
+    if (planCache == nullptr) {
+        planCache = std::make_shared<CompiledPlanCache>();
+    }
+    return [&compiler, &evaluator, planCache = std::move(planCache)](
+               const document::Snapshot& snapshot,
+               const runtime::PreviewRequestIdentity& desiredIdentity,
+               const std::size_t pixelStorageByteLimit,
+               const std::vector<runtime::SnapshotParameterOverride>& overrides,
+               runtime::TaskContext& context) -> runtime::TaskResult<std::size_t> {
+        using Result = runtime::TaskResult<std::size_t>;
+        if (context.isCancellationRequested())
+            return Result::cancelled();
+        if (const auto invalid =
+                validateStageRequest(snapshot, desiredIdentity, pixelStorageByteLimit);
+            invalid.has_value()) {
+            return Result::failed(*invalid);
+        }
+        auto compiled = compilePreviewPlan(compiler, planCache, snapshot, desiredIdentity,
+                                           overrides, context.cancellation());
+        auto diagnostics = compileTaskDiagnostics(compiled);
+        switch (compiled.status) {
+        case runtime::SnapshotCompileStatus::Unsupported:
+            // The stage will report the semantic Unsupported result without evaluating pixels.
+            return Result::succeeded(0);
+        case runtime::SnapshotCompileStatus::Cancelled:
+            return Result::cancelled(std::move(diagnostics));
+        case runtime::SnapshotCompileStatus::Failed:
+            if (diagnostics.empty())
+                diagnostics.push_back(
+                    missingResultDiagnostic("Composition plan compilation failed"));
+            return Result::failed(std::move(diagnostics));
+        case runtime::SnapshotCompileStatus::Compiled:
+            break;
+        }
+        if (!compiled.plan) {
+            return Result::failed(
+                missingResultDiagnostic("Composition compilation returned no immutable plan"));
+        }
+        // A hypothetical unbounded budget reveals the graph's preflight live-image minimum.
+        // The original caller limit still bounds allocations with execution-time geometry.
+        const auto request = evaluationRequestFor(desiredIdentity, *compiled.plan,
+                                                  std::numeric_limits<std::size_t>::max());
+        const auto planned =
+            evaluator.planPreflightPixelStorage(compiled.plan, request, context.cancellation());
+        if (planned.cancelled)
+            return Result::cancelled();
+        if (planned.diagnostic) {
+            const auto& diagnostic = *planned.diagnostic;
+            return Result::failed(
+                {.code = std::string(runtime::evaluationDiagnosticCodeId(diagnostic.code)),
+                 .severity = diagnostic.severity,
+                 .summary = diagnostic.summary,
+                 .detail = diagnostic.detail,
+                 .suggestedAction = "Review the affected operation and preview memory settings."});
+        }
+        if (!planned.requiredPreflightBytes)
+            return Result::failed(missingResultDiagnostic("Composition storage plan is missing"));
+        if (*planned.requiredPreflightBytes > pixelStorageByteLimit) {
+            return Result::failed(
+                {.code = std::string(runtime::evaluationDiagnosticCodeId(
+                     runtime::EvaluationDiagnosticCode::PixelStorageBudgetExceeded)),
+                 .severity = runtime::DiagnosticSeverity::Error,
+                 .summary = "Evaluation exceeds its pixel-storage budget",
+                 .detail = "requiredPeakBytes=" + std::to_string(*planned.requiredPreflightBytes) +
+                           " byteLimit=" + std::to_string(pixelStorageByteLimit),
+                 .suggestedAction = "Increase the preview memory limit or reduce the request."});
+        }
+        return Result::succeeded(*planned.requiredPreflightBytes);
+    };
+}
 
 runtime::PreviewCpuStageFunction makeCompositionPreviewCpuStage(
     const runtime::SnapshotCompiler& compiler, const runtime::CpuCompositionEvaluator& evaluator,

@@ -41,6 +41,16 @@ void GpuSceneExecutor::Impl::clearJob() noexcept {
     steps.clear();
     const bool failedAndRetired = state == GpuSceneExecutorJobState::Failure && device &&
                                   !deviceLost && !hasUnretiredNative() && !drainRequired;
+    if (failedAndRetired) {
+        // An OCIO cancellation can prove its fence while the retained program still owns its
+        // unpublished effect output. The program cache outlives this request, so release that
+        // failed job's provisional image before the request phase is retired.
+        for (auto& [key, entry] : ocioPrograms) {
+            static_cast<void>(key);
+            if (entry.program)
+                static_cast<void>(entry.program->discardRetiredFailure(*device));
+        }
+    }
     for (auto& pin : images) {
         if (failedAndRetired)
             static_cast<void>(render::retireFailedAttemptGpuImage(pin, *device));

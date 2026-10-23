@@ -3,18 +3,29 @@
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
+#include <algorithm>
 #include <limits>
 
 namespace bloom::runtime::detail {
 
-// Cheap immutable geometry only. No compiler, producer, media I/O, or rasterizer runs before the
-// shared host-only phase grant. CPU process+display overlap deliberately uses the FloatFinal
-// envelope; its source allowance becomes the existing evaluator/decoder pixel-storage ceiling.
+inline TaskResult<std::size_t> planPreviewCpuStorage(
+    const PreviewCpuStoragePlanner& planner, const document::Snapshot& snapshot,
+    const PreviewRequestIdentity& identity, const std::size_t pixelStorageByteLimit,
+    const std::vector<SnapshotParameterOverride>& overrides, TaskContext& context) {
+    if (!planner)
+        return TaskResult<std::size_t>::succeeded(0);
+    return planner(snapshot, identity, pixelStorageByteLimit, overrides, context);
+}
+
+// The caller's CPU worker has calculated the compiled graph's preflight pixel-storage minimum
+// when a planner is installed. CPU process+display overlap uses the FloatFinal envelope, and the
+// granted source allowance becomes the evaluator/decoder pixel-storage ceiling.
 inline render::GpuProcessingPhaseGrant
 reservePreviewCpuPhase(const std::shared_ptr<GpuProcessingPhasePolicy>& policy,
                        const document::Snapshot& snapshot, const PreviewRequestIdentity& identity,
                        const std::size_t pixelStorageByteLimit,
-                       const std::optional<std::uint64_t> nativeWorkingBytes = {}) noexcept {
+                       const std::optional<std::uint64_t> nativeWorkingBytes = {},
+                       const std::uint64_t requiredPeakBytes = 0) noexcept {
     if (!policy) {
         return {};
     }
@@ -31,21 +42,17 @@ reservePreviewCpuPhase(const std::shared_ptr<GpuProcessingPhasePolicy>& policy,
         pixels = static_cast<std::uint64_t>(identity.roi->extent().width()) *
                  identity.roi->extent().height();
     }
-    if (nativeWorkingBytes) {
-        if (pixels == 0 || pixels > std::numeric_limits<std::uint64_t>::max() / 16)
-            return {};
-        return policy->reserve({.output = GpuProcessingPhaseOutput::FloatFinal,
-                                .pixels = pixels,
-                                .encodedBytes = pixels * 16,
-                                .metadataBytes = 16ULL * 1024 * 1024,
-                                .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
-                                .requestedSourceBytes = pixelStorageByteLimit,
-                                .minimumSourceBytes = pixels * 16,
-                                .deviceWorkingBytes = *nativeWorkingBytes,
-                                .native = true});
-    }
-    return reserveHostEvaluationPhase(*policy, pixels, pixelStorageByteLimit,
-                                      GpuProcessingPhaseOutput::FloatFinal, true);
+    if (pixels == 0 || pixels > std::numeric_limits<std::uint64_t>::max() / 16)
+        return {};
+    return policy->reserve({.output = GpuProcessingPhaseOutput::FloatFinal,
+                            .pixels = pixels,
+                            .encodedBytes = pixels * 16,
+                            .metadataBytes = 16ULL * 1024 * 1024,
+                            .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                            .requestedSourceBytes = pixelStorageByteLimit,
+                            .minimumSourceBytes = std::max(pixels * 16, requiredPeakBytes),
+                            .deviceWorkingBytes = nativeWorkingBytes.value_or(0),
+                            .native = nativeWorkingBytes.has_value()});
 }
 
 inline TaskDiagnostic previewCpuPhaseDiagnostic(const render::GpuProcessingPhaseAdmission status,

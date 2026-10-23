@@ -172,6 +172,70 @@ void testColdCpuRootRecovery(Expectations& expectations) {
     expectations.expect(options.processingPhasePolicy->snapshot().reservations.admittedPhases == 0,
                         "successful CPU output retires its processing phase");
 }
+void testCpuGraphPeakAdmittedBeforeEvaluation(Expectations& expectations) {
+    runtime::detail::PreviewDisplayServiceTestFixture fixture(4, 2);
+    TaskScheduler scheduler(config());
+    runtime::GpuPreviewDisplayServiceOptions options;
+    options.enabled = false;
+    options.processingPhasePolicy = std::make_shared<runtime::GpuProcessingPhasePolicy>(1);
+    // Inject a preflight minimum above the one-frame 128-byte geometry to prove admission uses
+    // the planner result before invoking the evaluator. The live sample is held one byte short.
+    constexpr std::uint64_t peak = 1152;
+    options.cpuStoragePlanner =
+        [](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
+           const std::vector<runtime::SnapshotParameterOverride>&,
+           TaskContext&) { return TaskResult<std::size_t>::succeeded(peak); };
+    const auto snapshot = runtime::detail::previewTestSnapshot(*fixture.plan);
+    const auto identity = runtime::detail::testIdentity(*fixture.plan);
+    const auto request =
+        runtime::processingPhaseRequest({.output = runtime::GpuProcessingPhaseOutput::FloatFinal,
+                                         .pixels = 8,
+                                         .encodedBytes = 8 * 16,
+                                         .metadataBytes = 16ULL * 1024 * 1024,
+                                         .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                                         .requestedSourceBytes = kBudget,
+                                         .minimumSourceBytes = peak,
+                                         .native = false});
+    expectations.expect(request.has_value(), "CPU graph peak fixture has a valid phase envelope");
+    if (!request)
+        return;
+    const auto sampleCapacity = [&](const std::uint64_t available) {
+        runtime::MemoryBudgetState sample;
+        sample.machine.availableBytes = available;
+        sample.process.status = runtime::ProcessMemoryStatus::Finite;
+        sample.process.source = runtime::ProcessMemorySource::LinuxCgroupV2;
+        sample.process.sampledAt = runtime::GpuProcessingPhasePolicy::Clock::now();
+        sample.process.domains.push_back({.path = "/fixture",
+                                          .kind = runtime::ProcessMemoryLimitKind::Finite,
+                                          .limitBytes = 8ULL << 30,
+                                          .currentBytes = 0});
+        sample.processSampleFresh = true;
+        sample.sampleSerial = options.processingPhasePolicy->snapshot().sampleSerial + 1;
+        options.processingPhasePolicy->applyHostSample(sample, 8ULL << 30,
+                                                       sample.process.sampledAt);
+    };
+    sampleCapacity(request->fixedHostBytes + 3 * (peak - 1));
+    runtime::GpuPreviewDisplayService service(scheduler, fixture.stageFn(), fixture.fallback(),
+                                              options);
+    auto undergrant = service.submit(runtime::TaskRequest("undergrant", owner(903)), snapshot,
+                                     identity, kBudget, {});
+    const auto refused = awaitResult(undergrant.handle);
+    expectations.expect(
+        refused && refused->state() == TaskState::Failed && !refused->diagnostics().empty() &&
+            refused->diagnostics().front().admissionRetry &&
+            !refused->diagnostics().front().admissionRetry->requiresDeviceCapacity &&
+            fixture.evaluations->load() == 0 && fixture.fallbacks->load() == 0 &&
+            options.processingPhasePolicy->snapshot().reservations.admittedPhases == 0,
+        "host capacity below the planned graph peak refuses before pixel work");
+    sampleCapacity(request->fixedHostBytes + 3 * peak);
+    auto recovery = service.submit(runtime::TaskRequest("peak-recovery", owner(904)), snapshot,
+                                   identity, kBudget, {});
+    const auto prepared = awaitResult(recovery.handle);
+    expectations.expect(prepared && prepared->state() == TaskState::Succeeded &&
+                            prepared->value() && (*prepared->value())->frame() &&
+                            fixture.evaluations->load() == 1,
+                        "the same request evaluates once the complete graph peak is admitted");
+}
 // Non-device: disabled and missing-loader both take the ordinary CPU task, one evaluation each.
 void testCpuPaths(Expectations& expectations) {
     runtime::detail::PreviewDisplayServiceTestFixture fixture(32, 18);
@@ -562,6 +626,7 @@ int main(const int argc, char** argv) {
         }
         Expectations expectations;
         testColdCpuRootRecovery(expectations);
+        testCpuGraphPeakAdmittedBeforeEvaluation(expectations);
         testCpuPaths(expectations);
         testSubmitAfterShutdownRejects(expectations);
         testShutdownBeforeStartupDispatch(expectations);

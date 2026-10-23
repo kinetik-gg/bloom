@@ -14,6 +14,13 @@
 // no Qt or UI dependency.
 namespace bloom::ui {
 
+// Compile the same cached plan as the CPU stage and calculate its pixel-storage peak without
+// allocating pixels. The service runs this on a CPU worker before requesting a processing phase.
+[[nodiscard]] runtime::PreviewCpuStoragePlanner
+makeCompositionPreviewCpuStoragePlanner(const runtime::SnapshotCompiler& compiler,
+                                        const runtime::CpuCompositionEvaluator& evaluator,
+                                        CompiledPlanCacheHandle planCache = nullptr);
+
 // Compile -> evaluate -> select a CPU display processor, reproducing
 // makeCompositionPreviewPipeline's compile/evaluate/selection half: the same request validation,
 // the same fail-closed check for a permanently failed qualified provider, the same

@@ -283,11 +283,7 @@ void startResidentPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>&
         auto child = core->scheduler->submit<PreviewGpuSceneStageOutcomeHandle>(
             std::move(childRequest),
             [core, snapshot = std::move(submission.snapshot),
-             identity = std::move(submission.identity),
-             limit = (!core->options.previewByteAllowance && core->options.processingPhasePolicy &&
-                      core->options.processingPhasePolicy->budgetView())
-                         ? std::min(submission.pixelStorageByteLimit, submission.gpuByteAllowance)
-                         : submission.pixelStorageByteLimit,
+             identity = std::move(submission.identity), limit = submission.pixelStorageByteLimit,
              overrides = std::move(submission.overrides)](
                 TaskContext& context) -> TaskResult<PreviewGpuSceneStageOutcomeHandle> {
                 using Result = TaskResult<PreviewGpuSceneStageOutcomeHandle>;
@@ -342,9 +338,20 @@ void dispatchResidentCpuFallbackChild(const std::shared_ptr<PreviewDisplayServic
                         residentJobDiagnostic("bloom.runtime.gpu-preview-missing-snapshot",
                                               "The resident fallback has no snapshot."));
                 }
-                auto phase =
-                    reservePreviewCpuPhase(core->options.processingPhasePolicy, *stage->snapshot,
-                                           stage->identity, stage->pixelStorageByteLimit);
+                auto planned = planPreviewCpuStorage(
+                    core->options.cpuStoragePlanner, *stage->snapshot, stage->identity,
+                    stage->pixelStorageByteLimit, stage->overrides, context);
+                if (planned.state() == TaskState::Cancelled)
+                    return Result::cancelled(planned.diagnostics());
+                if (planned.state() == TaskState::Failed)
+                    return Result::failed(planned.diagnostics());
+                if (!planned.value())
+                    return Result::failed(
+                        residentJobDiagnostic("bloom.runtime.gpu-preview-missing-storage-plan",
+                                              "The CPU storage planner returned no peak."));
+                auto phase = reservePreviewCpuPhase(
+                    core->options.processingPhasePolicy, *stage->snapshot, stage->identity,
+                    stage->pixelStorageByteLimit, {}, *planned.value());
                 if (context.isCancellationRequested()) {
                     return Result::cancelled();
                 }

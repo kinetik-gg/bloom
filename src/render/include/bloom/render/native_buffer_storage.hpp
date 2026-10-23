@@ -89,6 +89,7 @@ class NativeBufferStorageToken final {
     NativeBufferStorageIdentity identity_;
     bool upload_ = false;
     bool processing_ = false;
+    bool supplementalHost_ = false;
     bool published_ = false;
     bool presentation_ = false;
 };

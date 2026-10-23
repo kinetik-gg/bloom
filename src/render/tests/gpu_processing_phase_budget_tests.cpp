@@ -1,4 +1,5 @@
 #include <bloom/render/gpu_processing_phase_budget.hpp>
+#include <bloom/render/native_buffer_storage.hpp>
 
 #include <array>
 #include <condition_variable>
@@ -212,6 +213,59 @@ void retryWatermarks() {
     require(budget.snapshot().admissionRevision > capacityWatermark,
             "capacity change is not erased by failed attempt disposal");
 }
+void finishedPreparationReleasesDecodeScratch() {
+    GpuProcessingPhaseBudget budget;
+    budget.setHostCapacity(1000, true);
+    budget.setDeviceCapacity(1000, true);
+    auto grant = budget.reserve(
+        {.fixedHostBytes = 100, .requestedSourceBytes = 300, .deviceWorkingBytes = 1000});
+    require(grant.lease && budget.snapshot().totalHostClaimBytes == 1000,
+            "preparation initially protects its full decode/conversion/upload overlap");
+    const NativeBufferStorageIdentity identity{
+        .allocatorGeneration = 1, .memoryType = 1, .heap = 0, .deviceLocal = false};
+    auto blocked = NativeBufferStorageToken::reserveProcessing(grant.lease, 64, identity);
+    require(!blocked.token, "unneeded decode reservation previously starved native scratch");
+    auto earlyUpload = NativeBufferStorageToken::reserveUpload(grant.lease, 10, identity);
+    require(earlyUpload.token && !grant.lease->finishSourcePreparation(20),
+            "preparation cannot change host accounting while an earlier upload is live");
+    earlyUpload.token.reset();
+    require(!grant.lease->finishSourcePreparation(301),
+            "final source storage cannot exceed its admitted allowance");
+    require(grant.lease->finishSourcePreparation(20) &&
+                budget.snapshot().totalHostClaimBytes == 120,
+            "finished preparation retains actual sources, not unused decode or upload storage");
+    require(!grant.lease->finishSourcePreparation(20) &&
+                budget.snapshot().totalHostClaimBytes == 120,
+            "completion cannot release the same reservation twice");
+    auto scratch = NativeBufferStorageToken::reserveProcessing(grant.lease, 64, identity);
+    require(scratch.token && budget.snapshot().totalHostClaimBytes == 184,
+            "native scratch can use released headroom without changing the device limit");
+    budget.setHostCapacity(184, true);
+    auto exhausted = NativeBufferStorageToken::reserveUpload(grant.lease, 1, identity);
+    require(!exhausted.token && budget.snapshot().totalHostClaimBytes == 184,
+            "deferred upload admission still refuses real host exhaustion without a partial claim");
+    budget.setHostCapacity(1000, true);
+    auto upload = NativeBufferStorageToken::reserveUpload(grant.lease, 300, identity);
+    require(upload.token && budget.snapshot().totalHostClaimBytes == 484,
+            "native staging acquires its real host allocation within the original upload ceiling");
+    require(upload.token->reconcile(280, identity) && budget.snapshot().totalHostClaimBytes == 464,
+            "actual smaller upload backing returns only its own supplemental host claim");
+    scratch.token.reset();
+    upload.token.reset();
+    grant.lease.reset();
+    require(budget.snapshot().totalHostClaimBytes == 0 &&
+                budget.snapshot().totalDeviceClaimBytes == 0 &&
+                budget.snapshot().admittedPhases == 0,
+            "trimmed phase and actual allocations retire with exact conservation");
+    grant = budget.reserve(
+        {.fixedHostBytes = 100, .requestedSourceBytes = 300, .deviceWorkingBytes = 1000});
+    require(grant.lease && grant.lease->finishSourcePreparation(20),
+            "a second preparation can release unused scratch");
+    const auto watermark = grant.lease->revisionAfterOwnRelease();
+    grant.lease.reset();
+    require(budget.snapshot().admissionRevision == watermark,
+            "own scratch release followed by teardown cannot create a self-retry loop");
+}
 void rootIdentity() {
     GpuProcessingPhaseBudget first;
     GpuProcessingPhaseBudget second;
@@ -294,6 +348,7 @@ int main() {
         rootIdentity();
         contention();
         retryWatermarks();
+        finishedPreparationReleasesDecodeScratch();
         std::cout << "paired phase readiness/sizing/lifetime/32-way contention PASS\n";
         return 0;
     } catch (const std::exception& error) {

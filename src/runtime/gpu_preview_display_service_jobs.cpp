@@ -434,25 +434,10 @@ void startGpuPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>& core
 
     const auto nativeWorking = std::min<std::uint64_t>(core->options.nativeBudgets.maxOwnedBytes,
                                                        submission.gpuByteAllowance);
-    auto phase = reservePreviewCpuPhase(core->options.processingPhasePolicy, submission.snapshot,
-                                        submission.identity, submission.pixelStorageByteLimit,
-                                        nativeWorking);
     if (stage->completion.cancellationRequested()) {
         completeCancelled(stage);
         return;
     }
-    if (phase.status != render::GpuProcessingPhaseAdmission::Accepted || !phase.lease) {
-        completeFailed(stage, {previewCpuPhaseDiagnostic(phase, true)});
-        return;
-    }
-    if (!core->device || core->device->processingPhaseOccupied()) {
-        completeFailed(stage,
-                       {previewCpuPhaseDiagnostic(
-                           render::GpuProcessingPhaseAdmission::BudgetRefused,
-                           TaskAdmissionRetry{phase.lease->revisionAfterOwnRelease(), true})});
-        return;
-    }
-    stage->cpuNativePhase = std::move(phase.lease);
 
     TaskRequest childRequest("GPU preview CPU stage", submission.owner, submission.priority,
                              TaskExecutor::Cpu);
@@ -463,17 +448,37 @@ void startGpuPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>& core
     try {
         auto child = core->scheduler->submit<PreviewCpuStageOutcomeHandle>(
             std::move(childRequest),
-            [core, snapshot = std::move(submission.snapshot),
-             identity = std::move(submission.identity), phase = stage->cpuNativePhase,
+            [core, stage, nativeWorking, snapshot = std::move(submission.snapshot),
+             identity = std::move(submission.identity),
              overrides = std::move(submission.overrides)](
                 TaskContext& context) -> TaskResult<PreviewCpuStageOutcomeHandle> {
                 using Result = TaskResult<PreviewCpuStageOutcomeHandle>;
                 if (context.isCancellationRequested()) {
                     return Result::cancelled();
                 }
+                auto planned =
+                    planPreviewCpuStorage(core->options.cpuStoragePlanner, snapshot, identity,
+                                          stage->pixelStorageByteLimit, overrides, context);
+                if (planned.state() == TaskState::Cancelled)
+                    return Result::cancelled(planned.diagnostics());
+                if (planned.state() == TaskState::Failed)
+                    return Result::failed(planned.diagnostics());
+                if (!planned.value())
+                    return Result::failed(
+                        previewDiagnostic("bloom.runtime.gpu-preview-missing-storage-plan",
+                                          "The CPU storage planner returned no peak."));
+                auto phase = reservePreviewCpuPhase(core->options.processingPhasePolicy, snapshot,
+                                                    identity, stage->pixelStorageByteLimit,
+                                                    nativeWorking, *planned.value());
+                if (context.isCancellationRequested())
+                    return Result::cancelled();
+                if (phase.status != render::GpuProcessingPhaseAdmission::Accepted || !phase.lease)
+                    return Result::failed(previewCpuPhaseDiagnostic(phase, true));
                 auto result = core->stageFunction(
-                    snapshot, identity, static_cast<std::size_t>(phase->sourceByteLimit()),
+                    snapshot, identity, static_cast<std::size_t>(phase.lease->sourceByteLimit()),
                     overrides, context);
+                if (result.state() == TaskState::Succeeded)
+                    stage->cpuNativePhase = std::move(phase.lease);
                 core->notify();
                 return result;
             });

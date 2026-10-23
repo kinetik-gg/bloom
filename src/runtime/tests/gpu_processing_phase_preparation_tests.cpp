@@ -382,6 +382,9 @@ void mixedAndNestedQuotas() {
                 "text-before-media and media-before-text admit96B upload plus encoded revision "
                 "independently "
                 "of coverage");
+        require(policy->snapshot().reservations.totalHostClaimBytes == fixedHeadroom + 96,
+                "native execution retains decoded sources, not unused uploads or spent "
+                "decoder/conversion workspace");
         mixed = std::move(plan);
     }
     require(policy->snapshot().reservations.admittedPhases == 0,

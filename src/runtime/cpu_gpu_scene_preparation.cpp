@@ -174,7 +174,12 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         }
     }
 
-    auto checked = detail::preflight(plan, request, cancellation, {}, nullptr, nullptr);
+    // Reuse semantic/geometry validation, but do not apply the CPU evaluator's hypothetical
+    // full-frame working set to GPU commands. Host retention is charged below against the real
+    // source/coverage allowances; native images and scratch belong to the device lease/executor.
+    auto validationRequest = request;
+    validationRequest.pixelStorageByteLimit = std::numeric_limits<std::size_t>::max();
+    auto checked = detail::preflight(plan, validationRequest, cancellation, {}, nullptr, nullptr);
     if (checked.cancelled || cancellation.isCancellationRequested()) {
         return fail(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");
     }
@@ -217,8 +222,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 outcome.diagnostic.defaultBudgetRetry = defaultBudgetRetry;
                 return outcome;
             }
-            envelope.requestedExecutorBytes = std::min<std::uint64_t>(
-                request.pixelStorageByteLimit, delivered->previewRequestBytes);
+            envelope.requestedExecutorBytes =
+                phase_.policy->snapshot().reservations.deviceCapacityBytes.value_or(0);
         }
         const auto extent = resolved.imageDescriptor.dataWindow().extent();
         envelope.pixels = static_cast<std::uint64_t>(extent.width()) * extent.height();
@@ -876,6 +881,13 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     auto scene = std::shared_ptr<const PreparedGpuScene>(new PreparedGpuScene(
         std::move(commands), std::move(commandForOperation), outputCommand, std::move(identity),
         std::move(bounds), resolved.imageDescriptor, mediaStatistics));
+    // Nested builders borrow the root phase and must not retire its preparation scratch while
+    // siblings can still decode. The shared backing ledger deduplicates all nested source pixels.
+    if (phaseLease && !phase_.admittedLease &&
+        !phaseLease->finishSourcePreparation(sourceBackings->chargedBytes)) {
+        return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                    "Prepared source storage could not finish its processing reservation");
+    }
     return {std::move(scene), PreparedGpuSceneDiagnostic{}, std::move(phaseLease)};
 }
 

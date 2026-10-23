@@ -35,6 +35,7 @@ struct ResolvedEvaluation final {
     double horizontalScale = 1.0;
     double verticalScale = 1.0;
     std::size_t imageBytes = 0;
+    std::size_t peakPixelStorageBytes = 0;
     std::vector<std::size_t> remainingConsumers;
     std::vector<ResolvedCurveSample<double>> scalarCurveValues;
     std::vector<ResolvedCurveSample<document::Vec2d>> vec2CurveValues;

@@ -1130,6 +1130,28 @@ and before executing queued work.
 Unrooted legacy defaults remain unchanged. This does not enlarge an admitted phase or guarantee
 that a composition fits.
 
+GPU scene preparation uses CPU preflight for semantic validation without charging hypothetical CPU
+intermediate images against the host source allowance. Retained decoded sources and coverage stay
+bounded by their host allowances; native images and scratch stay bounded by the device lease. Once
+the root scene finishes preparation, the phase retains actual deduplicated source bytes and fixed
+output/coverage headroom, and releases unused source/decode/upload reservation. Nested builders do
+not finish a borrowed phase while sibling sources can still decode. Subsequent uploads acquire
+their actual nonlocal host backing, including allocator requirements, against current host capacity;
+they retain the original upload and device ceilings. Retirement and unproven-work rules are unchanged.
+A cancelled scene also releases unpublished outputs in retained OCIO effect programs after native
+retirement is proved, before dropping its phase. The program cache keeps compiled shaders for reuse;
+pending submissions and unproven allocations remain held.
+Rooted resident preview queue admission charges no hypothetical pixel backing: the processing
+phase owns that admission before allocation. Scheduler queue/count bounds remain active. This
+avoids charging the whole device ceiling again against an aggregate host allowance and sending
+otherwise GPU-capable requests to CPU evaluation merely because another preview is queued.
+Explicit and unrooted legacy routes retain additive scheduler byte admission.
+
+Before CPU evaluation, a CPU-worker planner supplies the preflight live-image minimum, including
+nested compositions, to phase admission. The phase still requests the caller's full source ceiling;
+the minimum prevents granting a phase already known to fail preflight. It is not an exact allocation
+forecast: transformed bounds, decoded media, and operation scratch remain checked during execution.
+
 #### Preview default propagation follow-on
 
 The implemented follow-on distinguishes omitted preview limits from explicit finite ceilings.
@@ -1143,9 +1165,9 @@ The application explicitly shares one neutral `TaskBudgetView` between Tasks and
 policy. The existing off-UI sampler delivers host/process state; the root resolves configured
 preview/operation shares against the delivered live processing allowance, then publishes an
 immutable numeric snapshot after quota locks are released. Reusable-cache credit is not processing
-headroom. Omitted scheduler aggregate admission, service request allowance, controller host-pixel
-limit and preparation executor envelope read these delivered defaults instead of latching startup
-values. Each request remains subject to real phase and device admission; a snapshot is neither
+headroom. Omitted scheduler and controller host-pixel admission read delivered host defaults instead of
+latching startup values. The rooted service request and preparation executor use the device-owner
+ceiling independently; a host source ceiling does not cap GPU intermediates. Each request remains subject to real phase and device admission; a snapshot is neither
 allocation ownership nor a new independent allowance.
 
 The resident service keeps construction ceilings separate from live free space. For an omitted

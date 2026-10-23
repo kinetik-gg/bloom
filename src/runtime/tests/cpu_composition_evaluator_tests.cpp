@@ -1380,11 +1380,69 @@ void testProxyAndPeakBudget(Expectations& expectations) {
                         "exact live-image peak budget succeeds");
 
     const auto twoLayers = twoSolidPlan();
+    const auto planned =
+        evaluator.planPreflightPixelStorage(twoLayers, requestFor(*twoLayers, 1U << 20U));
+    expectations.expect(planned.requiredPreflightBytes == 384 && !planned.diagnostic &&
+                            !planned.cancelled,
+                        "pixel-free planning reports the branched graph's preflight minimum");
+    const auto underCap =
+        evaluator.planPreflightPixelStorage(twoLayers, requestFor(*twoLayers, 383));
+    expectations.expect(!underCap.requiredPreflightBytes && underCap.diagnostic &&
+                            underCap.diagnostic->code ==
+                                runtime::EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
+                        "preflight planning preserves the caller's explicit storage cap");
     const auto twoBelow = evaluator.evaluate(twoLayers, requestFor(*twoLayers, 1151), {});
     const auto twoExact = evaluator.evaluate(twoLayers, requestFor(*twoLayers, 1152), {});
     expectations.expect(twoBelow.status() == runtime::EvaluationStatus::Failed &&
                             twoExact.status() == runtime::EvaluationStatus::Evaluated,
                         "peak simulation accounts for both live layers while stacking");
+
+    // Each child preflight needs 384 bytes, but their transients are sequential. The second child
+    // runs while the first child output (128 bytes) remains live in the parent.
+    auto childDefinition = twoLayers->copyDefinition();
+    childDefinition.duration = core::RationalTime::fromInteger(10);
+    const auto child = publishPlan(std::move(childDefinition));
+    const auto nestedMapping = [](const std::uint64_t id) {
+        return runtime::CompiledCompositionTimeMapping{
+            {document::ParameterId::fromRaw(id), 0.0},
+            {document::ParameterId::fromRaw(id + 1), 1.0},
+            0};
+    };
+    std::vector<runtime::CompiledOperation> nestedOperations;
+    nestedOperations.emplace_back(runtime::CompiledCompositionSource{
+        document::NodeId::fromRaw(91001), 0, nestedMapping(91010)});
+    nestedOperations.emplace_back(runtime::CompiledCompositionSource{
+        document::NodeId::fromRaw(91002), 0, nestedMapping(91020)});
+    nestedOperations.emplace_back(
+        runtime::CompiledMerge{document::NodeId::fromRaw(91003),
+                               {{document::LayerSlotId::fromRaw(91011), document::LayerId{},
+                                 runtime::OperationIndex::fromRaw(0)},
+                                {document::LayerSlotId::fromRaw(91021), document::LayerId{},
+                                 runtime::OperationIndex::fromRaw(1)}}});
+    nestedOperations.emplace_back(runtime::CompiledCompositionOutput{
+        document::NodeId::fromRaw(91004), runtime::OperationIndex::fromRaw(2)});
+    runtime::CompiledCompositionPlanDefinition nestedDefinition{
+        document::Revision::fromRaw(7),
+        kProjectId,
+        document::CompositionId::fromRaw(kCompositionId.value() + 1000),
+        format(),
+        std::move(nestedOperations),
+        runtime::OperationIndex::fromRaw(3)};
+    nestedDefinition.duration = core::RationalTime::fromInteger(10);
+    nestedDefinition.nestedPlans.push_back(child);
+    const auto nestedPlan = publishPlan(std::move(nestedDefinition));
+    const auto nestedPeak =
+        evaluator.planPreflightPixelStorage(nestedPlan, requestFor(*nestedPlan, 1U << 20U));
+    expectations.expect(nestedPeak.requiredPreflightBytes == 512,
+                        "nested preflight overlaps a live sibling output with child demand");
+    const auto nestedUnderCap =
+        evaluator.planPreflightPixelStorage(nestedPlan, requestFor(*nestedPlan, 511));
+    expectations.expect(!nestedUnderCap.requiredPreflightBytes && nestedUnderCap.diagnostic &&
+                            nestedUnderCap.diagnostic->code ==
+                                runtime::EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
+                        "nested preflight demand is included before CPU phase admission");
+    expectations.expect(planned.requiredPreflightBytes && *planned.requiredPreflightBytes < 1152,
+                        "execution-time transformed bounds can exceed the preflight minimum");
 
     const auto emptyPlan = emptyStackPlan();
     const auto processOnlyBelow = evaluator.evaluate(emptyPlan, requestFor(*emptyPlan, 127), {});

@@ -7,12 +7,23 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
 
 namespace bloom::media::cache {
 class MediaDiskCache;
 } // namespace bloom::media::cache
 
 namespace bloom::runtime {
+// Pixel-free preflight result. This is the live-image minimum checked before evaluation, including
+// nested plans. Transforms and media may need more storage when their actual bounds are resolved
+// during execution; the caller's original limit remains the upper bound for those allocations.
+struct EvaluationPixelStoragePlan final {
+    std::optional<std::size_t> requiredPreflightBytes = {};
+    std::optional<std::size_t> outputImageBytes = {};
+    std::optional<EvaluationDiagnostic> diagnostic = {};
+    bool cancelled = false;
+};
+
 namespace detail {
 class VideoSourceContext;
 class ImageEffectContext;
@@ -57,6 +68,10 @@ struct AudioMixDescription final {
 
 class CpuCompositionEvaluator final {
   public:
+    [[nodiscard]] EvaluationPixelStoragePlan
+    planPreflightPixelStorage(const std::shared_ptr<const CompiledCompositionPlan>& plan,
+                              const EvaluationRequest& request,
+                              const CancellationToken& cancellation = {}) const;
     [[nodiscard]] std::shared_ptr<detail::ImageEffectContext> imageEffectContext() const;
     void setVideoCacheByteBudget(std::size_t budget) const;
     // "Purge media cache": drops the evaluator's decoded-video memory cache. Only the cache's own

@@ -342,6 +342,8 @@ int main(int argc, char* argv[]) try {
     auto gpuPreviewCpuDisplayFallback =
         bloom::ui::makeCompositionPreviewCpuDisplayFallback(referenceDisplayPreparer);
     gpuPreviewDisplayOptions.processingPhasePolicy = processingPhasePolicy;
+    gpuPreviewDisplayOptions.cpuStoragePlanner = bloom::ui::makeCompositionPreviewCpuStoragePlanner(
+        snapshotCompiler, cpuEvaluator, compiledPlanCache);
     bloom::runtime::GpuPreviewDisplayService gpuPreviewDisplayService(
         taskScheduler, std::move(gpuPreviewGpuSceneStage), std::move(gpuPreviewCpuStage),
         std::move(gpuPreviewCpuDisplayFallback), gpuPreviewDisplayOptions);

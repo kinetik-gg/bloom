@@ -135,6 +135,11 @@ class GpuProcessingPhaseLease final {
     // Existing source estimate separately protects S, C and occupied upload U, each sourceBytes.
     [[nodiscard]] std::uint64_t uploadByteLimit() const noexcept { return sourceBytes_; }
     [[nodiscard]] std::uint64_t executorByteLimit() const noexcept { return executorBytes_; }
+    // After the complete scene has finished CPU preparation, retain its actual decoded backing.
+    // Future native upload buffers acquire their actual host bytes at allocation, within the
+    // original upload ceiling. Spent decode/conversion scratch must not block native execution.
+    // Call once, before publishing the prepared scene to the device thread.
+    [[nodiscard]] bool finishSourcePreparation(std::uint64_t retainedSourceBytes) noexcept;
     // Expected watermark after this lease alone releases. Independent changes remain visible.
     [[nodiscard]] std::uint64_t revisionAfterOwnRelease() const noexcept;
     void markUnproven() noexcept;
@@ -165,6 +170,7 @@ class GpuProcessingPhaseLease final {
     std::uint64_t sourceBytes_ = 0;
     std::uint64_t executorBytes_ = 0;
     bool unproven_ = false;
+    bool sourcePreparationFinished_ = false;
 };
 
 enum class HostPixelStorageDomain { PackedPreview, FinalProcess, FinalEncoded };
