@@ -14,6 +14,7 @@
 #include <new>
 #include <numeric>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #if defined(__linux__)
 #include <sys/wait.h>
@@ -214,12 +215,70 @@ void sessionRevisions(const std::filesystem::path& source, const std::filesystem
         (void)product(
             gesture.frame(probe, 0, 12, 0, &gestureCache, {}, {}, {}, {},
                           {video::SourceRevisionPolicy::Retained, false, &work, &retained, {}}));
-        check(!retained && work.bytesHashed == size && gestureQuota->residentBytes() == 0 &&
-                  gestureCache.residentBytes() == 0,
+        // The first cold gesture hashes the original. The second has a verified identity and
+        // adopts the oracle's live capture of the same digest. Neither inserts anything.
+        check(i == 0 ? !retained && work.bytesHashed == size
+                     : retained && work.bytesRead == 0 && work.bytesHashed == 0,
+              "cold read-only gesture hashes once, then adopts the verified live capture");
+        check(gestureQuota->residentBytes() == 0 && gestureCache.residentBytes() == 0,
               "cold read-only gesture inserts neither source nor decoded frame");
     }
 }
 #if defined(__linux__)
+void identityVerifiedRevalidation(const std::filesystem::path& source,
+                                  const std::filesystem::path& scratch) {
+    const auto copy = scratch / "identity.mp4";
+    std::filesystem::copy_file(source, copy, std::filesystem::copy_options::overwrite_existing);
+    const auto size = std::filesystem::file_size(copy);
+    const auto reads = [] { return bloom::platform::sourceReadWork().fullReads; };
+    video::VideoDecodeSession first(copy, video::VideoDecodeSession::defaultWorker(), {},
+                                    scratch / "identity-spool");
+    const auto probe = product(first.probe());
+    const auto verified = reads();
+    // Playback, edits and per-frame export all revalidate by default: identity only, no reads.
+    bloom::platform::FileSnapshotStatistics work;
+    bool retained = false;
+    const video::SourceRevisionAccess revalidate{
+        video::SourceRevisionPolicy::Revalidate, true, &work, &retained, {}};
+    for (std::uint64_t i = 0; i < 6; ++i) {
+        (void)product(first.frame(probe, 0, i, 0, nullptr, {}, {}, {}, {}, revalidate));
+        check(retained && work.bytesRead == 0 && work.bytesHashed == 0,
+              "revalidation of an unchanged source reuses the verified snapshot");
+        check(!first.verifySource(probe.sourceDigest), "unchanged source verifies");
+    }
+    check(reads() == verified, "repeated revalidation performs zero full-file reads");
+    // A second consumer (thumbnails, export, audio) adopts the live capture by digest.
+    video::VideoDecodeSession second(copy, video::VideoDecodeSession::defaultWorker(), {},
+                                     scratch / "identity-spool-second");
+    (void)product(second.frame(probe, 0, 2, 0, nullptr, {}, {}, {}, {}, revalidate));
+    check(retained && work.bytesHashed == 0 && reads() == verified &&
+              video::sharedSourceSnapshotCount() >= 1,
+          "another session adopts the verified snapshot without reading the source");
+    // A timestamp-only touch rehashes exactly once and stays available.
+    std::filesystem::last_write_time(copy, std::filesystem::last_write_time(copy) +
+                                               std::chrono::seconds(3));
+    (void)product(first.frame(probe, 0, 3, 0, nullptr, {}, {}, {}, {}, revalidate));
+    check(!retained && work.bytesHashed == size && reads() == verified + 1,
+          "a changed identity is recaptured and rehashed once");
+    (void)product(second.frame(probe, 0, 3, 0, nullptr, {}, {}, {}, {}, revalidate));
+    check(retained && reads() == verified + 1, "the other session stays verified without reading");
+    // A same-size content change is still detected and reported with the relink diagnostic.
+    const auto modified = std::filesystem::last_write_time(copy);
+    {
+        std::fstream file(copy, std::ios::in | std::ios::out | std::ios::binary);
+        file.seekp(static_cast<std::streamoff>(size / 2));
+        file.put('x');
+    }
+    std::filesystem::last_write_time(copy, modified);
+    const auto changed = second.frame(probe, 0, 3, 0, nullptr);
+    const auto* failure = std::get_if<provider::Unavailable>(&changed);
+    check(failure != nullptr && failure->reason == provider::Error::SourceChanged &&
+              failure->detail.find("relink") != std::string::npos,
+          "a changed source reports the relink diagnostic");
+    const auto verify = first.verifySource(probe.sourceDigest);
+    check(verify && verify->reason == provider::Error::SourceChanged,
+          "verification of a changed source reports SourceChanged without another read");
+}
 void reaped(const std::int64_t process) {
     check(process > 0, "retained worker launched");
     int status = 0;
@@ -486,6 +545,7 @@ int main(int argc, char** argv) {
         retainedWorker(source, scratch.path);
         failedLeaderCompletesFollowers(source, scratch.path);
         retainedGenerationReplacement(source, scratch.path);
+        identityVerifiedRevalidation(source, scratch.path);
 #endif
         retirement(source, scratch.path / "retirement-spool");
         std::cout << "PASS: immutable disk-backed video source revisions\n";

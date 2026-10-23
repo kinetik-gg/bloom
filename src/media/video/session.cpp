@@ -41,35 +41,6 @@ PipelineQualificationV1 providerPipeline(const ProviderDeclaration& declaration)
     return ffmpegPipeline(declaration);
 #endif
 }
-[[maybe_unused]] Result<Digest> digestFile(const std::filesystem::path& path,
-                                           const Cancel& cancel) {
-    std::error_code error;
-    if (!std::filesystem::is_regular_file(path, error) || error)
-        return Unavailable{Error::Io, "Video source must be a local regular file"};
-    const auto size = std::filesystem::file_size(path, error);
-    if (error)
-        return Unavailable{Error::Io, "Video source is unavailable"};
-    if (size == 0 || size > Limits::sourceBytes)
-        return Unavailable{Error::Oversized, "Video source exceeds limits"};
-    std::ifstream file(path, std::ios::binary);
-    if (!file)
-        return Unavailable{Error::Io, "Video source is unavailable"};
-    core::Sha256Hasher hasher;
-    std::array<char, 65536> bytes{};
-    std::uint64_t total = 0;
-    while (file.read(bytes.data(), bytes.size()) || file.gcount() > 0) {
-        if (cancel && cancel())
-            return Unavailable{Error::Cancelled, "Video read cancelled"};
-        const auto count = static_cast<std::size_t>(file.gcount());
-        total += count;
-        if (total > Limits::sourceBytes ||
-            !hasher.update(std::as_bytes(std::span(bytes.data(), count))))
-            return Unavailable{Error::Oversized, "Video source exceeds limits"};
-    }
-    if (!file.eof())
-        return Unavailable{Error::Io, "Video source read failed"};
-    return hasher.finalize();
-}
 template <typename T> Result<T> product(WorkerReply reply) {
     if (auto* value = std::get_if<T>(&reply))
         return std::move(*value);
@@ -228,7 +199,43 @@ struct SnapshotRetirement final : render::detail::PackedHostRetirementNode {
             render::detail::releasePackedHostRegistration(retirement);
     }
 };
+// Process-wide index of live verified snapshots keyed by content digest. It holds no ownership:
+// a snapshot lives exactly as long as a session (or caller) retains it, so quota and retirement
+// semantics are unchanged. Another session for the same digest (thumbnails, preview, export,
+// audio) adopts the live capture instead of copying and hashing the movie again. Adoption always
+// requires the adopter's own identity-verified digest; an entry never vouches for a pathname.
+struct SharedSnapshots final {
+    std::mutex mutex;
+    std::vector<std::weak_ptr<const platform::ReadOnlyFileSnapshot>> entries;
+};
+SharedSnapshots& sharedSnapshots() {
+    static SharedSnapshots value;
+    return value;
+}
+std::shared_ptr<const platform::ReadOnlyFileSnapshot> findShared(const Digest& digest) {
+    auto& registry = sharedSnapshots();
+    const std::lock_guard lock(registry.mutex);
+    for (const auto& entry : registry.entries)
+        if (auto snapshot = entry.lock(); snapshot && snapshot->digest() == digest)
+            return snapshot;
+    return {};
+}
+void publishShared(const std::shared_ptr<const platform::ReadOnlyFileSnapshot>& snapshot) {
+    auto& registry = sharedSnapshots();
+    const std::lock_guard lock(registry.mutex);
+    std::erase_if(registry.entries, [](const auto& entry) { return entry.expired(); });
+    registry.entries.push_back(snapshot);
+}
+Unavailable sourceChanged() {
+    return Unavailable{Error::SourceChanged, "Video changed; relink the asset in Assets"};
+}
 } // namespace
+std::size_t sharedSourceSnapshotCount() {
+    auto& registry = sharedSnapshots();
+    const std::lock_guard lock(registry.mutex);
+    return static_cast<std::size_t>(std::ranges::count_if(
+        registry.entries, [](const auto& entry) { return !entry.expired(); }));
+}
 Result<std::shared_ptr<const platform::ReadOnlyFileSnapshot>>
 VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const Cancel& cancel,
                                    const SourceRevisionAccess& access) const {
@@ -244,6 +251,29 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
         if (access.retained)
             *access.retained = true;
         return state_->revision;
+    }
+    // Revalidate: one cheap identity observation of the original. While it matches the observation
+    // that bracketed a full hash, the verified snapshot stands for the source; otherwise capture.
+    const auto observed = platform::observeSource(state_->path);
+    if (!observed.identity)
+        return Unavailable{Error::Io, "Video source is unavailable; relink the asset in Assets"};
+    auto verified = observed.digest;
+    if (!verified && state_->revision && state_->revision->sourceIdentity() &&
+        *state_->revision->sourceIdentity() == *observed.identity)
+        verified = state_->revision->digest();
+    if (verified) {
+        if (expected && *verified != *expected)
+            return sourceChanged();
+        auto reusable = state_->revision && state_->revision->digest() == *verified
+                            ? state_->revision
+                            : findShared(*verified);
+        if (reusable) {
+            if (access.allowRetention)
+                state_->revision = reusable;
+            if (access.retained)
+                *access.retained = true;
+            return reusable;
+        }
     }
     // A prior worker keeps the old anonymous source handle alive. Retire it before a new
     // capture so a one-file quota can admit revalidation or a read-only gesture.
@@ -267,7 +297,7 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
     if (access.work)
         *access.work = (*snapshot)->statistics();
     if (expected && (*snapshot)->digest() != *expected)
-        return Unavailable{Error::SourceChanged, "Video changed; relink the asset in Assets"};
+        return sourceChanged();
     auto owner = std::make_unique<SnapshotRetirement>();
     owner->snapshot = std::move(*snapshot);
     owner->retirement = state_->retirement;
@@ -290,8 +320,10 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
             else
                 delete entry;
         });
-    if (access.allowRetention)
+    if (access.allowRetention) {
         state_->revision = result;
+        publishShared(result);
+    }
     return result;
 }
 Result<ProbeResult> VideoDecodeSession::probe(const Cancel& cancel) {
@@ -308,19 +340,33 @@ Result<ProbeResult> VideoDecodeSession::probe(const Cancel& cancel) {
 }
 std::optional<Unavailable> VideoDecodeSession::verifySource(const Digest& expected,
                                                             const Cancel& cancel) const {
+    // A known identity is one stat and never needs a snapshot or worker.
+    const auto observed = platform::observeSource(state_->path);
+    if (!observed.identity)
+        return Unavailable{Error::Io, "Video source is unavailable; relink the asset in Assets"};
+    if (observed.digest) {
+        if (*observed.digest != expected)
+            return sourceChanged();
+        return {};
+    }
 #if defined(__linux__)
-    const auto identity =
-        sourceRevision(expected, cancel, {SourceRevisionPolicy::Revalidate, false});
+    // A cold source is verified by the same capture a later decode reuses.
+    const auto identity = sourceRevision(expected, cancel, {SourceRevisionPolicy::Revalidate});
     if (const auto* error = std::get_if<Unavailable>(&identity))
         return *error;
     return {};
 #else
-    const auto identity = digestFile(state_->path, cancel);
-    if (const auto* error = std::get_if<Unavailable>(&identity))
-        return *error;
-    if (std::get<Digest>(identity) != expected)
-        return Unavailable{Error::SourceChanged, "Video changed; relink the asset in Assets"};
-    return {};
+    switch (platform::verifySourceDigest(state_->path, expected, cancel, Limits::sourceBytes)) {
+    case platform::SourceCheck::Matches:
+        return {};
+    case platform::SourceCheck::Cancelled:
+        return Unavailable{Error::Cancelled, "Video read cancelled"};
+    case platform::SourceCheck::Missing:
+        return Unavailable{Error::Io, "Video source is unavailable; relink the asset in Assets"};
+    case platform::SourceCheck::Changed:
+        break;
+    }
+    return sourceChanged();
 #endif
 }
 Result<std::shared_ptr<const FrameProduct>>

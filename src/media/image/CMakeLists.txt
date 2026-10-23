@@ -14,7 +14,7 @@ target_sources(bloom_media_image PUBLIC FILE_SET HEADERS BASE_DIRS include
     FILES include/bloom/media/image.hpp)
 target_compile_features(bloom_media_image PUBLIC cxx_std_20)
 target_link_libraries(bloom_media_image PUBLIC bloom_core bloom_render bloom_color_ocio
-    PRIVATE bloom_media_stb_image)
+    bloom_platform_process PRIVATE bloom_media_stb_image)
 bloom_find_dependency(OpenEXR)
 target_link_libraries(bloom_media_image PRIVATE OpenEXR::OpenEXR)
 bloom_enable_warnings(bloom_media_image)

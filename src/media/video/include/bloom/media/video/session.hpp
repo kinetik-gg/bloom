@@ -10,7 +10,13 @@
 namespace bloom::media::video {
 [[nodiscard]] bool isVideoExtension(const std::filesystem::path& path);
 using Cancel = std::function<bool()>;
+// Revalidate: observe the original's identity (size, times, volume/file id) and reuse the verified
+// snapshot while it matches the observation that bracketed its full hash; a changed or unknown
+// identity captures and rehashes, so changed bytes report SourceChanged. Retained: reuse this
+// session's last verified snapshot without touching the original.
 enum class SourceRevisionPolicy : std::uint8_t { Revalidate, Retained };
+// Live verified snapshots are shared by digest between sessions (non-owning index).
+[[nodiscard]] std::size_t sharedSourceSnapshotCount();
 struct SourceRevisionAccess final {
     SourceRevisionPolicy policy = SourceRevisionPolicy::Revalidate;
     bool allowRetention = true;

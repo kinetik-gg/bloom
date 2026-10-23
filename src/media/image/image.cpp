@@ -10,6 +10,7 @@
 #include <bloom/core/file_uri.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/media/image.hpp>
+#include <bloom/platform/source_identity.hpp>
 #include <fstream>
 #include <limits>
 #include <span>
@@ -30,31 +31,28 @@ constexpr std::uint64_t kPngJpegStagingBytesPerPixel = 8U;
 
 // Streams the whole file through SHA-256 in bounded chunks. There is no whole-file cap: the hash is
 // the content identity, the working set is one chunk, and cancellation is polled per chunk.
+// Identity-verified digest: a full hash only when the file's identity is unknown or changed.
 [[nodiscard]] ImageResult<core::Sha256Digest> hashFile(const std::filesystem::path& path,
                                                        const CancelImageWork& cancel) {
     if (cancelled(cancel))
         return {{}, {}, true};
-    std::ifstream input(path, std::ios::binary);
-    if (!input)
+    const auto hashed = platform::digestSourceFile(path, cancel);
+    switch (hashed.error) {
+    case platform::SourceHashError::None:
+        return {hashed.digest, {}};
+    case platform::SourceHashError::Cancelled:
+        return {{}, {}, true};
+    case platform::SourceHashError::Missing:
         return {
             {}, "Image file is missing or unreadable", false, ImageDiagnosticCode::FileUnavailable};
-    core::Sha256Hasher hasher;
-    std::vector<std::byte> buffer(kHashChunkBytes);
-    for (;;) {
-        if (cancelled(cancel))
-            return {{}, {}, true};
-        input.read(reinterpret_cast<char*>(buffer.data()),
-                   static_cast<std::streamsize>(buffer.size()));
-        const auto count = static_cast<std::size_t>(input.gcount());
-        if (count > 0 && !hasher.update(std::span(buffer.data(), count)))
-            return {{}, "Image digest failed", false, ImageDiagnosticCode::FileReadFailed};
-        if (count < buffer.size()) {
-            if (!input.eof())
-                return {{}, "Image read failed", false, ImageDiagnosticCode::FileReadFailed};
-            break;
-        }
+    case platform::SourceHashError::Changed:
+        return {
+            {}, "Image source changed while hashing", false, ImageDiagnosticCode::FileReadFailed};
+    case platform::SourceHashError::Oversized:
+    case platform::SourceHashError::Io:
+        break;
     }
-    return {hasher.finalize(), {}};
+    return {{}, "Image read failed", false, ImageDiagnosticCode::FileReadFailed};
 }
 
 [[nodiscard]] bool readHeader(const std::filesystem::path& path, const std::span<std::byte> head,
@@ -201,6 +199,7 @@ captureImageSourceRevision(const std::filesystem::path& path, const std::size_t 
             return {{}, {}, true, ImageDiagnosticCode::Cancelled};
         ImageSourceCaptureStatistics statistics;
         auto ioStart = detail::ImageWorkClock::now();
+        const auto observedBefore = platform::observeFileIdentity(path);
         std::ifstream input(path, std::ios::binary | std::ios::ate);
         if (!input)
             return {{},
@@ -259,6 +258,11 @@ captureImageSourceRevision(const std::filesystem::path& path, const std::size_t 
         const auto hashStart = detail::ImageWorkClock::now();
         const auto digest = hasher.finalize();
         detail::addImageWork(statistics.hashNanoseconds, detail::imageWorkNanoseconds(hashStart));
+        platform::recordFullSourceRead(bytes.size());
+        if (const auto observedAfter = platform::observeFileIdentity(path);
+            observedBefore && observedAfter && *observedBefore == *observedAfter &&
+            observedAfter->size == bytes.size())
+            platform::verifiedSourceDigests().record(path, *observedAfter, digest);
         if (expectedDigest && digest != *expectedDigest)
             return {{},
                     "Image content changed; relink the asset",
