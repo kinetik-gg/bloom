@@ -1376,10 +1376,17 @@ Probe retains codec/profile identifiers, exact rational timebase and rate, dimen
 pixel-format spelling, H.273 colour tags, channel layout, sample rate, duration and timecode.
 `DemuxIndex` records stream IDs and exact key-packet PTS/DTS. Software video verifies constant
 packet-presentation cadence, then seeks backward to a keyframe and decodes forward until the
-exact requested CFR presentation timestamp. A missing exact timestamp, unsupported layout or
+exact requested CFR presentation timestamp. A retained decoder keeps its presentation position:
+a later request whose nearest preceding key packet is at or before that position decodes forward
+without seeking (for example every second frame of a 50p source in a 25p composition), and only a
+backward request or one past a later key packet seeks. A missing exact timestamp, unsupported layout or
 unavailable rate is a typed refusal. Variable-frame-rate ordinal indexing and interlaced preview
 are not yet qualified. Audio requests name a starting sample and exact count; decoding from
-the beginning preserves codec priming and refuses timestamp gaps or overlaps. Audio sample zero
+the beginning preserves codec priming and refuses timestamp gaps or overlaps. A retained worker
+keeps a separate audio reader and its decode position: a block that starts where the previous
+block ended continues the same pass, including samples already decoded past that end, so N
+sequential blocks decode the stream once. Any other start reopens the reader and decodes from the
+beginning again. A retained worker is relaunched after five minutes or 65,536 calls. Audio sample zero
 uses the first video presentation timestamp, including for containers with a nonzero origin.
 
 All four read roles run behind the existing process supervisor, cancellation, bounded queue and
@@ -1389,21 +1396,80 @@ The preview audio buffer also obeys the existing audio sample budget. Malformed 
 content, oversize products, worker crashes and timeouts remain typed failures. A failed worker
 request cannot publish a partial product; a later request starts a fresh worker.
 
-Software decode declares `DecodedSemanticExact` for the intake's admitted codec paths. The
-separate VA-API execution key declares `NoDeterminismClaim`, carries Development/Incomplete
-evidence and is excluded from normal qualified selection until device-specific testing passes.
-Hardware provides acceleration only; it never changes project semantics or grants qualification.
+Software decode declares `DecodedSemanticExact` for the intake's admitted codec paths. It is
+built with FFmpeg's x86 SIMD and is threaded: long-GOP codecs use frame threads and intra-only
+codecs (ProRes, DNxHD, MJPEG, TIFF) use slice threads so one random-access frame never waits on a
+pipeline of following frames. The thread count is the smaller of the machine's cores, eight, and
+what fits four in-flight 16-bit 4:4:4 frames per thread into half of the 2 GiB worker address
+space (one thread for 8K). glibc malloc arenas are limited to four for the same reason. Frame
+and slice threading are bit-exact for these decoders, so threading does not change the
+determinism claim.
+
+Preview hardware decode (issue #366) is a separate, decode-only worker generation started with
+`--vaapi-decode` and identified by its own execution key: `Hardware`, device
+`vaapi-render-node-discovered`, H.264/HEVC `VideoDecode` only, `PreviewQualified`, and
+`NoDeterminismClaim`. The worker discovers `/dev/dri/renderD*` nodes in numeric order instead of
+assuming one; a node whose driver cannot decode the stream makes FFmpeg return software frames,
+which the worker treats as a miss and moves to the next node. The first hardware frame of every
+worker generation is decoded again by the software reference on an independent reader of the same
+immutable input and must match byte for byte (the documented tolerance is zero); downloaded
+limited-range NV12 is de-interleaved into the same YUV420P8 product as software, other surfaces
+use the same 16-bit conversion. Any typed hardware refusal or parity failure retires hardware for
+that source and decodes the software reference; the frame's `FrameDecodeProvenance` then reads
+`software (fallback: <reason>)`. Only retained (interactive preview) revisions may request
+hardware. Revalidated requests — final, still, sequence, video and headless rendering — always
+decode in software, decoded-cache keys and GPU raw-upload identities separate hardware frames from
+software ones. The route is preferred automatically only on hosts with at most four hardware
+threads, where it measured faster than threaded software decode; `BLOOM_VIDEO_HARDWARE_DECODE=1`
+prefers it on any host with a render node and `0` disables it. The older export-side
+VA-API execution key keeps its Development/Incomplete decode declarations, which are not
+selectable. Hardware provides acceleration only; it never changes project semantics.
 FFmpeg ProRes evidence explicitly records `apple_authorized=false` and no delivery qualification.
 Assets expose this exact note:
 
 > Decoded by FFmpeg; not an Apple-authorized ProRes implementation
 
-`VideoDecodeSession` serializes each asset's requests through `MediaWorkerPool`; concurrent calls
-receive `Busy`. The evaluator retains at most four sessions. `DecodedVideoCache` has a separate
-LRU byte budget and keys frames by content digest, stream, frame index and interpretation. The
-application reserves the smaller of 256 MiB and one quarter of the ledger's operation-cache
-allowance, deducting that reservation before assigning the operation cache. A zero budget disables
-retention. File content is rehashed before a cache hit, so edits cannot reuse stale decoded pixels.
+`VideoDecodeSession` serializes each asset's requests through one retained `MediaWorkerPool`
+worker per route. Identical frame requests share one decode; other concurrent requests wait,
+cancellably, for the decoder rather than receiving `Busy`, and the 30 second watchdog bounds each
+worker exchange rather than the queue. The evaluator admits retained sessions by memory: each is
+charged a conservative worker estimate (64 MiB plus 24 frames of 16-bit 4:4:4 planes, capped at
+the 2 GiB worker address space) against a session budget of a quarter of physical memory, keeping
+at least two so two sources can alternate and at most the eight files the source-snapshot quota
+can retain. Least-recently-used sessions beyond that are retired. `DecodedVideoCache` has a
+separate LRU byte budget and keys frames by content digest, stream, frame index,
+interpretation, colour identity and decode route. Its target is the `playback/decoded-video-cache-bytes`
+setting, or automatically one sixteenth of physical memory between 256 MiB and 4 GiB. It is a
+reusable pool on the process memory ledger, so an observed OS limit constrains it with the other
+reusable caches. A zero budget disables retention.
+
+Measured on 2026-10-23 with locally generated files (not committed), 200 frames and 40 seeded
+random scrubs through `bloom_media_video_decode_benchmark` on a 16-thread x86-64 Linux host with
+an AMD integrated GPU for VA-API. Mean milliseconds per frame request, before → after, software
+route:
+
+| Fixture | Cold first frame | Playback (+1) | 50p in 25p (+2) | Random scrub |
+| --- | --- | --- | --- | --- |
+| H.264 1080p50, GOP 100, B-frames | 65.6 → 33.8 | 48.3 → 16.9 | 230.4 → 17.7 | 255.6 → 51.7 |
+| H.264 2160p25, GOP 50, B-frames | 218.8 → 77.2 | 179.9 → 49.6 | 584.4 → 51.7 | 572.0 → 144.5 |
+| HEVC Main10 1080p50, closed GOP 100 | 246.9 → 46.0 | 269.4 → 31.9 | 636.9 → 32.7 | 548.6 → 109.1 |
+| HEVC Main 1080p50, closed GOP 100 | 60.4 → 28.0 | 46.0 → 17.2 | 264.9 → 18.3 | 272.7 → 87.6 |
+| ProRes 422 HQ 1080p25 (intra) | 226.9 → 36.1 | 327.6 → 32.4 | 326.2 → 32.6 | 264.6 → 32.4 |
+
+Before, closed-GOP HEVC failed one scrub in 40 and open-GOP HEVC four of 100 stride requests,
+because MOV seeks by decode time landed on a keyframe presented after the target; after, none
+fail. VA-API on the same host was slower than threaded software (H.264 1080p playback 28.1,
+scrub 122.5; 2160p playback 81.2, scrub 285.6). Restricted to four threads it matched or beat
+software (2160p playback 81.4 vs 98.4), and to two threads its scrub was 260.9 vs 415.3, which is
+the basis of the automatic preference. `--parity` decoded 200 frames of each H.264 and HEVC
+fixture through both routes with zero byte mismatches. On this AMD driver, hardware HEVC after a
+random seek returned a frame presented after the target; that is a typed refusal and the session
+fell back to software as designed.
+
+Plane digests are computed once in the worker and verified once when the host decodes the
+message, hashing the planes of large products concurrently. Later consumers of the immutable
+product (the decoded cache and colour conversion) check structure and budget only, so a 16-bit
+4:4:4 1080p frame is no longer hashed seven times. File content is rehashed before a cache hit, so edits cannot reuse stale decoded pixels.
 Thumbnail and waveform/audio buffers reuse the existing bounded preview storage after the same
 content check; scrubbing does not decode the complete audio clip again.
 No operation-cache or memory-ledger implementation changes are required.

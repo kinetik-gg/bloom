@@ -61,7 +61,12 @@ The settings keys are decimal byte counts:
 | `playback/operation-cache-bytes` | Selected operation-cache target |
 | `playback/ram-preview-memory-bytes` | Selected RAM-preview target |
 
-For example, 10737418240 and 6442450944 select 10 GiB and 6 GiB independently. Missing, zero or
+For example, 10737418240 and 6442450944 select 10 GiB and 6 GiB independently.
+
+Decoded video frames have their own retention target, read at startup from
+`playback/decoded-video-cache-bytes` (decimal bytes). Missing or zero selects Automatic: one
+sixteenth of physical memory, at least 256 MiB and at most 4 GiB (for example 1 GiB on a 16 GiB
+machine). Like the other reusable caches it shares an observed OS process limit. Missing, zero or
 unreadable settings select Automatic. Explicit settings are not reduced to a fraction of physical
 or available RAM. Disk-cache settings still take effect after restart.
 
