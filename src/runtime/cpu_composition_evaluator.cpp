@@ -1499,11 +1499,53 @@ audioStartTime(const std::int64_t frame, const document::FrameRate rate) noexcep
 
 } // namespace
 
+namespace {
+// ADR 0024: a placement time through a layer's clock to its content time, sampling a curve Time
+// Remap at the layer time. nullopt is silence: absent content or an unrepresentable time.
+[[nodiscard]] std::optional<core::RationalTime>
+layerContentTime(const CompiledLayerTime& mapping, const CompiledCompositionPlan* plan,
+                 const core::RationalTime placement) {
+    const auto tau = mapLayerTime(placement, mapping.startTime, mapping.speed);
+    if (!tau)
+        return std::nullopt;
+    auto content = *tau;
+    if (mapping.timeRemap) {
+        std::optional<double> seconds;
+        if (const auto* constant = std::get_if<double>(&mapping.timeRemap->source)) {
+            seconds = *constant;
+        } else if (const auto* curve =
+                       std::get_if<ScalarCurveIndex>(&mapping.timeRemap->source)) {
+            if (plan != nullptr && curve->value() < plan->scalarCurves().size())
+                seconds = sampleAnimationCurve(plan->scalarCurves()[curve->value()], *tau).value;
+        }
+        const auto remapped = seconds ? secondsToTime(*seconds) : std::nullopt;
+        if (!remapped)
+            return std::nullopt;
+        content = *remapped;
+    }
+    if (mapping.extentDuration) {
+        const auto wrapped = wrapToExtent(content, {*mapping.extentDuration, mapping.extentFrameRate},
+                                          mapping.beforeMode, mapping.afterMode);
+        if (!wrapped || !wrapped->present)
+            return std::nullopt;
+        content = wrapped->time;
+    }
+    return content;
+}
+} // namespace
+
 std::optional<core::RationalTime> mapAudioClipTime(const AudioClipDescription& clip,
                                                    core::RationalTime time) {
     for (const auto& mapping : clip.timeMappings) {
         if (time < mapping.inPoint || time >= mapping.outPoint)
             return std::nullopt;
+        if (mapping.layerTime) {
+            const auto content = layerContentTime(*mapping.layerTime, mapping.plan.get(), time);
+            if (!content)
+                return std::nullopt;
+            time = *content;
+            continue;
+        }
         const auto mapped =
             mapCompositionTime(time, mapping.offset, mapping.scale, mapping.duration,
                                mapping.frameRate, mapping.loopMode);
@@ -1531,6 +1573,10 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
             return std::holds_alternative<ValueOutputIndex>(
                        layer.source.timeMapping.offset.source) ||
                    std::holds_alternative<ValueOutputIndex>(layer.source.timeMapping.scale.source);
+        }) ||
+        std::ranges::any_of(plan->audioMix().layers, [](const auto& layer) {
+            return layer.time && layer.time->timeRemap &&
+                   std::holds_alternative<ValueOutputIndex>(layer.time->timeRemap->source);
         });
     if (needsValueGraph) {
         ValueGraphMemoization memoization;
@@ -1578,6 +1624,34 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
             return std::nullopt;
         description.clips.push_back({source.sourceNodeId, source.assetId, *start, layer.outPoint,
                                      level, !layer.enabled, layer.solo});
+        if (layer.time) {
+            // ADR 0024: the clip plays through the layer's clock; its range is tested in
+            // composition time by the mapping, and its source end is the content's own.
+            auto mapping = *layer.time;
+            if (mapping.timeRemap && std::holds_alternative<ValueOutputIndex>(
+                                         mapping.timeRemap->source)) {
+                // A driven remap is resolved once for this mix, at the request's layer time.
+                const auto* value =
+                    valueGraph ? std::get_if<double>(&valueGraph->outputs[std::get<ValueOutputIndex>(
+                                                         mapping.timeRemap->source)
+                                                                                 .value()])
+                               : nullptr;
+                if (value == nullptr)
+                    return std::nullopt;
+                mapping.timeRemap->source = *value;
+            }
+            auto& clip = description.clips.back();
+            clip.endTime = core::RationalTime::fromInteger(std::int64_t{1} << 40);
+            clip.timeMappings.push_back({.offset = 0.0,
+                                         .scale = 1.0,
+                                         .loopMode = 0,
+                                         .duration = {},
+                                         .frameRate = plan->format().frameRate(),
+                                         .inPoint = layer.inPoint,
+                                         .outPoint = layer.outPoint,
+                                         .layerTime = mapping,
+                                         .plan = plan});
+        }
     }
     const auto sampleScalar =
         [&](const CompiledScalarParameter& parameter) -> std::optional<double> {
@@ -1613,9 +1687,18 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
             return std::nullopt;
         const auto offset = sampleScalar(source.timeMapping.offset);
         const auto scale = sampleScalar(source.timeMapping.scale);
+        // ADR 0024: a retimed layer maps the request time to its content time first.
+        auto sourceTime = std::optional{time};
+        if (layer.time) {
+            // Absent content at this request time still describes the clips; their per-sample
+            // mapping decides when they sound.
+            sourceTime = layerContentTime(*layer.time, plan.get(), time);
+            if (!sourceTime)
+                sourceTime = core::RationalTime{};
+        }
         const auto mapped =
-            offset && scale
-                ? mapCompositionTime(time, *offset, *scale, nested->duration(),
+            offset && scale && sourceTime
+                ? mapCompositionTime(*sourceTime, *offset, *scale, nested->duration(),
                                      nested->format().frameRate(), source.timeMapping.loopMode)
                 : std::nullopt;
         if (!mapped)
@@ -1626,10 +1709,30 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
         for (auto& clip : mix->clips) {
             clip.muted = clip.muted || !layer.enabled || (anySolo && !layer.solo);
             clip.solo = false;
-            clip.timeMappings.insert(clip.timeMappings.begin(),
-                                     {*offset, *scale, source.timeMapping.loopMode,
-                                      nested->duration(), nested->format().frameRate(),
-                                      layer.inPoint, layer.outPoint});
+            if (layer.time) {
+                // Layer clock first (with the layer range), then the composition source mapping.
+                clip.timeMappings.insert(
+                    clip.timeMappings.begin(),
+                    {*offset, *scale, source.timeMapping.loopMode, nested->duration(),
+                     nested->format().frameRate(),
+                     core::RationalTime::fromInteger(-(std::int64_t{1} << 40)),
+                     core::RationalTime::fromInteger(std::int64_t{1} << 40)});
+                clip.timeMappings.insert(clip.timeMappings.begin(),
+                                         {.offset = 0.0,
+                                          .scale = 1.0,
+                                          .loopMode = 0,
+                                          .duration = {},
+                                          .frameRate = plan->format().frameRate(),
+                                          .inPoint = layer.inPoint,
+                                          .outPoint = layer.outPoint,
+                                          .layerTime = *layer.time,
+                                          .plan = plan});
+            } else {
+                clip.timeMappings.insert(clip.timeMappings.begin(),
+                                         {*offset, *scale, source.timeMapping.loopMode,
+                                          nested->duration(), nested->format().frameRate(),
+                                          layer.inPoint, layer.outPoint});
+            }
             description.clips.push_back(std::move(clip));
         }
     }

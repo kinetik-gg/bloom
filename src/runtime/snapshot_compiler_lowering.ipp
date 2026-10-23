@@ -474,10 +474,14 @@ lower(const std::vector<document::NodeId>& order) {
             const auto source = lowerCompositionSource(*audioSource);
             if (!source)
                 return false;
+            const auto time = lowerLayerTime(*layerNode, *boundary);
+            if (!time)
+                return false;
             mix.nestedLayers.push_back(
                 {*source,
                  boundary->enabled && !isMuted(boundary->nodeId) && !isMuted(audioSource->id),
-                 boundary->solo, boundary->inPoint, boundary->endPoint(composition_->duration())});
+                 boundary->solo, boundary->inPoint, boundary->endPoint(composition_->duration()),
+                 *time});
             return true;
         }
         if (audioSource == nullptr || (audioSource->typeId != document::kAudioSourceNodeType &&
@@ -489,9 +493,13 @@ lower(const std::vector<document::NodeId>& order) {
         const auto sourceIndex = appendSource(*audioSource);
         if (!sourceIndex)
             return false;
+        const auto time = lowerLayerTime(*layerNode, *boundary);
+        if (!time)
+            return false;
         mix.layers.push_back({layerNodeId, boundary->layerId, *sourceIndex,
                               boundary->enabled && !isMuted(boundary->nodeId), boundary->solo,
-                              boundary->inPoint, boundary->endPoint(composition_->duration())});
+                              boundary->inPoint, boundary->endPoint(composition_->duration()),
+                              *time});
         return true;
     };
 

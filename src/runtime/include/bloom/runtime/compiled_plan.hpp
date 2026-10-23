@@ -325,6 +325,20 @@ struct CompiledVideoSource {
     friend bool operator==(const CompiledVideoSource&, const CompiledVideoSource&) = default;
 };
 
+// ADR 0024: a Layer Output's own clock and its upstream's content clock. Present only for a layer
+// whose timing is not identity; the extent is already resolved (a Source extent names no node
+// here). The Time Remap operand is sampled on the layer clock.
+struct CompiledLayerTime final {
+    core::RationalTime startTime{};
+    document::LayerSpeed speed{};
+    std::optional<CompiledScalarParameter> timeRemap{};
+    std::optional<core::RationalTime> extentDuration{};
+    document::FrameRate extentFrameRate = document::FrameRate::framesPerSecond24();
+    document::LayerTimeMode beforeMode = document::LayerTimeMode::None;
+    document::LayerTimeMode afterMode = document::LayerTimeMode::None;
+    friend bool operator==(const CompiledLayerTime&, const CompiledLayerTime&) = default;
+};
+
 struct CompiledAudioSource final {
     document::NodeId sourceNodeId;
     document::AssetId assetId;
@@ -342,6 +356,8 @@ struct CompiledAudioLayer final {
     bool solo = false;
     core::RationalTime inPoint{};
     core::RationalTime outPoint{};
+    // ADR 0024: the layer's own time mapping; audio follows exactly the picture mapping.
+    std::optional<CompiledLayerTime> time{};
 
     friend bool operator==(const CompiledAudioLayer&, const CompiledAudioLayer&) = default;
 };
@@ -353,6 +369,7 @@ struct CompiledCompositionAudioLayer final {
     bool enabled = true;
     bool solo = false;
     core::RationalTime inPoint{}, outPoint{};
+    std::optional<CompiledLayerTime> time{};
     friend bool operator==(const CompiledCompositionAudioLayer&,
                            const CompiledCompositionAudioLayer&) = default;
 };
@@ -441,20 +458,6 @@ struct CompiledText {
 // named modes, which is exactly what a driver expresses and a curve cannot. It lives HERE, on the
 // layer boundary that owns it, rather than on the stack entry that consumes it -- the stack entry
 // is the ordering of layers, and the mode is a property of the layer.
-// ADR 0024: a Layer Output's own clock and its upstream's content clock. Present only for a layer
-// whose timing is not identity; the extent is already resolved (a Source extent names no node
-// here). The Time Remap operand is sampled on the layer clock.
-struct CompiledLayerTime final {
-    core::RationalTime startTime{};
-    document::LayerSpeed speed{};
-    std::optional<CompiledScalarParameter> timeRemap{};
-    std::optional<core::RationalTime> extentDuration{};
-    document::FrameRate extentFrameRate = document::FrameRate::framesPerSecond24();
-    document::LayerTimeMode beforeMode = document::LayerTimeMode::None;
-    document::LayerTimeMode afterMode = document::LayerTimeMode::None;
-    friend bool operator==(const CompiledLayerTime&, const CompiledLayerTime&) = default;
-};
-
 struct CompiledLayerOutput {
     document::NodeId sourceNodeId;
     document::LayerId layerId;

@@ -38,6 +38,10 @@ struct AudioCompositionTimeMapping final {
     core::RationalTime duration{};
     document::FrameRate frameRate = document::FrameRate::framesPerSecond24();
     core::RationalTime inPoint{}, outPoint{};
+    // ADR 0024: a layer-time entry instead of a composition-source one. `plan` keeps the compiled
+    // Time Remap curve alive so each output sample samples it at its own layer time.
+    std::optional<CompiledLayerTime> layerTime{};
+    std::shared_ptr<const CompiledCompositionPlan> plan{};
     friend bool operator==(const AudioCompositionTimeMapping&,
                            const AudioCompositionTimeMapping&) = default;
 };

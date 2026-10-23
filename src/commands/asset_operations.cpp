@@ -529,6 +529,21 @@ OperationResult AddAudioLayer::apply(document::Draft& draft) const {
                                           std::string(document::kLayerStackAudioInputRole)}}))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Audio layer topology could not be inserted");
+    // ADR 0024: the audio is the layer's content extent and the range ends with it (capped by the
+    // composition), so after its last sample the layer is silent.
+    if (auto* boundary = graph.findLayer(*layerId); boundary != nullptr) {
+        boundary->timing.contentExtent = document::SourceLayerExtent{*sourceNodeId};
+        const auto rate = composition->format().frameRate();
+        if (asset->duration > core::RationalTime{} && asset->duration < composition->duration()) {
+            const auto frames = (asset->duration.numerator() * rate.numerator() +
+                                 asset->duration.denominator() * rate.denominator() - 1) /
+                                (asset->duration.denominator() * rate.denominator());
+            if (const auto end = core::RationalTime::create(
+                    frames * static_cast<std::int64_t>(rate.denominator()), rate.numerator());
+                end && *end > core::RationalTime{} && *end < composition->duration())
+                boundary->outPoint = *end;
+        }
+    }
 
     const auto output = graph.compositionOutput();
     if (output.has_value() && std::ranges::none_of(graph.edges(), [&](const auto& edge) {

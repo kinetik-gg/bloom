@@ -3,7 +3,9 @@
 // animated 1 -> 7 over [0, 2) s, so the covered width of a row reads back the content time.
 
 #include <bloom/commands/animation_operations.hpp>
+#include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/runtime/composition_time.hpp>
@@ -197,12 +199,74 @@ void evaluation() {
     fixture.setTiming(early, at(-1), at(2));
     expect(fixture.covered(at(0)) == identityOne, "a range may start before composition zero");
 }
+// Audio follows exactly the picture mapping: a 1 s tone asset placed at start 2 s plays content
+// time t - 2 inside its range and is silent after its content extent (after mode None).
+void audio() {
+    auto initial = document::makeNewProject(
+        "Audio time", "Main", core::RationalTime::fromInteger(8),
+        *document::CompositionFormat::create(4, 4, core::PixelAspectRatio::square(), rate(24)));
+    {
+        document::AssetRecord tone;
+        tone.id = document::AssetId::fromRaw(9000);
+        tone.kind = document::AssetKind::Audio;
+        tone.locator = {"file", "project-relative", "tone.wav", "file:tone.wav"};
+        tone.rate = 48000;
+        tone.channels = 1;
+        tone.frames = 48000;
+        tone.duration = core::RationalTime::fromInteger(1);
+        if (!initial.project.addAsset(tone))
+            throw std::runtime_error("audio asset");
+    }
+    document::Document document{std::move(initial.project)};
+    commands::CommandStack commands{document};
+    commands::Transaction add("Add audio", document.snapshot().revision());
+    add.emplace<commands::AddAudioLayer>(initial.initialCompositionId,
+                                         document::AssetId::fromRaw(9000));
+    if (!commands.execute(std::move(add)).changed())
+        throw std::runtime_error("audio layer");
+    const auto layerId =
+        document.snapshot().project().findComposition(initial.initialCompositionId)
+            ->graph()
+            .layerOutputs()
+            .back()
+            .layerId;
+    {
+        const auto* layer = document.snapshot()
+                                .project()
+                                .findComposition(initial.initialCompositionId)
+                                ->graph()
+                                .findLayer(layerId);
+        expect(layer->endPoint(core::RationalTime::fromInteger(8)) == at(1),
+               "a new audio layer ends at its asset length");
+    }
+    commands::Transaction move("Move", document.snapshot().revision());
+    move.emplace<commands::SetLayerTiming>(initial.initialCompositionId, layerId, at(2), at(2),
+                                           at(5));
+    if (!commands.execute(std::move(move)).changed())
+        throw std::runtime_error("audio move");
+    runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    const auto compiled = compiler.compile({document.snapshot(), initial.initialCompositionId}, {});
+    if (!compiled.plan)
+        throw std::runtime_error("audio compile");
+    const auto mix = runtime::CpuCompositionEvaluator{}.evaluateAudioMix(compiled.plan, at(0));
+    expect(mix && mix->clips.size() == 1 && !mix->clips.front().timeMappings.empty(),
+           "a retimed audio layer carries its layer mapping");
+    if (!mix || mix->clips.empty())
+        return;
+    const auto& clip = mix->clips.front();
+    expect(!runtime::mapAudioClipTime(clip, at(19, 10)), "silent before the layer range");
+    expect(runtime::mapAudioClipTime(clip, at(5, 2)) == at(1, 2),
+           "inside the range the content time is t - start");
+    expect(!runtime::mapAudioClipTime(clip, at(7, 2)),
+           "silent after the content extent (after mode None), though the range continues");
+}
 } // namespace
 
 int main() {
     try {
         mappingCore();
         evaluation();
+        audio();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

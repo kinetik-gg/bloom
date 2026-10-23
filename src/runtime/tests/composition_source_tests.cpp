@@ -50,6 +50,9 @@ NodeId add(Composition& composition, const std::string_view type, const std::uin
     NodeRecord record{node, std::string(type), {}, found->key.schemaVersion};
     std::uint64_t index = 0;
     for (const auto& schema : found->parameters) {
+        // ADR 0024: an unbound Time Remap means disabled, as AddNode creates Layer Outputs.
+        if (schema.schemaKey == kTimeRemapParameterSchemaKey)
+            continue;
         const auto id = ParameterId::fromRaw(raw * 100 + index++);
         require(composition.parameters().insert(
                     {id, schema.schemaKey, ConstantValueSource{schema.defaultValue}}),
