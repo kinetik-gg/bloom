@@ -242,6 +242,43 @@ void compositionDrops() {
     require(!drop(timeline, mime) && session.snapshot().revision() == revision,
             "reverse drop refuses A to B to A without publication");
 }
+// A batch with one unreadable file imports the valid ones in one undoable step and reports the
+// skipped file with its own reason.
+void partialBatchImport() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "temporary partial-import directory");
+    QImage image(8, 8, QImage::Format_RGBA8888);
+    image.fill(Qt::white);
+    require(image.save(directory.filePath("valid.png")), "generate valid PNG");
+    {
+        QFile corrupt(directory.filePath("corrupt.png"));
+        require(corrupt.open(QIODevice::WriteOnly) && corrupt.write("not an image") > 0,
+                "write corrupt PNG");
+    }
+    runtime::TaskScheduler scheduler;
+    ui::ProjectHost host(scheduler);
+    ui::CompositionSession session(*host.liveDocumentAndStack().first,
+                                   *host.liveDocumentAndStack().second, host.lowestCompositionId());
+    ui::TaskUiBridge bridge(scheduler);
+    ui::AssetController controller(session, host, scheduler, bridge);
+    ui::AssetsEditor assets(session);
+    assets.show();
+    QStringList notices;
+    QObject::connect(&controller, &ui::AssetController::diagnostic, &assets,
+                     [&](const QString& message) { notices.push_back(message); });
+    QMimeData files;
+    files.setUrls({QUrl::fromLocalFile(directory.filePath("corrupt.png")),
+                   QUrl::fromLocalFile(directory.filePath("valid.png"))});
+    auto* tree = assets.findChild<QTreeWidget*>("assetsTree");
+    require(tree && drop(*tree->viewport(), files), "mixed files drop onto Assets");
+    require(waitUntil([&] { return !controller.busy(); }), "partial import completes");
+    require(session.snapshot().project().assets().size() == 1,
+            "the valid file imports despite the corrupt one");
+    require(notices.size() == 1 && notices.front().contains("corrupt.png"),
+            "the skipped file is reported with its own reason");
+    require(session.undo() && session.snapshot().project().assets().empty(),
+            "the successful files form one undoable import");
+}
 void run() {
     QTemporaryDir directory;
     require(directory.isValid(), "temporary media directory");
@@ -565,6 +602,7 @@ int main(int argc, char** argv) {
         inputColorCatalogFollowsWorkingSpace();
         compositionDrops();
         run();
+        partialBatchImport();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

@@ -129,6 +129,8 @@ class AssetController final : public QObject {
     void refreshNodeThumbnails();
     void startThumbnails();
     void poll();
+    // One status notice for an import job's diagnostics; the Jobs panel keeps each one.
+    void emitImportFailures(const std::vector<runtime::TaskDiagnostic>& issues);
     CompositionSession& session_;
     ProjectHost& host_;
     runtime::TaskScheduler& scheduler_;

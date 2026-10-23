@@ -207,6 +207,11 @@ std::size_t trimAudioStorage(Buffers& buffers, const std::size_t limit) {
     return bytes;
 }
 
+[[nodiscard]] std::string importFailureText(const commands::ImportFailure& failure) {
+    const auto name = failure.path.filename().u8string();
+    return "Could not import " + std::string(name.begin(), name.end()) + ": " + failure.diagnostic;
+}
+
 std::filesystem::path nativePath(const QString& text) {
 #if defined(_WIN32)
     return std::filesystem::path(text.toStdWString());
@@ -737,6 +742,7 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
         [files = std::move(files), directory, relinkId, relinkFont](runtime::TaskContext& context) {
             auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
+            std::vector<runtime::TaskDiagnostic> warnings;
             auto cancel = [&] { return context.isCancellationRequested(); };
             auto progress = [&](std::uint64_t done, std::uint64_t total) {
                 context.reportProgress({.phase = "Importing media",
@@ -766,18 +772,40 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
                     std::make_unique<commands::ImportAssets>(files, directory, cancel, progress);
                 if (context.isCancellationRequested())
                     return runtime::TaskResult<OperationHandle>::cancelled();
-                if (!prepared->diagnostic().empty())
-                    return runtime::TaskResult<OperationHandle>::failed(
-                        {.code = "bloom.media.import-failed",
-                         .severity = runtime::DiagnosticSeverity::Error,
-                         .summary = prepared->diagnostic(),
-                         .detail = prepared->diagnostic(),
-                         .suggestedAction = "Check the file and its reported limit."});
+                if (!prepared->diagnostic().empty()) {
+                    // Nothing importable: report every file's own reason, not only the first.
+                    std::vector<runtime::TaskDiagnostic> issues;
+                    for (const auto& failure : prepared->failures())
+                        issues.push_back(
+                            {.code = "bloom.media.import-failed",
+                             .severity = runtime::DiagnosticSeverity::Error,
+                             .summary = importFailureText(failure),
+                             .detail = failure.diagnostic,
+                             .suggestedAction = "Check the file and its reported limit."});
+                    if (issues.empty())
+                        issues.push_back(
+                            {.code = "bloom.media.import-failed",
+                             .severity = runtime::DiagnosticSeverity::Error,
+                             .summary = prepared->diagnostic(),
+                             .detail = prepared->diagnostic(),
+                             .suggestedAction = "Check the file and its reported limit."});
+                    return runtime::TaskResult<OperationHandle>::failed(std::move(issues));
+                }
+                // Skipped files stay listed individually on the job (Jobs panel) as warnings.
+                for (const auto& failure : prepared->failures())
+                    warnings.push_back({.code = "bloom.media.import-skipped",
+                                        .severity = runtime::DiagnosticSeverity::Warning,
+                                        .summary = importFailureText(failure),
+                                        .detail = failure.diagnostic,
+                                        .suggestedAction =
+                                            "Check the file and its reported limit, then import "
+                                            "it again."});
                 *result = std::move(prepared);
             }
             if (context.isCancellationRequested())
                 return runtime::TaskResult<OperationHandle>::cancelled();
-            return runtime::TaskResult<OperationHandle>::succeeded(std::move(result));
+            return runtime::TaskResult<OperationHandle>::succeeded(std::move(result),
+                                                                   std::move(warnings));
         });
     if (!submission.accepted()) {
         emit diagnostic(tr("Media import could not be scheduled"));
@@ -1481,6 +1509,17 @@ void AssetController::startThumbnails() {
         bridge_.wake();
     }
 }
+void AssetController::emitImportFailures(const std::vector<runtime::TaskDiagnostic>& issues) {
+    if (issues.empty())
+        return;
+    if (issues.size() == 1) {
+        emit diagnostic(QString::fromStdString(issues.front().summary));
+        return;
+    }
+    emit diagnostic(tr("%1 files could not be imported (details in Jobs). %2")
+                        .arg(issues.size())
+                        .arg(QString::fromStdString(issues.front().summary)));
+}
 void AssetController::poll() {
     if (inputColorCatalogPending_) {
         if (auto result = inputColorCatalogTask_.tryTakeResult()) {
@@ -1516,14 +1555,16 @@ void AssetController::poll() {
                     base_->revision() != session_.snapshot().revision()) {
                     emit diagnostic(tr("Project changed during import; import the files again"));
                 } else {
+                    // Successful files commit as one undoable transaction; every skipped file is
+                    // reported with its own diagnostic.
                     commands::Transaction transaction("Import Assets", base_->revision());
                     if (transaction.add(std::move(**result->value())))
                         static_cast<void>(session_.executeTransaction(std::move(transaction)));
+                    emitImportFailures(result->diagnostics());
                 }
             }
             if (result->state() == runtime::TaskState::Failed)
-                for (const auto& issue : result->diagnostics())
-                    emit diagnostic(QString::fromStdString(issue.summary));
+                emitImportFailures(result->diagnostics());
             base_.reset();
         }
     }
