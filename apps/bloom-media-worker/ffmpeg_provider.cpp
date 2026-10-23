@@ -18,6 +18,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
@@ -49,6 +50,8 @@ struct Input {
     AVFrame* frame = av_frame_alloc();
     AVFrame* transfer = av_frame_alloc();
     SwsContext* scale = nullptr;
+    // Source layout the cached conversion context was built for.
+    std::array<int, 5> scaleKey{};
     SwrContext* resample = nullptr;
     std::unique_ptr<platform::WorkerSnapshotInput> snapshot;
     AVIOContext* io = nullptr;
@@ -352,8 +355,16 @@ FrameProduct frame(Input& input, const AVStream& stream) {
     const auto format = static_cast<AVPixelFormat>(decoded->format);
     // A downloaded limited-range NV12 surface carries the same 8-bit 4:2:0 samples as the
     // software YUV420P product; de-interleave it so both routes publish one layout.
-    const bool nv12 = format == AV_PIX_FMT_NV12 && product.colour.range != AVCOL_RANGE_JPEG;
-    const bool direct = format == AV_PIX_FMT_YUV420P || nv12;
+    // Unspecified 4:2:0 siting is the H.273/MPEG-2 default: co-sited left, vertically centred.
+    const auto siting = decoded->chroma_location == AVCHROMA_LOC_UNSPECIFIED
+                            ? AVCHROMA_LOC_LEFT
+                            : decoded->chroma_location;
+    const bool leftSited = siting == AVCHROMA_LOC_LEFT;
+    const bool nv12 =
+        format == AV_PIX_FMT_NV12 && product.colour.range != AVCOL_RANGE_JPEG && leftSited;
+    // The compact 4:2:0 product carries left-sited chroma, which the host reconstructs with a
+    // filter. Other sitings are reconstructed here, where the frame's chroma location is known.
+    const bool direct = (format == AV_PIX_FMT_YUV420P && leftSited) || nv12;
     product.format = direct ? PixelFormat::Yuv420p8 : PixelFormat::Yuva444p16;
     std::array<std::uint8_t*, 4> data{};
     std::array<int, 4> strides{};
@@ -395,13 +406,35 @@ FrameProduct frame(Input& input, const AVStream& stream) {
         const auto* desc = av_pix_fmt_desc_get(format);
         require(desc && (desc->flags & AV_PIX_FMT_FLAG_RGB) == 0,
                 "RGB codec format is not qualified", Error::Unavailable);
-        // Reuse the conversion context across a retained decoder's frames.
-        input.scale = sws_getCachedContext(input.scale, decoded->width, decoded->height, format,
-                                           decoded->width, decoded->height, AV_PIX_FMT_YUVA444P16LE,
-                                           SWS_POINT | SWS_BITEXACT, nullptr, nullptr, nullptr);
-        require(input.scale != nullptr, "Pixel layout unavailable", Error::Unavailable);
-        const auto* coefficients = sws_getCoefficients(SWS_CS_ITU709);
+        // Filtered chroma reconstruction honouring the frame's chroma siting. Source and
+        // destination share coefficients and range, so no matrix or range change occurs. The
+        // context is reused across a retained decoder's frames while the layout is unchanged.
         const int fullRange = product.colour.range == AVCOL_RANGE_JPEG ? 1 : 0;
+        const std::array<int, 5> key{decoded->width, decoded->height, decoded->format, fullRange,
+                                     static_cast<int>(siting)};
+        if (!input.scale || input.scaleKey != key) {
+            sws_freeContext(input.scale);
+            input.scale = sws_alloc_context();
+            require(input.scale != nullptr, "Pixel layout unavailable", Error::Oversized);
+            int horizontal = 0, vertical = 0;
+            require(av_chroma_location_enum_to_pos(&horizontal, &vertical, siting) >= 0,
+                    "Chroma siting unavailable", Error::Unavailable);
+            auto* options = static_cast<void*>(input.scale);
+            require(av_opt_set_int(options, "srcw", decoded->width, 0) >= 0 &&
+                        av_opt_set_int(options, "srch", decoded->height, 0) >= 0 &&
+                        av_opt_set_int(options, "src_format", decoded->format, 0) >= 0 &&
+                        av_opt_set_int(options, "dstw", decoded->width, 0) >= 0 &&
+                        av_opt_set_int(options, "dsth", decoded->height, 0) >= 0 &&
+                        av_opt_set_int(options, "dst_format", AV_PIX_FMT_YUVA444P16LE, 0) >= 0 &&
+                        av_opt_set_int(options, "sws_flags",
+                                       SWS_BILINEAR | SWS_ACCURATE_RND | SWS_BITEXACT, 0) >= 0 &&
+                        av_opt_set_int(options, "src_h_chr_pos", horizontal, 0) >= 0 &&
+                        av_opt_set_int(options, "src_v_chr_pos", vertical, 0) >= 0 &&
+                        sws_init_context(input.scale, nullptr, nullptr) >= 0,
+                    "Pixel layout unavailable", Error::Unavailable);
+            input.scaleKey = key;
+        }
+        const auto* coefficients = sws_getCoefficients(SWS_CS_ITU709);
         require(sws_setColorspaceDetails(input.scale, coefficients, fullRange, coefficients,
                                          fullRange, 0, 1 << 16, 1 << 16) >= 0,
                 "Pixel range preservation unavailable", Error::Unavailable);

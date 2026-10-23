@@ -191,6 +191,35 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
         std::filesystem::remove(corruptPath, ignored);
         idBase += 10;
     }
+    // Issue #365: an untagged stream interpreted through an explicit choice and a tagged
+    // Rec.709 H.264 stream keep GPU/CPU input-to-working parity with filtered 4:2:0 chroma.
+    const std::array<std::tuple<std::string_view, std::string_view, bool>, 2> interpretations{
+        std::tuple<std::string_view, std::string_view, bool>{"untagged-h264.mp4", "untagged", true},
+        std::tuple<std::string_view, std::string_view, bool>{"numbered-h264.mp4", "rec709 h264",
+                                                             true}};
+    for (const auto& [file, label, explicitSpace] : interpretations) {
+        const std::string tag{label};
+        const auto path = fixtures / std::string{file};
+        document::AssetRecord asset;
+        try {
+            asset = videoAsset(path, idBase + 100);
+        } catch (const std::exception& error) {
+            expectations.expect(false, tag + ": fixture probe failed: " + error.what());
+            continue;
+        }
+        if (explicitSpace)
+            asset.interpretation.inputColorSpaceId = std::string{"ACES2065-1"};
+        const auto plan =
+            videoPlan(format(asset.width, asset.height), asset,
+                      LayerValues{.position = {static_cast<double>(asset.width) * 0.5,
+                                               static_cast<double>(asset.height) * 0.5}},
+                      idBase);
+        expectations.expect(expectMediaParity(expectations, *executor.executor, evaluator, builder,
+                                              plan, acesRequest(*plan, kAcesWorking), asset.width,
+                                              asset.height, tag + " video interpretation"),
+                            tag + ": interpreted video input-to-working parity");
+        idBase += 10;
+    }
 }
 
 void testVideoCancellation(Expectations& expectations, const std::filesystem::path& fixtures,

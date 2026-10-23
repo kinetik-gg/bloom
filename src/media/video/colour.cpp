@@ -26,6 +26,50 @@ selected(const bloom::color::ResolvedBloomNeutralConfig& config, std::string id,
     return result;
 }
 
+// H.273 code points. Unspecified (2 for primaries/transfer/matrix, 0 for range) and any value a
+// stream did not carry are "missing"; Bloom never infers them from resolution or codec.
+constexpr std::int32_t kMatrixBt709 = 1, kMatrixBt470bg = 5, kMatrixSmpte170m = 6,
+                       kMatrixBt2020Ncl = 9, kMatrixBt2020Cl = 10;
+constexpr std::int32_t kTransferPq = 16, kTransferHlg = 18;
+constexpr std::int32_t kPrimariesBt2020 = 9;
+// The interpretation that resolves a refused stream, named in every diagnostic.
+constexpr std::string_view kOverride =
+    "; choose an input colour space for the asset (Assets, Input Colour...) or its Video node";
+[[nodiscard]] bool knownMatrix(const std::int32_t matrix) {
+    return matrix == kMatrixBt709 || matrix == kMatrixBt470bg || matrix == kMatrixSmpte170m ||
+           matrix == kMatrixBt2020Ncl;
+}
+[[nodiscard]] bool knownRange(const std::int32_t range) { return range == 1 || range == 2; }
+// Names every tag a conversion needs but the stream lacks, for diagnostics.
+[[nodiscard]] std::string missingTags(const ColourTags& tags, const bool needTransfer) {
+    std::vector<std::string_view> missing;
+    if (tags.primaries <= 0 || tags.primaries == 2)
+        missing.emplace_back("colour primaries");
+    if (needTransfer && (tags.transfer <= 0 || tags.transfer == 2))
+        missing.emplace_back("transfer characteristics");
+    if (!knownMatrix(tags.matrix) && tags.matrix != kMatrixBt2020Cl)
+        missing.emplace_back("matrix coefficients");
+    if (!knownRange(tags.range))
+        missing.emplace_back("range");
+    std::string result;
+    for (std::size_t i = 0; i < missing.size(); ++i)
+        result += std::string(i == 0                    ? ""
+                              : i + 1 == missing.size() ? " and "
+                                                        : ", ") +
+                  std::string(missing[i]);
+    return result;
+}
+// Kr/Kb of the YUV matrix used for the conversion. A config-managed (explicit) interpretation of
+// a stream without a matrix tag takes the matrix of the chosen space's gamut family.
+[[nodiscard]] std::int32_t effectiveMatrix(const ColourTags& tags, const std::string_view inputId) {
+    if (knownMatrix(tags.matrix))
+        return tags.matrix;
+    if (tags.primaries == kPrimariesBt2020 || inputId.find("2020") != std::string_view::npos ||
+        inputId.find("2100") != std::string_view::npos)
+        return kMatrixBt2020Ncl;
+    return kMatrixBt709;
+}
+
 float component(const CpuPlane& plane, std::uint32_t x, std::uint32_t y, bool wide) {
     const auto offset =
         static_cast<std::size_t>(y) * plane.stride + static_cast<std::size_t>(x) * (wide ? 2U : 1U);
@@ -33,6 +77,26 @@ float component(const CpuPlane& plane, std::uint32_t x, std::uint32_t y, bool wi
     if (wide)
         value |= std::to_integer<unsigned>(plane.bytes[offset + 1]) << 8U;
     return static_cast<float>(value);
+}
+
+// Filtered 4:2:0 reconstruction for left-sited chroma (the H.273 default the worker guarantees for
+// this layout): horizontally co-sited with even luma columns, vertically between luma rows.
+float chroma(const CpuPlane& plane, const std::uint32_t x, const std::uint32_t y) {
+    const auto at = [&](std::int64_t cx, std::int64_t cy) {
+        cx = std::clamp<std::int64_t>(cx, 0, plane.width - 1);
+        cy = std::clamp<std::int64_t>(cy, 0, plane.height - 1);
+        return component(plane, static_cast<std::uint32_t>(cx), static_cast<std::uint32_t>(cy),
+                         false);
+    };
+    // Chroma-grid coordinates: horizontal x/2, vertical y/2 - 1/4.
+    const auto cx = static_cast<std::int64_t>(x / 2U);
+    const float fx = (x & 1U) != 0 ? 0.5F : 0.0F;
+    const auto vy = static_cast<std::int64_t>(4 * static_cast<std::int64_t>(y) - 1);
+    const auto cy = vy < 0 ? std::int64_t{-1} : vy / 8;
+    const float fy = static_cast<float>((vy - cy * 8)) / 8.0F;
+    const auto top = at(cx, cy) * (1.0F - fx) + at(cx + 1, cy) * fx;
+    const auto bottom = at(cx, cy + 1) * (1.0F - fx) + at(cx + 1, cy + 1) * fx;
+    return top * (1.0F - fy) + bottom * fy;
 }
 
 [[nodiscard]] Result<render::Rgba32fImage>
@@ -51,24 +115,43 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
     if (configManaged && applyProcessor && processor == nullptr)
         return Unavailable{Error::InvalidValue,
                            "A config-managed video conversion needs a colour processor"};
-    const auto& tags = frame.colour;
-    if (tags.primaries == 9 || tags.transfer == 16 || tags.transfer == 18 || tags.matrix == 9 ||
-        tags.matrix == 10)
-        return Unavailable{
-            Error::Unavailable,
-            "Rec.2020, HLG and PQ video are not supported by this preview colour path"};
+    auto tags = frame.colour;
+    if (tags.matrix == kMatrixBt2020Cl)
+        return Unavailable{Error::Unavailable,
+                           "BT.2020 constant-luminance video (matrix coefficients 10) is not "
+                           "supported; transcode it to the non-constant-luminance matrix"};
     const auto transfer = configManaged           ? 8
                           : overrideTransfer == 1 ? 13
                           : overrideTransfer >= 2 ? 8
                                                   : tags.transfer;
-    if (tags.primaries != 1 || tags.matrix != 1 || (tags.range != 1 && tags.range != 2) ||
-        (transfer != 1 && transfer != 13 && transfer != 8))
+    if (configManaged) {
+        // The config input space supplies primaries and transfer (including PQ and HLG), so only
+        // the YUV matrix and range come from the stream. An explicit interpretation of an
+        // untagged stream uses the chosen space's matrix family and video (limited) range.
+        if (inputColorSpaceId.empty())
+            return Unavailable{Error::InvalidValue,
+                               "A config-managed video input needs a colour-space id"};
+        tags.matrix = effectiveMatrix(tags, inputColorSpaceId);
+        if (!knownRange(tags.range))
+            tags.range = 1;
+    } else if (tags.transfer == kTransferPq || tags.transfer == kTransferHlg ||
+               tags.primaries == kPrimariesBt2020 || tags.matrix == kMatrixBt2020Ncl) {
+        // Legacy transfer overrides never reinterpret wide-gamut or HDR streams.
+        return Unavailable{Error::Unavailable,
+                           "Rec.2020, PQ and HLG video is interpreted only through the colour "
+                           "config" +
+                               std::string(kOverride)};
+    } else if (tags.primaries != 1 || tags.matrix != kMatrixBt709 || !knownRange(tags.range) ||
+               (transfer != 1 && transfer != 13 && transfer != 8)) {
+        const auto missing = missingTags(tags, overrideTransfer == 0);
         return Unavailable{
             Error::Unavailable,
-            "Video requires explicit Rec.709 matrix, primaries, range and supported transfer tags"};
-    if (configManaged && inputColorSpaceId.empty())
-        return Unavailable{Error::InvalidValue,
-                           "A config-managed video input needs a colour-space id"};
+            missing.empty()
+                ? "This Rec.2020, PQ, HLG or non-Rec.709 video is interpreted only through the "
+                  "colour config" +
+                      std::string(kOverride)
+                : "Video stream has no " + missing + " tag" + std::string(kOverride)};
+    }
     const bool wide = frame.format == PixelFormat::Yuva444p16;
     if (!wide && frame.format != PixelFormat::Yuv420p8)
         return Unavailable{Error::Unavailable, "Video pixel layout is not qualified"};
@@ -97,9 +180,9 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
             const auto sx = std::min(width - 1, static_cast<std::uint32_t>(x / horizontalScale));
             const auto yCode = component(frame.planes[0], sx, sy, wide);
             const auto uCode =
-                component(frame.planes[1], wide ? sx : sx / 2, wide ? sy : sy / 2, wide);
+                wide ? component(frame.planes[1], sx, sy, true) : chroma(frame.planes[1], sx, sy);
             const auto vCode =
-                component(frame.planes[2], wide ? sx : sx / 2, wide ? sy : sy / 2, wide);
+                wide ? component(frame.planes[2], sx, sy, true) : chroma(frame.planes[2], sx, sy);
             const bool fullWide = wide && tags.range == 2;
             const auto divisor = wide ? 256.0F : 1.0F;
             const auto luma = fullWide ? yCode * (255.0F / 65535.0F) : yCode / divisor;
@@ -107,7 +190,8 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
                 fullWide ? 128.0F + (uCode - 32768.0F) * (255.0F / 65535.0F) : uCode / divisor;
             const auto cr =
                 fullWide ? 128.0F + (vCode - 32768.0F) * (255.0F / 65535.0F) : vCode / divisor;
-            const auto rgb = color::rec709YuvToSceneLinear(luma, cb, cr, tags.range == 1, transfer);
+            const auto rgb =
+                color::yuvToSceneLinear(luma, cb, cr, tags.range == 1, transfer, tags.matrix);
             const auto alpha = wide ? component(frame.planes[3], sx, sy, true) / 65535.0F : 1.0F;
             if (configManaged) {
                 convertedRow[x] = {rgb[0], rgb[1], rgb[2], alpha};
@@ -150,17 +234,30 @@ VideoInputColorSpaceResolution resolveVideoInputColorSpace(
         return selected(config, std::string(config.processColorSpaceId()), false);
     if (legacyColorSpace == 1)
         return selected(config, std::string(config.sRgbTextureColorSpaceId()), false);
-    if (tags.primaries == 9 || tags.transfer == 16 || tags.transfer == 18 || tags.matrix == 9 ||
-        tags.matrix == 10)
-        return VideoInputColorSpaceResolution{
-            "", "", "Rec.2020, HLG and PQ video require an explicit config colour space", false,
-            true};
-    if (tags.primaries != 1 || tags.matrix != 1 || (tags.range != 1 && tags.range != 2))
-        return VideoInputColorSpaceResolution{
-            "", "",
-            "Video requires explicit Rec.709 matrix, primaries, range and supported "
-            "transfer tags",
-            false, true};
+    const auto refuse = [](std::string warning) {
+        return VideoInputColorSpaceResolution{"", "", std::move(warning), false, true};
+    };
+    if (tags.matrix == kMatrixBt2020Cl)
+        return refuse("BT.2020 constant-luminance video (matrix coefficients 10) is not supported");
+    if (tags.transfer == kTransferPq || tags.transfer == kTransferHlg) {
+        const bool pq = tags.transfer == kTransferPq;
+        // Rec.2100 needs its matrix and range to decode YUV; the config supplies the curve.
+        const auto missing = missingTags(tags, false);
+        if (!missing.empty())
+            return refuse("Rec.2100 video has no " + missing + " tag" + std::string(kOverride));
+        auto space =
+            std::string(pq ? config.rec2100PqColorSpaceId() : config.rec2100HlgColorSpaceId());
+        if (space.empty())
+            return refuse(std::string("The OCIO config has no Rec.2100 ") + (pq ? "PQ" : "HLG") +
+                          " colour space" + std::string(kOverride));
+        return selected(config, std::move(space), true);
+    }
+    if (const auto missing = missingTags(tags, true); !missing.empty())
+        return refuse("Video stream has no " + missing + " tag" + std::string(kOverride));
+    if (tags.primaries != 1 || tags.matrix != kMatrixBt709)
+        return refuse("Rec.2020 or other non-Rec.709 video without a PQ or HLG transfer has no "
+                      "automatic config space" +
+                      std::string(kOverride));
     if (tags.transfer == 1) {
         if (config.rec709VideoColorSpaceId().empty())
             return VideoInputColorSpaceResolution{

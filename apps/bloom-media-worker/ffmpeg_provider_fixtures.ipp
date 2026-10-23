@@ -42,7 +42,13 @@ struct Bits {
         return output;
     }
 };
-std::vector<std::uint8_t> h264Header() {
+// H.273 colour description written to both the H.264 VUI and the container. Absent means no
+// video_signal_type in the VUI and unspecified container tags (an untagged stream).
+struct FixtureColour final {
+    unsigned primaries = 1, transfer = 1, matrix = 1;
+    bool present = true;
+};
+std::vector<std::uint8_t> h264Header(const FixtureColour& colour = {}) {
     Bits s;
     s.number(66, 8);
     s.number(0, 8);
@@ -58,16 +64,19 @@ std::vector<std::uint8_t> h264Header() {
     s.bit(1);
     s.bit(0);
     s.bit(1);
-    // VUI: explicit limited-range Rec.709, with timing carried by the container.
+    // VUI: explicit limited-range colour description (or none), with timing carried by the
+    // container.
     s.bit(0);
     s.bit(0);
-    s.bit(1);
-    s.number(5, 3);
-    s.bit(0);
-    s.bit(1);
-    s.number(1, 8);
-    s.number(1, 8);
-    s.number(1, 8);
+    s.bit(colour.present ? 1U : 0U);
+    if (colour.present) {
+        s.number(5, 3);
+        s.bit(0);
+        s.bit(1);
+        s.number(colour.primaries, 8);
+        s.number(colour.transfer, 8);
+        s.number(colour.matrix, 8);
+    }
     s.bit(0);
     s.bit(0);
     s.bit(0);
@@ -161,7 +170,8 @@ struct Output {
         }
     }
 };
-void fixture(const std::filesystem::path& path, bool prores, bool alpha = false) {
+void fixture(const std::filesystem::path& path, bool prores, bool alpha = false,
+             const FixtureColour& colour = {}, unsigned frames = 48) {
     Output out;
     require(out.frame && out.packet, "Fixture allocation");
     require(avformat_alloc_output_context2(&out.format, nullptr, "mov", path.c_str()) >= 0,
@@ -175,10 +185,13 @@ void fixture(const std::filesystem::path& path, bool prores, bool alpha = false)
     vp.codec_id = prores ? AV_CODEC_ID_PRORES : AV_CODEC_ID_H264;
     vp.width = 64;
     vp.height = 48;
-    vp.color_primaries = AVCOL_PRI_BT709;
-    vp.color_trc = AVCOL_TRC_BT709;
-    vp.color_space = AVCOL_SPC_BT709;
-    vp.color_range = AVCOL_RANGE_MPEG;
+    vp.color_primaries =
+        colour.present ? static_cast<AVColorPrimaries>(colour.primaries) : AVCOL_PRI_UNSPECIFIED;
+    vp.color_trc = colour.present ? static_cast<AVColorTransferCharacteristic>(colour.transfer)
+                                  : AVCOL_TRC_UNSPECIFIED;
+    vp.color_space =
+        colour.present ? static_cast<AVColorSpace>(colour.matrix) : AVCOL_SPC_UNSPECIFIED;
+    vp.color_range = colour.present ? AVCOL_RANGE_MPEG : AVCOL_RANGE_UNSPECIFIED;
     av_dict_set(&videoStream->metadata, "timecode", "01:00:00:00", 0);
     if (prores) {
         const auto* encoder = avcodec_find_encoder_by_name("prores_ks");
@@ -204,7 +217,7 @@ void fixture(const std::filesystem::path& path, bool prores, bool alpha = false)
         out.frame->format = out.codec->pix_fmt;
         require(av_frame_get_buffer(out.frame, 32) >= 0, "Fixture image buffer");
     } else {
-        const auto header = h264Header();
+        const auto header = h264Header(colour);
         vp.extradata =
             static_cast<std::uint8_t*>(av_mallocz(header.size() + AV_INPUT_BUFFER_PADDING_SIZE));
         require(vp.extradata, "Fixture codec header");
@@ -231,7 +244,7 @@ void fixture(const std::filesystem::path& path, bool prores, bool alpha = false)
     const auto headerStatus = avformat_write_header(out.format, &muxOptions);
     av_dict_free(&muxOptions);
     require(headerStatus >= 0, "Fixture mux header");
-    for (unsigned n = 0; n < 48; ++n) {
+    for (unsigned n = 0; n < frames; ++n) {
         av_packet_unref(out.packet);
         if (prores) {
             require(av_frame_make_writable(out.frame) >= 0, "Fixture writable frame");
@@ -291,19 +304,25 @@ bool generateFixtures(const std::string& directory) {
         fixture(path / "numbered-h264.mp4", false);
         fixture(path / "numbered-prores.mov", true);
         fixture(path / "alpha-prores.mov", true, true);
+        // Issue #365 interpretation fixtures: untagged, Rec.2100 PQ and HLG (BT.2020 matrix).
+        fixture(path / "untagged-h264.mp4", false, false, {1, 1, 1, false}, 12);
+        fixture(path / "pq2020-h264.mp4", false, false, {9, 16, 9, true}, 12);
+        fixture(path / "hlg2020-h264.mp4", false, false, {9, 18, 9, true}, 12);
         std::ofstream provenance(path / "provenance.txt");
         provenance
             << "MEDIA-3 generated-read-v1\nFFmpeg 8.1.2 qualified intake mux/ProRes encode\n"
                "H.264 baseline I_PCM macroblocks, GOP 12; ProRes 422; 64x48; 48 frames at 24/1\n"
                "Luma background 16+3*N; seven-segment frame numbers; Rec.709 limited\n"
                "Additional ProRes 4444 alpha fixture uses 512/1023 opacity\n"
+               "12-frame H.264 colour fixtures: untagged, BT.2020/PQ, BT.2020/HLG\n"
                "PCM mono 48000 Hz: sample[n]=((n%997)-498)/1024\n"
                "Original synthetic content; generated at test time; no external media\n";
         const auto specification =
             provider::ffmpegHandshake().declarations.front().evidence.fixtures.toLowercaseHex();
         provenance << "Generator SHA-256: "
                    << std::string(specification.begin(), specification.end()) << '\n';
-        for (const auto* name : {"numbered-h264.mp4", "numbered-prores.mov", "alpha-prores.mov"}) {
+        for (const auto* name : {"numbered-h264.mp4", "numbered-prores.mov", "alpha-prores.mov",
+                                 "untagged-h264.mp4", "pq2020-h264.mp4", "hlg2020-h264.mp4"}) {
             const auto identity = sourceIdentity((path / name).string()).first.toLowercaseHex();
             provenance << name << " SHA-256: " << std::string(identity.begin(), identity.end())
                        << '\n';
