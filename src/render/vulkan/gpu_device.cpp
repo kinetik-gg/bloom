@@ -11,6 +11,8 @@
 
 #include <array>
 #include <atomic>
+#include <cstdio>
+#include <mutex>
 #include <cassert>
 #include <cstdint>
 #include <limits>
@@ -474,8 +476,18 @@ void DynamicLibrary::close() noexcept {
 #endif
 }
 
+namespace {
+std::atomic<int> diagActiveTeardowns{0}; // DIAG-355: step-1 experiment only.
+std::mutex nativeTeardownMutex;
+} // namespace
+
 DeviceAllocatorState::~DeviceAllocatorState() {
     assert(owner == std::this_thread::get_id());
+    const int already = diagActiveTeardowns.fetch_add(1);
+    if (already > 0)
+        std::fprintf(stderr, "BLOOM-DIAG concurrent native device teardown (%d already)\n",
+                     already);
+    const std::lock_guard serialized(nativeTeardownMutex);
     if (processingPhase) {
         processingPhase->markUnproven();
     }
@@ -483,6 +495,13 @@ DeviceAllocatorState::~DeviceAllocatorState() {
         vmaDestroyAllocator(allocator);
         allocator = VK_NULL_HANDLE;
     }
+    computeQueue = nullptr;
+    presentQueue = nullptr;
+    device.clear();
+    physicalDevice.clear();
+    instance.clear();
+    loader = DynamicLibrary{};
+    diagActiveTeardowns.fetch_sub(1);
 }
 
 } // namespace vulkan_detail
