@@ -1,6 +1,6 @@
 # ADR 0026: Multi-Channel And Data Images
 
-Status: proposed (draft for review, issue #363)
+Status: accepted (owner 2026-10-23, issue #363)
 
 Date: 2026-10-23
 
@@ -47,8 +47,8 @@ and migration for multi-channel images. It is a prerequisite for issue #364 (Cry
   between `ChannelSet` and `Image` in either direction. Conversion happens only in the explicit
   operations in §4 and through the Image source's colour output (§3).
 - Masks remain a separate kind; a channel set is not a mask. A ChannelSet → Mask conversion uses
-  the Mask kind defined by lane timeline-masking (#354/#360). This needs coordination before §4's
-  Cryptomatte node lands.
+  the Mask kind owned by lane timeline-masking (#360); the interface is agreed with that lane
+  before the Cryptomatte node lands.
 
 ### 2. Packing
 
@@ -103,6 +103,12 @@ These are new compiled operations. Each is GPU-required under
 - Channel-set geometry stays fixed in this record: no layer transform, resample or filter applies
   to a ChannelSet. Spatial work happens after an explicit Shuffle to Image. A later record may add
   point-sampled transforms for data.
+- **Viewer inspection.** The Viewer shows any channel or layer of a ChannelSet directly, as raw
+  greyscale (one channel) or RGB (three channels or a layer's colour channels), without wiring a
+  Shuffle. Artists inspect AOVs, depth, motion and Cryptomatte this way. This is a Viewer display
+  choice (session state, like the existing channel display remap): it never changes the project,
+  the compiled plan or any render/export result, and it applies no colour conversion or
+  premultiplication to Data channels.
 - The Image source's proxy resolution applies to channel sets by point sampling with the shared
   PointResampleV1 rule (ADR 0025 / #362), which keeps IDs exact.
 - Cryptomatte (#364) is a ChannelSet → Mask/Image operation built on §1–§2. It reads ID/coverage
@@ -151,7 +157,7 @@ These are new compiled operations. Each is GPU-required under
 
 ### 8. Migration and persistence
 
-- A project schema minor bump adds a named migration step. Every `bloom.image-source` v1 node
+- Project schema minor 1.26 adds a named migration step. Every `bloom.image-source` v1 node
   becomes v2 with `part = ""` and `layer = ""`. Its `image` output keeps its edge, and the new
   `channels` output is unconnected.
 - Existing projects therefore evaluate byte-identically; their decoded keys change only through the
@@ -176,13 +182,15 @@ These are new compiled operations. Each is GPU-required under
   both evaluators, GPU coverage and output. #363 lands them together, with migration fixtures,
   save/reopen tests and multi-layer, multipart and data-channel EXR fixtures.
 
-## Open questions for review
+## Resolved questions (owner 2026-10-23)
 
-1. Should the `image` output of a data-only layer be unavailable (proposed), or should it fall back
-   to a Raw Shuffle of the first channels?
-2. Mask kind: confirm the ChannelSet → Mask boundary with lane timeline-masking before the
-   Cryptomatte node.
-3. Composition Output layer selection: per-output list (proposed) or a dedicated Write node?
+1. A data-only layer's `image` output is unavailable and reports a typed diagnostic; it never falls
+   back to a raw shuffle.
+2. The ChannelSet → Mask boundary uses the Mask kind owned by lane timeline-masking (#360, document
+   schema 1.24). The exact interface is agreed with that lane before the Cryptomatte node (#364).
+3. Output layers are selected by a per-output layer list on the Composition Output.
+
+The document schema step for this record is minor 1.26 (timeline-masking 1.24, video-io 1.25).
 
 ## Related
 
