@@ -712,9 +712,13 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
          {"colorSpace", video ? "bloom.video.color-space" : "bloom.image.color-space",
           std::int64_t{0}, "colorSpaceParameter"}},
         video && asset->channels > 0};
+    // `premultiply` means "the source stores straight alpha; premultiply it". A new layer inherits
+    // the asset's probed association, so a premultiplied EXR is never multiplied by alpha twice.
     if (!video)
-        source.sourceParameters.push_back(
-            {"premultiply", "bloom.image.premultiply", true, "premultiplyParameter"});
+        source.sourceParameters.push_back({"premultiply", "bloom.image.premultiply",
+                                           asset->interpretation.alphaAssociation !=
+                                               document::AssetAlphaAssociation::Premultiplied,
+                                           "premultiplyParameter"});
     auto added = addStructuredLayer(
         draft, *composition, name, std::move(source),
         {static_cast<double>(composition->format().width()) / 2.0,

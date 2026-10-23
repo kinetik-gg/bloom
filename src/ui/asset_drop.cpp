@@ -81,6 +81,18 @@ class AddImageNode final : public commands::Operation {
                 const auto* node = id && composition ? composition->graph().findNode(*id) : nullptr;
                 if (!node)
                     break;
+                // The new node inherits the asset's probed alpha association (see AddImageLayer).
+                for (const auto& binding : node->parameters)
+                    if (binding.role == "premultiply") {
+                        auto result = commands::SetParameterSource(
+                                          composition_, binding.parameterId,
+                                          document::ConstantValueSource{
+                                              asset->interpretation.alphaAssociation !=
+                                              document::AssetAlphaAssociation::Premultiplied})
+                                          .apply(draft);
+                        if (result.status == commands::OperationStatus::Rejected)
+                            return result;
+                    }
                 for (const auto& binding : node->parameters)
                     if (binding.role == "asset") {
                         auto result =
