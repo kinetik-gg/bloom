@@ -272,7 +272,11 @@ routes on that same owner thread and scheduler lease:
 
 A stage whose failure, deadline, cancellation, or lost generation leaves a native submission
 unretired enters an explicit `Retiring` phase that retains the stage, its completion token, and the
-native pins until retirement is actually proven. Healthy registry budget pressure is a temporary
+native pins until retirement is actually proven. Before releasing a proven phase, dispose any
+unpublished Neutral/OCIO display output and retired failure storage, including cancelled jobs.
+Those tokens must not retain the whole reservation until a later request: that request would be
+unable to obtain admission. Unknown fences retain their existing ownership and quarantine.
+Healthy registry budget pressure is a temporary
 refusal that falls back to the CPU without invalidating live leases or pins; only an actual unproven
 retention or allocation failure latches the process-wide fuse. The bounded counter snapshot exposes
 `fullFrameReadbacks` (zero on the native resident route; scene readbacks plus final packed

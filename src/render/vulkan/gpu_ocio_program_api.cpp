@@ -328,6 +328,8 @@ std::shared_ptr<GpuImage> GpuOcioProgram::takeEffectOutput() noexcept {
     auto output = std::make_shared<GpuImage>(std::move(*impl_->effectOutput));
     impl_->effectOutput.reset();
     impl_->inputRetained.reset();
+    // A cancellation observed after Ready belongs to the consumed job, not the next reuse.
+    impl_->discardRequested.store(false);
     impl_->jobState = GpuOcioProgramJobState::Idle;
     impl_->jobDiagnostic = {};
     return output;
@@ -351,6 +353,8 @@ GpuDisplayImage GpuOcioProgram::takeDisplayOutput() noexcept {
     GpuDisplayImage output = std::move(*impl_->displayOutput);
     impl_->displayOutput.reset();
     impl_->inputRetained.reset();
+    // A cancellation observed after Ready belongs to the consumed job, not the next reuse.
+    impl_->discardRequested.store(false);
     impl_->jobState = GpuOcioProgramJobState::Idle;
     impl_->jobDiagnostic = {};
     return output;

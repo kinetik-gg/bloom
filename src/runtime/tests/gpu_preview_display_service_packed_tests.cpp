@@ -361,6 +361,10 @@ int run(int argc, char** argv) {
             return options.requireDevice ? 1 : kSkipExit;
         unsupportedPackedProof(checks, packedOptions(options), plan, processor, programs,
                                document.snapshot());
+        cancelledGeneralDisplayReleasesPhase(checks, packedOptions(options), plan, programs,
+                                            processor, document.snapshot(), false);
+        cancelledGeneralDisplayReleasesPhase(checks, packedOptions(options), plan, programs,
+                                            processor, document.snapshot(), true);
         payloadAllocationFailureProof(checks, packedOptions(options), plan, processor,
                                       document.snapshot());
     }

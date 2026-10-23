@@ -95,6 +95,22 @@ void releaseProcessingPhase(const std::shared_ptr<PreviewDisplayServiceCore>& co
                             const bool proven) noexcept {
     if (stage->processingPhaseArmed && core->device && stage->gpuStage &&
         stage->gpuStage->phaseLease()) {
+        if (proven && !residentDeviceLost(core) && !residentOwnerDrainRequired(core) &&
+            !residentExecutorHasUnretiredSubmission(core) &&
+            !residentDisplayHasUnretiredSubmission(core) &&
+            !residentDisplayHasUnretiredSubmissionGeneral(core)) {
+            // Cancellation may retire a display submission without consuming its output. Its
+            // unpublished image/staging tokens still own the phase, so dispose them before the
+            // device drops its lease; waiting for the next begin would strand admission forever.
+            if (core->residentGeneralDisplay) {
+                core->residentGeneralDisplay->executor().discardRetiredFailures();
+                static_cast<void>(core->residentGeneralDisplay->takeDisplayImage());
+            }
+            if (core->residentDisplay && !core->residentDisplay->hasUnretiredSubmission()) {
+                static_cast<void>(core->residentDisplay->discardRetiredFailure(*core->device));
+                static_cast<void>(core->residentDisplay->takeImage());
+            }
+        }
         core->device->retireProcessingPhase(stage->gpuStage->phaseLease()->id(), proven);
         stage->processingPhaseArmed = false;
     }

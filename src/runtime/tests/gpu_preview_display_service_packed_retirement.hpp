@@ -4,6 +4,139 @@
 
 namespace {
 #if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
+void cancelledGeneralDisplayReleasesPhase(
+    Expectations& checks, GpuPreviewDisplayServiceOptions options,
+    const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan,
+    const std::shared_ptr<const GpuDisplayProgramService>& programs,
+    const std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle>& processor,
+    const bloom::document::Snapshot& snapshot, const bool readyBeforeCancellation) {
+    const std::string variant = readyBeforeCancellation ? "ready" : "in-flight";
+    PackedRetirementScope retirement;
+    TaskScheduler scheduler(schedulerConfig());
+    auto policy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(32, retirement.owner);
+    auto sample = bloom::runtime::memoryBudgetSample();
+    bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
+                                              sample.machine.availableBytes.value_or(0));
+    ledger.beginProcessSampling();
+    const auto at = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
+    const auto state = ledger.applySample(std::move(sample), at);
+    policy->applyHostSample(state, ledger.physicalByteBudget(), at);
+    options.processingPhasePolicy = policy;
+    auto builder = std::make_shared<CpuGpuSceneBuilder>(
+        nullptr, bloom::runtime::GpuSceneMediaContext{}, bloom::runtime::GpuSceneOcioContext{},
+        bloom::runtime::GpuScenePreparationPhase{
+            .policy = policy,
+            .envelope = {.metadataBytes = 1024ULL * 1024,
+                         .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                         .requestedExecutorBytes = kBudget,
+                         .deviceWorkingBytes = 832ULL * 1024 * 1024}});
+    GpuPreviewDisplayService service(
+        scheduler, packedStageFunction(plan, builder, programs, processor),
+        generalCpuStageFunction(plan, processor, std::make_shared<CpuCompositionEvaluator>()),
+        generalFallback(processor), options);
+    const bool ready = waitUntil(
+        [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; },
+        30s) && service.status().state == GpuPreviewDisplayServiceState::Ready;
+    checks.expect(ready, variant + " cancelled general display uses a genuine native service");
+    if (!ready)
+        return;
+
+    auto core = bloom::runtime::detail::GpuPreviewDisplayServiceTestAccess::coreOf(service);
+    auto hold = std::make_shared<std::atomic_bool>(true);
+    auto polls = std::make_shared<std::atomic<std::uint64_t>>(0);
+    auto nativeReady = std::make_shared<std::atomic_bool>(false);
+    // Hold only the service-visible poll result. In the Ready variant, the real fence is polled
+    // until it proves completion, then Ready is reported as Pending until cancellation arrives.
+    // In the other variant, the real fence is polled after cancellation to prove retirement.
+    core->residentGeneralDisplayPollOverride = [hold, polls, nativeReady,
+                                                readyBeforeCancellation](
+                                                   bloom::runtime::GpuOcioDisplayArm& arm) {
+        ++*polls;
+        if (readyBeforeCancellation) {
+            const auto actual = arm.poll();
+            if (actual == bloom::runtime::GpuOcioExecutorPollResult::Ready)
+                nativeReady->store(true);
+            return hold->load() ? bloom::runtime::GpuOcioExecutorPollResult::Pending : actual;
+        }
+        return hold->load() ? bloom::runtime::GpuOcioExecutorPollResult::Pending : arm.poll();
+    };
+    const bloom::runtime::TaskOwner owner{.kind = bloom::runtime::TaskOwnerKind::Composition,
+                                          .id = bloom::runtime::TaskOwnerId::fromRaw(7)};
+    auto identity = makeIdentity(*plan, 2000, {}, {}, {});
+    auto cancelled = service.submit(TaskRequest("cancel submitted OCIO display", owner), snapshot,
+                                    identity, kBudget, {});
+    checks.expect(cancelled.accepted(), variant + " OCIO cancellation request admitted");
+    if (!cancelled.accepted()) {
+        hold->store(false);
+        return;
+    }
+    const bool displaySubmitted = waitUntil(
+        [&] { return readyBeforeCancellation ? nativeReady->load() : polls->load() > 0; }, 30s);
+    checks.expect(displaySubmitted && policy->snapshot().reservations.admittedPhases == 1,
+                  variant + " cancellation reaches general OCIO display with a live phase");
+    if (!displaySubmitted) {
+        hold->store(false);
+        return;
+    }
+    cancelled.handle.cancel();
+    // A Ready result has no outstanding fence, so leave the synthetic Pending observation held
+    // until the service acknowledges cancellation. This rules out a successful terminal handoff
+    // racing the test's unhold and exercises disposal of the unconsumed Ready output.
+    if (!readyBeforeCancellation)
+        hold->store(false);
+    const auto cancelledResult = awaitResult(cancelled.handle, 30s);
+    hold->store(false);
+    checks.expect(cancelledResult && cancelledResult->state() == TaskState::Cancelled,
+                  variant + " general OCIO display retires as cancelled");
+    checks.expect(
+        waitUntil(
+            [&] {
+                const auto root = policy->snapshot().reservations;
+                return root.admittedPhases == 0 && root.unprovenPhases == 0 &&
+                       root.deviceReservedBytes == 0;
+            },
+            2s),
+        variant + " fence-proven OCIO cancellation releases its phase");
+
+    // Task result publication precedes release of scheduler GPU request accounting. Wait for
+    // the finalizer before asking the one-request-capacity scheduler to admit another task.
+    checks.expect(waitUntil([&] { return scheduler.isQuiescent(); }, 2s),
+                  variant + " cancelled GPU task finishes scheduler accounting");
+
+    identity.requestGeneration = 2001;
+    auto next = service.submit(TaskRequest("after cancelled OCIO display", owner), snapshot,
+                               identity, kBudget, {});
+    if (!next.accepted()) {
+        const auto root = policy->snapshot().reservations;
+        std::cerr << variant << " OCIO recovery admission refused: status="
+                  << static_cast<int>(next.status) << " phases=" << root.admittedPhases
+                  << " unproven=" << root.unprovenPhases
+                  << " deviceReserved=" << root.deviceReservedBytes;
+        if (next.diagnostic)
+            std::cerr << " diagnostic=" << next.diagnostic->code << ' '
+                      << next.diagnostic->summary;
+        std::cerr << '\n';
+    }
+    const auto nextResult = next.accepted() ? awaitResult(next.handle, 30s) : std::nullopt;
+    const auto nextFrame = packedResult(nextResult);
+    if (next.accepted() &&
+        (!nextFrame || nextFrame->provenance().provider !=
+                           bloom::runtime::PreviewDisplayProvider::GpuPreparedPacked)) {
+        std::cerr << variant << " OCIO recovery result: state="
+                  << (nextResult ? static_cast<int>(nextResult->state()) : -1)
+                  << " provider="
+                  << (nextFrame ? static_cast<int>(nextFrame->provenance().provider) : -1)
+                  << " phases=" << policy->snapshot().reservations.admittedPhases << '\n';
+        if (nextResult)
+            for (const auto& diagnostic : nextResult->diagnostics())
+                std::cerr << " recovery diagnostic=" << diagnostic.code << ' '
+                          << diagnostic.summary << ' ' << diagnostic.detail << '\n';
+    }
+    checks.expect(nextFrame && nextFrame->provenance().provider ==
+                                   bloom::runtime::PreviewDisplayProvider::GpuPreparedPacked,
+                  variant + " next native request succeeds after cancellation");
+}
+
 void payloadAllocationFailureProof(
     Expectations& checks, GpuPreviewDisplayServiceOptions options,
     const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan,
