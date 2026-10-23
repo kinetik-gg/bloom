@@ -6,8 +6,8 @@
 #include <array>
 #include <cstdint>
 #include <limits>
-#include <set>
 #include <map>
+#include <set>
 #include <span>
 #include <variant>
 #include <vector>
@@ -116,8 +116,9 @@ void componentChangeSpans(const std::vector<document::ScalarKeyframe>& before,
 }
 
 // ADR 0024 layer-owned time. Key times of a retimed layer's own parameters are layer time, and of
-// its upstream content time. A retimed layer is "projectable" when its content time equals its layer
-// time wherever content shows: no Time Remap, and an unbounded extent or None out-of-extent modes.
+// its upstream content time. A retimed layer is "projectable" when its content time equals its
+// layer time wherever content shows: no Time Remap, and an unbounded extent or None out-of-extent
+// modes.
 struct RetimedLayer final {
     const document::LayerOutputBoundary* boundary = nullptr;
     bool topLevel = false;
@@ -140,12 +141,13 @@ struct RetimedLayer final {
         const bool remap = hasTimeRemap(composition, boundary);
         if (boundary.timing.isIdentityMapping() && !remap)
             continue;
-        RetimedLayer layer{.boundary = &boundary, .topLevel = false, .projectable = false, .upstream = {}};
+        RetimedLayer layer{
+            .boundary = &boundary, .topLevel = false, .projectable = false, .upstream = {}};
         const bool unbounded =
             std::holds_alternative<std::monostate>(boundary.timing.contentExtent);
-        layer.projectable = !remap && (unbounded ||
-                                       (boundary.timing.beforeMode == document::LayerTimeMode::None &&
-                                        boundary.timing.afterMode == document::LayerTimeMode::None));
+        layer.projectable =
+            !remap && (unbounded || (boundary.timing.beforeMode == document::LayerTimeMode::None &&
+                                     boundary.timing.afterMode == document::LayerTimeMode::None));
         // Top level: a slot of the Merge feeding Output (its range is composition time).
         layer.topLevel = std::ranges::any_of(graph.layerStack().entries(), [&](const auto& entry) {
             return entry.layerId == boundary.layerId;
@@ -262,7 +264,8 @@ std::optional<AffectedTimeFootprint> parameterEditFootprint(
         for (const auto& binding : node.parameters)
             owners[binding.parameterId].push_back(node.id);
 
-    const auto beforeReach = document::RenderReachability::compute(*before, registry);
+    const auto beforeReachShared = document::RenderReachability::of(*before, registry);
+    const auto& beforeReach = *beforeReachShared;
     const auto afterReach = document::RenderReachability::compute(*after, registry);
     if (!beforeReach.known() || !afterReach.known())
         return std::nullopt;
@@ -280,9 +283,8 @@ std::optional<AffectedTimeFootprint> parameterEditFootprint(
         while (!pending.empty()) {
             const auto node = pending.back();
             pending.pop_back();
-            if (std::ranges::any_of(retimed, [&](const auto& layer) {
-                    return layer.boundary->nodeId == node;
-                }))
+            if (std::ranges::any_of(
+                    retimed, [&](const auto& layer) { return layer.boundary->nodeId == node; }))
                 continue;
             if (!plain.insert(node).second)
                 continue;

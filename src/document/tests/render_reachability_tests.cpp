@@ -3,6 +3,8 @@
 #include <bloom/document/value_nodes.hpp>
 
 #include <array>
+#include <chrono>
+#include <cstring>
 #include <iostream>
 #include <string>
 
@@ -350,9 +352,98 @@ void testNormalizationAndWork() {
     expect(largeWork.edgesVisited == smallWork.edgesVisited, "unreachable nodes add no edge work");
 }
 
+// A composition of `layers` stacked layers, each fed by its own Solid, plus `loose` unconnected
+// Solids. Graph-only: reachability reads topology, so no parameters are needed.
+[[nodiscard]] Composition benchmarkComposition(const CompositionId id, const std::uint64_t base,
+                                               const std::size_t layers, const std::size_t loose) {
+    const auto stack = NodeId::fromRaw(base + 1);
+    const auto output = NodeId::fromRaw(base + 2);
+    CanonicalGraph graph(stack);
+    require(
+        graph.addNode({stack, std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion}),
+        "bench stack");
+    require(graph.addNode({output,
+                           std::string(kCompositionOutputNodeType),
+                           {},
+                           kCompositionOutputNodeSchemaVersion}),
+            "bench output");
+    std::uint64_t next = base + 10;
+    const auto edge = [&](OutputPortRef source, InputPortRef destination) {
+        require(graph.addEdge({EdgeId::fromRaw(next++), std::move(source), std::move(destination)}),
+                "bench edge");
+    };
+    edge({stack, "image"}, NodeInputRef{output, "image"});
+    graph.setCompositionOutput({output, "image"});
+    for (std::size_t index = 0; index < layers; ++index) {
+        const auto layer = NodeId::fromRaw(next++);
+        const auto solid = NodeId::fromRaw(next++);
+        const auto layerId = LayerId::fromRaw(next++);
+        const auto slot = LayerSlotId::fromRaw(next++);
+        require(graph.addNode(
+                    {layer, std::string(kLayerOutputNodeType), {}, kLayerOutputNodeSchemaVersion}),
+                "bench layer");
+        require(graph.addNode(
+                    {solid, std::string(kSolidSourceNodeType), {}, kSolidSourceNodeSchemaVersion}),
+                "bench solid");
+        require(graph.addLayerOutput({layer, layerId, "Layer", "image"}), "bench boundary");
+        require(graph.layerStack().append({slot, layerId}), "bench slot");
+        edge({solid, "image"}, NodeInputRef{layer, "image"});
+        edge({layer, "image"},
+             LayerStackInputRef{stack, slot, std::string(kLayerStackContentInputRole)});
+    }
+    for (std::size_t index = 0; index < loose; ++index)
+        require(graph.addNode({NodeId::fromRaw(next++),
+                               std::string(kSolidSourceNodeType),
+                               {},
+                               kSolidSourceNodeSchemaVersion}),
+                "bench loose");
+    return {id, "Bench", t(10), std::move(graph)};
+}
+
+// Issue #355/#357: the UI-thread cost of the reachability proofs, printed, not asserted.
+int runBenchmark() {
+    using Clock = std::chrono::steady_clock;
+    const auto microseconds = [](const Clock::duration duration) {
+        return std::chrono::duration<double, std::micro>(duration).count();
+    };
+    constexpr int kRepeats = 20;
+    std::cout << "nodes,compute_us,confine_us,depending_on_8_compositions_us\n";
+    for (const std::size_t layers :
+         {std::size_t{50}, std::size_t{250}, std::size_t{1000}, std::size_t{2500}}) {
+        const auto composition =
+            benchmarkComposition(CompositionId::fromRaw(1), 1'000'000, layers, layers);
+        Project project(ProjectId::fromRaw(1), "Bench");
+        require(project.addComposition(composition), "bench composition");
+        for (std::uint64_t index = 2; index <= 8; ++index)
+            require(project.addComposition(benchmarkComposition(CompositionId::fromRaw(index),
+                                                                index * 1'000'000, layers, layers)),
+                    "bench sibling");
+        const auto* first = project.findComposition(CompositionId::fromRaw(1));
+        const std::array changed{first->graph().layerOutputs().front().nodeId};
+        auto start = Clock::now();
+        for (int repeat = 0; repeat < kRepeats; ++repeat)
+            static_cast<void>(RenderReachability::compute(*first));
+        const auto compute = microseconds(Clock::now() - start) / kRepeats;
+        const auto reachability = RenderReachability::compute(*first);
+        start = Clock::now();
+        for (int repeat = 0; repeat < kRepeats; ++repeat)
+            static_cast<void>(confineNodeChange(*first, reachability, changed));
+        const auto confine = microseconds(Clock::now() - start) / kRepeats;
+        start = Clock::now();
+        for (int repeat = 0; repeat < kRepeats; ++repeat)
+            static_cast<void>(compositionsDependingOn(project, CompositionId::fromRaw(2)));
+        const auto depending = microseconds(Clock::now() - start) / kRepeats;
+        std::cout << first->graph().nodes().size() << ',' << compute << ',' << confine << ','
+                  << depending << '\n';
+    }
+    return 0;
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc > 1 && std::strcmp(argv[1], "--benchmark") == 0)
+        return runBenchmark();
     try {
         testReachableSet();
         testLayerGate();

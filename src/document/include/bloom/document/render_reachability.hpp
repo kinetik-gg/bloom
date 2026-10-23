@@ -5,6 +5,8 @@
 #include <bloom/document/node_definition_registry.hpp>
 
 #include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <set>
 #include <span>
 #include <vector>
@@ -45,6 +47,13 @@ class RenderReachability final {
     [[nodiscard]] static RenderReachability
     compute(const Composition& composition,
             const NodeDefinitionRegistry& registry = builtInNodeDefinitions());
+    // #357. The answer published content cached at freeze time (built-in registry), shared; draft
+    // content or another registry computes a fresh one.
+    [[nodiscard]] static std::shared_ptr<const RenderReachability>
+    of(const Composition& composition,
+       const NodeDefinitionRegistry& registry = builtInNodeDefinitions());
+    // Passes that walked a graph (cache hits do not count), for work-counter tests.
+    [[nodiscard]] static std::uint64_t computations() noexcept;
 
     [[nodiscard]] bool known() const noexcept { return known_; }
     [[nodiscard]] bool reaches(NodeId node) const { return nodes_.contains(node); }

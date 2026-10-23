@@ -1,6 +1,7 @@
 // Issue #357: an edit validates, reserves and copies what it changed, not the whole project.
 #include <bloom/document/document.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/render_reachability.hpp>
 #include <bloom/document/value_nodes.hpp>
 
 #include <iostream>
@@ -177,6 +178,21 @@ void testRetainedDraftPointerCannotReachASnapshot() {
            "an edited root collection is published as its own copy");
 }
 
+void testPublishedReachabilityIsCached() {
+    Document document(makeProject(8, 32));
+    const auto snapshot = document.snapshot();
+    const auto before = RenderReachability::computations();
+    for (const auto& composition : snapshot.project().compositions())
+        expect(RenderReachability::of(composition)->known(), "published reachability is known");
+    static_cast<void>(compositionsDependingOn(snapshot.project(), CompositionId::fromRaw(2000)));
+    expect(RenderReachability::computations() == before,
+           "published compositions answer reachability and nesting from their frozen cache");
+    const auto commits = RenderReachability::computations();
+    static_cast<void>(editFirstComposition(document));
+    expect(RenderReachability::computations() == commits + 1,
+           "a commit computes reachability once, for the one composition it changed");
+}
+
 } // namespace
 
 int main() {
@@ -184,6 +200,7 @@ int main() {
         testCostIndependentOfUnrelatedCompositions();
         testInvalidDraftsReportFullDiagnostics();
         testRetainedDraftPointerCannotReachASnapshot();
+        testPublishedReachabilityIsCached();
     } catch (const std::exception& error) {
         std::cerr << "fixture failure: " << error.what() << '\n';
         return 1;

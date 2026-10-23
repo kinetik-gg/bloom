@@ -1,6 +1,7 @@
 #include <bloom/document/project.hpp>
 
 #include <bloom/document/persisted_text.hpp>
+#include <bloom/document/render_reachability.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -124,9 +125,17 @@ void Composition::freezeContent() {
         frozen->frozenLockIndex = buildLockIndex(*frozen);
         frozen->frozenDeclaredIds = buildDeclaredIdIndex(*frozen);
         frozen->frozenNestedReferences = buildNestedReferences(*frozen);
-        frozenContent_ = std::move(frozen);
+        // Publish first so the reachability walk reads the frozen payload through *this; nothing
+        // else shares `frozen` until this function returns.
+        frozenContent_ = frozen;
         editableContent_.reset();
+        frozen->frozenReachability = std::make_shared<const RenderReachability>(
+            RenderReachability::compute(*this, builtInNodeDefinitions()));
     }
+}
+
+std::shared_ptr<const RenderReachability> Composition::frozenRenderReachability() const {
+    return !editableContent_ && frozenContent_ ? frozenContent_->frozenReachability : nullptr;
 }
 
 Composition::CopyWork Composition::copyWork() noexcept {

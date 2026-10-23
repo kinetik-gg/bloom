@@ -25,6 +25,8 @@
 
 namespace bloom::document {
 
+class RenderReachability;
+
 namespace detail {
 // #357. Copy-on-write storage for one project-root collection. Published snapshots share one
 // immutable vector; a draft copies the collection only when it edits it, and publication freezes
@@ -144,6 +146,9 @@ class Composition final {
     [[nodiscard]] LockIndex lockIndex() const;
     // Lock-index builds, for work-counter tests.
     [[nodiscard]] static std::uint64_t lockIndexBuilds() noexcept;
+    // The render reachability published content computed at freeze time (built-in registry), or
+    // null for draft content. Prefer RenderReachability::of(), which falls back to computing.
+    [[nodiscard]] std::shared_ptr<const RenderReachability> frozenRenderReachability() const;
     void setName(std::string name) { name_ = std::move(name); }
     [[nodiscard]] bool setDuration(core::RationalTime duration) noexcept;
     void setFormat(CompositionFormat format) noexcept { format_ = format; }
@@ -182,6 +187,8 @@ class Composition final {
         std::optional<LockIndex> frozenLockIndex;
         std::optional<DeclaredIdIndex> frozenDeclaredIds;
         std::optional<std::vector<CompositionId>> frozenNestedReferences;
+        // #355/#357. Built once at freeze time against the built-in registry; immutable thereafter.
+        std::shared_ptr<const RenderReachability> frozenReachability;
     };
     [[nodiscard]] const Content& content() const noexcept {
         return editableContent_ ? *editableContent_ : *frozenContent_;
