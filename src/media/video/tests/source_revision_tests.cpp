@@ -1,6 +1,7 @@
 #include "packed_host_retirement_private.hpp"
 #include <array>
 #include <atomic>
+#include <bloom/media/video/audio.hpp>
 #include <bloom/media/video/session.hpp>
 #include <cerrno>
 #include <chrono>
@@ -225,6 +226,38 @@ void sessionRevisions(const std::filesystem::path& source, const std::filesystem
     }
 }
 #if defined(__linux__)
+void audioOnePass(const std::filesystem::path& fixtures, const std::filesystem::path& scratch) {
+    const auto source = fixtures / "numbered-prores.mov";
+    std::vector<std::int64_t> launches;
+    video::VideoDecodeSession session(
+        source, video::VideoDecodeSession::defaultWorker(), {}, scratch / "audio-spool", {},
+        [&](const std::int64_t process) { launches.push_back(process); });
+    const auto probe = product(session.probe());
+    const auto stream = std::ranges::find(probe.streams, provider::MediaKind::Audio,
+                                          &provider::StreamDescriptor::kind);
+    check(stream != probe.streams.end(), "the ProRes fixture carries audio");
+    const auto frames = video::audioClipFrameCount(*stream);
+    check(frames && *frames > provider::Limits::audioSamples,
+          "the fixture spans more than one audio block");
+    const auto clip =
+        product(video::decodeAudioClip(session, probe, *frames * stream->channelLayout.size()));
+    check(launches.size() == 1 && clip.frames == *frames,
+          "every audio block of a clip reuses the probe's retained worker in one pass");
+    // Oracle: the same blocks in reverse order cannot continue a cursor, so each restarts.
+    for (std::uint64_t start =
+             (*frames - 1) / provider::Limits::audioSamples * provider::Limits::audioSamples;
+         ; start -= provider::Limits::audioSamples) {
+        const auto count = static_cast<std::uint32_t>(
+            std::min<std::uint64_t>(provider::Limits::audioSamples, *frames - start));
+        const auto block = product(session.audio(probe, stream->id, start, count));
+        for (std::size_t channel = 0; channel < block.channels.size(); ++channel)
+            check(std::equal(block.channels[channel].begin(), block.channels[channel].end(),
+                             clip.planes[channel].begin() + static_cast<std::ptrdiff_t>(start)),
+                  "sequential continuation equals independently positioned blocks");
+        if (start == 0)
+            break;
+    }
+}
 void identityVerifiedRevalidation(const std::filesystem::path& source,
                                   const std::filesystem::path& scratch) {
     const auto copy = scratch / "identity.mp4";
@@ -546,6 +579,7 @@ int main(int argc, char** argv) {
         failedLeaderCompletesFollowers(source, scratch.path);
         retainedGenerationReplacement(source, scratch.path);
         identityVerifiedRevalidation(source, scratch.path);
+        audioOnePass(fixtures, scratch.path);
 #endif
         retirement(source, scratch.path / "retirement-spool");
         std::cout << "PASS: immutable disk-backed video source revisions\n";
