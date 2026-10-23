@@ -26,6 +26,7 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/platform/source_identity.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -404,6 +405,8 @@ void run() {
         return pixels;
     };
     waitThumbnail();
+    // Sources were hashed once at import; later refreshes verify by file identity only.
+    const auto verifiedReads = platform::sourceReadWork().fullReads;
     const auto bright = renderCard();
     const int cx = bright.width() / 2;
     const int cy =
@@ -436,6 +439,8 @@ void run() {
     const auto nextFrame = core::RationalTime::create(1, 24);
     require(nextFrame && session.setCurrentTime(*nextFrame), "advance sequence time");
     waitThumbnail();
+    require(platform::sourceReadWork().fullReads == verifiedReads,
+            "edits, asset rebinding and time changes re-read no verified source");
     require(controller.nodeThumbnail(source).pixelColor(0, 0).lightness() <
                 firstFrame.pixelColor(0, 0).lightness() - 75,
             "sequence thumbnail follows session time");

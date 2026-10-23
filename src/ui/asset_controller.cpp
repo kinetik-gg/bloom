@@ -18,6 +18,7 @@
 #include <bloom/media/video/colour.hpp>
 #include <bloom/media/video/session.hpp>
 #include <bloom/platform/font_catalog.hpp>
+#include <bloom/platform/source_identity.hpp>
 #include <bloom/render/processing_host_storage.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
@@ -31,7 +32,6 @@
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <cmath>
 #include <cstring>
-#include <fstream>
 #include <limits>
 #include <optional>
 #include <span>
@@ -158,27 +158,21 @@ windowedAudioStorageClaim(const media::audio::AudioProbe& probe) noexcept {
 
 enum class AudioSourceCheck { Matches, MissingOrChanged, Cancelled };
 
+// Identity-verified: one stat while the file matches its last full hash, a rehash otherwise.
 [[nodiscard]] AudioSourceCheck verifyAudioSource(const std::filesystem::path& path,
                                                  const core::Sha256Digest& expected,
                                                  const runtime::CancellationToken& cancellation) {
-    std::ifstream input(path, std::ios::binary);
-    if (!input)
-        return AudioSourceCheck::MissingOrChanged;
-    core::Sha256Hasher hasher;
-    std::array<std::byte, std::size_t{64} * 1024U> chunk{};
-    while (input) {
-        if (cancellation.isCancellationRequested())
-            return AudioSourceCheck::Cancelled;
-        input.read(reinterpret_cast<char*>(chunk.data()),
-                   static_cast<std::streamsize>(chunk.size()));
-        const auto count = input.gcount();
-        if (count > 0 && !hasher.update(std::span<const std::byte>{chunk}.first(
-                             static_cast<std::size_t>(count))))
-            return AudioSourceCheck::MissingOrChanged;
+    switch (platform::verifySourceDigest(path, expected,
+                                         [&] { return cancellation.isCancellationRequested(); })) {
+    case platform::SourceCheck::Matches:
+        return AudioSourceCheck::Matches;
+    case platform::SourceCheck::Cancelled:
+        return AudioSourceCheck::Cancelled;
+    case platform::SourceCheck::Changed:
+    case platform::SourceCheck::Missing:
+        break;
     }
-    return input.bad()                     ? AudioSourceCheck::MissingOrChanged
-           : hasher.finalize() == expected ? AudioSourceCheck::Matches
-                                           : AudioSourceCheck::MissingOrChanged;
+    return AudioSourceCheck::MissingOrChanged;
 }
 
 // Prune aliasing preview images too: erasing a map entry alone does not release its pixels.
@@ -242,18 +236,9 @@ struct ThumbnailSelection {
 [[nodiscard]] bool fontFileMatches(const document::AssetRecord& asset) {
     if (asset.locator.portability == "builtin")
         return true;
-    constexpr std::uintmax_t kMaximumFontBytes = static_cast<std::uintmax_t>(64) * 1024U * 1024U;
-    std::error_code error;
-    const auto size = std::filesystem::file_size(asset.locator.path, error);
-    if (error || size == 0 || size > kMaximumFontBytes)
-        return false;
-    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
-    std::ifstream input(asset.locator.path, std::ios::binary);
-    input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-    if (!input)
-        return false;
-    const auto digest = core::Sha256Hasher::hash(std::as_bytes(std::span(bytes)));
-    return digest.has_value() && *digest == asset.contentDigest;
+    constexpr std::uint64_t kMaximumFontBytes = std::uint64_t{64} * 1024U * 1024U;
+    return platform::verifySourceDigest(asset.locator.path, asset.contentDigest, {},
+                                        kMaximumFontBytes) == platform::SourceCheck::Matches;
 }
 
 [[nodiscard]] document::AssetRecord fontAssetRecord(const platform::FontFace& face) {
@@ -1090,10 +1075,22 @@ void AssetController::startThumbnails() {
                         const auto digest = asset.contentDigest.toLowercaseHex();
                         const auto path = media::resolveImagePath(
                             asset.locator.path, asset.locator.relinkHint, directory);
-                        media::video::VideoDecodeSession video(path);
+                        // The decode session (and its worker) exists only for a thumbnail or
+                        // audio miss. A known source identity verifies with one stat.
+                        std::optional<media::video::VideoDecodeSession> decoder;
+                        const auto video = [&]() -> media::video::VideoDecodeSession& {
+                            if (!decoder)
+                                decoder.emplace(path);
+                            return *decoder;
+                        };
                         const auto probe = runtime::video::probeMetadata(asset);
-                        const bool available = !video.verifySource(
-                            asset.contentDigest, [&] { return context.isCancellationRequested(); });
+                        const auto observed = platform::observeSource(path);
+                        const bool available =
+                            observed.digest ? *observed.digest == asset.contentDigest
+                                            : observed.identity &&
+                                                  !video().verifySource(asset.contentDigest, [&] {
+                                                      return context.isCancellationRequested();
+                                                  });
                         const auto stream =
                             std::ranges::find(probe.streams, media::provider::MediaKind::Video,
                                               &media::provider::StreamDescriptor::kind);
@@ -1163,7 +1160,7 @@ void AssetController::startThumbnails() {
                         }
                         if (available && colorAvailable && thumbnailDisplay &&
                             preview.image.isNull() && stream != probe.streams.end()) {
-                            const auto frame = video.frame(
+                            const auto frame = video().frame(
                                 probe, stream->id, 0, 0, nullptr, inputId, workingId,
                                 configRevision, [&] { return context.isCancellationRequested(); });
                             if (const auto* product = std::get_if<
@@ -1281,7 +1278,7 @@ void AssetController::startThumbnails() {
                                         audioAdmission.standaloneByteAllowance;
                                 if ((phase && scratch) || enoughStandalone) {
                                     auto decoded = media::video::decodeAudioClip(
-                                        video, probe, claim->samples,
+                                        video(), probe, claim->samples,
                                         [&] { return context.isCancellationRequested(); });
                                     if (auto* audio = std::get_if<media::audio::AudioBuffer>(&decoded)) {
                                         const auto summary = media::audio::waveformSummary(*audio, 256);

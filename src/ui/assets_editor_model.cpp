@@ -92,7 +92,77 @@ void AssetsEditor::refreshDisclosure(QTreeWidgetItem* item) {
                                                        : tr("Expand %1").arg(item->text(0)));
     }
 }
+QString AssetsEditor::rowSignature() const {
+    // Every record field and controller status the rows render. Unit separators keep fields apart.
+    QString signature;
+    const auto field = [&signature](const QString& value) {
+        signature += value;
+        signature += QChar(0x1f);
+    };
+    const auto text = [&field](const std::string_view value) {
+        field(QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size())));
+    };
+    const auto number = [&field](const auto value) {
+        field(QString::number(static_cast<qulonglong>(value)));
+    };
+    const auto& project = session_.snapshot().project();
+    for (const auto& composition : project.compositions()) {
+        number(composition.id().value());
+        text(composition.name());
+    }
+    signature += QChar(0x1e);
+    for (const auto& folder : project.assetFolders()) {
+        number(folder.id.value());
+        number(folder.parent ? folder.parent->value() + 1 : 0);
+        text(folder.name);
+    }
+    signature += QChar(0x1e);
+    const auto* controller = session_.assetController();
+    for (const auto& asset : project.assets()) {
+        number(asset.id.value());
+        number(asset.folder ? asset.folder->value() + 1 : 0);
+        number(asset.order);
+        number(static_cast<int>(asset.kind));
+        text(asset.name);
+        text(asset.locator.path);
+        text(asset.fontStyle);
+        text(asset.interpretation.inputColorSpaceId);
+        field(QString::number(asset.duration.toSeconds(), 'g', 17));
+        number(asset.manifest.members.size());
+        for (const auto& tag : asset.tags)
+            text(tag);
+        for (const auto& stream : asset.videoStreams)
+            text(stream.codec);
+        if (asset.kind == document::AssetKind::Video)
+            field(videoContainerTags(asset));
+        if (controller) {
+            number(controller->missing(asset.id) ? 1 : 0);
+            field(controller->audioDiagnostic(asset.id));
+            field(controller->inputColorSpaceDisplay(asset.id));
+            field(controller->inputColorSpaceWarning(asset.id));
+        }
+        signature += QChar(0x1e);
+    }
+    for (const auto& block : project.typedDataBlocks()) {
+        const auto* id = std::get_if<document::DataBlockRecordId>(&block.id);
+        if (id == nullptr || document::isMediaDataBlockKind(block.kind))
+            continue;
+        number(id->value());
+        text(block.typeId);
+        text(document::dataBlockKindName(block.kind));
+        text(block.provenance.createdAt);
+        const auto digest = block.provenance.contentDigest.toLowercaseHex();
+        text(std::string_view(digest.data(), digest.size()));
+    }
+    return signature;
+}
+void AssetsEditor::refreshRows() {
+    if (rowSignature() != rowSignature_)
+        rebuild();
+}
 void AssetsEditor::rebuild() {
+    rowSignature_ = rowSignature();
+    ++rowRebuilds_;
     rebuilding_ = true;
     QSet<QString> selected;
     for (const auto* item : tree_->selectedItems())

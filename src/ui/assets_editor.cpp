@@ -132,12 +132,12 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     connect(tree_, &QTreeWidget::itemExpanded, this, expanded);
     connect(tree_, &QTreeWidget::itemCollapsed, this, expanded);
 
-    connect(&session_, &CompositionSession::snapshotChanged, this, &AssetsEditor::rebuild);
+    connect(&session_, &CompositionSession::snapshotChanged, this, &AssetsEditor::refreshRows);
     connect(&session_, &CompositionSession::compositionChanged, this,
             &AssetsEditor::updateSelection);
 
     if (auto* controller = session_.assetController())
-        connect(controller, &AssetController::changed, this, &AssetsEditor::rebuild);
+        connect(controller, &AssetController::changed, this, &AssetsEditor::refreshRows);
     buildHeaderMenus();
     buildFooter();
     rebuild();

@@ -72,10 +72,20 @@ void videoAssetRows(TestContext& context) {
                            "ProRes tooltip carries the platform's ProRes provenance note");
         }
     context.expect(found, "video asset appears in Assets");
+    const auto rebuilds = editor.rowRebuildCount();
     commands::Transaction transaction("Add Video Layer", session.snapshot().revision());
     transaction.emplace<commands::AddImageLayer>(seed.initialCompositionId, asset.id);
     context.expect(session.executeTransaction(std::move(transaction)).succeeded(),
                    "video drop command participates in UI session history");
+    context.expect(editor.rowRebuildCount() == rebuilds,
+                   "an ordinary edit that leaves asset records unchanged keeps the Assets rows");
+    commands::Transaction addition("Add composition", session.snapshot().revision());
+    addition.emplace<commands::AddComposition>("Other", document::CompositionFormat{},
+                                               core::RationalTime::fromInteger(2));
+    context.expect(session.executeTransaction(std::move(addition)).succeeded(),
+                   "composition add succeeds");
+    context.expect(editor.rowRebuildCount() == rebuilds + 1,
+                   "a record change rebuilds the Assets rows once");
 }
 
 } // namespace

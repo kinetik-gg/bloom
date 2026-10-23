@@ -8,6 +8,7 @@
 #include <bloom/media/image.hpp>
 
 #include <bloom/media/video/session.hpp>
+#include <bloom/platform/source_identity.hpp>
 #include <cctype>
 #include <fstream>
 #include <limits>
@@ -96,35 +97,15 @@ media::audio::AudioResult<core::Sha256Digest> digestFile(const std::filesystem::
             return true;
         }
     };
-    if (cancelled())
+    // Hashed once here; the recorded identity lets later verification skip re-reading the file.
+    const auto hashed = platform::hashSourceFile(path, cancelled);
+    if (hashed.error == platform::SourceHashError::Cancelled)
         return media::audio::AudioResult<core::Sha256Digest>::failure(
             media::audio::AudioError::codeOnly(media::audio::AudioErrorCode::Cancelled));
-    std::ifstream input(path, std::ios::binary);
-    if (!input)
+    if (hashed.error != platform::SourceHashError::None)
         return media::audio::AudioResult<core::Sha256Digest>::failure(
             media::audio::AudioError::codeOnly(media::audio::AudioErrorCode::FileReadFailed));
-    core::Sha256Hasher hasher;
-    std::array<std::byte, static_cast<std::size_t>(64) * 1024> buffer{};
-    while (input) {
-        if (cancelled())
-            return media::audio::AudioResult<core::Sha256Digest>::failure(
-                media::audio::AudioError::codeOnly(media::audio::AudioErrorCode::Cancelled));
-        input.read(reinterpret_cast<char*>(buffer.data()),
-                   static_cast<std::streamsize>(buffer.size()));
-        const auto count = input.gcount();
-        if (count > 0 && !hasher.update(std::span<const std::byte>{buffer}.first(
-                             static_cast<std::size_t>(count))))
-            return media::audio::AudioResult<core::Sha256Digest>::failure(
-                media::audio::AudioError::codeOnly(media::audio::AudioErrorCode::FileReadFailed));
-    }
-    if (cancelled())
-        return media::audio::AudioResult<core::Sha256Digest>::failure(
-            media::audio::AudioError::codeOnly(media::audio::AudioErrorCode::Cancelled));
-    if (input.bad())
-        return media::audio::AudioResult<core::Sha256Digest>::failure(
-            media::audio::AudioError::codeOnly(media::audio::AudioErrorCode::FileReadFailed));
-    auto digest = hasher.finalize();
-    return media::audio::AudioResult<core::Sha256Digest>::success(digest);
+    return media::audio::AudioResult<core::Sha256Digest>::success(hashed.digest);
 }
 } // namespace
 OperationResult RelinkFontAsset::apply(document::Draft& draft) const {
