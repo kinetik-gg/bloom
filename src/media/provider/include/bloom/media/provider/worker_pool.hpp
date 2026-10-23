@@ -11,8 +11,9 @@ struct WorkerPoolOptions {
     Handshake expected;
     std::chrono::milliseconds timeout{5000};
     std::size_t capacity = 2;
-    // FFmpeg video sessions may retain one process for a pinned immutable source generation.
-    // Other providers keep the existing one-call worker lifecycle.
+    // FFmpeg video sessions may retain one process for a pinned immutable source generation;
+    // it serves probe, index, video and sequential audio blocks. Other providers keep the
+    // existing one-call worker lifecycle.
     bool retainedVideo = false;
     // Optional process-lifecycle telemetry, invoked on the BlockingIo task.
     std::function<void(std::int64_t)> launched;

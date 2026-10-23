@@ -545,7 +545,7 @@ struct Encoder::State {
         const auto& stream = *input.format->streams[0];
         require(stream.codecpar->codec_id == videoTrack.codec->codec_id,
                 "Reopened video codec differs");
-        decoder(input, stream, false);
+        decoder(input, stream, nullptr);
         bool eof = false;
         while (next(input, 0, eof)) {
             require(
@@ -590,7 +590,7 @@ struct Encoder::State {
              ";channels=" + std::to_string(stream.codecpar->ch_layout.nb_channels) +
              ";order=" + std::to_string(stream.codecpar->ch_layout.order))
                 .c_str());
-        decoder(input, stream, false);
+        decoder(input, stream, nullptr);
         bool eof = false;
         core::Sha256Hasher actual;
         if (aacReference)

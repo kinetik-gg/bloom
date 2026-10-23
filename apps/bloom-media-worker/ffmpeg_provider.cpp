@@ -12,6 +12,7 @@
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <thread>
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -24,6 +25,7 @@ extern "C" {
 namespace bloom::media::ffmpeg {
 namespace {
 using namespace provider;
+constexpr std::uint64_t kMaximumDecodeThreads = 8;
 void require(bool ok, const char* detail, Error code = Error::Corrupt) {
     if (!ok)
         throw Unavailable{code, detail};
@@ -215,30 +217,85 @@ DemuxIndex index(Input& input) {
     require(status == AVERROR_EOF, "Malformed demux input");
     return result;
 }
+// Prefer the VA-API surface when the hwaccel offers it. When hwaccel initialisation refuses the
+// stream, FFmpeg asks again without it; answer with software so the caller can observe the miss
+// on the first frame instead of failing inside the decoder.
 AVPixelFormat hardwareFormat(AVCodecContext*, const AVPixelFormat* formats) {
     for (const auto* p = formats; *p != AV_PIX_FMT_NONE; ++p)
         if (*p == AV_PIX_FMT_VAAPI)
             return *p;
+    for (const auto* p = formats; *p != AV_PIX_FMT_NONE; ++p) {
+        const auto* desc = av_pix_fmt_desc_get(*p);
+        if (desc && (desc->flags & AV_PIX_FMT_FLAG_HWACCEL) == 0)
+            return *p;
+    }
     return AV_PIX_FMT_NONE;
 }
-void decoder(Input& input, const AVStream& stream, bool hardware) {
+// Thrown when a VA-API decoder silently produced software frames for this device.
+struct HardwareMiss final {};
+// Bounded software decoder parallelism. Frame threads keep extra reference and output frames in
+// flight, so the count is sized against half of the 2 GiB media-v1 worker address space as well
+// as the machine. Intra-only codecs use slice threads: a random-access request then waits for one
+// frame rather than for a pipeline of following frames.
+void configureThreads(AVCodecContext& codec, const AVCodecParameters& p) {
+    const auto* desc = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(p.format));
+    const std::uint64_t sampleBytes = desc && desc->comp[0].depth > 8 ? 2U : 1U;
+    const auto frameBytes = std::max<std::uint64_t>(
+        1, static_cast<std::uint64_t>(std::max(p.width, 1)) *
+               static_cast<std::uint64_t>(std::max(p.height, 1)) * 3U * sampleBytes);
+    constexpr std::uint64_t budget = 1ULL << 30U;
+    const auto byMemory = budget / (frameBytes * 4U);
+    const auto cores = std::max(1U, std::thread::hardware_concurrency());
+    codec.thread_count = static_cast<int>(std::clamp<std::uint64_t>(
+        std::min<std::uint64_t>(cores, byMemory), 1, kMaximumDecodeThreads));
+    const bool intra = p.codec_id == AV_CODEC_ID_PRORES || p.codec_id == AV_CODEC_ID_DNXHD ||
+                       p.codec_id == AV_CODEC_ID_MJPEG || p.codec_id == AV_CODEC_ID_TIFF;
+    codec.thread_type = intra ? FF_THREAD_SLICE : FF_THREAD_FRAME | FF_THREAD_SLICE;
+}
+// A null device selects the software reference decoder.
+void decoder(Input& input, const AVStream& stream, AVBufferRef* device) {
     const auto* codec = avcodec_find_decoder(stream.codecpar->codec_id);
     require(codec != nullptr, "Codec is not in the intake", Error::Unavailable);
     input.codec = avcodec_alloc_context3(codec);
     require(input.codec != nullptr, "Decoder allocation failed", Error::Oversized);
     require(avcodec_parameters_to_context(input.codec, stream.codecpar) >= 0,
             "Invalid codec parameters");
-    input.codec->thread_count = 1;
     input.codec->max_pixels = Limits::pixels;
     input.codec->err_recognition = AV_EF_CRCCHECK | AV_EF_BITSTREAM | AV_EF_BUFFER | AV_EF_EXPLODE;
-    if (hardware) {
-        require(av_hwdevice_ctx_create(&input.codec->hw_device_ctx, AV_HWDEVICE_TYPE_VAAPI,
-                                       "/dev/dri/renderD128", nullptr, 0) >= 0,
-                "VA-API device unavailable", Error::Unavailable);
+    if (device) {
+        input.codec->thread_count = 1;
+        input.codec->hw_device_ctx = av_buffer_ref(device);
+        require(input.codec->hw_device_ctx != nullptr, "VA-API device reference failed",
+                Error::Oversized);
         input.codec->get_format = hardwareFormat;
-    }
+    } else
+        configureThreads(*input.codec, *stream.codecpar);
     require(avcodec_open2(input.codec, codec, nullptr) >= 0, "Decoder refused stream",
             Error::Unavailable);
+}
+// Render nodes in numeric order, discovered rather than assumed. Bounded to the DRM minor range.
+std::vector<std::string> renderNodes() {
+    std::vector<std::pair<unsigned, std::string>> nodes;
+    std::error_code error;
+    for (std::filesystem::directory_iterator it("/dev/dri", error), end; !error && it != end;
+         it.increment(error)) {
+        const auto name = it->path().filename().string();
+        if (!name.starts_with("renderD") || name.size() > 10)
+            continue;
+        unsigned number = 0;
+        bool digits = name.size() > 7;
+        for (const auto c : name.substr(7)) {
+            digits = digits && c >= '0' && c <= '9';
+            number = number * 10U + static_cast<unsigned>(c - '0');
+        }
+        if (digits && nodes.size() < 64)
+            nodes.emplace_back(number, it->path().string());
+    }
+    std::ranges::sort(nodes);
+    std::vector<std::string> result;
+    for (auto& node : nodes)
+        result.push_back(std::move(node.second));
+    return result;
 }
 // Receive before sending; drain delayed frames at EOF. A packet is never dropped on EAGAIN.
 bool next(Input& input, unsigned stream, bool& eof) {
@@ -265,11 +322,10 @@ bool next(Input& input, unsigned stream, bool& eof) {
         }
     }
 }
-FrameProduct frame(Input& input, const AVStream& stream, bool hardware) {
+FrameProduct frame(Input& input, const AVStream& stream) {
     auto* decoded = input.frame;
-    if (hardware) {
-        require(decoded->format == AV_PIX_FMT_VAAPI, "Hardware decode not active",
-                Error::Unavailable);
+    if (decoded->format == AV_PIX_FMT_VAAPI) {
+        av_frame_unref(input.transfer);
         require(av_hwframe_transfer_data(input.transfer, decoded, 0) >= 0,
                 "Hardware download failed");
         require(av_frame_copy_props(input.transfer, decoded) >= 0, "Hardware metadata copy failed");
@@ -294,7 +350,10 @@ FrameProduct frame(Input& input, const AVStream& stream, bool hardware) {
     if (product.colour.range == AVCOL_RANGE_UNSPECIFIED)
         product.colour.range = streamColour.range;
     const auto format = static_cast<AVPixelFormat>(decoded->format);
-    const bool direct = format == AV_PIX_FMT_YUV420P;
+    // A downloaded limited-range NV12 surface carries the same 8-bit 4:2:0 samples as the
+    // software YUV420P product; de-interleave it so both routes publish one layout.
+    const bool nv12 = format == AV_PIX_FMT_NV12 && product.colour.range != AVCOL_RANGE_JPEG;
+    const bool direct = format == AV_PIX_FMT_YUV420P || nv12;
     product.format = direct ? PixelFormat::Yuv420p8 : PixelFormat::Yuva444p16;
     std::array<std::uint8_t*, 4> data{};
     std::array<int, 4> strides{};
@@ -310,7 +369,22 @@ FrameProduct frame(Input& input, const AVStream& stream, bool hardware) {
         data[i] = reinterpret_cast<std::uint8_t*>(product.planes.back().bytes.data());
         strides[i] = static_cast<int>(product.planes.back().stride);
     }
-    if (direct) {
+    if (nv12) {
+        for (unsigned y = 0; y < product.planes[0].height; ++y)
+            std::memcpy(data[0] + static_cast<std::size_t>(y) * product.planes[0].stride,
+                        decoded->data[0] + static_cast<std::ptrdiff_t>(y) * decoded->linesize[0],
+                        product.planes[0].stride);
+        for (unsigned y = 0; y < product.planes[1].height; ++y) {
+            const auto* uv =
+                decoded->data[1] + static_cast<std::ptrdiff_t>(y) * decoded->linesize[1];
+            auto* u = data[1] + static_cast<std::size_t>(y) * product.planes[1].stride;
+            auto* v = data[2] + static_cast<std::size_t>(y) * product.planes[2].stride;
+            for (unsigned x = 0; x < product.planes[1].width; ++x) {
+                u[x] = uv[2U * x];
+                v[x] = uv[2U * x + 1U];
+            }
+        }
+    } else if (direct) {
         for (unsigned i = 0; i < 3; ++i)
             for (unsigned y = 0; y < product.planes[i].height; ++y)
                 std::memcpy(data[i] + static_cast<std::size_t>(y) * product.planes[i].stride,
@@ -321,9 +395,10 @@ FrameProduct frame(Input& input, const AVStream& stream, bool hardware) {
         const auto* desc = av_pix_fmt_desc_get(format);
         require(desc && (desc->flags & AV_PIX_FMT_FLAG_RGB) == 0,
                 "RGB codec format is not qualified", Error::Unavailable);
-        input.scale = sws_getContext(decoded->width, decoded->height, format, decoded->width,
-                                     decoded->height, AV_PIX_FMT_YUVA444P16LE,
-                                     SWS_POINT | SWS_BITEXACT, nullptr, nullptr, nullptr);
+        // Reuse the conversion context across a retained decoder's frames.
+        input.scale = sws_getCachedContext(input.scale, decoded->width, decoded->height, format,
+                                           decoded->width, decoded->height, AV_PIX_FMT_YUVA444P16LE,
+                                           SWS_POINT | SWS_BITEXACT, nullptr, nullptr, nullptr);
         require(input.scale != nullptr, "Pixel layout unavailable", Error::Unavailable);
         const auto* coefficients = sws_getCoefficients(SWS_CS_ITU709);
         const int fullRange = product.colour.range == AVCOL_RANGE_JPEG ? 1 : 0;
@@ -334,19 +409,45 @@ FrameProduct frame(Input& input, const AVStream& stream, bool hardware) {
                           data.data(), strides.data()) == decoded->height,
                 "Pixel layout conversion failed");
     }
-    for (auto& plane : product.planes)
-        plane.digest = digestBytes(plane.bytes);
-    require(valid(product), "Invalid video product");
+    assignPlaneDigests(product.planes);
+    require(validLayout(product), "Invalid video product");
     return product;
 }
 struct VideoCursor final {
     std::vector<std::int64_t> timestamps;
-    std::optional<std::uint64_t> previous;
+    // Key packets as (presentation, decode) timestamps sorted by presentation: the random-access
+    // points a seek can land on.
+    std::vector<std::pair<std::int64_t, std::int64_t>> keyframes;
+    // Presentation timestamp of the last frame this decoder returned.
+    std::optional<std::int64_t> position;
     bool indexed = false;
     bool eof = false;
 };
 
-FrameProduct video(Input& input, const CallRequest& request, bool hardware,
+// A forward request decodes on from the current position when no later random-access point
+// precedes the target: seeking would restart from a keyframe at or before where the decoder
+// already is, so continuing is never more work. Backward requests and requests past a later
+// keyframe seek to the keyframe at or before the target.
+bool continueForward(const VideoCursor& cursor, const std::int64_t target) {
+    if (!cursor.position || *cursor.position >= target)
+        return false;
+    const auto after = std::ranges::upper_bound(cursor.keyframes, target, {},
+                                                &std::pair<std::int64_t, std::int64_t>::first);
+    return after == cursor.keyframes.begin() || std::prev(after)->first <= *cursor.position;
+}
+// Demuxers such as MOV index random access by decode time. With reordered (B-frame) streams a key
+// packet's decode time precedes its presentation time, so seeking by the target presentation
+// time can land on a keyframe presented after the target. Seek by the decode time of the last
+// key packet presented at or before the target instead; an earlier landing only costs decoding.
+std::int64_t seekTimestamp(const VideoCursor& cursor, const std::int64_t target) {
+    const auto after = std::ranges::upper_bound(cursor.keyframes, target, {},
+                                                &std::pair<std::int64_t, std::int64_t>::first);
+    if (after == cursor.keyframes.begin())
+        return target;
+    const auto [pts, dts] = *std::prev(after);
+    return dts == AV_NOPTS_VALUE ? pts : std::min(pts, dts);
+}
+FrameProduct video(Input& input, const CallRequest& request, AVBufferRef* device,
                    VideoCursor* retained = nullptr) {
     const auto& stream = *input.format->streams[request.stream];
     require(stream.codecpar->codec_type == AVMEDIA_TYPE_VIDEO, "Requested stream is not video");
@@ -363,7 +464,7 @@ FrameProduct video(Input& input, const CallRequest& request, bool hardware,
     // while assigning it a different frame number. The admitted codecs/demuxers
     // produce one access unit per packet; missing or duplicate PTS are unavailable.
     if (!cursor.indexed) {
-        decoder(input, stream, hardware);
+        decoder(input, stream, device);
         int read = 0;
         while ((read = av_read_frame(input.format, input.packet)) >= 0) {
             if (input.packet->stream_index == static_cast<int>(request.stream)) {
@@ -373,12 +474,15 @@ FrameProduct video(Input& input, const CallRequest& request, bool hardware,
                     require(cursor.timestamps.size() < Limits::indexEntries,
                             "Frame index exceeds limits", Error::Oversized);
                     cursor.timestamps.push_back(input.packet->pts);
+                    if ((input.packet->flags & AV_PKT_FLAG_KEY) != 0)
+                        cursor.keyframes.emplace_back(input.packet->pts, input.packet->dts);
                 }
             }
             av_packet_unref(input.packet);
         }
         require(read == AVERROR_EOF, "Malformed video packets");
         std::ranges::sort(cursor.timestamps);
+        std::ranges::sort(cursor.keyframes);
         for (std::size_t i = 0; i < cursor.timestamps.size(); ++i) {
             const auto expected =
                 av_rescale_q(static_cast<std::int64_t>(i), av_inv_q(rate), stream.time_base);
@@ -392,11 +496,11 @@ FrameProduct video(Input& input, const CallRequest& request, bool hardware,
     require(request.frame < cursor.timestamps.size(), "Frame is outside the video duration",
             Error::Unavailable);
     const auto target = cursor.timestamps[request.frame];
-    const bool sequential = cursor.previous && *cursor.previous + 1 == request.frame;
     av_frame_unref(input.frame);
-    if (!sequential) {
-        require(av_seek_frame(input.format, static_cast<int>(request.stream), target,
-                              AVSEEK_FLAG_BACKWARD) >= 0,
+    if (!continueForward(cursor, target)) {
+        cursor.position.reset();
+        require(av_seek_frame(input.format, static_cast<int>(request.stream),
+                              seekTimestamp(cursor, target), AVSEEK_FLAG_BACKWARD) >= 0,
                 "Cannot seek video", Error::Unavailable);
         avcodec_flush_buffers(input.codec);
         cursor.eof = false;
@@ -404,50 +508,112 @@ FrameProduct video(Input& input, const CallRequest& request, bool hardware,
     while (next(input, request.stream, cursor.eof)) {
         const auto pts = input.frame->best_effort_timestamp;
         require(pts != AV_NOPTS_VALUE, "Frame timestamp unavailable", Error::Unavailable);
+        if (device && input.frame->format != AV_PIX_FMT_VAAPI)
+            throw HardwareMiss{};
         if (pts == target) {
-            auto product = frame(input, stream, hardware);
-            cursor.previous = request.frame;
+            auto product = frame(input, stream);
+            cursor.position = pts;
             return product;
         }
         require(pts < target, "Exact frame timestamp unavailable (variable frame rate)",
                 Error::Unavailable);
+        cursor.position = pts;
         av_frame_unref(input.frame);
     }
     throw Unavailable{Error::Unavailable, "Frame is outside the video duration"};
 }
-AudioBlock audio(Input& input, const CallRequest& request) {
-    const auto& stream = *input.format->streams[request.stream];
+// Resumable audio decode position. A retained worker keeps one so consecutive blocks continue
+// from the previous block's end: N sequential blocks decode the stream once, not N times.
+struct AudioCursor final {
+    std::unique_ptr<Input> input;
+    unsigned stream = 0;
+    int rate = 0;
+    std::vector<std::string> layout;
+    // Both node outputs use the first video presentation as their local origin.
+    std::int64_t origin = 0;
+    bool eof = false;
+    std::optional<std::int64_t> previousEnd;
+    // Converted samples decoded past the previous block's end, starting at `pendingBegin`.
+    std::int64_t pendingBegin = 0;
+    std::vector<std::vector<float>> pending;
+    // Sample following the last delivered block; a request starting here continues.
+    std::optional<std::int64_t> next;
+};
+void openAudio(AudioCursor& cursor, std::unique_ptr<Input> input, const unsigned streamIndex) {
+    cursor = {};
+    cursor.input = std::move(input);
+    cursor.stream = streamIndex;
+    auto& in = *cursor.input;
+    const auto& stream = *in.format->streams[streamIndex];
     require(stream.codecpar->codec_type == AVMEDIA_TYPE_AUDIO, "Requested stream is not audio");
-    const auto rate = stream.codecpar->sample_rate;
-    require(rate > 0 && rate <= static_cast<int>(Limits::sampleRate) && request.samples > 0 &&
-                request.samples <= Limits::audioSamples &&
+    cursor.rate = stream.codecpar->sample_rate;
+    require(cursor.rate > 0 && cursor.rate <= static_cast<int>(Limits::sampleRate),
+            "Audio request exceeds limits", Error::Oversized);
+    decoder(in, stream, nullptr);
+    cursor.layout = channels(stream.codecpar->ch_layout);
+    // Container timestamps can start well after zero (for example MPEG-TS).
+    for (unsigned i = 0; i < in.format->nb_streams; ++i) {
+        const auto& candidate = *in.format->streams[i];
+        if (candidate.codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            if (candidate.start_time != AV_NOPTS_VALUE)
+                cursor.origin =
+                    av_rescale_q(candidate.start_time, candidate.time_base, {1, cursor.rate});
+            break;
+        }
+    }
+}
+AudioBlock audio(AudioCursor& cursor, const CallRequest& request) {
+    require(cursor.input && request.stream == cursor.stream, "Requested stream is not audio");
+    auto& input = *cursor.input;
+    const auto& stream = *input.format->streams[request.stream];
+    const auto rate = cursor.rate;
+    require(request.samples > 0 && request.samples <= Limits::audioSamples &&
                 request.frame <=
                     static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) -
                         request.samples,
             "Audio request exceeds limits", Error::Oversized);
-    decoder(input, stream, false);
     AudioBlock result;
     result.pts = rational(static_cast<std::int64_t>(request.frame), rate);
     result.sampleRate = static_cast<std::uint32_t>(rate);
-    result.channelLayout = channels(stream.codecpar->ch_layout);
+    result.channelLayout = cursor.layout;
     result.channels.resize(result.channelLayout.size());
-    // Decode from the beginning to retain codec priming and exact sample placement.
-    // The supervisor watchdog bounds long seeks; no approximate audio is published.
-    bool eof = false;
     const auto first = static_cast<std::int64_t>(request.frame);
-    // Both node outputs use the first video presentation as their local origin.
-    // Container timestamps can start well after zero (for example MPEG-TS).
-    std::int64_t origin = 0;
-    for (unsigned i = 0; i < input.format->nb_streams; ++i) {
-        const auto& candidate = *input.format->streams[i];
-        if (candidate.codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            if (candidate.start_time != AV_NOPTS_VALUE)
-                origin = av_rescale_q(candidate.start_time, candidate.time_base, {1, rate});
-            break;
+    // Appends converted samples beginning at local sample `begin`; returns true when the block
+    // is complete. Samples past the block are kept for a continuing request.
+    const auto deliver = [&](const std::int64_t begin, std::vector<std::vector<float>>& planes) {
+        const auto filled = static_cast<std::int64_t>(result.channels.front().size());
+        const auto available = static_cast<std::int64_t>(planes.front().size());
+        if (begin + available <= first + filled)
+            return false;
+        require(begin <= first + filled, "Audio timestamp gap");
+        const auto skip = static_cast<std::size_t>(first + filled - begin);
+        const auto count = std::min(static_cast<std::size_t>(available) - skip,
+                                    request.samples - static_cast<std::size_t>(filled));
+        for (std::size_t c = 0; c < planes.size(); ++c)
+            result.channels[c].insert(
+                result.channels[c].end(), planes[c].begin() + static_cast<std::ptrdiff_t>(skip),
+                planes[c].begin() + static_cast<std::ptrdiff_t>(skip + count));
+        if (skip + count < static_cast<std::size_t>(available)) {
+            cursor.pendingBegin = begin + static_cast<std::int64_t>(skip + count);
+            for (auto& plane : planes)
+                plane.erase(plane.begin(),
+                            plane.begin() + static_cast<std::ptrdiff_t>(skip + count));
+            cursor.pending = std::move(planes);
         }
+        return result.channels.front().size() == request.samples;
+    };
+    const auto complete = [&] {
+        require(valid(result), "Invalid audio product");
+        cursor.next = first + static_cast<std::int64_t>(request.samples);
+        return result;
+    };
+    if (!cursor.pending.empty()) {
+        auto planes = std::move(cursor.pending);
+        cursor.pending.clear();
+        if (deliver(cursor.pendingBegin, planes))
+            return complete();
     }
-    std::optional<std::int64_t> previousEnd;
-    while (next(input, request.stream, eof)) {
+    while (next(input, request.stream, cursor.eof)) {
         const auto& f = *input.frame;
         require(f.sample_rate == rate && f.nb_samples > 0 &&
                     f.nb_samples <= static_cast<int>(Limits::audioSamples) &&
@@ -455,21 +621,21 @@ AudioBlock audio(Input& input, const CallRequest& request) {
                 "Audio format changed");
         require(f.best_effort_timestamp != AV_NOPTS_VALUE, "Audio timestamp is unavailable");
         const auto absolute = av_rescale_q(f.best_effort_timestamp, stream.time_base, {1, rate});
+        const auto origin = cursor.origin;
         require((origin >= 0 || absolute <= std::numeric_limits<std::int64_t>::max() + origin) &&
                     (origin <= 0 || absolute >= std::numeric_limits<std::int64_t>::min() + origin),
                 "Audio timestamp origin exceeds limits", Error::Oversized);
         const auto begin = absolute - origin;
-        require(!previousEnd || begin >= *previousEnd, "Overlapping audio timestamps");
+        require(!cursor.previousEnd || begin >= *cursor.previousEnd,
+                "Overlapping audio timestamps");
         require(begin <= std::numeric_limits<std::int64_t>::max() - f.nb_samples,
                 "Audio timestamp exceeds limits", Error::Oversized);
         const auto end = begin + f.nb_samples;
-        previousEnd = end;
-        if (end <= first) {
+        cursor.previousEnd = end;
+        if (end <= first + static_cast<std::int64_t>(result.channels.front().size())) {
             av_frame_unref(input.frame);
             continue;
         }
-        require(begin <= first + static_cast<std::int64_t>(result.channels.front().size()),
-                "Audio timestamp gap");
         if (!input.resample) {
             require(swr_alloc_set_opts2(&input.resample, &f.ch_layout, AV_SAMPLE_FMT_FLTP, rate,
                                         &f.ch_layout, static_cast<AVSampleFormat>(f.format), rate,
@@ -487,22 +653,12 @@ AudioBlock audio(Input& input, const CallRequest& request) {
             swr_convert(input.resample, outputs.data(), f.nb_samples,
                         const_cast<const std::uint8_t**>(f.extended_data), f.nb_samples);
         require(converted == f.nb_samples, "Audio conversion changed sample count");
-        const auto skip = static_cast<std::size_t>(std::max<std::int64_t>(0, first - begin));
-        const auto count = std::min(static_cast<std::size_t>(converted) - skip,
-                                    request.samples - result.channels.front().size());
-        for (std::size_t c = 0; c < planes.size(); ++c)
-            result.channels[c].insert(
-                result.channels[c].end(), planes[c].begin() + static_cast<std::ptrdiff_t>(skip),
-                planes[c].begin() + static_cast<std::ptrdiff_t>(skip + count));
-        if (result.channels.front().size() == request.samples) {
-            require(valid(result), "Invalid audio product");
-            return result;
-        }
         av_frame_unref(input.frame);
+        if (deliver(begin, planes))
+            return complete();
     }
     throw Unavailable{Error::Unavailable, "Audio block is outside the stream duration"};
 }
-
 std::unique_ptr<Input> openInput(const CallRequest& request) {
     auto input = std::make_unique<Input>();
     if (request.snapshotBytes != 0) {
@@ -543,127 +699,6 @@ std::unique_ptr<Input> openInput(const CallRequest& request) {
     return input;
 }
 } // namespace
-struct DecodeSession::State final {
-    explicit State(bool hardwareValue) : hardware(hardwareValue) {}
-    bool hardware = false;
-    provider::Digest digest;
-    std::uint64_t bytes = 0;
-    std::unique_ptr<Input> input;
-    VideoCursor cursor;
-    std::optional<std::uint32_t> videoStream;
-    std::optional<provider::DemuxIndex> demux;
-};
-DecodeSession::DecodeSession(bool hardware) : state_(std::make_unique<State>(hardware)) {}
-DecodeSession::~DecodeSession() = default;
-provider::Payload DecodeSession::call(const provider::CallRequest& request) {
-    try {
-        av_log_set_level(AV_LOG_ERROR);
-        const auto handshake = provider::ffmpegHandshake(state_->hardware);
-        require(std::ranges::any_of(handshake.declarations,
-                                    [&](const auto& declaration) {
-                                        return declaration.capability == request.capability;
-                                    }),
-                "Unsupported FFmpeg capability", provider::Error::Unavailable);
-        require(request.snapshotBytes != 0,
-                "Retained decoder requires an immutable input capability",
-                provider::Error::IdentityMismatch);
-        if (state_->input) {
-            require(request.sourceDigest == state_->digest &&
-                        request.snapshotBytes == state_->bytes,
-                    "Retained decoder source generation changed", provider::Error::SourceChanged);
-        } else {
-            state_->input = openInput(request);
-            state_->digest = request.sourceDigest;
-            state_->bytes = request.snapshotBytes;
-        }
-        if (request.capability.role == provider::Role::Probe)
-            return probe(*state_->input, state_->digest, state_->bytes);
-        if (request.capability.role == provider::Role::DemuxIndex) {
-            if (!state_->demux) {
-                // Index scanning must not disturb the retained video decoder's packet cursor.
-                auto reader = openInput(request);
-                state_->demux = index(*reader);
-            }
-            return *state_->demux;
-        }
-        require(request.capability.role == provider::Role::VideoDecode,
-                "Retained decoder accepts video only", provider::Error::Unavailable);
-        require(request.stream < state_->input->format->nb_streams, "Stream does not exist");
-        require(request.capability.codec ==
-                    avcodec_get_name(
-                        state_->input->format->streams[request.stream]->codecpar->codec_id),
-                "Stream codec does not match pinned capability", provider::Error::IdentityMismatch);
-        if (state_->videoStream && request.stream != *state_->videoStream) {
-            state_->input.reset();
-            state_->input = openInput(request);
-            state_->cursor = {};
-        }
-        auto result = video(*state_->input, request, state_->hardware, &state_->cursor);
-        state_->videoStream = request.stream;
-        return result;
-    } catch (const provider::Unavailable& error) {
-        state_->input.reset();
-        state_->cursor = {};
-        state_->videoStream.reset();
-        state_->demux.reset();
-        return error;
-    } catch (const std::bad_alloc&) {
-        state_->input.reset();
-        state_->cursor = {};
-        state_->videoStream.reset();
-        state_->demux.reset();
-        return provider::Unavailable{provider::Error::Oversized, "Media allocation limit"};
-    } catch (const std::filesystem::filesystem_error&) {
-        state_->input.reset();
-        state_->cursor = {};
-        state_->videoStream.reset();
-        state_->demux.reset();
-        return provider::Unavailable{provider::Error::Io, "Media file unavailable"};
-    }
-}
-provider::Payload call(const provider::CallRequest& request, bool hardware) {
-    try {
-        av_log_set_level(AV_LOG_ERROR);
-        const auto h = provider::ffmpegHandshake(hardware);
-        require(
-            std::ranges::any_of(h.declarations,
-                                [&](const auto& d) { return d.capability == request.capability; }),
-            "Unsupported FFmpeg capability", provider::Error::Unavailable);
-        const auto identity = request.snapshotBytes != 0
-                                  ? std::pair{request.sourceDigest, request.snapshotBytes}
-                                  : sourceIdentity(request.source);
-        const auto& [digest, bytes] = identity;
-        if (request.capability.role != provider::Role::Probe)
-            require(digest == request.sourceDigest, "Media source content changed",
-                    provider::Error::SourceChanged);
-        auto input = openInput(request);
-        provider::Payload result;
-        if (request.capability.role == provider::Role::Probe)
-            result = probe(*input, digest, bytes);
-        else if (request.capability.role == provider::Role::DemuxIndex)
-            result = index(*input);
-        else {
-            require(request.stream < input->format->nb_streams, "Stream does not exist");
-            require(
-                request.capability.codec ==
-                    avcodec_get_name(input->format->streams[request.stream]->codecpar->codec_id),
-                "Stream codec does not match pinned capability", provider::Error::IdentityMismatch);
-            result = request.capability.role == provider::Role::VideoDecode
-                         ? provider::Payload(video(*input, request, hardware))
-                         : provider::Payload(audio(*input, request));
-        }
-        require(input->snapshot || sourceIdentity(request.source).first == digest,
-                "Source changed during media read", provider::Error::SourceChanged);
-        return result;
-    } catch (const provider::Unavailable& error) {
-        return error;
-    } catch (const std::bad_alloc&) {
-        return provider::Unavailable{provider::Error::Oversized, "Media allocation limit"};
-    } catch (const std::filesystem::filesystem_error&) {
-        return provider::Unavailable{provider::Error::Io, "Media file unavailable"};
-    }
-}
-
 bool hardwareEncodeAvailable() {
     const auto* codec = avcodec_find_encoder_by_name("h264_vaapi");
     if (codec == nullptr)
@@ -675,6 +710,7 @@ bool hardwareEncodeAvailable() {
     return status >= 0;
 }
 } // namespace bloom::media::ffmpeg
+#include "ffmpeg_provider_decode.ipp"
 #include "ffmpeg_provider_encode.ipp"
 #ifdef BLOOM_MEDIA_FIXTURE_GENERATOR
 #include "ffmpeg_provider_fixtures.ipp"

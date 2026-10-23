@@ -5,6 +5,7 @@
 #include <bloom/media/image.hpp>
 #include <bloom/media/video/colour.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <bloom/runtime/video_asset.hpp>
 #include <limits>
@@ -51,9 +52,38 @@ makeSession(const std::filesystem::path& path,
         });
 }
 } // namespace
+void VideoSourceContext::setSessionByteBudget(const std::size_t bytes) {
+    std::list<SessionEntry> detached;
+    const std::lock_guard lock(mutex_);
+    sessionByteBudget_ = bytes;
+    admitLocked(detached);
+}
+std::size_t VideoSourceContext::retainedSessionCount() {
+    const std::lock_guard lock(mutex_);
+    return sessions_.size();
+}
+void VideoSourceContext::admitLocked(std::list<SessionEntry>& detached) {
+    if (sessionByteBudget_ == 0)
+        sessionByteBudget_ =
+            std::max<std::size_t>(physicalMemoryBytes() / 4U, std::size_t{2} << 30U);
+    std::size_t total = 0;
+    std::size_t kept = 0;
+    for (auto it = sessions_.begin(); it != sessions_.end();) {
+        total += it->workerBytes;
+        const bool admitted = kept < kSnapshotFiles &&
+                              (kept < kMinimumRetainedSessions || total <= sessionByteBudget_);
+        if (admitted) {
+            ++kept;
+            ++it;
+        } else {
+            total -= it->workerBytes;
+            detached.splice(detached.end(), sessions_, it++);
+        }
+    }
+}
 std::shared_ptr<media::video::VideoDecodeSession>
 VideoSourceContext::session(const std::string& key, const std::filesystem::path& path,
-                            const bool allowInsertion) {
+                            const bool allowInsertion, const std::size_t workerBytes) {
     std::shared_ptr<render::detail::PackedHostRetirementState> retirement;
     std::uint64_t generation = 0;
     {
@@ -80,9 +110,8 @@ VideoSourceContext::session(const std::string& key, const std::filesystem::path&
         const auto found = std::ranges::find(sessions_, key, &SessionEntry::key);
         if (found != sessions_.end())
             detached.splice(detached.end(), sessions_, found);
-        if (sessions_.size() == 4)
-            detached.splice(detached.end(), sessions_, std::prev(sessions_.end()));
-        sessions_.push_front({key, path, session});
+        sessions_.push_front({key, path, session, workerBytes});
+        admitLocked(detached);
     }
     return session;
 }
@@ -260,13 +289,18 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
     if (!session) {
         const auto path =
             media::resolveImagePath(asset.locator.path, asset.locator.relinkHint, base);
-        session = context.session(revisionKey, path, allowInsertion);
+        session =
+            context.session(revisionKey, path, allowInsertion,
+                            media::video::estimatedDecodeWorkerBytes(asset.width, asset.height));
     }
     if (!session) {
         selection.warning = "Video source owner is closing";
         selection.cancelled = true;
         return selection;
     }
+    // Retained revisions serve interactive preview, which may use the discovered VA-API decoder;
+    // revalidated (final/export) requests always decode through the software reference.
+    media::video::FrameDecodeProvenance decodeProvenance;
     const auto product =
         session->frame(runtime::video::probeMetadata(asset), stream->id, index,
                        selection.interpretation, useCache ? &context.cache : nullptr,
@@ -279,7 +313,8 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
                         &selection.sourceWork,
                         &selection.retainedRevision,
                         {},
-                        hostByteBudget});
+                        hostByteBudget},
+                       {revisionPolicy == MediaSourceRevisionPolicy::Retained, &decodeProvenance});
     if (const auto* error = std::get_if<media::provider::Unavailable>(&product)) {
         selection.warning = error->detail;
         selection.cancelled = error->reason == media::provider::Error::Cancelled;
@@ -301,6 +336,10 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
     key.add(std::string(revision.begin(), revision.end()));
     key.add(selection.frame != nullptr);
     key.add(selection.warning);
+    const bool hardwareDecoded =
+        decodeProvenance.implementation == media::provider::Implementation::Hardware;
+    key.add(hardwareDecoded);
+    selection.decodeProvenance = decodeProvenance.description;
     selection.cacheKey = key.bytes();
     // Decode-only identity for the raw codec-side preparation. It deliberately omits the input and
     // working colour spaces, config revision, display and proxy so a changed working space reuses
@@ -310,6 +349,9 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
     decodeKey.add(std::string(digest.begin(), digest.end()));
     decodeKey.add(stream->id);
     decodeKey.add(index);
+    // A hardware-decoded preview frame is a distinct preparation from the software reference.
+    if (hardwareDecoded)
+        decodeKey.add(std::string{"vaapi"});
     selection.decodeKey = decodeKey.digest();
     return selection;
 }

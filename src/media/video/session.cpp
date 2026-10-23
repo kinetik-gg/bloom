@@ -10,8 +10,10 @@
 #include <bloom/platform/cache_directory.hpp>
 #include <cctype>
 #include <condition_variable>
+#include <cstdlib>
 #include <fstream>
 #include <new>
+#include <thread>
 #include <type_traits>
 namespace bloom::media::video {
 bool isVideoExtension(const std::filesystem::path& path) {
@@ -21,6 +23,43 @@ bool isVideoExtension(const std::filesystem::path& path) {
     return extension == ".mp4" || extension == ".mov" || extension == ".mkv" ||
            extension == ".mxf" || extension == ".mts" || extension == ".m2ts" ||
            extension == ".ts" || extension == ".m4v";
+}
+
+std::size_t automaticDecodedVideoCacheBytes(const std::size_t physicalBytes) noexcept {
+    constexpr std::size_t floor = std::size_t{256} << 20U;
+    constexpr std::size_t ceiling = std::size_t{4} << 30U;
+    return std::clamp(physicalBytes / 16U, floor, ceiling);
+}
+std::size_t estimatedDecodeWorkerBytes(const std::uint32_t width,
+                                       const std::uint32_t height) noexcept {
+    constexpr std::uint64_t base = 64ULL << 20U, ceiling = 2ULL << 30U;
+    const auto frame = static_cast<std::uint64_t>(width) * height * 3U * 2U;
+    return static_cast<std::size_t>(std::min(ceiling, base + frame * 24U));
+}
+bool VideoDecodeSession::hardwareDecodePossible() {
+#if defined(__linux__)
+    const auto* value = std::getenv("BLOOM_VIDEO_HARDWARE_DECODE");
+    const std::string_view mode = value ? value : "";
+    if (mode == "0")
+        return false;
+    // Automatic preference: with SIMD and threads, software decode was faster than VA-API on a
+    // 16-thread host and VA-API only won with four or fewer threads
+    // (docs/architecture/media-io.md).
+    if (mode != "1" && std::thread::hardware_concurrency() > kHardwareDecodeMaximumThreads)
+        return false;
+    // Render nodes are enumerated once per process; the worker discovers the usable one.
+    static const bool renderNode = [] {
+        std::error_code error;
+        for (std::filesystem::directory_iterator it("/dev/dri", error), end; !error && it != end;
+             it.increment(error))
+            if (it->path().filename().string().starts_with("renderD"))
+                return true;
+        return false;
+    }();
+    return renderNode;
+#else
+    return false;
+#endif
 }
 
 namespace {
@@ -41,6 +80,13 @@ PipelineQualificationV1 providerPipeline(const ProviderDeclaration& declaration)
     return ffmpegPipeline(declaration);
 #endif
 }
+// Waits for a session-level lock while honouring cancellation; queued requests never see Busy.
+bool acquire(std::unique_lock<std::timed_mutex>& lock, const Cancel& cancel) {
+    while (!lock.try_lock_for(std::chrono::milliseconds(20)))
+        if (cancel && cancel())
+            return false;
+    return true;
+}
 template <typename T> Result<T> product(WorkerReply reply) {
     if (auto* value = std::get_if<T>(&reply))
         return std::move(*value);
@@ -58,13 +104,23 @@ struct VideoDecodeSession::State {
         bool done = false;
         // Construct the terminal fallback before this flight is visible to another caller.
         FrameOutcome result = Unavailable{Error::Io, "Video frame failed"};
+        FrameDecodeProvenance provenance;
         std::condition_variable completed;
     };
     std::filesystem::path path;
     Handshake hello = providerHandshake();
     CapabilityRegistry registry;
     MediaWorkerPool pool;
-    std::mutex mutex;
+    // Preview-only VA-API decode generation (Linux). Created on first eligible request and
+    // permanently retired for this session after its first typed hardware refusal.
+    Handshake hardwareHello;
+    std::string workerExecutable;
+    std::function<void(std::int64_t)> workerLaunched;
+    std::unique_ptr<MediaWorkerPool> hardwarePool;
+    std::mutex hardwareMutex;
+    std::atomic<bool> hardwareRetired{false};
+    std::string hardwareFallback;
+    std::timed_mutex mutex;
     std::mutex frameMutex;
     std::shared_ptr<InFlightFrame> inFlightFrame;
     std::mutex revisionMutex;
@@ -88,8 +144,8 @@ struct VideoDecodeSession::State {
           std::shared_ptr<platform::FileSnapshotQuota> limits, std::filesystem::path directory,
           std::shared_ptr<render::detail::PackedHostRetirementState> owner,
           std::function<void(std::int64_t)> launched)
-        : path(std::move(source)), pool(options(std::move(worker), std::move(launched))),
-          quota(std::move(limits)), spoolDirectory(std::move(directory)),
+        : path(std::move(source)), pool(options(worker, launched)), workerExecutable(worker),
+          workerLaunched(launched), quota(std::move(limits)), spoolDirectory(std::move(directory)),
           retirement(std::move(owner)) {
         if (!quota)
             quota = std::make_shared<platform::FileSnapshotQuota>(32ULL * 1024 * 1024 * 1024, 8);
@@ -101,10 +157,53 @@ struct VideoDecodeSession::State {
             (void)registry.registerProvider(declaration);
             (void)registry.qualifyPipeline(providerPipeline(declaration));
         }
+#if defined(__linux__)
+        hardwareHello = ffmpegHardwareDecodeHandshake();
+        for (const auto& declaration : hardwareHello.declarations) {
+            (void)registry.registerProvider(declaration);
+            (void)registry.qualifyPipeline(providerPipeline(declaration));
+        }
+#endif
+    }
+    MediaWorkerPool* hardwareWorkers() {
+        const std::lock_guard lock(hardwareMutex);
+        if (!hardwarePool && !hardwareRetired.load()) {
+            auto o = options(workerExecutable, workerLaunched);
+            o.expected = hardwareHello;
+            o.process.arguments.emplace_back("--vaapi-decode");
+            hardwarePool = std::make_unique<MediaWorkerPool>(std::move(o));
+        }
+        return hardwarePool.get();
+    }
+    // Explicit, sticky software fallback. The retired worker and its source handle are released
+    // off the caller's lock order; later preview requests report the typed reason.
+    void retireHardware(std::string reason) {
+        // Worker calls hold `mutex` while they use the pool, so retirement waits for them.
+        const std::lock_guard serial(mutex);
+        std::unique_ptr<MediaWorkerPool> retired;
+        {
+            const std::lock_guard lock(hardwareMutex);
+            if (hardwareRetired.exchange(true))
+                return;
+            hardwareFallback = std::move(reason);
+            retired = std::move(hardwarePool);
+        }
+    }
+    [[nodiscard]] std::string hardwareFallbackReason() {
+        const std::lock_guard lock(hardwareMutex);
+        return hardwareFallback;
+    }
+    void releaseRetainedWorkers() {
+        pool.releaseRetained();
+        const std::lock_guard lock(hardwareMutex);
+        if (hardwarePool)
+            hardwarePool->releaseRetained();
     }
     WorkerPoolOptions options(std::string executable, std::function<void(std::int64_t)> launched) {
         WorkerPoolOptions options;
         options.process.executable = std::move(executable);
+        // One retained worker per pool decodes in presentation order; the session queues callers
+        // instead of refusing them. The watchdog bounds one worker exchange, not the queue.
         configureFfmpegWorkerEnvironment(options.process, options.process.executable);
         options.expected = hello;
         options.capacity = 1;
@@ -157,19 +256,22 @@ WorkerReply
 VideoDecodeSession::call(Role role, const ProbeResult* source, std::uint32_t stream,
                          std::uint64_t position, std::uint32_t count, const Cancel& cancel,
                          const std::shared_ptr<const platform::ReadOnlyFileSnapshot>& snapshot,
-                         const bool retainWorker) {
-    std::unique_lock lock(state_->mutex, std::try_to_lock);
-    if (!lock.owns_lock())
-        return Unavailable{Error::Busy, "Video session has an active request"};
-    if (cancel && cancel())
+                         const bool retainWorker, const bool hardware) {
+    std::unique_lock lock(state_->mutex, std::defer_lock);
+    if (!acquire(lock, cancel) || (cancel && cancel()))
         return Unavailable{Error::Cancelled, "Video request cancelled"};
     if (source && stream >= source->streams.size())
         return Unavailable{Error::InvalidValue, "Video stream does not exist"};
-    const auto found = std::ranges::find_if(state_->hello.declarations, [&](const auto& d) {
+    auto* workers = hardware ? state_->hardwareWorkers() : &state_->pool;
+    if (!workers)
+        return Unavailable{Error::Unavailable, "Hardware video decode is retired for this source"};
+    const auto& declarations =
+        hardware ? state_->hardwareHello.declarations : state_->hello.declarations;
+    const auto found = std::ranges::find_if(declarations, [&](const auto& d) {
         return d.capability.role == role && (!source || role == Role::DemuxIndex ||
                                              d.capability.codec == source->streams[stream].codec);
     });
-    if (found == state_->hello.declarations.end())
+    if (found == declarations.end())
         return Unavailable{Error::Unavailable, "No qualified video read capability"};
     auto attempt = state_->registry.begin(providerPipeline(*found));
     if (const auto* error = std::get_if<Unavailable>(&attempt))
@@ -185,8 +287,8 @@ VideoDecodeSession::call(Role role, const ProbeResult* source, std::uint32_t str
         request.width = source->streams[stream].width;
         request.height = source->streams[stream].height;
     }
-    return state_->pool.call(std::get<MediaAttempt>(attempt), 0, std::move(request), snapshot,
-                             cancel, retainWorker);
+    return workers->call(std::get<MediaAttempt>(attempt), 0, std::move(request), snapshot, cancel,
+                         retainWorker);
 }
 namespace {
 struct SnapshotRetirement final : render::detail::PackedHostRetirementNode {
@@ -295,7 +397,7 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
     }
     // A prior worker keeps the old anonymous source handle alive. Retire it before a new
     // capture so a one-file quota can admit revalidation or a read-only gesture.
-    state_->pool.releaseRetained();
+    state_->releaseRetainedWorkers();
     if (access.allowRetention)
         state_->revision.reset();
     if (access.hostByteBudget <= sizeof(SnapshotRetirement))
@@ -393,13 +495,12 @@ VideoDecodeSession::frame(const ProbeResult& source, std::uint32_t stream, std::
                           const Cancel& cancel) {
     return frame(source, stream, index, interpretation, cache, {}, {}, {}, cancel);
 }
-Result<std::shared_ptr<const FrameProduct>>
-VideoDecodeSession::frame(const ProbeResult& source, std::uint32_t stream, std::uint64_t index,
-                          std::uint32_t interpretation, DecodedVideoCache* cache,
-                          const std::string_view inputColorSpaceId,
-                          const std::string_view workingColorSpaceId,
-                          const provider::Digest& configRevision, const Cancel& cancel,
-                          const SourceRevisionAccess& revisionAccess) {
+Result<std::shared_ptr<const FrameProduct>> VideoDecodeSession::frame(
+    const ProbeResult& source, std::uint32_t stream, std::uint64_t index,
+    std::uint32_t interpretation, DecodedVideoCache* cache,
+    const std::string_view inputColorSpaceId, const std::string_view workingColorSpaceId,
+    const provider::Digest& configRevision, const Cancel& cancel,
+    const SourceRevisionAccess& revisionAccess, const FrameDecodeRoute& route) {
     if (revisionAccess.work)
         *revisionAccess.work = {};
     if (revisionAccess.retained)
@@ -414,30 +515,79 @@ VideoDecodeSession::frame(const ProbeResult& source, std::uint32_t stream, std::
     if (const auto error = verifySource(source.sourceDigest, cancel))
         return *error;
 #endif
+    const bool retainWorker =
+        revisionAccess.policy == SourceRevisionPolicy::Retained && revisionAccess.allowRetention;
+    // Hardware is a capability-screened preview accelerator: only retained preview revisions of
+    // a codec the hardware generation declares, and never after this session's first refusal.
+    const bool hardware =
+        route.preferHardware && retainWorker && stream < source.streams.size() &&
+        !state_->hardwareRetired.load() && hardwareDecodePossible() &&
+        std::ranges::any_of(
+            state_->hardwareHello.declarations,
+            [&](const auto& d) { return d.capability.codec == source.streams[stream].codec; });
+    const auto describe = [&](const bool usedHardware) {
+        FrameDecodeProvenance provenance;
+        if (usedHardware) {
+            provenance.implementation = Implementation::Hardware;
+            provenance.description = "vaapi";
+        } else if (route.preferHardware && state_->hardwareRetired.load()) {
+            provenance.fallback = true;
+            provenance.description =
+                "software (fallback: " + state_->hardwareFallbackReason() + ")";
+        }
+        return provenance;
+    };
+    const auto publish = [&](const FrameDecodeProvenance& provenance) {
+        if (route.provenance)
+            *route.provenance = provenance;
+    };
     const FrameKey key{source.sourceDigest,
                        stream,
                        index,
                        interpretation,
                        std::string(inputColorSpaceId),
                        std::string(workingColorSpaceId),
-                       configRevision};
+                       configRevision,
+                       hardware};
     if (cache)
-        if (auto cached = cache->find(key))
+        if (auto cached = cache->find(key)) {
+            publish(describe(hardware));
             return cached;
+        }
     std::shared_ptr<State::InFlightFrame> flight;
     bool leader = false;
     {
-        std::lock_guard lock(state_->frameMutex);
-        if (state_->inFlightFrame) {
-            if (state_->inFlightFrame->key != key)
-                return Unavailable{Error::Busy, "Video session has an active frame request"};
-            flight = state_->inFlightFrame;
-        } else {
-            flight = std::make_shared<State::InFlightFrame>(key);
-            state_->inFlightFrame = flight;
-            leader = true;
+        // A different in-flight frame is waited for, not refused: requests are served in turn
+        // by the one retained decoder, which keeps its forward position between them.
+        std::unique_lock lock(state_->frameMutex);
+        while (!flight) {
+            if (!state_->inFlightFrame) {
+                flight = std::make_shared<State::InFlightFrame>(key);
+                state_->inFlightFrame = flight;
+                leader = true;
+            } else if (state_->inFlightFrame->key == key)
+                flight = state_->inFlightFrame;
+            else {
+                const auto busy = state_->inFlightFrame;
+                busy->completed.wait_for(lock, std::chrono::milliseconds(20));
+                if (cancel && cancel())
+                    return Unavailable{Error::Cancelled, "Video frame wait cancelled"};
+            }
         }
     }
+    if (leader && cache)
+        if (auto cached = cache->find(key)) {
+            // The frame that was in flight before us may have been this one.
+            {
+                const std::lock_guard lock(state_->frameMutex);
+                flight->done = true;
+                flight->result = cached;
+                state_->inFlightFrame.reset();
+            }
+            flight->completed.notify_all();
+            publish(describe(hardware));
+            return cached;
+        }
     if (!leader) {
         std::unique_lock lock(state_->frameMutex);
         while (!flight->done) {
@@ -447,16 +597,30 @@ VideoDecodeSession::frame(const ProbeResult& source, std::uint32_t stream, std::
         }
         if (cancel && cancel())
             return Unavailable{Error::Cancelled, "Video frame wait cancelled"};
-        return flight->result;
+        auto provenance = flight->provenance;
+        auto result = flight->result;
+        lock.unlock();
+        publish(provenance);
+        return result;
     }
     // Everything after admission is covered, including worker callbacks, cache insertion and
     // copying the leader's return value. Completion never allocates or copies an outcome.
     State::FrameCompletion completion{*state_, *flight};
     try {
-        auto decoded = product<FrameProduct>(
-            call(Role::VideoDecode, &source, stream, index, 1, cancel, snapshot,
-                 revisionAccess.policy == SourceRevisionPolicy::Retained &&
-                     revisionAccess.allowRetention));
+        bool usedHardware = hardware;
+        auto decoded = product<FrameProduct>(call(Role::VideoDecode, &source, stream, index, 1,
+                                                  cancel, snapshot, retainWorker, hardware));
+        if (const auto* error = std::get_if<Unavailable>(&decoded);
+            hardware && error && error->reason != Error::Cancelled &&
+            error->reason != Error::Shutdown && error->reason != Error::SourceChanged) {
+            // Explicit fallback: retire hardware for this source and decode the software
+            // reference. The typed reason stays visible in every later frame's provenance.
+            state_->retireHardware(error->detail);
+            usedHardware = false;
+            decoded = product<FrameProduct>(call(Role::VideoDecode, &source, stream, index, 1,
+                                                 cancel, snapshot, retainWorker, false));
+        }
+        flight->provenance = describe(usedHardware);
         if (const auto* error = std::get_if<Unavailable>(&decoded)) {
             auto failure = *error;
             State::FrameOutcome outcome{std::move(failure)};
@@ -464,8 +628,11 @@ VideoDecodeSession::frame(const ProbeResult& source, std::uint32_t stream, std::
         } else {
             auto frame =
                 std::make_shared<const FrameProduct>(std::get<FrameProduct>(std::move(decoded)));
-            if (cache && revisionAccess.allowRetention)
-                cache->store(key, frame);
+            if (cache && revisionAccess.allowRetention) {
+                auto stored = key;
+                stored.hardware = usedHardware;
+                cache->store(stored, frame);
+            }
             State::FrameOutcome outcome{std::move(frame)};
             flight->result = std::move(outcome);
         }
@@ -474,6 +641,7 @@ VideoDecodeSession::frame(const ProbeResult& source, std::uint32_t stream, std::
     } catch (const std::exception&) {
         std::get<Unavailable>(flight->result).reason = Error::Io;
     }
+    publish(flight->provenance);
     return flight->result;
 }
 Result<AudioBlock> VideoDecodeSession::audio(const ProbeResult& source, std::uint32_t stream,

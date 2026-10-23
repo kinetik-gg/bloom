@@ -1,3 +1,4 @@
+#include "video_source.hpp"
 #include <algorithm>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
@@ -26,6 +27,35 @@ project::ProjectIoOperationMemory memory() {
     if (!operation)
         throw std::runtime_error("memory operation");
     return std::move(*operation);
+}
+// Issue #366: retained decode sessions are admitted by estimated worker memory, not a fixed
+// count. Construction launches no worker, so this checks admission only.
+void sessionAdmission(const std::filesystem::path& directory) {
+    runtime::detail::VideoSourceContext context;
+    const auto hd = media::video::estimatedDecodeWorkerBytes(1920, 1080);
+    const auto uhd = media::video::estimatedDecodeWorkerBytes(3840, 2160);
+    context.setSessionByteBudget(hd * 6);
+    for (int i = 0; i < 10; ++i)
+        check(context.session("hd-" + std::to_string(i), directory / "numbered-h264.mp4", true,
+                              hd) != nullptr,
+              "session construction");
+    check(context.retainedSessionCount() == 6, "memory budget sizes retained HD sessions");
+    context.setSessionByteBudget(uhd * 3);
+    for (int i = 0; i < 6; ++i)
+        (void)context.session("uhd-" + std::to_string(i), directory / "numbered-h264.mp4", true,
+                              uhd);
+    check(context.retainedSessionCount() == 3, "larger streams admit fewer sessions");
+    context.setSessionByteBudget(1);
+    check(context.retainedSessionCount() ==
+              runtime::detail::VideoSourceContext::kMinimumRetainedSessions,
+          "two sources can always alternate");
+    context.setSessionByteBudget(std::size_t{1} << 50U);
+    for (int i = 0; i < 20; ++i)
+        (void)context.session("small-" + std::to_string(i), directory / "numbered-h264.mp4", true,
+                              1);
+    check(context.retainedSessionCount() == runtime::detail::VideoSourceContext::kSnapshotFiles,
+          "the source-snapshot file quota bounds retention");
+    context.beginShutdown();
 }
 void run(const std::filesystem::path& directory) {
     auto seed = document::makeNewProject("Video test", "Main", core::RationalTime::fromInteger(2));
@@ -110,7 +140,8 @@ void run(const std::filesystem::path& directory) {
     check(mix && mix->clips.size() == 1 && mix->clips.front().assetId == asset.id,
           "video audio follows the clip mix");
     media::video::VideoDecodeSession session(directory / "numbered-prores.mov");
-    const auto clip = media::video::decodeAudioClip(session, runtime::video::probeMetadata(asset));
+    const auto clip = media::video::decodeAudioClip(session, runtime::video::probeMetadata(asset),
+                                                    std::uint64_t{96000});
     check(std::holds_alternative<media::audio::AudioBuffer>(clip),
           "video audio prepares a mixer buffer");
     check(std::get<media::audio::AudioBuffer>(clip).frames == 96000, "complete sample count");
@@ -139,11 +170,11 @@ void run(const std::filesystem::path& directory) {
     const auto colors = document::makeBloomNeutralColorSettingsV1({});
     auto archive = project::buildVerifiedSaveArchive(
         {}, {.snapshot = &saved, .colorSettings = &colors}, {}, memory());
-    check(static_cast<bool>(archive), "video archive writes schema 1.21");
+    check(static_cast<bool>(archive), "video archive writes the current schema");
     auto opened = project::openProjectArchive(archive.archive()->bytes(), {}, memory());
     check(opened.outcome() == project::OpenArchiveOutcome::Opened, "video archive reopens");
     auto restored = std::move(opened).takeOpened();
-    check(restored.schemaMinor == 21 &&
+    check(restored.schemaMinor >= 21 &&
               *restored.document->snapshot().project().findAsset(asset.id) == asset,
           "video streams, timing and identity round trip");
     {
@@ -169,6 +200,7 @@ void run(const std::filesystem::path& directory) {
 int main(int argc, char** argv) {
     try {
         check(argc == 2, "fixture directory");
+        sessionAdmission(argv[1]);
         run(argv[1]);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

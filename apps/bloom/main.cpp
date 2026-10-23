@@ -8,12 +8,14 @@
 #include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
+#include <bloom/media/video/session.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
@@ -159,7 +161,17 @@ int main(int argc, char* argv[]) try {
         });
     const QSettings playbackSettings;
     const auto cacheBudgets = bloom::ui::cacheMemoryBudgetsFromSettings(playbackSettings);
-    cpuEvaluator.setVideoCacheByteBudget(std::size_t{256} * 1024U * 1024U);
+    // Decoded-video retention: `playback/decoded-video-cache-bytes` selects an exact target; a
+    // missing, zero or unreadable value selects the automatic share of physical memory. The
+    // cache is a reusable pool on the process memory ledger, so observed OS limits still apply.
+    const auto decodedVideoCacheBytes =
+        playbackSettings.value(QStringLiteral("playback/decoded-video-cache-bytes"), 0)
+            .toULongLong();
+    cpuEvaluator.setVideoCacheByteBudget(
+        decodedVideoCacheBytes != 0
+            ? static_cast<std::size_t>(decodedVideoCacheBytes)
+            : bloom::media::video::automaticDecodedVideoCacheBytes(
+                  bloom::runtime::physicalMemoryBytes()));
     cpuEvaluator.operationCache()->setByteBudget(cacheBudgets.operationCacheByteBudget);
     // CACHE-2 (docs/architecture/media-io.md "Disk cache"): one instance shared by the evaluator
     // and the Asset Controller's proxy/thumbnail decodes below -- "the same store". Built from

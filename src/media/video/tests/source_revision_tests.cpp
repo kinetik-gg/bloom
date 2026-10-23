@@ -345,20 +345,20 @@ void retainedWorker(const std::filesystem::path& source, const std::filesystem::
               "100 frame requests amortize one worker and one indexed source within quota");
         for (unsigned ordinal = 0; ordinal < 20; ++ordinal)
             (void)product(session.frame(probe, 0, ordinal, 0, nullptr, {}, {}, {}, {}, retained));
-        check(launches.size() == 1, "retained worker stays live through its 128th call");
         (void)product(session.frame(probe, 0, 20, 0, nullptr, {}, {}, {}, {}, retained));
-        check(launches.size() == 2, "bounded retained worker rotates after its 128-call lifetime");
-        reaped(launches.front());
+        // Issue #366: the call bound is sized for continuous playback; relaunching every 128
+        // calls discarded the decoder position and packet index every few seconds.
+        check(launches.size() == 1, "retained worker stays live past 128 calls");
 
         int cancelChecks = 0;
         const auto cancelled = session.frame(
             probe, 0, 7, 0, nullptr, {}, {}, {}, [&] { return ++cancelChecks >= 4; }, retained);
         check(std::get<provider::Unavailable>(cancelled).reason == provider::Error::Cancelled,
               "in-flight retained call observes cancellation");
-        reaped(launches[1]);
+        reaped(launches[0]);
         const auto restarted =
             product(session.frame(probe, 0, 7, 0, nullptr, {}, {}, {}, {}, retained));
-        check(launches.size() == 3 &&
+        check(launches.size() == 2 &&
                   std::to_integer<unsigned>(restarted->planes.front().bytes.front()) == 37U,
               "cancelled retained worker is replaced without losing immutable source authority");
     }

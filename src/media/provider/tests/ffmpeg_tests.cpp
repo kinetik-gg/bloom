@@ -5,6 +5,8 @@
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/provider/openh264_runtime.hpp>
 #include <bloom/media/provider/worker_pool.hpp>
+#include <bloom/platform/file_snapshot.hpp>
+#include <chrono>
 #include <csignal>
 #include <filesystem>
 #include <fstream>
@@ -106,6 +108,29 @@ void run(const std::filesystem::path& directory) {
                         pipeline.result == QcResult::Incomplete &&
                         pipeline.determinism == MediaDeterminismV1::NoDeterminismClaim,
                     "VA-API never inherits software qualification or determinism");
+    }
+    // Preview VA-API decode: discovered device, H.264/HEVC decode only, admitted for preview
+    // through its own hardware execution key and never claiming determinism.
+    const auto decodeHardware = ffmpegHardwareDecodeHandshake();
+    test::check(decodeHardware.declarations.size() == 2 &&
+                    decodeHardware.execution.device == "vaapi-render-node-discovered" &&
+                    decodeHardware.execution.implementation == Implementation::Hardware,
+                "hardware decode handshake names discovery, not a fixed render node");
+    CapabilityRegistry hardwareRegistry;
+    for (const auto& declaration : decodeHardware.declarations) {
+        test::check(declaration.capability.role == Role::VideoDecode &&
+                        declaration.capability.purpose == Purpose::Preview &&
+                        (declaration.capability.codec == "h264" ||
+                         declaration.capability.codec == "hevc") &&
+                        declaration.execution == decodeHardware.execution,
+                    "hardware decode is preview H.264/HEVC only");
+        const auto pipeline = ffmpegPipeline(declaration);
+        test::check(pipeline.determinism == MediaDeterminismV1::NoDeterminismClaim,
+                    "hardware decode makes no determinism claim");
+        test::check(
+            std::holds_alternative<Digest>(hardwareRegistry.registerProvider(declaration)) &&
+                std::holds_alternative<Digest>(hardwareRegistry.qualifyPipeline(pipeline)),
+            "hardware preview decode is selectable by capability");
     }
     for (const auto* filename : {"numbered-h264.mp4", "numbered-prores.mov"}) {
         const auto path = directory / filename;
@@ -261,11 +286,139 @@ void run(const std::filesystem::path& directory) {
     const auto* error = std::get_if<Unavailable>(&refused);
     test::check(error && error->reason == Error::Corrupt, "corrupt input refused");
 }
+// Issue #366: a retained worker continues sequential audio blocks from the previous block's end,
+// so decoding N blocks of a stream is linear in N rather than redecoding from the start each time.
+void sequentialAudioIsLinear(const std::filesystem::path& directory) {
+    constexpr std::uint32_t rate = 48000, block = 65536, blocks = 256;
+    constexpr std::uint64_t samples = std::uint64_t{block} * blocks;
+    const auto path = directory / "linear-audio.wav";
+    {
+        std::ofstream wav(path, std::ios::binary | std::ios::trunc);
+        const auto u32 = [&](std::uint32_t v) {
+            for (unsigned i = 0; i < 4; ++i)
+                wav.put(static_cast<char>((v >> (8U * i)) & 255U));
+        };
+        const auto u16 = [&](std::uint16_t v) {
+            wav.put(static_cast<char>(v & 255U));
+            wav.put(static_cast<char>(v >> 8U));
+        };
+        const auto data = static_cast<std::uint32_t>(samples * 2U);
+        wav.write("RIFF", 4);
+        u32(36U + data);
+        wav.write("WAVEfmt ", 8);
+        u32(16);
+        u16(1);
+        u16(1);
+        u32(rate);
+        u32(rate * 2U);
+        u16(2);
+        u16(16);
+        wav.write("data", 4);
+        u32(data);
+        std::vector<char> bytes(samples * 2U);
+        for (std::uint64_t n = 0; n < samples; ++n) {
+            const auto value = static_cast<std::uint16_t>(
+                static_cast<std::int16_t>((static_cast<int>(n % 997) - 498) * 32));
+            bytes[n * 2] = static_cast<char>(value & 255U);
+            bytes[n * 2 + 1] = static_cast<char>(value >> 8U);
+        }
+        wav.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        test::check(wav.good(), "write linear-audio fixture");
+    }
+    const auto quota = std::make_shared<bloom::platform::FileSnapshotQuota>(1ULL << 36U, 2);
+    auto captured =
+        bloom::platform::ReadOnlyFileSnapshot::capture(path, directory, quota, Limits::sourceBytes);
+    auto* owned = std::get_if<std::unique_ptr<bloom::platform::ReadOnlyFileSnapshot>>(&captured);
+    test::check(owned != nullptr, "audio snapshot");
+    const std::shared_ptr<const bloom::platform::ReadOnlyFileSnapshot> snapshot(std::move(*owned));
+    const auto hello = ffmpegHandshake();
+    CapabilityRegistry registry;
+    for (const auto& d : hello.declarations) {
+        (void)registry.registerProvider(d);
+        (void)registry.qualifyPipeline(ffmpegPipeline(d));
+    }
+    WorkerPoolOptions options;
+    options.process.executable = BLOOM_FFMPEG_WORKER;
+    options.expected = hello;
+    options.capacity = 1;
+    options.timeout = std::chrono::seconds(30);
+    options.retainedVideo = true;
+    MediaWorkerPool pool(options);
+    const auto declaration = [&](Role role, std::string_view codec) {
+        const auto found = std::ranges::find_if(hello.declarations, [&](const auto& d) {
+            return d.capability.role == role && d.capability.purpose == Purpose::Preview &&
+                   (codec.empty() || d.capability.codec == codec);
+        });
+        test::check(found != hello.declarations.end(), "declared audio capability");
+        return *found;
+    };
+    const auto probeDeclaration = declaration(Role::Probe, {});
+    CallRequest probeRequest;
+    probeRequest.capability = probeDeclaration.capability;
+    probeRequest.source = path.string();
+    const auto probe = std::get<ProbeResult>(
+        pool.call(std::get<MediaAttempt>(registry.begin(ffmpegPipeline(probeDeclaration))), 0,
+                  probeRequest, snapshot, {}, true));
+    test::check(probe.streams.size() == 1 && probe.streams[0].codec == "pcm_s16le",
+                "PCM WAV probe");
+    const auto audioDeclaration = declaration(Role::AudioDecode, "pcm_s16le");
+    std::vector<double> milliseconds;
+    for (std::uint32_t b = 0; b < blocks; ++b) {
+        CallRequest request;
+        request.capability = audioDeclaration.capability;
+        request.source = path.string();
+        request.sourceDigest = probe.sourceDigest;
+        request.frame = std::uint64_t{b} * block;
+        request.samples = block;
+        const auto start = std::chrono::steady_clock::now();
+        auto reply =
+            pool.call(std::get<MediaAttempt>(registry.begin(ffmpegPipeline(audioDeclaration))), 0,
+                      std::move(request), snapshot, {}, true);
+        milliseconds.push_back(
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+                .count());
+        const auto* audio = std::get_if<AudioBlock>(&reply);
+        test::check(audio != nullptr && audio->channels.size() == 1 &&
+                        audio->channels[0].size() == block,
+                    "sequential retained audio block");
+        for (const auto i : {0U, 1U, block / 2U, block - 1U}) {
+            const auto n = std::uint64_t{b} * block + i;
+            test::check(audio->channels[0][i] ==
+                            static_cast<float>(static_cast<int>(n % 997) - 498) / 1024.0F,
+                        "sample-exact sequential audio continuation");
+        }
+    }
+    const auto mean = [&](std::size_t from) {
+        double total = 0;
+        for (std::size_t i = from; i < from + 16; ++i)
+            total += milliseconds[i];
+        return total / 16.0;
+    };
+    // Redecoding from the start would make the last blocks read ~250 blocks of audio each.
+    const auto early = mean(1), late = mean(blocks - 16);
+    std::cout << "audio block mean early " << early << " ms, late " << late << " ms\n";
+    test::check(late < early * 3.0 + 10.0, "sequential audio decode is linear, not quadratic");
+    // A non-continuing request reopens and still returns exact samples.
+    CallRequest jump;
+    jump.capability = audioDeclaration.capability;
+    jump.source = path.string();
+    jump.sourceDigest = probe.sourceDigest;
+    jump.frame = 1234567;
+    jump.samples = 1000;
+    const auto jumped = std::get<AudioBlock>(
+        pool.call(std::get<MediaAttempt>(registry.begin(ffmpegPipeline(audioDeclaration))), 0, jump,
+                  snapshot, {}, true));
+    test::check(jumped.channels[0][0] ==
+                    static_cast<float>(static_cast<int>(1234567 % 997) - 498) / 1024.0F,
+                "reopened audio request is sample exact");
+    std::filesystem::remove(path);
+}
 } // namespace
 int main(int argc, char** argv) {
     try {
         test::check(argc == 2, "fixture directory");
         run(argv[1]);
+        sequentialAudioIsLinear(argv[1]);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

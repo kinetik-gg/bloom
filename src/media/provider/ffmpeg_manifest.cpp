@@ -138,6 +138,32 @@ Handshake ffmpegHandshake(const bool hardware, const bool openh264,
     h.transports = {Transport::PipeCopiesV0};
     return h;
 }
+Handshake ffmpegHardwareDecodeHandshake() {
+    // Preview-only VA-API decode. The worker discovers the render node at run time, so the
+    // execution key names the discovery policy rather than one device path. Every worker
+    // generation re-proves its first hardware frame against the software reference before any
+    // hardware frame is returned, and the host never routes final rendering here.
+    auto h = ffmpegHandshake();
+    auto& e = h.execution;
+    e.driver = "vaapi-libva";
+    e.device = "vaapi-render-node-discovered";
+    e.implementation = Implementation::Hardware;
+    e.entitlement = "apple_authorized=false;delivery_qualified=false;preview_only=true";
+    std::vector<ProviderDeclaration> declarations;
+    for (auto declaration : h.declarations) {
+        if (declaration.capability.role != Role::VideoDecode ||
+            (declaration.capability.codec != "h264" && declaration.capability.codec != "hevc"))
+            continue;
+        declaration.execution = e;
+        declaration.capability.surfaceSemantics = "cpu-planes-v2-vaapi-download";
+        declaration.evidence.reviewDate = "2026-10-23";
+        declaration.evidence.qualification = Qualification::PreviewQualified;
+        declaration.evidence.result = QcResult::Pass;
+        declarations.push_back(std::move(declaration));
+    }
+    h.declarations = std::move(declarations);
+    return h;
+}
 PipelineQualificationV1 ffmpegPipeline(const ProviderDeclaration& d) {
     PipelineQualificationV1 p;
     p.steps.push_back({std::get<Digest>(digest(d.capability)),

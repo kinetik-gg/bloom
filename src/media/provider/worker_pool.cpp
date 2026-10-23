@@ -9,6 +9,10 @@
 namespace bloom::media::provider {
 namespace {
 using Clock = std::chrono::steady_clock;
+// A retained worker is relaunched after five minutes or this many calls. Relaunching discards
+// the decoder position and packet index, so the call bound is sized for continuous playback
+// (about 20 minutes at 50 frames per second) and the five-minute lifetime is the binding limit.
+constexpr std::size_t kRetainedCallLimit = 65536;
 Unavailable failure(const platform::ProcessFailure& p) {
     switch (p.code) {
     case platform::ProcessError::Unavailable:
@@ -274,7 +278,8 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
     const bool retain =
         retainWorker && state_->options.retainedVideo && snapshot &&
         (request.capability.role == Role::Probe || request.capability.role == Role::VideoDecode ||
-         request.capability.role == Role::DemuxIndex);
+         request.capability.role == Role::DemuxIndex ||
+         request.capability.role == Role::AudioDecode);
     try {
         if (!retain) {
             state_->retained.reset();
@@ -286,7 +291,7 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
         if (state_->retained && (state_->retained->snapshot != snapshot ||
                                  now - state_->retained->started >= std::chrono::minutes(5) ||
                                  now - state_->retained->lastUsed >= std::chrono::seconds(30) ||
-                                 state_->retained->calls >= 128))
+                                 state_->retained->calls >= kRetainedCallLimit))
             state_->retained.reset();
         if (!state_->retained) {
             auto options = state_->options.process;

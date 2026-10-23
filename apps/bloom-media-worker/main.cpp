@@ -13,6 +13,9 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 #include <memory>
 #include <string_view>
 
@@ -20,6 +23,11 @@ int main(int argc, char** argv) {
     using namespace bloom::media;
     if (!bloom::platform::processWorkerBootstrap())
         return 2;
+#if defined(__GLIBC__)
+    // Decoder threads would otherwise each reserve a 64 MiB malloc arena inside the bounded
+    // media-v1 address space.
+    mallopt(M_ARENA_MAX, 4);
+#endif
     bool retainedVideo = false;
 #ifdef BLOOM_FAKE_WORKER
     (void)argc;
@@ -32,12 +40,15 @@ int main(int argc, char** argv) {
     videotoolbox::Encoder encoder;
 #else
     bool hardware = false;
+    bool hardwareDecode = false;
     std::string openh264Directory;
     std::string openh264Digest;
     for (int i = 1; i < argc; ++i) {
         const auto argument = std::string_view(argv[i]);
         if (argument == "--vaapi")
             hardware = true;
+        else if (argument == "--vaapi-decode")
+            hardwareDecode = true;
         else if (argument == "--retained-video")
             retainedVideo = true;
         else if (argument == "--openh264-dir" && i + 1 < argc)
@@ -60,13 +71,20 @@ int main(int argc, char** argv) {
                        .c_str(),
                    1);
     }
+    if (hardwareDecode && (hardware || !retainedVideo))
+        return 2; // Preview hardware decode is a retained, decode-only worker generation.
     hardware = hardware && ffmpeg::hardwareEncodeAvailable();
-    const auto handshake = provider::ffmpegHandshake(
-        hardware, openh264, provider::OpenH264Runtime::version(), openh264Digest);
+    // The decode-only VA-API handshake is device-neutral: the worker discovers the render node
+    // when it opens the stream, and reports a typed refusal when none decodes it.
+    const auto handshake =
+        hardwareDecode
+            ? provider::ffmpegHardwareDecodeHandshake()
+            : provider::ffmpegHandshake(hardware, openh264, provider::OpenH264Runtime::version(),
+                                        openh264Digest);
     ffmpeg::Encoder encoder(hardware);
     std::unique_ptr<ffmpeg::DecodeSession> decoder;
     if (retainedVideo)
-        decoder = std::make_unique<ffmpeg::DecodeSession>(hardware);
+        decoder = std::make_unique<ffmpeg::DecodeSession>(hardwareDecode);
 #endif
     try {
         std::uint64_t session = 0, sequence = 0;

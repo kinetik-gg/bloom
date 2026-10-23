@@ -23,12 +23,15 @@ struct VideoSourceSelection {
     bool cancelled = false;
     platform::FileSnapshotStatistics sourceWork;
     bool retainedRevision = false;
+    // "software", "vaapi" or "software (fallback: <reason>)" for the decoded frame.
+    std::string decodeProvenance;
 };
 class VideoSourceContext final {
   public:
     media::video::DecodedVideoCache cache{0};
     [[nodiscard]] std::shared_ptr<media::video::VideoDecodeSession>
-    session(const std::string& key, const std::filesystem::path& path, bool allowInsertion);
+    session(const std::string& key, const std::filesystem::path& path, bool allowInsertion,
+            std::size_t workerBytes = 0);
     [[nodiscard]] std::shared_ptr<media::video::VideoDecodeSession>
     retainedSession(const std::string& key);
     void discardFailedSession(const std::string& key,
@@ -42,6 +45,13 @@ class VideoSourceContext final {
     void beginShutdown();
     [[nodiscard]] std::uint64_t sourceSnapshotBytes() const { return quota_->residentBytes(); }
     [[nodiscard]] std::size_t sourceSnapshotCount() const { return quota_->residentFiles(); }
+    // Retained sessions are admitted by memory, not a fixed count: their estimated worker bytes
+    // must fit this budget (default a quarter of physical memory). At least two are kept so two
+    // sources can alternate, and never more than the source-snapshot file quota can retain.
+    void setSessionByteBudget(std::size_t bytes);
+    [[nodiscard]] std::size_t retainedSessionCount();
+    static constexpr std::size_t kSnapshotFiles = 8;
+    static constexpr std::size_t kMinimumRetainedSessions = 2;
 
   private:
     std::mutex mutex_;
@@ -49,10 +59,14 @@ class VideoSourceContext final {
         std::string key;
         std::filesystem::path path;
         std::shared_ptr<media::video::VideoDecodeSession> session;
+        std::size_t workerBytes = 0;
     };
+    // Called with mutex_ held; moves evicted entries into `detached` for destruction unlocked.
+    void admitLocked(std::list<SessionEntry>& detached);
+    std::size_t sessionByteBudget_ = 0;
     std::list<SessionEntry> sessions_;
     std::shared_ptr<platform::FileSnapshotQuota> quota_ =
-        std::make_shared<platform::FileSnapshotQuota>(32ULL * 1024 * 1024 * 1024, 8);
+        std::make_shared<platform::FileSnapshotQuota>(32ULL * 1024 * 1024 * 1024, kSnapshotFiles);
     std::shared_ptr<render::detail::PackedHostRetirementState> retirement_;
     std::uint64_t generation_ = 0;
     bool closed_ = false;

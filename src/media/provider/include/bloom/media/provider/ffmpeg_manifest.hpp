@@ -5,6 +5,9 @@ namespace bloom::media::provider {
 [[nodiscard]] Handshake ffmpegHandshake(bool hardware = false, bool openh264 = false,
                                         std::string_view openh264Version = {},
                                         std::string_view openh264Digest = {});
+// Preview-only VA-API decode for H.264/HEVC with run-time render-node discovery and a
+// per-worker software parity gate. Software decode remains the reference and fallback.
+[[nodiscard]] Handshake ffmpegHardwareDecodeHandshake();
 [[nodiscard]] PipelineQualificationV1 ffmpegPipeline(const ProviderDeclaration& declaration);
 // Presentation note for a ProRes deliverable. On macOS ProRes is the operating system's own codec
 // through AVFoundation/VideoToolbox -- the native, Apple-authorized implementation -- so the
