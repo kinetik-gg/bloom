@@ -144,6 +144,10 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
         copy.nodeId = nodeIds.at(boundary.nodeId);
         copy.layerId = *layerId;
         copy.name += " copy";
+        // ADR 0024: a duplicated content-extent source travels with its layer.
+        if (auto* source = std::get_if<document::SourceLayerExtent>(&copy.timing.contentExtent))
+            if (const auto mapped = nodeIds.find(source->sourceNodeId); mapped != nodeIds.end())
+                source->sourceNodeId = mapped->second;
         if (!graph.addLayerOutput(std::move(copy)))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Duplicated layer name or boundary is invalid");
