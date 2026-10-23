@@ -143,7 +143,7 @@ list or generated Merge chain to synchronize. Composition sources provide nestin
 The Merge and parenting changes introduced plan semantics 4: `CompiledMergeInput` admits an absent Layer identity and a plain image
 operation, changing the previous Layer-only operand grammar. Layer Output also carries an optional
 parent operation index. Evaluator semantics remains 6 and
-primitive semantics remains 5; existing unparented pixel behavior is unchanged. Current output identities use plan 8, animation 2, evaluator 9 and primitives 7.
+primitive semantics remains 5; existing unparented pixel behavior is unchanged. Current output identities use plan 8, animation 2, evaluator 10 and primitives 7.
 
 ### Composition Sources
 
