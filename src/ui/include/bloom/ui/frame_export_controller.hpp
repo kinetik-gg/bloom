@@ -197,6 +197,11 @@ class FrameExportController final : public QObject {
     void setProjectPathProvider(FrameExportDestinationProvider provider);
     void setRangeProvider(FrameExportRangeProvider provider);
     void setApprovalDecisionProvider(FrameExportApprovalDecisionProvider provider);
+    // Test seam: adjusts each still-frame attempt request just before submission, so a test can
+    // force a genuine attempt failure (for example an impossible pixel allowance) and prove the UI
+    // failure path. Production never installs one.
+    void setAttemptRequestAdjusterForTesting(
+        std::function<void(host::OutputAnalysisAttemptRequestV1&)> adjuster);
     // Composition exports need a process-rooted owner for admission-independent encoder cleanup.
     // Install it before beginning a media export; the application root retains and drains it.
     void
@@ -339,6 +344,7 @@ class FrameExportController final : public QObject {
     FrameExportDestinationProvider projectPathProvider_;
     FrameExportRangeProvider rangeProvider_;
     FrameExportApprovalDecisionProvider approvalDecisionProvider_;
+    std::function<void(host::OutputAnalysisAttemptRequestV1&)> attemptRequestAdjuster_;
     std::optional<SequenceState> sequence_;
     std::unique_ptr<host::SequenceExportRunnerV1> mediaExport_;
     // Guards pollCompositionExport against re-entrancy from the approval prompt's nested event

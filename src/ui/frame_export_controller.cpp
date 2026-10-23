@@ -388,6 +388,10 @@ void FrameExportController::setRangeProvider(FrameExportRangeProvider provider) 
     rangeProvider_ = std::move(provider);
 }
 
+void FrameExportController::setAttemptRequestAdjusterForTesting(
+    std::function<void(host::OutputAnalysisAttemptRequestV1&)> adjuster) {
+    attemptRequestAdjuster_ = std::move(adjuster);
+}
 void FrameExportController::setApprovalDecisionProvider(
     FrameExportApprovalDecisionProvider provider) {
     approvalDecisionProvider_ = std::move(provider);
@@ -756,6 +760,8 @@ bool FrameExportController::beginAttempt(
         .gpuProvider = gpuExportProvider_,
         .useRootPixelCapacity = true};
 
+    if (attemptRequestAdjuster_)
+        attemptRequestAdjuster_(request);
     auto begin = host::beginOutputAnalysisAttemptV1(scheduler_, artifactCoordinator_, *ledger_,
                                                     std::move(request));
     if (!begin) {

@@ -773,7 +773,7 @@ template <typename Definition>
                               {},
                               std::nullopt,
                               NodeCardinality::Many,
-                              NodeCategory::Utilities};
+                              NodeCategory::Transform};
     if (rotate) {
         definition.parameters.push_back({"quarterTurns", "bloom.rotate-90.quarter-turns",
                                          ParameterValueKind::Integer, true, false,
