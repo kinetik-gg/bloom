@@ -228,6 +228,12 @@ struct AudioBlock {
 [[nodiscard]] bool valid(const Rational& value);
 [[nodiscard]] bool valid(const ProbeResult& value);
 [[nodiscard]] bool valid(const FrameProduct& value);
+// Structure, extent and budget checks without rehashing planes. Use it only where the plane
+// digests were just computed or already verified at the worker boundary (`decodeMessage`).
+[[nodiscard]] bool validLayout(const FrameProduct& value);
+// Computes or verifies every plane digest, hashing large planes concurrently.
+void assignPlaneDigests(std::vector<CpuPlane>& planes);
+[[nodiscard]] bool planeDigestsMatch(const std::vector<CpuPlane>& planes);
 [[nodiscard]] bool valid(const AudioBlock& value);
 [[nodiscard]] bool valid(const DemuxIndex& value);
 [[nodiscard]] Digest digestBytes(std::span<const std::byte> bytes);

@@ -430,6 +430,27 @@ void run() {
     plane.digest = digestBytes(plane.bytes);
     frame.planes.push_back(plane);
     test::check(valid(frame), "bounded plane");
+    frame.planes[0].digest = Digest{};
+    test::check(!valid(frame) && validLayout(frame) && !planeDigestsMatch(frame.planes),
+                "layout checks never stand in for a digest check");
+    // Large multi-plane products hash their planes concurrently with identical results.
+    FrameProduct large;
+    large.format = PixelFormat::Yuva444p16;
+    for (unsigned i = 0; i < 4; ++i) {
+        CpuPlane largePlane;
+        largePlane.width = largePlane.height = 1024;
+        largePlane.stride = 2048;
+        largePlane.bytes.assign(std::size_t{2048} * 1024,
+                                std::byte{static_cast<unsigned char>(i + 1)});
+        large.planes.push_back(std::move(largePlane));
+    }
+    assignPlaneDigests(large.planes);
+    for (const auto& largePlane : large.planes)
+        test::check(largePlane.digest == digestBytes(largePlane.bytes), "concurrent plane digest");
+    test::check(valid(large) && planeDigestsMatch(large.planes), "concurrent verification");
+    large.planes[3].bytes[7] = std::byte{0};
+    test::check(!planeDigestsMatch(large.planes) && !valid(large), "tampered plane detected");
+    frame.planes[0].digest = digestBytes(frame.planes[0].bytes);
     frame.planes[0].stride = 0;
     test::check(!valid(frame), "bad stride");
     AudioBlock audio;

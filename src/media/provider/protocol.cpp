@@ -164,7 +164,8 @@ ProbeResult probe(Reader& r) {
     return p;
 }
 void frame(Writer& w, const FrameProduct& f) {
-    require(valid(f));
+    // The receiver verifies every plane digest; the sender checks structure only.
+    require(validLayout(f));
     w.enumeration(f.format, 1, 5);
     w.rational(f.pts);
     colour(w, f.colour);
@@ -201,10 +202,10 @@ FrameProduct frame(Reader& r) {
         p.bytes.assign(r.bytes.begin(), r.bytes.begin() + size);
         r.bytes = r.bytes.subspan(size);
         p.digest = r.hash();
-        require(p.digest == digestBytes(p.bytes), Error::DigestMismatch);
         f.planes.push_back(std::move(p));
     }
-    require(valid(f));
+    require(planeDigestsMatch(f.planes), Error::DigestMismatch);
+    require(validLayout(f));
     return f;
 }
 void index(Writer& w, const DemuxIndex& value) {

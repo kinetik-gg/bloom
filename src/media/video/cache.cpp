@@ -26,7 +26,8 @@ std::shared_ptr<const provider::FrameProduct> DecodedVideoCache::find(const Fram
 }
 void DecodedVideoCache::store(const FrameKey& key,
                               std::shared_ptr<const provider::FrameProduct> frame) {
-    if (!frame || !provider::valid(*frame))
+    // Products reach the cache only after the worker boundary verified their plane digests.
+    if (!frame || !provider::validLayout(*frame))
         return;
     std::size_t bytes = 0;
     for (const auto& plane : frame->planes)

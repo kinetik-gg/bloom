@@ -1,6 +1,7 @@
 #include "wire.hpp"
 #include <algorithm>
 #include <cmath>
+#include <future>
 #include <numeric>
 #include <set>
 
@@ -98,7 +99,55 @@ bool valid(const ProbeResult& v) {
     }
     return true;
 }
-bool valid(const FrameProduct& v) {
+namespace {
+// Planes of a large frame are hashed on separate threads; small products stay on the caller.
+template <typename Work> void eachPlane(std::size_t count, std::uint64_t bytes, Work work) {
+    if (count < 2 || bytes < (std::uint64_t{4} << 20U)) {
+        for (std::size_t i = 0; i < count; ++i)
+            work(i);
+        return;
+    }
+    std::vector<std::future<void>> others;
+    others.reserve(count - 1);
+    for (std::size_t i = 1; i < count; ++i)
+        others.push_back(std::async(std::launch::async, [&work, i] { work(i); }));
+    std::exception_ptr failure;
+    try {
+        work(0);
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    for (auto& other : others) {
+        try {
+            other.get();
+        } catch (...) {
+            if (!failure)
+                failure = std::current_exception();
+        }
+    }
+    if (failure)
+        std::rethrow_exception(failure);
+}
+std::uint64_t planeBytes(const std::vector<CpuPlane>& planes) {
+    std::uint64_t total = 0;
+    for (const auto& p : planes)
+        total += p.bytes.size();
+    return total;
+}
+} // namespace
+void assignPlaneDigests(std::vector<CpuPlane>& planes) {
+    eachPlane(planes.size(), planeBytes(planes),
+              [&](std::size_t i) { planes[i].digest = digestBytes(planes[i].bytes); });
+}
+bool planeDigestsMatch(const std::vector<CpuPlane>& planes) {
+    std::vector<char> matches(planes.size(), 0);
+    eachPlane(planes.size(), planeBytes(planes), [&](std::size_t i) {
+        matches[i] = digestBytes(planes[i].bytes) == planes[i].digest ? 1 : 0;
+    });
+    return std::ranges::all_of(matches, [](char m) { return m != 0; });
+}
+bool valid(const FrameProduct& v) { return validLayout(v) && planeDigestsMatch(v.planes); }
+bool validLayout(const FrameProduct& v) {
     if (!valid(v.pts) || !colour(v.colour) || v.format < PixelFormat::Rgba8 ||
         v.format > PixelFormat::Rgba16 || v.planes.empty() || v.planes.size() > Limits::planes)
         return false;
@@ -122,7 +171,7 @@ bool valid(const FrameProduct& v) {
                        p.height != (yuva ? v.planes[0].height : (v.planes[0].height + 1) / 2)))
             return false;
         total += p.bytes.size();
-        if (total > Limits::productBytes || digestBytes(p.bytes) != p.digest)
+        if (total > Limits::productBytes)
             return false;
     }
     return true;

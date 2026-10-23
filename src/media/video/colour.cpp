@@ -43,7 +43,8 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
              const double verticalScale, const std::size_t byteBudget,
              const std::function<bool()>& cancel, const bool configManaged,
              const bool applyProcessor) {
-    if (!valid(frame) || overrideTransfer > 3 || !std::isfinite(horizontalScale) ||
+    // The frame was digest-verified when it crossed the worker boundary and is immutable since.
+    if (!validLayout(frame) || overrideTransfer > 3 || !std::isfinite(horizontalScale) ||
         !std::isfinite(verticalScale) || horizontalScale <= 0 || horizontalScale > 1 ||
         verticalScale <= 0 || verticalScale > 1)
         return Unavailable{Error::InvalidValue, "Invalid video colour request"};
