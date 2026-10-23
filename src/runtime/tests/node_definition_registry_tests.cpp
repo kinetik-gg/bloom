@@ -128,9 +128,17 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // readouts, and DATA-1's four data-block readers. The number is pinned rather than computed so
     // that adding a node type is a deliberate edit here. MEDIA-1 adds one Image source definition,
     // AUDIO-2 adds one Audio source definition, COMP-SRC adds Composition source, and LB-1 adds the
-    // Layer Bounds value readout. MEDIA-3 adds Video; COLOR-3 adds CST and File Transform.
-    expectations.expect(registry.definitions().size() == 120,
+    // Layer Bounds value readout. MEDIA-3 adds Video; COLOR-3 adds CST and File Transform. The
+    // image-node batch adds Exposure, Offset, Multiply, Invert, the two Combine nodes, Crop, Pad,
+    // Multiply Alpha, Checker, Flip, Rotate 90, Resize, Fit, Gaussian and Box Blur, and Linear and
+    // Radial Gradient: 30 structural/image definitions plus 100 value-library definitions.
+    expectations.expect(registry.definitions().size() == 130,
                         "startup contribution includes every built-in definition");
+    for (const auto* type :
+         {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
+          "bloom.resize", "bloom.fit", "bloom.gaussian-blur", "bloom.box-blur"})
+        expectations.expect(registry.find(type, 1) != nullptr,
+                            "each pinned image-node addition is registered");
 
     for (const auto& [kind, version] : std::array<std::pair<std::string_view, std::uint32_t>, 4>{
              {{document::kSolidSourceNodeType, 1},
