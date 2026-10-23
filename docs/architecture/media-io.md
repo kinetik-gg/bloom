@@ -502,7 +502,9 @@ for the two memory ceilings.
 **Cache key.** Content-addressed and restart-stable, deliberately narrower than the evaluator's
 in-process operation-cache key: asset content digest, member/frame, legacy interpretation, resolved
 input colour-space id, effective working-space id, exact OCIO config revision, alpha association,
-and a decoder identity/version string (`bloom::media::cache::kImageDecoderIdentity`) bumped
+the synthesized-space identity of a Bloom-synthesized input space (Rec.2100 HLG: its definition and
+OCIO version; empty, and absent from the key bytes, for ordinary config spaces), and a decoder
+identity/version string (`bloom::media::cache::kImageDecoderIdentity`) bumped
 whenever the decode or config-managed conversion pipeline could change decoded pixels for the same
 source bytes. The key omits the resolved path/relink hint and availability that the memory-cache key
 includes, so a relink of identical content still hits the disk entry. Changing the input id,
