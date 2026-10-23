@@ -86,11 +86,12 @@ TimelineGraphView::TimelineGraphView(CompositionSession& session, TimelineRuler&
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_OpaquePaintEvent, true);
     setMouseTracking(true);
-    connect(&ruler_, &TimelineRuler::axisChanged, this, qOverload<>(&TimelineGraphView::update));
+    connect(&ruler_, &TimelineRuler::axisChanged, this, &TimelineGraphView::invalidateAll);
+    // #358: a playhead move repaints only the strips it leaves and enters.
     connect(&session_, &CompositionSession::currentTimeChanged, this,
-            qOverload<>(&TimelineGraphView::update));
+            &TimelineGraphView::invalidatePlayhead);
     connect(&session_, &CompositionSession::selectionChanged, this,
-            qOverload<>(&TimelineGraphView::update));
+            &TimelineGraphView::invalidateAll);
     connect(&session_, &CompositionSession::snapshotChanged, this, [this] {
         compiledValid_ = false;
         refreshCurves();
@@ -105,6 +106,61 @@ TimelineGraphView::TimelineGraphView(CompositionSession& session, TimelineRuler&
 }
 
 TimelineGraphView::~TimelineGraphView() = default;
+
+void TimelineGraphView::invalidateAll() {
+    ++work_.fullInvalidations;
+    update();
+}
+
+void TimelineGraphView::invalidatePlayhead() {
+    const auto axis = ruler_.axisForWidth(width());
+    if (!axis || !paintedPlayheadX_ || dragging_) {
+        invalidateAll();
+        return;
+    }
+    ++work_.playheadInvalidations;
+    const int margin = kit::px(kit::Spacing::XXS) + 1;
+    const int next = static_cast<int>(std::floor(axis->pixelForTime(session_.currentTime())));
+    for (const int x : {*paintedPlayheadX_, next})
+        update(QRect(x - margin, 0, margin * 2 + 1, height()));
+}
+
+const QPainterPath& TimelineGraphView::pathFor(const GraphCurveId& curve,
+                                               const runtime::CompiledScalarCurve& compiled) const {
+    const auto axis = ruler_.axisForWidth(width());
+    const auto viewport = viewportFor(curve);
+    const double top = bandTop();
+    const double band = bandHeight();
+    auto& cached = paths_[curve];
+    if (axis && cached.generation == compiledGeneration_ && cached.t0 == axis->t0 &&
+        cached.t1 == axis->t1 && cached.width == width() && cached.top == top &&
+        cached.band == band && cached.minimum == viewport.minimum &&
+        cached.maximum == viewport.maximum && !cached.path.isEmpty())
+        return cached.path;
+    QPainterPath path;
+    if (axis) {
+        bool started = false;
+        for (int x = gutterWidth(); x < width(); ++x) {
+            const auto offset = keyPointerOffset(axis->secondsForPixel(x));
+            if (!offset.has_value())
+                continue;
+            ++work_.curveSamples;
+            const auto sampled = runtime::sampleAnimationCurve(compiled, *offset);
+            if (!sampled.value.has_value())
+                continue;
+            const QPointF point(x, pixelForValue(viewport, *sampled.value, top, band));
+            if (!started) {
+                path.moveTo(point);
+                started = true;
+            } else {
+                path.lineTo(point);
+            }
+        }
+        cached = {compiledGeneration_, axis->t0,         axis->t1, width(), top, band,
+                  viewport.minimum,    viewport.maximum, path};
+    }
+    return cached.path;
+}
 
 int TimelineGraphView::gutterWidth() const noexcept { return kit::px(kit::Size::GraphValueAxis); }
 
@@ -203,6 +259,7 @@ TimelineGraphView::compiledFor(const GraphCurveId& curve) const {
     const auto revision = session_.snapshot().revision().value();
     if (!compiledValid_ || compiledRevision_ != revision) {
         compiled_.clear();
+        ++compiledGeneration_;
         compiledRevision_ = revision;
         compiledValid_ = true;
     }
@@ -333,26 +390,9 @@ void TimelineGraphView::paintEvent(QPaintEvent* event) {
             continue;
         const auto viewport = viewportFor(curve);
         const auto tint = kit::color(curveColor(curve.component));
-        QPainterPath path;
-        bool started = false;
-        for (int x = gutterWidth(); x < width(); ++x) {
-            const auto offset = keyPointerOffset(axis->secondsForPixel(x));
-            if (!offset.has_value())
-                continue;
-            const auto sampled = runtime::sampleAnimationCurve(*compiled, *offset);
-            if (!sampled.value.has_value())
-                continue;
-            const QPointF point(x, pixelForValue(viewport, *sampled.value, top, band));
-            if (!started) {
-                path.moveTo(point);
-                started = true;
-            } else {
-                path.lineTo(point);
-            }
-        }
         painter.setPen(QPen(tint, kit::kHairlineWidth));
         painter.setBrush(Qt::NoBrush);
-        painter.drawPath(path);
+        painter.drawPath(pathFor(curve, *compiled));
 
         const auto keys = keysFor(curve);
         for (std::size_t index = 0; index < keys.size(); ++index) {
@@ -442,6 +482,7 @@ void TimelineGraphView::paintEvent(QPaintEvent* event) {
     }
 
     paintPlayheadLine(painter, *axis, session_.currentTime(), height());
+    paintedPlayheadX_ = static_cast<int>(std::floor(axis->pixelForTime(session_.currentTime())));
 
     // The gutter is painted LAST, over the curves, so a curve that runs off the left edge slides
     // under the axis instead of colliding with its labels.

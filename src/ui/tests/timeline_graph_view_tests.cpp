@@ -32,6 +32,7 @@
 
 #include <QApplication>
 #include <QContextMenuEvent>
+#include <QElapsedTimer>
 #include <QImage>
 #include <QMenu>
 #include <QMouseEvent>
@@ -273,6 +274,35 @@ void testPolylineIsTheSampler() {
     const auto sampledQuarter = runtime::sampleAnimationCurve(compiled, quarter);
     expect(sampledQuarter.value.has_value() && std::abs(*sampledQuarter.value - 0.275) > 1e-9,
            "a quarter into the eased segment is the eased value, not the straight-line one");
+}
+
+// #358: playback moves the playhead every frame. The graph repaints only the playhead strips and
+// never resamples a curve whose table, axis, size and viewport are unchanged.
+void testPlaybackNeitherResamplesNorRepaintsTheGraph() {
+    GraphFixture fixture(makeProject("Graph playback"));
+    static_cast<void>(seedOpacity(fixture.session.session));
+    fixture.expandAndShowGraph();
+    auto& session = fixture.session.session;
+    // Settle first: pending layout, resize and deferred zoom work are not playback.
+    QElapsedTimer settle;
+    settle.start();
+    while (settle.elapsed() < 300)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    static_cast<void>(fixture.view->grab());
+    const auto painted = fixture.view->work();
+    expect(painted.curveSamples > 0, "the first paint samples the curve");
+    for (int frame = 0; frame < 60; ++frame) {
+        static_cast<void>(session.setCurrentTime(time(frame, 24)));
+        QCoreApplication::processEvents();
+    }
+    static_cast<void>(fixture.view->grab());
+    const auto played = fixture.view->work();
+    expect(played.fullInvalidations == painted.fullInvalidations,
+           "playback never invalidates the whole graph");
+    expect(played.playheadInvalidations >= painted.playheadInvalidations + 59,
+           "each playhead move invalidates only its strips");
+    expect(played.curveSamples == painted.curveSamples,
+           "an unchanged curve is drawn from its cached polyline, never resampled");
 }
 
 // 2. A value drag is one gesture: one history entry, and undo puts the key back exactly.
@@ -585,6 +615,7 @@ int main(int argc, char** argv) {
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
     testPolylineIsTheSampler();
+    testPlaybackNeitherResamplesNorRepaintsTheGraph();
     testValueDragIsOneUndoableTransaction();
     testCtrlConstrainsToTheDominantAxis();
     testSnappingGovernsTheDraggedTime();
