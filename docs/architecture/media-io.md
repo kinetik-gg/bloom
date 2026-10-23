@@ -1504,10 +1504,18 @@ Issue #365 interpretation rules:
   including under a legacy transfer override. Raw and linear compatibility overrides keep their
   transfer-only behaviour.
 
-Generated untagged, BT.2020/PQ and BT.2020/HLG H.264 fixtures check tag plumbing, and GPU/CPU
-input-to-working parity is tested for tagged Rec.709 and explicitly interpreted untagged H.264.
-Measured GPU parity of the ACES CG Rec.2100 PQ input transform is 2.19e-6 relative at a linear value
-of 52.37, just outside the 2e-6 gate, so PQ GPU parity is an open item.
+Generated untagged, BT.2020/PQ and BT.2020/HLG H.264 fixtures check tag plumbing. GPU/CPU
+input-to-working parity at the unchanged 2e-6 gate is tested for tagged Rec.709 H.264, a PQ-tagged
+stream, an untagged stream interpreted as Rec.2100 PQ, and a 16,384-sample still sweep across the
+PQ code range including negative and above-one values.
+
+OCIO implements the Rec.2100 PQ input as an inverse half-domain 1D LUT (65,536 entries). Its
+generated GLSL folds the half index and the interpolation fraction into one binary32 coordinate
+of up to 2^16, which keeps only 8 to 10 fraction bits; on the steep PQ segment that alone measured
+2.19e-6 relative at 52.37 linear. Bloom's OCIO GPU adapter therefore rewrites every half-domain
+lookup to take the half index from the float's exponent and top ten mantissa bits and the fraction
+from the remaining thirteen, both exact, and to fetch the two neighbouring entries directly. The
+PQ cases then match the CPU oracle exactly.
 
 Tests generate 48-frame H.264 MP4 and ProRes 422 MOV fixtures with burned-in frame numbers and
 48 kHz PCM, using the intake libraries in a worker-only fixture generator. An additional ProRes 4444

@@ -417,6 +417,53 @@ vec3 bloom_ocio_cpu_fast_pow(vec3 x, vec3 e) { return pow(x, e); }
 vec4 bloom_ocio_cpu_fast_pow(vec4 x, vec4 e) { return bloom_ocio_cpu_gamma_pow(x, e); }
 )";
 
+// Half-domain 1D LUTs. OCIO's generated `<name>_computePos` folds the half-float index and the
+// interpolation fraction into one binary32 `dep` (up to 2^16), leaving only 8-10 fraction bits
+// for large inputs, then re-encodes it as a texture coordinate. Its CPU renderer interpolates
+// between the two neighbouring half values with a full-precision fraction. On a steep LUT (the
+// Rec.2100 PQ EOTF near 50 linear) that quantization alone exceeds the parity gate, so the lookup
+// is rewritten: the half index comes from the float's exponent and top ten mantissa bits and the
+// fraction from the remaining thirteen, both exact, and the two neighbours are fetched directly.
+// OCIO packs entry k at (k % (width - 1), k / (width - 1)), repeating each row's last entry.
+[[nodiscard]] bool isHalfDomainLookup(const std::string_view shaderText,
+                                      const std::string& textureName) {
+    const std::string signature = "vec2 " + textureName + "_computePos(float f)";
+    const auto at = shaderText.find(signature);
+    return at != std::string_view::npos &&
+           shaderText.find("16777216.", at) != std::string_view::npos &&
+           shaderText.find("16777216.", at) < shaderText.find("return retVal;", at);
+}
+
+[[nodiscard]] std::string halfDomainLookup(const std::string& textureName,
+                                           const std::string& samplerName) {
+    return "precise vec4 bloom_ocio_half_lookup_" + textureName + "(float f)\n{\n" +
+           "    const ivec2 size = textureSize(" + samplerName + ", 0);\n" +
+           R"(    const int stride = size.x - 1;
+    const float magnitude = min(abs(f), 65504.0);
+    int index;
+    float fraction;
+    if (magnitude > 6.10351562e-05) {
+        const uint bits = floatBitsToUint(magnitude);
+        const uint mantissa = bits & 0x7FFFFFu;
+        index = (int((bits >> 23) & 0xFFu) - 112) * 1024 + int(mantissa >> 13);
+        fraction = float(mantissa & 0x1FFFu) * (1.0 / 8192.0);
+    } else {
+        const float position = magnitude * 16777216.0;
+        const float base = floor(position);
+        index = int(base);
+        fraction = position - base;
+    }
+    if (f < 0.0) { index += 32768; }
+    const ivec2 lower = ivec2(index % stride, index / stride);
+    const vec4 a = texelFetch()" +
+           samplerName + R"(, lower, 0);
+    const vec4 b = texelFetch()" +
+           samplerName + R"(, ivec2(lower.x + 1, lower.y), 0);
+    return a + (b - a) * fraction;
+}
+)";
+}
+
 } // namespace
 
 OcioGpuSamplingGlsl ocioGpuSamplingGlslFor(const render::OcioGpuProgramDesc& program) {
@@ -518,6 +565,25 @@ OcioGpuSamplingGlsl ocioGpuSamplingGlslFor(const render::OcioGpuProgramDesc& pro
         definitions += std::string(kCpuHelperDefinitions);
         result.shaderBody = std::move(specialized.body);
     }
+
+    // Exact half-domain LUT lookups, applied on top of any body specialization above.
+    std::string halfBody;
+    for (const auto& texture : program.textures) {
+        if (texture.dimensions != render::OcioGpuTextureDimensions::TwoD ||
+            texture.interpolation != render::OcioGpuInterpolation::Linear ||
+            !validIdentifier(texture.name) || !validIdentifier(texture.samplerName) ||
+            !isHalfDomainLookup(program.shaderText, texture.name))
+            continue;
+        if (halfBody.empty())
+            halfBody = result.shaderBody.empty() ? program.shaderText : result.shaderBody;
+        replaceAll(halfBody,
+                   "texture(" + texture.samplerName + ", " + texture.name + "_computePos(",
+                   "bloom_ocio_half_lookup_" + texture.name + "((");
+        declarations += "precise vec4 bloom_ocio_half_lookup_" + texture.name + "(float f);\n";
+        definitions += halfDomainLookup(texture.name, texture.samplerName);
+    }
+    if (!halfBody.empty())
+        result.shaderBody = std::move(halfBody);
 
     if (declarations.empty()) {
         return result;
