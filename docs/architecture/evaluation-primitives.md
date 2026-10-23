@@ -671,7 +671,10 @@ the start-to-end distance. Horizontal distances are multiplied by physical pixel
 formulas. A zero-length vector chooses the first colour. Clamp confines `t` to `[0,1]`, Repeat
 uses its fractional part, and Mirror folds over period two. The two authored colours interpolate
 in the effective scene-linear working space as straight RGB and independent alpha; the result is
-premultiplied once for the process image. Negative and HDR RGB are retained when the resulting
+premultiplied once for the process image. The phase is reduced in binary64 and rounded once to
+Float32 (Mirror folds that Float32 value); alpha is then interpolated in Float32 as two rounded
+products and one sum without fused multiply-add, so the CPU reference and native GradientV1 agree
+bit-exactly on alpha. RGB interpolates in binary64 within the 2e-6 parity bound. Negative and HDR RGB are retained when the resulting
 Float32 process pixel is finite. The fractional right/bottom extent coverage scales the final
 premultiplied pixel. ROI clips the requested output while preserving full source coordinates and
 the composition display window.

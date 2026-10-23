@@ -93,9 +93,14 @@ void main() {
     }
     // Weighted endpoints avoid overflowing the difference of opposite-sign HDR colours.
     vec4 straight = p.first * (1.0 - t) + p.second * t;
+    // Alpha is bit-exact with the CPU reference: two rounded products and one sum, no FMA.
+    precise float remaining = 1.0 - t;
+    precise float firstAlpha = p.first.a * remaining;
+    precise float secondAlpha = p.second.a * t;
+    precise float straightAlpha = firstAlpha + secondAlpha;
     float coverage = clamp(p.extent.z - float(index.x + p.flags.y), 0.0, 1.0) *
                      clamp(p.extent.w - float(index.y + p.flags.z), 0.0, 1.0);
-    float alpha = straight.a * coverage;
+    precise float alpha = straightAlpha * coverage;
     imageStore(bloom_gradient_output, index,
                alpha == 0.0 ? vec4(0.0) : vec4(straight.rgb * alpha, alpha));
 }

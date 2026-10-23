@@ -47,19 +47,29 @@ gradientPixel(const ResolvedGradient& gradient, const double authorX,
     if (std::isnan(t) || (gradient.repeat != 0 && !std::isfinite(t)))
         return render::ImageResult<render::Rgba32f>::failure(
             render::ImageError::codeOnly(render::ImageErrorCode::NonFiniteResult));
+    // The phase is reduced in binary64 and rounded once to Float32; Mirror folds that Float32
+    // value, exactly as native GradientV1 folds its compensated phase.
+    float phase = 0.0F;
     if (gradient.repeat == 1)
-        t -= std::floor(t);
+        phase = static_cast<float>(t - std::floor(t));
     else if (gradient.repeat == 2) {
-        const double unit = t - 2.0 * std::floor(t / 2.0);
-        t = unit <= 1.0 ? unit : 2.0 - unit;
+        const auto unit = static_cast<float>(t - 2.0 * std::floor(t / 2.0));
+        phase = unit <= 1.0F ? unit : 2.0F - unit;
     } else
-        t = std::clamp(t, 0.0, 1.0);
+        phase = static_cast<float>(std::clamp(t, 0.0, 1.0));
+    t = static_cast<double>(phase);
     const double u = 1.0 - t;
-    const double a = u * gradient.first.alpha + t * gradient.second.alpha;
+    // Alpha is part of the bit-exact CPU/GPU parity gate, so it follows the native GradientV1
+    // Float32 sequence exactly: Float32 phase and endpoint alphas, two correctly rounded products
+    // and one sum, never contracted into an FMA. RGB keeps binary64 interpolation (2e-6 bound).
+    const float remaining = 1.0F - phase;
+    const float firstAlpha = static_cast<float>(gradient.first.alpha) * remaining;
+    const float secondAlpha = static_cast<float>(gradient.second.alpha) * phase;
+    const float alpha = firstAlpha + secondAlpha;
+    const auto a = static_cast<double>(alpha);
     return render::Rgba32f::fromPremultiplied(
         static_cast<float>((u * gradient.first.red + t * gradient.second.red) * a),
         static_cast<float>((u * gradient.first.green + t * gradient.second.green) * a),
-        static_cast<float>((u * gradient.first.blue + t * gradient.second.blue) * a),
-        static_cast<float>(a));
+        static_cast<float>((u * gradient.first.blue + t * gradient.second.blue) * a), alpha);
 }
 } // namespace bloom::runtime::detail
