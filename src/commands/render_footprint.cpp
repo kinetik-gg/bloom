@@ -4,6 +4,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
+#include <limits>
+#include <set>
 #include <map>
 #include <span>
 #include <variant>
@@ -51,11 +54,12 @@ using document::RenderTimeSpan;
 // key.
 void componentChangeSpans(const std::vector<document::ScalarKeyframe>& before,
                           const std::vector<document::ScalarKeyframe>& after,
-                          const core::RationalTime duration, std::vector<RenderTimeSpan>& out) {
+                          const core::RationalTime duration, std::vector<RenderTimeSpan>& out,
+                          const core::RationalTime low = {}) {
     if (before == after)
         return;
     if (before.empty() || after.empty()) {
-        out.push_back({core::RationalTime{}, duration});
+        out.push_back({low, duration});
         return;
     }
     const auto collect = [&](const std::vector<document::ScalarKeyframe>& keys,
@@ -63,7 +67,7 @@ void componentChangeSpans(const std::vector<document::ScalarKeyframe>& before,
         for (std::size_t index = 0; index < keys.size(); ++index) {
             if (std::ranges::find(other, keys[index]) != other.end())
                 continue;
-            const auto start = index == 0 ? core::RationalTime{} : keys[index - 1].time;
+            const auto start = index == 0 ? low : keys[index - 1].time;
             const auto end = index + 1 == keys.size() ? duration : keys[index + 1].time;
             // A neighbour outside [0, duration) still bounds correctly once clipped; a key whose
             // neighbours are ordered after the end collapses to nothing and is dropped there.
@@ -78,7 +82,8 @@ void componentChangeSpans(const std::vector<document::ScalarKeyframe>& before,
 [[nodiscard]] bool curveChangeSpans(const document::AnimationCurveRecord& before,
                                     const document::AnimationCurveRecord& after,
                                     const core::RationalTime duration,
-                                    std::vector<RenderTimeSpan>& out) {
+                                    std::vector<RenderTimeSpan>& out,
+                                    const core::RationalTime low = {}) {
     if (before.index() != after.index())
         return false;
     return std::visit(
@@ -86,11 +91,11 @@ void componentChangeSpans(const std::vector<document::ScalarKeyframe>& before,
             using Curve = std::decay_t<decltype(left)>;
             const auto& right = std::get<Curve>(after);
             if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
-                componentChangeSpans(left.keyframes, right.keyframes, duration, out);
+                componentChangeSpans(left.keyframes, right.keyframes, duration, out, low);
             } else {
                 for (std::size_t index = 0; index < left.components.size(); ++index)
                     componentChangeSpans(left.components[index].keyframes,
-                                         right.components[index].keyframes, duration, out);
+                                         right.components[index].keyframes, duration, out, low);
             }
             return true;
         },
@@ -108,6 +113,96 @@ void componentChangeSpans(const std::vector<document::ScalarKeyframe>& before,
                 result.push_back({start, end});
         }
     return result;
+}
+
+// ADR 0024 layer-owned time. Key times of a retimed layer's own parameters are layer time, and of
+// its upstream content time. A retimed layer is "projectable" when its content time equals its layer
+// time wherever content shows: no Time Remap, and an unbounded extent or None out-of-extent modes.
+struct RetimedLayer final {
+    const document::LayerOutputBoundary* boundary = nullptr;
+    bool topLevel = false;
+    bool projectable = false;
+    std::set<document::NodeId> upstream; // every node feeding its image or audio input
+};
+
+[[nodiscard]] bool hasTimeRemap(const document::Composition& composition,
+                                const document::LayerOutputBoundary& boundary) {
+    const auto* node = composition.graph().findNode(boundary.nodeId);
+    return node != nullptr && std::ranges::any_of(node->parameters, [](const auto& binding) {
+               return binding.role == document::kTimeRemapParameterRole;
+           });
+}
+
+[[nodiscard]] std::vector<RetimedLayer> retimedLayers(const document::Composition& composition) {
+    const auto& graph = composition.graph();
+    std::vector<RetimedLayer> result;
+    for (const auto& boundary : graph.layerOutputs()) {
+        const bool remap = hasTimeRemap(composition, boundary);
+        if (boundary.timing.isIdentityMapping() && !remap)
+            continue;
+        RetimedLayer layer{.boundary = &boundary, .topLevel = false, .projectable = false, .upstream = {}};
+        const bool unbounded =
+            std::holds_alternative<std::monostate>(boundary.timing.contentExtent);
+        layer.projectable = !remap && (unbounded ||
+                                       (boundary.timing.beforeMode == document::LayerTimeMode::None &&
+                                        boundary.timing.afterMode == document::LayerTimeMode::None));
+        // Top level: a slot of the Merge feeding Output (its range is composition time).
+        layer.topLevel = std::ranges::any_of(graph.layerStack().entries(), [&](const auto& entry) {
+            return entry.layerId == boundary.layerId;
+        });
+        // Backward closure over input edges and driver bindings, starting at the layer's inputs.
+        std::vector<document::NodeId> pending;
+        const auto visitInputs = [&](const document::NodeId node) {
+            for (const auto& edge : graph.edges()) {
+                const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
+                const auto* slot = std::get_if<document::LayerStackInputRef>(&edge.destination);
+                if ((input && input->nodeId == node) || (slot && slot->stackNodeId == node))
+                    pending.push_back(edge.source.nodeId);
+            }
+            if (const auto* record = graph.findNode(node))
+                for (const auto& binding : record->parameters)
+                    if (const auto* parameter = composition.parameters().find(binding.parameterId))
+                        if (const auto* driver =
+                                std::get_if<document::DriverBindingSource>(&parameter->source))
+                            pending.push_back(driver->sourceNodeId);
+        };
+        visitInputs(boundary.nodeId);
+        while (!pending.empty()) {
+            const auto node = pending.back();
+            pending.pop_back();
+            if (layer.upstream.insert(node).second)
+                visitInputs(node);
+        }
+        result.push_back(std::move(layer));
+    }
+    return result;
+}
+
+// A layer-clock time as placement time: start + tau * den / num, or nullopt on overflow.
+[[nodiscard]] std::optional<core::RationalTime> placementOf(const document::LayerTiming& timing,
+                                                            const core::RationalTime tau) {
+    const auto multiply = [](const std::int64_t a,
+                             const std::int64_t b) -> std::optional<std::int64_t> {
+        constexpr auto limit = std::numeric_limits<std::int64_t>::max();
+        if (a == std::numeric_limits<std::int64_t>::min() ||
+            b == std::numeric_limits<std::int64_t>::min())
+            return std::nullopt;
+        const auto magnitude = a < 0 ? -a : a;
+        if (magnitude != 0 && (b > limit / magnitude || b < -(limit / magnitude)))
+            return std::nullopt;
+        return a * b;
+    };
+    const auto n = multiply(tau.numerator(), timing.speed.denominator());
+    const auto d = multiply(tau.denominator(), timing.speed.numerator());
+    const auto& start = timing.startTime;
+    const auto left = n && d ? multiply(start.numerator(), *d) : std::nullopt;
+    const auto right = n ? multiply(*n, start.denominator()) : std::nullopt;
+    const auto denominator = d ? multiply(start.denominator(), *d) : std::nullopt;
+    if (!left || !right || !denominator ||
+        (*right > 0 && *left > std::numeric_limits<std::int64_t>::max() - *right) ||
+        (*right < 0 && *left < std::numeric_limits<std::int64_t>::min() - *right))
+        return std::nullopt;
+    return core::RationalTime::create(*left + *right, *denominator);
 }
 
 // Converts normalized spans to a footprint. Past the interval cap the union collapses to its hull,
@@ -173,18 +268,41 @@ std::optional<AffectedTimeFootprint> parameterEditFootprint(
         return std::nullopt;
     const bool sameTopology = beforeReach.sameRenderTopology(afterReach);
     const std::vector<RenderTimeSpan> whole{{core::RationalTime{}, duration}};
-    // ADR 0024: key times of a retimed layer (and of its upstream) are layer or content times, not
-    // composition times. Until they are projected through the layer mapping, a key edit in a
-    // composition with any retimed layer is confined to the reaching layers' whole spans.
-    const bool retimed = std::ranges::any_of(
-        after->graph().layerOutputs(), [&](const document::LayerOutputBoundary& layer) {
-            const auto* node = after->graph().findNode(layer.nodeId);
-            return !layer.timing.isIdentityMapping() ||
-                   (node != nullptr &&
-                    std::ranges::any_of(node->parameters, [](const auto& binding) {
-                        return binding.role == document::kTimeRemapParameterRole;
-                    }));
-        });
+    // ADR 0024: key times of a retimed layer's parameters are layer times and of its upstream
+    // content times. They are projected onto composition time through the layer's linear clock
+    // where content time equals layer time; otherwise the layer's whole span is used.
+    const auto retimed = retimedLayers(*after);
+    // Nodes that reach Composition Output without passing a retimed layer (their keys are
+    // composition times).
+    std::set<document::NodeId> plain;
+    if (!retimed.empty()) {
+        std::vector<document::NodeId> pending{after->graph().compositionOutput()->nodeId};
+        while (!pending.empty()) {
+            const auto node = pending.back();
+            pending.pop_back();
+            if (std::ranges::any_of(retimed, [&](const auto& layer) {
+                    return layer.boundary->nodeId == node;
+                }))
+                continue;
+            if (!plain.insert(node).second)
+                continue;
+            for (const auto& edge : after->graph().edges()) {
+                const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
+                const auto* slot = std::get_if<document::LayerStackInputRef>(&edge.destination);
+                if ((input && input->nodeId == node) || (slot && slot->stackNodeId == node))
+                    pending.push_back(edge.source.nodeId);
+            }
+            if (const auto* record = after->graph().findNode(node))
+                for (const auto& binding : record->parameters)
+                    if (const auto* parameter = after->parameters().find(binding.parameterId))
+                        if (const auto* driver =
+                                std::get_if<document::DriverBindingSource>(&parameter->source))
+                            pending.push_back(driver->sourceNodeId);
+        }
+    }
+    // Layer-clock spans are computed unbounded on both sides.
+    const auto far = core::RationalTime::fromInteger(std::int64_t{1} << 40);
+    const auto nearFar = core::RationalTime::fromInteger(-(std::int64_t{1} << 40));
 
     std::vector<RenderTimeSpan> changed;
     for (const auto& [id, pair] : parameters) {
@@ -194,6 +312,8 @@ std::optional<AffectedTimeFootprint> parameterEditFootprint(
         const auto* newCurve =
             current ? std::get_if<document::AnimationCurveSource>(&current->source) : nullptr;
         std::vector<RenderTimeSpan> times;
+        // The same change in an unbounded layer/content clock; nullopt means "everywhere".
+        std::optional<std::vector<RenderTimeSpan>> clockTimes;
         const bool sameRecord = old != nullptr && current != nullptr && *old == *current;
         if (oldCurve != nullptr && newCurve != nullptr && oldCurve->curveId == newCurve->curveId &&
             (sameRecord || old->schemaKey == current->schemaKey)) {
@@ -201,8 +321,13 @@ std::optional<AffectedTimeFootprint> parameterEditFootprint(
             const auto* b = after->animationCurves().find(newCurve->curveId);
             if (a == nullptr || b == nullptr || !curveChangeSpans(*a, *b, duration, times))
                 times = whole;
+            std::vector<RenderTimeSpan> unbounded;
+            if (a != nullptr && b != nullptr && curveChangeSpans(*a, *b, far, unbounded, nearFar))
+                clockTimes = std::move(unbounded);
         } else if (!sameRecord) {
             times = whole;
+        } else {
+            clockTimes = std::vector<RenderTimeSpan>{};
         }
         if (times.empty())
             continue;
@@ -223,22 +348,56 @@ std::optional<AffectedTimeFootprint> parameterEditFootprint(
             const std::array node{owner};
             const auto confinement =
                 document::confineNodeChange(*after, afterReach, node, registry);
+            if (confinement.kind == document::RenderConfinementKind::Unproven)
+                return std::nullopt;
+            if (confinement.kind == document::RenderConfinementKind::Unaffected)
+                continue;
+            // Retimed layers whose clock reads this owner's keys.
+            bool onlyRetimed = !retimed.empty() && !plain.contains(owner);
+            for (const auto& layer : retimed) {
+                const bool own = layer.boundary->nodeId == owner;
+                if (!own && !layer.upstream.contains(owner))
+                    continue;
+                const RenderTimeSpan span{layer.boundary->inPoint,
+                                          layer.boundary->endPoint(duration)};
+                // A nested retimed layer's range is in its enclosing clock: stay conservative.
+                if (!layer.topLevel) {
+                    onlyRetimed = false;
+                    changed.insert(changed.end(), whole.begin(), whole.end());
+                    continue;
+                }
+                if (!clockTimes || (!own && !layer.projectable)) {
+                    changed.push_back(span);
+                    continue;
+                }
+                for (const auto& [a, b] : *clockTimes) {
+                    const auto from = a <= nearFar ? std::optional{span.start}
+                                                   : placementOf(layer.boundary->timing, a);
+                    const auto to =
+                        b >= far ? std::optional{span.end} : placementOf(layer.boundary->timing, b);
+                    if (!from || !to) {
+                        changed.push_back(span);
+                        break;
+                    }
+                    const auto start = std::max(*from, span.start);
+                    const auto end = std::min(*to, span.end);
+                    if (start < end)
+                        changed.push_back({start, end});
+                }
+            }
+            if (onlyRetimed)
+                continue;
             switch (confinement.kind) {
-            case document::RenderConfinementKind::Unaffected:
-                break;
             case document::RenderConfinementKind::LayerSpans: {
-                const auto bounded = intersect(retimed ? whole : times, confinement.spans);
+                const auto bounded = intersect(times, confinement.spans);
                 changed.insert(changed.end(), bounded.begin(), bounded.end());
                 break;
             }
             case document::RenderConfinementKind::WholeComposition:
-                if (retimed)
-                    changed.insert(changed.end(), whole.begin(), whole.end());
-                else
-                    changed.insert(changed.end(), times.begin(), times.end());
+                changed.insert(changed.end(), times.begin(), times.end());
                 break;
-            case document::RenderConfinementKind::Unproven:
-                return std::nullopt;
+            default:
+                break;
             }
         }
     }

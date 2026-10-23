@@ -300,6 +300,12 @@ void testLayerTiming(TestContext& test) {
                     spans(apply<SetKeyframeAtTimeForParameter>(fixture, kOpacityId, t(1), 0.5),
                           {{3, 8}}),
                 "key edits on a retimed layer cover its whole span");
+    // The layer starts at 2: a key at layer time 1 between keys at 0 and 4 changes layer times
+    // [0, 4), which is composition [2, 6) within the layer's span [3, 8).
+    (void)apply<SetKeyframeAtTimeForParameter>(fixture, kOpacityId, t(4), 1.0);
+    test.expect(spans(apply<SetKeyframeAtTimeForParameter>(fixture, kOpacityId, t(1), 0.25),
+                      {{3, 6}}),
+                "a key edit is projected through the layer's start time");
     const auto refused = apply<SetLayerTiming>(fixture, kFirstLayerId, t(0), t(20), t(30));
     test.expect(!refused.changed(), "a range wholly after the composition is refused");
 }
