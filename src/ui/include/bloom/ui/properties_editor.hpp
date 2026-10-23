@@ -2,9 +2,9 @@
 
 // Complete, not forward-declared: bindCell() below binds a cell's own gesture signals, which needs
 // the type rather than just its name.
-#include <cstdint>
 #include <bloom/document/animation.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <cstdint>
 #include <functional>
 #include <optional>
 

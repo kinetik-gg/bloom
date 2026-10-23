@@ -7,8 +7,8 @@
 
 #include "composition_editor_support.hpp"
 #include "properties_anchor_grid.hpp"
-#include "properties_registry_row.hpp"
 #include "properties_layer_time.hpp"
+#include "properties_registry_row.hpp"
 #include "properties_sections.hpp"
 
 #include <bloom/ui/composition_authoring.hpp>
