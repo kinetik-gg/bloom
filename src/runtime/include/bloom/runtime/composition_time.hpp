@@ -55,4 +55,14 @@ mapLayerTime(core::RationalTime placementTime, core::RationalTime startTime,
 [[nodiscard]] std::optional<core::RationalTime>
 mapCompositionTime(core::RationalTime time, double offset, double scale,
                    core::RationalTime duration, document::FrameRate rate, std::int64_t loopMode);
+
+// #354: a media source's own loop mode applied to an audio clip time, so a video's embedded audio
+// follows its picture. `time` is the clip's content time and `start` where the source's first
+// sample sits. Loop (1) and PingPong (2) wrap the source-local time over the picture extent exactly
+// as the picture's frame index wraps (PingPong reflects about the last frame start), and the result
+// is again a content time. Before `start`, and for Hold (0), the time is returned unchanged: the
+// stream plays once. nullopt only for unrepresentable arithmetic or an invalid extent.
+[[nodiscard]] std::optional<core::RationalTime>
+wrapSourceAudioTime(core::RationalTime time, core::RationalTime start, const TimeExtent& extent,
+                    std::int64_t loopMode);
 } // namespace bloom::runtime

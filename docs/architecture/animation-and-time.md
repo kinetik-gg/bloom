@@ -1171,7 +1171,24 @@ Audio uses the same mapping per output sample, as a layer entry ahead of nested-
 in the clip's ordered mapping list (`AudioCompositionTimeMapping::layerTime`); the clip keeps the
 compiled plan so a curve Time Remap is sampled at each sample's layer time. Speed and remap are
 varispeed and None is silence. A driven (value-graph) Time Remap on an audio layer is resolved once
-per mix at the request time. Mixer and level detail belong to #354.
+per mix at the request time, and such a mix is re-evaluated with the transport like an animated
+level.
+
+Audio timing (#354):
+
+- Every layer clip carries its own layer's range entry, including identity timing, so a trimmed
+  head is silent before the in point and the out point ends the clip; a source wired straight to
+  the output gates on the composition range.
+- A video source's embedded audio follows its picture's `loopMode`: Loop wraps the source-local
+  time (`t - startFrame`) at the picture extent (frame count times the stream period) and PingPong
+  reflects it about the last frame start, exactly as the picture's frame index wraps. The wrap is
+  applied after every layer and composition mapping (`wrapSourceAudioTime`). Before its start frame
+  the stream is silent, and Hold plays the stream once: a held picture frame has no sound. An audio
+  source has no loop mode.
+- Layer modes, speed, remap and nested compositions map audio exactly as pictures (Hold repeats the
+  held sample, as for a nested composition). Export re-evaluates the mix per block and playback
+  per transport change through the same `mapAudioClipTime` and mixer, so they produce identical
+  samples; the per-sample mapping allocates nothing on the mixer worker.
 
 Implementation notes:
 

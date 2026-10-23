@@ -11,6 +11,7 @@
 #include <bloom/render/image_coverage.hpp>
 #include <bloom/runtime/compiled_curves.hpp>
 #include <bloom/runtime/compiled_value_graph.hpp>
+#include <bloom/runtime/composition_time.hpp>
 #include <bloom/runtime/operation_index.hpp>
 
 #include <array>
@@ -344,6 +345,11 @@ struct CompiledAudioSource final {
     document::AssetId assetId;
     std::int64_t startFrame = 0;
     CompiledScalarParameter level;
+    // #354: a video source's stored loop mode (0 Hold, 1 Loop, 2 PingPong) and its picture extent,
+    // so embedded audio wraps exactly as its picture does. An audio source has neither (Hold): the
+    // stream plays once.
+    std::int64_t loopMode = 0;
+    std::optional<TimeExtent> loopExtent{};
 
     friend bool operator==(const CompiledAudioSource&, const CompiledAudioSource&) = default;
 };

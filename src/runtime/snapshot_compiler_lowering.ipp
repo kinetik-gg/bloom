@@ -442,9 +442,21 @@ lower(const std::vector<document::NodeId>& order) {
             addTopologyFailure(audioSource.id, "Audio source parameters could not be lowered.");
             return std::nullopt;
         }
+        runtime::CompiledAudioSource compiled{
+            audioSource.id, document::AssetId::fromRaw(assetRaw), *startFrame, *level};
+        if (audioSource.typeId == "bloom.video-source") {
+            // #354: embedded audio follows its picture's loop mode over the picture extent.
+            const auto* loop =
+                parameterConstant<std::int64_t>(findParameterBinding(audioSource, "loopMode"));
+            if (loop != nullptr && (*loop == 1 || *loop == 2)) {
+                compiled.loopExtent = runtime::resolveVideoStreamExtent(
+                    *request_.snapshot.project().findAsset(compiled.assetId));
+                if (compiled.loopExtent)
+                    compiled.loopMode = *loop;
+            }
+        }
         const auto sourceIndex = mix.sources.size();
-        mix.sources.push_back(
-            {audioSource.id, document::AssetId::fromRaw(assetRaw), *startFrame, *level});
+        mix.sources.push_back(std::move(compiled));
         return sourceIndex;
     };
     // Lowers one Layer node as an audio layer: its boundary supplies enable, solo, and range; the

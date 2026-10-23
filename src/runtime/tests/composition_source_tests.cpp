@@ -371,7 +371,8 @@ void nestedAudio() {
     double sum = 0;
     for (const auto& clip : mix->clips) {
         sum += clip.level;
-        require(!clip.muted && clip.timeMappings.size() == 1, "nested audio mapping retained");
+        // The outer composition-source entry, then the inner source's own range entry (#354).
+        require(!clip.muted && clip.timeMappings.size() == 2, "nested audio mapping retained");
         require(runtime::mapAudioClipTime(clip, time(3, 4)) == time(1) &&
                     !runtime::mapAudioClipTime(clip, time(2)),
                 "nested audio time respects the enclosing layer range");
@@ -461,8 +462,8 @@ void multipleAudioLevels() {
     require(project.addComposition(std::move(outer)), "third audio composition");
     Document document(std::move(project));
     const auto mix = audioMix(document.snapshot(), 3, time(1, 2));
-    require(mix && mix->clips.size() == 1 && mix->clips.front().timeMappings.size() == 2,
-            "audio retains both enclosing mappings");
+    require(mix && mix->clips.size() == 1 && mix->clips.front().timeMappings.size() == 3,
+            "audio retains both enclosing mappings and its own range");
     AudioRenderer renderer;
     require(renderer.render(mix, time(1, 2), 4) == std::vector<float>{2, 2.5F, 3, 3.5F},
             "audio applies outer mapping before inner mapping");

@@ -1559,6 +1559,9 @@ std::optional<core::RationalTime> mapAudioClipTime(const AudioClipDescription& c
             return std::nullopt;
         time = *mapped;
     }
+    if (clip.sourceLoopExtent)
+        return wrapSourceAudioTime(time, clip.startTime, *clip.sourceLoopExtent,
+                                   clip.sourceLoopMode);
     return time;
 }
 
@@ -1630,7 +1633,22 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
             return std::nullopt;
         description.clips.push_back({source.sourceNodeId, source.assetId, *start, layer.outPoint,
                                      level, !layer.enabled, layer.solo});
-        if (layer.time) {
+        description.clips.back().sourceLoopMode = source.loopMode;
+        description.clips.back().sourceLoopExtent = source.loopExtent;
+        if (!layer.time) {
+            // #354: identity timing still gates the layer's in/out window (a trimmed head is
+            // silent), through the same range test a retimed layer uses.
+            description.clips.back().timeMappings.push_back(
+                {.offset = 0.0,
+                 .scale = 1.0,
+                 .loopMode = 0,
+                 .duration = {},
+                 .frameRate = plan->format().frameRate(),
+                 .inPoint = layer.inPoint,
+                 .outPoint = layer.outPoint,
+                 .layerTime = CompiledLayerTime{},
+                 .plan = {}});
+        } else {
             // ADR 0024: the clip plays through the layer's clock; its range is tested in
             // composition time by the mapping, and its source end is the content's own.
             auto mapping = *layer.time;

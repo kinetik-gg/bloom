@@ -20,6 +20,10 @@ namespace bloom::runtime {
 resolveSourceExtent(const document::Project& project, const document::Composition& composition,
                     document::NodeId sourceNodeId);
 
+// A video asset's picture extent: its frame count times its stream period, at the stream rate.
+// nullopt for a non-video asset or unusable stream timing.
+[[nodiscard]] std::optional<TimeExtent> resolveVideoStreamExtent(const document::AssetRecord& asset);
+
 // The layer's resolved content extent, or nullopt for Unbounded (or an unresolvable Source).
 [[nodiscard]] std::optional<TimeExtent>
 resolveLayerExtent(const document::Project& project, const document::Composition& composition,

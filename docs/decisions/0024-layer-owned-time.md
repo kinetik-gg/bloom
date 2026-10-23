@@ -207,7 +207,8 @@ over all of them. These use the render-reachability helper (#355) once it lands.
 
 Audio follows the identical mapping per output sample: the clip's ordered mapping list gains a layer
 entry in front of any nested-composition entries. Speed and remap are varispeed (pitch follows rate);
-`None` is silence. Mixer, level and loop details belong to #354.
+`None` is silence. The in/out gate for identity layers and a video's embedded-audio loop are
+recorded with the other audio rules in `animation-and-time.md` (#354).
 
 ## Consequences
 

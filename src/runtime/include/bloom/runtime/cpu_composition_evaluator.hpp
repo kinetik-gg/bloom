@@ -54,6 +54,10 @@ struct AudioClipDescription final {
     bool muted = false;
     bool solo = false;
     std::vector<AudioCompositionTimeMapping> timeMappings{};
+    // #354: the source's own loop (a video's Loop/PingPong over its picture extent), applied
+    // after every mapping above to the clip's content time; see wrapSourceAudioTime.
+    std::int64_t sourceLoopMode = 0;
+    std::optional<TimeExtent> sourceLoopExtent{};
 
     friend bool operator==(const AudioClipDescription&, const AudioClipDescription&) = default;
 };
@@ -66,7 +70,9 @@ struct AudioMixDescription final {
 };
 
 // Resolve an enclosing composition's transport time into this clip's leaf composition.
-// A time outside any enclosing Layer range contributes silence.
+// A time outside any enclosing Layer range contributes silence. Every layer clip carries at least
+// its own layer's range entry, so a trimmed head is silent before the in point. Allocation-free:
+// it runs per output sample on the mixer worker.
 [[nodiscard]] std::optional<core::RationalTime> mapAudioClipTime(const AudioClipDescription& clip,
                                                                  core::RationalTime time);
 

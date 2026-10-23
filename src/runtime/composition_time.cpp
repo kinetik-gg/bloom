@@ -221,4 +221,23 @@ std::optional<core::RationalTime> mapCompositionTime(const core::RationalTime ti
         return std::nullopt;
     return wrapped->time;
 }
+
+std::optional<core::RationalTime> wrapSourceAudioTime(const RationalTime time,
+                                                      const RationalTime start,
+                                                      const TimeExtent& extent,
+                                                      const std::int64_t loopMode) {
+    if (loopMode != 1 && loopMode != 2)
+        return time;
+    const auto local = difference(time, start);
+    if (!local)
+        return std::nullopt;
+    if (*local < RationalTime{})
+        return time;
+    const auto mode = loopMode == 1 ? document::LayerTimeMode::Loop : document::LayerTimeMode::PingPong;
+    const auto wrapped = wrapToExtent(*local, extent, mode, mode);
+    if (!wrapped || start.numerator() == -limit - 1)
+        return std::nullopt;
+    const auto negated = RationalTime::create(-start.numerator(), start.denominator());
+    return negated ? difference(wrapped->time, *negated) : std::nullopt;
+}
 } // namespace bloom::runtime

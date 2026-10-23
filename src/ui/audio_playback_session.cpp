@@ -138,11 +138,20 @@ void AudioPlaybackSession::submitPending() {
             auto prepared = std::make_shared<Preparation>();
             if (compiled.status == runtime::SnapshotCompileStatus::Compiled && compiled.plan) {
                 const auto& audio = compiled.plan->audioMix();
-                prepared->timeDependent = !audio.nestedLayers.empty() ||
-                                          std::ranges::any_of(audio.sources, [](const auto& source) {
-                                              return !std::holds_alternative<double>(
-                                                  source.level.source);
-                                          });
+                // A value-driven Time Remap is resolved once per mix (ADR 0024), so it is
+                // re-evaluated with the transport like an animated level.
+                prepared->timeDependent =
+                    !audio.nestedLayers.empty() ||
+                    std::ranges::any_of(audio.sources,
+                                        [](const auto& source) {
+                                            return !std::holds_alternative<double>(
+                                                source.level.source);
+                                        }) ||
+                    std::ranges::any_of(audio.layers, [](const auto& layer) {
+                        return layer.time && layer.time->timeRemap &&
+                               std::holds_alternative<runtime::ValueOutputIndex>(
+                                   layer.time->timeRemap->source);
+                    });
                 prepared->mix =
                     evaluator->evaluateAudioMix(compiled.plan, request.time, context.cancellation());
             } else {

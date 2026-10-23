@@ -45,6 +45,21 @@ template <typename Value>
 
 } // namespace
 
+std::optional<TimeExtent> resolveVideoStreamExtent(const document::AssetRecord& asset) {
+    if (asset.kind != document::AssetKind::Video)
+        return std::nullopt;
+    const auto stream = std::ranges::find(asset.videoStreams, 1U, &document::AssetVideoStream::kind);
+    if (stream == asset.videoStreams.end() || stream->framePeriod.numerator() <= 0 ||
+        stream->framePeriod.denominator() > std::numeric_limits<std::uint32_t>::max() ||
+        stream->framePeriod.numerator() > std::numeric_limits<std::uint32_t>::max())
+        return std::nullopt;
+    const auto streamRate =
+        document::FrameRate::create(static_cast<std::uint32_t>(stream->framePeriod.denominator()),
+                                    static_cast<std::uint32_t>(stream->framePeriod.numerator()));
+    const auto duration = streamRate ? framesAt(asset.frames, *streamRate) : std::nullopt;
+    return duration ? std::optional{TimeExtent{*duration, *streamRate}} : std::nullopt;
+}
+
 std::optional<TimeExtent> resolveSourceExtent(const document::Project& project,
                                               const document::Composition& composition,
                                               const document::NodeId sourceNodeId) {
@@ -68,19 +83,9 @@ std::optional<TimeExtent> resolveSourceExtent(const document::Project& project,
     }
     if (node->typeId == "bloom.video-source") {
         const auto* asset = assetOf(project, composition, *node);
-        if (asset == nullptr || asset->kind != document::AssetKind::Video || !identityStart())
+        if (asset == nullptr || !identityStart())
             return std::nullopt;
-        const auto stream =
-            std::ranges::find(asset->videoStreams, 1U, &document::AssetVideoStream::kind);
-        if (stream == asset->videoStreams.end() || stream->framePeriod.numerator() <= 0 ||
-            stream->framePeriod.denominator() > std::numeric_limits<std::uint32_t>::max() ||
-            stream->framePeriod.numerator() > std::numeric_limits<std::uint32_t>::max())
-            return std::nullopt;
-        const auto streamRate = document::FrameRate::create(
-            static_cast<std::uint32_t>(stream->framePeriod.denominator()),
-            static_cast<std::uint32_t>(stream->framePeriod.numerator()));
-        const auto duration = streamRate ? framesAt(asset->frames, *streamRate) : std::nullopt;
-        return duration ? std::optional{TimeExtent{*duration, *streamRate}} : std::nullopt;
+        return resolveVideoStreamExtent(*asset);
     }
     if (node->typeId == "bloom.audio-source") {
         const auto* asset = assetOf(project, composition, *node);

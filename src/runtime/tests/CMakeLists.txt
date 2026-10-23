@@ -224,11 +224,17 @@ bloom_enable_warnings(bloom_runtime_shape_sources_test)
 bloom_enable_strict_floating_point(bloom_runtime_shape_sources_test)
 bloom_add_test(NAME bloom.runtime.shape_sources COMMAND bloom_runtime_shape_sources_test LABELS unit rendering)
 
-add_executable(bloom_runtime_layer_time_test layer_time_tests.cpp)
+# Cross-module (runtime + commands) evaluation tests live under tests/integration/.
+add_executable(bloom_runtime_layer_time_test ${PROJECT_SOURCE_DIR}/tests/integration/layer_time_tests.cpp)
 target_link_libraries(bloom_runtime_layer_time_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands)
 bloom_enable_warnings(bloom_runtime_layer_time_test)
 bloom_enable_strict_floating_point(bloom_runtime_layer_time_test)
 bloom_add_test(NAME bloom.runtime.layer-time COMMAND bloom_runtime_layer_time_test LABELS unit runtime TIMEOUT 60)
+
+add_executable(bloom_runtime_audio_timing_test ${PROJECT_SOURCE_DIR}/tests/integration/audio_timing_tests.cpp)
+target_link_libraries(bloom_runtime_audio_timing_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_media_audio)
+bloom_enable_warnings(bloom_runtime_audio_timing_test)
+bloom_add_test(NAME bloom.runtime.audio-timing COMMAND bloom_runtime_audio_timing_test LABELS unit runtime TIMEOUT 120)
 
 add_executable(bloom_composition_source_test composition_source_tests.cpp)
 target_link_libraries(bloom_composition_source_test PRIVATE bloom_runtime_evaluator bloom_runtime_compiler bloom_media_audio)
