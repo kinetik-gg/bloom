@@ -2951,9 +2951,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                          " image pixels had non-finite or out-of-range values; "
                                          "they were repaired (NaN/Inf to 0, alpha clamped)",
                                      {}});
-                            bounds[index].local = detail::boundsForWindow(
-                                image.value->descriptor()->dataWindow(), resolved.horizontalScale,
-                                resolved.verticalScale);
+                            bounds[index].local =
+                                detail::imageSourceFrameBounds(*selectedImage)
+                                    .value_or(detail::boundsForWindow(
+                                        image.value->descriptor()->dataWindow(),
+                                        resolved.horizontalScale, resolved.verticalScale));
                             bounds[index].output = bounds[index].local;
                             produced.emplace(std::move(*image.value));
                         },

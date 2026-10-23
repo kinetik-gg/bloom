@@ -332,15 +332,22 @@ struct ExrLayout final {
 }
 
 [[nodiscard]] ImageProbe makeProbe(const ExrLayout& layout, const core::Sha256Digest digest) {
-    return ImageProbe{static_cast<std::uint32_t>(layout.width),
-                      static_cast<std::uint32_t>(layout.height),
-                      layout.bitDepth,
-                      digest,
-                      ImageFormat::Exr,
-                      ImageColorSpace::Linear,
-                      layout.alphaAssociation,
-                      layout.colorSpaceTag,
-                      layout.interpretationAssumption};
+    auto probe = ImageProbe{static_cast<std::uint32_t>(layout.width),
+                            static_cast<std::uint32_t>(layout.height),
+                            layout.bitDepth,
+                            digest,
+                            ImageFormat::Exr,
+                            ImageColorSpace::Linear,
+                            layout.alphaAssociation,
+                            layout.colorSpaceTag,
+                            layout.interpretationAssumption};
+    probe.dataOffsetX = static_cast<std::int64_t>(layout.dataWindow.min.x) -
+                        static_cast<std::int64_t>(layout.displayWindow.min.x);
+    probe.dataOffsetY = static_cast<std::int64_t>(layout.dataWindow.min.y) -
+                        static_cast<std::int64_t>(layout.displayWindow.min.y);
+    probe.frameWidth = static_cast<std::uint32_t>(layout.displayWidth);
+    probe.frameHeight = static_cast<std::uint32_t>(layout.displayHeight);
+    return probe;
 }
 
 } // namespace

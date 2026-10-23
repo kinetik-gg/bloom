@@ -74,6 +74,19 @@ struct ImageProbe {
     // interpretationAssumption explains the convention used by the bounded reader.
     std::string colorSpaceTag;
     std::string interpretationAssumption;
+    // The image frame (OpenEXR display window) and the data window's offset inside it, in source
+    // pixels. width/height above are the data window. A zero frame means the frame is the data
+    // window at offset (0, 0), as for PNG/JPEG.
+    std::int64_t dataOffsetX = 0;
+    std::int64_t dataOffsetY = 0;
+    std::uint32_t frameWidth = 0;
+    std::uint32_t frameHeight = 0;
+    [[nodiscard]] std::uint32_t effectiveFrameWidth() const noexcept {
+        return frameWidth != 0 ? frameWidth : width;
+    }
+    [[nodiscard]] std::uint32_t effectiveFrameHeight() const noexcept {
+        return frameHeight != 0 ? frameHeight : height;
+    }
 };
 
 // A session-owned, immutable source revision. Its digest, header and every decoder read refer to

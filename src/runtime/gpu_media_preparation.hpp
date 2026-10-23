@@ -72,6 +72,9 @@ struct MediaUploadOutcome final {
     std::string uploadSemanticKey;
     std::shared_ptr<const PreparedGpuOcioCommand> program;
     std::optional<MediaResamplePlan> resample;
+    // Image-source frame bounds when the data window differs from the frame (see
+    // imageSourceFrameBounds); otherwise the leaf bounds follow its output window.
+    std::optional<ContentBounds> frameBounds;
     bool cancelled = false;
     bool cacheHit = false;
     bool converted = false;

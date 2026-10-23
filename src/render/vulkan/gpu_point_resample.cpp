@@ -24,30 +24,6 @@ constexpr std::uint64_t kPointResampleDeadlineNanoseconds = 5ULL * 1000ULL * 100
     return pointResampleDiagnostic(code, std::move(message));
 }
 
-// The media-image-proxy CPU oracle extent: max(1, ceil(sourceExtent * scale)). Rejects a scale that
-// is non-finite or not strictly positive and an unbounded/overflowing result before any allocation.
-[[nodiscard]] bool derivedProxyExtent(const std::uint32_t sourceWidth,
-                                      const std::uint32_t sourceHeight,
-                                      const double horizontalScale, const double verticalScale,
-                                      std::uint32_t& outputWidth,
-                                      std::uint32_t& outputHeight) noexcept {
-    if (!std::isfinite(horizontalScale) || !std::isfinite(verticalScale) ||
-        horizontalScale <= 0.0 || verticalScale <= 0.0) {
-        return false;
-    }
-    const double width =
-        std::max(1.0, std::ceil(static_cast<double>(sourceWidth) * horizontalScale));
-    const double height =
-        std::max(1.0, std::ceil(static_cast<double>(sourceHeight) * verticalScale));
-    constexpr auto kMaximum = static_cast<double>(std::numeric_limits<std::uint32_t>::max());
-    if (!std::isfinite(width) || !std::isfinite(height) || width > kMaximum || height > kMaximum) {
-        return false;
-    }
-    outputWidth = static_cast<std::uint32_t>(width);
-    outputHeight = static_cast<std::uint32_t>(height);
-    return true;
-}
-
 // Overflow-checked axis metadata size (one int32 per output column plus one per output row).
 [[nodiscard]] bool axisMetadataBytes(const std::uint32_t outputWidth,
                                      const std::uint32_t outputHeight,
@@ -252,19 +228,16 @@ GpuPointResampleDiagnostic GpuPointResample::begin(const GpuPointResampleRequest
         return makeDiagnostic(GpuPointResampleDiagnosticCode::InvalidArgument,
                               "the point-resample source image has no data window");
     }
-    const std::uint32_t sourceWidth = sourceWindow->extent().width();
-    const std::uint32_t sourceHeight = sourceWindow->extent().height();
-    std::uint32_t outputWidth = 0;
-    std::uint32_t outputHeight = 0;
-    if (!derivedProxyExtent(sourceWidth, sourceHeight, parameters.horizontalScale,
-                            parameters.verticalScale, outputWidth, outputHeight)) {
+    const auto derived = pointResampleProxyWindow(*sourceWindow, parameters.horizontalScale,
+                                                  parameters.verticalScale);
+    if (!derived) {
         return makeDiagnostic(GpuPointResampleDiagnosticCode::InvalidArgument,
                               "the point-resample scale or derived extent is invalid");
     }
+    const std::uint32_t outputWidth = derived->extent().width();
+    const std::uint32_t outputHeight = derived->extent().height();
     const auto outputWindow = parameters.output.dataWindow();
-    if (outputWindow.originX() != 0 || outputWindow.originY() != 0 ||
-        outputWindow.extent().width() != outputWidth ||
-        outputWindow.extent().height() != outputHeight) {
+    if (outputWindow != *derived) {
         return makeDiagnostic(GpuPointResampleDiagnosticCode::InvalidArgument,
                               "the output descriptor does not match the derived proxy window");
     }
@@ -326,9 +299,8 @@ GpuPointResampleDiagnostic GpuPointResample::begin(const GpuPointResampleRequest
                               "the point-resample source image does not belong to this device");
     }
 
-    const auto maps =
-        preparePointResampleAxisMaps(sourceWidth, sourceHeight, outputWidth, outputHeight,
-                                     parameters.horizontalScale, parameters.verticalScale);
+    const auto maps = preparePointResampleAxisMaps(
+        *sourceWindow, outputWindow, parameters.horizontalScale, parameters.verticalScale);
     std::vector<std::int32_t> axisIndices;
     axisIndices.reserve(static_cast<std::size_t>(outputWidth) + outputHeight);
     axisIndices.insert(axisIndices.end(), maps.sourceX.begin(), maps.sourceX.end());
