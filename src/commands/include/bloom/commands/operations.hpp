@@ -260,6 +260,10 @@ class SetParameterSource final : public Operation {
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;

@@ -625,6 +625,27 @@ driver dependency; a solo layer — leaves the whole-render default. The result 
 `documentEvaluationChanged`/cache-retention path as a clip trim, so unaffected cached frames are
 retained with zero preparation and only the deleted span re-derives.
 
+**Reachability-proven edits (#355).** Node and parameter commands consult the shared
+[render reachability](layer-graph-model.md#render-reachability) helper. `AddNode`, `RemoveNodes`,
+`ConnectPorts`, `DisconnectInput` and `DissolveNode` capture the composition's reachability before
+mutating and publish a deliberate empty footprint when no node they touched (the node itself, every
+consumer of a removed output, a Merge losing a slot, a driven parameter's owner, a surviving parent)
+is reachable before or after and the compiled topology (nodes, edges, nested references) is
+unchanged; deleting a disconnected Blur, Solid or value node therefore keeps every cached frame. A
+reachable topology change stays whole-render, because it can change compile validity everywhere;
+`RemoveNodes` still falls back to the TEMPORAL-DELETE layer proof. `SetParameterSource` and every
+keyframe/animation operation declare `Operation::parameterEditScope()`; the command stack then diffs
+that composition's parameters and curves ONCE per transaction (`Work::parameterFootprintDiffs`). A
+changed constant or source changes the whole duration; a changed curve changes, per component, only
+`[previous key, next key)` around each added, removed, moved or re-valued key (holds extend the first
+and last key to the composition's ends, and handles and interpolation never reach past a neighbour).
+That time is intersected with where the parameter's owner can reach output: a gating layer's span,
+the whole composition when it reaches Composition Output ungated, nothing when it is unreachable
+(solo-excluded, disabled, a later slot of a muted Merge, or unconnected). A changed driver binding,
+a graph or mute change in the same transaction, an unproven dependency (a readout), or a different
+duration fails closed. Keys are composition times; layer-owned time mapping must map them before it
+may rely on this proof.
+
 **Cache retention.** The cache holds an accepted-provenance policy: while a composition's time is
 inside a span, only that span's revision may be retained there. A finite edit prunes exactly the
 entries whose own revision is no longer accepted for their time (counted as `staleDrops`) while

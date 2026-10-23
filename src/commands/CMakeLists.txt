@@ -14,6 +14,7 @@ target_sources(
         node_duplication.cpp
         node_group_operations.cpp
         node_layout_operations.cpp
+        render_footprint.cpp
         result.cpp
         transaction.cpp
     PUBLIC

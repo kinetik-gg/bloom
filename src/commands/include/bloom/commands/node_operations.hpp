@@ -52,14 +52,17 @@ class AddNode final : public Operation {
 
 class RemoveNodes final : public Operation {
   public:
-    RemoveNodes(document::CompositionId compositionId, std::set<document::NodeId> nodes)
-        : compositionId_(compositionId), nodes_(std::move(nodes)) {}
+    RemoveNodes(
+        document::CompositionId compositionId, std::set<document::NodeId> nodes,
+        const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions())
+        : compositionId_(compositionId), nodes_(std::move(nodes)), registry_(registry) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
 
   private:
     document::CompositionId compositionId_;
     std::set<document::NodeId> nodes_;
+    const document::NodeDefinitionRegistry& registry_;
 };
 
 class DuplicateNodes final : public Operation {

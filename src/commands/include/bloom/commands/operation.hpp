@@ -3,6 +3,7 @@
 #include <bloom/commands/result.hpp>
 #include <bloom/document/document.hpp>
 
+#include <optional>
 #include <string_view>
 
 namespace bloom::commands {
@@ -25,6 +26,16 @@ class Operation {
     // that provably touch no compiled or evaluated input (for example the node-layout card
     // geometry) return false.
     [[nodiscard]] virtual bool renderAffecting() const noexcept { return true; }
+
+    // Issue #355. An operation that changes ONLY parameter sources, animation curves and keyframes
+    // of one composition -- never graph topology, node layout, or composition settings -- names
+    // that composition here. When it publishes no footprint of its own, the command stack proves
+    // one once per transaction by diffing the composition's parameters and curves (see
+    // render_footprint.hpp). The default (std::nullopt) keeps the whole-render default.
+    [[nodiscard]] virtual std::optional<document::CompositionId>
+    parameterEditScope() const noexcept {
+        return std::nullopt;
+    }
 };
 
 } // namespace bloom::commands

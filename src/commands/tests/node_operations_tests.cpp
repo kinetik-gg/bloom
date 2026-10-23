@@ -577,10 +577,11 @@ void testAddAndLayout(TestContext& test) {
                 expected = document::Vec2d{static_cast<double>(comp.format().width()) / 2.0,
                                            static_cast<double>(comp.format().height()) / 2.0};
             if (parameter.schemaKey == document::kGradientEndParameterSchemaKey)
-                expected = document::Vec2d{
-                    static_cast<double>(comp.format().width()),
-                    definition.key.typeId == document::kRadialGradientNodeType
-                        ? static_cast<double>(comp.format().height()) / 2.0 : 0.0};
+                expected =
+                    document::Vec2d{static_cast<double>(comp.format().width()),
+                                    definition.key.typeId == document::kRadialGradientNodeType
+                                        ? static_cast<double>(comp.format().height()) / 2.0
+                                        : 0.0};
             if (parameter.schemaKey == document::kPositionParameterSchemaKey)
                 expected = document::Vec2d{static_cast<double>(comp.format().width()) / 2.0,
                                            static_cast<double>(comp.format().height()) / 2.0};
@@ -1347,8 +1348,9 @@ void testRemovalTimeFootprint(TestContext& test) {
         if (!source.has_value())
             throw std::logic_error("removal footprint source fixture");
         const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{*source});
-        test.expect(result.changed() && result.renderAffecting && !result.affectedTimes.has_value(),
-                    "removing a non-layer node is whole-render");
+        test.expect(result.changed() && result.renderAffecting &&
+                        result.affectedTimes.has_value() && result.affectedTimes->intervals.empty(),
+                    "removing an unreachable non-layer node is render-neutral (issue #355)");
     }
     {
         Fixture fixture;

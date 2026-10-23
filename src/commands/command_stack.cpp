@@ -1,4 +1,5 @@
 #include "layer_lock.hpp"
+#include "render_footprint.hpp"
 #include <bloom/commands/command_stack.hpp>
 
 #include <algorithm>
@@ -298,6 +299,9 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
     // makes the transaction's affected time the conservative whole render.
     bool wholeRender = false;
     std::optional<AffectedTimeFootprint> affectedTimes;
+    // Issue #355. The one composition whose parameter/animation-only operations deferred their
+    // footprint to a single before/after diff once every operation has applied.
+    std::optional<document::CompositionId> parameterScope;
     // SPLIT-1. Ordered remaps, appended in operation order. Any unknown/mixed/cap failure clears
     // them and forces whole render.
     std::vector<LayerIdentityRemap> layerIdentityRemaps;
@@ -376,6 +380,10 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
                         }
                     }
                 }
+            } else if (const auto scope = operation->parameterEditScope();
+                       !operationResult.affectedTimes.has_value() && scope.has_value() &&
+                       remapsValid && (!parameterScope || *parameterScope == *scope)) {
+                parameterScope = scope;
             } else {
                 // An operation that proved no finite footprint, or a transaction already failed
                 // closed on remaps, dominates to whole render and can never publish remaps.
@@ -384,6 +392,20 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
             }
         }
         ++operationIndex;
+    }
+
+    if (changed && renderAffecting && !wholeRender && remapsValid && parameterScope.has_value()) {
+        ++work_.parameterFootprintDiffs;
+        const auto proven = detail::parameterEditFootprint(
+            before.project(), std::as_const(draft).project(), *parameterScope);
+        const auto merged =
+            proven ? mergeAffectedTimeFootprints(affectedTimes, *proven) : std::nullopt;
+        if (merged.has_value()) {
+            affectedTimes = merged;
+        } else {
+            wholeRender = true;
+            remapsValid = false;
+        }
     }
 
     if (!changed) {

@@ -28,6 +28,10 @@ class CreateAnimationForParameter final : public Operation {
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -47,6 +51,10 @@ class InsertScalarKeyframe final : public Operation {
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -68,6 +76,10 @@ class InsertVec2Keyframe final : public Operation {
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -89,6 +101,10 @@ class InsertVec3Keyframe final : public Operation {
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -110,6 +126,10 @@ class InsertColor4Keyframe final : public Operation {
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -131,6 +151,10 @@ class UpdateScalarKeyframe final : public Operation {
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -154,6 +178,10 @@ class UpdateVec2Keyframe final : public Operation {
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -177,6 +205,10 @@ class UpdateVec3Keyframe final : public Operation {
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -200,6 +232,10 @@ class UpdateColor4Keyframe final : public Operation {
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -231,6 +267,10 @@ class SetKeyframeInterpolation final : public Operation {
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -257,6 +297,10 @@ class SetKeyframeAtTime final : public Operation {
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -297,6 +341,10 @@ class SetKeyframeAtTimeForParameter final : public Operation {
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -318,6 +366,10 @@ class SetKeyframeAtTimeForParameterComponent final : public Operation {
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -337,6 +389,10 @@ class DeleteKeyframe final : public Operation {
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -362,6 +418,10 @@ class ConvertAnimationToConstant final : public Operation {
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -410,6 +470,10 @@ class MoveKeyframes final : public Operation {
         : composition_(composition), keys_(std::move(keys)) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return composition_;
+    }
 
   private:
     document::CompositionId composition_;
@@ -421,6 +485,10 @@ class DeleteKeyframes final : public Operation {
         : composition_(composition), keys_(std::move(keys)) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return composition_;
+    }
 
   private:
     document::CompositionId composition_;
@@ -434,6 +502,10 @@ class SetKeyframesInterpolation final : public Operation {
         : composition_(composition), keys_(std::move(keys)), interpolation_(interpolation) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return composition_;
+    }
 
   private:
     document::CompositionId composition_;
@@ -452,6 +524,10 @@ class SetKeyframeHandles final : public Operation {
         : composition_(composition), edits_(std::move(edits)) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return composition_;
+    }
 
   private:
     document::CompositionId composition_;
@@ -468,6 +544,10 @@ class SetKeyframeValues final : public Operation {
         : composition_(composition), values_(std::move(values)) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return composition_;
+    }
 
   private:
     document::CompositionId composition_;
@@ -479,6 +559,10 @@ class PasteKeyframes final : public Operation {
         : composition_(composition), keys_(std::move(keys)) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return composition_;
+    }
 
   private:
     document::CompositionId composition_;

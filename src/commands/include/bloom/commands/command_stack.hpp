@@ -45,6 +45,8 @@ class CommandStack final {
         std::uint64_t chargedSnapshotsVisited = 0;
         std::uint64_t overBudgetValidations = 0;
         std::uint64_t historyEntriesRetired = 0;
+        // Transactions whose parameter/animation footprint was proven by one before/after diff.
+        std::uint64_t parameterFootprintDiffs = 0;
     };
     explicit CommandStack(document::Document& document);
     CommandStack(document::Document& document, HistoryLimits limits);

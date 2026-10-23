@@ -1,6 +1,7 @@
 #include <bloom/commands/node_operations.hpp>
 
 #include "node_operation_support.hpp"
+#include "render_footprint.hpp"
 
 #include <bloom/document/persisted_text.hpp>
 
@@ -64,6 +65,9 @@ OperationResult AddNode::apply(document::Draft& draft) const {
         eligibility.status == OperationStatus::Rejected)
         return eligibility;
     auto* composition = draft.project().findComposition(compositionId_);
+    // Issue #355: a node added with no links is not compiled, so adding it publishes an empty
+    // footprint whenever the compiled topology provably stays the same.
+    const auto reachableBefore = document::RenderReachability::compute(*composition, registry_);
     const document::NodeDefinition* definition = nullptr;
     for (const auto& candidate : registry_.definitions()) {
         if (candidate.key.typeId == nodeTypeId_ &&
@@ -90,9 +94,9 @@ OperationResult AddNode::apply(document::Draft& draft) const {
                                     static_cast<double>(composition->format().height()) / 2.0};
         else if (parameter.schemaKey == document::kGradientEndParameterSchemaKey)
             value = nodeTypeId_ == document::kRadialGradientNodeType
-                ? document::Vec2d{static_cast<double>(composition->format().width()),
-                                  static_cast<double>(composition->format().height()) / 2.0}
-                : document::Vec2d{static_cast<double>(composition->format().width()), 0.0};
+                        ? document::Vec2d{static_cast<double>(composition->format().width()),
+                                          static_cast<double>(composition->format().height()) / 2.0}
+                        : document::Vec2d{static_cast<double>(composition->format().width()), 0.0};
         else if (parameter.schemaKey == document::kPositionParameterSchemaKey)
             value = document::Vec2d{static_cast<double>(composition->format().width()) / 2.0,
                                     static_cast<double>(composition->format().height()) / 2.0};
@@ -136,7 +140,10 @@ OperationResult AddNode::apply(document::Draft& draft) const {
                                              "Layer boundary could not be inserted");
         outputs.push_back({"layer", *layerId});
     }
-    return OperationResult::applied(std::move(outputs));
+    auto result = OperationResult::applied(std::move(outputs));
+    result.affectedTimes =
+        detail::unreachableEditFootprint(*composition, reachableBefore, {*nodeId}, registry_);
+    return result;
 }
 
 namespace {
@@ -235,6 +242,42 @@ removalTimeFootprint(const document::Composition& composition,
                                                                 .intervals = std::move(intervals)});
 }
 
+// Everything a removal changes besides the removed nodes themselves: each consumer of a removed
+// output (including a Merge losing a slot), each node whose parameter a removed node drives, each
+// Merge listing a removed layer, and each surviving parent whose transform-parent status may lapse.
+[[nodiscard]] std::set<document::NodeId>
+removalTouchedNodes(const document::Composition& composition,
+                    const std::set<document::NodeId>& nodes) {
+    const auto& graph = composition.graph();
+    std::set<document::NodeId> touched = nodes;
+    for (const auto& edge : graph.edges())
+        if (nodes.contains(edge.source.nodeId))
+            touched.insert(detail::destinationNode(edge.destination));
+    std::set<document::LayerId> layers;
+    for (const auto& boundary : graph.layerOutputs()) {
+        if (!nodes.contains(boundary.nodeId))
+            continue;
+        layers.insert(boundary.layerId);
+        if (boundary.parent)
+            if (const auto* parent = graph.findLayer(*boundary.parent))
+                touched.insert(parent->nodeId);
+    }
+    for (const auto& merge : graph.merges())
+        for (const auto& entry : merge.entries())
+            if (layers.contains(entry.layerId))
+                touched.insert(merge.nodeId());
+    for (const auto& node : graph.nodes())
+        for (const auto& binding : node.parameters) {
+            const auto* parameter = composition.parameters().find(binding.parameterId);
+            const auto* driver =
+                parameter ? std::get_if<document::DriverBindingSource>(&parameter->source)
+                          : nullptr;
+            if (driver != nullptr && nodes.contains(driver->sourceNodeId))
+                touched.insert(node.id);
+        }
+    return touched;
+}
+
 } // namespace
 
 std::string_view RemoveNodes::typeId() const noexcept { return "bloom.node.remove"; }
@@ -257,8 +300,11 @@ OperationResult RemoveNodes::apply(document::Draft& draft) const {
             candidates.insert(binding.parameterId);
     }
     // Classify from the pre-erase graph. std::nullopt is the conservative whole-render default; a
-    // present footprint (possibly empty) is provable bounded reuse evidence.
-    const auto footprint = removalTimeFootprint(*composition, nodes_);
+    // present footprint (possibly empty) is provable bounded reuse evidence. Issue #355: removing
+    // nodes the compiler never reaches is render-neutral, whatever kind of node they are.
+    const auto reachableBefore = document::RenderReachability::compute(*composition, registry_);
+    const auto touched = removalTouchedNodes(*composition, nodes_);
+    auto footprint = removalTimeFootprint(*composition, nodes_);
     for (const auto id : nodes_) {
         (void)composition->graph().eraseNode(id);
         composition->nodeLayout().erase(id);
@@ -266,6 +312,9 @@ OperationResult RemoveNodes::apply(document::Draft& draft) const {
     // A removed node leaves its frame, and a frame with nothing left in it goes with it.
     (void)detail::detachFromNodeGroups(*composition, nodes_);
     detail::eraseOrphanedParameters(*composition, candidates);
+    if (auto neutral =
+            detail::unreachableEditFootprint(*composition, reachableBefore, touched, registry_))
+        footprint = std::move(neutral);
     auto result = OperationResult::applied();
     result.affectedTimes = footprint;
     return result;
@@ -296,6 +345,12 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
     if (!composition)
         return detail::invalidTarget();
     auto& graph = composition->graph();
+    const auto reachableBefore = document::RenderReachability::compute(*composition, registry_);
+    const auto neutral = [&](OperationResult result) {
+        result.affectedTimes = detail::unreachableEditFootprint(
+            *composition, reachableBefore, {detail::destinationNode(destination_)}, registry_);
+        return result;
+    };
     const auto sourceKind = graph.outputKind(source_, registry_);
     const auto inputKind = graph.inputKind(destination_, registry_);
     // An unconnected REROUTE has no kind yet, and that is not a missing port -- it is the whole of
@@ -332,7 +387,7 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
                                              "Driver binding could not be applied");
         if (const auto failure = detail::validateGraph(*composition, registry_))
             return *failure;
-        return OperationResult::applied();
+        return neutral(OperationResult::applied());
     }
     // A link into Merge's ordered multi-input whose slot id is the invalid sentinel MEANS "make a
     // new slot here" (task FIX1, item B): the stack slot is what a Layer node's connection to Merge
@@ -387,8 +442,8 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
                                              "Layer stack connection could not be inserted");
         if (const auto failure = detail::validateGraph(*composition, registry_))
             return *failure;
-        return OperationResult::applied(
-            {{std::string(kConnectPortsSlotOutput), slotId}, {"edge", *edgeId}});
+        return neutral(OperationResult::applied(
+            {{std::string(kConnectPortsSlotOutput), slotId}, {"edge", *edgeId}}));
     }
     const auto* previous = detail::inputEdge(graph, destination_);
     if (previous && previous->source == source_)
@@ -422,7 +477,7 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
                                          "Connection could not be inserted");
     if (const auto failure = detail::validateGraph(*composition, registry_))
         return *failure;
-    return OperationResult::applied({{"edge", *edgeId}});
+    return neutral(OperationResult::applied({{"edge", *edgeId}}));
 }
 
 std::string_view SetMergeEnabled::typeId() const noexcept { return "bloom.merge.set-enabled"; }
@@ -464,6 +519,13 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
     auto& graph = composition->graph();
     if (!graph.inputKind(input_, registry_))
         return detail::invalidTarget();
+    const auto reachableBefore = document::RenderReachability::compute(*composition, registry_);
+    std::set<document::NodeId> touched{detail::destinationNode(input_)};
+    const auto neutral = [&](OperationResult result) {
+        result.affectedTimes =
+            detail::unreachableEditFootprint(*composition, reachableBefore, touched, registry_);
+        return result;
+    };
     if (const auto* slot = std::get_if<document::LayerStackInputRef>(&input_); slot != nullptr) {
         auto* stack = graph.merge(slot->stackNodeId);
         if (!stack || stack->find(slot->slotId) == nullptr)
@@ -489,7 +551,7 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
                                              "Layer stack slot could not be removed");
         if (const auto failure = detail::validateGraph(*composition, registry_))
             return *failure;
-        return OperationResult::applied();
+        return neutral(OperationResult::applied());
     }
     // Unlinking an operand socket restores its parameter to the constant its registered default
     // names; see registeredDefault() for why that, and not a remembered previous value, is what an
@@ -513,7 +575,7 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
                                              "Registered default violates its parameter schema");
         if (const auto failure = detail::validateGraph(*composition, registry_))
             return *failure;
-        return OperationResult::applied();
+        return neutral(OperationResult::applied());
     }
     const auto* edge = detail::inputEdge(graph, input_);
     if (!edge)
@@ -526,10 +588,11 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
     // the SAME transaction, so one undo puts the link and its bend back together. Both ends are
     // checked, because either of them may be the reroute this disconnect stranded.
     for (const auto candidate : {upstream, downstream})
-        (void)detail::eraseStrandedReroute(*composition, candidate);
+        if (detail::eraseStrandedReroute(*composition, candidate))
+            touched.insert(candidate);
     if (const auto failure = detail::validateGraph(*composition, registry_))
         return *failure;
-    return OperationResult::applied();
+    return neutral(OperationResult::applied());
 }
 
 std::string_view DissolveNode::typeId() const noexcept { return "bloom.node.dissolve"; }
@@ -578,6 +641,8 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
     std::set<document::ParameterId> candidates;
     for (const auto& binding : node->parameters)
         candidates.insert(binding.parameterId);
+    const auto reachableBefore = document::RenderReachability::compute(*composition, registry_);
+    const auto touched = removalTouchedNodes(*composition, {nodeId_});
     (void)graph.eraseNode(nodeId_);
     composition->nodeLayout().erase(nodeId_);
     (void)detail::detachFromNodeGroups(*composition, {nodeId_});
@@ -589,6 +654,9 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
     detail::eraseOrphanedParameters(*composition, candidates);
     if (const auto failure = detail::validateGraph(*composition, registry_))
         return *failure;
-    return OperationResult::applied();
+    auto result = OperationResult::applied();
+    result.affectedTimes =
+        detail::unreachableEditFootprint(*composition, reachableBefore, touched, registry_);
+    return result;
 }
 } // namespace bloom::commands

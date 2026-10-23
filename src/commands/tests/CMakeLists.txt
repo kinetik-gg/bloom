@@ -47,6 +47,12 @@ target_link_libraries(bloom_commands_node_test PRIVATE bloom_commands)
 bloom_enable_warnings(bloom_commands_node_test)
 bloom_add_test(NAME bloom.commands.nodes COMMAND bloom_commands_node_test LABELS commands unit)
 
+add_executable(bloom_commands_render_footprint_test render_footprint_tests.cpp)
+target_link_libraries(bloom_commands_render_footprint_test PRIVATE bloom_commands)
+bloom_enable_warnings(bloom_commands_render_footprint_test)
+bloom_add_test(NAME bloom.commands.render-footprint COMMAND bloom_commands_render_footprint_test
+               LABELS commands unit)
+
 add_executable(bloom_commands_composition_test composition_operations_tests.cpp)
 target_link_libraries(bloom_commands_composition_test PRIVATE bloom_commands)
 bloom_enable_warnings(bloom_commands_composition_test)
