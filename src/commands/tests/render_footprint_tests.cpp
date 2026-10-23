@@ -258,6 +258,28 @@ void testCompositionSourceReference(TestContext& test) {
         "a reachable nested source parameter is confined to its layer");
 }
 
+void testAffectedCompositionScope(TestContext& test) {
+    Fixture fixture;
+    const auto solid = addNode(fixture, kSolidSourceNodeType);
+    const auto rewire = apply<ConnectPorts>(fixture, OutputPortRef{solid, "image"},
+                                            InputPortRef{NodeInputRef{kFirstLayerNodeId, "image"}});
+    test.expect(whole(rewire) && rewire.affectedComposition == kCompositionId,
+                "a whole-render node edit still names its composition");
+    test.expect(fixture.stack.undo().affectedComposition == kCompositionId &&
+                    fixture.stack.redo().affectedComposition == kCompositionId,
+                "undo and redo replay the composition scope");
+    test.expect(apply<SetParameterSource>(fixture, kOpacityId, ConstantValueSource{0.5})
+                        .affectedComposition == kCompositionId,
+                "a finite footprint implies its composition scope");
+
+    Transaction mixed("Unscoped", fixture.document.snapshot().revision());
+    mixed.emplace<AddNode>(kCompositionId, std::string(kSolidSourceNodeType), Vec2d{});
+    mixed.emplace<SetLayerEnabled>(kCompositionId, kFirstLayerId, false);
+    const auto unscoped = fixture.stack.execute(std::move(mixed));
+    test.expect(whole(unscoped) && !unscoped.affectedComposition.has_value(),
+                "an operation without a declared scope leaves the scope unknown");
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -269,6 +291,7 @@ int main() {
         bloom::commands::test::testParameterSpans(test);
         bloom::commands::test::testKeyframeIntervals(test);
         bloom::commands::test::testCompositionSourceReference(test);
+        bloom::commands::test::testAffectedCompositionScope(test);
     } catch (const std::exception& error) {
         test.fail(error.what());
     }
