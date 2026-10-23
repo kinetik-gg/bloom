@@ -1,3 +1,4 @@
+#include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/scripting/operation_registry.hpp>
 
@@ -2460,6 +2461,85 @@ OperationRegistry OperationRegistry::builtIn() {
                                              document::LayerId::fromRaw(*layer), *start, *end),
                                          std::nullopt);
         });
+
+    // ADR 0024 layer-owned time.
+    add("bloom.layer.set-timing",
+        {compositionArgument(), layerArgument(),
+         need("startTime", ValueKind::Time, std::int64_t{0},
+              "Composition time of the layer's time zero (moves content and keys)."),
+         need("start", ValueKind::Time, std::int64_t{0}, "The layer's first frame."),
+         need("end", ValueKind::Time, std::int64_t{24}, "The layer's exclusive end frame."),
+         need("speedNumerator", ValueKind::Integer, std::int64_t{1}, "Exact speed numerator."),
+         need("speedDenominator", ValueKind::Integer, std::int64_t{1},
+              "Exact speed denominator.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            const auto startTime = rational(args, op, "startTime", error);
+            const auto start = rational(args, op, "start", error);
+            const auto end = rational(args, op, "end", error);
+            const auto numerator = integer(args, op, "speedNumerator", error);
+            const auto denominator = integer(args, op, "speedDenominator", error);
+            if (!composition || !layer || !startTime || !start || !end || !numerator ||
+                !denominator)
+                return error;
+            const auto speed = document::LayerSpeed::create(*numerator, *denominator);
+            if (!speed)
+                return failure(op, "speedNumerator", "speed must be in [1/1000, 1000]");
+            return OperationCreateResult(
+                std::make_unique<commands::SetLayerTiming>(
+                    document::CompositionId::fromRaw(*composition),
+                    document::LayerId::fromRaw(*layer), *startTime, *start, *end, *speed),
+                std::nullopt);
+        });
+
+    add("bloom.layer.set-time-modes",
+        {compositionArgument(), layerArgument(),
+         need("before", ValueKind::Integer, std::int64_t{0},
+              "Before the content: 0 None, 1 Hold, 2 Loop, 3 PingPong."),
+         need("after", ValueKind::Integer, std::int64_t{0},
+              "After the content: 0 None, 1 Hold, 2 Loop, 3 PingPong.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            const auto before = integer(args, op, "before", error);
+            const auto after = integer(args, op, "after", error);
+            if (!composition || !layer || !before || !after)
+                return error;
+            const auto beforeMode = document::layerTimeModeFromStoredValue(*before);
+            const auto afterMode = document::layerTimeModeFromStoredValue(*after);
+            if (!beforeMode || !afterMode)
+                return failure(op, beforeMode ? "after" : "before",
+                               "modes are 0 None, 1 Hold, 2 Loop, 3 PingPong");
+            return OperationCreateResult(std::make_unique<commands::SetLayerTimeModes>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::LayerId::fromRaw(*layer), *beforeMode,
+                                             *afterMode),
+                                         std::nullopt);
+        });
+
+    for (const bool enable : {true, false})
+        add(enable ? "bloom.layer.enable-time-remap" : "bloom.layer.disable-time-remap",
+            {compositionArgument(), layerArgument()},
+            [enable](const std::string& op, const Arguments& args) {
+                OperationCreateResult error(nullptr, std::nullopt);
+                const auto composition = id(args, op, "composition", error);
+                const auto layer = id(args, op, "layer", error);
+                if (!composition || !layer)
+                    return error;
+                const auto compositionId = document::CompositionId::fromRaw(*composition);
+                const auto layerId = document::LayerId::fromRaw(*layer);
+                std::unique_ptr<commands::Operation> operation;
+                if (enable)
+                    operation =
+                        std::make_unique<commands::EnableLayerTimeRemap>(compositionId, layerId);
+                else
+                    operation =
+                        std::make_unique<commands::DisableLayerTimeRemap>(compositionId, layerId);
+                return OperationCreateResult(std::move(operation), std::nullopt);
+            });
 
     add("bloom.layer.split-at-time", {compositionArgument(), layerArgument(), timeArgument()},
         [](const std::string& op, const Arguments& args) {
