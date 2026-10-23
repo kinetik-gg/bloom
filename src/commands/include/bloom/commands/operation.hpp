@@ -36,6 +36,14 @@ class Operation {
     parameterEditScope() const noexcept {
         return std::nullopt;
     }
+
+    // Issue #355. The single composition whose content this operation can change, so a whole-render
+    // result still names the composition it touched (CommandResult::affectedComposition). An
+    // operation that edits project-wide state (assets, colour settings, compositions themselves)
+    // must keep the default, which means "any composition".
+    [[nodiscard]] virtual std::optional<document::CompositionId> renderScope() const noexcept {
+        return parameterEditScope();
+    }
 };
 
 } // namespace bloom::commands

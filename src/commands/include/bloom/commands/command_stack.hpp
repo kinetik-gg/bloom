@@ -90,6 +90,8 @@ class CommandStack final {
         // render-affecting op proved a finite footprint. Undo publishes the inverted list; redo
         // publishes this stored forward list.
         std::optional<std::vector<LayerIdentityRemap>> layerIdentityRemaps;
+        // #355. The composition the render effect is confined to, when known.
+        std::optional<document::CompositionId> affectedComposition;
     };
 
     [[nodiscard]] std::optional<CommandResult> staleResult(CommandAction action, std::string label,

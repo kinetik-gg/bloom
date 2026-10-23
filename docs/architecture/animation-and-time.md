@@ -605,7 +605,8 @@ repeated split of a tail collapses original->intermediate->final rather than nam
 ID absent from the retained snapshot. A finite pixel-interval replacement switches only the changed
 intervals to live (clearing their mappings); unaffected segments keep their snapshot and mappings.
 Undo publishes the already-inverted list, so `before` is validated against the PREVIOUS live graph
-and `after` against the new one. Whole/cap/rebind/switch fall back to whole-live with no mappings.
+and `after` against the new one. Whole/cap/rebind fall back to whole-live with no mappings; a
+composition switch keeps the spans and mappings it retains (see below).
 `CompositionPreviewController::currentLayerBounds()` is the one place viewer paint, hit-test, text
 editing and selection read geometry: it translates each retained bound's layer/node ID to the current
 graph for the frame's own time, so a cached tail frame hit-selects and drags the NEW tail while the
@@ -645,6 +646,24 @@ the whole composition when it reaches Composition Output ungated, nothing when i
 a graph or mute change in the same transaction, an unproven dependency (a readout), or a different
 duration fails closed. Keys are composition times; layer-owned time mapping must map them before it
 may rely on this proof.
+
+**Per-composition retention (#355).** Switching composition no longer discards the composition
+being left: `CompositionSession` keeps its spans (with their mappings) for up to
+`kMaxRetainedCompositions` (4) inactive compositions, and restores them on return when they still
+form a full cover whose snapshots agree with the live project, duration and frame rate; otherwise
+the entered composition starts whole-live. The preview controller pushes the retained spans to the
+frame cache's accepted-provenance policy beside the active ones, so those frames are not pruned and
+a return answers from the RAM preview with no preparation. Every committed result is applied to the
+retained compositions too: a finite footprint of a retained composition is applied in place; a
+non-empty footprint, or a whole render, of another composition drops a retained (or the active)
+composition only when that composition renders it through a reachable nested Composition Source --
+checked against the live snapshot and every snapshot it still retains, via
+`document::compositionsDependingOn()`. `CommandResult::affectedComposition` names the one
+composition a whole-render transaction was confined to (from each operation's footprint or
+`Operation::renderScope()`); without it -- project-wide edits, mixed compositions, stale or
+external revisions, rebind -- every retained composition is dropped. A footprint naming a
+composition the live project lacks is inconsistent and resets. `retainedEvaluationChanged()` tells
+the controller to re-scope cache retention when only retained compositions changed.
 
 **Cache retention.** The cache holds an accepted-provenance policy: while a composition's time is
 inside a span, only that span's revision may be retained there. A finite edit prunes exactly the

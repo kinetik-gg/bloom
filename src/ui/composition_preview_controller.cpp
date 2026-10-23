@@ -124,6 +124,8 @@ CompositionPreviewController::CompositionPreviewController(
             &CompositionPreviewController::handleCurrentTimeChanged);
     connect(&session_, &CompositionSession::transformInteractionChanged, this,
             &CompositionPreviewController::handleTransformInteractionChanged);
+    connect(&session_, &CompositionSession::retainedEvaluationChanged, this,
+            &CompositionPreviewController::refreshRetentionRange);
     connect(&session_, &CompositionSession::liveValueChanged, this,
             &CompositionPreviewController::handleLiveValueChanged);
     connect(&session_, &CompositionSession::colorSettingsChanged, this, [this] {
@@ -548,6 +550,17 @@ void CompositionPreviewController::refreshRetentionRange() {
                                                  .revision = range.snapshot.revision(),
                                                  .start = range.start,
                                                  .end = range.end});
+    }
+    // #355: compositions the artist switched away from keep their accepted spans, so their cached
+    // frames survive the switch and are reused when it comes back.
+    for (const auto& retained : session_.retainedCompositionRanges()) {
+        for (const auto& range : retained.ranges)
+            snapshots.push_back(
+                PreviewFrameCache::RetentionSnapshot{.projectId = projectId,
+                                                     .compositionId = retained.compositionId,
+                                                     .revision = range.snapshot.revision(),
+                                                     .start = range.start,
+                                                     .end = range.end});
     }
     frameCache_->setRetentionSnapshots(std::move(snapshots));
 }

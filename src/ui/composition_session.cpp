@@ -13,6 +13,7 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/render_reachability.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/curve_compilation.hpp>
@@ -47,7 +48,7 @@ QString componentCommandLabel(const document::ParameterRecord& parameter, const 
         return QStringLiteral("Set Scale");
     return fallback;
 }
-}
+} // namespace
 
 struct SessionColorConverterState final {
     std::mutex mutex;
@@ -408,6 +409,7 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
     // published, so no observer can pair a new document with the old document's eval state, and a
     // same-numeric-ID document can never reuse it.
     compositionId_ = compositionId;
+    retainedRanges_.clear();
     static_cast<void>(resetEvaluationRangesToLive());
     currentTime_ = core::RationalTime::fromInteger(0);
     selection_ = {};
@@ -461,7 +463,10 @@ const document::Snapshot& CompositionSession::evaluationSnapshot() const noexcep
 }
 
 bool CompositionSession::evaluationTimeBaseUsable() const noexcept {
-    const auto* current = composition();
+    return timeBaseUsable(composition());
+}
+
+bool CompositionSession::timeBaseUsable(const document::Composition* current) noexcept {
     if (current == nullptr || current->duration() <= core::RationalTime{})
         return false;
     const auto rate = current->format().frameRate();
@@ -524,13 +529,14 @@ void canonicalizeMappings(std::vector<commands::LayerIdentityRemap>& mappings,
 } // namespace
 
 bool CompositionSession::applyFiniteEvaluationFootprint(
+    std::vector<EvaluationSnapshotRange>& ranges, const document::CompositionId compositionId,
     const commands::AffectedTimeFootprint& footprint,
     const std::vector<commands::LayerIdentityRemap>* remaps,
-    const document::Snapshot& previousSnapshot, bool& trustworthy) {
+    const document::Snapshot& previousSnapshot, bool& trustworthy) const {
     trustworthy = false;
-    const auto* current = composition();
-    if (current == nullptr || !evaluationTimeBaseUsable() ||
-        footprint.compositionId != compositionId_) {
+    const auto* current = snapshot_.project().findComposition(compositionId);
+    if (current == nullptr || !timeBaseUsable(current) ||
+        footprint.compositionId != compositionId) {
         // A footprint for another composition is conservatively treated as whole-render: proving a
         // nested/transitive dependency absent is a separate concern this slice does not add.
         return false;
@@ -546,8 +552,8 @@ bool CompositionSession::applyFiniteEvaluationFootprint(
     // composition at the same numeric project identity and match the LIVE duration and frame rate.
     const auto liveProjectId = snapshot_.project().id();
     const auto liveRate = current->format().frameRate();
-    for (const auto& range : evaluationRanges_) {
-        const auto* retained = range.snapshot.project().findComposition(compositionId_);
+    for (const auto& range : ranges) {
+        const auto* retained = range.snapshot.project().findComposition(compositionId);
         if (retained == nullptr || range.snapshot.project().id() != liveProjectId ||
             retained->duration() != duration || retained->format().frameRate() != liveRate) {
             return false;
@@ -556,7 +562,7 @@ bool CompositionSession::applyFiniteEvaluationFootprint(
     // 1. Replace the changed pixel intervals with the live snapshot, clearing their mappings;
     //    unaffected segments keep their snapshot AND their mappings.
     std::vector<core::RationalTime> points{core::RationalTime{}};
-    for (const auto& range : evaluationRanges_) {
+    for (const auto& range : ranges) {
         points.push_back(range.start);
         points.push_back(range.end);
     }
@@ -566,8 +572,9 @@ bool CompositionSession::applyFiniteEvaluationFootprint(
     }
     std::ranges::sort(points);
     points.erase(std::unique(points.begin(), points.end()), points.end());
-    const auto segmentAt = [this](const core::RationalTime time) -> const EvaluationSnapshotRange* {
-        for (const auto& range : evaluationRanges_) {
+    const auto segmentAt =
+        [&ranges](const core::RationalTime time) -> const EvaluationSnapshotRange* {
+        for (const auto& range : ranges) {
             if (time >= range.start && time < range.end)
                 return &range;
         }
@@ -599,11 +606,11 @@ bool CompositionSession::applyFiniteEvaluationFootprint(
             return false;
         }
     }
-    evaluationRanges_ = std::move(next);
+    ranges = std::move(next);
     // 2. Compose the incoming command's remaps onto segments whose snapshot still names the before
     //    identity. Undo already inverted/reversed its list, so this composes the current direction.
     if (remaps != nullptr && !remaps->empty()) {
-        if (!applyLayerIdentityRemaps(*remaps, previousSnapshot))
+        if (!applyLayerIdentityRemaps(ranges, compositionId, *remaps, previousSnapshot))
             return false;
     }
     trustworthy = true;
@@ -611,17 +618,18 @@ bool CompositionSession::applyFiniteEvaluationFootprint(
 }
 
 bool CompositionSession::applyLayerIdentityRemaps(
+    std::vector<EvaluationSnapshotRange>& ranges, const document::CompositionId compositionId,
     const std::vector<commands::LayerIdentityRemap>& remaps,
-    const document::Snapshot& previousSnapshot) {
-    const auto* current = composition();
-    const auto* previousComposition = previousSnapshot.project().findComposition(compositionId_);
+    const document::Snapshot& previousSnapshot) const {
+    const auto* current = snapshot_.project().findComposition(compositionId);
+    const auto* previousComposition = previousSnapshot.project().findComposition(compositionId);
     if (current == nullptr || previousComposition == nullptr ||
         previousSnapshot.project().id() != snapshot_.project().id() ||
         remaps.size() > commands::kMaxLayerIdentityRemaps)
         return false;
     const auto duration = current->duration();
     for (const auto& remap : remaps) {
-        if (remap.compositionId != compositionId_ || remap.start < core::RationalTime{} ||
+        if (remap.compositionId != compositionId || remap.start < core::RationalTime{} ||
             remap.start >= remap.end || remap.end > duration)
             return false;
         // `before` must be the boundary in the PREVIOUS live graph, `after` the boundary in the new
@@ -636,7 +644,7 @@ bool CompositionSession::applyLayerIdentityRemaps(
     }
     // Subdivide at every remap boundary so a segment is either wholly inside or outside each remap.
     std::vector<core::RationalTime> points;
-    for (const auto& range : evaluationRanges_) {
+    for (const auto& range : ranges) {
         points.push_back(range.start);
         points.push_back(range.end);
     }
@@ -646,8 +654,9 @@ bool CompositionSession::applyLayerIdentityRemaps(
     }
     std::ranges::sort(points);
     points.erase(std::unique(points.begin(), points.end()), points.end());
-    const auto segmentAt = [this](const core::RationalTime time) -> const EvaluationSnapshotRange* {
-        for (const auto& range : evaluationRanges_) {
+    const auto segmentAt =
+        [&ranges](const core::RationalTime time) -> const EvaluationSnapshotRange* {
+        for (const auto& range : ranges) {
             if (time >= range.start && time < range.end)
                 return &range;
         }
@@ -679,7 +688,7 @@ bool CompositionSession::applyLayerIdentityRemaps(
                 return false;
             continue;
         }
-        const auto* snapshotComposition = prior->snapshot.project().findComposition(compositionId_);
+        const auto* snapshotComposition = prior->snapshot.project().findComposition(compositionId);
         if (snapshotComposition == nullptr)
             return false;
         for (const auto& remap : remaps) {
@@ -702,7 +711,7 @@ bool CompositionSession::applyLayerIdentityRemaps(
                 if (!matched &&
                     snapshotComposition->graph().findLayer(remap.beforeLayerId) != nullptr) {
                     mappings.push_back(
-                        commands::LayerIdentityRemap{.compositionId = compositionId_,
+                        commands::LayerIdentityRemap{.compositionId = compositionId,
                                                      .start = start,
                                                      .end = end,
                                                      .beforeLayerId = remap.beforeLayerId,
@@ -712,7 +721,7 @@ bool CompositionSession::applyLayerIdentityRemaps(
                 }
             }
         }
-        canonicalizeMappings(mappings, compositionId_, start, end);
+        canonicalizeMappings(mappings, compositionId, start, end);
         if (mappings.size() > commands::kMaxLayerIdentityRemaps)
             return false;
         if (!next.empty() && next.back().end == start &&
@@ -725,7 +734,124 @@ bool CompositionSession::applyLayerIdentityRemaps(
         if (next.size() > kMaxEvaluationSnapshotRanges)
             return false;
     }
-    evaluationRanges_ = std::move(next);
+    ranges = std::move(next);
+    return true;
+}
+
+namespace {
+[[nodiscard]] bool
+sameRanges(const std::vector<CompositionSession::EvaluationSnapshotRange>& left,
+           const std::vector<CompositionSession::EvaluationSnapshotRange>& right) {
+    return std::ranges::equal(left, right, [](const auto& a, const auto& b) {
+        return a.start == b.start && a.end == b.end && sameSnapshotOwner(a.snapshot, b.snapshot) &&
+               sameMappings(a.mappings, b.mappings);
+    });
+}
+} // namespace
+
+bool CompositionSession::rendersThrough(const std::vector<EvaluationSnapshotRange>& ranges,
+                                        const document::CompositionId owner,
+                                        const document::CompositionId target,
+                                        DependentsCache& dependents) const {
+    if (owner == target)
+        return true;
+    // Evidence naming a composition the live project does not hold is inconsistent: fail closed.
+    if (snapshot_.project().findComposition(target) == nullptr)
+        return true;
+    const auto check = [&](const document::Snapshot& snapshot) {
+        auto found = dependents.find(&snapshot.project());
+        if (found == dependents.end())
+            found = dependents
+                        .emplace(&snapshot.project(),
+                                 document::compositionsDependingOn(snapshot.project(), target))
+                        .first;
+        return found->second.contains(owner);
+    };
+    if (check(snapshot_))
+        return true;
+    return std::ranges::any_of(ranges, [&](const auto& range) { return check(range.snapshot); });
+}
+
+bool CompositionSession::applyFootprintToRetained(const commands::CommandResult& result,
+                                                  const document::Snapshot& previousSnapshot) {
+    if (retainedRanges_.empty())
+        return false;
+    if (!result.affectedTimes.has_value()) {
+        // A whole render scoped to one composition drops exactly the retained compositions that
+        // render it; an unscoped one drops them all.
+        DependentsCache dependents;
+        const auto before = retainedRanges_.size();
+        std::erase_if(retainedRanges_, [&](const RetainedCompositionRanges& entry) {
+            return !result.affectedComposition.has_value() ||
+                   rendersThrough(entry.ranges, entry.compositionId, *result.affectedComposition,
+                                  dependents);
+        });
+        return retainedRanges_.size() != before;
+    }
+    const auto& footprint = *result.affectedTimes;
+    const auto* remaps =
+        result.layerIdentityRemaps.has_value() ? &*result.layerIdentityRemaps : nullptr;
+    DependentsCache dependents;
+    bool changed = false;
+    for (auto entry = retainedRanges_.begin(); entry != retainedRanges_.end();) {
+        bool drop = false;
+        if (footprint.compositionId == entry->compositionId) {
+            auto next = entry->ranges;
+            bool trustworthy = false;
+            static_cast<void>(applyFiniteEvaluationFootprint(
+                next, entry->compositionId, footprint, remaps, previousSnapshot, trustworthy));
+            if (!trustworthy) {
+                drop = true;
+            } else if (!sameRanges(next, entry->ranges)) {
+                entry->ranges = std::move(next);
+                changed = true;
+            }
+        } else if (!footprint.intervals.empty() &&
+                   rendersThrough(entry->ranges, entry->compositionId, footprint.compositionId,
+                                  dependents)) {
+            drop = true;
+        }
+        if (drop) {
+            entry = retainedRanges_.erase(entry);
+            changed = true;
+        } else {
+            ++entry;
+        }
+    }
+    return changed;
+}
+
+void CompositionSession::retainActiveRanges() {
+    std::erase_if(retainedRanges_,
+                  [this](const auto& entry) { return entry.compositionId == compositionId_; });
+    if (composition() == nullptr || evaluationRanges_.empty())
+        return;
+    retainedRanges_.push_back({compositionId_, evaluationRanges_});
+    if (retainedRanges_.size() > kMaxRetainedCompositions)
+        retainedRanges_.erase(retainedRanges_.begin());
+}
+
+bool CompositionSession::restoreRetainedRanges(const document::CompositionId compositionId) {
+    const auto found = std::ranges::find(retainedRanges_, compositionId,
+                                         &RetainedCompositionRanges::compositionId);
+    if (found == retainedRanges_.end())
+        return false;
+    auto ranges = std::move(found->ranges);
+    retainedRanges_.erase(found);
+    const auto* current = snapshot_.project().findComposition(compositionId);
+    if (current == nullptr || !timeBaseUsable(current) || ranges.empty() ||
+        ranges.front().start != core::RationalTime{} || ranges.back().end != current->duration())
+        return false;
+    for (std::size_t index = 0; index < ranges.size(); ++index) {
+        const auto& range = ranges[index];
+        const auto* retained = range.snapshot.project().findComposition(compositionId);
+        if (range.start >= range.end || (index > 0 && ranges[index - 1].end != range.start) ||
+            retained == nullptr || range.snapshot.project().id() != snapshot_.project().id() ||
+            retained->duration() != current->duration() ||
+            retained->format().frameRate() != current->format().frameRate())
+            return false;
+    }
+    evaluationRanges_ = std::move(ranges);
     return true;
 }
 
@@ -812,13 +938,17 @@ bool CompositionSession::setComposition(const document::CompositionId compositio
         return false;
     }
 
-    // A composition switch resets the time-indexed provenance to the new composition's live
-    // snapshot BEFORE any cancellation signal, so a handler never pairs the new composition with
+    // A composition switch installs the new composition's retained provenance, or its live
+    // snapshot, BEFORE any cancellation signal, so a handler never pairs the new composition with
     // the old composition's retained snapshots. It then cancels any active interaction
     // (docs/architecture/animation-and-time.md, "Direct Manipulation And Preview Overrides"): its
     // frozen target/mapping belong to the OLD composition.
+    // #355: the composition being left keeps its spans, and the one being entered reuses its own
+    // retained spans when they are still consistent with the live composition.
+    retainActiveRanges();
     compositionId_ = compositionId;
-    static_cast<void>(resetEvaluationRangesToLive());
+    if (!restoreRetainedRanges(compositionId))
+        static_cast<void>(resetEvaluationRangesToLive());
     cancelValueEdit();
     cancelTransformInteraction();
     const bool timeChanged = currentTime_ != core::RationalTime::fromInteger(0);
@@ -1894,6 +2024,7 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
         // cancelling value edits, because both emit signals whose handlers may build a request and
         // must already see the provenance they are allowed to evaluate.
         bool provenanceChanged = false;
+        bool retainedChanged = false;
         if (revisionAdvanced) {
             // Trust the evidence only on a contiguous command chain: the operation's own before and
             // after revisions must match the session's previous and new live revisions. A stale or
@@ -1907,10 +2038,34 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
             // render-affecting command with no footprint means a whole invalidation and resets. A
             // non-contiguous (stale or external) chain resets as well.
             if (!chainValid ||
-                (event.result.renderAffecting && !event.result.affectedTimes.has_value())) {
+                (event.result.renderAffecting && !event.result.affectedTimes.has_value() &&
+                 !event.result.affectedComposition.has_value())) {
                 // Whole/unknown/mixed (or stale/external revision): conservative full-live reset.
+                // A whole render names no composition, so every retained composition goes too.
                 provenanceChanged = resetEvaluationRangesToLive();
+                retainedChanged = !retainedRanges_.empty();
+                retainedRanges_.clear();
+            } else if (event.result.renderAffecting && !event.result.affectedTimes.has_value()) {
+                // #355: a whole render confined to one composition resets only the compositions
+                // that render it; every other composition keeps its retained spans.
+                retainedChanged = applyFootprintToRetained(event.result, previousSnapshot);
+                DependentsCache dependents;
+                if (rendersThrough(evaluationRanges_, compositionId_,
+                                   *event.result.affectedComposition, dependents))
+                    provenanceChanged = resetEvaluationRangesToLive();
+            } else if (event.result.renderAffecting &&
+                       event.result.affectedTimes->compositionId != compositionId_) {
+                // #355: another composition's finite edit. The active composition keeps every span
+                // unless it renders that composition through a reachable nested reference and the
+                // edit actually changed something there.
+                retainedChanged = applyFootprintToRetained(event.result, previousSnapshot);
+                DependentsCache dependents;
+                if (!event.result.affectedTimes->intervals.empty() &&
+                    rendersThrough(evaluationRanges_, compositionId_,
+                                   event.result.affectedTimes->compositionId, dependents))
+                    provenanceChanged = resetEvaluationRangesToLive();
             } else if (event.result.renderAffecting) {
+                retainedChanged = applyFootprintToRetained(event.result, previousSnapshot);
                 // SPLIT-2: a finite footprint replaces the changed pixel intervals with live (which
                 // clears their mappings) and composes any geometry remaps onto the unaffected
                 // segments, so an equivalent split keeps BOTH halves' cached pixels while their
@@ -1922,7 +2077,8 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
                                          ? &*event.result.layerIdentityRemaps
                                          : nullptr;
                 static_cast<void>(applyFiniteEvaluationFootprint(
-                    *event.result.affectedTimes, remaps, previousSnapshot, trustworthy));
+                    evaluationRanges_, compositionId_, *event.result.affectedTimes, remaps,
+                    previousSnapshot, trustworthy));
                 if (!trustworthy) {
                     // The finite step may already have mutated ranges before failing, so
                     // resetEvaluationRangesToLive()'s own "did it change" answer cannot be trusted:
@@ -1959,6 +2115,8 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
             // transitions (display qualification, colour settings, rebind) that always force work.
             if (provenanceChanged)
                 emit documentEvaluationChanged();
+            if (retainedChanged)
+                emit retainedEvaluationChanged();
         }
         // The effective range is compared against the live snapshot before and after the edit, so a
         // mixed transaction that changed no range, or a range edit to another composition, is a

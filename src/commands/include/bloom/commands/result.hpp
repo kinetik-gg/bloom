@@ -208,6 +208,12 @@ struct CommandResult {
     // composition within the cap. Undo publishes the inverted (reversed, before/after-swapped)
     // list; redo publishes the stored forward list.
     std::optional<std::vector<LayerIdentityRemap>> layerIdentityRemaps;
+    // #355. The one composition every applied render-affecting operation was confined to, when each
+    // declared or proved it (Operation::renderScope() or its finite footprint's composition). With
+    // a std::nullopt affectedTimes this means "a whole render of THIS composition, and of every
+    // composition that renders it", so other compositions keep their retained frames; std::nullopt
+    // here is the conservative "any composition". Replayed by undo/redo.
+    std::optional<document::CompositionId> affectedComposition;
     // Oldest undo entries retired to keep the configured history entry/charged-byte bounds.
     // Redo-branch replacement is ordinary branch semantics and is not included here.
     std::size_t historyEntriesDropped = 0;

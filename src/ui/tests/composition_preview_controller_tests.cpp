@@ -1172,6 +1172,7 @@ bloom::document::NodeId firstGraphNode(const bloom::ui::CompositionSession& sess
 #include "composition_preview_controller_02_snapshot.ipp"
 #include "composition_preview_controller_03_split.ipp"
 #include "composition_preview_controller_04_retention.ipp"
+#include "composition_preview_controller_05_reachability.ipp"
 #include "composition_preview_controller_color_lifetime.ipp"
 #include "composition_preview_controller_pause.ipp"
 } // namespace
@@ -1223,6 +1224,8 @@ int main(int argc, char** argv) {
         testTemporalDeleteRetainsUnaffectedFrames(expectations);
         testTemporalDeleteParentDependencyInvalidatesWhole(expectations);
         testInconsistentTimeBaseResetsProvenance(expectations);
+        testReachabilityProvenEditsKeepFrames(expectations);
+        testCompositionSwitchRetainsUnaffectedCache(expectations);
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';
         return 1;

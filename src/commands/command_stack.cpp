@@ -32,6 +32,7 @@ CommandResult makeResult(CommandAction action, CommandStatus status,
         .renderAffecting = true,
         .affectedTimes = std::nullopt,
         .layerIdentityRemaps = std::nullopt,
+        .affectedComposition = std::nullopt,
     };
 }
 
@@ -302,6 +303,9 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
     // Issue #355. The one composition whose parameter/animation-only operations deferred their
     // footprint to a single before/after diff once every operation has applied.
     std::optional<document::CompositionId> parameterScope;
+    // #355. The one composition every applied render-affecting operation is confined to.
+    std::optional<document::CompositionId> renderScope;
+    bool renderScopeKnown = true;
     // SPLIT-1. Ordered remaps, appended in operation order. Any unknown/mixed/cap failure clears
     // them and forces whole render.
     std::vector<LayerIdentityRemap> layerIdentityRemaps;
@@ -339,6 +343,13 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
         // that reported NoChange contributes nothing, so a layout edit beside it stays layout-only.
         if (operationResult.status == OperationStatus::Applied && operation->renderAffecting()) {
             renderAffecting = true;
+            const auto scope = operationResult.affectedTimes.has_value()
+                                   ? std::optional(operationResult.affectedTimes->compositionId)
+                                   : operation->renderScope();
+            if (!scope.has_value() || (renderScope.has_value() && *renderScope != *scope))
+                renderScopeKnown = false;
+            else
+                renderScope = scope;
             // A proven finite footprint narrows the affected time; an operation that proved none
             // (the default) dominates to the whole render. A mixed-composition union also fails
             // closed to whole render.
@@ -380,10 +391,10 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
                         }
                     }
                 }
-            } else if (const auto scope = operation->parameterEditScope();
-                       !operationResult.affectedTimes.has_value() && scope.has_value() &&
-                       remapsValid && (!parameterScope || *parameterScope == *scope)) {
-                parameterScope = scope;
+            } else if (const auto parameterEdit = operation->parameterEditScope();
+                       !operationResult.affectedTimes.has_value() && parameterEdit.has_value() &&
+                       remapsValid && (!parameterScope || *parameterScope == *parameterEdit)) {
+                parameterScope = parameterEdit;
             } else {
                 // An operation that proved no finite footprint, or a transaction already failed
                 // closed on remaps, dominates to whole render and can never publish remaps.
@@ -507,10 +518,16 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
         else
             result.affectedTimes.reset();
     }
+    if (renderAffecting && renderScopeKnown)
+        result.affectedComposition = renderScope;
     result.historyEntriesDropped = oldestDropped;
-    HistoryEntry staged{
-        std::string(transaction.label()), before, before, renderAffecting, result.affectedTimes,
-        result.layerIdentityRemaps};
+    HistoryEntry staged{std::string(transaction.label()),
+                        before,
+                        before,
+                        renderAffecting,
+                        result.affectedTimes,
+                        result.layerIdentityRemaps,
+                        result.affectedComposition};
     history_.reserve(history_.size() + 1);
     static_assert(std::is_nothrow_move_constructible_v<HistoryEntry> &&
                   std::is_nothrow_move_assignable_v<HistoryEntry>);
@@ -569,6 +586,7 @@ CommandResult CommandStack::undo() {
         resultForCommit(CommandAction::Undo, entry.label, before, std::move(restoreResult));
     result.renderAffecting = entry.renderAffecting;
     result.affectedTimes = entry.affectedTimes;
+    result.affectedComposition = entry.affectedComposition;
     // Undo reverses order and swaps before/after IDs.
     if (entry.layerIdentityRemaps.has_value() && !entry.layerIdentityRemaps->empty())
         result.layerIdentityRemaps = invertLayerIdentityRemaps(entry.layerIdentityRemaps);
@@ -609,6 +627,7 @@ CommandResult CommandStack::redo() {
         resultForCommit(CommandAction::Redo, entry.label, before, std::move(restoreResult));
     result.renderAffecting = entry.renderAffecting;
     result.affectedTimes = entry.affectedTimes;
+    result.affectedComposition = entry.affectedComposition;
     // Redo replays the stored FORWARD ordered list.
     result.layerIdentityRemaps = entry.layerIdentityRemaps;
     ++cursor_;

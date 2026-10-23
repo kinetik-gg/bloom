@@ -42,6 +42,9 @@ class AddNode final : public Operation {
           layoutPosition_(layoutPosition), registry_(registry) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -58,6 +61,9 @@ class RemoveNodes final : public Operation {
         : compositionId_(compositionId), nodes_(std::move(nodes)), registry_(registry) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -108,6 +114,9 @@ class ConnectPorts final : public Operation {
           destination_(std::move(destination)), registry_(registry), insertBefore_(insertBefore) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -153,6 +162,9 @@ class DisconnectInput final : public Operation {
         : compositionId_(compositionId), input_(std::move(input)), registry_(registry) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;
@@ -168,6 +180,9 @@ class DissolveNode final : public Operation {
         : compositionId_(compositionId), nodeId_(nodeId), registry_(registry) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
+        return compositionId_;
+    }
 
   private:
     document::CompositionId compositionId_;

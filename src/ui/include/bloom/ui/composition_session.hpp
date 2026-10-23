@@ -586,6 +586,21 @@ class CompositionSession final : public QObject {
     // The whole time-indexed provenance, for the next slice's frame-cache retention. Read-only.
     [[nodiscard]] std::vector<EvaluationSnapshotRange> evaluationSnapshotRanges() const;
 
+    // #355. Evaluation spans retained for compositions that are NOT active, so switching back
+    // reuses their cached frames. A composition keeps its spans until a whole-render edit, a
+    // non-empty edit to its own unaffected-time bookkeeping that cannot be applied, or a non-empty
+    // edit to a composition it nests reaches it. Bounded by kMaxRetainedCompositions (oldest
+    // first out).
+    struct RetainedCompositionRanges final {
+        document::CompositionId compositionId;
+        std::vector<EvaluationSnapshotRange> ranges;
+    };
+    static constexpr std::size_t kMaxRetainedCompositions = 4;
+    [[nodiscard]] const std::vector<RetainedCompositionRanges>&
+    retainedCompositionRanges() const noexcept {
+        return retainedRanges_;
+    }
+
     // Translates a retained frame's evaluated layer/node identity to the CURRENT live graph. The
     // frame's own revision and project are a provenance gate: a mapping applies only when they
     // match the covering segment's retained snapshot, so a live override frame passes through
@@ -618,6 +633,9 @@ class CompositionSession final : public QObject {
     // still accepted; this is the only signal a finite clip-range edit emits, so a range edit can
     // reuse unaffected frames. It is deliberately distinct from evaluationChanged().
     void documentEvaluationChanged();
+    // #355. The retained (non-active) compositions' evaluation spans changed; frame-cache retention
+    // must be re-scoped. The active composition's provenance is unchanged by this signal alone.
+    void retainedEvaluationChanged();
     // Emitted when the evaluation inputs changed for a NON-document reason that always forces a
     // fresh derivation: the qualified display transform becoming available, a colour-settings
     // change, and rebind. These leave every snapshot revision unchanged, so a consumer must NOT
@@ -736,27 +754,47 @@ class CompositionSession final : public QObject {
     void invalidateTransformInteractionOnStaleRevision();
 
     // TEMPORAL-2A. Rebuilds the time-indexed provenance to a single full-cover span of the live
-    // snapshot. Used on rebind, composition switch, and every conservative (whole/unknown/mixed)
-    // transition. Returns true when the provenance actually changed.
+    // snapshot. Used on rebind, a composition switch without usable retained spans, and every
+    // conservative (whole/unknown/mixed) transition. Returns true when the provenance actually changed.
     [[nodiscard]] bool resetEvaluationRangesToLive();
     // Applies a finite footprint: spans outside the half-open changed intervals keep their genuine
     // snapshot, spans inside switch to the live snapshot. Returns true when anything changed;
     // returns std::nullopt (via out-param) when the evidence is not trustworthy and the caller must
     // fall back to resetEvaluationRangesToLive().
-    [[nodiscard]] bool
-    applyFiniteEvaluationFootprint(const commands::AffectedTimeFootprint& footprint,
-                                   const std::vector<commands::LayerIdentityRemap>* remaps,
-                                   const document::Snapshot& previousSnapshot, bool& trustworthy);
+    // Operates on any composition's ranges: the active composition's or a retained one's (#355).
+    [[nodiscard]] bool applyFiniteEvaluationFootprint(
+        std::vector<EvaluationSnapshotRange>& ranges, document::CompositionId compositionId,
+        const commands::AffectedTimeFootprint& footprint,
+        const std::vector<commands::LayerIdentityRemap>* remaps,
+        const document::Snapshot& previousSnapshot, bool& trustworthy) const;
     // SPLIT-2. Composes an incoming command's before->after remaps onto every segment whose
     // snapshot still names the before identity, subdividing segments at the remap range boundaries.
     // Returns false (caller resets whole-live) when a descriptor is inconsistent with the previous
     // or new live graph, the composition/project is wrong, or a bound is exceeded.
     [[nodiscard]] bool
-    applyLayerIdentityRemaps(const std::vector<commands::LayerIdentityRemap>& remaps,
-                             const document::Snapshot& previousSnapshot);
+    applyLayerIdentityRemaps(std::vector<EvaluationSnapshotRange>& ranges,
+                             document::CompositionId compositionId,
+                             const std::vector<commands::LayerIdentityRemap>& remaps,
+                             const document::Snapshot& previousSnapshot) const;
     // The composition's frame mapping is usable for time-indexed provenance: a real composition
     // with a positive duration and a constructible frame-time mapping.
     [[nodiscard]] bool evaluationTimeBaseUsable() const noexcept;
+    [[nodiscard]] static bool timeBaseUsable(const document::Composition* composition) noexcept;
+    // #355. Applies one committed footprint to every retained (non-active) composition's ranges:
+    // its own composition's finite footprint is applied in place, and a non-empty footprint of a
+    // composition it renders through a reachable nested reference -- in the live snapshot or any
+    // snapshot it still retains -- drops its retention. Returns true when any retention changed.
+    [[nodiscard]] bool applyFootprintToRetained(const commands::CommandResult& result,
+                                                const document::Snapshot& previousSnapshot);
+    // Whether `owner`, evaluated through `ranges` or the live snapshot, renders `target`.
+    using DependentsCache = std::map<const document::Project*, std::set<document::CompositionId>>;
+    [[nodiscard]] bool rendersThrough(const std::vector<EvaluationSnapshotRange>& ranges,
+                                      document::CompositionId owner, document::CompositionId target,
+                                      DependentsCache& dependents) const;
+    // Restores `compositionId`'s retained ranges when they still form a full cover consistent with
+    // the live composition; false otherwise.
+    [[nodiscard]] bool restoreRetainedRanges(document::CompositionId compositionId);
+    void retainActiveRanges();
 
     // Session-only, never persisted (docs/architecture/animation-and-time.md, "Direct
     // Manipulation And Preview Overrides"). Named after exactly what the contract freezes.
@@ -798,6 +836,8 @@ class CompositionSession final : public QObject {
     // composition's time, each naming a genuine snapshot. Empty until the first refresh; then a
     // single full-cover span of the live snapshot.
     std::vector<EvaluationSnapshotRange> evaluationRanges_;
+    // #355. Retained spans of inactive compositions, oldest first.
+    std::vector<RetainedCompositionRanges> retainedRanges_;
     document::CompositionId compositionId_;
     core::RationalTime currentTime_ = core::RationalTime::fromInteger(0);
     CompositionSelection selection_;
