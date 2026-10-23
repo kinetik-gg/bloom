@@ -224,6 +224,35 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
                             tag + ": interpreted video input-to-working parity");
         idBase += 10;
     }
+    // Issue #365: HLG streams resolve to the synthesized scene-light Rec.2100 HLG space under both
+    // pinned configs and keep the same parity gate.
+    for (const bool aces : {true, false}) {
+        const std::string tag = aces ? "hlg aces" : "hlg neutral";
+        document::AssetRecord asset;
+        try {
+            asset = videoAsset(fixtures / "hlg2020-h264.mp4", idBase + 100);
+        } catch (const std::exception& error) {
+            expectations.expect(false, tag + ": fixture probe failed: " + error.what());
+            continue;
+        }
+        const auto plan =
+            videoPlan(format(asset.width, asset.height), asset,
+                      LayerValues{.position = {static_cast<double>(asset.width) * 0.5,
+                                               static_cast<double>(asset.height) * 0.5}},
+                      idBase);
+        // A fresh evaluator per config keeps each build cold (no shared raw-upload cache).
+        CpuCompositionEvaluator hlgEvaluator;
+        hlgEvaluator.setAssetBaseDirectory(fixtures);
+        hlgEvaluator.setVideoCacheByteBudget(std::size_t{64} << 20U);
+        const auto hlgContext = legacyPreparedMediaContext(hlgEvaluator);
+        const CpuGpuSceneBuilder hlgBuilder(nullptr, hlgContext, ocioContext);
+        const auto request = aces ? acesRequest(*plan, kAcesWorking) : requestFor(*plan);
+        expectations.expect(expectMediaParity(expectations, *executor.executor, hlgEvaluator,
+                                              hlgBuilder, plan, request, asset.width, asset.height,
+                                              tag + " video interpretation"),
+                            tag + ": HLG input-to-working parity");
+        idBase += 10;
+    }
 }
 
 void testVideoCancellation(Expectations& expectations, const std::filesystem::path& fixtures,
@@ -326,8 +355,8 @@ void testPqInputSweep(Expectations& expectations, bloom::render::GpuDevice& devi
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     const auto plan = mediaPlan(format(width, height), asset,
                                 LayerValues{.position = {width * 0.5, height * 0.5}}, 9100);
-    expectations.expect(expectMediaParity(expectations, *executor.executor, evaluator, builder, plan,
-                                          acesRequest(*plan, kAcesWorking), width, height,
+    expectations.expect(expectMediaParity(expectations, *executor.executor, evaluator, builder,
+                                          plan, acesRequest(*plan, kAcesWorking), width, height,
                                           "pq sweep"),
                         "pq sweep: Rec.2100 PQ input-to-working parity across the code range");
     std::error_code ignored;

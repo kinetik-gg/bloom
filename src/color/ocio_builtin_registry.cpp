@@ -99,6 +99,85 @@ struct InputColorSpaceMappings final {
     return colorSpace != nullptr && !colorSpace->isData();
 }
 
+// RGB->XYZ for a set of xy primaries and white point, in double precision (SMPTE RP 177).
+[[nodiscard]] std::array<double, 9> rgbToXyz(const std::array<double, 8>& xy) {
+    const auto column = [](double x, double y) {
+        return std::array<double, 3>{x / y, 1.0, (1.0 - x - y) / y};
+    };
+    const auto r = column(xy[0], xy[1]), g = column(xy[2], xy[3]), b = column(xy[4], xy[5]),
+               w = column(xy[6], xy[7]);
+    const std::array<double, 9> p{r[0], g[0], b[0], r[1], g[1], b[1], r[2], g[2], b[2]};
+    const auto det = p[0] * (p[4] * p[8] - p[5] * p[7]) - p[1] * (p[3] * p[8] - p[5] * p[6]) +
+                     p[2] * (p[3] * p[7] - p[4] * p[6]);
+    const std::array<double, 9> inv{
+        (p[4] * p[8] - p[5] * p[7]) / det, (p[2] * p[7] - p[1] * p[8]) / det,
+        (p[1] * p[5] - p[2] * p[4]) / det, (p[5] * p[6] - p[3] * p[8]) / det,
+        (p[0] * p[8] - p[2] * p[6]) / det, (p[2] * p[3] - p[0] * p[5]) / det,
+        (p[3] * p[7] - p[4] * p[6]) / det, (p[1] * p[6] - p[0] * p[7]) / det,
+        (p[0] * p[4] - p[1] * p[3]) / det};
+    std::array<double, 3> scale{};
+    for (std::size_t i = 0; i < 3; ++i)
+        scale[i] = inv[i * 3] * w[0] + inv[i * 3 + 1] * w[1] + inv[i * 3 + 2] * w[2];
+    std::array<double, 9> m{};
+    for (std::size_t row = 0; row < 3; ++row)
+        for (std::size_t col = 0; col < 3; ++col)
+            m[row * 3 + col] = p[row * 3 + col] * scale[col];
+    return m;
+}
+
+[[nodiscard]] std::array<double, 16> matrix44(const std::array<double, 9>& m) {
+    return {m[0], m[1], m[2], 0, m[3], m[4], m[5], 0, m[6], m[7], m[8], 0, 0, 0, 0, 1};
+}
+
+// Synthesizes kBloomRec2100HlgColorSpaceId in an in-memory copy of a pinned config that has no
+// HLG input space. The pinned locator, payload and content revision are unchanged; only the
+// resolved config used for processors gains the space. HLG is scene-referred (BT.2100): the
+// space applies OCIO's built-in "CURVE - HLG-OETF-INVERSE" (signal to scene light, 0.42 -> 18%
+// grey) and the BT.2020 (D65) to reference-primaries matrix. No HLG OOTF / system gamma is
+// applied: that is a display adaptation, and compositing works in scene light.
+[[nodiscard]] OCIO::ConstConfigRcPtr withBloomHlgInput(const OCIO::ConstConfigRcPtr& config,
+                                                       const bool isNeutral) {
+    if (config->getColorSpace(std::string(bloom::color::kBloomRec2100HlgColorSpaceId).c_str()) !=
+        nullptr)
+        return config;
+    constexpr std::array<double, 8> bt2020{0.708, 0.292, 0.170,  0.797,
+                                           0.131, 0.046, 0.3127, 0.3290};
+    constexpr std::array<double, 8> bt709{0.64, 0.33, 0.30, 0.60, 0.15, 0.06, 0.3127, 0.3290};
+    auto toReference = OCIO::GroupTransform::Create();
+    auto curve = OCIO::BuiltinTransform::Create();
+    curve->setStyle("CURVE - HLG-OETF-INVERSE");
+    toReference->appendTransform(curve);
+    auto toXyz = OCIO::MatrixTransform::Create();
+    const auto bt2020ToXyz = matrix44(rgbToXyz(bt2020));
+    toXyz->setMatrix(bt2020ToXyz.data());
+    toReference->appendTransform(toXyz);
+    if (isNeutral) {
+        // Bloom Neutral's reference is linear Rec.709 (D65): XYZ -> Rec.709.
+        auto toRec709 = OCIO::MatrixTransform::Create();
+        const auto rec709ToXyz = matrix44(rgbToXyz(bt709));
+        toRec709->setMatrix(rec709ToXyz.data());
+        toRec709->setDirection(OCIO::TRANSFORM_DIR_INVERSE);
+        toReference->appendTransform(toRec709);
+    } else {
+        // The ACES configs' reference is ACES2065-1 (AP0, D60): OCIO's Bradford-adapted built-in.
+        auto toAp0 = OCIO::BuiltinTransform::Create();
+        toAp0->setStyle("UTILITY - ACES-AP0_to_CIE-XYZ-D65_BFD");
+        toAp0->setDirection(OCIO::TRANSFORM_DIR_INVERSE);
+        toReference->appendTransform(toAp0);
+    }
+    auto space = OCIO::ColorSpace::Create(OCIO::REFERENCE_SPACE_SCENE);
+    space->setName(std::string(bloom::color::kBloomRec2100HlgColorSpaceId).c_str());
+    space->setFamily("Input");
+    space->setDescription("Bloom-synthesized Rec.2100 HLG scene-light input (no OOTF)");
+    space->setTransform(toReference, OCIO::COLORSPACE_DIR_TO_REFERENCE);
+    // The pinned config was validated above. Config::validate() would refuse the copy only
+    // because the 2.4 built-in style postdates the pinned config's version, so the copy is not
+    // revalidated (and its version is not changed); the processor is built from OCIO 2.5 itself.
+    auto editable = config->createEditableCopy();
+    editable->addColorSpace(space);
+    return editable;
+}
+
 [[nodiscard]] InputColorSpaceMappings inputColorSpaceMappings(const OCIO::ConstConfigRcPtr& config,
                                                               const bool isNeutral) {
     InputColorSpaceMappings result;
@@ -115,6 +194,20 @@ struct InputColorSpaceMappings final {
                  config->isColorSpaceLinear(name, OCIO::REFERENCE_SPACE_SCENE)});
     }
 
+    // Rec.2100 video interpretation targets. Configs commonly declare these display-referred
+    // spaces inactive (hidden from pickers); OCIO still builds processors from them by name.
+    for (int index = 0;
+         index < config->getNumColorSpaces(OCIO::SEARCH_REFERENCE_SPACE_ALL, OCIO::COLORSPACE_ALL);
+         ++index) {
+        const char* const name = config->getColorSpaceNameByIndex(OCIO::SEARCH_REFERENCE_SPACE_ALL,
+                                                                  OCIO::COLORSPACE_ALL, index);
+        if (!isNonDataColorSpace(config, name) || !containsInsensitive(name, "2100"))
+            continue;
+        if (result.rec2100Pq.empty() && containsInsensitive(name, "pq"))
+            result.rec2100Pq = name;
+        if (result.rec2100Hlg.empty() && containsInsensitive(name, "hlg"))
+            result.rec2100Hlg = name;
+    }
     if (isNeutral) {
         result.sRgbTexture = "srgb_rec709_display";
         result.rec709Video = "lin_rec709_scene";
@@ -142,20 +235,6 @@ struct InputColorSpaceMappings final {
             result.rec709Video = space.id;
             break;
         }
-    }
-    // Rec.2100 video interpretation targets. Configs commonly declare these display-referred
-    // spaces inactive (hidden from pickers); OCIO still builds processors from them by name.
-    for (int index = 0;
-         index < config->getNumColorSpaces(OCIO::SEARCH_REFERENCE_SPACE_ALL, OCIO::COLORSPACE_ALL);
-         ++index) {
-        const char* const name = config->getColorSpaceNameByIndex(OCIO::SEARCH_REFERENCE_SPACE_ALL,
-                                                                  OCIO::COLORSPACE_ALL, index);
-        if (!isNonDataColorSpace(config, name) || !containsInsensitive(name, "2100"))
-            continue;
-        if (result.rec2100Pq.empty() && containsInsensitive(name, "pq"))
-            result.rec2100Pq = name;
-        if (result.rec2100Hlg.empty() && containsInsensitive(name, "hlg"))
-            result.rec2100Hlg = name;
     }
     return result;
 }
@@ -289,6 +368,11 @@ std::string_view ResolvedBloomNeutralConfig::sRgbTextureColorSpaceId() const& no
 }
 std::string_view ResolvedBloomNeutralConfig::rec709VideoColorSpaceId() const& noexcept {
     return rec709VideoColorSpaceId_;
+}
+std::string synthesizedColorSpaceIdentity(const std::string_view colorSpaceId) {
+    if (colorSpaceId != kBloomRec2100HlgColorSpaceId)
+        return {};
+    return std::string("bloom-hlg-scene-v1;ocio=") + OCIO::GetVersion();
 }
 std::string_view ResolvedBloomNeutralConfig::rec2100PqColorSpaceId() const& noexcept {
     return rec2100PqColorSpaceId_;
@@ -492,6 +576,14 @@ resolveOcioBuiltIn(const OcioConfigLocatorKind locatorKind, const std::string_vi
         return result;
     }
 
+    try {
+        config = withBloomHlgInput(config, isNeutral);
+    } catch (const OCIO::Exception&) {
+        auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
+        result.recomputedRevision_ = recomputed;
+        result.invalidReason_ = OcioBuiltInInvalidReason::ParseFailed;
+        return result;
+    }
     const auto inputMappings = inputColorSpaceMappings(config, isNeutral);
     auto impl = std::make_unique<ResolvedBloomNeutralConfig::Impl>(config);
     ResolvedBloomNeutralConfig resolved(

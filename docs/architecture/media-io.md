@@ -1497,9 +1497,11 @@ Issue #365 interpretation rules:
   BT.2020 constant luminance is refused by name.
 - PQ and HLG streams resolve automatically to the config's Rec.2100 PQ or HLG colour space,
   searched among active and inactive spaces because configs usually hide these display-referred
-  spaces from pickers. The pinned ACES 1.3 CG config provides `Rec.2100-PQ - Display` and no HLG
-  space; Bloom Neutral provides neither. A missing space is refused with a diagnostic that names
-  it. Other Rec.2020 streams need an explicit space.
+  spaces from pickers. The pinned ACES 1.3 CG config provides `Rec.2100-PQ - Display`; Bloom
+  Neutral has no PQ space, so PQ there is refused with a diagnostic that names the space. Neither
+  pinned config defines HLG, so HLG resolves to the synthesized scene-light `Rec.2100-HLG (Bloom)`
+  space ([colour management](color-management.md#synthesized-rec2100-hlg-input-space)). Other
+  Rec.2020 streams need an explicit space.
 - On the unmanaged legacy path (no config space), Rec.2020, PQ and HLG stay typed `Unavailable`,
   including under a legacy transfer override. Raw and linear compatibility overrides keep their
   transfer-only behaviour.
@@ -1507,7 +1509,8 @@ Issue #365 interpretation rules:
 Generated untagged, BT.2020/PQ and BT.2020/HLG H.264 fixtures check tag plumbing. GPU/CPU
 input-to-working parity at the unchanged 2e-6 gate is tested for tagged Rec.709 H.264, a PQ-tagged
 stream, an untagged stream interpreted as Rec.2100 PQ, and a 16,384-sample still sweep across the
-PQ code range including negative and above-one values.
+PQ code range including negative and above-one values, plus the HLG fixture through the synthesized
+space under both pinned configs.
 
 OCIO implements the Rec.2100 PQ input as an inverse half-domain 1D LUT (65,536 entries). Its
 generated GLSL folds the half index and the interpolation fraction into one binary32 coordinate

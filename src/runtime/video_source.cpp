@@ -332,6 +332,9 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
     key.add(selection.interpretation);
     key.add(selection.inputColorSpaceId);
     key.add(selection.workingColorSpaceId);
+    // A Bloom-synthesized input space (Rec.2100 HLG) is defined by OCIO built-ins, so its
+    // definition and the linked OCIO version are part of the transform identity.
+    key.add(color::synthesizedColorSpaceIdentity(selection.inputColorSpaceId));
     const auto revision = selection.configRevision.toLowercaseHex();
     key.add(std::string(revision.begin(), revision.end()));
     key.add(selection.frame != nullptr);

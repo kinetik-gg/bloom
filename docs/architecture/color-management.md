@@ -51,7 +51,30 @@ Auto resolution is format-specific and never uses an ambient `$OCIO` or a decode
 | Video: Rec.709 primaries/matrix + BT.709 transfer | Config Rec.709 camera/video space |
 | Video: sRGB transfer | Config sRGB-texture space |
 | Video: linear transfer | Working space |
-| Video: Rec.2020, HLG, or PQ tags | Typed refusal; an explicit config id is required and the pixel path must be qualified for that mapping |
+| Video: BT.2020 + PQ tags | The config's Rec.2100 PQ space (active or inactive); refused by name when the config has none |
+| Video: BT.2020 + HLG tags | The config's Rec.2100 HLG space, otherwise the synthesized `Rec.2100-HLG (Bloom)` space |
+| Video: other Rec.2020 tags, or any missing tag | Typed refusal naming each missing tag and the input-colour override |
+
+### Synthesized Rec.2100 HLG input space
+
+Neither pinned config (Bloom Neutral v1, OCIO ACES 1.3 CG) defines an HLG space, so every resolved
+pinned config that lacks one gains `Rec.2100-HLG (Bloom)` in memory. Its definition, from scene
+light to the config reference, is:
+
+1. OCIO 2.5 built-in `CURVE - HLG-OETF-INVERSE` (BT.2100 HLG signal to scene light, scaled so a
+   signal of 0.42 is 18% grey);
+2. the BT.2020 (D65) RGB to CIE XYZ matrix derived from the BT.2020 primaries; then
+3. to the reference primaries: the inverse BT.709 RGB-to-XYZ matrix for Bloom Neutral (linear
+   Rec.709 reference), or the inverse OCIO built-in `UTILITY - ACES-AP0_to_CIE-XYZ-D65_BFD` for
+   the ACES config (ACES2065-1 reference).
+
+It is scene-referred: no HLG OOTF and no system gamma are applied. HLG is defined on scene light
+and its OOTF is a display adaptation for a particular display luminance; compositing and the
+working space are scene-linear, and a display-side OOTF belongs to the output transform, not the
+input interpretation. The pinned locator, payload and content revision are unchanged, and the
+space is re-synthesized every time a pinned config is resolved, so a saved project naming it opens
+anywhere. Because the definition uses OCIO built-ins, transform identity includes
+`synthesizedColorSpaceIdentity()` (`bloom-hlg-scene-v1;ocio=<version>`) as well as the space id.
 
 ARRI LogC3 and RED Log3G10 are not container-tagged automatic cases. The Assets and Properties
 pickers list every non-data colour space, grouped by the config's family, so an artist can choose
