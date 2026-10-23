@@ -547,6 +547,17 @@ int main(int argc, char* argv[]) {
     const auto exrCompiled = compiler.compile({exrDocument.snapshot(), exrComposition}, {});
     if (!exrCompiled.plan)
         return 21;
+    // #362: an OpenEXR is premultiplied by convention, so the new layer must not premultiply it
+    // again; the JPEG layer above stays straight.
+    const auto premultiplies = [](const runtime::CompiledCompositionPlan& plan) {
+        for (const auto& operation : plan.operations())
+            if (const auto* source = std::get_if<runtime::CompiledImageSource>(&operation))
+                return std::optional{source->premultiply};
+        return std::optional<bool>{};
+    };
+    if (premultiplies(*exrCompiled.plan) != std::optional{false} ||
+        premultiplies(*compiled.plan) != std::optional{true})
+        return 24;
     runtime::CpuCompositionEvaluator exrEvaluator;
     exrEvaluator.setAssetBaseDirectory(folder);
     const auto scrubTime = bloom::core::RationalTime::create(1, 2);
