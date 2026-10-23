@@ -452,13 +452,19 @@ void testReferenceFailures(Expectations& expectations) {
 }
 
 void testByteCeiling(Expectations& expectations) {
+    // Since 821a217f GPU preparation charges only real retained host bytes (gpu-backend.md):
+    // device images and scratch belong to the device lease, so a ceiling is exercised through
+    // retained coverage. Fractional child solids retain coverage representations.
     const auto child =
-        childPlan(format(64, 64), LayerValues{.position = {32.0, 32.0}},
-                  LayerValues{.position = {32.0, 32.0}}, 64.0, 64.0, 11000, 1101, false);
+        childPlan(format(64, 64), LayerValues{.position = {32.3, 32.1}},
+                  LayerValues{.position = {31.7, 32.6}}, 63.5, 62.5, 11000, 1101, false);
     const auto parent =
         parentPlan(child, format(64, 64), timeMapping(11100, 0.0, 1.0, 0), 11200, 1100);
     const CpuGpuSceneBuilder builder;
-    const auto prepared = builder.build(parent, requestAt(*parent, RationalTime{}, 1U << 14U));
+    expectations.expect(
+        builder.build(parent, requestAt(*parent, RationalTime{}, 1U << 28U)).hasValue(),
+        "a nested scene within its allowance prepares");
+    const auto prepared = builder.build(parent, requestAt(*parent, RationalTime{}, 16U));
     expectations.expect(!prepared && prepared.diagnostic.code ==
                                          PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
                         "a nested scene under a tiny allowance fails closed on the byte ceiling");
