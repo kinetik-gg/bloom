@@ -231,11 +231,11 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     connect(&session_, &CompositionSession::selectionChanged, this, &PropertiesEditor::rebuild);
     connect(&session_, &CompositionSession::currentTimeChanged, this,
             &PropertiesEditor::configureMergeInputs);
-    // Same reason the node canvas follows it: every animated row shows its curve's value at the
-    // session time, and its keyframe diamond says whether a key sits there. Neither question has
-    // the same answer at two different times, so a playhead move is a rebuild here even though the
-    // document did not change.
-    connect(&session_, &CompositionSession::currentTimeChanged, this, &PropertiesEditor::rebuild);
+    // Every animated row shows its curve's value at the session time, and its keyframe diamond
+    // says whether a key sits there. Neither question has the same answer at two different times,
+    // but the rows themselves do not change: a playhead move refreshes values in place (#358).
+    connect(&session_, &CompositionSession::currentTimeChanged, this,
+            &PropertiesEditor::refreshValues);
 
     rebuild();
 }
@@ -346,10 +346,13 @@ bool PropertiesEditor::eventFilter(QObject* watched, QEvent* event) {
     return QWidget::eventFilter(watched, event);
 }
 
-void PropertiesEditor::refreshLiveValues() {
+void PropertiesEditor::refreshLiveValues() { refreshValues(); }
+
+void PropertiesEditor::refreshValues() {
     if (rebuilding_)
         return;
     rebuilding_ = true;
+    ++work_.valueRefreshes;
     configurePosition();
     configureAnchor();
     configureScale();
@@ -357,15 +360,19 @@ void PropertiesEditor::refreshLiveValues() {
     configureOpacity();
     configureSolidColor();
     configureTextSource();
-    configureRegistryRows();
-    configureUpstream();
+    for (auto* row : registryRows_)
+        row->refresh();
+    for (auto* row : upstreamRows_)
+        row->refresh();
     rebuilding_ = false;
+    session_.refreshDrivenValues();
 }
 
 void PropertiesEditor::rebuild() {
     if (rebuilding_)
         return;
     rebuilding_ = true;
+    ++work_.fullRebuilds;
     configureObjectToggles();
     configurePosition();
     configureAnchor();
