@@ -499,6 +499,7 @@ decodeExrInput(Imf::InputFile& input, const ImageInterpretation& interpretation,
 
         std::uint64_t completed = 0;
         std::uint64_t repairedPixels = 0;
+        std::vector<bool> repairedRow(static_cast<std::size_t>(width));
         if (progress)
             progress(0, height);
         while (completed < height) {
@@ -547,6 +548,24 @@ decodeExrInput(Imf::InputFile& input, const ImageInterpretation& interpretation,
                                  ? std::array<float, 4>{luminance, luminance, luminance, alpha}
                                  : std::array<float, 4>{band[0][offset], band[1][offset],
                                                         band[2][offset], alpha};
+                    // Non-finite policy, before any colour conversion: a NaN/Inf component
+                    // becomes zero and alpha is clamped to [0, 1].
+                    bool repaired = false;
+                    for (auto& component : target)
+                        if (!std::isfinite(component)) {
+                            component = 0.0F;
+                            repaired = true;
+                        }
+                    if (target[3] < 0.0F || target[3] > 1.0F) {
+                        target[3] = std::clamp(target[3], 0.0F, 1.0F);
+                        repaired = true;
+                    }
+                    // Premultiplied RGB at zero alpha (additive emission) cannot survive the v1
+                    // process image; it is dropped and reported.
+                    if (sourcePremultiplied && target[3] == 0.0F &&
+                        (target[0] != 0.0F || target[1] != 0.0F || target[2] != 0.0F))
+                        repaired = true;
+                    repairedRow[static_cast<std::size_t>(x)] = repaired;
                     if (sourcePremultiplied && convert) {
                         for (std::size_t channel = 0; channel < 3; ++channel)
                             target[channel] = target[3] > 0.0F ? target[channel] / target[3] : 0.0F;
@@ -565,9 +584,9 @@ decodeExrInput(Imf::InputFile& input, const ImageInterpretation& interpretation,
                         ImageDiagnosticCode::InvalidDataWindow, "OpenEXR output row is invalid");
                 for (std::uint64_t x = 0; x < width; ++x) {
                     auto sample = row[static_cast<std::size_t>(x)];
-                    // Non-finite policy: a NaN/Inf component becomes zero and alpha is clamped
-                    // to [0, 1]. The frame keeps rendering; the repaired count is reported.
-                    bool repaired = false;
+                    // The same policy after colour conversion, which can itself overflow. The
+                    // frame keeps rendering; each repaired pixel is counted once.
+                    bool repaired = repairedRow[static_cast<std::size_t>(x)];
                     for (auto& component : sample)
                         if (!std::isfinite(component)) {
                             component = 0.0F;
@@ -583,6 +602,10 @@ decodeExrInput(Imf::InputFile& input, const ImageInterpretation& interpretation,
                         sourcePremultiplied && !convert ? sample[1] : sample[1] * sample[3];
                     const auto blue =
                         sourcePremultiplied && !convert ? sample[2] : sample[2] * sample[3];
+                    // The v1 process image cannot carry premultiplied RGB at zero alpha
+                    // (additive emission); such a pixel becomes transparent and is reported.
+                    if (sample[3] == 0.0F && (red != 0.0F || green != 0.0F || blue != 0.0F))
+                        repaired = true;
                     auto pixel = render::Rgba32f::fromPremultiplied(red, green, blue, sample[3]);
                     if (!pixel) {
                         // A finite input can still overflow when premultiplied.

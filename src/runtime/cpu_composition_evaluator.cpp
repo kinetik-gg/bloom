@@ -2948,8 +2948,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                      DiagnosticSeverity::Warning,
                                      operationSubject,
                                      std::to_string(image.repairedPixels) +
-                                         " image pixels had non-finite or out-of-range values; "
-                                         "they were repaired (NaN/Inf to 0, alpha clamped)",
+                                         " image pixels were repaired by the ingest policy "
+                                         "(NaN/Inf to 0, alpha clamped to [0, 1], zero-alpha "
+                                         "emission dropped)",
                                      {}});
                             bounds[index].local =
                                 detail::imageSourceFrameBounds(*selectedImage)
