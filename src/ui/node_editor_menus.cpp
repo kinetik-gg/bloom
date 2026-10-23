@@ -599,9 +599,7 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
         if (nodes.empty() || !scene_->canSubmit() || !session_.composition())
             return menu;
         const auto composition = session_.compositionId();
-        const auto accepts = [&](const commands::Operation& operation) {
-            return commands::canApplyNodeOperation(session_.snapshot(), operation);
-        };
+        const auto& graphComposition = *session_.composition();
         auto* organize = menu->addMenu(tr("Organize"));
         organize->setObjectName(QStringLiteral("nodeOrganizeMenu"));
         auto* arrangeAll = organize->addAction(tr("Arrange All"));
@@ -615,10 +613,13 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
         arrangeSelection->setShortcutContext(Qt::WidgetShortcut);
         connect(arrangeSelection, &QAction::triggered, this, [this] { arrangeSelectedNodes(); });
         menu->addSeparator();
-        if (accepts(commands::DuplicateNodes(composition, nodes, {24, 24})))
+        // Duplicate's acceptance depends on a full post-apply validation, so it alone keeps the
+        // isolated-draft query; it runs once per menu open.
+        if (commands::canApplyNodeOperation(session_.snapshot(),
+                                            commands::DuplicateNodes(composition, nodes, {24, 24})))
             action(tr("Duplicate"), QStringLiteral("nodeDuplicateAction"),
                    [this] { duplicateSelectedNodes(); });
-        if (nodes.size() == 1 && accepts(commands::DissolveNode(composition, *nodes.begin())))
+        if (nodes.size() == 1 && commands::canDissolveNode(graphComposition, *nodes.begin()))
             action(tr("Dissolve"), QStringLiteral("nodeDissolveAction"),
                    [this] { dissolveSelectedNode(); });
         const bool allMuted = std::ranges::all_of(
@@ -626,19 +627,19 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
         const bool allCollapsed = std::ranges::all_of(
             nodes, [&](const auto id) { return layoutFor(*session_.composition(), id).collapsed; });
         if (std::ranges::all_of(nodes, [&](const auto id) {
-                return accepts(commands::SetNodeMuted(composition, id, !allMuted));
+                return commands::canSetNodeMuted(graphComposition, id, !allMuted);
             }))
             action(allMuted ? tr("Unmute") : tr("Mute"), QStringLiteral("nodeMuteAction"),
                    [this] { toggleSelectedMuted(true); });
         if (std::ranges::all_of(nodes, [&](const auto id) {
-                return accepts(commands::SetNodeCollapsed(composition, id, !allCollapsed));
+                return commands::canSetNodeCollapsed(graphComposition, id, !allCollapsed);
             }))
             action(allCollapsed ? tr("Expand") : tr("Collapse"),
                    QStringLiteral("nodeCollapseAction"), [this] { toggleSelectedMuted(false); });
         if (nodes.size() == 1) {
             for (const auto& boundary : session_.composition()->graph().layerOutputs()) {
                 if (boundary.nodeId == *nodes.begin() &&
-                    accepts(commands::RenameLayer(composition, boundary.layerId, boundary.name)))
+                    commands::canRenameLayer(graphComposition, boundary.layerId, boundary.name))
                     action(tr("Rename"), QStringLiteral("nodeRenameAction"),
                            [this, id = boundary.nodeId] {
                                if (auto* card = dynamic_cast<NodeItem*>(scene_->findNodeItem(id)))
@@ -646,8 +647,8 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
                            });
             }
         }
-        if (accepts(commands::GroupNodes(composition, nodes,
-                                         std::string(commands::kDefaultNodeGroupName))))
+        if (commands::canGroupNodes(graphComposition, session_.snapshot().ids(), nodes,
+                                    commands::kDefaultNodeGroupName))
             action(tr("Group"), QStringLiteral("nodeGroupAction"),
                    [this] { groupSelectedNodes(); });
         if (std::ranges::any_of(nodes, [&](const auto id) {
@@ -656,7 +657,7 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
             }))
             action(tr("Ungroup"), QStringLiteral("nodeUngroupAction"),
                    [this] { ungroupSelection(); });
-        if (accepts(commands::RemoveNodes(composition, nodes)))
+        if (commands::canRemoveNodes(graphComposition, nodes))
             action(tr("Delete"), QStringLiteral("nodeDeleteAction"),
                    [this] { removeSelectedNodes(); });
         return menu;
@@ -1110,40 +1111,37 @@ void NodeGraphEditor::refreshNodeMenuState() {
         collapseAction_->setText(tr("Collapse"));
         return;
     }
-    const auto composition = session_.compositionId();
-    const auto accepts = [this](const commands::Operation& operation) {
-        return commands::canApplyNodeOperation(session_.snapshot(), operation);
-    };
+    const auto& graphComposition = *session_.composition();
     dissolveAction_->setEnabled(nodes.size() == 1 &&
-                                accepts(commands::DissolveNode(composition, *nodes.begin())));
+                                commands::canDissolveNode(graphComposition, *nodes.begin()));
     const bool allMuted = std::ranges::all_of(
         nodes, [&](const auto id) { return layoutFor(*session_.composition(), id).muted; });
     const bool allCollapsed = std::ranges::all_of(
         nodes, [&](const auto id) { return layoutFor(*session_.composition(), id).collapsed; });
     muteAction_->setText(allMuted ? tr("Unmute") : tr("Mute"));
     muteAction_->setEnabled(std::ranges::all_of(nodes, [&](const auto id) {
-        return accepts(commands::SetNodeMuted(composition, id, !allMuted));
+        return commands::canSetNodeMuted(graphComposition, id, !allMuted);
     }));
     collapseAction_->setText(allCollapsed ? tr("Expand") : tr("Collapse"));
     collapseAction_->setEnabled(std::ranges::all_of(nodes, [&](const auto id) {
-        return accepts(commands::SetNodeCollapsed(composition, id, !allCollapsed));
+        return commands::canSetNodeCollapsed(graphComposition, id, !allCollapsed);
     }));
     bool canRename = false;
     if (nodes.size() == 1) {
         for (const auto& boundary : session_.composition()->graph().layerOutputs()) {
             if (boundary.nodeId == *nodes.begin() &&
-                accepts(commands::RenameLayer(composition, boundary.layerId, boundary.name))) {
+                commands::canRenameLayer(graphComposition, boundary.layerId, boundary.name)) {
                 canRename = true;
             }
         }
     }
     renameAction_->setEnabled(canRename);
-    groupAction_->setEnabled(accepts(
-        commands::GroupNodes(composition, nodes, std::string(commands::kDefaultNodeGroupName))));
+    groupAction_->setEnabled(commands::canGroupNodes(graphComposition, session_.snapshot().ids(),
+                                                     nodes, commands::kDefaultNodeGroupName));
     ungroupAction_->setEnabled(std::ranges::any_of(nodes, [&](const auto id) {
         return document::findNodeGroupOf(session_.composition()->nodeGroups(), id) != nullptr;
     }));
-    deleteAction_->setEnabled(accepts(commands::RemoveNodes(composition, nodes)));
+    deleteAction_->setEnabled(commands::canRemoveNodes(graphComposition, nodes));
 }
 
 void NodeGraphEditor::applyLinkStyle(const LinkStyle style) {

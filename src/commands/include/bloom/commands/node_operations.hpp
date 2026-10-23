@@ -24,6 +24,27 @@ namespace bloom::commands {
     document::Vec2d layoutPosition,
     const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions());
 
+// Read-only menu eligibility (issue #357). Each predicate mirrors the matching operation's
+// rejection rules and the command stack's locked-layer refusal, and answers from the published
+// composition alone: no document copy, no draft, no project validation. A NoChange outcome counts
+// as eligible, matching canApplyNodeOperation. Execution stays authoritative. DuplicateNodes has no
+// predicate; its acceptance depends on a full post-apply validation, so it keeps using
+// canApplyNodeOperation.
+[[nodiscard]] bool canRemoveNodes(const document::Composition& composition,
+                                  const std::set<document::NodeId>& nodes);
+[[nodiscard]] bool canDissolveNode(
+    const document::Composition& composition, document::NodeId nodeId,
+    const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions());
+[[nodiscard]] bool canSetNodeMuted(const document::Composition& composition,
+                                   document::NodeId nodeId, bool muted);
+[[nodiscard]] bool canSetNodeCollapsed(const document::Composition& composition,
+                                       document::NodeId nodeId, bool collapsed);
+[[nodiscard]] bool canRenameLayer(const document::Composition& composition,
+                                  document::LayerId layerId, std::string_view name);
+[[nodiscard]] bool canGroupNodes(const document::Composition& composition,
+                                 const document::IdAllocator& ids,
+                                 const std::set<document::NodeId>& nodes, std::string_view name);
+
 inline constexpr std::string_view kAddNodeOutput = "node";
 inline constexpr std::string_view kGroupNodesOutput = "nodeGroup";
 inline constexpr std::string_view kDefaultNodeGroupName = "Group";

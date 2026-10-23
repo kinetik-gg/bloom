@@ -14,6 +14,7 @@ target_sources(
         layer_time_operations.cpp
         node_duplication.cpp
         node_group_operations.cpp
+        node_operation_eligibility.cpp
         node_layout_operations.cpp
         render_footprint.cpp
         result.cpp
