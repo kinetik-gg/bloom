@@ -19,6 +19,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -85,8 +86,18 @@ class Composition final {
     void setBackgroundColor(core::Color4d color) noexcept { backgroundColor_ = color; }
     [[nodiscard]] SafeAreaSettings safeAreas() const noexcept { return safeAreas_; }
     void setSafeAreas(SafeAreaSettings settings) noexcept { safeAreas_ = settings; }
+    // A node is locked when a locked layer boundary depends on it through node inputs. Published
+    // (frozen) content answers from a lock index built once at freeze time by one reverse BFS;
+    // draft content builds the index per call, still linear in the graph (#357).
     [[nodiscard]] bool nodeLocked(NodeId node) const;
     [[nodiscard]] bool parameterLocked(ParameterId parameter) const;
+    struct LockIndex final {
+        std::unordered_set<NodeId> nodes;
+        std::unordered_set<ParameterId> parameters;
+    };
+    [[nodiscard]] LockIndex lockIndex() const;
+    // Lock-index builds, for work-counter tests.
+    [[nodiscard]] static std::uint64_t lockIndexBuilds() noexcept;
     void setName(std::string name) { name_ = std::move(name); }
     [[nodiscard]] bool setDuration(core::RationalTime duration) noexcept;
     void setFormat(CompositionFormat format) noexcept { format_ = format; }
@@ -106,12 +117,15 @@ class Composition final {
         // Computed once before this payload is published through frozenContent_. Editable
         // draft copies ignore this value and recompute their live charge on demand.
         std::size_t frozenByteCharge = 0;
+        // Built once at freeze time; editable copies ignore it and build their own on demand.
+        std::optional<LockIndex> frozenLockIndex;
     };
     [[nodiscard]] const Content& content() const noexcept {
         return editableContent_ ? *editableContent_ : *frozenContent_;
     }
     [[nodiscard]] Content& mutableContent();
     [[nodiscard]] static std::size_t calculateContentByteCharge(const Content& authored);
+    [[nodiscard]] static LockIndex buildLockIndex(const Content& authored);
     void freezeContent();
     std::optional<WorkArea> workArea_{};
     std::optional<std::string> workingColorSpaceId_{};

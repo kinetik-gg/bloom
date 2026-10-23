@@ -120,6 +120,7 @@ void Composition::freezeContent() {
         // storage cannot let a pointer retained from the original Draft mutate a Snapshot.
         auto frozen = std::make_shared<Content>(std::move(*editableContent_));
         frozen->frozenByteCharge = calculateContentByteCharge(*frozen);
+        frozen->frozenLockIndex = buildLockIndex(*frozen);
         frozenContent_ = std::move(frozen);
         editableContent_.reset();
     }
@@ -312,33 +313,58 @@ std::size_t Project::rootByteCharge() const {
     return bytes;
 }
 
-bool Composition::nodeLocked(const NodeId node) const {
+namespace {
+std::atomic<std::uint64_t> lockIndexBuildCount{0};
+} // namespace
+
+Composition::LockIndex Composition::lockIndex() const {
+    if (!editableContent_ && frozenContent_ && frozenContent_->frozenLockIndex)
+        return *frozenContent_->frozenLockIndex;
+    return buildLockIndex(content());
+}
+
+Composition::LockIndex Composition::buildLockIndex(const Content& authored) {
+    lockIndexBuildCount.fetch_add(1, std::memory_order_relaxed);
+    LockIndex index;
     std::vector<NodeId> pending;
-    for (const auto& layer : graph().layerOutputs())
+    for (const auto& layer : authored.graph.layerOutputs())
         if (layer.locked)
             pending.push_back(layer.nodeId);
-    std::unordered_set<NodeId> seen;
+    if (pending.empty())
+        return index;
+    // One reverse BFS over node inputs from every locked boundary.
+    std::unordered_map<NodeId, std::vector<NodeId>> sources;
+    for (const auto& edge : authored.graph.edges())
+        if (const auto* input = std::get_if<NodeInputRef>(&edge.destination))
+            sources[input->nodeId].push_back(edge.source.nodeId);
     while (!pending.empty()) {
         const auto id = pending.back();
         pending.pop_back();
-        if (id == node)
-            return true;
-        if (!seen.insert(id).second)
+        if (!index.nodes.insert(id).second)
             continue;
-        for (const auto& edge : graph().edges()) {
-            const auto* input = std::get_if<NodeInputRef>(&edge.destination);
-            if (input && input->nodeId == id)
-                pending.push_back(edge.source.nodeId);
-        }
+        if (const auto found = sources.find(id); found != sources.end())
+            pending.insert(pending.end(), found->second.begin(), found->second.end());
     }
-    return false;
+    for (const auto& node : authored.graph.nodes())
+        if (index.nodes.contains(node.id))
+            for (const auto& binding : node.parameters)
+                index.parameters.insert(binding.parameterId);
+    return index;
+}
+
+std::uint64_t Composition::lockIndexBuilds() noexcept {
+    return lockIndexBuildCount.load(std::memory_order_relaxed);
+}
+
+bool Composition::nodeLocked(const NodeId node) const {
+    if (!editableContent_ && frozenContent_ && frozenContent_->frozenLockIndex)
+        return frozenContent_->frozenLockIndex->nodes.contains(node);
+    return buildLockIndex(content()).nodes.contains(node);
 }
 bool Composition::parameterLocked(const ParameterId parameter) const {
-    for (const auto& node : graph().nodes())
-        for (const auto& binding : node.parameters)
-            if (binding.parameterId == parameter && nodeLocked(node.id))
-                return true;
-    return false;
+    if (!editableContent_ && frozenContent_ && frozenContent_->frozenLockIndex)
+        return frozenContent_->frozenLockIndex->parameters.contains(parameter);
+    return buildLockIndex(content()).parameters.contains(parameter);
 }
 
 bool Composition::setDuration(const core::RationalTime duration) noexcept {
