@@ -3,6 +3,7 @@
 #include "command_test_support.hpp"
 
 #include <bloom/commands/animation_operations.hpp>
+#include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/document/value_nodes.hpp>
 
 #include <iostream>
@@ -283,6 +284,29 @@ void testAffectedCompositionScope(TestContext& test) {
 } // namespace
 } // namespace bloom::commands::test
 
+// ADR 0024: layer timing edits and key edits on a retimed layer.
+void testLayerTiming(TestContext& test) {
+    Fixture fixture;
+    (void)apply<SetLayerRange>(fixture, kFirstLayerId, t(1), t(4));
+    test.expect(spans(apply<SetLayerTiming>(fixture, kFirstLayerId, t(2), t(3), t(6)), {{1, 6}}),
+                "moving a layer covers its old and new spans");
+    test.expect(spans(fixture.stack.undo(), {{1, 6}}) && spans(fixture.stack.redo(), {{1, 6}}),
+                "undo and redo replay the move footprint");
+    test.expect(spans(apply<SetLayerTiming>(fixture, kFirstLayerId, t(2), t(3), t(8)), {{6, 8}}),
+                "trimming with the same mapping covers only the changed span");
+    test.expect(spans(apply<SetLayerTimeModes>(fixture, kFirstLayerId,
+                                               document::LayerTimeMode::Hold,
+                                               document::LayerTimeMode::Loop),
+                      {{3, 8}}),
+                "a mode change covers the layer span");
+    test.expect(spans(apply<CreateAnimationForParameter>(fixture, kOpacityId, t(0)), {{3, 8}}) &&
+                    spans(apply<SetKeyframeAtTimeForParameter>(fixture, kOpacityId, t(1), 0.5),
+                          {{3, 8}}),
+                "key edits on a retimed layer cover its whole span");
+    const auto refused = apply<SetLayerTiming>(fixture, kFirstLayerId, t(0), t(20), t(30));
+    test.expect(!refused.changed(), "a range wholly after the composition is refused");
+}
+
 int main() {
     bloom::commands::test::TestContext test;
     try {
@@ -292,6 +316,7 @@ int main() {
         bloom::commands::test::testKeyframeIntervals(test);
         bloom::commands::test::testCompositionSourceReference(test);
         bloom::commands::test::testAffectedCompositionScope(test);
+        bloom::commands::test::testLayerTiming(test);
     } catch (const std::exception& error) {
         test.fail(error.what());
     }

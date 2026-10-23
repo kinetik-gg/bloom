@@ -173,6 +173,18 @@ std::optional<AffectedTimeFootprint> parameterEditFootprint(
         return std::nullopt;
     const bool sameTopology = beforeReach.sameRenderTopology(afterReach);
     const std::vector<RenderTimeSpan> whole{{core::RationalTime{}, duration}};
+    // ADR 0024: key times of a retimed layer (and of its upstream) are layer or content times, not
+    // composition times. Until they are projected through the layer mapping, a key edit in a
+    // composition with any retimed layer is confined to the reaching layers' whole spans.
+    const bool retimed = std::ranges::any_of(
+        after->graph().layerOutputs(), [&](const document::LayerOutputBoundary& layer) {
+            const auto* node = after->graph().findNode(layer.nodeId);
+            return !layer.timing.isIdentityMapping() ||
+                   (node != nullptr &&
+                    std::ranges::any_of(node->parameters, [](const auto& binding) {
+                        return binding.role == document::kTimeRemapParameterRole;
+                    }));
+        });
 
     std::vector<RenderTimeSpan> changed;
     for (const auto& [id, pair] : parameters) {
@@ -215,12 +227,15 @@ std::optional<AffectedTimeFootprint> parameterEditFootprint(
             case document::RenderConfinementKind::Unaffected:
                 break;
             case document::RenderConfinementKind::LayerSpans: {
-                const auto bounded = intersect(times, confinement.spans);
+                const auto bounded = intersect(retimed ? whole : times, confinement.spans);
                 changed.insert(changed.end(), bounded.begin(), bounded.end());
                 break;
             }
             case document::RenderConfinementKind::WholeComposition:
-                changed.insert(changed.end(), times.begin(), times.end());
+                if (retimed)
+                    changed.insert(changed.end(), whole.begin(), whole.end());
+                else
+                    changed.insert(changed.end(), times.begin(), times.end());
                 break;
             case document::RenderConfinementKind::Unproven:
                 return std::nullopt;
