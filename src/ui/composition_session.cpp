@@ -411,6 +411,7 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
     // same-numeric-ID document can never reuse it.
     compositionId_ = compositionId;
     retainedRanges_.clear();
+    lastDocumentChangeAffectedEvaluation_ = true;
     static_cast<void>(resetEvaluationRangesToLive());
     currentTime_ = core::RationalTime::fromInteger(0);
     selection_ = {};
@@ -2109,6 +2110,7 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
             cancelValueEdit();
         }
         if (revisionAdvanced) {
+            lastDocumentChangeAffectedEvaluation_ = provenanceChanged;
             normalizeSelection();
             emit snapshotChanged();
             // A document command moved the time-indexed provenance. This is the distinct signal a
@@ -2587,9 +2589,9 @@ KeyframeDiamondState
 CompositionSession::keyframeDiamondState(const std::string_view role,
                                          const document::AnimationComponent component) const {
     const auto* parameter = parameterForSelection(role);
-    return parameter ? keyframeDiamondState(parameter->id, component,
-                                            keyTimeAtPlayhead(parameter->id))
-                     : KeyframeDiamondState::Unsupported;
+    return parameter
+               ? keyframeDiamondState(parameter->id, component, keyTimeAtPlayhead(parameter->id))
+               : KeyframeDiamondState::Unsupported;
 }
 
 bool CompositionSession::toggleKeyframe(const std::string_view role,

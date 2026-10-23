@@ -469,6 +469,14 @@ class CompositionSession final : public QObject {
         std::uint64_t evaluations = 0;
     };
     [[nodiscard]] DrivenValueWork drivenValueWork() const noexcept;
+    // #358. Whether the newest document change moved the active composition's evaluation
+    // provenance (what documentEvaluationChanged() announces). False for a layout-only edit, an
+    // edit the render reachability proves neutral, or an edit to a composition this one does not
+    // render -- the rendered pixels AND audio of the active composition are unchanged. Valid from
+    // the snapshotChanged() emission of that change; a rebind counts as a change.
+    [[nodiscard]] bool lastDocumentChangeAffectedEvaluation() const noexcept {
+        return lastDocumentChangeAffectedEvaluation_;
+    }
 
     // Writes one authored value onto an EXACT parameter, by the same constant-or-keyframe rule
     // every layer row already follows (task FIX1, item G): a constant source is rewritten, an
@@ -866,6 +874,7 @@ class CompositionSession final : public QObject {
     std::vector<EvaluationSnapshotRange> evaluationRanges_;
     // #355. Retained spans of inactive compositions, oldest first.
     std::vector<RetainedCompositionRanges> retainedRanges_;
+    bool lastDocumentChangeAffectedEvaluation_ = true;
     document::CompositionId compositionId_;
     core::RationalTime currentTime_ = core::RationalTime::fromInteger(0);
     CompositionSelection selection_;
