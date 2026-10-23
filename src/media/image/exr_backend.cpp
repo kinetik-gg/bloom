@@ -12,6 +12,9 @@
 #include <ImfHeader.h>
 #include <ImfIO.h>
 #include <ImfInputFile.h>
+#include <ImfInputPart.h>
+#include <ImfMultiPartInputFile.h>
+#include <ImfPartType.h>
 #include <ImfIntAttribute.h>
 #include <ImfPixelType.h>
 #include <ImfStandardAttributes.h>
@@ -44,7 +47,6 @@ constexpr std::array<std::uint32_t, 8> kRec709D65ChromaticityBits{
     0x3e19999aU, 0x3d75c28fU, 0x3ea01a37U, 0x3ea872b0U};
 constexpr std::array<float, 8> kAcesAp0Chromaticities{0.7347F, 0.2653F,  0.0F,     1.0F,
                                                       0.0001F, -0.0770F, 0.32168F, 0.33767F};
-constexpr std::size_t kMaximumChannels = 4;
 
 class RevisionStream final : public Imf::IStream {
   public:
@@ -115,8 +117,6 @@ template <typename T>
         return ImageDiagnosticCode::UnsupportedVersion;
     if (Imf::isNonImage(raw))
         return ImageDiagnosticCode::UnsupportedDeepImage;
-    if (Imf::isMultiPart(raw))
-        return ImageDiagnosticCode::UnsupportedMultipart;
     return std::nullopt;
 }
 
@@ -130,6 +130,12 @@ struct ExrLayout final {
     std::uint8_t bitDepth = 0;
     bool hasAlpha = false;
     bool luminance = false;
+    // The selected layer carries R/G/B or Y colour channels (ADR 0026); without them the part has
+    // no colour image and only its channel set is available.
+    bool colour = false;
+    bool layerFound = false;
+    // Colour channel names in R, G, B, A order (Y in slot 0 for luminance); empty when absent.
+    std::array<std::string, 4> colourNames;
     bool tiled = false;
     std::uint32_t tileHeight = 1U;
     ImageAlphaAssociation alphaAssociation = ImageAlphaAssociation::Premultiplied;
@@ -201,8 +207,18 @@ struct ExrLayout final {
     return ImageAlphaAssociation::Premultiplied;
 }
 
-[[nodiscard]] std::optional<ExrLayout> inspectHeader(const Imf::Header& header, const bool tiled,
+[[nodiscard]] bool partIsTiled(const Imf::Header& header) {
+    return header.hasType() ? Imf::isTiled(header.type()) : header.hasTileDescription();
+}
+
+[[nodiscard]] std::optional<ExrLayout> inspectHeader(const Imf::Header& header,
+                                                     const std::string_view layer,
                                                      ImageDiagnosticCode& error) {
+    if (header.hasType() && Imf::isDeepData(header.type())) {
+        error = ImageDiagnosticCode::UnsupportedDeepImage;
+        return std::nullopt;
+    }
+    const bool tiled = partIsTiled(header);
     const auto dataWidth = boxExtent(header.dataWindow().min.x, header.dataWindow().max.x);
     const auto dataHeight = boxExtent(header.dataWindow().min.y, header.dataWindow().max.y);
     const auto displayWidth = boxExtent(header.displayWindow().min.x, header.displayWindow().max.x);
@@ -241,75 +257,80 @@ struct ExrLayout final {
         }
     }
 
+    // Every channel of the part must be a supported, full-resolution sample kind, whichever layer
+    // is selected; the colour image is formed from the selected layer's R/G/B[/A] or Y[/A].
     const auto& channels = header.channels();
     std::size_t channelCount = 0;
-    const Imf::Channel* firstChannel = nullptr;
-    bool hasR = false;
-    bool hasG = false;
-    bool hasB = false;
-    bool hasY = false;
-    bool hasA = false;
+    bool layerFound = false;
+    std::array<const Imf::Channel*, 5> colour{}; // R, G, B, A, Y
+    std::array<std::string, 5> colourNames;
+    std::uint8_t firstBitDepth = 0;
     for (auto it = channels.begin(); it != channels.end(); ++it) {
-        if (++channelCount > kMaximumChannels) {
+        ++channelCount;
+        const auto& channel = it.channel();
+        if (channel.type != Imf::HALF && channel.type != Imf::FLOAT && channel.type != Imf::UINT) {
+            error = ImageDiagnosticCode::UnsupportedChannelType;
+            return std::nullopt;
+        }
+        if (channel.xSampling != 1 || channel.ySampling != 1) {
             error = ImageDiagnosticCode::UnsupportedChannels;
             return std::nullopt;
         }
+        if (firstBitDepth == 0)
+            firstBitDepth = channel.type == Imf::HALF ? 16U : 32U;
         const std::string_view name = it.name();
-        if (name == "R")
-            hasR = true;
-        else if (name == "G")
-            hasG = true;
-        else if (name == "B")
-            hasB = true;
-        else if (name == "Y")
-            hasY = true;
-        else if (name == "A")
-            hasA = true;
-        else {
-            error = ImageDiagnosticCode::UnsupportedChannels;
-            return std::nullopt;
-        }
-        if (firstChannel == nullptr)
-            firstChannel = &it.channel();
-        if (it.channel().type != Imf::HALF && it.channel().type != Imf::FLOAT) {
-            error = ImageDiagnosticCode::UnsupportedChannelType;
-            return std::nullopt;
-        }
-        if (it.channel().xSampling != 1 || it.channel().ySampling != 1) {
-            error = ImageDiagnosticCode::UnsupportedChannels;
-            return std::nullopt;
-        }
-        if (firstChannel->type != it.channel().type) {
-            error = ImageDiagnosticCode::UnsupportedChannelType;
-            return std::nullopt;
-        }
+        if (render::channelLayerName(name) != layer)
+            continue;
+        layerFound = true;
+        if (channel.type == Imf::UINT)
+            continue;
+        const auto suffix = name.substr(layer.empty() ? 0 : layer.size() + 1);
+        constexpr std::array<std::string_view, 5> kSuffixes{"R", "G", "B", "A", "Y"};
+        for (std::size_t slot = 0; slot < kSuffixes.size(); ++slot)
+            if (suffix == kSuffixes[slot]) {
+                colour[slot] = &channel;
+                colourNames[slot] = std::string(name);
+            }
     }
-    const bool rgb = hasR && hasG && hasB;
-    if ((!rgb && !hasY) || (rgb && hasY) || (hasA && !rgb && !hasY) ||
-        (rgb && channelCount != (hasA ? 4U : 3U)) || (!rgb && channelCount != (hasA ? 2U : 1U))) {
+    if (channelCount == 0) {
         error = ImageDiagnosticCode::UnsupportedChannels;
         return std::nullopt;
     }
+    const bool rgb = colour[0] != nullptr && colour[1] != nullptr && colour[2] != nullptr;
+    const bool luminance = !rgb && colour[4] != nullptr;
+    const bool hasColour = rgb || luminance;
+    const bool hasAlpha = hasColour && colour[3] != nullptr;
+    std::uint8_t bitDepth = hasColour ? 16U : firstBitDepth;
+    for (const auto* channel : colour)
+        if (hasColour && channel != nullptr && channel->type == Imf::FLOAT)
+            bitDepth = 32U;
     const auto alpha = alphaAssociation(header);
     if (!alpha) {
         error = ImageDiagnosticCode::InvalidHeader;
         return std::nullopt;
     }
 
-    ExrLayout result{header.dataWindow(),
-                     header.displayWindow(),
-                     *dataWidth,
-                     *dataHeight,
-                     *displayWidth,
-                     *displayHeight,
-                     static_cast<std::uint8_t>(firstChannel->type == Imf::HALF ? 16U : 32U),
-                     hasA,
-                     !rgb,
-                     tiled,
-                     tileHeight,
-                     *alpha,
-                     {},
-                     {}};
+    ExrLayout result;
+    result.dataWindow = header.dataWindow();
+    result.displayWindow = header.displayWindow();
+    result.width = *dataWidth;
+    result.height = *dataHeight;
+    result.displayWidth = *displayWidth;
+    result.displayHeight = *displayHeight;
+    result.bitDepth = bitDepth;
+    result.hasAlpha = hasAlpha;
+    result.luminance = luminance;
+    result.colour = hasColour;
+    result.layerFound = layerFound;
+    if (rgb) {
+        result.colourNames = {colourNames[0], colourNames[1], colourNames[2],
+                              hasAlpha ? colourNames[3] : std::string{}};
+    } else if (luminance) {
+        result.colourNames = {colourNames[4], {}, {}, hasAlpha ? colourNames[3] : std::string{}};
+    }
+    result.tiled = tiled;
+    result.tileHeight = tileHeight;
+    result.alphaAssociation = *alpha;
     if (const auto* chromaticities =
             header.findTypedAttribute<Imf::ChromaticitiesAttribute>("chromaticities")) {
         result.colorSpaceTag = isAcesAp0(chromaticities->value())     ? "ACES2065-1"
@@ -331,6 +352,43 @@ struct ExrLayout final {
     return result;
 }
 
+[[nodiscard]] ImageChannelSampleKind sampleKind(const Imf::PixelType type) {
+    return type == Imf::HALF    ? ImageChannelSampleKind::Half
+           : type == Imf::FLOAT ? ImageChannelSampleKind::Float
+                                : ImageChannelSampleKind::Uint;
+}
+
+[[nodiscard]] ImagePartInfo makePartInfo(const Imf::Header& header, const ExrLayout& layout) {
+    ImagePartInfo part;
+    if (header.hasName())
+        part.name = header.name();
+    if (header.hasView())
+        part.view = header.view();
+    part.tiled = layout.tiled;
+    part.dataX = layout.dataWindow.min.x;
+    part.dataY = layout.dataWindow.min.y;
+    part.dataWidth = static_cast<std::uint32_t>(layout.width);
+    part.dataHeight = static_cast<std::uint32_t>(layout.height);
+    part.displayX = layout.displayWindow.min.x;
+    part.displayY = layout.displayWindow.min.y;
+    part.displayWidth = static_cast<std::uint32_t>(layout.displayWidth);
+    part.displayHeight = static_cast<std::uint32_t>(layout.displayHeight);
+    part.alphaAssociation = layout.alphaAssociation;
+    part.colorSpaceTag = layout.colorSpaceTag;
+    for (auto it = header.channels().begin(); it != header.channels().end(); ++it) {
+        part.channels.push_back({it.name(), sampleKind(it.channel().type)});
+        const auto layer = std::string(render::channelLayerName(it.name()));
+        if (std::ranges::find(part.layers, layer) == part.layers.end())
+            part.layers.push_back(layer);
+    }
+    for (const auto& layer : part.layers) {
+        ImageDiagnosticCode ignored = ImageDiagnosticCode::None;
+        if (const auto selected = inspectHeader(header, layer, ignored); selected && selected->colour)
+            part.colourLayers.push_back(layer);
+    }
+    return part;
+}
+
 [[nodiscard]] ImageProbe makeProbe(const ExrLayout& layout, const core::Sha256Digest digest) {
     auto probe = ImageProbe{static_cast<std::uint32_t>(layout.width),
                             static_cast<std::uint32_t>(layout.height),
@@ -350,6 +408,42 @@ struct ExrLayout final {
     return probe;
 }
 
+// Every part is validated; the scalar probe fields describe the first part's root layer.
+[[nodiscard]] ImageResult<ImageProbe> probeParts(const Imf::MultiPartInputFile& input,
+                                                 const core::Sha256Digest digest,
+                                                 const CancelImageWork& cancel) {
+    if (const auto error = validateVersion(static_cast<std::uint32_t>(input.version())))
+        return failure<ImageProbe>(*error, "OpenEXR version or flags are unsupported");
+    if (input.parts() < 1)
+        return failure<ImageProbe>(ImageDiagnosticCode::InvalidHeader, "OpenEXR has no parts");
+    std::vector<ImagePartInfo> parts;
+    std::optional<ExrLayout> first;
+    for (int index = 0; index < input.parts(); ++index) {
+        if (cancelled(cancel))
+            return {{}, "Image probe cancelled", true, ImageDiagnosticCode::Cancelled};
+        ImageDiagnosticCode error = ImageDiagnosticCode::InvalidHeader;
+        const auto layout = inspectHeader(input.header(index), {}, error);
+        if (!layout)
+            return failure<ImageProbe>(error, "OpenEXR header is unsupported or invalid");
+        parts.push_back(makePartInfo(input.header(index), *layout));
+        if (index == 0)
+            first = layout;
+    }
+    auto probe = makeProbe(*first, digest);
+    probe.parts = std::move(parts);
+    return {std::move(probe), {}};
+}
+
+[[nodiscard]] std::optional<int> findPartIndex(const Imf::MultiPartInputFile& input,
+                                               const std::string_view name) {
+    if (name.empty())
+        return input.parts() > 0 ? std::optional<int>{0} : std::nullopt;
+    for (int index = 0; index < input.parts(); ++index)
+        if (input.header(index).hasName() && input.header(index).name() == name)
+            return index;
+    return std::nullopt;
+}
+
 } // namespace
 
 ImageResult<ImageProbe> probeExr(const std::filesystem::path& path,
@@ -364,13 +458,8 @@ ImageResult<ImageProbe> probeExr(const std::filesystem::path& path,
             return failure<ImageProbe>(versionError, "OpenEXR version field is truncated");
         if (const auto versionFailure = validateVersion(version); versionFailure.has_value())
             return failure<ImageProbe>(*versionFailure, "OpenEXR version or flags are unsupported");
-        Imf::InputFile input(utf8Path(path).c_str(), 1);
-        ImageDiagnosticCode error = ImageDiagnosticCode::InvalidHeader;
-        const auto layout =
-            inspectHeader(input.header(), Imf::isTiled(static_cast<int>(version)), error);
-        if (!layout)
-            return failure<ImageProbe>(error, "OpenEXR header is unsupported or invalid");
-        return {makeProbe(*layout, contentDigest), {}};
+        const Imf::MultiPartInputFile input(utf8Path(path).c_str(), 1);
+        return probeParts(input, contentDigest, cancel);
     } catch (const std::bad_alloc&) {
         return failure<ImageProbe>(ImageDiagnosticCode::AllocationFailure,
                                    "OpenEXR probe allocation failed");
@@ -379,9 +468,9 @@ ImageResult<ImageProbe> probeExr(const std::filesystem::path& path,
                                    "OpenEXR header could not be read");
     }
 }
-
 static ImageResult<std::shared_ptr<const render::Rgba32fImage>>
-decodeExrInput(Imf::InputFile& input, const ImageInterpretation& interpretation,
+decodeExrInput(Imf::InputPart& input, const ExrLayout& selected,
+               const ImageInterpretation& interpretation,
                std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
                const CancelImageWork& cancel, const ImageProgress& progress,
                const std::size_t pixelBudget) {
@@ -389,16 +478,7 @@ decodeExrInput(Imf::InputFile& input, const ImageInterpretation& interpretation,
         return failure<std::shared_ptr<const render::Rgba32fImage>>(ImageDiagnosticCode::Cancelled,
                                                                     "Image decode cancelled");
     try {
-        ImageDiagnosticCode error = ImageDiagnosticCode::InvalidHeader;
-        const auto version = static_cast<std::uint32_t>(input.version());
-        if (const auto versionFailure = validateVersion(version); versionFailure.has_value())
-            return failure<std::shared_ptr<const render::Rgba32fImage>>(
-                *versionFailure, "OpenEXR version or flags are unsupported");
-        const auto layout =
-            inspectHeader(input.header(), Imf::isTiled(static_cast<int>(version)), error);
-        if (!layout)
-            return failure<std::shared_ptr<const render::Rgba32fImage>>(
-                error, "OpenEXR header is unsupported or invalid");
+        const ExrLayout* const layout = &selected;
 
         const auto dataWindow = render::ImageWindow::create(
             layout->dataWindow.min.x, layout->dataWindow.min.y, layout->width, layout->height);
@@ -522,14 +602,14 @@ decodeExrInput(Imf::InputFile& input, const ImageInterpretation& interpretation,
                                                           sizeof(float), rowStride));
             };
             if (layout->luminance)
-                insert("Y", band[0]);
+                insert(layout->colourNames[0].c_str(), band[0]);
             else {
-                insert("R", band[0]);
-                insert("G", band[1]);
-                insert("B", band[2]);
+                insert(layout->colourNames[0].c_str(), band[0]);
+                insert(layout->colourNames[1].c_str(), band[1]);
+                insert(layout->colourNames[2].c_str(), band[2]);
             }
             if (layout->hasAlpha)
-                insert("A", band[3]);
+                insert(layout->colourNames[3].c_str(), band[3]);
             input.setFrameBuffer(frameBuffer);
             input.readPixels(static_cast<int>(firstY), static_cast<int>(lastY));
 
@@ -646,6 +726,35 @@ decodeExrInput(Imf::InputFile& input, const ImageInterpretation& interpretation,
     }
 }
 
+// Resolves the interpretation's part and colour layer, then decodes that layer's colour image.
+static ImageResult<std::shared_ptr<const render::Rgba32fImage>>
+decodeExrParts(Imf::MultiPartInputFile& input, const ImageInterpretation& interpretation,
+               std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
+               const CancelImageWork& cancel, const ImageProgress& progress,
+               const std::size_t pixelBudget) {
+    using Decoded = std::shared_ptr<const render::Rgba32fImage>;
+    if (const auto error = validateVersion(static_cast<std::uint32_t>(input.version())))
+        return failure<Decoded>(*error, "OpenEXR version or flags are unsupported");
+    const auto index = findPartIndex(input, interpretation.part);
+    if (!index)
+        return failure<Decoded>(ImageDiagnosticCode::PartNotFound,
+                                "The selected OpenEXR part is not present");
+    ImageDiagnosticCode error = ImageDiagnosticCode::InvalidHeader;
+    const auto layout = inspectHeader(input.header(*index), interpretation.layer, error);
+    if (!layout)
+        return failure<Decoded>(error, "OpenEXR header is unsupported or invalid");
+    if (!interpretation.layer.empty() && !layout->layerFound)
+        return failure<Decoded>(ImageDiagnosticCode::LayerNotFound,
+                                "The selected OpenEXR layer is not present");
+    if (!layout->colour)
+        return failure<Decoded>(ImageDiagnosticCode::NoColourChannels,
+                                "The selected OpenEXR layer has no colour channels; use its "
+                                "channel set");
+    Imf::InputPart part(input, *index);
+    return decodeExrInput(part, *layout, interpretation, std::move(processor), cancel, progress,
+                          pixelBudget);
+}
+
 ImageResult<ImageProbe> probeExr(const std::span<const std::byte> bytes,
                                  const core::Sha256Digest digest, const CancelImageWork& cancel) {
     if (cancelled(cancel))
@@ -660,16 +769,11 @@ ImageResult<ImageProbe> probeExr(const std::span<const std::byte> bytes,
         if (const auto error = validateVersion(encodedVersion))
             return failure<ImageProbe>(*error, "OpenEXR version or flags are unsupported");
         RevisionStream stream(bytes);
-        Imf::InputFile input(stream, 1);
-        const auto version = static_cast<std::uint32_t>(input.version());
-        if (const auto error = validateVersion(version))
-            return failure<ImageProbe>(*error, "OpenEXR version or flags are unsupported");
-        ImageDiagnosticCode error = ImageDiagnosticCode::InvalidHeader;
-        const auto layout =
-            inspectHeader(input.header(), Imf::isTiled(static_cast<int>(version)), error);
-        if (!layout)
-            return failure<ImageProbe>(error, "OpenEXR header is unsupported or invalid");
-        return {makeProbe(*layout, digest), {}};
+        const Imf::MultiPartInputFile input(stream, 1);
+        return probeParts(input, digest, cancel);
+    } catch (const std::bad_alloc&) {
+        return failure<ImageProbe>(ImageDiagnosticCode::AllocationFailure,
+                                   "OpenEXR probe allocation failed");
     } catch (...) {
         return failure<ImageProbe>(ImageDiagnosticCode::InvalidHeader,
                                    "OpenEXR revision header could not be read");
@@ -681,8 +785,8 @@ decodeExr(const std::filesystem::path& path, const ImageInterpretation& interpre
           std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
           const CancelImageWork& cancel, const ImageProgress& progress, const std::size_t budget) {
     try {
-        Imf::InputFile input(utf8Path(path).c_str(), 1);
-        return decodeExrInput(input, interpretation, std::move(processor), cancel, progress,
+        Imf::MultiPartInputFile input(utf8Path(path).c_str(), 1);
+        return decodeExrParts(input, interpretation, std::move(processor), cancel, progress,
                               budget);
     } catch (...) {
         return failure<std::shared_ptr<const render::Rgba32fImage>>(
@@ -696,12 +800,161 @@ decodeExr(const std::span<const std::byte> bytes, const ImageInterpretation& int
           const CancelImageWork& cancel, const ImageProgress& progress, const std::size_t budget) {
     try {
         RevisionStream stream(bytes);
-        Imf::InputFile input(stream, 1);
-        return decodeExrInput(input, interpretation, std::move(processor), cancel, progress,
+        Imf::MultiPartInputFile input(stream, 1);
+        return decodeExrParts(input, interpretation, std::move(processor), cancel, progress,
                               budget);
     } catch (...) {
         return failure<std::shared_ptr<const render::Rgba32fImage>>(
             ImageDiagnosticCode::Truncated, "OpenEXR revision pixel data could not be decoded");
+    }
+}
+
+ImageResult<std::shared_ptr<const render::ChannelSetImage>>
+decodeExrChannels(const std::span<const std::byte> bytes, const ImageChannelSelection& selection,
+                  const CancelImageWork& cancel, const ImageProgress& progress,
+                  const std::size_t budget) {
+    using Decoded = std::shared_ptr<const render::ChannelSetImage>;
+    if (cancelled(cancel))
+        return {{}, "Image decode cancelled", true, ImageDiagnosticCode::Cancelled};
+    try {
+        RevisionStream stream(bytes);
+        Imf::MultiPartInputFile input(stream, 1);
+        if (const auto error = validateVersion(static_cast<std::uint32_t>(input.version())))
+            return failure<Decoded>(*error, "OpenEXR version or flags are unsupported");
+        const auto index = findPartIndex(input, selection.part);
+        if (!index)
+            return failure<Decoded>(ImageDiagnosticCode::PartNotFound,
+                                    "The selected OpenEXR part is not present");
+        const auto& header = input.header(*index);
+        ImageDiagnosticCode error = ImageDiagnosticCode::InvalidHeader;
+        const auto layout = inspectHeader(header, {}, error);
+        if (!layout)
+            return failure<Decoded>(error, "OpenEXR header is unsupported or invalid");
+
+        struct Selected final {
+            std::string name;
+            Imf::PixelType type;
+        };
+        std::vector<Selected> selected;
+        if (selection.channels.empty()) {
+            for (auto it = header.channels().begin(); it != header.channels().end(); ++it)
+                selected.push_back({it.name(), it.channel().type});
+        } else {
+            for (const auto& name : selection.channels) {
+                const auto* channel = header.channels().findChannel(name);
+                if (channel == nullptr)
+                    return failure<Decoded>(ImageDiagnosticCode::ChannelNotFound,
+                                            "A selected OpenEXR channel is not present");
+                if (std::ranges::any_of(selected,
+                                        [&](const Selected& item) { return item.name == name; }))
+                    return failure<Decoded>(ImageDiagnosticCode::UnsupportedChannels,
+                                            "A channel is selected more than once");
+                selected.push_back({name, channel->type});
+            }
+        }
+
+        // Admission: every selected plane (channels x pixels x 4), the part's string metadata and
+        // one bounded band of scratch rows.
+        const auto width = layout->width;
+        const auto height = layout->height;
+        const auto count = static_cast<std::uint64_t>(selected.size());
+        render::ChannelMetadata metadata;
+        std::uint64_t metadataBytes = 0;
+        for (auto it = header.begin(); it != header.end(); ++it)
+            if (const auto* text = dynamic_cast<const Imf::StringAttribute*>(&it.attribute())) {
+                metadataBytes += std::strlen(it.name()) + text->value().size();
+                metadata.emplace_back(it.name(), text->value());
+            }
+        std::uint64_t pixels = 0;
+        std::uint64_t planeBytes = 0;
+        std::uint64_t bytesPerRow = 0;
+        if (!checkedSizeProduct(width, height, pixels) ||
+            !checkedSizeProduct(pixels, count * sizeof(float), planeBytes) ||
+            !checkedSizeProduct(width, count * sizeof(float), bytesPerRow) ||
+            planeBytes > std::numeric_limits<std::uint64_t>::max() - metadataBytes)
+            return failure<Decoded>(ImageDiagnosticCode::PixelBudgetExceeded,
+                                    "Decoded channel set exceeds the pixel working-set budget");
+        constexpr std::uint64_t kBandTargetBytes = std::uint64_t{1024} * 1024U;
+        std::uint64_t chunkRows =
+            layout->tiled ? std::max<std::uint64_t>(1U, layout->tileHeight)
+                          : std::max<std::uint64_t>(1U, kBandTargetBytes /
+                                                            std::max<std::uint64_t>(bytesPerRow, 1U));
+        chunkRows = std::min(chunkRows, height);
+        std::uint64_t bandBytes = 0;
+        if (!checkedSizeProduct(chunkRows, bytesPerRow, bandBytes) ||
+            !decodeWorkingSetFits(planeBytes + metadataBytes, bandBytes, 0U, budget))
+            return failure<Decoded>(ImageDiagnosticCode::PixelBudgetExceeded,
+                                    "Decoded channel set exceeds the pixel working-set budget");
+
+        std::vector<std::vector<float>> planes(selected.size());
+        for (auto& plane : planes)
+            plane.assign(static_cast<std::size_t>(pixels), 0.0F);
+        const auto bandSamples = static_cast<std::size_t>(chunkRows * width);
+        std::vector<float> band(bandSamples * selected.size());
+        const auto rowStride = static_cast<std::size_t>(width) * sizeof(float);
+        Imf::InputPart part(input, *index);
+        std::uint64_t completed = 0;
+        if (progress)
+            progress(0, height);
+        while (completed < height) {
+            if (cancelled(cancel))
+                return {{}, "Image decode cancelled", true, ImageDiagnosticCode::Cancelled};
+            const auto first = layout->tiled ? (completed / chunkRows) * chunkRows : completed;
+            const auto rows = std::min(chunkRows, height - first);
+            const auto firstY = static_cast<std::int64_t>(layout->dataWindow.min.y) +
+                                static_cast<std::int64_t>(first);
+            const auto origin = Imath::V2i(layout->dataWindow.min.x, static_cast<int>(firstY));
+            Imf::FrameBuffer frameBuffer;
+            for (std::size_t channel = 0; channel < selected.size(); ++channel) {
+                // Half and float widen to Float32; uint keeps its 32-bit pattern in the lane.
+                const auto readType = selected[channel].type == Imf::UINT ? Imf::UINT : Imf::FLOAT;
+                frameBuffer.insert(selected[channel].name,
+                                   Imf::Slice::Make(readType, band.data() + channel * bandSamples,
+                                                    origin, static_cast<std::int64_t>(width),
+                                                    static_cast<std::int64_t>(rows),
+                                                    sizeof(float), rowStride));
+            }
+            part.setFrameBuffer(frameBuffer);
+            part.readPixels(static_cast<int>(firstY), static_cast<int>(firstY) +
+                                                          static_cast<int>(rows) - 1);
+            for (std::size_t channel = 0; channel < selected.size(); ++channel)
+                std::memcpy(planes[channel].data() + static_cast<std::size_t>(first * width),
+                            band.data() + channel * bandSamples,
+                            static_cast<std::size_t>(rows * width) * sizeof(float));
+            completed = first + rows;
+            if (progress)
+                progress(completed, height);
+        }
+        if (!part.isComplete())
+            return failure<Decoded>(ImageDiagnosticCode::Truncated,
+                                    "OpenEXR pixel data is truncated");
+
+        std::vector<render::ChannelDescriptor> descriptors;
+        descriptors.reserve(selected.size());
+        for (const auto& item : selected)
+            descriptors.push_back(render::describeChannel(item.name, sampleKind(item.type)));
+        const auto dataWindow = render::ImageWindow::create(
+            layout->dataWindow.min.x, layout->dataWindow.min.y, width, height);
+        const auto displayWindow =
+            render::ImageWindow::create(layout->displayWindow.min.x, layout->displayWindow.min.y,
+                                        layout->displayWidth, layout->displayHeight);
+        if (!dataWindow || !displayWindow)
+            return failure<Decoded>(ImageDiagnosticCode::InvalidDataWindow,
+                                    "OpenEXR image window is invalid");
+        auto created = render::ChannelSetImage::create(
+            *dataWindow.value(), *displayWindow.value(), core::PixelAspectRatio::square(),
+            std::move(descriptors), std::move(planes), std::move(metadata),
+            std::numeric_limits<std::size_t>::max());
+        if (!created)
+            return failure<Decoded>(ImageDiagnosticCode::DecodeFailed,
+                                    "Channel set validation failed");
+        return {std::make_shared<const render::ChannelSetImage>(std::move(*created.value())), {}};
+    } catch (const std::bad_alloc&) {
+        return failure<Decoded>(ImageDiagnosticCode::AllocationFailure,
+                                "OpenEXR channel decode allocation failed");
+    } catch (...) {
+        return failure<Decoded>(ImageDiagnosticCode::Truncated,
+                                "OpenEXR channel data could not be decoded");
     }
 }
 

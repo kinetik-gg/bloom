@@ -598,6 +598,29 @@ decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& inte
     return decoded;
 }
 
+ImageResult<std::shared_ptr<const render::ChannelSetImage>>
+decodeImageChannels(const ImageSourceRevision& revision, const ImageChannelSelection& selection,
+                    const CancelImageWork& cancel, const ImageProgress& progress,
+                    const std::size_t hostByteBudget, ImageDecodeStatistics* statistics) {
+    if (statistics)
+        *statistics = {};
+    if (cancelled(cancel))
+        return {{}, {}, true, ImageDiagnosticCode::Cancelled};
+    if (revision.probe().format != ImageFormat::Exr)
+        return {{},
+                "Channel sets are available for OpenEXR sources",
+                false,
+                ImageDiagnosticCode::UnsupportedChannelSetFormat};
+    if (revision.retainedBytes() >= hostByteBudget)
+        return {{},
+                "Image revision and decode exceed the host byte budget",
+                false,
+                ImageDiagnosticCode::PixelBudgetExceeded};
+    const detail::ImageWorkTimer timer(statistics ? &statistics->decodeNanoseconds : nullptr);
+    return detail::decodeExrChannels(revision.bytes(), selection, cancel, progress,
+                                     hostByteBudget - revision.retainedBytes());
+}
+
 ImageResult<ImageProviderEncodeResponse> encodeImage(const ImageProviderEncodeRequest& request,
                                                      const ImageProvider* provider) {
     if (provider == nullptr || !provider->encode)

@@ -20,4 +20,9 @@ decodeExr(std::span<const std::byte> bytes, const ImageInterpretation& interpret
           std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
           const CancelImageWork& cancel, const ImageProgress& progress, std::size_t pixelBudget);
 
+[[nodiscard]] ImageResult<std::shared_ptr<const render::ChannelSetImage>>
+decodeExrChannels(std::span<const std::byte> bytes, const ImageChannelSelection& selection,
+                  const CancelImageWork& cancel, const ImageProgress& progress,
+                  std::size_t budget);
+
 } // namespace bloom::media::detail

@@ -456,11 +456,14 @@ int main() {
         exr(path, false, Imf::HALF);
         patchExrVersionFlag(path, fixture.second);
         const auto result = media::probeImage(path);
-        const auto expected = fixture.second == 0x00000800U
-                                  ? media::ImageDiagnosticCode::UnsupportedDeepImage
-                                  : media::ImageDiagnosticCode::UnsupportedMultipart;
-        check.expect(!result && result.code == expected,
-                     "deep and multipart EXR fixtures are refused with typed diagnostics");
+        // Multipart files are supported (ADR 0026); a single-part file whose version claims
+        // multipart has no part headers and is refused as malformed, never decoded.
+        const auto typed = fixture.second == 0x00000800U
+                               ? result.code == media::ImageDiagnosticCode::UnsupportedDeepImage
+                               : result.code != media::ImageDiagnosticCode::None;
+        check.expect(!result && typed,
+                     "deep and malformed multipart EXR fixtures are refused with typed "
+                     "diagnostics");
     }
     // "" with an empty base name is the render-farm form: 0000.png, 0001.png, ... (owner,
     // 2026-09-15: such a folder imported as individual images).

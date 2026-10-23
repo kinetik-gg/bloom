@@ -30,6 +30,15 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_media_image_test)
     bloom_add_test(NAME bloom.media.image COMMAND bloom_media_image_test LABELS unit media)
 
+    add_executable(bloom_media_exr_channel_test tests/exr_channel_tests.cpp)
+    target_link_libraries(bloom_media_exr_channel_test PRIVATE bloom_media_image bloom_output
+        ZLIB::ZLIBSTATIC OpenEXR::OpenEXR)
+    target_include_directories(bloom_media_exr_channel_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/output/tests)
+    bloom_enable_warnings(bloom_media_exr_channel_test)
+    bloom_add_test(NAME bloom.media.exr_channels COMMAND bloom_media_exr_channel_test
+                   LABELS unit media)
+
     add_executable(bloom_media_image_capacity_test tests/image_capacity_tests.cpp)
     target_link_libraries(bloom_media_image_capacity_test PRIVATE bloom_media_image bloom_output
         ZLIB::ZLIBSTATIC OpenEXR::OpenEXR)

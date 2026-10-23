@@ -2,6 +2,7 @@
 
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/core/sha256.hpp>
+#include <bloom/render/channel_set_image.hpp>
 #include <bloom/render/image.hpp>
 #include <cstdint>
 #include <filesystem>
@@ -10,6 +11,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -30,6 +32,10 @@ struct ImageInterpretation {
     ImageColorSpace colorSpace = ImageColorSpace::Auto;
     std::string inputColorSpaceId;
     ImageAlphaAssociation alphaAssociation = ImageAlphaAssociation::Auto;
+    // ADR 0026 selection. `part` names an OpenEXR part (empty: the first part); `layer` names the
+    // layer whose R/G/B[/A] or Y[/A] channels form the colour image (empty: the root layer).
+    std::string part{};
+    std::string layer{};
     friend bool operator==(const ImageInterpretation&, const ImageInterpretation&) = default;
 };
 
@@ -59,6 +65,55 @@ enum class ImageDiagnosticCode : std::uint8_t {
     ProviderFailed,
     ColorSpaceUnavailable,
     Cancelled,
+    // ADR 0026 selection outcomes.
+    PartNotFound,
+    LayerNotFound,
+    ChannelNotFound,
+    NoColourChannels,
+    UnsupportedChannelSetFormat,
+};
+
+using ImageChannelSampleKind = render::ChannelSampleKind;
+
+struct ImageChannelInfo final {
+    std::string name;
+    ImageChannelSampleKind sampleKind = ImageChannelSampleKind::Half;
+    friend bool operator==(const ImageChannelInfo&, const ImageChannelInfo&) = default;
+};
+
+// One OpenEXR part as enumerated by the probe (ADR 0026). Windows are in source pixel coordinates.
+struct ImagePartInfo final {
+    std::string name;
+    std::string view;
+    bool tiled = false;
+    std::int64_t dataX = 0;
+    std::int64_t dataY = 0;
+    std::uint32_t dataWidth = 0;
+    std::uint32_t dataHeight = 0;
+    std::int64_t displayX = 0;
+    std::int64_t displayY = 0;
+    std::uint32_t displayWidth = 0;
+    std::uint32_t displayHeight = 0;
+    ImageAlphaAssociation alphaAssociation = ImageAlphaAssociation::Premultiplied;
+    std::string colorSpaceTag;
+    // Header channel order (OpenEXR sorts names).
+    std::vector<ImageChannelInfo> channels;
+    // Distinct layer names in first-appearance order; "" is the root layer.
+    std::vector<std::string> layers;
+    // The subset of `layers` that carries R/G/B or Y colour channels.
+    std::vector<std::string> colourLayers;
+    friend bool operator==(const ImagePartInfo&, const ImagePartInfo&) = default;
+    [[nodiscard]] std::size_t retainedBytes() const noexcept {
+        std::size_t total = sizeof(ImagePartInfo) + name.capacity() + view.capacity() +
+                            colorSpaceTag.capacity();
+        for (const auto& channel : channels)
+            total += sizeof(ImageChannelInfo) + channel.name.capacity();
+        for (const auto& layer : layers)
+            total += sizeof(std::string) + layer.capacity();
+        for (const auto& layer : colourLayers)
+            total += sizeof(std::string) + layer.capacity();
+        return total;
+    }
 };
 
 struct ImageProbe {
@@ -81,6 +136,19 @@ struct ImageProbe {
     std::int64_t dataOffsetY = 0;
     std::uint32_t frameWidth = 0;
     std::uint32_t frameHeight = 0;
+    // OpenEXR parts (ADR 0026); empty for PNG, JPEG and provider formats. The scalar fields above
+    // describe the first part and its root colour layer.
+    std::vector<ImagePartInfo> parts{};
+    [[nodiscard]] const ImagePartInfo* findPart(const std::string_view name) const noexcept {
+        if (parts.empty())
+            return nullptr;
+        if (name.empty())
+            return &parts.front();
+        for (const auto& part : parts)
+            if (part.name == name)
+                return &part;
+        return nullptr;
+    }
     [[nodiscard]] std::uint32_t effectiveFrameWidth() const noexcept {
         return frameWidth != 0 ? frameWidth : width;
     }
@@ -114,8 +182,12 @@ class ImageSourceRevision final {
         return captureStatistics_;
     }
     [[nodiscard]] std::size_t retainedBytes() const noexcept {
-        return sizeof(ImageSourceRevision) + bytes_.capacity() + probe_.colorSpaceTag.capacity() +
-               probe_.interpretationAssumption.capacity();
+        std::size_t total = sizeof(ImageSourceRevision) + bytes_.capacity() +
+                            probe_.colorSpaceTag.capacity() +
+                            probe_.interpretationAssumption.capacity();
+        for (const auto& part : probe_.parts)
+            total += part.retainedBytes();
+        return total;
     }
 
   private:
@@ -144,6 +216,21 @@ decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& inte
             const CancelImageWork& cancel = {}, const ImageProgress& progress = {},
             std::size_t hostByteBudget = kMaxImageStorageBytes,
             ImageDecodeStatistics* statistics = nullptr);
+
+// ADR 0026 channel-set decode. `part` selects an OpenEXR part (empty: the first); `channels` names
+// the channels to decode in order (empty: every channel of the part). Values are source values:
+// never converted, premultiplied, repaired or clamped. Only OpenEXR sources carry channel sets;
+// other formats report UnsupportedChannelSetFormat.
+struct ImageChannelSelection final {
+    std::string part{};
+    std::vector<std::string> channels{};
+    friend bool operator==(const ImageChannelSelection&, const ImageChannelSelection&) = default;
+};
+[[nodiscard]] ImageResult<std::shared_ptr<const render::ChannelSetImage>>
+decodeImageChannels(const ImageSourceRevision& revision, const ImageChannelSelection& selection,
+                    const CancelImageWork& cancel = {}, const ImageProgress& progress = {},
+                    std::size_t hostByteBudget = kMaxImageStorageBytes,
+                    ImageDecodeStatistics* statistics = nullptr);
 
 enum class ImageProviderRole : std::uint8_t { Decode, Encode };
 
