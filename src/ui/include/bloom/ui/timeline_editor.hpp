@@ -300,6 +300,7 @@ class TimelineLaneRegion final : public QWidget {
     // The clip bar rect of row `row`, in this widget's own coordinates -- the pinned geometry for
     // "the bar spans the composition range on its own lane".
     [[nodiscard]] std::optional<QRect> clipBarRect(int row) const;
+    void paintContentExtent(QPainter& painter, int row, const QRect& bar) const;
     [[nodiscard]] std::vector<core::RationalTime> keySummaryTimes(int row) const;
     // Hiding keys hides BOTH surfaces that show them: the per-parameter key lanes and the
     // collapsed layer rows' summary glyphs. Showing one without the other would make a collapsed

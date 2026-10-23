@@ -1332,6 +1332,47 @@ std::optional<QRect> TimelineLaneRegion::clipBarRect(const int row) const {
                  kit::px(kit::Size::TimelineBar));
 }
 
+// ADR 0024: the part of a layer's bar outside its content extent (where its before/after mode
+// decides what shows) is drawn sunken, so the media extent reads inside the bar.
+void TimelineLaneRegion::paintContentExtent(QPainter& painter, const int row,
+                                            const QRect& bar) const {
+    const auto* composition = session_.composition();
+    const auto axis = ruler_.axisForWidth(width());
+    if (composition == nullptr || !axis || row < 0 || row >= static_cast<int>(entries_.size()))
+        return;
+    const auto* layer =
+        composition->graph().findLayer(entries_[static_cast<std::size_t>(row)].layerId);
+    if (layer == nullptr)
+        return;
+    auto timing = layer->timing;
+    if (drag_ && drag_->layer == layer->layerId) {
+        timing.startTime = drag_->previewStart;
+        timing.speed = drag_->previewSpeed;
+    }
+    const auto extent = runtime::resolveLayerExtent(session_.snapshot().project(), *composition,
+                                                    timing);
+    if (!extent)
+        return;
+    const auto first = runtime::placementTimeOfLayerTime(timing, {});
+    const auto last = runtime::placementTimeOfLayerTime(timing, extent->duration);
+    if (!first || !last)
+        return;
+    const auto from = std::lround(axis->pixelForTime(*first));
+    const auto to = std::lround(axis->pixelForTime(*last));
+    QColor shade = kit::color(kit::Color::SurfaceSunken);
+    shade.setAlphaF(0.6F);
+    const auto top = bar.top() + kit::px(kit::Size::Hairline);
+    const auto height = bar.height() - 2 * kit::px(kit::Size::Hairline);
+    if (from > bar.left())
+        painter.fillRect(QRect(bar.left(), top, static_cast<int>(std::min<long>(from, bar.right()) - bar.left()),
+                               height),
+                         shade);
+    if (to < bar.right())
+        painter.fillRect(QRect(static_cast<int>(std::max<long>(to, bar.left())), top,
+                               static_cast<int>(bar.right() - std::max<long>(to, bar.left())), height),
+                         shade);
+}
+
 std::vector<core::RationalTime> TimelineLaneRegion::keySummaryTimes(int row) const {
     std::set<core::RationalTime> times;
     // Hidden keys are hidden from the HIT TEST too, because this one answer is what both the
@@ -1439,6 +1480,7 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
             painter.fillRect(QRect(bar->right() - grip, bar->top() + grip,
                                    kit::px(kit::Size::Hairline), bar->height() - (grip + grip)),
                              kit::hoverFillFor(fill));
+            paintContentExtent(painter, row, *bar);
             if (entry.audioNodeId.isValid() && entry.waveform != nullptr &&
                 !entry.waveform->buckets.empty()) {
                 painter.setPen(QPen(kit::color(kit::Color::DataAudio), kit::kHairlineWidth));
