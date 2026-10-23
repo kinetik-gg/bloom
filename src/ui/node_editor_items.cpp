@@ -54,6 +54,8 @@ QString nodeCategoryName(const document::NodeCategory category) {
         return QCoreApplication::translate("node_editor", "Output");
     case document::NodeCategory::Utilities:
         return QCoreApplication::translate("node_editor", "Utilities");
+    case document::NodeCategory::Transform:
+        return QCoreApplication::translate("node_editor", "Transform");
     }
     return {};
 }
@@ -93,11 +95,12 @@ QString nodeCategoryName(const document::NodeDefinition& definition) {
 }
 std::span<const QString> nodeCategoryOrder() {
     static const std::array order{
-        QStringLiteral("Sources"), QStringLiteral("Layers"),    QStringLiteral("Compositing"),
-        QStringLiteral("Filters"), QStringLiteral("Colour"),    QStringLiteral("Values"),
-        QStringLiteral("Math"),    QStringLiteral("Convert"),   QStringLiteral("String"),
-        QStringLiteral("Logic"),   QStringLiteral("Time"),      QStringLiteral("Color"),
-        QStringLiteral("Vector"),  QStringLiteral("Utilities"), QStringLiteral("Output")};
+        QStringLiteral("Sources"),   QStringLiteral("Layers"),  QStringLiteral("Compositing"),
+        QStringLiteral("Transform"), QStringLiteral("Filters"), QStringLiteral("Colour"),
+        QStringLiteral("Values"),    QStringLiteral("Math"),    QStringLiteral("Convert"),
+        QStringLiteral("String"),    QStringLiteral("Logic"),   QStringLiteral("Time"),
+        QStringLiteral("Color"),     QStringLiteral("Vector"),  QStringLiteral("Utilities"),
+        QStringLiteral("Output")};
     return order;
 }
 

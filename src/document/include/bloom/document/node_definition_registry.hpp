@@ -178,6 +178,8 @@ enum class NodeCategory : std::uint8_t {
     Math,
     Output,
     Utilities,
+    // Geometric image operations (Flip, Rotate 90). Not persisted, like every category.
+    Transform,
     // Retained persisted schemas, excluded from new-node authoring categories.
 };
 

@@ -272,15 +272,15 @@ void testSearchKeyboardAndMenus() {
     // Task UTIL-1: Math joins that order after Values, and Output moves to the END, so the reading
     // order is where pixels come from, how they are arranged, what numbers drive them, the
     // arithmetic over those numbers, the plumbing that carries them, and finally where the picture
-    // goes. The blur nodes add Filters between Compositing and Colour (node_editor category order).
+    // goes. Transform (Flip, Rotate 90) and Filters (blurs) follow Compositing (ui-grammar.md).
     expect(sectionHeadings(list->model()) ==
                QStringList{
                    QStringLiteral("Sources"), QStringLiteral("Layers"),
-                   QStringLiteral("Compositing"), QStringLiteral("Filters"),
-                   QStringLiteral("Colour"), QStringLiteral("Values"), QStringLiteral("Math"),
-                   QStringLiteral("Convert"), QStringLiteral("String"), QStringLiteral("Logic"),
-                   QStringLiteral("Time"), QStringLiteral("Color"), QStringLiteral("Vector"),
-                   QStringLiteral("Utilities"), QStringLiteral("Output")},
+                   QStringLiteral("Compositing"), QStringLiteral("Transform"),
+                   QStringLiteral("Filters"), QStringLiteral("Colour"), QStringLiteral("Values"),
+                   QStringLiteral("Math"), QStringLiteral("Convert"), QStringLiteral("String"),
+                   QStringLiteral("Logic"), QStringLiteral("Time"), QStringLiteral("Color"),
+                   QStringLiteral("Vector"), QStringLiteral("Utilities"), QStringLiteral("Output")},
            "every populated section is headed, in category order, and the empty ones are absent");
     expect(list->model()->index(0, 0).data(kit::kSearchSectionRole).toBool() &&
                list->model()->index(0, 0).flags() == Qt::NoItemFlags,

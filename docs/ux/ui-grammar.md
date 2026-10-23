@@ -435,8 +435,9 @@ Properties shows every section with no filter strip and no header search. Sectio
 individually with persisted state; there is no Collapse all / Expand all affordance and no
 section menu. KSection headers carry only the chevron, title, and Reset.
 
-Node Add menu and search order is Sources, Layers, Compositing, Colour, Values, Math, Convert, String,
-Logic, Time, Color, Vector, Utilities, Output. The UI category projection owns normalization;
+Node Add menu and search order is Sources, Layers, Compositing, Transform, Filters, Colour, Values,
+Math, Convert, String, Logic, Time, Color, Vector, Utilities, Output. Transform holds geometric image
+operations (Flip, Rotate 90); Filters holds the blurs. The UI category projection owns normalization;
 the Colour image-effect section projects `NodeCategory::Color`, while Color holds value nodes.
 Categories are not persisted, so no migration is needed. Utilities contains only reroute and
 Separate/Combine plumbing (reroutes remain link gestures). Time includes Time, frame readouts and
