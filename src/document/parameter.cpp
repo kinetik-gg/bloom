@@ -268,8 +268,9 @@ constantMatchesSchema(const std::string_view schemaKey,
         return value != nullptr && std::isfinite(*value) && *value >= 0.0 && *value <= 1.0;
     }
     if (schemaKey == "bloom.set-alpha.channel" || schemaKey == "bloom.multiply-alpha.channel") {
+        // The closed matte selector (render::MatteSelection): 0-4 A/R/G/B/Luma, 5-9 inverted.
         const auto* value = std::get_if<std::int64_t>(&constant.value);
-        return value != nullptr && *value >= 0 && *value <= 4;
+        return value != nullptr && *value >= 0 && *value <= 9;
     }
     if (schemaKey == "bloom.ocio-cst.from" || schemaKey == "bloom.ocio-cst.to" ||
         schemaKey == "bloom.ocio-file.process-space") {

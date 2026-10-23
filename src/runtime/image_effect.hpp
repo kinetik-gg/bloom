@@ -16,7 +16,7 @@ struct PreparedImageEffect final {
     struct Combine final {
         ImageCombineMode mode = ImageCombineMode::Mix;
         float factor = 1.0F;
-        render::ImageCoverageChannel channel = render::ImageCoverageChannel::Alpha;
+        render::MatteSelection matte{};
     };
     std::optional<Combine> combine;
     std::optional<PointwiseAffine> pointwise;

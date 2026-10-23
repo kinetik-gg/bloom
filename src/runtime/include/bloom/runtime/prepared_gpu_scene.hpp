@@ -467,6 +467,11 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
         key.append(std::to_string(static_cast<unsigned>(imageCombine->kind)));
         key.append("|channel=");
         key.append(std::to_string(static_cast<unsigned>(imageCombine->channel)));
+        // Appended only when set, so every pre-#361 combine key keeps its exact bytes.
+        if (imageCombine->invert)
+            key.append("|invert");
+        if (imageCombine->matteAbsent)
+            key.append("|absent-matte");
         gpu_scene_key_detail::appendSemanticFloatBits(key, imageCombine->factor);
     }
     gpu_scene_key_detail::appendSemanticWindow(key, sourceWindow);

@@ -314,7 +314,9 @@ void testImageCombineChannelLowering(Expectations& expectations) {
     require(runtime::registerBuiltInNodeDefinitions(registry), "combine built-ins register");
     registry.freeze();
     for (const auto* type : {"bloom.set-alpha", "bloom.multiply-alpha", "bloom.image-mix"}) {
-        for (int scenario = 0; scenario != 4; ++scenario) {
+        // Scenarios: 0 constant, 1 linked Integer, 2 linked frame number, 3 empty matte source,
+        // 4 unconnected matte (#361), 5 constant inverted selector 7 = Green Inverted (#361).
+        for (int scenario = 0; scenario != 6; ++scenario) {
             const bool mix = std::string_view(type) == "bloom.image-mix";
             if (mix && scenario != 3)
                 continue;
@@ -342,9 +344,14 @@ void testImageCombineChannelLowering(Expectations& expectations) {
             require(graph.eraseEdge(kFirstSourceEdge), "base source edge is removed");
             require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
                                    NodeInputRef{effectId, "input"}}), "base feeds combine");
-            require(graph.addEdge({EdgeId::fromRaw(900), {kSecondSolidNode, "image"},
-                                   NodeInputRef{effectId, mix ? "second" : "matte"}}),
-                    "second image feeds combine");
+            if (scenario != 4)
+                require(graph.addEdge({EdgeId::fromRaw(900), {kSecondSolidNode, "image"},
+                                       NodeInputRef{effectId, mix ? "second" : "matte"}}),
+                        "second image feeds combine");
+            if (scenario == 5)
+                require(composition->parameters().setSource(
+                            channel, ConstantValueSource{std::int64_t{7}}),
+                        "the closed matte selector admits an inverted channel");
             require(graph.addEdge({EdgeId::fromRaw(901), {effectId, "image"},
                                    NodeInputRef{kFirstLayerNode,
                                                 std::string(kLayerOutputContentInputPort)}}),
@@ -383,7 +390,13 @@ void testImageCombineChannelLowering(Expectations& expectations) {
                                     result.plan->operationTimeDependent(result.plan->output()) ==
                                         (scenario == 2),
                                 "only a time-dependent matte channel invalidates downstream frames");
-            if (scenario == 3) {
+            if (scenario == 5)
+                expectations.expect(kernel.channel == render::ImageCoverageChannel::Green &&
+                                        kernel.invert,
+                                    "stored selector 7 lowers to the inverted green matte");
+            else
+                expectations.expect(!kernel.invert, "selectors 0-4 lower without invert");
+            if (scenario == 3 || scenario == 4) {
                 const auto* empty = effect.secondaryInput
                     ? std::get_if<runtime::CompiledMerge>(
                           &result.plan->operations()[effect.secondaryInput->value()])

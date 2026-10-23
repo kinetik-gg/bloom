@@ -197,6 +197,43 @@ imageCombinePlan(const bloom::runtime::ImageCombineMode mode, const std::uint64_
     return publish(std::move(definition));
 }
 
+// #361 matte axes over the image-combine fixture: an inverted selector, and an ABSENT matte -- a
+// matte Layer whose range starts after the requested time, so it publishes no image at all.
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+matteCombinePlan(const bloom::runtime::ImageCombineMode mode, const std::uint64_t idBase,
+                 const bool invert, const bool absent) {
+    auto definition = imageCombinePlan(mode, idBase)->copyDefinition();
+    auto& combine = std::get<CompiledImageEffect>(definition.operations[2]);
+    std::get<bloom::runtime::ImageCombineKernel>(combine.kernel).invert = invert;
+    if (absent) {
+        // Insert a trimmed matte Layer over the second solid: solid, solid, matte layer, combine,
+        // layer, merge, output.
+        auto matteLayer = std::get<CompiledLayerOutput>(definition.operations[3]);
+        matteLayer.sourceNodeId = NodeId::fromRaw(idBase + 40);
+        matteLayer.layerId = LayerId::fromRaw(idBase + 41);
+        matteLayer.input = OperationIndex::fromRaw(1);
+        matteLayer.inPoint = bloom::core::RationalTime::fromInteger(1000);
+        matteLayer.position.id = ParameterId::fromRaw(idBase + 42);
+        matteLayer.anchor.id = ParameterId::fromRaw(idBase + 43);
+        matteLayer.scale.id = ParameterId::fromRaw(idBase + 44);
+        matteLayer.rotation.id = ParameterId::fromRaw(idBase + 45);
+        matteLayer.opacity.id = ParameterId::fromRaw(idBase + 46);
+        matteLayer.blendModeParameterId = ParameterId::fromRaw(idBase + 47);
+        combine.input = OperationIndex::fromRaw(0);
+        combine.secondaryInput = OperationIndex::fromRaw(2);
+        auto layer = std::get<CompiledLayerOutput>(definition.operations[3]);
+        layer.input = OperationIndex::fromRaw(3);
+        auto merge = std::get<CompiledMerge>(definition.operations[4]);
+        merge.entries.front().input = OperationIndex::fromRaw(4);
+        definition.operations = {definition.operations[0], definition.operations[1], matteLayer,
+                                 combine, layer, merge,
+                                 CompiledCompositionOutput{NodeId::fromRaw(idBase + 6),
+                                                           OperationIndex::fromRaw(5)}};
+        definition.output = OperationIndex::fromRaw(6);
+    }
+    return publish(std::move(definition));
+}
+
 [[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
 modifiedLayer(const std::function<void(CompiledLayerOutput&)>& edit) {
     auto definition = basePlan()->copyDefinition();

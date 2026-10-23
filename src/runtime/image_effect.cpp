@@ -92,15 +92,20 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
         return prepared;
     }
     if (const auto* combine = std::get_if<ImageCombineKernel>(&effect.kernel)) {
-        const auto channel = combine->drivenChannel
-                                 ? sampledChannel
-                                 : std::optional<std::int64_t>{
-                                       static_cast<std::int64_t>(combine->channel)};
+        // A driven selector samples the whole closed stored enumeration (channel and invert); a
+        // constant one was split by the compiler into the kernel's channel and invert fields.
+        const auto selection =
+            combine->drivenChannel
+                ? (sampledChannel ? render::matteSelectionFromStoredValue(*sampledChannel)
+                                  : std::nullopt)
+                : (static_cast<std::uint8_t>(combine->channel) <=
+                           static_cast<std::uint8_t>(render::ImageCoverageChannel::Luma)
+                       ? std::optional{render::MatteSelection{combine->channel, combine->invert}}
+                       : std::nullopt);
         if (!effect.secondaryInput ||
             static_cast<std::uint8_t>(combine->mode) >
                 static_cast<std::uint8_t>(ImageCombineMode::MultiplyAlpha) ||
-            !channel || *channel < 0 ||
-            *channel > static_cast<std::int64_t>(render::ImageCoverageChannel::Luma) ||
+            !selection ||
             (combine->mode == ImageCombineMode::SetAlpha) != !combine->factor ||
             (combine->factor && (!sampledAmount || !std::isfinite(*sampledAmount) ||
                                  *sampledAmount < 0.0 || *sampledAmount > 1.0))) {
@@ -109,12 +114,14 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
             return prepared;
         }
         const float factor = combine->factor ? static_cast<float>(*sampledAmount) : 1.0F;
-        const auto coverageChannel = static_cast<render::ImageCoverageChannel>(*channel);
-        prepared.combine = PreparedImageEffect::Combine{combine->mode, factor, coverageChannel};
+        prepared.combine = PreparedImageEffect::Combine{combine->mode, factor, *selection};
         OperationKey combineKey;
         combineKey.add(combine->mode);
         combineKey.add(static_cast<double>(factor));
-        combineKey.add(coverageChannel);
+        combineKey.add(selection->channel);
+        // Appended only when set, so every pre-#361 combine key keeps its exact bytes.
+        if (selection->invert)
+            combineKey.add(std::string("inverted-matte"));
         prepared.cacheIdentity = combineKey.bytes();
         return prepared;
     }
@@ -424,18 +431,27 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
     }
     const auto window = input.descriptor()->dataWindow();
     if (effect.combine) {
-        if (secondary == nullptr || secondary->descriptor() == nullptr) {
+        // #361: an absent second image (a matte Layer outside its range, an unconnected or empty
+        // matte) is a transparent matte: every tap is transparent black, exactly as a tap outside
+        // a present matte's data window. The resident GPU route declares an empty source extent
+        // for the same result.
+        if (secondary != nullptr && secondary->descriptor() == nullptr) {
             result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
                                         "Image combine second input is unavailable");
             return result;
         }
-        const auto secondView = secondary->view();
-        if (!secondView) {
-            result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
-                                        "Image combine second input is invalid");
-            return result;
+        std::optional<render::Rgba32fImageView> secondView;
+        std::optional<render::ImageWindow> secondWindow;
+        if (secondary != nullptr) {
+            auto matteView = secondary->view();
+            if (!matteView) {
+                result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                            "Image combine second input is invalid");
+                return result;
+            }
+            secondView.emplace(*matteView.value());
+            secondWindow = secondary->descriptor()->dataWindow();
         }
-        const auto secondWindow = secondary->descriptor()->dataWindow();
         const auto total = window.extent().height();
         reportProgress(progress, {EvaluationProgressStage::Operation, operation, 0, total});
         for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
@@ -451,8 +467,9 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                 return result;
             }
             std::optional<std::span<const render::Rgba32f>> secondRow;
-            if (y >= secondWindow.originY() && y < secondWindow.maxYExclusive()) {
-                const auto fetched = secondView.value()->row(y);
+            if (secondWindow && y >= secondWindow->originY() &&
+                y < secondWindow->maxYExclusive()) {
+                const auto fetched = secondView->row(y);
                 if (!fetched) {
                     result.diagnostic = refusal(EvaluationDiagnosticCode::InternalInvariant,
                                                 "Image combine second row is unavailable");
@@ -467,20 +484,20 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                 }
                 const auto x = window.originX() + static_cast<std::int64_t>(column);
                 const auto base = (*sourceRow.value())[column];
-                const auto matte = secondRow && x >= secondWindow.originX() &&
-                                           x < secondWindow.maxXExclusive()
-                                       ? (*secondRow)[static_cast<std::size_t>(x - secondWindow.originX())]
-                                       : render::Rgba32f::transparent();
+                const auto matte =
+                    secondRow && x >= secondWindow->originX() && x < secondWindow->maxXExclusive()
+                        ? (*secondRow)[static_cast<std::size_t>(x - secondWindow->originX())]
+                        : render::Rgba32f::transparent();
                 render::ImageResult<render::Rgba32f> pixel =
                     render::ImageResult<render::Rgba32f>::success(base);
                 if (effect.combine->mode == ImageCombineMode::SetAlpha) {
                     pixel = render::setImageAlpha(
-                        base, render::imageCoverage(matte, effect.combine->channel));
+                        base, render::matteCoverage(matte, effect.combine->matte));
                 } else {
                     const double weight = effect.combine->mode == ImageCombineMode::Mix
                                               ? static_cast<double>(effect.combine->factor)
-                                              : static_cast<double>(render::imageCoverage(
-                                                    matte, effect.combine->channel)) *
+                                              : static_cast<double>(render::matteCoverage(
+                                                    matte, effect.combine->matte)) *
                                                     static_cast<double>(effect.combine->factor);
                     const double baseWeight = effect.combine->mode == ImageCombineMode::Mix
                                                   ? 1.0 - weight : weight;

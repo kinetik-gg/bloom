@@ -231,6 +231,72 @@ void blurNodeReopen() {
     }
 }
 
+// #361: Set Alpha and Multiply Alpha with inverted matte selectors (9 Luma Inverted, 7 Green
+// Inverted) and no matte connection save, reopen and validate with exact stored values.
+void matteNodeReopen() {
+    auto initial = document::makeNewProject("Matte Project", "Matte Composition",
+                                            core::RationalTime::fromInteger(10));
+    document::Document owned(std::move(initial.project));
+    const auto before = owned.snapshot();
+    auto draft = owned.draft(before);
+    auto* composition = draft.project().findComposition(initial.initialCompositionId);
+    std::vector<document::NodeId> nodes;
+    for (const auto* type : {"bloom.set-alpha", "bloom.multiply-alpha"}) {
+        const auto node = draft.ids().allocateNode();
+        const auto* definition = document::builtInNodeDefinitions().find(type, 1);
+        if (!node || !definition)
+            throw std::logic_error("matte node definition");
+        std::vector<document::ParameterBinding> bindings;
+        for (const auto& parameter : definition->parameters) {
+            const auto id = draft.ids().allocateParameter();
+            if (!id)
+                throw std::logic_error("matte parameter identity");
+            const document::ParameterValue value =
+                parameter.role == "factor"
+                    ? document::ParameterValue{0.5}
+                    : document::ParameterValue{std::int64_t{nodes.empty() ? 9 : 7}};
+            if (!composition->parameters().insert(
+                    {*id, parameter.schemaKey, document::ConstantValueSource{value}}))
+                throw std::logic_error("matte parameter inserts");
+            bindings.push_back({parameter.role, *id});
+        }
+        if (!composition->graph().addNode({*node, type, std::move(bindings), 1}))
+            throw std::logic_error("matte node inserts");
+        nodes.push_back(*node);
+    }
+    expect(owned.commit(before.revision(), std::move(draft)).committed(),
+           "inverted matte selectors without a matte publish");
+    const auto snapshot = owned.snapshot();
+    const auto settings =
+        document::makeBloomNeutralColorSettingsV1(core::Sha256Digest::fromBytes({}));
+    auto archive = buildVerifiedSaveArchive({}, {.snapshot = &snapshot, .colorSettings = &settings},
+                                            {}, memory());
+    expect(static_cast<bool>(archive), "matte graph passes verified save");
+    if (!archive)
+        return;
+    auto result = openProjectArchive(archive.archive()->bytes(), {}, memory());
+    expect(result.outcome() == OpenArchiveOutcome::Opened, "matte archive reopens");
+    if (result.outcome() != OpenArchiveOutcome::Opened)
+        return;
+    auto opened = std::move(result).takeOpened();
+    const auto reopened = opened.document->snapshot();
+    const auto* oldComposition = snapshot.project().findComposition(initial.initialCompositionId);
+    const auto* newComposition = reopened.project().findComposition(initial.initialCompositionId);
+    for (const auto id : nodes) {
+        const auto* oldNode = oldComposition->graph().findNode(id);
+        const auto* newNode = newComposition->graph().findNode(id);
+        expect(oldNode && newNode, "matte nodes survive reopen");
+        if (!oldNode || !newNode)
+            continue;
+        for (const auto& binding : oldNode->parameters) {
+            const auto* oldParameter = oldComposition->parameters().find(binding.parameterId);
+            const auto* newParameter = newComposition->parameters().find(binding.parameterId);
+            expect(oldParameter && newParameter && oldParameter->source == newParameter->source,
+                   "matte selector and factor values survive reopen exactly");
+        }
+    }
+}
+
 void futureLayoutAttachments() {
     auto baseline = openProjectArchive(currentArchive(), {}, memory());
     if (baseline.outcome() != OpenArchiveOutcome::Opened)
@@ -309,6 +375,7 @@ int main() {
         layoutAndReopen();
         discreteImageNodesReopen();
         blurNodeReopen();
+        matteNodeReopen();
         futureLayoutAttachments();
     } catch (const std::exception& error) {
         std::cerr << error.what() << "\n";

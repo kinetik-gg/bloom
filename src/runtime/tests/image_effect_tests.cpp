@@ -129,7 +129,7 @@ void testImageCombineWindows() {
     const auto matte = make(-1, 3, 1, 1, mattePixels);
     runtime::detail::PreparedImageEffect mix;
     mix.combine = {runtime::ImageCombineMode::Mix, 0.25F,
-                   render::ImageCoverageChannel::Alpha};
+                   {render::ImageCoverageChannel::Alpha, false}};
     const auto operation = runtime::OperationIndex::fromRaw(1);
     const auto mixed = runtime::detail::applyImageEffect(mix, base, &matte, 1U << 20U, {},
                                                           operation, {});
@@ -145,7 +145,7 @@ void testImageCombineWindows() {
     }
     runtime::detail::PreparedImageEffect set;
     set.combine = {runtime::ImageCombineMode::SetAlpha, 1.0F,
-                   render::ImageCoverageChannel::Luma};
+                   {render::ImageCoverageChannel::Luma, false}};
     const auto replaced = runtime::detail::applyImageEffect(set, base, &matte, 1U << 20U, {},
                                                              operation, {});
     expect(replaced.image && !replaced.diagnostic, "Set Alpha CPU evaluation succeeds");
@@ -157,6 +157,52 @@ void testImageCombineWindows() {
         expect(replaced.image->pixels()[2] == render::Rgba32f::transparent(),
                "Set Alpha clears base pixels after matte extent");
     }
+    // #361: an inverted matte is the exact complement of the selected unit coverage.
+    const auto withAlpha = [](const render::Rgba32f pixel, const float coverage) {
+        const auto result = render::setImageAlpha(pixel, coverage);
+        if (!result)
+            throw std::logic_error("invalid Set Alpha expectation");
+        return *result.value();
+    };
+    runtime::detail::PreparedImageEffect inverted;
+    inverted.combine = {runtime::ImageCombineMode::SetAlpha, 1.0F,
+                        {render::ImageCoverageChannel::Alpha, true}};
+    const auto complement = runtime::detail::applyImageEffect(inverted, base, &matte, 1U << 20U,
+                                                               {}, operation, {});
+    expect(complement.image && !complement.diagnostic, "inverted Set Alpha CPU evaluation succeeds");
+    if (complement.image) {
+        expect(complement.image->pixels()[0] ==
+                   withAlpha(basePixels[0], 1.0F),
+               "an inverted matte gives full coverage outside the matte window");
+        expect(complement.image->pixels()[1] ==
+                   withAlpha(basePixels[1], 0.5F),
+               "an inverted matte complements the matte alpha inside its window");
+    }
+    // #361: an absent matte (no second image at all) is a transparent matte on the CPU reference:
+    // zero coverage, and full coverage when inverted. It is never a refusal.
+    const auto absent = runtime::detail::applyImageEffect(set, base, nullptr, 1U << 20U, {},
+                                                           operation, {});
+    expect(absent.image && !absent.diagnostic &&
+               std::ranges::all_of(absent.image->pixels(),
+                                   [](const auto pixel) {
+                                       return pixel == render::Rgba32f::transparent();
+                                   }),
+           "an absent matte is zero coverage");
+    const auto absentInverted = runtime::detail::applyImageEffect(inverted, base, nullptr,
+                                                                   1U << 20U, {}, operation, {});
+    expect(absentInverted.image && !absentInverted.diagnostic &&
+               absentInverted.image->pixels()[2] == basePixels[2] &&
+               absentInverted.image->pixels()[0] ==
+                   withAlpha(basePixels[0], 1.0F),
+           "an absent inverted matte is full coverage");
+    runtime::detail::PreparedImageEffect multiplyAbsent;
+    multiplyAbsent.combine = {runtime::ImageCombineMode::MultiplyAlpha, 1.0F,
+                              {render::ImageCoverageChannel::Alpha, true}};
+    const auto multiplied = runtime::detail::applyImageEffect(multiplyAbsent, base, nullptr,
+                                                               1U << 20U, {}, operation, {});
+    expect(multiplied.image && !multiplied.diagnostic &&
+               std::ranges::equal(multiplied.image->pixels(), base.pixels()),
+           "Multiply Alpha by an absent inverted matte at unit factor keeps the base");
     const auto budgetRefusal = runtime::detail::applyImageEffect(mix, base, &matte, 1, {},
                                                                  operation, {});
     expect(!budgetRefusal.image && budgetRefusal.diagnostic,
@@ -1126,7 +1172,7 @@ void testImageCombineDrivers() {
            "linked Integer channel changes coverage and cache identity across frames");
 
     for (const auto& value : {CompiledValue{0.0}, CompiledValue{std::int64_t{-1}},
-                              CompiledValue{std::int64_t{5}}}) {
+                              CompiledValue{std::int64_t{10}}}) {
         auto invalidDefinition = channelDefinition;
         invalidDefinition.valueOperations.front().kernel = CompiledValuePassthrough{
             {ParameterId::fromRaw(201), value}};
@@ -1150,12 +1196,85 @@ void testImageCombineDrivers() {
     expect(!alphaPrepared.diagnostic && !redPrepared.diagnostic &&
                alphaPrepared.cacheIdentity != redPrepared.cacheIdentity,
            "prepared channel identity includes the resolved channel");
+    const auto invertedPrepared = context.prepare(effect, intent, {}, {}, {}, {}, 1.0, 1.0, 5);
+    expect(!invertedPrepared.diagnostic && invertedPrepared.combine &&
+               invertedPrepared.combine->matte ==
+                   render::MatteSelection{render::ImageCoverageChannel::Alpha, true} &&
+               invertedPrepared.cacheIdentity != alphaPrepared.cacheIdentity,
+           "a driven selector of 5 is the inverted alpha matte with its own identity");
     for (const auto value : {std::optional<std::int64_t>{}, std::optional<std::int64_t>{-1},
-                             std::optional<std::int64_t>{5}})
+                             std::optional<std::int64_t>{10}})
         expect(context.prepare(effect, intent, {}, {}, {}, {}, 1.0, 1.0, value)
                    .diagnostic.has_value(),
                "channel preparation refuses missing and invalid samples");
 }
+// #361: a matte Layer outside its range publishes no image. The CPU evaluator must treat that
+// as a transparent matte (zero coverage, full when inverted) instead of failing the frame, and an
+// empty matte operation (the compiler's stand-in for an unconnected matte) must agree with it.
+void testAbsentMatteEvaluation() {
+    using namespace runtime;
+    using namespace document;
+    const auto op = [](const std::size_t i) { return OperationIndex::fromRaw(i); };
+    const auto plan = [&](const bool invert, const bool emptyMatte) {
+        auto definition = planWith({ImageCombineKernel{
+                                       ImageCombineMode::SetAlpha, {},
+                                       render::ImageCoverageChannel::Alpha, {}, invert}})
+                              ->copyDefinition();
+        const auto solid = definition.operations[0];
+        auto effect = std::get<CompiledImageEffect>(definition.operations[1]);
+        auto layer = std::get<CompiledLayerOutput>(definition.operations[2]);
+        auto merge = std::get<CompiledMerge>(definition.operations[3]);
+        CompiledOperation matte = CompiledMerge{NodeId::fromRaw(103), {}};
+        if (!emptyMatte) {
+            auto trimmed = layer;
+            trimmed.sourceNodeId = NodeId::fromRaw(103);
+            trimmed.layerId = LayerId::fromRaw(2);
+            trimmed.input = op(0);
+            trimmed.inPoint = core::RationalTime::fromInteger(1);
+            // Compiled parameter identities are globally unique.
+            trimmed.position.id = ParameterId::fromRaw(20);
+            trimmed.anchor.id = ParameterId::fromRaw(21);
+            trimmed.scale.id = ParameterId::fromRaw(22);
+            trimmed.rotation.id = ParameterId::fromRaw(23);
+            trimmed.opacity.id = ParameterId::fromRaw(24);
+            trimmed.blendModeParameterId = ParameterId::fromRaw(25);
+            matte = trimmed;
+        }
+        effect.input = op(0);
+        effect.secondaryInput = op(1);
+        layer.input = op(2);
+        merge.entries.front().input = op(3);
+        definition.operations = {solid, matte, effect, layer, merge,
+                                 CompiledCompositionOutput{NodeId::fromRaw(102), op(4)}};
+        definition.output = op(5);
+        definition.duration = core::RationalTime::fromInteger(2);
+        return std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+    };
+    CpuCompositionEvaluator evaluator;
+    const auto trimmed = plan(false, false);
+    const auto atZero = evaluator.evaluate(trimmed, requestFor(*trimmed), {});
+    expect(atZero.frame() != nullptr,
+           "a Set Alpha whose matte Layer is outside its range still evaluates");
+    if (atZero.frame())
+        expect(std::ranges::all_of(atZero.frame()->processImage().pixels(),
+                                   [](const auto pixel) { return pixel.alpha() == 0.0F; }),
+               "an out-of-range matte Layer is zero coverage");
+    auto inRange = requestFor(*trimmed);
+    inRange.time = core::RationalTime::fromInteger(1);
+    const auto atOne = evaluator.evaluate(trimmed, inRange, {});
+    expect(atOne.frame() && !samePixels(atZero, atOne),
+           "the same matte Layer covers the base once inside its range");
+    const auto empty = plan(false, true);
+    expect(samePixels(atZero, evaluator.evaluate(empty, requestFor(*empty), {})),
+           "an empty matte operation matches an out-of-range matte Layer");
+    const auto invertedTrimmed = plan(true, false);
+    const auto inverted = evaluator.evaluate(invertedTrimmed, requestFor(*invertedTrimmed), {});
+    expect(inverted.frame() &&
+               std::ranges::all_of(inverted.frame()->processImage().pixels(),
+                                   [](const auto pixel) { return pixel.alpha() == 1.0F; }),
+           "an inverted absent matte is full coverage");
+}
+
 #include "pointwise_arithmetic_tests.ipp"
 
 } // namespace
@@ -1165,6 +1284,7 @@ int main(const int argc, char** argv) {
         if (argc == 2 && std::string_view(argv[1]) == "--combine-only") {
             testImageCombineWindows();
             testImageCombineDrivers();
+            testAbsentMatteEvaluation();
             return failures == 0 ? 0 : 1;
         }
         if (argc == 2 && std::string_view(argv[1]) == "--blur-only") {
@@ -1185,6 +1305,7 @@ int main(const int argc, char** argv) {
         testCanvasAnimation();
         testImageCombineWindows();
         testImageCombineDrivers();
+        testAbsentMatteEvaluation();
         testDiscreteImages();
         testDiscreteFinalRowCancellation();
         testUnaryImageEffectInputArity();

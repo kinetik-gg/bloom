@@ -938,6 +938,9 @@ class CompilePass final {
     std::size_t valueOutputCount_ = 0;
     std::multimap<DiagnosticKey, runtime::CompileDiagnostic> diagnostics_;
     std::unordered_set<document::NodeId> emptyImages_;
+    // Set Alpha / Multiply Alpha nodes whose optional matte is unconnected, mapped to the empty
+    // transparent operation that stands in for it.
+    std::unordered_map<document::NodeId, runtime::OperationIndex> unconnectedMattes_;
     std::unordered_set<document::NodeId> transformParents_;
     runtime::CompiledPlanCache* planCache_ = nullptr;
     std::vector<std::shared_ptr<const runtime::CompiledCompositionPlan>> nestedPlans_;

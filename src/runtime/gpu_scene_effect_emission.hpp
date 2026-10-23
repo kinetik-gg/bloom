@@ -275,26 +275,33 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel);
     const auto* combine = std::get_if<ImageCombineKernel>(&effect.kernel);
     if (combine != nullptr) {
-        auto channel = static_cast<std::int64_t>(combine->channel);
+        // The same closed selector the CPU reference prepares (image_effect.cpp): a driver samples
+        // the whole stored enumeration, a constant arrives split into channel and invert.
+        std::optional<render::MatteSelection> selection;
         if (combine->drivenChannel) {
             const auto* sampled = resolvedValue<std::int64_t>(*combine->drivenChannel, resolved);
             if (sampled == nullptr)
                 return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                             "Image combine channel driver is not an Integer");
-            channel = *sampled;
+            selection = render::matteSelectionFromStoredValue(*sampled);
+        } else if (static_cast<std::uint8_t>(combine->channel) <=
+                   static_cast<std::uint8_t>(render::ImageCoverageChannel::Luma)) {
+            selection = render::MatteSelection{combine->channel, combine->invert};
         }
         if (!effect.secondaryInput || effect.secondaryInput->value() >= plan.operations().size() ||
             static_cast<std::uint8_t>(combine->mode) >
                 static_cast<std::uint8_t>(ImageCombineMode::MultiplyAlpha) ||
-            channel < 0 || channel > static_cast<std::int64_t>(render::ImageCoverageChannel::Luma))
+            !selection)
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                         "Image combine kernel or second input is invalid");
         const auto secondValue = effect.secondaryInput->value();
         if (!outputWindowOf[inputValue])
             return identity();
-        if (!outputWindowOf[secondValue])
-            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
-                        "Image combine second input has no resident image");
+        // #361: a second input with no image (a matte Layer outside its range, an unconnected or
+        // empty matte) is a transparent matte, as on the CPU reference. The kernel then binds the
+        // base image in the matte slot and declares an empty matte extent, so every tap is
+        // transparent black; it never reads a matte texel and never falls back to the CPU.
+        const bool matteAbsent = !outputWindowOf[secondValue];
         float factor = 1.0F;
         if (combine->factor) {
             const auto sampled = resolveParameter(*combine->factor, plan, resolved);
@@ -341,10 +348,15 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         if (const auto error = residentInput(inputValue, baseCommand, baseKey, result.consumedLeaf,
                                              result.consumedText, result.consumedShape))
             return error;
-        if (const auto error =
-                residentInput(secondValue, secondCommand, secondKey, result.consumedSecondLeaf,
-                              result.consumedSecondText, result.consumedSecondShape))
+        if (matteAbsent) {
+            secondCommand = baseCommand;
+            secondKey = baseKey;
+        } else if (const auto error = residentInput(secondValue, secondCommand, secondKey,
+                                                    result.consumedSecondLeaf,
+                                                    result.consumedSecondText,
+                                                    result.consumedSecondShape)) {
             return error;
+        }
         const auto baseDescriptor = gpuSceneCommandDescriptorOf(*ctx.commands, baseCommand, 0);
         const auto secondDescriptor = gpuSceneCommandDescriptorOf(*ctx.commands, secondCommand, 0);
         if (!baseDescriptor || !secondDescriptor)
@@ -355,8 +367,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                                       sizeof(render::Rgba32f)))
             return error;
         const render::GpuImageCombineParameters parameters{
-            static_cast<render::GpuImageCombineKind>(combine->mode), factor,
-            static_cast<render::ImageCoverageChannel>(channel)};
+            static_cast<render::GpuImageCombineKind>(combine->mode), factor, selection->channel,
+            selection->invert, matteAbsent};
         GpuSceneBlendCommand command{.sourceOperation = operationIndex,
                                      .source = secondCommand,
                                      .destination = baseCommand,

@@ -247,6 +247,17 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
     out.push_back(GpuFeatureCoverageEntry{
         "feature.color.working_space_transform", "decode-to-working-space colour transform",
         GpuCoverageDisposition::Required, "src/color OCIO processor tests"});
+    // #361 matte axes. Invert and an absent matte are pixel semantics of the resident
+    // ImageCombineV1 dispatch, never host preparation: an absent matte binds the base image and an
+    // empty matte extent rather than skipping, failing or falling back to the CPU.
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.matte.invert", "inverted matte coverage (Set Alpha / Multiply Alpha)",
+        GpuCoverageDisposition::Required,
+        "src/render ImageCombineV1 native + image combine production scene preparation"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.matte.absent", "absent matte is zero coverage on every route",
+        GpuCoverageDisposition::Required,
+        "src/render ImageCombineV1 native + image combine production scene preparation"});
     out.push_back(GpuFeatureCoverageEntry{
         "feature.display.view_adjust", "custom viewer exposure/gamma adjust",
         GpuCoverageDisposition::Required, "src/runtime gpu_neutral_display qualification tests"});

@@ -64,6 +64,7 @@ using bloom::gpu_coverage_fixtures::format;
 using bloom::gpu_coverage_fixtures::LayerValues;
 using bloom::gpu_coverage_fixtures::publish;
 using bloom::gpu_coverage_plans::imageCombinePlan;
+using bloom::gpu_coverage_plans::matteCombinePlan;
 using bloom::gpu_coverage_fixtures::requestFor;
 using bloom::gpu_coverage_fixtures::twoLayerPlan;
 using bloom::runtime::CompiledColorParameter;
@@ -585,6 +586,18 @@ displayProofRunner(const bool customView) {
         "src/runtime canvas image effect tests", [canvas] {
             return runBuilder(effectPlan(canvas(bloom::runtime::CanvasImageEffect::Pad, 110600),
                                          110600));
+        });
+    // #361 matte axes: the inverted selector and an absent matte (a trimmed matte Layer with no
+    // image) both prepare through the production builder's resident combine dispatch.
+    add("feature.matte.invert", GpuCoverageFixtureCriterion::Prepared,
+        "src/render ImageCombineV1 native + image combine production scene preparation", [] {
+            return runBuilder(matteCombinePlan(bloom::runtime::ImageCombineMode::SetAlpha, 110800,
+                                               true, false));
+        });
+    add("feature.matte.absent", GpuCoverageFixtureCriterion::Prepared,
+        "src/render ImageCombineV1 native + image combine production scene preparation", [] {
+            return runBuilder(matteCombinePlan(bloom::runtime::ImageCombineMode::MultiplyAlpha,
+                                               110900, true, true));
         });
     add("node.bloom.multiply-alpha", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime image combine production scene preparation", [] {

@@ -154,6 +154,13 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                             multiplyAlpha->inputs.size() == 4 &&
                             multiplyAlpha->parameters.size() == 2,
                         "Checker and Multiply Alpha publish linkable artist controls");
+    const auto* setAlpha = registry.find("bloom.set-alpha", 1);
+    const auto* imageMix = registry.find("bloom.image-mix", 1);
+    expectations.expect(setAlpha && multiplyAlpha && imageMix &&
+                            setAlpha->inputs[1].name == "matte" && !setAlpha->inputs[1].required &&
+                            multiplyAlpha->inputs[1].name == "matte" &&
+                            !multiplyAlpha->inputs[1].required && imageMix->inputs[1].required,
+                        "#361: Set Alpha and Multiply Alpha mattes are optional, Mix's is not");
     registry.freeze();
     expectations.expect(registry.find(document::kSolidSourceNodeType,
                                       document::kSolidSourceNodeSchemaVersion) == solid,

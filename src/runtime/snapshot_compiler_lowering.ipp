@@ -333,6 +333,14 @@ lower(const std::vector<document::NodeId>& order) {
                 operations.emplace_back(runtime::CompiledMerge{second->source.nodeId, {}});
                 indices.emplace(second->source.nodeId, empty);
             }
+            // #361: Set Alpha's and Multiply Alpha's matte is optional. An unconnected matte is the
+            // same transparent matte as a connected empty one (zero coverage, full when inverted),
+            // owned by the combine node itself because there is no source node to name.
+            if (second == nullptr && node->typeId != "bloom.image-mix") {
+                const auto empty = runtime::OperationIndex::fromRaw(operations.size());
+                operations.emplace_back(runtime::CompiledMerge{nodeId, {}});
+                unconnectedMattes_.insert_or_assign(nodeId, empty);
+            }
         }
         // An empty transform parent still owns authored transform values. Give it an empty
         // image input without adding document nodes or Merge membership.
@@ -715,7 +723,12 @@ lowerImageEffect(const document::NodeRecord& node,
         node.typeId == "bloom.multiply-alpha") {
         const bool mix = node.typeId == "bloom.image-mix";
         const bool multiplyAlpha = node.typeId == "bloom.multiply-alpha";
-        const auto second = findInputOperation(node.id, mix ? "second" : "matte", indices);
+        auto second = findInputOperation(node.id, mix ? "second" : "matte", indices);
+        if (!second && !mix) {
+            if (const auto unconnected = unconnectedMattes_.find(node.id);
+                unconnected != unconnectedMattes_.end())
+                second = unconnected->second;
+        }
         if (!second) {
             addTopologyFailure(node.id, "Image combine second input could not be lowered.");
             return std::nullopt;
@@ -725,15 +738,16 @@ lowerImageEffect(const document::NodeRecord& node,
             const auto* channelBinding = findParameterBinding(node, "channel");
             const auto* channel = parameterConstant<std::int64_t>(channelBinding);
             const auto channelDriver = drivenOutput(channelBinding, runtime::SocketValueKind::Integer);
-            if (factor && ((channel && *channel >= 0 && *channel <= 4) || channelDriver))
+            const auto selection =
+                channel ? render::matteSelectionFromStoredValue(*channel) : std::nullopt;
+            if (factor && (selection || channelDriver))
                 return runtime::CompiledImageEffect{
                     node.id,
                     *input,
                     runtime::ImageCombineKernel{
                         runtime::ImageCombineMode::MultiplyAlpha, *factor,
-                        channel ? static_cast<render::ImageCoverageChannel>(*channel)
-                                : render::ImageCoverageChannel::Alpha,
-                        channelDriver},
+                        selection ? selection->channel : render::ImageCoverageChannel::Alpha,
+                        channelDriver, selection && selection->invert},
                     false,
                     false,
                     *second};
@@ -751,16 +765,17 @@ lowerImageEffect(const document::NodeRecord& node,
             const auto* channelBinding = findParameterBinding(node, "channel");
             const auto* channel = parameterConstant<std::int64_t>(channelBinding);
             const auto channelDriver = drivenOutput(channelBinding, runtime::SocketValueKind::Integer);
-            if ((channel && *channel >= 0 && *channel <= 4) || channelDriver)
+            const auto selection =
+                channel ? render::matteSelectionFromStoredValue(*channel) : std::nullopt;
+            if (selection || channelDriver)
                 return runtime::CompiledImageEffect{
                     node.id,
                     *input,
                     runtime::ImageCombineKernel{
                         runtime::ImageCombineMode::SetAlpha,
                         {},
-                        channel ? static_cast<render::ImageCoverageChannel>(*channel)
-                                : render::ImageCoverageChannel::Alpha,
-                        channelDriver},
+                        selection ? selection->channel : render::ImageCoverageChannel::Alpha,
+                        channelDriver, selection && selection->invert},
                     false,
                     false,
                     *second};

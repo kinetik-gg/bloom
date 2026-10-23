@@ -149,8 +149,9 @@ template <typename Definition>
             const bool mix = definition.key.typeId == "bloom.image-mix";
             return definition.key.schemaVersion == 1 && definition.inputs.size() == 3 &&
                    hasLeadingImageInput(definition, "input") &&
+                   // #361: Set Alpha's matte is optional; Image Mix's second image is not.
                    definition.inputs[1] == InputPortDefinition{mix ? "second" : "matte",
-                                                               SocketValueKind::Image, true} &&
+                                                               SocketValueKind::Image, mix} &&
                    hasParameterSockets(definition, 2) &&
                    hasParameter(definition, 0, mix ? "factor" : "channel",
                                 mix ? "bloom.image-mix.factor" : "bloom.set-alpha.channel",
@@ -164,7 +165,7 @@ template <typename Definition>
             return definition.key.schemaVersion == 1 && definition.inputs.size() == 4 &&
                    hasLeadingImageInput(definition, "input") &&
                    definition.inputs[1] ==
-                       InputPortDefinition{"matte", SocketValueKind::Image, true} &&
+                       InputPortDefinition{"matte", SocketValueKind::Image, false} &&
                    hasParameterSockets(definition, 2) &&
                    hasParameter(definition, 0, "factor", "bloom.multiply-alpha.factor",
                                 ParameterValueKind::Float64, true, true) &&
@@ -708,7 +709,8 @@ template <typename Definition>
         {mix ? "bloom.image-mix" : "bloom.set-alpha", 1},
         NodeLoweringKind::ImageEffect,
         {{"input", SocketValueKind::Image},
-         {mix ? "second" : "matte", SocketValueKind::Image},
+         // An unconnected matte is a transparent matte (zero coverage), never a compile failure.
+         {mix ? "second" : "matte", SocketValueKind::Image, mix},
          {mix ? "factor" : "channel", mix ? SocketValueKind::Scalar : SocketValueKind::Integer,
           false}},
         {{"image", SocketValueKind::Image}},
@@ -743,7 +745,7 @@ template <typename Definition>
         {"bloom.multiply-alpha", 1},
         NodeLoweringKind::ImageEffect,
         {{"input", SocketValueKind::Image},
-         {"matte", SocketValueKind::Image},
+         {"matte", SocketValueKind::Image, false},
          {"factor", SocketValueKind::Scalar, false},
          {"channel", SocketValueKind::Integer, false}},
         {{"image", SocketValueKind::Image}},

@@ -242,6 +242,10 @@ struct ImageCombineKernel final {
     std::optional<CompiledScalarParameter> factor;
     render::ImageCoverageChannel channel = render::ImageCoverageChannel::Alpha;
     std::optional<ValueOutputIndex> drivenChannel = std::nullopt;
+    // #361: the constant matte selector's invert half (render::MatteSelection). A driven selector
+    // carries its own invert in the sampled stored value, so this stays false beside a driver.
+    // Appended with a false default: no existing plan value changes meaning.
+    bool invert = false;
     friend bool operator==(const ImageCombineKernel&, const ImageCombineKernel&) = default;
 };
 enum class CanvasImageEffect : std::uint8_t { Crop, Pad };
