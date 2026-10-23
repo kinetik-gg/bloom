@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
@@ -263,15 +264,56 @@ def parse_junit(path: Path, expected_names: set[str] | None) -> dict:
             "status": "Passed" if not skipped and not failed else "Failed", "junit": str(path)}
 
 
-def test_inventory(report: dict, build_dir: Path, config: str, env: dict[str, str], logs: Path) -> set[str]:
+DEVICE_LABEL = "device"
+
+
+def test_inventory(report: dict, build_dir: Path, config: str, env: dict[str, str],
+                   logs: Path) -> dict[str, set[str]]:
+    """Every CTest name with its labels."""
     command = ["ctest", "--test-dir", str(build_dir), "-C", config, "--show-only=json-v1"]
     log = logs / "inventory.json"
     if execute(report, command, ROOT, env, log, 60):
         raise ValidationError("CTest inventory failed")
     try:
-        return {entry["name"] for entry in json.loads(log.read_text(encoding="utf-8"))["tests"]}
+        inventory = {}
+        for entry in json.loads(log.read_text(encoding="utf-8"))["tests"]:
+            labels = set()
+            for prop in entry.get("properties", []):
+                if prop.get("name") == "LABELS":
+                    labels.update(prop.get("value", []))
+            inventory[entry["name"]] = labels
+        return inventory
     except (ValueError, KeyError, TypeError) as error:
         raise ValidationError(f"Invalid CTest inventory: {error}") from error
+
+
+def require_device_serialization(args: argparse.Namespace, needs_device: bool) -> None:
+    """Tests labelled `device` touch the GPU and must never share it with another run."""
+    if needs_device and not args.gpu_lock_file and not args.gpu_lock_held:
+        raise ValidationError("Tests labelled `device` need --gpu-lock-file (or "
+                              "BLOOM_LOCAL_GPU_LOCK_FILE), or --gpu-lock-held when the caller "
+                              "already holds the machine GPU lock")
+
+
+def device_tests_requested(args: argparse.Namespace, build_dir: Path) -> bool:
+    """Decided before any lock is taken, so the GPU lock can be acquired first."""
+    if getattr(args, "level", None) == "native":
+        return False
+    if getattr(args, "all", False):
+        return True
+    if not args.test:
+        return False
+    try:
+        listed = subprocess.run(["ctest", "--test-dir", str(build_dir), "--show-only=json-v1"],
+                                capture_output=True, text=True, timeout=60, check=True)
+        labels = {}
+        for entry in json.loads(listed.stdout)["tests"]:
+            labels[entry["name"]] = {value for prop in entry.get("properties", [])
+                                     if prop.get("name") == "LABELS"
+                                     for value in prop.get("value", [])}
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return True  # Unknown inventory: serialize conservatively.
+    return any(DEVICE_LABEL in labels.get(name, {DEVICE_LABEL}) for name in args.test)
 
 
 def ctest_command(build_dir: Path, config: str, jobs: int, junit: Path,
@@ -304,12 +346,13 @@ def run_named(args: argparse.Namespace, report: dict, env: dict[str, str], logs:
             raise ValidationError("Named target build failed")
     if args.test:
         inventory = test_inventory(report, build_dir, args.config, env, logs)
-        missing = sorted(set(args.test) - inventory)
+        missing = sorted(set(args.test) - set(inventory))
         if missing:
             raise ValidationError("Requested CTest name is absent: " + ", ".join(missing))
         names = list(dict.fromkeys(args.test))
         junit = logs / "named-tests.xml"
         command = ctest_command(build_dir, args.config, args.jobs, junit, names)
+        require_device_serialization(args, any(DEVICE_LABEL in inventory[name] for name in names))
         code = execute(report, command, ROOT, env, logs / "named-tests.log",
                        args.test_timeout_seconds)
         result = parse_junit(junit, set(names))
@@ -350,6 +393,8 @@ def run_milestone(args: argparse.Namespace, report: dict, env: dict[str, str], l
         raise ValidationError("Milestone build failed")
     junit = logs / "all-tests.xml"
     command = ctest_command(build_dir, args.config, args.jobs, junit, None)
+    inventory = test_inventory(report, build_dir, args.config, env, logs)
+    require_device_serialization(args, any(DEVICE_LABEL in labels for labels in inventory.values()))
     code = execute(report, command, ROOT, env, logs / "all-tests.log", args.test_timeout_seconds)
     result = parse_junit(junit, None)
     report["tests"].append(result)
@@ -385,7 +430,15 @@ def run(args: argparse.Namespace) -> int:
         report["source"] = source_identity(ROOT)
         lock = Path(args.lock_file).expanduser().resolve() if args.lock_file else common_git_lock(ROOT)
         report["lockFile"] = str(lock)
-        with exclusive_lock(lock, args.lock_timeout_seconds) as wait_seconds:
+        # A run with `device` tests takes the machine GPU lock FIRST, then the build lock: the same
+        # order as wrapping a native run in the GPU lock, so two runs can never deadlock.
+        gpu_lock = contextlib.nullcontext(0.0)
+        if args.gpu_lock_file and device_tests_requested(args, build_dir):
+            gpu_path = Path(args.gpu_lock_file).expanduser().resolve()
+            report["gpuLockFile"] = str(gpu_path)
+            gpu_lock = exclusive_lock(gpu_path, args.lock_timeout_seconds)
+        with gpu_lock as gpu_wait_seconds, exclusive_lock(lock, args.lock_timeout_seconds) as wait_seconds:
+            report["gpuLockWaitSeconds"] = round(gpu_wait_seconds, 3)
             report["lockWaitSeconds"] = round(wait_seconds, 3)
             if args.mode == "milestone" and args.configure:
                 if (build_dir / "CMakeCache.txt").exists():
@@ -451,6 +504,12 @@ def parser() -> argparse.ArgumentParser:
     common.add_argument("--ccache-dir", default=os.environ.get("BLOOM_LOCAL_CCACHE_DIR"))
     common.add_argument("--lock-file", default=os.environ.get("BLOOM_LOCAL_LOCK_FILE"),
                         help="Shared lock path; default is the repository's common Git directory")
+    common.add_argument("--gpu-lock-file", default=os.environ.get("BLOOM_LOCAL_GPU_LOCK_FILE"),
+                        help="Machine GPU lock taken before the build lock when tests labelled "
+                             "`device` are selected")
+    common.add_argument("--gpu-lock-held", action="store_true",
+                        help="The caller already holds the machine GPU lock (for example through "
+                             "flock); never combine with --gpu-lock-file")
     common.add_argument("--lock-timeout-seconds", type=float, default=0,
                         help="Wait at most this long for the shared lock (default: fail fast)")
     common.add_argument("--build-timeout-seconds", type=int, default=3600)
@@ -482,6 +541,8 @@ def main(argv: list[str] | None = None) -> int:
     args = command.parse_args(argv)
     if not 1 <= args.jobs <= MAX_JOBS:
         command.error(f"--jobs must be between 1 and {MAX_JOBS}")
+    if args.gpu_lock_held and args.gpu_lock_file:
+        command.error("--gpu-lock-held and --gpu-lock-file are mutually exclusive")
     if args.lock_timeout_seconds < 0 or any(value <= 0 for value in
         (args.build_timeout_seconds, args.test_timeout_seconds)):
         command.error("timeouts must be positive, and lock timeout must be non-negative")

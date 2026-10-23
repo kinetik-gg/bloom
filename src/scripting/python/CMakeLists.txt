@@ -78,12 +78,12 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}" -I
             "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_api.py"
             "${CMAKE_BINARY_DIR}/python" $<TARGET_FILE:bloom-cli>
-        LABELS scripting python integration)
+        LABELS scripting python integration device)
     bloom_add_test(NAME bloom.scripting.python-embedding
         COMMAND bloom-cli run "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/embedding.py"
-        LABELS scripting python integration)
+        LABELS scripting python integration device)
     # The recipe in docs/user-guide/python.md, run the way an artist runs it.
     bloom_add_test(NAME bloom.scripting.python-first-five-minutes
         COMMAND bloom-cli run "${PROJECT_SOURCE_DIR}/examples/scripting/first_five_minutes.py"
-        LABELS scripting python integration)
+        LABELS scripting python integration device)
 endif()

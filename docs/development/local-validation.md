@@ -32,6 +32,16 @@ Repeat `--target` and `--test` for a small set of related checks. A focused run 
 target-only or test-only. Broad CMake targets such as `all` and `test` are refused in this mode.
 CTest names are checked against the configured inventory before execution.
 
+### Device tests
+
+A CTest case labelled `device` touches the GPU (for example the Python and embedding scripting
+tests, which render through the GPU export provider). The runner refuses to execute one unless the
+machine GPU lock is serialized: pass `--gpu-lock-file` (or set `BLOOM_LOCAL_GPU_LOCK_FILE`) and the
+runner takes that lock before the build lock -- the same order as wrapping a native run in the GPU
+lock, so concurrent runs cannot deadlock -- or pass `--gpu-lock-held` when the caller already holds
+it (never both: a second acquisition from inside a wrapper would wait on itself). Every run already
+removes `DISPLAY` and `WAYLAND_DISPLAY` and uses the offscreen Qt platform.
+
 ## Explicit milestone gates
 
 For `core` and `desktop`, a milestone normally builds the named union of `--target` values once,
