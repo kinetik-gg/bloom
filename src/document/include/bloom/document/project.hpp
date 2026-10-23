@@ -156,7 +156,7 @@ class Composition final {
     // carries one built at freeze time so cross-composition uniqueness checks never rescan an
     // unchanged composition.
     struct DeclaredIdIndex final {
-        std::vector<std::uint64_t> nodes, edges, parameters, curves, keyframes, layers, slots,
+        std::vector<std::uint64_t> nodes, edges, parameters, curves, keyframes, layers, layerSlots,
             groups;
     };
     struct Content;

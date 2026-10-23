@@ -68,9 +68,9 @@ Composition::DeclaredIdIndex Composition::buildDeclaredIdIndex(const Content& au
         add(index.groups, groupId);
     for (const auto& stack : authored.graph.merges())
         for (const auto& entry : stack.entries())
-            add(index.slots, entry.slotId);
+            add(index.layerSlots, entry.slotId);
     for (auto* ids : {&index.nodes, &index.edges, &index.parameters, &index.curves,
-                      &index.keyframes, &index.layers, &index.slots, &index.groups})
+                      &index.keyframes, &index.layers, &index.layerSlots, &index.groups})
         sortUnique(*ids);
     return index;
 }
@@ -187,7 +187,7 @@ bool Project::validatesAgainst(const Project& base) const {
          {&Composition::DeclaredIdIndex::nodes, &Composition::DeclaredIdIndex::edges,
           &Composition::DeclaredIdIndex::parameters, &Composition::DeclaredIdIndex::curves,
           &Composition::DeclaredIdIndex::keyframes, &Composition::DeclaredIdIndex::layers,
-          &Composition::DeclaredIdIndex::slots, &Composition::DeclaredIdIndex::groups}) {
+          &Composition::DeclaredIdIndex::layerSlots, &Composition::DeclaredIdIndex::groups}) {
         std::unordered_set<std::uint64_t> seen;
         for (const auto& index : fresh)
             for (const auto id : index.*field) {
