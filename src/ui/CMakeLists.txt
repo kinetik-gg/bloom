@@ -399,6 +399,8 @@ target_sources(
         properties_registry_row.cpp
         properties_editor_registry.cpp
         properties_upstream.cpp
+        properties_layer_time.cpp
+        properties_layer_time.hpp
         properties_driven_rows.cpp
         composition_parameter_vocabulary.cpp
         composition_driver_probe.cpp

@@ -26,6 +26,7 @@
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <bloom/commands/operations.hpp>
+#include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/document/graph.hpp>
@@ -1646,10 +1647,33 @@ void TimelineLaneRegion::mouseReleaseEvent(QMouseEvent* event) {
         const auto completed = *drag_;
         drag_.reset();
         guide_.reset();
-        commands::Transaction transaction("Set Layer Range", completed.revision);
-        transaction.emplace<commands::SetLayerRange>(session_.compositionId(), completed.layer,
-                                                     completed.preview.start,
-                                                     completed.preview.end);
+        const auto* composition = session_.composition();
+        const auto* boundary =
+            composition ? composition->graph().findLayer(completed.layer) : nullptr;
+        commands::Transaction transaction(completed.handle == 0 ? "Move Layer" : "Set Layer Range",
+                                          completed.revision);
+        if (completed.handle == 0 && boundary != nullptr) {
+            // ADR 0024: a body drag moves the layer's start time with its range, so its content
+            // and keys move with the bar. The shift is a whole number of composition frames.
+            const auto rate = composition->format().frameRate();
+            const auto frames = std::llround(
+                (completed.preview.start.toSeconds() - completed.original.start.toSeconds()) *
+                rate.numerator() / rate.denominator());
+            const auto& from = boundary->timing.startTime;
+            const auto start = core::RationalTime::create(
+                from.numerator() * static_cast<std::int64_t>(rate.numerator()) +
+                    frames * static_cast<std::int64_t>(rate.denominator()) * from.denominator(),
+                from.denominator() * static_cast<std::int64_t>(rate.numerator()));
+            if (!start)
+                return;
+            transaction.emplace<commands::SetLayerTiming>(
+                session_.compositionId(), completed.layer, *start, completed.preview.start,
+                completed.preview.end, boundary->timing.speed);
+        } else {
+            transaction.emplace<commands::SetLayerRange>(session_.compositionId(), completed.layer,
+                                                         completed.preview.start,
+                                                         completed.preview.end);
+        }
         (void)session_.executeTransaction(std::move(transaction));
         update();
         event->accept();
