@@ -401,6 +401,8 @@ target_sources(
         properties_upstream.cpp
         properties_layer_time.cpp
         timeline_layer_timing_gesture.cpp
+        timeline_key_time.cpp
+        timeline_key_time.hpp
         timeline_layer_timing_gesture.hpp
         properties_layer_time.hpp
         properties_driven_rows.cpp

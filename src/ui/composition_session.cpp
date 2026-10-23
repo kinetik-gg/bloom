@@ -1,6 +1,7 @@
 #include <bloom/ui/composition_session.hpp>
 
 #include "animation_components.hpp"
+#include "timeline_key_time.hpp"
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
@@ -1421,7 +1422,7 @@ bool CompositionSession::setSelectionScalarParameter(const std::string_view role
     } else if (const auto* animationSource =
                    std::get_if<document::AnimationCurveSource>(&parameter->source)) {
         transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, animationSource->curveId,
-                                                         currentTime_, value);
+                                                         keyTimeAtPlayhead(parameter->id), value);
     } else {
         reportUnavailable(
             QStringLiteral("Disconnect the driven parameter before editing its value"));
@@ -1546,7 +1547,7 @@ bool CompositionSession::setParameterComponentValue(const document::ParameterId 
         componentCommandLabel(*parameter, QStringLiteral("Set Component")).toStdString(),
         snapshot_.revision());
     transaction.emplace<commands::SetKeyframeAtTimeForParameterComponent>(
-        compositionId_, parameterId, component, currentTime_, value);
+        compositionId_, parameterId, component, keyTimeAtPlayhead(parameterId), value);
     return execute(std::move(transaction));
 }
 
@@ -1580,8 +1581,8 @@ bool CompositionSession::appendParameterEdit(commands::Transaction& transaction,
             if constexpr (std::is_same_v<Held, double> || std::is_same_v<Held, document::Vec2d> ||
                           std::is_same_v<Held, document::Vec3d> ||
                           std::is_same_v<Held, core::Color4d>) {
-                transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, animated->curveId,
-                                                                 time, held);
+                transaction.emplace<commands::SetKeyframeAtTime>(
+                    compositionId_, animated->curveId, keyTimeOf(parameterId, time), held);
                 return true;
             } else {
                 return false;
@@ -1830,7 +1831,7 @@ bool CompositionSession::setSelectionColorParameter(const std::string_view role,
         // this task no command could put a colour on a curve at all, and this method refused every
         // non-constant source on that basis.
         transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, animationSource->curveId,
-                                                         currentTime_, color);
+                                                         keyTimeAtPlayhead(parameter->id), color);
     } else {
         reportUnavailable(QStringLiteral("Disconnect the driven color before editing its value"));
         return false;
@@ -2291,6 +2292,59 @@ CompositionSession::parameterForCurve(const document::AnimationCurveId curveId) 
     return std::nullopt;
 }
 
+std::optional<document::LayerTiming>
+CompositionSession::keyClockForParameter(const document::ParameterId parameterId) const {
+    const auto* current = composition();
+    if (current == nullptr)
+        return std::nullopt;
+    auto layerId = contextualLayerForParameter(parameterId);
+    if (!layerId.has_value()) {
+        // A value node that only DRIVES a layer parameter has no graph edge to the layer; it is
+        // upstream of the layer through a driver link. Own it only when exactly one layer reaches
+        // the owning node, so a shared driver never silently takes one layer's clock.
+        std::optional<document::NodeId> owner;
+        for (const auto& node : current->graph().nodes())
+            if (std::ranges::any_of(node.parameters, [parameterId](const auto& binding) {
+                    return binding.parameterId == parameterId;
+                }))
+                owner = node.id;
+        if (!owner.has_value())
+            return std::nullopt;
+        for (const auto& boundary : current->graph().layerOutputs()) {
+            std::vector<document::NodeId> seeds{boundary.nodeId};
+            if (const auto source = directSourceNodeForLayer(boundary.layerId))
+                seeds.push_back(*source);
+            const auto upstream = upstreamNodes(seeds, UpstreamTraversal::DriverLinksAndInputEdges);
+            if (std::ranges::none_of(upstream,
+                                     [&](const auto& reached) { return reached.id == *owner; }))
+                continue;
+            if (layerId.has_value() && *layerId != boundary.layerId)
+                return std::nullopt;
+            layerId = boundary.layerId;
+        }
+    }
+    const auto* layer = layerId ? current->graph().findLayer(*layerId) : nullptr;
+    if (layer == nullptr)
+        return std::nullopt;
+    return layer->timing;
+}
+
+std::optional<document::LayerTiming>
+CompositionSession::keyClockForCurve(const document::AnimationCurveId curveId) const {
+    const auto parameterId = parameterForCurve(curveId);
+    return parameterId ? keyClockForParameter(*parameterId) : std::nullopt;
+}
+
+core::RationalTime CompositionSession::keyTimeOf(const document::ParameterId parameterId,
+                                                 const core::RationalTime time) const {
+    return keyTimeOfCompositionTime(keyClockForParameter(parameterId), time).value_or(time);
+}
+
+core::RationalTime
+CompositionSession::keyTimeAtPlayhead(const document::ParameterId parameterId) const {
+    return keyTimeOf(parameterId, currentTime_);
+}
+
 std::optional<ParameterSample>
 CompositionSession::sampleParameterValue(const document::ParameterRecord& parameter,
                                          const core::RationalTime time) const {
@@ -2417,7 +2471,7 @@ CompositionSession::effectiveParameterValue(const document::ParameterRecord* par
     // An animated source is sampled at the CURRENT session time; a driven one is produced by the
     // value graph rather than read off the record, so it answers nothing here and
     // drivenValueText() answers instead -- exactly as every write path refuses a driven source.
-    return sampleParameterValue(*parameter, currentTime_);
+    return sampleParameterValue(*parameter, keyTimeAtPlayhead(parameter->id));
 }
 
 namespace {
@@ -2525,7 +2579,7 @@ KeyframeDiamondState CompositionSession::keyframeDiamondState(const std::string_
 KeyframeParameterState
 CompositionSession::keyframeParameterState(const std::string_view role) const {
     const auto* parameter = parameterForSelection(role);
-    return parameter ? keyframeParameterState(parameter->id, currentTime_)
+    return parameter ? keyframeParameterState(parameter->id, keyTimeAtPlayhead(parameter->id))
                      : KeyframeParameterState::Unsupported;
 }
 
@@ -2533,14 +2587,15 @@ KeyframeDiamondState
 CompositionSession::keyframeDiamondState(const std::string_view role,
                                          const document::AnimationComponent component) const {
     const auto* parameter = parameterForSelection(role);
-    return parameter ? keyframeDiamondState(parameter->id, component, currentTime_)
+    return parameter ? keyframeDiamondState(parameter->id, component,
+                                            keyTimeAtPlayhead(parameter->id))
                      : KeyframeDiamondState::Unsupported;
 }
 
 bool CompositionSession::toggleKeyframe(const std::string_view role,
                                         const document::AnimationComponent component) {
     const auto* parameter = parameterForSelection(role);
-    return parameter && toggleKeyframe(parameter->id, component, currentTime_);
+    return parameter && toggleKeyframe(parameter->id, component, keyTimeAtPlayhead(parameter->id));
 }
 
 KeyframeDiamondState CompositionSession::keyframeDiamondStateForParameter(
@@ -2621,7 +2676,7 @@ CompositionSession::diamondStateFor(const document::ParameterRecord* parameter) 
         // would promise a click that does nothing.
         return KeyframeDiamondState::Unsupported;
     }
-    return keyframeAtExactTime(*parameter, currentTime_).has_value()
+    return keyframeAtExactTime(*parameter, keyTimeAtPlayhead(parameter->id)).has_value()
                ? KeyframeDiamondState::AnimatedWithKey
                : KeyframeDiamondState::AnimatedWithoutKey;
 }
@@ -2746,12 +2801,14 @@ bool CompositionSession::toggleKeyframeFor(const document::ParameterRecord* para
     }
     const auto parameterId = parameter->id;
     const auto label = keyframeCommandLabel(parameter->schemaKey);
+    // The key lands on the parameter's own clock (ADR 0024), not the composition's.
+    const auto keyTime = keyTimeAtPlayhead(parameterId);
 
     // --- constant -> animated, with one key at the current value and time ----------------------
     if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
         commands::Transaction transaction(label.addKey.toStdString(), snapshot_.revision());
         transaction.emplace<commands::CreateAnimationForParameter>(compositionId_, parameterId,
-                                                                   currentTime_);
+                                                                   keyTime);
         // Parameter-keyed, not curve-keyed: the curve this writes into does not exist until the
         // operation above runs against the same draft. Both operations land in ONE transaction, so
         // the whole gesture is one undo step (docs/architecture/animation-and-time.md).
@@ -2763,7 +2820,7 @@ bool CompositionSession::toggleKeyframeFor(const document::ParameterRecord* para
                               std::is_same_v<Value, document::Vec3d> ||
                               std::is_same_v<Value, core::Color4d>) {
                     transaction.emplace<commands::SetKeyframeAtTimeForParameter>(
-                        compositionId_, parameterId, currentTime_, value);
+                        compositionId_, parameterId, keyTime, value);
                     return true;
                 } else {
                     return false;
@@ -2784,12 +2841,12 @@ bool CompositionSession::toggleKeyframeFor(const document::ParameterRecord* para
         return false;
     }
     const auto curveId = source->curveId;
-    const auto existing = keyframeAtExactTime(*parameter, currentTime_);
+    const auto existing = keyframeAtExactTime(*parameter, keyTime);
 
     // --- animated, no key here -> insert one at the exactly sampled value ----------------------
     if (!existing.has_value() ||
-        keyframeParameterState(parameterId, currentTime_) == KeyframeParameterState::Some) {
-        const auto sample = sampleParameterValue(*parameter, currentTime_);
+        keyframeParameterState(parameterId, keyTime) == KeyframeParameterState::Some) {
+        const auto sample = sampleParameterValue(*parameter, keyTime);
         if (!sample.has_value()) {
             reportUnavailable(QStringLiteral("The animation curve could not be sampled here"));
             return false;
@@ -2799,7 +2856,7 @@ bool CompositionSession::toggleKeyframeFor(const document::ParameterRecord* para
             [&](const auto& value) {
                 if constexpr (interpolable<std::decay_t<decltype(value)>>) {
                     transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, curveId,
-                                                                     currentTime_, value);
+                                                                     keyTime, value);
                 }
             },
             *sample);
@@ -2814,7 +2871,7 @@ bool CompositionSession::toggleKeyframeFor(const document::ParameterRecord* para
     }
     // The curve's final key IS the parameter's whole animation, so removing it is the
     // animation-to-constant transition, holding exactly the value that key carried.
-    const auto sample = sampleParameterValue(*parameter, currentTime_);
+    const auto sample = sampleParameterValue(*parameter, keyTime);
     if (!sample.has_value()) {
         reportUnavailable(QStringLiteral("The animation curve could not be sampled here"));
         return false;

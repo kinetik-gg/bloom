@@ -12,6 +12,7 @@
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/layer_time.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/render/display_buffer.hpp>
@@ -194,6 +195,20 @@ class CompositionSession final : public QObject {
     [[nodiscard]] const document::Composition* composition() const noexcept;
     [[nodiscard]] const CompositionSelection& selection() const noexcept;
     [[nodiscard]] core::RationalTime currentTime() const noexcept;
+
+    // ADR 0024 key clocks. A layer's own parameter keys are stored in layer time and its upstream
+    // keys in content time (layer time while the layer has no Time Remap, and kept on the layer
+    // clock even with one); composition time t maps to a key time tau = (t - start) * speed. The
+    // clock is the timing of the single layer whose boundary owns the parameter or whose upstream
+    // contains it; nullopt (identity) when none or several do.
+    [[nodiscard]] std::optional<document::LayerTiming>
+    keyClockForParameter(document::ParameterId parameterId) const;
+    [[nodiscard]] std::optional<document::LayerTiming>
+    keyClockForCurve(document::AnimationCurveId curveId) const;
+    // The playhead expressed in the key time of `parameterId`: where a key "at the current time"
+    // is stored. Explicit-time APIs below (toggleKeyframe, keyframeParameterState, ...) take key
+    // times, so callers wanting the playhead pass this.
+    [[nodiscard]] core::RationalTime keyTimeAtPlayhead(document::ParameterId parameterId) const;
 
     [[nodiscard]] bool setComposition(document::CompositionId compositionId);
     [[nodiscard]] bool setCurrentTime(core::RationalTime time);
@@ -817,9 +832,14 @@ class CompositionSession final : public QObject {
         std::vector<std::pair<document::ParameterId, document::ParameterValue>> native;
     };
 
+    // `time` is a COMPOSITION time; the key is written on the parameter's own clock (keyTimeOf).
     [[nodiscard]] bool appendParameterEdit(commands::Transaction& transaction,
                                            document::ParameterId parameterId,
                                            core::RationalTime time, document::ParameterValue value);
+    // Composition time to the stored key time of `parameterId` (identity when no single layer owns
+    // it or the layer timing is identity).
+    [[nodiscard]] core::RationalTime keyTimeOf(document::ParameterId parameterId,
+                                               core::RationalTime time) const;
 
     // Pointers, not references (task U1, issue #72): rebind() must be able to atomically retarget
     // which document/command-stack this session projects after ProjectHost replaces the live

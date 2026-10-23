@@ -214,7 +214,7 @@ bool CompositionSession::commitValueEdit() {
         if (edit.component && parameter &&
             std::holds_alternative<document::AnimationCurveSource>(parameter->source)) {
             transaction.emplace<commands::SetKeyframeAtTimeForParameterComponent>(
-                compositionId_, edit.parameter, *edit.component, edit.time,
+                compositionId_, edit.parameter, *edit.component, keyTimeOf(edit.parameter, edit.time),
                 *editedComponent(edit.value, *edit.component));
         } else {
             result = appendParameterEdit(transaction, edit.parameter, edit.time, edit.value);

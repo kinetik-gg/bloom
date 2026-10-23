@@ -1,4 +1,5 @@
 #include "timeline_key_glyph.hpp"
+#include "timeline_key_time.hpp"
 #include <QRegion>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/timeline_editor.hpp>
@@ -127,6 +128,7 @@ QString titleCase(const std::string_view role) {
 
 struct KeyEntry final {
     document::KeyframeId id;
+    // COMPOSITION time (the key's stored time projected through its layer clock, ADR 0024).
     core::RationalTime time;
     // Task S5, item 2: the key's OUTGOING interpolation, so the lane can give each mode its own
     // glyph instead of one diamond for everything.
@@ -384,7 +386,9 @@ class TimelineKeyframeRow final : public QWidget {
         if (!snappedTime.has_value()) {
             return;
         }
-        if (session_.insertKeyframeAtTime(curveId_, *snappedTime)) {
+        // The lane is in composition time; the key is stored on the owning layer's clock.
+        const auto keyTime = keyTimeOfCompositionTime(session_.keyClockForCurve(curveId_), *snappedTime);
+        if (keyTime && session_.insertKeyframeAtTime(curveId_, *keyTime)) {
             if (auto* panel = parentWidget()) {
                 panel->setFocus(Qt::MouseFocusReason);
             }
@@ -486,7 +490,10 @@ class TimelineKeyframeRow final : public QWidget {
             if (ghostTime_.has_value()) {
                 // Refusal (duplicate time / model rejection) commits nothing and keeps the
                 // selection; the ghost is cleared unconditionally below either way.
-                (void)session_.moveSelectedKeyframe(*ghostTime_);
+                // The ghost is a composition time; the command takes the key's own clock.
+                if (const auto keyTime = keyTimeOfCompositionTime(
+                        session_.keyClockForCurve(curveId_), *ghostTime_))
+                    (void)session_.moveSelectedKeyframe(*keyTime);
             }
         }
         endDrag();
@@ -554,6 +561,7 @@ class TimelineKeyframeRow final : public QWidget {
         if (record == nullptr) {
             return entries;
         }
+        const auto clock = session_.keyClockForCurve(curveId_);
         std::visit(
             [&](const auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
@@ -561,7 +569,8 @@ class TimelineKeyframeRow final : public QWidget {
                                         std::optional<document::AnimationComponent> component) {
                     entries.reserve(entries.size() + keys.size());
                     for (const auto& key : keys)
-                        entries.push_back({key.id, key.time, key.outgoingInterpolation, component});
+                        entries.push_back({key.id, projectedKeyTime(clock, key.time),
+                                           key.outgoingInterpolation, component});
                 };
                 if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>)
                     append(curve.keyframes, std::nullopt);

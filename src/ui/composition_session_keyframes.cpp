@@ -1,4 +1,5 @@
 #include "animation_components.hpp"
+#include "timeline_key_time.hpp"
 #include "timeline_keyframe_time.hpp"
 #include <QThread>
 #include <algorithm>
@@ -315,17 +316,33 @@ bool CompositionSession::pasteCopiedKeyframes() {
     if (!current || keyframeClipboard_.empty())
         return false;
     auto keys = keyframeClipboard_;
-    const auto first = std::ranges::min_element(keys, {}, &commands::KeyframePaste::time)->time;
-    const auto offset = keyTimeDifference(currentTime_, first);
+    // Clipboard times are key-clock times (ADR 0024). The anchor is the playhead, a composition
+    // time: each key is projected to composition time, shifted by the anchor offset, bounds
+    // checked there, and converted back to the clock of the parameter it is pasted onto.
+    std::optional<core::RationalTime> firstPlacement;
+    for (const auto& key : keys) {
+        const auto placement =
+            compositionTimeOfKey(keyClockForParameter(key.parameterId), key.time);
+        if (!placement)
+            return false;
+        if (!firstPlacement || *placement < *firstPlacement)
+            firstPlacement = placement;
+    }
+    const auto offset = keyTimeDifference(currentTime_, *firstPlacement);
     if (!offset)
         return false;
     for (auto& key : keys) {
-        const auto time = offsetKeyTime(key.time, *offset);
+        const auto clock = keyClockForParameter(key.parameterId);
+        const auto placement = compositionTimeOfKey(clock, key.time);
+        const auto time = placement ? offsetKeyTime(*placement, *offset) : std::nullopt;
         if (!time || *time < core::RationalTime{} || *time >= current->duration()) {
             reportUnavailable(tr("Pasted keys would exceed the composition"));
             return false;
         }
-        key.time = *time;
+        const auto stored = keyTimeOfCompositionTime(clock, *time);
+        if (!stored)
+            return false;
+        key.time = *stored;
     }
     return pasteKeyframes(keys, snapshot_.revision());
 }

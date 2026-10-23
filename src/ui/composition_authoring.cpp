@@ -179,8 +179,9 @@ void KeyframeDiamond::setComponent(std::optional<document::AnimationComponent> c
 
 void KeyframeDiamond::refresh() {
     const auto next =
-        component_ ? (parameterId_ ? session_.keyframeDiamondState(*parameterId_, *component_,
-                                                                   session_.currentTime())
+        component_ ? (parameterId_ ? session_.keyframeDiamondState(
+                                         *parameterId_, *component_,
+                                         session_.keyTimeAtPlayhead(*parameterId_))
                                    : session_.keyframeDiamondState(role_, *component_))
         : parameterId_.has_value() ? session_.keyframeDiamondStateForParameter(*parameterId_)
                                    : session_.keyframeDiamondState(role_);
@@ -208,7 +209,8 @@ void KeyframeDiamond::refresh() {
     auto fill = next == KeyframeDiamondState::AnimatedWithKey ? Fill::Full : Fill::None;
     if (!component_) {
         const auto aggregate =
-            parameterId_ ? session_.keyframeParameterState(*parameterId_, session_.currentTime())
+            parameterId_ ? session_.keyframeParameterState(*parameterId_,
+                                            session_.keyTimeAtPlayhead(*parameterId_))
                          : session_.keyframeParameterState(role_);
         fill = aggregate == KeyframeParameterState::All    ? Fill::Full
                : aggregate == KeyframeParameterState::Some ? Fill::Half
@@ -232,7 +234,8 @@ void KeyframeDiamond::mousePressEvent(QMouseEvent* event) {
     // key on one card cannot silently retarget the Properties panel.
     if (component_)
         (void)(parameterId_
-                   ? session_.toggleKeyframe(*parameterId_, *component_, session_.currentTime())
+                   ? session_.toggleKeyframe(*parameterId_, *component_,
+                                           session_.keyTimeAtPlayhead(*parameterId_))
                    : session_.toggleKeyframe(role_, *component_));
     else
         (void)(parameterId_ ? session_.toggleKeyframeForParameter(*parameterId_)

@@ -1788,6 +1788,12 @@ target_link_libraries(bloom_ui_layer_time_checkpoint_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_ui_layer_time_checkpoint_test)
 bloom_add_test(NAME bloom.ui.layer-time-checkpoint COMMAND bloom_ui_layer_time_checkpoint_test LABELS ui unit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(bloom_ui_timeline_key_projection_test timeline_key_projection_tests.cpp)
+target_link_libraries(bloom_ui_timeline_key_projection_test PRIVATE bloom_ui)
+target_include_directories(bloom_ui_timeline_key_projection_test PRIVATE ..)
+bloom_enable_warnings(bloom_ui_timeline_key_projection_test)
+bloom_add_test(NAME bloom.ui.timeline-key-projection COMMAND bloom_ui_timeline_key_projection_test LABELS ui unit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_ui_timeline_layer_timing_test timeline_layer_timing_gesture_tests.cpp)
 target_link_libraries(bloom_ui_timeline_layer_timing_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_ui_timeline_layer_timing_test)

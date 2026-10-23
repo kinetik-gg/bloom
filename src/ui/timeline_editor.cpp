@@ -11,6 +11,7 @@
 #include <bloom/ui/viewer_editor.hpp>
 
 #include "composition_editor_support.hpp"
+#include "timeline_key_time.hpp"
 #include "timeline_layer_timing_gesture.hpp"
 #include "timeline_property_rows.hpp"
 
@@ -1395,6 +1396,10 @@ std::vector<core::RationalTime> TimelineLaneRegion::keySummaryTimes(int row) con
     // disagree about which keys belong to this layer.
     for (const auto& upstream : session_.upstreamNodes(nodes, UpstreamTraversal::DriverLinksOnly))
         nodes.push_back(upstream.id);
+    // Every key of this layer's own parameters and upstream rows is stored on the layer's clock
+    // (ADR 0024) and summarised at its placement time startTime + tau / speed.
+    const auto* layerRecord = composition->graph().findLayer(entry.layerId);
+    const KeyClock clock = layerRecord ? KeyClock(layerRecord->timing) : std::nullopt;
     for (const auto nodeId : nodes) {
         const auto* node = composition->graph().findNode(nodeId);
         if (!node)
@@ -1412,11 +1417,11 @@ std::vector<core::RationalTime> TimelineLaneRegion::keySummaryTimes(int row) con
                         using Curve = std::decay_t<decltype(record)>;
                         if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
                             for (const auto& key : record.keyframes)
-                                times.insert(key.time);
+                                times.insert(projectedKeyTime(clock, key.time));
                         } else {
                             for (const auto& component : record.components)
                                 for (const auto& key : component.keyframes)
-                                    times.insert(key.time);
+                                    times.insert(projectedKeyTime(clock, key.time));
                         }
                     },
                     *curve);

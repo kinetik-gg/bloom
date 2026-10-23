@@ -1,3 +1,4 @@
+#include "timeline_key_time.hpp"
 #include "timeline_keyframe_time.hpp"
 #include <QApplication>
 #include <QContextMenuEvent>
@@ -29,6 +30,9 @@ std::vector<TimelineKeyframePanel::LaneKey> TimelineKeyframePanel::laneKeys() co
             source ? composition->animationCurves().find(source->curveId) : nullptr;
         if (!record)
             continue;
+        // LaneKey::time is a COMPOSITION time: the stored key time projected through the owning
+        // layer's clock (ADR 0024). Gestures work in composition time and convert back on commit.
+        const auto clock = session_.keyClockForParameter(gridParameters_[i]);
         std::visit(
             [&](const auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
@@ -36,7 +40,7 @@ std::vector<TimelineKeyframePanel::LaneKey> TimelineKeyframePanel::laneKeys() co
                                         std::optional<document::AnimationComponent> component) {
                     for (const auto& key : values)
                         keys.push_back({{curve.id, key.id, component},
-                                        key.time,
+                                        projectedKeyTime(clock, key.time),
                                         key.outgoingInterpolation,
                                         gridRows_[i]});
                 };
@@ -154,6 +158,9 @@ void TimelineKeyframePanel::mousePressEvent(QMouseEvent* event) {
         selectLaneKey(*pressed, event->modifiers().testFlag(Qt::ShiftModifier), true);
         gestureKeys_ = session_.selection().keyframes;
         gestureData_ = session_.selectedKeyframeData();
+        // Stored key times to composition time, so the whole gesture runs on the lane's axis.
+        for (auto& key : gestureData_)
+            key.time = projectedKeyTime(session_.keyClockForParameter(key.parameterId), key.time);
         copying_ = event->modifiers().testFlag(Qt::AltModifier) && !gestureData_.empty() &&
                    std::ranges::all_of(gestureData_, [&](const auto& key) {
                        return key.time == gestureData_.front().time;
@@ -378,12 +385,22 @@ void TimelineKeyframePanel::mouseReleaseEvent(QMouseEvent* event) {
         const auto revision = gestureRevision_;
         const bool copy = copying_;
         cancelGesture();
-        if (copy) {
+        // Gesture times are composition times; commands take each key's own clock.
+        bool convertible = moves.size() == data.size();
+        auto stored = moves;
+        for (std::size_t i = 0; convertible && i < stored.size(); ++i) {
+            const auto time = keyTimeOfCompositionTime(
+                session_.keyClockForCurve(stored[i].key.curveId), moves[i].time);
+            convertible = time.has_value();
+            if (time)
+                stored[i].time = *time;
+        }
+        if (convertible && copy) {
             for (std::size_t i = 0; i < data.size(); ++i)
-                data[i].time = moves[i].time;
+                data[i].time = stored[i].time;
             (void)session_.pasteKeyframes(data, revision);
-        } else
-            (void)session_.moveKeyframes(moves, revision);
+        } else if (convertible)
+            (void)session_.moveKeyframes(stored, revision);
     }
     cancelGesture();
     event->accept();
@@ -417,10 +434,13 @@ void TimelineKeyframePanel::mouseDoubleClickEvent(QMouseEvent* event) {
         frameTimeForIndex(axis->frameRate, axis->duration,
                           axis->frameIndexForPixel(static_cast<int>(event->position().x())));
     const auto component = gridComponents_[index];
-    if (time && component)
-        (void)session_.toggleKeyframe(parameterId, *component, *time);
-    else if (source && time)
-        (void)session_.insertKeyframeAtTime(source->curveId, *time);
+    const auto keyTime =
+        time ? keyTimeOfCompositionTime(session_.keyClockForParameter(parameterId), *time)
+             : std::nullopt;
+    if (keyTime && component)
+        (void)session_.toggleKeyframe(parameterId, *component, *keyTime);
+    else if (source && keyTime)
+        (void)session_.insertKeyframeAtTime(source->curveId, *keyTime);
 }
 void TimelineKeyframePanel::contextMenuEvent(QContextMenuEvent* event) {
     if (!gridMode_) {
