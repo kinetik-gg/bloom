@@ -12,6 +12,7 @@
 // Without the pinned shader tools the test SKIPs; without a device it SKIPs (exit 77) unless
 // --require-device is passed.
 
+#include "gpu_media_cache_test_support.hpp"
 #include "gpu_media_executor_test_support.hpp"
 #include "gpu_media_scene_preparation_test_support.hpp"
 
@@ -196,7 +197,9 @@ void testMediaRoiEditReuse(Expectations& expectations, GpuDevice& device,
                            const std::filesystem::path& directory,
                            const bloom::document::AssetRecord& asset,
                            const GpuSceneOcioContext& ocioContext) {
-    auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    // An unbound fromEvaluator context is uncached; this upload-reuse proof opts into the
+    // standalone prepared-upload arm explicitly.
+    auto context = legacyPreparedMediaContext(evaluator);
     context.assetBaseDirectory = directory;
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     const auto plan =

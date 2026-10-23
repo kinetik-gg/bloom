@@ -14,6 +14,7 @@
 //
 // Requires the Vulkan backend and the pinned tools; skips cleanly otherwise.
 
+#include "gpu_media_cache_test_support.hpp"
 #include "gpu_media_executor_test_support.hpp"
 
 // The shared scene-preparation fixtures are only needed by the tools-present native arm; leaving
@@ -359,7 +360,9 @@ void testMixedAces(Expectations& expectations, GpuDevice& device,
     if (!cache || !executor) {
         return;
     }
-    const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    // An unbound fromEvaluator context is uncached; this upload-reuse proof opts into the
+    // standalone prepared-upload arm explicitly.
+    const auto context = legacyPreparedMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     const auto plan = mixedPlan(format(8, 8), fixture.asset, Color4d{-0.2, 1.6, 0.35, 0.5}, 5000);
     const auto request = acesRequest(*plan, kAcesWorking);
