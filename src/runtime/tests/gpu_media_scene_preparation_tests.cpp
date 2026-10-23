@@ -2,12 +2,14 @@
 #include "gpu_process_frame_preparation_private.hpp"
 
 #include <bloom/media/cache/media_disk_cache.hpp>
+#include <bloom/platform/source_identity.hpp>
 #include <bloom/runtime/gpu_memory_budget.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <fstream>
 #include <functional>
 #include <limits>
 #include <mutex>
@@ -53,6 +55,7 @@ int main() {
         testWarmReuseAndChangedSource(expectations, evaluator, fixture);
         testImmutableSourceRevisionReuse(expectations, fixture);
         testGestureSourceRevisionIsReadOnly(expectations, fixture);
+        testRevalidatedFramesReadNothing(expectations, fixture);
         testChangedFrameAndBypass(expectations, evaluator, fixture);
         testChangedColourInterpretation(expectations, evaluator, fixture);
         testSourceKeyExcludesIdsAndRevision(expectations, evaluator, fixture);

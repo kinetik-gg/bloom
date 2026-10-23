@@ -3,6 +3,7 @@
 #include "operation_key.hpp"
 #include <algorithm>
 #include <bloom/media/cache/media_disk_cache_decode.hpp>
+#include <bloom/platform/source_identity.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <charconv>
 #include <cmath>
@@ -84,12 +85,24 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
         selected.cancelled = true;
         return selected;
     }
-    if (revisionPolicy == MediaSourceRevisionPolicy::Retained && revisionCache) {
+    if (revisionCache) {
         if (const auto cached = revisionCache->find(revisionKey.bytes(), document::Revision{});
             cached && cached->sourceRevision &&
             cached->sourceRevision->retainedBytes() < hostByteBudget) {
-            selected.sourceRevision = cached->sourceRevision;
-            selected.retainedRevision = true;
+            if (revisionPolicy == MediaSourceRevisionPolicy::Retained) {
+                selected.sourceRevision = cached->sourceRevision;
+                selected.retainedRevision = true;
+            } else {
+                // Revalidate: the retained bytes stand for the original only while a cheap identity
+                // observation still matches the one that bracketed a full hash of this digest.
+                selected.path = media::resolveImagePath(locator->path, locator->relinkHint, base);
+                const auto observed = platform::observeSource(selected.path);
+                if (observed.digest && *observed.digest == selected.digest &&
+                    cached->sourceRevision->probe().contentDigest == selected.digest) {
+                    selected.sourceRevision = cached->sourceRevision;
+                    selected.retainedRevision = true;
+                }
+            }
         }
     }
     media::ImageResult<std::shared_ptr<const media::ImageSourceRevision>> capture;

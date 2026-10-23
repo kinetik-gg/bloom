@@ -386,6 +386,53 @@ void testImmutableSourceRevisionReuse(Expectations& expectations, const MediaFix
     }
 }
 
+// Final/per-frame export revalidates every frame. An unchanged source is an identity check against
+// the verified revision: zero whole-file reads. A changed source is still rejected.
+void testRevalidatedFramesReadNothing(Expectations& expectations, const MediaFixture& fixture) {
+    CpuCompositionEvaluator evaluator;
+    evaluator.setAssetBaseDirectory(fixture.directory);
+    auto context = legacyPreparedMediaContext(evaluator);
+    const CpuGpuSceneBuilder builder(nullptr, context);
+    const auto plan = mediaPlan(format(8, 8), fixture.asset, LayerValues{}, 4300);
+    auto request = requestFor(*plan);
+    request.mediaSourceRevisionPolicy = bloom::runtime::MediaSourceRevisionPolicy::Revalidate;
+    request.requireVerifiedMediaSources = true;
+    const auto cold = builder.build(plan, request);
+    expectations.expect(cold.hasValue(), "cold verified frame prepares");
+    const auto reads = bloom::platform::sourceReadWork().fullReads;
+    for (int frame = 0; frame < 5; ++frame) {
+        const auto warm = builder.build(plan, request);
+        expectations.expect(warm && warm.scene->mediaStatistics().sourceRevisionCaptures == 0 &&
+                                warm.scene->mediaStatistics().sourceRevisionCacheHits == 1 &&
+                                warm.scene->mediaStatistics().sourceBytesRead == 0,
+                            "revalidated GPU frame reuses the verified revision");
+        const auto cpu = evaluator.evaluate(plan, request, {});
+        expectations.expect(cpu.frame() != nullptr, "revalidated CPU frame evaluates");
+    }
+    expectations.expect(bloom::platform::sourceReadWork().fullReads == reads,
+                        "per-frame revalidation performs zero full-file reads");
+    std::vector<char> original(std::filesystem::file_size(fixture.path));
+    {
+        std::ifstream input(fixture.path, std::ios::binary);
+        input.read(original.data(), static_cast<std::streamsize>(original.size()));
+    }
+    {
+        std::ofstream output(fixture.path, std::ios::binary | std::ios::app);
+        output << '\0';
+    }
+    expectations.expect(!builder.build(plan, request),
+                        "a changed source is rejected despite the retained revision");
+    const auto cpuChanged = evaluator.evaluate(plan, request, {});
+    expectations.expect(cpuChanged.status() == bloom::runtime::EvaluationStatus::Failed,
+                        "CPU final rejects the changed source");
+    {
+        std::ofstream output(fixture.path, std::ios::binary | std::ios::trunc);
+        output.write(original.data(), static_cast<std::streamsize>(original.size()));
+    }
+    expectations.expect(builder.build(plan, request).hasValue(),
+                        "restored content verifies again");
+}
+
 void testGestureSourceRevisionIsReadOnly(Expectations& checks, const MediaFixture& fixture) {
     CpuCompositionEvaluator evaluator;
     evaluator.setAssetBaseDirectory(fixture.directory);
