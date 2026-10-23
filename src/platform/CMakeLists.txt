@@ -98,7 +98,7 @@ endif()
 
 # Process supervision has no font catalogue or filesystem publication dependency. Workers link
 # this narrow target so codec trust domains do not inherit unused platform-library closures.
-add_library(bloom_platform_process STATIC file_snapshot.cpp)
+add_library(bloom_platform_process STATIC file_snapshot.cpp source_identity.cpp)
 target_link_libraries(bloom_platform_process PUBLIC bloom_core)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Threads REQUIRED)
@@ -110,7 +110,8 @@ else()
     target_sources(bloom_platform_process PRIVATE process_supervisor_unsupported.cpp)
 endif()
 target_sources(bloom_platform_process PUBLIC FILE_SET HEADERS BASE_DIRS include
-               FILES include/bloom/platform/process_supervisor.hpp include/bloom/platform/file_snapshot.hpp)
+               FILES include/bloom/platform/process_supervisor.hpp include/bloom/platform/file_snapshot.hpp
+                     include/bloom/platform/source_identity.hpp)
 target_compile_features(bloom_platform_process PUBLIC cxx_std_20)
 bloom_enable_warnings(bloom_platform_process)
 
@@ -120,4 +121,9 @@ if(BUILD_TESTING AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE))
     bloom_enable_warnings(bloom_platform_process_descriptor_test)
     bloom_add_test(NAME bloom.platform.process_descriptors
                    COMMAND bloom_platform_process_descriptor_test LABELS unit platform process)
+    add_executable(bloom_platform_source_identity_test tests/source_identity_tests.cpp)
+    target_link_libraries(bloom_platform_source_identity_test PRIVATE bloom_platform_process)
+    bloom_enable_warnings(bloom_platform_source_identity_test)
+    bloom_add_test(NAME bloom.platform.source_identity
+                   COMMAND bloom_platform_source_identity_test LABELS unit platform media)
 endif()

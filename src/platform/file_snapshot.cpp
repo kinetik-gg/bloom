@@ -38,6 +38,7 @@ struct ReadOnlyFileSnapshot::State {
     std::uint64_t bytes = 0;
     core::Sha256Digest digest;
     FileSnapshotStatistics statistics;
+    std::optional<FileIdentity> sourceIdentity;
     std::shared_ptr<FileSnapshotQuota> quota;
     ~State() {
 #if defined(__linux__) || defined(__APPLE__)
@@ -55,6 +56,9 @@ const core::Sha256Digest& ReadOnlyFileSnapshot::digest() const { return state_->
 std::uint64_t ReadOnlyFileSnapshot::size() const { return state_->bytes; }
 const FileSnapshotStatistics& ReadOnlyFileSnapshot::statistics() const {
     return state_->statistics;
+}
+const std::optional<FileIdentity>& ReadOnlyFileSnapshot::sourceIdentity() const {
+    return state_->sourceIdentity;
 }
 int ReadOnlyFileSnapshot::descriptor() const { return state_->fd; }
 #if defined(__linux__) || defined(__APPLE__)
@@ -105,6 +109,8 @@ ProcessResult<std::unique_ptr<ReadOnlyFileSnapshot>> ReadOnlyFileSnapshot::captu
 #if defined(__linux__) || defined(__APPLE__)
     if (cancel && cancel())
         return ProcessFailure{ProcessError::Cancelled, 0};
+    // Observed before the open so a replacement during the copy cannot be recorded as verified.
+    const auto observedBefore = observeFileIdentity(source);
     Descriptor input(::open(source.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK));
     struct stat status{};
     if (input.get() < 0 || ::fstat(input.get(), &status) != 0 || !S_ISREG(status.st_mode))
@@ -186,7 +192,16 @@ ProcessResult<std::unique_ptr<ReadOnlyFileSnapshot>> ReadOnlyFileSnapshot::captu
     } while (read < 0 && errno == EINTR);
     if (read != 0)
         return ProcessFailure{ProcessError::Io, read < 0 ? errno : EFBIG};
+    recordFullSourceRead(total);
     state->digest = hasher.finalize();
+    if (const auto observedAfter = observeFileIdentity(source);
+        observedBefore && observedAfter && *observedBefore == *observedAfter &&
+        observedAfter->size == size &&
+        observedAfter->fileIdLow == static_cast<std::uint64_t>(status.st_ino) &&
+        observedAfter->volume == static_cast<std::uint64_t>(status.st_dev)) {
+        state->sourceIdentity = observedAfter;
+        verifiedSourceDigests().record(source, *observedAfter, state->digest);
+    }
     if (expected && state->digest != *expected)
         return ProcessFailure{ProcessError::Io, ESTALE};
     if (cancel && cancel())

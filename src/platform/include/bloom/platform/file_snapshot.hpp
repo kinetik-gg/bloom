@@ -1,6 +1,7 @@
 #pragma once
 #include <bloom/core/sha256.hpp>
 #include <bloom/platform/process_supervisor.hpp>
+#include <bloom/platform/source_identity.hpp>
 #include <filesystem>
 #include <limits>
 #include <mutex>
@@ -44,6 +45,9 @@ class ReadOnlyFileSnapshot final {
     [[nodiscard]] const core::Sha256Digest& digest() const;
     [[nodiscard]] std::uint64_t size() const;
     [[nodiscard]] const FileSnapshotStatistics& statistics() const;
+    // Observation of the original pathname that bracketed this capture, when it was stable across
+    // the copy. A later identical observation means the original still holds these bytes.
+    [[nodiscard]] const std::optional<FileIdentity>& sourceIdentity() const;
 
   private:
     friend class ProcessSupervisor;
