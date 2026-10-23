@@ -119,6 +119,8 @@ struct GpuSceneMediaStatistics final {
     std::uint64_t sourceRevisionCacheHits = 0;
     std::uint64_t sourceRevisionCaptures = 0;
     std::uint64_t sourceRevisionBytesHashed = 0;
+    // Pixels repaired under the non-finite/out-of-range image ingest policy in this build.
+    std::uint64_t imageRepairedPixels = 0;
     std::uint64_t sourceBytesRead = 0;
     std::uint64_t sourceIoNanoseconds = 0;
     std::uint64_t sourceHashNanoseconds = 0;

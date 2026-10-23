@@ -90,6 +90,8 @@ struct ImageDecodeStatistics final {
     // Codec, image construction and any requested input colour processing. Source capture I/O,
     // SHA256, metadata probe, proxy resampling and cache lookup are excluded.
     std::uint64_t decodeNanoseconds = 0;
+    // Pixels repaired by the non-finite/out-of-range policy during this decode.
+    std::uint64_t repairedPixels = 0;
 };
 class ImageSourceRevision final {
   public:
@@ -171,6 +173,9 @@ template <typename T> struct ImageResult {
     std::string diagnostic;
     bool cancelled = false;
     ImageDiagnosticCode code = ImageDiagnosticCode::None;
+    // Pixels a successful decode repaired under the documented non-finite policy (media-io.md
+    // "OpenEXR ingest"): non-finite components become zero and alpha is clamped to [0, 1].
+    std::uint64_t repairedPixels = 0;
     [[nodiscard]] explicit operator bool() const noexcept { return value.has_value(); }
 };
 struct SequenceMember {

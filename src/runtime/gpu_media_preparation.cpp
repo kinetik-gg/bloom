@@ -232,6 +232,7 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
                                      resolved.verticalScale, byteBudget(pixelBudget), memoryCache,
                                      memoryAccess, cancellation, diskCache, &decodeStatistics);
     addMediaWork(statistics.imageDecodeNanoseconds, decodeStatistics.decodeNanoseconds);
+    addMediaWork(statistics.imageRepairedPixels, image.repairedPixels);
     ++statistics.imageConversions;
     if (image.cancelled) {
         outcome.cancelled = true;

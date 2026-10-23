@@ -216,6 +216,7 @@ media::ImageResult<render::Rgba32fImage> evaluateImageSource(
     if (!selected.available)
         return {{}, selected.warning};
     std::shared_ptr<const render::Rgba32fImage> image;
+    std::uint64_t repairedPixels = 0;
     if (memoryAccess != ImageSourceMemoryCacheAccess::Disabled && memoryCache != nullptr) {
         auto cached = memoryCache->find(selected.cacheKey, document::Revision{});
         if (cached)
@@ -237,15 +238,18 @@ media::ImageResult<render::Rgba32fImage> evaluateImageSource(
             decodeDiskCache, /*writeAsync=*/true, [&] { return cancel.isCancellationRequested(); },
             {}, budget, selected.inputProcessor, selected.sourceRevision, decodeStatistics);
         if (!decoded.value.has_value())
-            return {{}, decoded.diagnostic, decoded.cancelled};
+            return {{}, decoded.diagnostic, decoded.cancelled, decoded.code};
         image = std::move(*decoded.value);
+        repairedPixels = decoded.repairedPixels;
         if (memoryAccess == ImageSourceMemoryCacheAccess::ReadWrite && memoryCache != nullptr)
             memoryCache->store(selected.cacheKey, document::Revision{},
                                {.image = image, .values = {}, .bounds = {}},
                                OperationCacheEntryKind::DecodedMedia);
     }
-    return resampleDecodedImage(*image, composition, horizontalScale, verticalScale, budget,
-                                cancel);
+    auto resampled =
+        resampleDecodedImage(*image, composition, horizontalScale, verticalScale, budget, cancel);
+    resampled.repairedPixels = repairedPixels;
+    return resampled;
 }
 
 media::ImageResult<std::shared_ptr<const render::Rgba32fImage>>

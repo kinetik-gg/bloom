@@ -2942,6 +2942,15 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 contentHashes[index] += ":image-decode-failed";
                                 return;
                             }
+                            if (image.repairedPixels != 0)
+                                imageWarnings.push_back(
+                                    {EvaluationDiagnosticCode::InvalidParameter,
+                                     DiagnosticSeverity::Warning,
+                                     operationSubject,
+                                     std::to_string(image.repairedPixels) +
+                                         " image pixels had non-finite or out-of-range values; "
+                                         "they were repaired (NaN/Inf to 0, alpha clamped)",
+                                     {}});
                             bounds[index].local = detail::boundsForWindow(
                                 image.value->descriptor()->dataWindow(), resolved.horizontalScale,
                                 resolved.verticalScale);

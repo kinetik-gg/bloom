@@ -491,6 +491,7 @@ decodeExrInput(Imf::InputFile& input, const ImageInterpretation& interpretation,
         const auto rowStride = static_cast<std::size_t>(width) * sizeof(float);
 
         std::uint64_t completed = 0;
+        std::uint64_t repairedPixels = 0;
         if (progress)
             progress(0, height);
         while (completed < height) {
@@ -556,18 +557,38 @@ decodeExrInput(Imf::InputFile& input, const ImageInterpretation& interpretation,
                     return failure<std::shared_ptr<const render::Rgba32fImage>>(
                         ImageDiagnosticCode::InvalidDataWindow, "OpenEXR output row is invalid");
                 for (std::uint64_t x = 0; x < width; ++x) {
-                    const auto& sample = row[static_cast<std::size_t>(x)];
+                    auto sample = row[static_cast<std::size_t>(x)];
+                    // Non-finite policy: a NaN/Inf component becomes zero and alpha is clamped
+                    // to [0, 1]. The frame keeps rendering; the repaired count is reported.
+                    bool repaired = false;
+                    for (auto& component : sample)
+                        if (!std::isfinite(component)) {
+                            component = 0.0F;
+                            repaired = true;
+                        }
+                    if (sample[3] < 0.0F || sample[3] > 1.0F) {
+                        sample[3] = std::clamp(sample[3], 0.0F, 1.0F);
+                        repaired = true;
+                    }
                     const auto red =
                         sourcePremultiplied && !convert ? sample[0] : sample[0] * sample[3];
                     const auto green =
                         sourcePremultiplied && !convert ? sample[1] : sample[1] * sample[3];
                     const auto blue =
                         sourcePremultiplied && !convert ? sample[2] : sample[2] * sample[3];
-                    const auto pixel =
-                        render::Rgba32f::fromPremultiplied(red, green, blue, sample[3]);
+                    auto pixel = render::Rgba32f::fromPremultiplied(red, green, blue, sample[3]);
+                    if (!pixel) {
+                        // A finite input can still overflow when premultiplied.
+                        pixel = render::Rgba32f::fromPremultiplied(
+                            std::isfinite(red) ? red : 0.0F, std::isfinite(green) ? green : 0.0F,
+                            std::isfinite(blue) ? blue : 0.0F, sample[3]);
+                        repaired = true;
+                    }
                     if (!pixel)
                         return failure<std::shared_ptr<const render::Rgba32fImage>>(
                             ImageDiagnosticCode::DecodeFailed, "OpenEXR contains an invalid pixel");
+                    if (repaired)
+                        ++repairedPixels;
                     (*outputRow.value())[static_cast<std::size_t>(x)] = *pixel.value();
                 }
                 ++completed;
@@ -582,7 +603,10 @@ decodeExrInput(Imf::InputFile& input, const ImageInterpretation& interpretation,
         if (!image)
             return failure<std::shared_ptr<const render::Rgba32fImage>>(
                 ImageDiagnosticCode::DecodeFailed, "Process image validation failed");
-        return {std::make_shared<const render::Rgba32fImage>(std::move(*image.value())), {}};
+        ImageResult<std::shared_ptr<const render::Rgba32fImage>> decoded{
+            std::make_shared<const render::Rgba32fImage>(std::move(*image.value())), {}};
+        decoded.repairedPixels = repairedPixels;
+        return decoded;
     } catch (const std::bad_alloc&) {
         return failure<std::shared_ptr<const render::Rgba32fImage>>(
             ImageDiagnosticCode::AllocationFailure, "OpenEXR decode allocation failed");
