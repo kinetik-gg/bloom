@@ -224,6 +224,15 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             }
             envelope.requestedExecutorBytes =
                 phase_.policy->snapshot().reservations.deviceCapacityBytes.value_or(0);
+            // The executor needs at least the plan's preflight live-image peak (one float frame
+            // at minimum); the ceiling above is only an upper bound shared with other phases.
+            const auto extent = frameResolved.imageDescriptor.dataWindow().extent();
+            const auto frameBytes = static_cast<std::uint64_t>(extent.width()) * extent.height() *
+                                    sizeof(render::Rgba32f);
+            envelope.minimumExecutorBytes =
+                std::min(*envelope.requestedExecutorBytes,
+                         std::max({envelope.minimumExecutorBytes, frameBytes,
+                                   static_cast<std::uint64_t>(frameResolved.peakPixelStorageBytes)}));
         }
         const auto extent = frameResolved.imageDescriptor.dataWindow().extent();
         envelope.pixels = static_cast<std::uint64_t>(extent.width()) * extent.height();

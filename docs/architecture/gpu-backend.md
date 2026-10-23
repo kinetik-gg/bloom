@@ -1170,6 +1170,13 @@ latching startup values. The rooted service request and preparation executor use
 ceiling independently; a host source ceiling does not cap GPU intermediates. Each request remains subject to real phase and device admission; a snapshot is neither
 allocation ownership nor a new independent allowance.
 
+A requested executor size is a ceiling, not a need. The phase budget grants a native phase at most
+half of the remaining device room (never less than the phase's stated minimum), so concurrent
+phases such as a Viewer request beside a RAM-preview fill are not refused while most of the device
+is free. GPU scene preparation states its minimum as the plan's preflight live-image peak, at least
+one float frame of the resolved output; a minimum that does not fit the remaining room is still a
+typed Device refusal.
+
 The resident service keeps construction ceilings separate from live free space. For an omitted
 rooted preview limit, the executor's per-image ceiling uses finite device-local size (or the
 bounded unknown-device fallback), while lease, scene, and Viewer retention limits use a nominal

@@ -525,7 +525,14 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
             return refused(GpuProcessingPhaseDomain::Device);
         }
         const std::uint64_t executorRoom = deviceRemaining - request.deviceWorkingBytes;
-        executorBytes = std::min(request.requestedExecutorBytes, executorRoom);
+        // The requested executor bytes are a ceiling, not a need: a GPU scene asks for the whole
+        // device by default. Granting the whole remaining room to one phase starved every
+        // concurrent native phase (a Viewer request beside a RAM-preview fill was refused "does
+        // not fit the current device-memory capacity" with most of the device free). A ceiling
+        // grant therefore leaves half of the remaining room for concurrent phases, never granting
+        // less than the request's stated minimum (its known live-image peak).
+        const std::uint64_t share = std::max(request.minimumExecutorBytes, executorRoom / 2);
+        executorBytes = std::min({request.requestedExecutorBytes, executorRoom, share});
         if (executorBytes < request.minimumExecutorBytes ||
             (request.requestedExecutorBytes != 0 && executorBytes == 0)) {
             return refused(GpuProcessingPhaseDomain::Device);

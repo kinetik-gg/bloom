@@ -111,9 +111,12 @@ void sizingAndLifetime() {
     full.requestedExecutorBytes = gib;
     full.minimumExecutorBytes = 4 * fullPixels * 16;
     auto grant = budget.reserve(full);
+    // A ceiling grant keeps half of the remaining device room for concurrent phases.
+    const auto executorShare =
+        std::max(full.minimumExecutorBytes, (gib - full.deviceWorkingBytes) / 2);
     require(grant.lease && grant.lease->sourceByteLimit() == 0 &&
                 grant.lease->hostBytes() == full.fixedHostBytes &&
-                grant.lease->deviceBytes() == gib,
+                grant.lease->deviceBytes() == full.deviceWorkingBytes + executorShare,
             "1080p source-free envelope admits without whole-domain reservation");
     auto alias = grant.lease;
     grant.lease->markUnproven();
@@ -291,6 +294,40 @@ void rootIdentity() {
     require(next.lease && next.lease->rootIdentity() == identity,
             "later phases preserve the exact neutral root identity");
 }
+// Owner-reported regression: GPU scene preparation asks for the whole device as its executor
+// CEILING. Granting the whole room to the first phase refused every concurrent native phase (a
+// Viewer request beside a RAM-preview fill) with "does not fit the current device-memory
+// capacity" while most of the device was free. Concurrent ceiling requests must all fit while
+// their stated minimum fits, and a minimum that does not fit is still refused.
+void ceilingRequestsShareDevice() {
+    constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
+    constexpr std::uint64_t mib = 1024ULL * 1024;
+    GpuProcessingPhaseBudget budget(8);
+    budget.setHostCapacity(16 * gib, true);
+    budget.setDeviceCapacity(gib, true);
+    GpuProcessingPhaseRequest ceiling{.fixedHostBytes = 64 * mib,
+                                      .requestedSourceBytes = gib,
+                                      .minimumSourceBytes = 0,
+                                      .deviceWorkingBytes = 0,
+                                      .requestedExecutorBytes = gib,
+                                      .minimumExecutorBytes = 112 * mib,
+                                      .sourceFree = true};
+    auto viewer = budget.reserve(ceiling);
+    auto fill = budget.reserve(ceiling);
+    auto prefetch = budget.reserve(ceiling);
+    require(viewer.lease && fill.lease && prefetch.lease,
+            "concurrent whole-device ceiling requests all admit while their minimum fits");
+    require(viewer.lease->deviceBytes() >= ceiling.minimumExecutorBytes &&
+                fill.lease->deviceBytes() >= ceiling.minimumExecutorBytes &&
+                budget.snapshot().deviceReservedBytes <= gib,
+            "every grant covers its minimum and the device is never over-reserved");
+    auto heavy = ceiling;
+    heavy.minimumExecutorBytes = gib;
+    heavy.requestedExecutorBytes = gib;
+    require(budget.reserve(heavy).domain == GpuProcessingPhaseDomain::Device,
+            "a minimum that does not fit the remaining device room is still refused");
+}
+
 void contention() {
     constexpr std::size_t contenders = 32;
     GpuProcessingPhaseBudget budget(2);
@@ -347,6 +384,7 @@ int main() {
         sizingAndLifetime();
         rootIdentity();
         contention();
+        ceilingRequestsShareDevice();
         retryWatermarks();
         finishedPreparationReleasesDecodeScratch();
         std::cout << "paired phase readiness/sizing/lifetime/32-way contention PASS\n";

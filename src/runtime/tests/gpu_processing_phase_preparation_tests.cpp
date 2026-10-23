@@ -273,6 +273,57 @@ void prepare() {
     require(policy->snapshot().reservations.admittedPhases == 0,
             "source-free text quota is released with its prepared result");
 }
+// Owner-reported regression: with the delivered default, every native scene preparation asks for
+// the whole device as its executor ceiling. The first live phase (a RAM-preview fill) used to be
+// granted all remaining device room, so the Viewer's concurrent request was refused "does not fit
+// the current device-memory capacity" with ~22 GiB of the device free.
+void concurrentDefaultCeiling() {
+    const auto now = GpuProcessingPhasePolicy::Clock::now();
+    auto view = std::make_shared<TaskBudgetView>();
+    auto policy = std::make_shared<GpuProcessingPhasePolicy>(32, nullptr, view);
+    auto plan = bloom::gpu_coverage_fixtures::twoLayerPlan(
+        bloom::gpu_coverage_fixtures::format(2048, 858), {}, {}, 600.0, 400.0, 892000);
+    auto request = bloom::gpu_coverage_fixtures::requestFor(*plan);
+    request.pixelStorageByteLimit = gib;
+    GpuScenePreparationPhase phase{.policy = policy,
+                                   .envelope = {.metadataBytes = 1024ULL * 1024,
+                                                .retainedCoverageByteLimit = 16ULL * 1024 * 1024}};
+    CpuGpuSceneBuilder builder(nullptr, {}, {}, phase);
+    MemoryBudgetState sample;
+    sample.machine.availableBytes = 60 * gib;
+    sample.configuredBytes = 30 * gib;
+    sample.processingEffectiveBytes = 10 * gib;
+    sample.process.status = ProcessMemoryStatus::Finite;
+    sample.process.source = ProcessMemorySource::LinuxCgroupV2;
+    sample.process.sampledAt = now;
+    sample.process.domains.push_back({.path = "/own",
+                                      .kind = ProcessMemoryLimitKind::Finite,
+                                      .limitBytes = 64 * gib,
+                                      .currentBytes = 2 * gib});
+    sample.processSampleFresh = true;
+    sample.sampleSerial = 1;
+    policy->applyHostSample(sample, 60 * gib,
+                            MemoryBudgetAllocation{.usableByteBudget = 60 * gib,
+                                                   .operationCacheByteBudget = 18 * gib,
+                                                   .previewFrameCacheByteBudget = 12 * gib},
+                            now);
+    require(view->load() != nullptr, "delivered default budget is published");
+    require(policy->reportDevice(103, {.source = GpuAllocationBudgetSource::MemoryBudget,
+                                       .device_local_bytes = 24 * gib,
+                                       .available_bytes = 22 * gib}),
+            "device capacity reported");
+    auto fill = builder.build(plan, request);
+    auto viewer = builder.build(plan, request);
+    auto prefetch = builder.build(plan, request);
+    require(fill.scene && fill.phaseLease, "first default-ceiling preparation admits");
+    require(viewer.scene && viewer.phaseLease,
+            "concurrent default-ceiling preparation admits while the device has room");
+    require(prefetch.scene && prefetch.phaseLease,
+            "a third concurrent default-ceiling preparation still admits");
+    require(policy->snapshot().reservations.deviceReservedBytes <= 22 * gib,
+            "shared ceiling grants never over-reserve the device");
+}
+
 void mixedAndNestedQuotas() {
     const auto now = GpuProcessingPhasePolicy::Clock::now();
     const auto directory =
@@ -521,6 +572,7 @@ int main() {
         prepare();
         finalPreparation();
         mixedAndNestedQuotas();
+        concurrentDefaultCeiling();
         std::cout << "production before-preparation denial and1080 solid/text admission PASS\n";
         return 0;
     } catch (const std::exception& error) {
