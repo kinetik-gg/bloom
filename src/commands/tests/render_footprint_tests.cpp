@@ -281,9 +281,6 @@ void testAffectedCompositionScope(TestContext& test) {
                 "an operation without a declared scope leaves the scope unknown");
 }
 
-} // namespace
-} // namespace bloom::commands::test
-
 // ADR 0024: layer timing edits and key edits on a retimed layer.
 void testLayerTiming(TestContext& test) {
     Fixture fixture;
@@ -306,6 +303,9 @@ void testLayerTiming(TestContext& test) {
     const auto refused = apply<SetLayerTiming>(fixture, kFirstLayerId, t(0), t(20), t(30));
     test.expect(!refused.changed(), "a range wholly after the composition is refused");
 }
+
+} // namespace
+} // namespace bloom::commands::test
 
 int main() {
     bloom::commands::test::TestContext test;
