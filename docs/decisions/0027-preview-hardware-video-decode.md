@@ -1,4 +1,4 @@
-# ADR 0024: Preview hardware video decode and decode capacity
+# ADR 0027: Preview hardware video decode and decode capacity
 
 Status: accepted
 
