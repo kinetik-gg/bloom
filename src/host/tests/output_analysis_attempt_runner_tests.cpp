@@ -93,5 +93,7 @@ int main(const int argc, char** argv) {
     testGpuDisplayConcurrentSetterPrepare(expectations);
     testGpuExportProviderFactoryDisplayPreparation(expectations);
     testGpuEvaluatorHostPath(expectations, requireDevice);
+    expectations.expect(collectFixtureRetirement(),
+                        "fixture retirement worker exits and is collected before main returns");
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

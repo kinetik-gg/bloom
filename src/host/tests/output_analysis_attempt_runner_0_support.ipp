@@ -106,25 +106,29 @@ constexpr auto kBlendModeParameterId = document::ParameterId::fromRaw(0x1010);
                                                    .output = runtime::OperationIndex::fromRaw(3)});
 }
 
+// One retirement owner shared by fixture policies. It is shut down and collected explicitly
+// before main returns: a worker joined from a static destructor during exit() is not a supported
+// lifecycle (packed_host_retirement.hpp).
+[[nodiscard]] const std::shared_ptr<bloom::render::PackedHostRetirementOwner>&
+fixtureRetirementOwner() {
+    static const auto owner = bloom::render::PackedHostRetirementOwner::create();
+    return owner;
+}
+[[nodiscard]] bool collectFixtureRetirement() {
+    const auto& owner = fixtureRetirementOwner();
+    owner->beginShutdown();
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!owner->exitAcknowledged() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(1ms);
+    return owner->collect();
+}
+
 [[nodiscard]] std::shared_ptr<runtime::GpuProcessingPhasePolicy>
 fixturePhasePolicy(const std::size_t capacity = 32,
                    const std::uint64_t usedBytes = 6ULL * 1024 * 1024 * 1024,
                    const bool withRetirement = true) {
-        struct RetirementFixture final {
-            std::shared_ptr<bloom::render::PackedHostRetirementOwner> owner =
-                bloom::render::PackedHostRetirementOwner::create();
-            ~RetirementFixture() {
-                owner->beginShutdown();
-                const auto deadline = std::chrono::steady_clock::now() + 5s;
-                while (!owner->exitAcknowledged() && std::chrono::steady_clock::now() < deadline)
-                    std::this_thread::sleep_for(1ms);
-                if (!owner->collect())
-                    std::abort();
-            }
-        };
-        static RetirementFixture retirement;
         auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(
-            capacity, withRetirement ? retirement.owner
+            capacity, withRetirement ? fixtureRetirementOwner()
                                      : std::shared_ptr<bloom::render::PackedHostRetirementOwner>{});
         constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
         runtime::MemoryBudgetState sample;

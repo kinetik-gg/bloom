@@ -6,8 +6,10 @@
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/packed_host_retirement.hpp>
 
+#include <chrono>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 namespace bloom::host {
@@ -144,6 +146,18 @@ GpuExportProvider::~GpuExportProvider() {
     // caller violates that contract, releasing here joins the native owner worker on this thread;
     // that is a lifecycle bug, not a supported path.
     collectRetired();
+    // The owned host reclaimer must never be destroyed with a joinable worker. It belongs to this
+    // provider and is already closed; when an attempt outlived the application handle, wait for
+    // the closed worker to drain and collect it here. A worker still held open by outstanding
+    // backing past a bounded wait is kept alive deliberately rather than terminating the process.
+    if (state_ != nullptr && state_->packedHostOwner != nullptr) {
+        const auto owner = state_->packedHostOwner;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!owner->exitAcknowledged() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (!owner->collect())
+            new std::shared_ptr<runtime::PackedHostRetirementOwner>(owner); // NOLINT
+    }
     state_.reset();
 }
 
