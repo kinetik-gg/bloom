@@ -238,6 +238,8 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
         return outcome;
     }
     if (!image.value.has_value()) {
+        if (image.code == media::ImageDiagnosticCode::PixelBudgetExceeded)
+            outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
         outcome.failure =
             image.diagnostic.empty() ? "Image source could not be evaluated" : image.diagnostic;
         return outcome;
@@ -277,6 +279,8 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
     if (const auto* error = std::get_if<media::provider::Unavailable>(&converted)) {
         outcome.cancelled = error->reason == media::provider::Error::Cancelled;
         if (!outcome.cancelled) {
+            if (error->reason == media::provider::Error::Oversized)
+                outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
             outcome.failure =
                 error->detail.empty() ? "Video frame could not be converted" : error->detail;
         }
@@ -354,6 +358,13 @@ prepareImageUpload(const CompiledImageSource& source, const EvaluationRequest& r
                    const bool explicitBypass, const bool planBypass,
                    const CancellationToken& cancellation, GpuSceneMediaStatistics& statistics) {
     ++statistics.imageSources;
+    // The default empty context has no evaluator caches: fail closed instead of decoding with
+    // semantics that differ from the evaluator (prepared_gpu_scene.hpp).
+    if (context.operationCache == nullptr) {
+        MediaUploadOutcome outcome;
+        outcome.failure = "Image source context is unavailable";
+        return outcome;
+    }
     const auto selection = selectImageSource(
         source, request.time, plan.format().frameRate(), context.assetBaseDirectory, cancellation,
         request.colorIntent, explicitBypass ? nullptr : context.operationCache.get(),
@@ -369,7 +380,7 @@ prepareImageUpload(const CompiledImageSource& source, const EvaluationRequest& r
     }
     if (!selection.available) {
         MediaUploadOutcome outcome;
-        if (pixelBudget == 0)
+        if (pixelBudget == 0 || selection.budgetExceeded)
             outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
         outcome.failure =
             selection.warning.empty() ? "Image source is unavailable" : selection.warning;
@@ -420,6 +431,12 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
                       const std::uint64_t pixelBudget, const bool explicitBypass,
                       const bool planBypass, const CancellationToken& cancellation,
                       GpuSceneMediaStatistics& statistics) {
+    if (context.operationCache == nullptr) {
+        ++statistics.imageSources;
+        MediaUploadOutcome outcome;
+        outcome.failure = "Image source context is unavailable";
+        return outcome;
+    }
     const auto selection = selectImageSource(
         source, request.time, plan.format().frameRate(), context.assetBaseDirectory, cancellation,
         request.colorIntent, explicitBypass ? nullptr : context.operationCache.get(),
@@ -437,7 +454,7 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
     if (!selection.available) {
         ++statistics.imageSources;
         MediaUploadOutcome outcome;
-        if (pixelBudget == 0)
+        if (pixelBudget == 0 || selection.budgetExceeded)
             outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
         outcome.failure =
             selection.warning.empty() ? "Image source is unavailable" : selection.warning;
@@ -652,6 +669,9 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
         if (const auto* error = std::get_if<media::provider::Unavailable>(&prepared)) {
             outcome.cancelled = error->reason == media::provider::Error::Cancelled;
             if (!outcome.cancelled) {
+                if (error->reason == media::provider::Error::Oversized)
+                    outcome.failureCode =
+                        PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
                 outcome.failure =
                     error->detail.empty() ? "Video frame could not be prepared" : error->detail;
             }

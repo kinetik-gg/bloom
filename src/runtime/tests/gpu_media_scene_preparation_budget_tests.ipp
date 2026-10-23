@@ -8,8 +8,14 @@ void testBudgetRefusal(Expectations& expectations, const MediaFixture& fixture) 
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto plan =
         mediaPlan(format(256, 256), fixture.asset, LayerValues{.position = {128.0, 128.0}}, 2000);
+    // GPU preparation charges the real retained source bytes, not the CPU evaluator's hypothetical
+    // full-frame working set (gpu-backend.md): 64 KiB holds this 3x2 source, so it prepares.
     auto request = requestFor(*plan);
     request.pixelStorageByteLimit = 1U << 16U;
+    expectations.expect(builder.build(plan, request).hasValue(),
+                        "a budget above the real source bytes prepares a 256x256 media scene");
+    // A budget below the source's own capture/backing bytes must still fail closed.
+    request.pixelStorageByteLimit = 64U;
     const auto prepared = builder.build(plan, request);
     expectations.expect(!prepared.hasValue(), "a media scene under a tiny budget fails closed");
     expectations.expect(

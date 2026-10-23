@@ -36,6 +36,8 @@ struct ImageSourceSelection {
     std::string warning;
     bool available = false;
     bool cancelled = false;
+    // The source capture was refused by the host byte budget, not by missing/changed media.
+    bool budgetExceeded = false;
     std::shared_ptr<const media::ImageSourceRevision> sourceRevision;
     bool retainedRevision = false;
 };

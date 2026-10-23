@@ -113,6 +113,8 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
             selected.digest);
         selected.sourceRevision = capture.value ? *capture.value : nullptr;
         selected.cancelled = capture.cancelled;
+        selected.budgetExceeded = !selected.sourceRevision &&
+                                  capture.code == media::ImageDiagnosticCode::PixelBudgetExceeded;
         if (selected.sourceRevision && revisionCache && allowRevisionInsertion)
             revisionCache->store(revisionKey.bytes(), document::Revision{},
                                  {.image = {},
