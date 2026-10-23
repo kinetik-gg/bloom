@@ -93,6 +93,25 @@ class FootprintOp final : public Operation {
     bool renderAffecting_;
 };
 
+// Applies (or reports no change) while reporting one non-fatal issue, like a partial import.
+class WarningOp final : public Operation {
+  public:
+    explicit WarningOp(std::string name) : name_(std::move(name)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.test.warning"; }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override {
+        auto result = OperationResult::noChange();
+        if (!name_.empty()) {
+            draft.project().setName(name_);
+            result = OperationResult::applied();
+        }
+        result.issues.push_back({OperationIssueCode::InvalidValue, "skipped.png: unreadable"});
+        return result;
+    }
+
+  private:
+    std::string name_;
+};
+
 // A render-neutral operation (renderAffecting false) that also carries no footprint.
 class NeutralOp final : public Operation {
   public:
@@ -275,6 +294,34 @@ void testLayerIdentityRemapAggregation(TestContext& test) {
         const auto redo = stack.redo();
         expectWhole(redo, "redo of a composition-mismatch remap transaction stays whole-render");
     }
+}
+
+void testOperationWarningsArePublished(TestContext& test) {
+    document::Document document(makeProject());
+    CommandStack stack(document);
+    Transaction applied("Partial", document.snapshot().revision());
+    applied.emplace<WarningOp>("Renamed");
+    const auto result = stack.execute(std::move(applied));
+    test.expect(result.status == CommandStatus::Succeeded && result.warnings.size() == 1 &&
+                    result.warnings.front().operationIndex == 0 &&
+                    result.warnings.front().operationType == "bloom.test.warning" &&
+                    result.warnings.front().issue.message == "skipped.png: unreadable" &&
+                    result.operationFailures.empty(),
+                "an applied operation's issues are published as warnings");
+    test.expect(stack.undo().warnings.empty(), "undo does not replay execution warnings");
+
+    Transaction unchanged("Nothing imported", document.snapshot().revision());
+    unchanged.emplace<WarningOp>("");
+    const auto none = stack.execute(std::move(unchanged));
+    test.expect(none.status == CommandStatus::NoChange && none.warnings.size() == 1,
+                "a no-change operation's issues are still published as warnings");
+
+    Transaction rejected("Rejected", document.snapshot().revision());
+    rejected.emplace<WarningOp>("Renamed again");
+    rejected.emplace<SetProjectName>("");
+    const auto refused = stack.execute(std::move(rejected));
+    test.expect(refused.status == CommandStatus::Rejected && refused.warnings.empty(),
+                "a rejected transaction publishes failures, not warnings");
 }
 
 void testFiniteTimeFootprintAggregation(TestContext& test) {
@@ -870,6 +917,7 @@ int main() {
     bloom::commands::test::TestContext test;
     try {
         bloom::commands::test::testFiniteTimeFootprintAggregation(test);
+        bloom::commands::test::testOperationWarningsArePublished(test);
         bloom::commands::test::testLayerIdentityRemapAggregation(test);
         bloom::commands::test::testRenderAffectingPublication(test);
         bloom::commands::test::testAtomicTransactionUndoAndRedo(test);

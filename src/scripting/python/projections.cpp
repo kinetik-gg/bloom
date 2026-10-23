@@ -187,7 +187,16 @@ nb::dict commandResult(const commands::CommandResult& result) {
         diagnostic["message"] = failure.issue.message;
         diagnostics.append(diagnostic);
     }
-    if (!result.succeeded() && diagnostics.empty()) {
+    for (const auto& warning : result.warnings) {
+        nb::dict diagnostic;
+        diagnostic["code"] = "bloom.scripting.operation-warning";
+        diagnostic["severity"] = "warning";
+        diagnostic["operation_id"] = warning.operationType;
+        diagnostic["argument"] = "";
+        diagnostic["message"] = warning.issue.message;
+        diagnostics.append(diagnostic);
+    }
+    if (!result.succeeded() && result.operationFailures.empty()) {
         nb::dict diagnostic;
         diagnostic["code"] = result.status == commands::CommandStatus::StaleRevision
                                  ? "bloom.scripting.stale-revision"
