@@ -439,6 +439,118 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
     return major && minor && major->asNumberToken() == "1" &&
            minor->asNumberToken() == minorToken && version->objectMembers().size() == 2;
 }
+// Layer time (1.22 -> 1.23): the boundary gains optional members that an older file cannot contain,
+// and the Layer Output node schema advances to declare the optional Time Remap role. Only the
+// node-record schemaVersion of "bloom.layer-output" nodes at 3 or 4 changes; every binding and
+// every other byte is copied unchanged, so no record is inserted and no value is rewritten.
+[[nodiscard]] bool emitLayerTimeNode(const JsonValue& node, Buffer& output) {
+    if (node.kind() != JsonValueKind::Object)
+        return false;
+    const auto* typeId = node.findMember("typeId");
+    const auto* schemaVersion = node.findMember("schemaVersion");
+    const auto layerOutput =
+        typeId && typeId->asString() == "bloom.layer-output" && schemaVersion &&
+        (schemaVersion->asNumberToken() == "3" || schemaVersion->asNumberToken() == "4");
+    append(output, "{");
+    bool first = true;
+    for (const auto& member : node.objectMembers()) {
+        if (!first)
+            append(output, ",");
+        first = false;
+        if (!quoted(output, member.key()))
+            return false;
+        append(output, ":");
+        if (layerOutput && member.key() == "schemaVersion")
+            append(output, "5");
+        else if (!copyValue(member.value(), output))
+            return false;
+    }
+    append(output, "}");
+    return true;
+}
+
+[[nodiscard]] bool emitLayerTimeArray(const JsonValue& array, Buffer& output) {
+    if (array.kind() != JsonValueKind::Array)
+        return false;
+    append(output, "[");
+    bool first = true;
+    for (const auto& node : array.arrayElements()) {
+        if (!first)
+            append(output, ",");
+        first = false;
+        if (!emitLayerTimeNode(node, output))
+            return false;
+    }
+    append(output, "]");
+    return true;
+}
+
+[[nodiscard]] bool emitLayerTimeObject(const JsonValue& object, const std::string_view rewriteKey,
+                                       const auto& rewrite, Buffer& output) {
+    if (object.kind() != JsonValueKind::Object)
+        return false;
+    append(output, "{");
+    bool first = true;
+    for (const auto& member : object.objectMembers()) {
+        if (!first)
+            append(output, ",");
+        first = false;
+        if (!quoted(output, member.key()))
+            return false;
+        append(output, ":");
+        if (member.key() == rewriteKey ? !rewrite(member.value(), output)
+                                       : !copyValue(member.value(), output))
+            return false;
+    }
+    append(output, "}");
+    return true;
+}
+
+[[nodiscard]] bool emitLayerTimeDocument(const JsonValue& root, Buffer& output) {
+    const auto graph = [](const JsonValue& value, Buffer& out) {
+        return emitLayerTimeObject(value, "nodes", emitLayerTimeArray, out);
+    };
+    const auto composition = [&](const JsonValue& value, Buffer& out) {
+        return emitLayerTimeObject(value, "graph", graph, out);
+    };
+    const auto compositions = [&](const JsonValue& value, Buffer& out) {
+        if (value.kind() != JsonValueKind::Array)
+            return false;
+        append(out, "[");
+        bool firstComposition = true;
+        for (const auto& element : value.arrayElements()) {
+            if (!firstComposition)
+                append(out, ",");
+            firstComposition = false;
+            if (!composition(element, out))
+                return false;
+        }
+        append(out, "]");
+        return true;
+    };
+    const auto project = [&](const JsonValue& value, Buffer& out) {
+        return emitLayerTimeObject(value, "compositions", compositions, out);
+    };
+    if (root.kind() != JsonValueKind::Object)
+        return false;
+    append(output, "{");
+    bool first = true;
+    for (const auto& member : root.objectMembers()) {
+        if (!first)
+            append(output, ",");
+        first = false;
+        if (!quoted(output, member.key()))
+            return false;
+        append(output, ":");
+        if (member.key() == "schemaVersion")
+            append(output, "{\"major\":1,\"minor\":23}");
+        else if (member.key() == "project" ? !project(member.value(), output)
+                                           : !copyValue(member.value(), output))
+            return false;
+    }
+    append(output, "}");
+    return true;
+}
 } // namespace
 
 MigrationStepOutcome migrateNodeLayoutV1_0(const JsonValue& root,
@@ -596,6 +708,12 @@ MigrationStepOutcome migrateExternalFileLocatorsV1_21(const JsonValue& root,
     // Older locators remain project-relative; the new arm only expands what a writer can emit.
     if (!sourceVersionIs(root, "21") ||
         !transform(root, Scope::Root, Step::ExternalFileLocators, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateLayerTimeV1_22(const JsonValue& root, std::pmr::memory_resource*,
+                                           Buffer& output) {
+    if (!sourceVersionIs(root, "22") || !emitLayerTimeDocument(root, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

@@ -23,6 +23,7 @@
 #include <bloom/core/color.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/graph.hpp>
+#include <bloom/document/layer_time.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/project/canonical_decimal.hpp>
 #include <bloom/project/round_trip_state.hpp>
@@ -1252,6 +1253,11 @@ template <typename Keyframe, typename DecodeOne>
         state.fail(DocumentDecodeError::DomainViolation, schemaVersionPath);
         return false;
     }
+    // Document 1.23 advanced Layer Output to schema 5 (optional Time Remap). Older documents carry
+    // schemas 3 or 4 with identical bindings, so they open as the current schema.
+    if (state.documentMinor < 23 && typeIdText == document::kLayerOutputNodeType &&
+        schemaVersion == 4)
+        schemaVersion = document::kLayerOutputNodeSchemaVersion;
     std::vector<ParameterBinding> bindings;
     if (!decodeBindings(*members[3], state, joinPath(path, "parameters"), bindings)) {
         return false;
@@ -1316,6 +1322,102 @@ template <typename Keyframe, typename DecodeOne>
     return true;
 }
 
+// Layer time (1.23). Every member is optional and defaults to identity; a present member is
+// strict, so a malformed one is a decode error rather than silently identity.
+[[nodiscard]] bool decodeLayerTimeMode(const JsonValue& node, DecodeState& state,
+                                       const std::string& path, document::LayerTimeMode& out) {
+    std::string_view text;
+    if (!decodeStringMember(node, state, path, text))
+        return false;
+    const auto mode = document::layerTimeModeFromName(text);
+    if (!mode) {
+        state.fail(DocumentDecodeError::DomainViolation, path);
+        return false;
+    }
+    out = *mode;
+    return true;
+}
+
+[[nodiscard]] bool decodeLayerContentExtent(const JsonValue& node, DecodeState& state,
+                                            const std::string& path,
+                                            document::LayerContentExtent& out) {
+    const AttachmentScope extentScope(state, "contentExtent");
+    std::string_view kind;
+    if (!decodeKindDiscriminator(node, state, path, kind))
+        return false;
+    if (kind == "fixed") {
+        static constexpr std::array<std::string_view, 3> kKeys{"kind", "duration", "frameRate"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, kKeys, true, state, path, members))
+            return false;
+        document::FixedLayerExtent fixed;
+        {
+            const AttachmentScope scope(state, "duration");
+            if (!decodeRationalTimeValue(*members[1], state, joinPath(path, "duration"),
+                                         fixed.duration))
+                return false;
+        }
+        if (fixed.duration <= core::RationalTime{}) {
+            state.fail(DocumentDecodeError::NonPositiveDuration, joinPath(path, "duration"));
+            return false;
+        }
+        {
+            const AttachmentScope scope(state, "frameRate");
+            if (!detail::decodeFrameRateValue(*members[2], state, joinPath(path, "frameRate"),
+                                              fixed.frameRate))
+                return false;
+        }
+        out = fixed;
+        return true;
+    }
+    if (kind == "source") {
+        static constexpr std::array<std::string_view, 2> kKeys{"kind", "node"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, kKeys, true, state, path, members))
+            return false;
+        NodeId id;
+        if (!decodeObjectId(*members[1], state, joinPath(path, "node"), id))
+            return false;
+        out = document::SourceLayerExtent{id};
+        return true;
+    }
+    state.fail(DocumentDecodeError::DomainViolation, joinPath(path, "kind"));
+    return false;
+}
+
+[[nodiscard]] bool decodeLayerTiming(const JsonValue& node, DecodeState& state,
+                                     const std::string& path, document::LayerTiming& out) {
+    if (const auto* value = node.findMember("startTime")) {
+        const AttachmentScope scope(state, "startTime");
+        if (!decodeRationalTimeValue(*value, state, joinPath(path, "startTime"), out.startTime))
+            return false;
+    }
+    if (const auto* value = node.findMember("speed")) {
+        const AttachmentScope scope(state, "speed");
+        core::RationalTime ratio;
+        const auto speedPath = joinPath(path, "speed");
+        if (!decodeRationalTimeValue(*value, state, speedPath, ratio))
+            return false;
+        const auto speed = document::LayerSpeed::create(ratio.numerator(), ratio.denominator());
+        if (!speed) {
+            state.fail(DocumentDecodeError::DomainViolation, speedPath);
+            return false;
+        }
+        out.speed = *speed;
+    }
+    if (const auto* value = node.findMember("contentExtent"))
+        if (!decodeLayerContentExtent(*value, state, joinPath(path, "contentExtent"),
+                                      out.contentExtent))
+            return false;
+    if (const auto* value = node.findMember("beforeMode"))
+        if (!decodeLayerTimeMode(*value, state, joinPath(path, "beforeMode"), out.beforeMode))
+            return false;
+    if (const auto* value = node.findMember("afterMode"))
+        if (!decodeLayerTimeMode(*value, state, joinPath(path, "afterMode"), out.afterMode))
+            return false;
+    return true;
+}
+
 // A Layer Output boundary is a collection element identified by `layerId` (see
 // docs/architecture/project-format.md, "Versions, Migrations, And Preservation": "layer ID for a
 // Layer Output"). `layerId` is its second member, so its own trailing capture must be deferred
@@ -1330,6 +1432,10 @@ template <typename Keyframe, typename DecodeOne>
     }
     if (state.documentMinor >= 13 && node.findMember("parent"))
         keys.push_back("parent");
+    if (state.documentMinor >= 23)
+        for (const auto* key : {"startTime", "speed", "contentExtent", "beforeMode", "afterMode"})
+            if (node.findMember(key))
+                keys.push_back(key);
     std::vector<const JsonValue*> members;
     std::vector<RetainedJsonMember> trailing;
     if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
@@ -1407,7 +1513,7 @@ template <typename Keyframe, typename DecodeOne>
                 return false;
         }
     }
-    return true;
+    return state.documentMinor < 23 || decodeLayerTiming(node, state, path, out.timing);
 }
 
 [[nodiscard]] bool decodeLayerOutputs(const JsonValue& node, DecodeState& state,

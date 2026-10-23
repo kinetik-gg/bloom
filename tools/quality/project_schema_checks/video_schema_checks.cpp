@@ -296,20 +296,20 @@ void validateDocumentSchemaV1_22(const json::Value& schema) {
                  R"(["project-relative","external","builtin","system"])",
                  "external locator portability");
     requireExact(locator.at("path").at("maxLength"), "16384", "external locator path limit");
-    requireExact(locator.at("relinkHint").at("pattern"),
-                 R"("^(?:[Ff][Ii][Ll][Ee]|font):")", "file URI scheme pattern");
+    requireExact(locator.at("relinkHint").at("pattern"), R"("^(?:[Ff][Ii][Ll][Ee]|font):")",
+                 "file URI scheme pattern");
     auto previous = schema;
     auto& defs = previous.at("$defs");
-    auto fixed = std::find_if(defs.asObject().begin(), defs.asObject().end(),
-                              [](const auto& member) { return member.first == "fixedVersion-1.22"; });
+    auto fixed =
+        std::find_if(defs.asObject().begin(), defs.asObject().end(),
+                     [](const auto& member) { return member.first == "fixedVersion-1.22"; });
     if (fixed == defs.asObject().end())
         throw std::runtime_error("document 1.22 version is missing");
     fixed->first = "fixedVersion-1.21";
     fixed->second.at("properties").at("minor") = json::parse(R"({"const":21})");
     defs.at("assetLocator-1.11").at("properties").at("portability").at("enum") =
         json::parse(R"(["project-relative","builtin","system"])");
-    defs.at("assetLocator-1.11").at("properties").at("path").at("maxLength") =
-        json::parse("4096");
+    defs.at("assetLocator-1.11").at("properties").at("path").at("maxLength") = json::parse("4096");
     defs.at("assetLocator-1.11").at("properties").at("relinkHint").at("pattern") =
         json::parse(R"("^(?:file|font):")");
     previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-document:1.21"));
@@ -326,8 +326,9 @@ void validateManifestSchemaV1_22(const json::Value& schema) {
                  R"({"const":22})", "external locator manifest minor");
     auto previous = schema;
     auto& defs = previous.at("$defs");
-    auto fixed = std::find_if(defs.asObject().begin(), defs.asObject().end(),
-                              [](const auto& member) { return member.first == "fixedVersion-1.22"; });
+    auto fixed =
+        std::find_if(defs.asObject().begin(), defs.asObject().end(),
+                     [](const auto& member) { return member.first == "fixedVersion-1.22"; });
     if (fixed == defs.asObject().end())
         throw std::runtime_error("manifest 1.22 version is missing");
     fixed->first = "fixedVersion-1.21";
@@ -336,5 +337,73 @@ void validateManifestSchemaV1_22(const json::Value& schema) {
     defs.at("document-1.0").at("properties").at("schemaVersion") =
         json::parse(R"({"$ref":"#/$defs/fixedVersion-1.21"})");
     validateManifestSchemaV1_21(previous);
+}
+void validateDocumentSchemaV1_23(const json::Value& schema) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-document:1.23",
+                       "layer time document id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.23").at("properties").at("minor"),
+                 R"({"const":23})", "layer time document minor");
+    const auto& boundary = schema.at("$defs").at("layerOutput-1.0").at("properties");
+    requireExact(boundary.at("startTime"), R"({"$ref":"#/$defs/rationalTime"})",
+                 "layer start time");
+    requireExact(boundary.at("speed"), R"({"$ref":"#/$defs/positiveRationalTime"})", "layer speed");
+    requireExact(boundary.at("contentExtent"), R"({"$ref":"#/$defs/layerContentExtent-1.23"})",
+                 "layer content extent");
+    requireExact(boundary.at("beforeMode").at("enum"), R"(["none","hold","loop","pingPong"])",
+                 "layer before mode");
+    requireExact(boundary.at("afterMode").at("enum"), R"(["none","hold","loop","pingPong"])",
+                 "layer after mode");
+    const auto& extent = schema.at("$defs").at("layerContentExtent-1.23").at("oneOf").asArray();
+    requireExact(extent.at(0).at("properties").at("kind"), R"({"const":"fixed"})",
+                 "fixed extent kind");
+    requireExact(extent.at(0).at("required"), R"(["kind","duration","frameRate"])",
+                 "fixed extent members");
+    requireExact(extent.at(1).at("properties").at("kind"), R"({"const":"source"})",
+                 "source extent kind");
+    requireExact(extent.at(1).at("required"), R"(["kind","node"])", "source extent members");
+    auto previous = schema;
+    auto& defs = previous.at("$defs");
+    auto fixed =
+        std::find_if(defs.asObject().begin(), defs.asObject().end(),
+                     [](const auto& member) { return member.first == "fixedVersion-1.23"; });
+    if (fixed == defs.asObject().end())
+        throw std::runtime_error("document 1.23 version is missing");
+    fixed->first = "fixedVersion-1.22";
+    fixed->second.at("properties").at("minor") = json::parse(R"({"const":22})");
+    auto& previousBoundary = defs.at("layerOutput-1.0").at("properties").asObject();
+    std::erase_if(previousBoundary, [](const auto& member) {
+        return member.first == "startTime" || member.first == "speed" ||
+               member.first == "contentExtent" || member.first == "beforeMode" ||
+               member.first == "afterMode";
+    });
+    std::erase_if(defs.asObject(),
+                  [](const auto& member) { return member.first == "layerContentExtent-1.23"; });
+    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-document:1.22"));
+    previous.at("properties").at("schemaVersion") =
+        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.22"})");
+    validateDocumentSchemaV1_22(previous);
+}
+void validateManifestSchemaV1_23(const json::Value& schema) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-manifest:1.23",
+                       "layer time manifest id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.23").at("properties").at("minor"),
+                 R"({"const":23})", "layer time manifest minor");
+    auto previous = schema;
+    auto& defs = previous.at("$defs");
+    auto fixed =
+        std::find_if(defs.asObject().begin(), defs.asObject().end(),
+                     [](const auto& member) { return member.first == "fixedVersion-1.23"; });
+    if (fixed == defs.asObject().end())
+        throw std::runtime_error("manifest 1.23 version is missing");
+    fixed->first = "fixedVersion-1.22";
+    fixed->second.at("properties").at("minor") = json::parse(R"({"const":22})");
+    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-manifest:1.22"));
+    defs.at("document-1.0").at("properties").at("schemaVersion") =
+        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.22"})");
+    validateManifestSchemaV1_22(previous);
 }
 } // namespace bloom::quality

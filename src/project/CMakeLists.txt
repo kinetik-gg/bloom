@@ -352,6 +352,11 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_project_node_layout_test)
     bloom_add_test(NAME bloom.project.node-layout COMMAND bloom_project_node_layout_test LABELS unit persistence)
 
+    add_executable(bloom_project_layer_time_test tests/layer_time_persistence_tests.cpp)
+    target_link_libraries(bloom_project_layer_time_test PRIVATE bloom_project ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_layer_time_test)
+    bloom_add_test(NAME bloom.project.layer-time COMMAND bloom_project_layer_time_test LABELS unit persistence)
+
     add_executable(bloom_project_node_group_test tests/node_group_persistence_tests.cpp)
     target_link_libraries(bloom_project_node_group_test PRIVATE bloom_project ZLIB::ZLIB)
     bloom_enable_warnings(bloom_project_node_group_test)

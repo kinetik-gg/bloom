@@ -1,7 +1,8 @@
 # Bloom Project Format
 
-The current document schema is 1.22. It adds explicit external file-URI asset locators on top of
-the 1.21 LUT asset kind, 1.20 config-managed asset input colour-space ids,
+The current document schema is 1.23. It adds optional layer-owned time members to Layer Output
+boundaries (see "Layer Time In Document 1.23") on top of the 1.22 explicit external file-URI asset
+locators, the 1.21 LUT asset kind, 1.20 config-managed asset input colour-space ids,
 the 1.19 optional per-composition working colour-space override, the 1.18 `project.dataBlocks`
 collection, and the `dataBlock` allocator namespace.
 See [data blocks](data-blocks.md) for the model and provenance contract.
@@ -44,13 +45,13 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.22`.
+The container version remains `1.0`; the current document schema is `1.23`.
 The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. Versioned artifacts through `1.11` remain checked as
-historical fixtures, with the current `1.22` contract also enforced by the canonical writer and
+historical fixtures, with the current `1.23` contract also enforced by the canonical writer and
 decoder tests. The manifest artifact still requires container `1.0`; its document
 declaration follows the current document minor. Every historical artifact from `1.0` through `1.11`,
 manifest and document, remains checked, and each version's checker validates what its own minor adds
@@ -888,13 +889,13 @@ schema-version path. Reconstruction applies the same registry validation to deco
 names the node ID. Old or future versions of a known kind are never silently upgraded, downgraded,
 or interpreted through another definition. No parameters or IDs are injected and no edges are dropped.
 
-The canonical writer is **1.22** and the load floor is **1.15**. Opening 1.15 applies the additive
-asset metadata defaults during typed decoding and reports the resulting document as 1.22. The
+The canonical writer is **1.23** and the load floor is **1.15**. Opening 1.15 applies the additive
+asset metadata defaults during typed decoding and reports the resulting document as 1.23. The
 registered 1.15 → 1.16, 1.16 → 1.17, 1.17 → 1.18, 1.18 → 1.19, 1.19 → 1.20,
-1.20 → 1.21 and 1.21 → 1.22 DOM
+1.20 → 1.21, 1.21 → 1.22 and 1.22 → 1.23 DOM
 transforms are tested against the same decoded result. The input-id step adds only the deterministic
 mapping, preserving inheritance and `lin_rec709_scene`; the LUT and locator steps advance only
-the version. No node version, parameter source or rendering meaning changes. The earlier numbered ladder remains independently
+the version, and the layer-time step also advances the Layer Output node schema (below). No other node version, parameter source or rendering meaning changes. The earlier numbered ladder remains independently
 tested bookkeeping and does not admit files below the load floor. Historical schema
 artifacts describe their own versions and do not imply that those documents can be loaded.
 
@@ -1215,8 +1216,8 @@ the new artifacts to 1.5 and run the complete historical ladder.
 
 ## Content Bounds Introduced In Document 1.7
 
-Solid v2 introduced explicit Scalar width and height. Text v2, Layer v4, and Merge v2 use local
-content bounds. These are now the only supported definitions; the current 1.22 schema includes
+Solid v2 introduced explicit Scalar width and height. Text v2, Layer v4 (v5 from 1.23), and Merge v2 use local
+content bounds. These are now the only supported definitions; the current 1.23 schema includes
 those contracts together with per-component animation, image assets, and audio. Documents carrying
 older node versions fail validation. There is no coordinate conversion or compatibility evaluator.
 
@@ -1341,9 +1342,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.22`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.23`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-The current artifacts are `document-1.22.schema.json` and `manifest-1.22.schema.json`; the
+The current artifacts are `document-1.23.schema.json` and `manifest-1.23.schema.json`; the
 historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
@@ -1378,7 +1379,7 @@ and unknown additive members.
 Document `1.16` adds organization metadata without changing media identity or evaluation. The
 introduction artifacts are `document-1.16.schema.json` and `manifest-1.16.schema.json`. Container
 version remains `1.0`; the load floor remains `1.15` so existing projects can acquire these
-additive defaults when opened. The current writer saves 1.22; opening alone leaves the
+additive defaults when opened. The current writer saves 1.23; opening alone leaves the
 original file untouched.
 
 Each asset appends `name`, optional `folder`, `tags`, then `order` after its existing media
@@ -1418,14 +1419,41 @@ empty tags, and positions matching their former ID-ordered listing. The migratio
 asset ID, locator, digest, media descriptor, graph node and parameter source. Relink likewise keeps
 name, folder, tags and order. No organization command changes render pixels.
 
+## Layer Time In Document 1.23
+
+Document `1.23` persists the layer-owned time model of
+[ADR 0024](../decisions/0024-layer-owned-time.md). A Layer Output boundary in `layerOutputs` gains
+five optional members, written after `parent` in this order and only when they differ from the
+identity default, so a layer without timing keeps its pre-1.23 bytes:
+
+| Member | Encoding | Default (omitted) |
+| --- | --- | --- |
+| `startTime` | rational-time object, same encoding as `inPoint` (any representable value, including negative) | `0` |
+| `speed` | `{numerator, denominator}` decimal strings, reduced, positive, terms in `[1, 2^31 - 1]`, value in `[1/1000, 1000]` | `1/1` |
+| `contentExtent` | `{"kind":"fixed","duration":<positive rational time>,"frameRate":<frame-rate object as in a composition format>}` or `{"kind":"source","node":<node id string>}` | Unbounded |
+| `beforeMode`, `afterMode` | `"none"`, `"hold"`, `"loop"` or `"pingPong"` | `"none"` |
+
+The decoder reads these members only in documents at `1.23` or later; an earlier minor rejects them
+as unknown members. A present member is strict: a speed outside the range above, an unknown mode or
+extent kind, or a fixed extent with a non-positive duration is a decode error rather than a silent
+identity. The explicit layer range (`inPoint`, `outPoint`) may lie outside `[0, duration]`.
+
+The Layer Output node schema advances 4 → 5 to declare the optional, animatable Float64 parameter
+role `timeRemap` (schema key `bloom.layer.time-remap`). The parameter is not required, so no
+binding or parameter record is inserted. The `1.22` → `1.23` DOM step advances the version and
+rewrites every `bloom.layer-output` node record whose `schemaVersion` is 3 or 4 to 5, leaving all
+bindings and values unchanged; opening an older document through typed decoding applies the same
+node-schema upgrade. A document opened from `1.22` therefore saves as `1.23` with identity timing
+and no layer time member.
+
 ## Video Assets In Document 1.17
 
-The current document and manifest schema artifacts are `document-1.22.schema.json` and
-`manifest-1.22.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
+The current document and manifest schema artifacts are `document-1.23.schema.json` and
+`manifest-1.23.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
 The 1.16 → 1.17 migration only advances the version; the 1.17 → 1.18 and 1.18 → 1.19 steps
 likewise preserve existing assets and pixels. Opening 1.15 first applies asset-organization
 defaults and the historical video and working-space steps, then the 1.19 → 1.20 input-id step,
-1.20 → 1.21 LUT step and 1.21 → 1.22 locator version step.
+1.20 → 1.21 LUT step, 1.21 → 1.22 locator version step and 1.22 → 1.23 layer-time step.
 
 `AssetKind::Video` serializes as `"video"`. It retains the shared asset identity, locator,
 interpretation, dimensions and organization envelope, with a closed `video` member before

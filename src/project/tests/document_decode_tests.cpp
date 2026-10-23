@@ -93,7 +93,7 @@ constexpr std::uint64_t kGenerousOperationBudget = 8ULL << 20U; // 8 MiB: ample 
 // carry the current required composition members; rejection fixtures alter only their target.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":22})";
+constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":23})";
 constexpr std::string_view kValidDigest =
     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 
@@ -227,7 +227,7 @@ constexpr std::string_view kMinimalGraphJson =
 // skeleton builder rather than complicating every existing R2/R3 call site above.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":23})";
+constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":24})";
 
 [[nodiscard]] std::string
 documentWithCompositionFutureMinor(const std::string_view compositionJsonText) {
@@ -1571,7 +1571,7 @@ void testRejectsUnknownEdgeDestinationKind(Expectations& expectations) {
 void testRejectsUnsortedLayerOutputs(Expectations& expectations) {
     const std::string graph =
         R"({"nodes":[)"
-        R"({"id":"1","typeId":"bloom.layer-output","schemaVersion":4,"parameters":[]}],)"
+        R"({"id":"1","typeId":"bloom.layer-output","schemaVersion":5,"parameters":[]}],)"
         R"("edges":[],)"
         R"("layerOutputs":[)"
         R"({"nodeId":"1","layerId":"2","name":"B","outputPort":"image"},)"
@@ -1587,7 +1587,7 @@ void testRejectsUnsortedLayerOutputs(Expectations& expectations) {
 
 void testLayerParentMember(Expectations& expectations) {
     const std::string graph =
-        R"({"nodes":[{"id":"1","typeId":"bloom.layer-output","schemaVersion":4,"parameters":[]}],)"
+        R"({"nodes":[{"id":"1","typeId":"bloom.layer-output","schemaVersion":5,"parameters":[]}],)"
         R"("edges":[],"layerOutputs":[)"
         R"({"nodeId":"1","layerId":"1","name":"A","outputPort":"image","parent":"2"},)"
         R"({"nodeId":"1","layerId":"2","name":"B","outputPort":"image"}],)"
@@ -1608,7 +1608,7 @@ void testRejectsDuplicateLayerOutputs(Expectations& expectations) {
         R"({"nodeId":"1","layerId":"1","name":"A","outputPort":"image"})";
     const std::string graph =
         R"({"nodes":[)"
-        R"({"id":"1","typeId":"bloom.layer-output","schemaVersion":4,"parameters":[]}],)"
+        R"({"id":"1","typeId":"bloom.layer-output","schemaVersion":5,"parameters":[]}],)"
         R"("edges":[],)"
         R"("layerOutputs":[)" +
         boundaryJson + "," + boundaryJson +
@@ -1626,8 +1626,8 @@ void testAcceptsUnsortedLayerStackEntries(Expectations& expectations) {
     const std::string graph =
         R"({"nodes":[)"
         R"({"id":"1","typeId":"bloom.layer-stack","schemaVersion":2,"parameters":[]},)"
-        R"({"id":"2","typeId":"bloom.layer-output","schemaVersion":4,"parameters":[]},)"
-        R"({"id":"3","typeId":"bloom.layer-output","schemaVersion":4,"parameters":[]},)"
+        R"({"id":"2","typeId":"bloom.layer-output","schemaVersion":5,"parameters":[]},)"
+        R"({"id":"3","typeId":"bloom.layer-output","schemaVersion":5,"parameters":[]},)"
         R"({"id":"4","typeId":"bloom.composition-output","schemaVersion":1,"parameters":[]}],)"
         R"("edges":[],)"
         R"("layerOutputs":[)"

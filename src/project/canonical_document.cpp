@@ -1066,6 +1066,63 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
     return state.ok(writer.endArray());
 }
 
+// Layer time (1.23): every member is written only when it differs from the identity default, so a
+// layer without timing keeps its pre-1.23 bytes.
+[[nodiscard]] bool emitLayerTiming(EmitState& state,
+                                   const bloom::document::LayerTiming& timing) noexcept {
+    using namespace bloom::document;
+    auto& writer = state.writer;
+    if (timing.startTime != bloom::core::RationalTime{}) {
+        const PathScope scope(state, "startTime");
+        if (!state.ok(writer.memberName("startTime")) ||
+            !emitRational(state, timing.startTime.numerator(), timing.startTime.denominator()))
+            return false;
+    }
+    if (!timing.speed.isIdentity()) {
+        const PathScope scope(state, "speed");
+        if (!state.ok(writer.memberName("speed")) ||
+            !emitRational(state, timing.speed.numerator(), timing.speed.denominator()))
+            return false;
+    }
+    if (const auto* fixed = std::get_if<FixedLayerExtent>(&timing.contentExtent)) {
+        const PathScope scope(state, "contentExtent");
+        if (!state.ok(writer.memberName("contentExtent")) || !state.ok(writer.beginObject()) ||
+            !state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("fixed")) ||
+            !state.ok(writer.memberName("duration")))
+            return false;
+        {
+            const PathScope durationScope(state, "duration");
+            if (!emitRational(state, fixed->duration.numerator(), fixed->duration.denominator()))
+                return false;
+        }
+        if (!state.ok(writer.memberName("frameRate")))
+            return false;
+        {
+            const PathScope rateScope(state, "frameRate");
+            if (!emitRational(state, fixed->frameRate.numerator(), fixed->frameRate.denominator()))
+                return false;
+        }
+        if (!emitRetainedTrailing(state) || !state.ok(writer.endObject()))
+            return false;
+    } else if (const auto* source = std::get_if<SourceLayerExtent>(&timing.contentExtent)) {
+        const PathScope scope(state, "contentExtent");
+        if (!state.ok(writer.memberName("contentExtent")) || !state.ok(writer.beginObject()) ||
+            !state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("source")) ||
+            !emitNamedId(state, "node", source->sourceNodeId.value()) ||
+            !emitRetainedTrailing(state) || !state.ok(writer.endObject()))
+            return false;
+    }
+    if (timing.beforeMode != LayerTimeMode::None &&
+        (!state.ok(writer.memberName("beforeMode")) ||
+         !state.ok(writer.stringValue(layerTimeModeName(timing.beforeMode)))))
+        return false;
+    if (timing.afterMode != LayerTimeMode::None &&
+        (!state.ok(writer.memberName("afterMode")) ||
+         !state.ok(writer.stringValue(layerTimeModeName(timing.afterMode)))))
+        return false;
+    return true;
+}
+
 [[nodiscard]] bool emitGraph(EmitState& state, const Composition& composition,
                              const std::size_t compositionIndex) noexcept {
     using namespace bloom::document;
@@ -1308,6 +1365,8 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
                 return false;
         }
         if (boundary.parent && !emitNamedId(state, "parent", boundary.parent->value()))
+            return false;
+        if (!emitLayerTiming(state, boundary.timing))
             return false;
         if (!emitRetainedTrailing(state)) {
             return false;

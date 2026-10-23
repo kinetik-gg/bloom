@@ -164,6 +164,11 @@ class AttachmentScope final {
 [[nodiscard]] bool decodeRationalTimeValue(const JsonValue& node, DecodeState& state,
                                            const std::string& path, core::RationalTime& out);
 
+// The canonical frame-rate wire shape ({"numerator","denominator"} reduced positive uint32 decimal
+// strings) shared by a composition format and a Fixed layer content extent.
+[[nodiscard]] bool decodeFrameRateValue(const JsonValue& node, DecodeState& state,
+                                        const std::string& path, document::FrameRate& out);
+
 // Reads an object's first member, requires it to be literally named "kind", and decodes its
 // string value as the discriminator for a branch the caller resolves afterward (constant value,
 // parameter source, edge destination, OCIO locator).

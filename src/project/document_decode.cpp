@@ -505,6 +505,16 @@ using document::SchemaVersion;
     out = *created;
     return true;
 }
+} // namespace
+
+namespace detail {
+bool decodeFrameRateValue(const JsonValue& node, DecodeState& state, const std::string& path,
+                          FrameRate& out) {
+    return decodeFrameRate(node, state, path, out);
+}
+} // namespace detail
+
+namespace {
 
 [[nodiscard]] bool decodeFormat(const JsonValue& node, DecodeState& state, const std::string& path,
                                 CompositionFormat& out) {
@@ -2200,7 +2210,11 @@ DocumentDecodeResult decodeDocumentEnvelope(const JsonValue& root) {
                                                    std::numeric_limits<std::uint32_t>::max(),
                                                    parsedVersion) &&
                         parsedVersion != 0 &&
-                        !document::isSupportedNodeVersion(*kind->asString(), parsedVersion)) {
+                        !document::isSupportedNodeVersion(*kind->asString(), parsedVersion) &&
+                        // Layer Output schema 4 predates Time Remap (document 1.23); the
+                        // node decoder upgrades them to the current schema, as the migration does.
+                        !(schemaVersion.minor < 23 && *kind->asString() == "bloom.layer-output" &&
+                          parsedVersion == 4)) {
                         return DocumentDecodeResult::failure(
                             DocumentDecodeError::UnsupportedNodeVersion,
                             "/project/compositions/" + std::to_string(compositionIndex) +
