@@ -1,0 +1,58 @@
+{
+  "name": "nasm",
+  "version": "2.16.03",
+  "source": {
+    "url": "https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/nasm-2.16.03.tar.xz",
+    "archiveSha256": "sha256:1412a1c760bbd05db026b6c0d1657affd6631cd0a63cddb6f73cc6d4aa616148",
+    "archiveSizeBytes": 1032388,
+    "retrievedAt": "2026-10-23",
+    "commit": null,
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/nasm/provenance.md",
+      "sha256": "sha256:4bad1e42ed60ee68cef896ee85c1db782230da534ee841ee766a3b60cef0d8c7"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "BSD-2-Clause",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/nasm/LICENSE",
+        "sha256": "sha256:1563996c52e220e15ef2418e67d39488255aa8c28c89e617074d3afe3ee329e0"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/nasm/review.md",
+      "sha256": "sha256:8886ea6d4f4580f3b6f9d955b024dc7e748fe5d3ef00c2d3f34d0084b88dc65b"
+    },
+    "reviewedAt": "2026-10-23"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [
+    {
+      "profileId": "bloom.linux-x86-64-clang-release",
+      "linkage": "executable",
+      "cmakeOptions": [],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.nasm"
+      ],
+      "shippingRoles": [],
+      "conformanceFixtureSets": []
+    }
+  ],
+  "securityReview": {
+    "reviewedAt": "2026-10-23",
+    "record": {
+      "path": "dependencies/licenses/nasm/security.md",
+      "sha256": "sha256:47f33451c648ff8bc91049c23c2555c980868ed1295e28e90afbd6fe2b9831e5"
+    },
+    "vulnerabilities": []
+  }
+}

@@ -98,7 +98,9 @@ WAV, MP3, and AAC demuxing; MOV, Matroska, MXF, and WAV muxing; H.264/HEVC, ProR
 TIFF, AAC, MP3, and explicit PCM-family decoding; ProRes KS, DNxHD, PCM-family, AAC, and TIFF
 encoding; the required parsers/bitstream filters; and the `file` protocol. VA-API H.264/HEVC
 hardware acceleration is enabled when `libva` is available and can be disabled for a host without
-the development files.
+the development files. On x86 and x86-64 hosts FFmpeg's hand-written SIMD is enabled: the superbuild
+assembles it with NASM 2.16.03, a source-built, build-host-only tool installed outside the
+dependency prefix that is never linked or shipped.
 
 FFmpeg ProRes is a non-authorized preview/workflow capability only. It is not evidence of Apple
 authorization, certification, patent clearance, or delivery qualification. The Linux worker's

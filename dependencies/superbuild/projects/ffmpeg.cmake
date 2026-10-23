@@ -38,6 +38,14 @@ else()
     endif()
 endif()
 
+# x86 SIMD: FFmpeg's x86 assembly is built with the superbuild-private NASM (nasm.cmake). Other
+# targets use FFmpeg's inline/NEON assembly and need neither the tool nor the argument.
+set(BLOOM_FFMPEG_DEPENDS bloom_dependency_openh264)
+if(BLOOM_NASM_REQUIRED)
+    list(APPEND BLOOM_FFMPEG_DEPENDS bloom_dependency_nasm)
+    list(APPEND BLOOM_FFMPEG_CONFIGURE_ARGUMENTS --x86asmexe=${BLOOM_NASM_EXECUTABLE})
+endif()
+
 ExternalProject_Add(bloom_dependency_ffmpeg
     URL "${BLOOM_FFMPEG_URL}"
     URL_HASH SHA256=${BLOOM_FFMPEG_SHA256}
@@ -45,7 +53,7 @@ ExternalProject_Add(bloom_dependency_ffmpeg
     DOWNLOAD_NAME ffmpeg-${BLOOM_FFMPEG_VERSION}.tar.xz
     DOWNLOAD_NO_PROGRESS ON
     DOWNLOAD_EXTRACT_TIMESTAMP ON
-    DEPENDS bloom_dependency_openh264
+    DEPENDS ${BLOOM_FFMPEG_DEPENDS}
     BUILD_IN_SOURCE ON
     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
         CC=${CMAKE_C_COMPILER}

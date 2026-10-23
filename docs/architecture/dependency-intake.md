@@ -156,6 +156,11 @@ download and decompressed bytes against the lock, and atomically publishes the b
 path follows the same digest check. Runtime-fetched components are never bundled, fetched at
 startup, or accepted from an unverified mirror.
 
+FFmpeg's x86 SIMD is enabled. NASM 2.16.03 is a source-built, build-host-only tool recorded with
+`executable` linkage and no shipping roles; FFmpeg depends on it with the `build` relationship. It is
+installed into a superbuild-private `tools/` directory rather than the dependency prefix and is
+passed to FFmpeg through `--x86asmexe` on x86 targets only.
+
 The worker also carries a Bloom-owned API shim named `libopenh264.so.8` in its private `lib/`
 directory. The shim re-declares only the six public C entry points required by the FFmpeg wrapper,
 exports no codec implementation, reports a zero version with a shim marker, and makes encoder and

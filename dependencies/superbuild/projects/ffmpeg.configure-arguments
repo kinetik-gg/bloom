@@ -10,7 +10,6 @@
 --disable-autodetect
 --disable-iconv
 --disable-audiotoolbox
---disable-x86asm
 --enable-pic
 --enable-demuxer=mov
 --enable-demuxer=matroska

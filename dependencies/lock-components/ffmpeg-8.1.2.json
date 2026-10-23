@@ -47,6 +47,10 @@
   "patches": [],
   "dependencies": [
     {
+      "name": "nasm",
+      "relationship": "build"
+    },
+    {
       "name": "openh264",
       "relationship": "link"
     }
@@ -66,6 +70,11 @@
           "id": "bloom.feature.ffmpeg-vaapi",
           "state": "enabled",
           "reason": "libva is present in the qualified Linux profile; the recipe has an explicit OFF fallback"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-x86-simd",
+          "state": "enabled",
+          "reason": "x86 SIMD is assembled with the superbuild-private NASM 2.16.03 build tool, passed through --x86asmexe on x86 targets only"
         }
       ],
       "capabilities": [
