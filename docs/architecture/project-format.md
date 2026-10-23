@@ -388,7 +388,8 @@ is enforced at both ends and never by terminating:
   no well-formed archive can carry one.
 - **Before either.** The document model refuses non-finite values on admission (`ParameterStore`,
   and `AnimationCurveStore` insert/update on every scalar and component key) and
-  `Document::commit()` re-runs `Project::validate()`, so a committed document cannot hold one. The writer's refusal is the last line of defence, not the first.
+  `Document::commit()` admits only a draft proven valid (see **Commit Validation And Publication
+  Cost**), so a committed document cannot hold one. The writer's refusal is the last line of defence, not the first.
 
 ### Unknown JSON Numbers
 
@@ -722,6 +723,34 @@ nothing referencing it is valid and expected.
 Every serialized typed ID in a namespace must be nonzero and at most its high-water value. The
 high-water may exceed all surviving declarations because deleted and undone allocations remain
 consumed. Commit, restore, undo, redo, clone, import, and reopen may increase but never lower it.
+
+### Commit Validation And Publication Cost
+
+Status: accepted (#357). Every published state is valid -- construction and every commit prove it
+-- so a commit only has to prove what its draft changed relative to the published state it was
+drafted from (`Project::validatesAgainst`). A composition is changed when its content identity or
+any of its settings differ. Only changed compositions run `Composition::validate()`;
+project-wide ID uniqueness compares their declarations with each other and with the frozen,
+sorted per-composition ID index every published composition carries; composition nesting reads
+each composition's cached Composition Source references; assets, folders and the project name are
+revalidated only when their storage changed; extension records and data blocks are revalidated
+when their storage changed, or when any composition changed while records exist that may name
+composition content. Anything this cannot prove falls back to the whole `Project::validate()`,
+which also supplies the refusal's diagnostics, so an invalid draft reports exactly what it always
+did. `Draft::validate()` keeps returning the full diagnostics, warnings included; `Draft::valid()`
+is the incremental yes/no. Diagnostic paths in project-wide ID checks and data-block rows are built
+only when a diagnostic exists.
+
+Assets, folders, extension records and data blocks are copy-on-write like composition content:
+snapshots share one immutable collection, a draft copies a collection only when it edits it, and
+publication freezes only the copies a draft made, so a retained draft pointer can never reach a
+snapshot. Publication reserves allocator IDs only for changed compositions and edited root
+collections; undo/redo restores rely on the historical state's own allocator, which already
+covered its project. Published composition content also carries a lock index (one reverse search
+from locked layers) and its render reachability, both built once at freeze time. Work counters
+(`Project::incrementalValidationWork()`, `Composition::lockIndexBuilds()`,
+`RenderReachability::computations()`) let tests prove an edit's cost does not grow with unrelated
+compositions.
 
 `ProjectId` is not allocator-backed because one container owns one project. A normal schema `1.0`
 document missing any high-water member, including `driverBinding`, is invalid. Reconstruction from
