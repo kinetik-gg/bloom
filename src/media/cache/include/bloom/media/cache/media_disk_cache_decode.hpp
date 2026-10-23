@@ -35,6 +35,10 @@ struct ImageCacheKeyInputs final {
     std::string workingColorSpaceId;
     ImageAlphaAssociation alphaAssociation = ImageAlphaAssociation::Straight;
     core::Sha256Digest configDigest;
+    // color::synthesizedColorSpaceIdentity() of the resolved input space: the definition and
+    // OCIO version of a Bloom-synthesized space (Rec.2100 HLG). Empty for ordinary config spaces,
+    // whose keys are then byte-identical to the keys before this field existed.
+    std::string synthesizedColorSpaceIdentity;
 
     friend bool operator==(const ImageCacheKeyInputs&, const ImageCacheKeyInputs&) = default;
 };

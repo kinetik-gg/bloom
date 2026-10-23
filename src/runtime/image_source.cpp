@@ -2,13 +2,16 @@
 #include "input_color_context.hpp"
 #include "operation_key.hpp"
 #include <algorithm>
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/media/cache/media_disk_cache_decode.hpp>
 #include <bloom/platform/source_identity.hpp>
+#include <bloom/render/gpu_point_resample.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <charconv>
 #include <cmath>
 #include <limits>
 #include <utility>
+#include <vector>
 
 namespace bloom::runtime::detail {
 
@@ -172,6 +175,11 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
     key.add(memberFrame);
     key.add(selected.interpretation.colorSpace);
     key.add(selected.interpretation.inputColorSpaceId);
+    // A Bloom-synthesized input space (Rec.2100 HLG) is defined by OCIO built-ins, so its
+    // definition and the linked OCIO version are part of the source identity (as for video).
+    const auto synthesized =
+        color::synthesizedColorSpaceIdentity(selected.interpretation.inputColorSpaceId);
+    key.add(synthesized);
     key.add(selected.workingColorSpaceId);
     const auto revision = selected.configRevision.toLowercaseHex();
     key.add(std::string(revision.begin(), revision.end()));
@@ -202,6 +210,7 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
     diskInputs.workingColorSpaceId = selected.workingColorSpaceId;
     diskInputs.alphaAssociation = selected.interpretation.alphaAssociation;
     diskInputs.configDigest = selected.configRevision;
+    diskInputs.synthesizedColorSpaceIdentity = synthesized;
     selected.diskCacheKey =
         media::cache::buildImageCacheKey(diskInputs, media::cache::kImageDecoderIdentity);
     return selected;
@@ -216,6 +225,7 @@ media::ImageResult<render::Rgba32fImage> evaluateImageSource(
     if (!selected.available)
         return {{}, selected.warning};
     std::shared_ptr<const render::Rgba32fImage> image;
+    std::uint64_t repairedPixels = 0;
     if (memoryAccess != ImageSourceMemoryCacheAccess::Disabled && memoryCache != nullptr) {
         auto cached = memoryCache->find(selected.cacheKey, document::Revision{});
         if (cached)
@@ -237,15 +247,18 @@ media::ImageResult<render::Rgba32fImage> evaluateImageSource(
             decodeDiskCache, /*writeAsync=*/true, [&] { return cancel.isCancellationRequested(); },
             {}, budget, selected.inputProcessor, selected.sourceRevision, decodeStatistics);
         if (!decoded.value.has_value())
-            return {{}, decoded.diagnostic, decoded.cancelled};
+            return {{}, decoded.diagnostic, decoded.cancelled, decoded.code};
         image = std::move(*decoded.value);
+        repairedPixels = decoded.repairedPixels;
         if (memoryAccess == ImageSourceMemoryCacheAccess::ReadWrite && memoryCache != nullptr)
             memoryCache->store(selected.cacheKey, document::Revision{},
                                {.image = image, .values = {}, .bounds = {}},
                                OperationCacheEntryKind::DecodedMedia);
     }
-    return resampleDecodedImage(*image, composition, horizontalScale, verticalScale, budget,
-                                cancel);
+    auto resampled =
+        resampleDecodedImage(*image, composition, horizontalScale, verticalScale, budget, cancel);
+    resampled.repairedPixels = repairedPixels;
+    return resampled;
 }
 
 media::ImageResult<std::shared_ptr<const render::Rgba32fImage>>
@@ -267,6 +280,30 @@ decodeRawImageSource(const ImageSourceSelection& selected, const std::size_t bud
         [&cancel] { return cancel.isCancellationRequested(); }, {}, budget, decodeStatistics);
 }
 
+std::optional<render::ImageWindow>
+frameRelativeDataWindow(const render::Rgba32fImageDescriptor& decoded) noexcept {
+    const auto data = decoded.dataWindow();
+    const auto frame = decoded.displayWindow();
+    const auto window = render::ImageWindow::create(data.originX() - frame.originX(),
+                                                    data.originY() - frame.originY(),
+                                                    data.extent().width(), data.extent().height());
+    if (!window)
+        return std::nullopt;
+    return *window.value();
+}
+
+std::optional<ContentBounds>
+imageSourceFrameBounds(const ImageSourceSelection& selection) noexcept {
+    if (!selection.sourceRevision)
+        return std::nullopt;
+    const auto& probe = selection.sourceRevision->probe();
+    if (probe.dataOffsetX == 0 && probe.dataOffsetY == 0 &&
+        probe.effectiveFrameWidth() == probe.width && probe.effectiveFrameHeight() == probe.height)
+        return std::nullopt;
+    return ContentBounds{0.0, 0.0, static_cast<double>(probe.effectiveFrameWidth()),
+                         static_cast<double>(probe.effectiveFrameHeight())};
+}
+
 media::ImageResult<render::Rgba32fImage>
 resampleDecodedImage(const render::Rgba32fImage& decoded,
                      const render::Rgba32fImageDescriptor composition, const double horizontalScale,
@@ -274,36 +311,35 @@ resampleDecodedImage(const render::Rgba32fImage& decoded,
                      const CancellationToken& cancel) {
     if (decoded.descriptor() == nullptr)
         return {{}, "Decoded image has no descriptor"};
-    const auto sourceWindow = decoded.descriptor()->dataWindow();
-    const auto width = static_cast<std::uint64_t>(
-        std::max(1.0, std::ceil(sourceWindow.extent().width() * horizontalScale)));
-    const auto height = static_cast<std::uint64_t>(
-        std::max(1.0, std::ceil(sourceWindow.extent().height() * verticalScale)));
-    const auto window = render::ImageWindow::create(0, 0, width, height);
+    const auto source = frameRelativeDataWindow(*decoded.descriptor());
+    const auto window =
+        source ? render::pointResampleProxyWindow(*source, horizontalScale, verticalScale)
+               : std::nullopt;
     if (!window)
         return {{}, "Image proxy dimensions are invalid"};
     const auto descriptor = render::Rgba32fImageDescriptor::create(
-        *window.value(), composition.displayWindow(), composition.pixelAspect());
+        *window, composition.displayWindow(), composition.pixelAspect());
     if (!descriptor)
         return {{}, "Image source descriptor is invalid"};
     auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), budget);
     if (!builder)
         return {{}, "Image source exceeds the pixel budget"};
-    for (std::uint64_t y = 0; y < height; ++y) {
+    const auto sourceWidth = source->extent().width();
+    const auto sourceHeight = source->extent().height();
+    std::vector<std::uint32_t> columns(window->extent().width());
+    for (std::uint32_t x = 0; x < window->extent().width(); ++x)
+        columns[x] = render::pointResampleSourceIndex(window->originX() + x, source->originX(),
+                                                      sourceWidth, horizontalScale);
+    for (std::uint32_t y = 0; y < window->extent().height(); ++y) {
         if (cancel.isCancellationRequested())
             return {{}, {}, true};
-        auto row = builder.value()->row(static_cast<std::int64_t>(y));
-        const auto sourceY =
-            std::min(sourceWindow.extent().height() - 1,
-                     static_cast<std::uint32_t>(static_cast<double>(y) / verticalScale));
-        for (std::uint64_t x = 0; x < width; ++x) {
-            const auto sourceX =
-                std::min(sourceWindow.extent().width() - 1,
-                         static_cast<std::uint32_t>(static_cast<double>(x) / horizontalScale));
+        const auto outputY = window->originY() + y;
+        auto row = builder.value()->row(outputY);
+        const auto sourceY = render::pointResampleSourceIndex(outputY, source->originY(),
+                                                              sourceHeight, verticalScale);
+        for (std::uint32_t x = 0; x < window->extent().width(); ++x)
             (*row.value())[x] =
-                decoded.pixels()[static_cast<std::size_t>(sourceY) * sourceWindow.extent().width() +
-                                 sourceX];
-        }
+                decoded.pixels()[static_cast<std::size_t>(sourceY) * sourceWidth + columns[x]];
     }
     auto frozen = std::move(*builder.value()).freeze();
     if (!frozen)

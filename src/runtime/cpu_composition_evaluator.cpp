@@ -2942,9 +2942,21 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 contentHashes[index] += ":image-decode-failed";
                                 return;
                             }
-                            bounds[index].local = detail::boundsForWindow(
-                                image.value->descriptor()->dataWindow(), resolved.horizontalScale,
-                                resolved.verticalScale);
+                            if (image.repairedPixels != 0)
+                                imageWarnings.push_back(
+                                    {EvaluationDiagnosticCode::InvalidParameter,
+                                     DiagnosticSeverity::Warning,
+                                     operationSubject,
+                                     std::to_string(image.repairedPixels) +
+                                         " image pixels were repaired by the ingest policy "
+                                         "(NaN/Inf to 0, alpha clamped to [0, 1], zero-alpha "
+                                         "emission dropped)",
+                                     {}});
+                            bounds[index].local =
+                                detail::imageSourceFrameBounds(*selectedImage)
+                                    .value_or(detail::boundsForWindow(
+                                        image.value->descriptor()->dataWindow(),
+                                        resolved.horizontalScale, resolved.verticalScale));
                             bounds[index].output = bounds[index].local;
                             produced.emplace(std::move(*image.value));
                         },

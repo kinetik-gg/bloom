@@ -36,18 +36,27 @@ using bloom::render::Rgba32f;
 using bloom::render::Rgba32fImage;
 using bloom::render::Rgba32fImageDescriptor;
 
-// An independent re-implementation of the media-image-proxy CPU axis rule.
-[[nodiscard]] std::int32_t oracleAxis(const std::uint32_t index, const std::uint32_t extent,
-                                      const double scale) {
-    const double mapped = static_cast<double>(index) / scale;
+// An independent re-implementation of the positioned media-image-proxy CPU axis rule: absolute
+// output coordinate X selects clamp(floor(X / scale) - origin, 0, extent - 1).
+[[nodiscard]] std::int32_t oracleAxis(const std::int64_t output, const std::int64_t origin,
+                                      const std::uint32_t extent, const double scale) {
+    const double mapped =
+        std::floor(static_cast<double>(output) / scale) - static_cast<double>(origin);
     const double maximum = static_cast<double>(extent - 1U);
     return static_cast<std::int32_t>(
-        static_cast<std::uint32_t>(mapped > maximum ? maximum : mapped));
+        static_cast<std::uint32_t>(mapped < 0.0 ? 0.0 : (mapped > maximum ? maximum : mapped)));
 }
 
-[[nodiscard]] std::uint32_t derivedExtent(const std::uint32_t extent, const double scale) {
-    return static_cast<std::uint32_t>(
-        std::max(1.0, std::ceil(static_cast<double>(extent) * scale)));
+// The positioned proxy axis: [floor(origin * scale), ceil((origin + extent) * scale)), at least
+// one pixel.
+[[nodiscard]] std::int64_t derivedOrigin(const std::int64_t origin, const double scale) {
+    return static_cast<std::int64_t>(std::floor(static_cast<double>(origin) * scale));
+}
+[[nodiscard]] std::uint32_t derivedExtent(const std::int64_t origin, const std::uint32_t extent,
+                                          const double scale) {
+    const auto minimum = std::floor(static_cast<double>(origin) * scale);
+    const auto maximum = std::ceil((static_cast<double>(origin) + extent) * scale);
+    return static_cast<std::uint32_t>(std::max(1.0, maximum - minimum));
 }
 
 [[nodiscard]] std::vector<Rgba32f>
@@ -56,13 +65,16 @@ oracleResample(const std::span<const Rgba32f> source, const ImageWindow sourceWi
                const double horizontalScale, const double verticalScale) {
     const auto sourceWidth = sourceWindow.extent().width();
     const auto sourceHeight = sourceWindow.extent().height();
+    const auto outputX = derivedOrigin(sourceWindow.originX(), horizontalScale);
+    const auto outputY = derivedOrigin(sourceWindow.originY(), verticalScale);
     std::vector<Rgba32f> expected(static_cast<std::size_t>(outputWidth) * outputHeight,
                                   Rgba32f::transparent());
     for (std::uint32_t y = 0; y < outputHeight; ++y) {
-        const auto sourceY = static_cast<std::uint32_t>(oracleAxis(y, sourceHeight, verticalScale));
+        const auto sourceY = static_cast<std::uint32_t>(
+            oracleAxis(outputY + y, sourceWindow.originY(), sourceHeight, verticalScale));
         for (std::uint32_t x = 0; x < outputWidth; ++x) {
-            const auto sourceX =
-                static_cast<std::uint32_t>(oracleAxis(x, sourceWidth, horizontalScale));
+            const auto sourceX = static_cast<std::uint32_t>(
+                oracleAxis(outputX + x, sourceWindow.originX(), sourceWidth, horizontalScale));
             expected[static_cast<std::size_t>(y) * outputWidth + x] =
                 source[static_cast<std::size_t>(sourceY) * sourceWidth + sourceX];
         }
@@ -105,8 +117,9 @@ oracleResample(const std::span<const Rgba32f> source, const ImageWindow sourceWi
 
 [[nodiscard]] std::optional<Rgba32fImageDescriptor>
 outputDescriptor(const std::uint32_t width, const std::uint32_t height,
-                 const ImageWindow displayWindow, const PixelAspectRatio aspect) {
-    const auto dataWindow = ImageWindow::create(0, 0, width, height);
+                 const ImageWindow displayWindow, const PixelAspectRatio aspect,
+                 const std::int64_t originX = 0, const std::int64_t originY = 0) {
+    const auto dataWindow = ImageWindow::create(originX, originY, width, height);
     if (!dataWindow) {
         return std::nullopt;
     }
@@ -197,9 +210,15 @@ void testGeometryParity(Expectations& expectations, GpuDevice& device) {
             continue;
         }
         auto source = std::make_shared<const GpuImage>(std::move(*sourceResident));
-        const auto outputWidth = derivedExtent(testCase.sourceWidth, testCase.horizontalScale);
-        const auto outputHeight = derivedExtent(testCase.sourceHeight, testCase.verticalScale);
-        const auto output = outputDescriptor(outputWidth, outputHeight, displayWindow, aspect);
+        // A positioned source (an OpenEXR crop inside its frame) keeps its offset, scaled.
+        const auto outputWidth =
+            derivedExtent(testCase.sourceOriginX, testCase.sourceWidth, testCase.horizontalScale);
+        const auto outputHeight =
+            derivedExtent(testCase.sourceOriginY, testCase.sourceHeight, testCase.verticalScale);
+        const auto output =
+            outputDescriptor(outputWidth, outputHeight, displayWindow, aspect,
+                             derivedOrigin(testCase.sourceOriginX, testCase.horizontalScale),
+                             derivedOrigin(testCase.sourceOriginY, testCase.verticalScale));
         expectations.expect(output.has_value(), testCase.name + ": output descriptor builds");
         if (!output) {
             continue;

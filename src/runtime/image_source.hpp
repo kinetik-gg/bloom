@@ -5,6 +5,8 @@
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 #include <filesystem>
+#include <optional>
+#include <utility>
 
 namespace bloom::media::cache {
 class MediaDiskCache;
@@ -94,11 +96,19 @@ decodeRawImageSource(const ImageSourceSelection& selection, std::size_t budget,
                      const CancellationToken& cancel,
                      media::ImageDecodeStatistics* decodeStatistics = nullptr);
 
-// Rebase a decoded image into the evaluator's composition descriptor: a (0,0)-origin data window
-// sized ceil(sourceExtent * scale), the composition display window and pixel aspect. At unit scale
-// this is the evaluator's exact rebase copy; at a fractional proxy scale it is the evaluator's
-// exact nearest-neighbour copy. One implementation shared by evaluateImageSource() and the GPU
-// split.
+// Rebase a decoded image into the evaluator's composition descriptor: its data window keeps its
+// offset inside the source frame (OpenEXR display window), scaled by the shared PointResampleV1
+// window rule, with the composition display window and pixel aspect. At unit scale this is the
+// evaluator's exact rebase copy; at a fractional proxy scale it is the evaluator's exact
+// nearest-neighbour copy. One implementation shared by evaluateImageSource() and the GPU split.
+[[nodiscard]] std::optional<render::ImageWindow>
+frameRelativeDataWindow(const render::Rgba32fImageDescriptor& decoded) noexcept;
+// Local content bounds of an image source whose data window differs from its frame (an OpenEXR
+// crop or overscan): the frame in full-resolution source pixels, so passes with different data
+// windows of one frame stay registered under the layer transform. nullopt when data and frame
+// coincide; the bounds then follow the published data window exactly as before.
+[[nodiscard]] std::optional<ContentBounds>
+imageSourceFrameBounds(const ImageSourceSelection& selection) noexcept;
 [[nodiscard]] media::ImageResult<render::Rgba32fImage>
 resampleDecodedImage(const render::Rgba32fImage& decoded,
                      render::Rgba32fImageDescriptor composition, double horizontalScale,

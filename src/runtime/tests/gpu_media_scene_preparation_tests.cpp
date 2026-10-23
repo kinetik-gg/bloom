@@ -40,6 +40,8 @@ namespace {
 
 #include "gpu_media_scene_preparation_cancellation_tests.ipp"
 
+#include "gpu_media_scene_preparation_exr_ingest_tests.ipp"
+
 } // namespace
 
 int main() {
@@ -56,6 +58,8 @@ int main() {
         testImmutableSourceRevisionReuse(expectations, fixture);
         testGestureSourceRevisionIsReadOnly(expectations, fixture);
         testRevalidatedFramesReadNothing(expectations, fixture);
+        testExrDataWindowRegistration(expectations);
+        testExrNonFiniteRepair(expectations);
         testChangedFrameAndBypass(expectations, evaluator, fixture);
         testChangedColourInterpretation(expectations, evaluator, fixture);
         testSourceKeyExcludesIdsAndRevision(expectations, evaluator, fixture);

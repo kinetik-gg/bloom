@@ -74,6 +74,19 @@ struct ImageProbe {
     // interpretationAssumption explains the convention used by the bounded reader.
     std::string colorSpaceTag;
     std::string interpretationAssumption;
+    // The image frame (OpenEXR display window) and the data window's offset inside it, in source
+    // pixels. width/height above are the data window. A zero frame means the frame is the data
+    // window at offset (0, 0), as for PNG/JPEG.
+    std::int64_t dataOffsetX = 0;
+    std::int64_t dataOffsetY = 0;
+    std::uint32_t frameWidth = 0;
+    std::uint32_t frameHeight = 0;
+    [[nodiscard]] std::uint32_t effectiveFrameWidth() const noexcept {
+        return frameWidth != 0 ? frameWidth : width;
+    }
+    [[nodiscard]] std::uint32_t effectiveFrameHeight() const noexcept {
+        return frameHeight != 0 ? frameHeight : height;
+    }
 };
 
 // A session-owned, immutable source revision. Its digest, header and every decoder read refer to
@@ -90,6 +103,8 @@ struct ImageDecodeStatistics final {
     // Codec, image construction and any requested input colour processing. Source capture I/O,
     // SHA256, metadata probe, proxy resampling and cache lookup are excluded.
     std::uint64_t decodeNanoseconds = 0;
+    // Pixels repaired by the non-finite/out-of-range policy during this decode.
+    std::uint64_t repairedPixels = 0;
 };
 class ImageSourceRevision final {
   public:
@@ -171,6 +186,9 @@ template <typename T> struct ImageResult {
     std::string diagnostic;
     bool cancelled = false;
     ImageDiagnosticCode code = ImageDiagnosticCode::None;
+    // Pixels a successful decode repaired under the documented non-finite policy (media-io.md
+    // "OpenEXR ingest"): non-finite components become zero and alpha is clamped to [0, 1].
+    std::uint64_t repairedPixels = 0;
     [[nodiscard]] explicit operator bool() const noexcept { return value.has_value(); }
 };
 struct SequenceMember {

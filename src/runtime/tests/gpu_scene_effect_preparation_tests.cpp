@@ -111,13 +111,15 @@ void testCanvasPreparation(Expectations& expectations) {
         const auto created = bloom::render::ImageWindow::create(x, y, width, height);
         return *created.value();
     };
+    // The margin ids stay clear of effectPlan's layer parameters (idBase + 0..5): one id with two
+    // values is a non-canonical plan and fails preflight.
     const auto kernel = [](const bloom::runtime::CanvasImageEffect effect,
                            const std::array<double, 4> sides) {
         std::array<bloom::runtime::CompiledScalarParameter, 4> parameters{
-            bloom::runtime::CompiledScalarParameter{ParameterId::fromRaw(8001), sides[0]},
-            bloom::runtime::CompiledScalarParameter{ParameterId::fromRaw(8002), sides[1]},
-            bloom::runtime::CompiledScalarParameter{ParameterId::fromRaw(8003), sides[2]},
-            bloom::runtime::CompiledScalarParameter{ParameterId::fromRaw(8004), sides[3]}};
+            bloom::runtime::CompiledScalarParameter{ParameterId::fromRaw(8101), sides[0]},
+            bloom::runtime::CompiledScalarParameter{ParameterId::fromRaw(8102), sides[1]},
+            bloom::runtime::CompiledScalarParameter{ParameterId::fromRaw(8103), sides[2]},
+            bloom::runtime::CompiledScalarParameter{ParameterId::fromRaw(8104), sides[3]}};
         return bloom::runtime::CanvasImageKernel{effect, parameters};
     };
     for (const auto kind : {bloom::runtime::CanvasImageEffect::Crop,

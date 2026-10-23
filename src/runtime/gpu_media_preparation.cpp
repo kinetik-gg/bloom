@@ -10,6 +10,7 @@
 #include <bloom/media/image.hpp>
 #include <bloom/media/provider/contract.hpp>
 #include <bloom/media/video/colour.hpp>
+#include <bloom/render/gpu_point_resample.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
@@ -150,44 +151,45 @@ void addPixelAspect(OperationKey& key, const core::PixelAspectRatio ratio) {
 // full-resolution data window.
 [[nodiscard]] std::optional<render::Rgba32fImageDescriptor>
 rawUploadDescriptor(const render::Rgba32fImage& source,
-                    const render::Rgba32fImageDescriptor& composition) {
+                    const render::Rgba32fImageDescriptor& composition, const bool framed) {
     if (source.descriptor() == nullptr) {
         return std::nullopt;
     }
-    const auto sourceWindow = source.descriptor()->dataWindow();
-    const auto window = render::ImageWindow::create(0, 0, sourceWindow.extent().width(),
-                                                    sourceWindow.extent().height());
+    // A still image keeps its data window's offset inside the source frame
+    // (frameRelativeDataWindow); a video frame is always a (0,0)-origin frame.
+    const auto data = source.descriptor()->dataWindow();
+    const auto window = framed ? frameRelativeDataWindow(*source.descriptor())
+                               : [&]() -> std::optional<render::ImageWindow> {
+        auto created =
+            render::ImageWindow::create(0, 0, data.extent().width(), data.extent().height());
+        if (!created)
+            return std::nullopt;
+        return *created.value();
+    }();
     if (!window) {
         return std::nullopt;
     }
     const auto descriptor = render::Rgba32fImageDescriptor::create(
-        *window.value(), composition.displayWindow(), composition.pixelAspect());
+        *window, composition.displayWindow(), composition.pixelAspect());
     if (!descriptor) {
         return std::nullopt;
     }
     return *descriptor.value();
 }
 
-// The proxy output descriptor: the media-image proxy window max(1, ceil(sourceExtent*scale)) at
-// (0,0) with the composition display window and pixel aspect, exactly the CPU evaluateImageSource()
-// oracle. The source extent is the raw upload's data-window extent (the FULL source dimensions).
+// The proxy output descriptor: the shared PointResampleV1 proxy window of the positioned raw
+// upload window, with the composition display window and pixel aspect, exactly the CPU
+// evaluateImageSource() oracle.
 [[nodiscard]] std::optional<render::Rgba32fImageDescriptor>
 proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
                       const ResolvedEvaluation& resolved) {
-    const auto sourceWindow = source.dataWindow();
-    const auto width = static_cast<std::uint64_t>(std::max(
-        1.0,
-        std::ceil(static_cast<double>(sourceWindow.extent().width()) * resolved.horizontalScale)));
-    const auto height = static_cast<std::uint64_t>(std::max(
-        1.0,
-        std::ceil(static_cast<double>(sourceWindow.extent().height()) * resolved.verticalScale)));
-    const auto window = render::ImageWindow::create(0, 0, width, height);
+    const auto window = render::pointResampleProxyWindow(
+        source.dataWindow(), resolved.horizontalScale, resolved.verticalScale);
     if (!window) {
         return std::nullopt;
     }
     const auto descriptor = render::Rgba32fImageDescriptor::create(
-        *window.value(), resolved.imageDescriptor.displayWindow(),
-        resolved.imageDescriptor.pixelAspect());
+        *window, resolved.imageDescriptor.displayWindow(), resolved.imageDescriptor.pixelAspect());
     if (!descriptor) {
         return std::nullopt;
     }
@@ -204,6 +206,7 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
     const bool planBypass, const CancellationToken& cancellation,
     GpuSceneMediaStatistics& statistics) {
     MediaUploadOutcome outcome;
+    outcome.frameBounds = imageSourceFrameBounds(selection);
     outcome.semanticKey = uploadSemanticKey("image", selection.cacheKey, resolved);
     outcome.uploadSemanticKey = outcome.semanticKey;
     ++statistics.uploadKeyConstructions;
@@ -232,6 +235,7 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
                                      resolved.verticalScale, byteBudget(pixelBudget), memoryCache,
                                      memoryAccess, cancellation, diskCache, &decodeStatistics);
     addMediaWork(statistics.imageDecodeNanoseconds, decodeStatistics.decodeNanoseconds);
+    addMediaWork(statistics.imageRepairedPixels, image.repairedPixels);
     ++statistics.imageConversions;
     if (image.cancelled) {
         outcome.cancelled = true;
@@ -492,6 +496,7 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
     // sample commutes with a per-pixel transform, so nearest-then-(optional OCIO) is
     // pixel-identical with no host per-pixel resampling.
     MediaUploadOutcome outcome;
+    outcome.frameBounds = imageSourceFrameBounds(selection);
     const auto backingKey = rawDecodeUploadKey("image-raw", selection.decodeKey);
     ++statistics.uploadKeyConstructions;
     if (!explicitBypass && context.preparedUploadCache != nullptr) {
@@ -515,6 +520,7 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
         auto decoded = decodeRawImageSource(selection, byteBudget(pixelBudget), cancellation,
                                             &decodeStatistics);
         addMediaWork(statistics.imageDecodeNanoseconds, decodeStatistics.decodeNanoseconds);
+        addMediaWork(statistics.imageRepairedPixels, decodeStatistics.repairedPixels);
         ++statistics.imageConversions;
         if (decoded.cancelled) {
             outcome.cancelled = true;
@@ -538,7 +544,8 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
         outcome.image.reset();
         return outcome;
     }
-    const auto uploadDescriptor = rawUploadDescriptor(*outcome.image, resolved.imageDescriptor);
+    const auto uploadDescriptor =
+        rawUploadDescriptor(*outcome.image, resolved.imageDescriptor, true);
     if (!uploadDescriptor) {
         outcome.failure = "Raw image upload descriptor is invalid";
         outcome.image.reset();
@@ -689,7 +696,8 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
         outcome.image.reset();
         return outcome;
     }
-    const auto uploadDescriptor = rawUploadDescriptor(*outcome.image, resolved.imageDescriptor);
+    const auto uploadDescriptor =
+        rawUploadDescriptor(*outcome.image, resolved.imageDescriptor, false);
     if (!uploadDescriptor) {
         outcome.failure = "Raw video upload descriptor is invalid";
         outcome.image.reset();

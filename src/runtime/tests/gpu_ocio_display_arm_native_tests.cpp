@@ -166,10 +166,10 @@ constexpr std::array<AdjustCase, 6> kAdjustCases{{
     return pixels;
 }
 
-[[nodiscard]] std::shared_ptr<const GpuImage> uploadImage(GpuImageUpload& uploader,
-                                                          const std::uint32_t width,
-                                                          const std::uint32_t height,
-                                                          const std::vector<Rgba32f>& pixels) {
+// The device retains the request's processing phase; an upload must present that exact authority.
+[[nodiscard]] std::shared_ptr<const GpuImage>
+uploadImage(GpuImageUpload& uploader, const GpuDevice& device, const std::uint32_t width,
+            const std::uint32_t height, const std::vector<Rgba32f>& pixels) {
     const auto windowResult = bloom::render::ImageWindow::create(0, 0, width, height);
     if (!windowResult) {
         return nullptr;
@@ -197,7 +197,8 @@ constexpr std::array<AdjustCase, 6> kAdjustCases{{
         return nullptr;
     }
     auto source = std::make_shared<const Rgba32fImage>(std::move(*frozen.value()));
-    if (uploader.begin({source}, kBudget).code != GpuImageUploadDiagnosticCode::None) {
+    if (uploader.begin({source, device.retainedProcessingPhase()}, kBudget).code !=
+        GpuImageUploadDiagnosticCode::None) {
         return nullptr;
     }
     auto poll = GpuImageUploadPollResult::Pending;
@@ -250,7 +251,8 @@ void testDisplayPair(Expectations& expectations, GpuDevice& device,
         return;
     }
     const auto pixels = fixturePixels(geometry.width, geometry.height);
-    const auto input = uploadImage(*uploader.upload, geometry.width, geometry.height, pixels);
+    const auto input =
+        uploadImage(*uploader.upload, device, geometry.width, geometry.height, pixels);
     expectations.expect(input != nullptr, std::string(label) + ": the input uploads");
     if (input == nullptr) {
         return;
@@ -506,7 +508,7 @@ void testLargeGeometry(Expectations& expectations, GpuDevice& device,
         return;
     }
     const auto pixels = fixturePixels(width, height);
-    const auto input = uploadImage(*uploader.upload, width, height, pixels);
+    const auto input = uploadImage(*uploader.upload, device, width, height, pixels);
     expectations.expect(input != nullptr, "the >4K input uploads within device capacity");
     if (input == nullptr) {
         return;
@@ -587,10 +589,14 @@ int main(int argc, char** argv) {
         bloom::render::GpuProcessingPhaseBudget root;
         root.setHostCapacity(kBudget * 2, true);
         root.setDeviceCapacity(kBudget * 2, true);
+        // The display input is a source upload: its staging is charged to the phase's source
+        // allowance (rooted upload staging accounting), so the phase reserves one.
         auto admission = root.reserve({.fixedHostBytes = 1,
+                                       .requestedSourceBytes = kBudget / 4,
+                                       .minimumSourceBytes = kBudget / 4,
                                        .requestedExecutorBytes = kBudget,
                                        .minimumExecutorBytes = kBudget,
-                                       .sourceFree = true});
+                                       .sourceFree = false});
         expectations.expect(admission.lease &&
                                 device.device->retainProcessingPhase(admission.lease),
                             "general display pixels use the actual native-image allocation root");

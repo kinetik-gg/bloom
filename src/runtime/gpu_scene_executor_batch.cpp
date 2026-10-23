@@ -118,8 +118,9 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
                 std::numeric_limits<std::uint64_t>::max() - counters.processingSubmitNanoseconds);
         peakLiveBytes = std::max(peakLiveBytes, liveBytes + stats.peakAllocationBytes);
         counters.peakLiveImageBytes = peakLiveBytes;
-        counters.peakStepImageBytes =
-            std::max(counters.peakStepImageBytes, stats.peakAllocationBytes);
+        // peakStepImageBytes is the largest single produced image (gpu_scene_executor.hpp); each
+        // batch output records its own allocation when it is published (finishNative). The whole
+        // batch's transient allocation belongs only to the live peak above.
         batchStepCount = operations.size();
         ++counters.nativeBatches;
         counters.nativeSubmissions += stats.submissions;

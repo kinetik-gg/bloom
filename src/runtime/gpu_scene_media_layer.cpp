@@ -35,7 +35,7 @@ finishUploadLeaf(const MediaUploadOutcome& outcome, GpuSceneUploadLeafResult& re
     // output, not the full-resolution raw upload. At unit scale the two are identical.
     const auto leafWindow = outcome.resample.has_value() ? outcome.resample->output.dataWindow()
                                                          : descriptor.dataWindow();
-    result.bounds.local = boundsForWindow(leafWindow, hScale, vScale);
+    result.bounds.local = outcome.frameBounds.value_or(boundsForWindow(leafWindow, hScale, vScale));
     result.bounds.output = result.bounds.local;
     result.outputWindow = leafWindow;
     if (const auto error =

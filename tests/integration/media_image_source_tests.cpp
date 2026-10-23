@@ -369,7 +369,9 @@ int main(int argc, char* argv[]) {
         overrideStatsA.misses != overrideA->operations().size() ||
         overrideStatsB.misses != overrideB->operations().size())
         return 26;
-    if (cacheStatsAfter.hits != cacheStatsBefore.hits + 2 ||
+    // Each read-only gesture reads exactly two existing entries: the verified source revision
+    // (reused after an identity check, ADR 0025) and the decoded image. It inserts nothing.
+    if (cacheStatsAfter.hits != cacheStatsBefore.hits + 4 ||
         cacheStatsAfter.misses != cacheStatsBefore.misses)
         return 27;
     if (evaluator.operationCache()->retainedBytes(runtime::OperationCacheEntryKind::DecodedMedia) !=
@@ -409,7 +411,8 @@ int main(int argc, char* argv[]) {
         const auto changed = evaluator.evaluate(plan, baseRequest(plan), {});
         if (!changed.frame())
             return expectedReturn;
-        if (evaluator.operationCache()->statistics().hits != hitsBefore ||
+        // Only the verified source revision is reused (ADR 0025); the decoded entry misses.
+        if (evaluator.operationCache()->statistics().hits != hitsBefore + 1 ||
             evaluator.operationCache()->statistics().misses != missesBefore + 1 ||
             evaluator.operationCache()->retainedBytes(
                 runtime::OperationCacheEntryKind::DecodedMedia) != bytesBefore)
@@ -487,6 +490,11 @@ int main(int argc, char* argv[]) {
     auto parentDefinition = compiled.plan->copyDefinition();
     parentDefinition.compositionId = doc::CompositionId::fromRaw(composition.value() + 100);
     parentDefinition.nestedPlans = {compiled.plan};
+    // The replaced operation list has no retimed layer, so the child's ADR 0024 clocks (which
+    // name the child's own Layer Outputs) do not belong to this parent.
+    parentDefinition.clocks.clear();
+    parentDefinition.operationClocks.clear();
+    parentDefinition.placementClocks.clear();
     parentDefinition.operations = {runtime::CompiledCompositionSource{
         doc::NodeId::fromRaw(10001),
         0,
@@ -539,6 +547,17 @@ int main(int argc, char* argv[]) {
     const auto exrCompiled = compiler.compile({exrDocument.snapshot(), exrComposition}, {});
     if (!exrCompiled.plan)
         return 21;
+    // #362: an OpenEXR is premultiplied by convention, so the new layer must not premultiply it
+    // again; the JPEG layer above stays straight.
+    const auto premultiplies = [](const runtime::CompiledCompositionPlan& plan) {
+        for (const auto& operation : plan.operations())
+            if (const auto* source = std::get_if<runtime::CompiledImageSource>(&operation))
+                return std::optional{source->premultiply};
+        return std::optional<bool>{};
+    };
+    if (premultiplies(*exrCompiled.plan) != std::optional{false} ||
+        premultiplies(*compiled.plan) != std::optional{true})
+        return 24;
     runtime::CpuCompositionEvaluator exrEvaluator;
     exrEvaluator.setAssetBaseDirectory(folder);
     const auto scrubTime = bloom::core::RationalTime::create(1, 2);

@@ -587,10 +587,15 @@ decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& inte
                 "Image revision and decode exceed the host byte budget",
                 false,
                 ImageDiagnosticCode::PixelBudgetExceeded};
-    const detail::ImageWorkTimer timer(statistics ? &statistics->decodeNanoseconds : nullptr);
-    return decodeImageImpl({}, &revision, interpretation, std::move(processor), cancel, progress,
-                           hostByteBudget - revision.retainedBytes(),
-                           revision.probe().contentDigest, nullptr);
+    auto decoded = [&] {
+        const detail::ImageWorkTimer timer(statistics ? &statistics->decodeNanoseconds : nullptr);
+        return decodeImageImpl({}, &revision, interpretation, std::move(processor), cancel,
+                               progress, hostByteBudget - revision.retainedBytes(),
+                               revision.probe().contentDigest, nullptr);
+    }();
+    if (statistics)
+        statistics->repairedPixels = decoded.repairedPixels;
+    return decoded;
 }
 
 ImageResult<ImageProviderEncodeResponse> encodeImage(const ImageProviderEncodeRequest& request,

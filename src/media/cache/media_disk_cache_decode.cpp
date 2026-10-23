@@ -33,6 +33,10 @@ std::string buildImageCacheKey(const ImageCacheKeyInputs& inputs,
     appendBytes(inputs.configDigest.bytes());
     for (const auto character : decoderIdentity)
         bytes.push_back(static_cast<std::byte>(character));
+    if (!inputs.synthesizedColorSpaceIdentity.empty()) {
+        bytes.push_back(std::byte{0});
+        appendText(inputs.synthesizedColorSpaceIdentity);
+    }
     const auto digest = core::Sha256Hasher::hash(bytes);
     if (!digest)
         return {};

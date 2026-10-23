@@ -18,8 +18,14 @@
 //   sourceX(x)   = min(sourceWidth  - 1, (uint32)(double(x) / horizontalScale))
 //   sourceY(y)   = min(sourceHeight - 1, (uint32)(double(y) / verticalScale))
 //   out[y][x]    = in[sourceY(y)][sourceX(x)]
-// Source data-window origin is irrelevant to indexing (indices are data-window-relative); output
-// origin is (0, 0); the display window and pixel aspect are preserved verbatim.
+// A source data window may sit at an origin o inside its own display frame (OpenEXR crops and
+// overscan). The general form, of which the formulas above are the o = 0 case, is
+//   outputMin    = floor(o * scale), outputMax = ceil((o + sourceExtent) * scale)
+//   outputExtent = max(1, outputMax - outputMin)
+//   source(X)    = clamp(floor(X / scale) - o, 0, sourceExtent - 1) for absolute output X
+// Indices stay data-window-relative; the display window and pixel aspect are preserved verbatim.
+// pointResampleProxyWindow()/pointResampleSourceIndex() are the single shared arithmetic used by
+// the CPU oracle and the GPU host preparation.
 //
 // SAMPLE METADATA. The exact binary64 `x / scale` axis mapping is evaluated once per output column
 // and once per output row on the host and uploaded as a bounded O(width + height) int32 storage
@@ -39,6 +45,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -60,6 +67,19 @@ struct GpuPointResampleAxisMaps final {
 preparePointResampleAxisMaps(std::uint32_t sourceWidth, std::uint32_t sourceHeight,
                              std::uint32_t outputWidth, std::uint32_t outputHeight,
                              double horizontalScale, double verticalScale);
+// Origin-aware maps: `source` and `output` are the positioned data windows (see above).
+[[nodiscard]] GpuPointResampleAxisMaps preparePointResampleAxisMaps(ImageWindow source,
+                                                                    ImageWindow output,
+                                                                    double horizontalScale,
+                                                                    double verticalScale);
+// The proxy output window for a positioned source data window, or nullopt for a non-finite or
+// non-positive scale or an unrepresentable result.
+[[nodiscard]] std::optional<ImageWindow>
+pointResampleProxyWindow(ImageWindow source, double horizontalScale, double verticalScale) noexcept;
+// The data-window-relative source index selected for absolute output coordinate `output`.
+[[nodiscard]] std::uint32_t pointResampleSourceIndex(std::int64_t output, std::int64_t sourceOrigin,
+                                                     std::uint32_t sourceExtent,
+                                                     double scale) noexcept;
 
 // Immutable inputs for one resample. `source` is shared immutable ownership retained for the job's
 // lifetime. `output` is the validated output descriptor: its data window must be exactly the proxy

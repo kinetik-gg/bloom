@@ -651,9 +651,11 @@ Result<AudioBlock> VideoDecodeSession::audio(const ProbeResult& source, std::uin
     const auto captured = sourceRevision(source.sourceDigest, cancel, {});
     if (const auto* error = std::get_if<Unavailable>(&captured))
         return *error;
+    // A retained worker continues from the previous block's end, so a clip decodes in one
+    // sequential pass instead of restarting at the stream origin for every block.
     return product<AudioBlock>(
         call(Role::AudioDecode, &source, stream, sample, count, cancel,
-             std::get<std::shared_ptr<const platform::ReadOnlyFileSnapshot>>(captured)));
+             std::get<std::shared_ptr<const platform::ReadOnlyFileSnapshot>>(captured), true));
 #else
     return product<AudioBlock>(call(Role::AudioDecode, &source, stream, sample, count, cancel));
 #endif

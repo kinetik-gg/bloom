@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -361,6 +362,9 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
                         selected.workingColorSpaceId + ":" +
                         std::to_string(static_cast<int>(selected.interpretation.alphaAssociation)) +
                         ":" + std::string(config.begin(), config.end());
+    const auto synthesized =
+        color::synthesizedColorSpaceIdentity(selected.interpretation.inputColorSpaceId);
+    selected.cacheKey += ":" + synthesized;
     media::cache::ImageCacheKeyInputs diskInputs;
     diskInputs.contentDigest = selected.digest;
     diskInputs.memberFrame = memberFrame;
@@ -369,6 +373,7 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
     diskInputs.workingColorSpaceId = selected.workingColorSpaceId;
     diskInputs.alphaAssociation = selected.interpretation.alphaAssociation;
     diskInputs.configDigest = selected.configRevision;
+    diskInputs.synthesizedColorSpaceIdentity = synthesized;
     selected.diskCacheKey =
         media::cache::buildImageCacheKey(diskInputs, media::cache::kImageDecoderIdentity);
     return selected;
