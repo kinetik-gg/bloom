@@ -108,7 +108,8 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
                const output::OutputPresetV1 preset, const std::filesystem::path& destination,
                std::filesystem::path scratchDirectory, output::ExportResourceLedgerV1& ledger,
                const std::shared_ptr<host::GpuExportProvider>& gpuProvider,
-               const std::function<bool()>& cancelled) {
+               const std::function<bool()>& cancelled,
+               const std::shared_ptr<const runtime::CpuCompositionEvaluator>& fallbackEvaluator) {
     const auto failed = [](std::string diagnostic) {
         return RenderResult{.succeeded = false,
                             .publishedFrames = 0,
@@ -129,6 +130,7 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
                        .colorIntent = colorIntent,
                        .pixelStorageByteLimit = 0},
         .assetBaseDirectory = assetBaseDirectory,
+        .fallbackEvaluator = fallbackEvaluator,
         .targetPath = destination,
         .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
         .owner = {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(1)},
@@ -359,6 +361,9 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
     // One caller-owned root shared by still/range/concurrent requests, including CPU fallback.
     auto gpuProvider = std::move(injectedGpuProvider);
     gpuProvider->prepare(scheduler);
+    // One final-render evaluator per request: its verified source revisions and video sessions
+    // make each frame's CPU fallback revalidation an identity check instead of a source read.
+    const auto fallbackEvaluator = std::make_shared<const runtime::CpuCompositionEvaluator>();
     if (request.range.has_value()) {
         const auto [first, last] = *request.range;
         host::FrameRangeRequestV1 range{.destination = request.destination,
@@ -374,7 +379,7 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
                 const auto current =
                     exportWithPlan(session, scheduler, plan, source.assetBaseDirectory, frame.time,
                                    *colorIntent, request.preset, frame.path, scratchDirectory,
-                                   ledger, gpuProvider, request.cancelled);
+                                   ledger, gpuProvider, request.cancelled, fallbackEvaluator);
                 aggregate.gpuEvaluatedFrames += current.gpuEvaluatedFrames;
                 aggregate.gpuNativeDispatches += current.gpuNativeDispatches;
                 aggregate.gpuReadbacks += current.gpuReadbacks;
@@ -416,7 +421,7 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
     }
     return exportWithPlan(session, scheduler, plan, source.assetBaseDirectory, *time, *colorIntent,
                           request.preset, request.destination, std::move(scratchDirectory), ledger,
-                          gpuProvider, request.cancelled);
+                          gpuProvider, request.cancelled, fallbackEvaluator);
 }
 
 } // namespace bloom::scripting
