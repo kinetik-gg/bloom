@@ -17,6 +17,7 @@ target_sources(
         shape.cpp
         persisted_text.cpp
         project.cpp
+        render_reachability.cpp
         asset.cpp
         value_node_definitions.cpp
         value_utility_nodes.cpp
@@ -40,6 +41,7 @@ target_sources(
             include/bloom/document/shape.hpp
             include/bloom/document/persisted_text.hpp
             include/bloom/document/project.hpp
+            include/bloom/document/render_reachability.hpp
             include/bloom/document/asset.hpp
             include/bloom/document/schema_version.hpp
             include/bloom/document/validation.hpp
@@ -59,6 +61,15 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_document_node_model_test)
     bloom_add_test(NAME bloom.document.node-model COMMAND bloom_document_node_model_test LABELS unit)
 
+
+    add_executable(bloom_document_render_reachability_test tests/render_reachability_tests.cpp)
+    target_link_libraries(bloom_document_render_reachability_test PRIVATE bloom_document)
+    bloom_enable_warnings(bloom_document_render_reachability_test)
+    bloom_add_test(
+        NAME bloom.document.render-reachability
+        COMMAND bloom_document_render_reachability_test
+        LABELS unit
+    )
 
     add_executable(bloom_document_model_test tests/document_model_tests.cpp)
     target_link_libraries(bloom_document_model_test PRIVATE bloom_document)

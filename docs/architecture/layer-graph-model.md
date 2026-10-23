@@ -399,6 +399,32 @@ semantics into explicit time-map, mask/matte, transform, opacity, and ordered bl
 derived state only. Artist node schemas and backend-neutral primitive semantics remain separate as
 defined in [`evaluation-primitives.md`](evaluation-primitives.md).
 
+### Render Reachability
+
+`document::RenderReachability` (`src/document`) is the one shared answer to "can this edit change
+what a composition renders?". It mirrors the snapshot compiler's reachable-graph collection exactly:
+from Composition Output and every Layer Bounds readout root, through consumed image and audio edges
+(a disabled Merge consumes nothing, a muted node consumes only its first image input, and a
+disabled, muted or solo-excluded layer's slot is skipped), layer parents, and parameter drivers in
+both directions. It also records the compositions named by reachable Composition Source nodes. A
+node outside the set is never compiled, so editing it cannot change pixels or audio. When the graph
+has no output, a reachable reference names a missing node, a reachable node's definition is not
+registered, or a reachable Composition Source reference is not a constant, the answer is unknown and
+every caller fails closed to a whole render.
+
+`confineNodeChange()` bounds where in composition time a change to given nodes can reach output. It
+walks forward along edges, drivers and parent links. A layer boundary gates the walk -- the walk
+records the layer's half-open active span and stops at its output -- only when its output feeds
+nothing but enabled, unmuted Merge slots of its own layer and drives no parameter; its children are
+still followed because they inherit its transform. Reaching Composition Output ungated means the
+change may appear at every time its own inputs change; reaching a readout root or a dead end is
+unproven. The gate relies on in-composition evaluation being time-local; nested composition time
+mapping is outside this proof, so `compositionsDependingOn()` reports every composition that
+transitively nests a changed one, and those compositions treat any non-empty change as whole.
+Features that add cross-layer or temporal dependencies (track mattes, layer-owned time mapping)
+must extend these gates before they may rely on them. The cost is linear in the one composition's
+nodes, edges and parameter bindings, with work counters for tests.
+
 ## Hard-Case Contracts
 
 - **Matte:** explicit typed connection with channel, invert, space, and time policy. Row adjacency
