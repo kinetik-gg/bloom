@@ -15,12 +15,12 @@
 #include "timeline_layer_timing_gesture.hpp"
 #include "timeline_property_rows.hpp"
 
+#include <bloom/runtime/layer_time_projection.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
-#include <bloom/runtime/layer_time_projection.hpp>
 
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
@@ -28,8 +28,8 @@
 #include <bloom/ui/kit/split_handle.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
-#include <bloom/commands/operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
+#include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/document/graph.hpp>
@@ -1156,15 +1156,39 @@ TimelineLaneRegion::TimelineLaneRegion(CompositionSession& session, TimelineRule
     setMouseTracking(true);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setAttribute(Qt::WA_OpaquePaintEvent, true);
-    connect(&ruler_, &TimelineRuler::axisChanged, this, qOverload<>(&TimelineLaneRegion::update));
+    connect(&ruler_, &TimelineRuler::axisChanged, this, &TimelineLaneRegion::invalidateAll);
+    // #358: a playhead move repaints the two strips it touches, not every lane.
     connect(&session_, &CompositionSession::currentTimeChanged, this,
-            qOverload<>(&TimelineLaneRegion::update));
+            &TimelineLaneRegion::invalidatePlayhead);
     connect(&session_, &CompositionSession::selectionChanged, this,
-            qOverload<>(&TimelineLaneRegion::update));
+            &TimelineLaneRegion::invalidateAll);
     connect(&session_, &CompositionSession::snapshotChanged, this,
-            qOverload<>(&TimelineLaneRegion::update));
+            &TimelineLaneRegion::invalidateAll);
     connect(&session_, &CompositionSession::compositionChanged, this,
-            qOverload<>(&TimelineLaneRegion::update));
+            &TimelineLaneRegion::invalidateAll);
+    connect(&session_, &CompositionSession::documentRebound, this, [this] {
+        keySummaryCache_.clear();
+        keySummaryProject_ = nullptr;
+    });
+}
+
+void TimelineLaneRegion::invalidateAll() {
+    ++work_.fullInvalidations;
+    update();
+}
+
+void TimelineLaneRegion::invalidatePlayhead() {
+    const auto axis = ruler_.axisForWidth(width());
+    if (!axis || graphEditor_ || !paintedPlayheadX_) {
+        invalidateAll();
+        return;
+    }
+    ++work_.playheadInvalidations;
+    // The playhead is a one-pixel line; a small margin covers the device-pixel snap either side.
+    const int margin = kit::px(kit::Spacing::XXS) + 1;
+    const int next = static_cast<int>(std::floor(axis->pixelForTime(session_.currentTime())));
+    for (const int x : {*paintedPlayheadX_, next})
+        update(QRect(x - margin, 0, margin * 2 + 1, height()));
 }
 
 void TimelineLaneRegion::resizeEvent(QResizeEvent* event) {
@@ -1350,8 +1374,8 @@ void TimelineLaneRegion::paintContentExtent(QPainter& painter, const int row,
         timing.startTime = drag_->previewStart;
         timing.speed = drag_->previewSpeed;
     }
-    const auto extent = runtime::resolveLayerExtent(session_.snapshot().project(), *composition,
-                                                    timing);
+    const auto extent =
+        runtime::resolveLayerExtent(session_.snapshot().project(), *composition, timing);
     if (!extent)
         return;
     const auto first = runtime::placementTimeOfLayerTime(timing, {});
@@ -1365,16 +1389,42 @@ void TimelineLaneRegion::paintContentExtent(QPainter& painter, const int row,
     const auto top = bar.top() + kit::px(kit::Size::Hairline);
     const auto height = bar.height() - 2 * kit::px(kit::Size::Hairline);
     if (from > bar.left())
-        painter.fillRect(QRect(bar.left(), top, static_cast<int>(std::min<long>(from, bar.right()) - bar.left()),
+        painter.fillRect(QRect(bar.left(), top,
+                               static_cast<int>(std::min<long>(from, bar.right()) - bar.left()),
                                height),
                          shade);
     if (to < bar.right())
         painter.fillRect(QRect(static_cast<int>(std::max<long>(to, bar.left())), top,
-                               static_cast<int>(bar.right() - std::max<long>(to, bar.left())), height),
+                               static_cast<int>(bar.right() - std::max<long>(to, bar.left())),
+                               height),
                          shade);
 }
 
 std::vector<core::RationalTime> TimelineLaneRegion::keySummaryTimes(int row) const {
+    if (!keyframesVisible_ || row < 0 || row >= static_cast<int>(entries_.size()))
+        return {};
+    const auto& entry = entries_[static_cast<std::size_t>(row)];
+    if (entry.rowKind != TimelineLayerEntry::Kind::Layer || entry.expanded)
+        return {};
+    // #358: the summary depends only on the document state (keys, drivers, layer clocks), so it is
+    // built once per state and layer instead of on every paint.
+    const auto& snapshot = session_.snapshot();
+    if (keySummaryRevision_ != snapshot.revision() || keySummaryProject_ != &snapshot.project() ||
+        keySummaryComposition_ != session_.compositionId()) {
+        keySummaryCache_.clear();
+        keySummaryRevision_ = snapshot.revision();
+        keySummaryProject_ = &snapshot.project();
+        keySummaryComposition_ = session_.compositionId();
+    }
+    const auto [found, inserted] = keySummaryCache_.try_emplace(entry.layerId.value());
+    if (inserted) {
+        ++work_.keySummaryBuilds;
+        found->second = computeKeySummaryTimes(row);
+    }
+    return found->second;
+}
+
+std::vector<core::RationalTime> TimelineLaneRegion::computeKeySummaryTimes(int row) const {
     std::set<core::RationalTime> times;
     // Hidden keys are hidden from the HIT TEST too, because this one answer is what both the
     // painter and the summary-glyph click read. An affordance nobody can see must not be one
@@ -1544,6 +1594,7 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
     // One stroke for the whole region, painted after every lane, so the playhead reads as a single
     // continuous line down all of them and moving it never touches a layout.
     paintPlayheadLine(painter, *axis, session_.currentTime(), height());
+    paintedPlayheadX_ = static_cast<int>(std::floor(axis->pixelForTime(session_.currentTime())));
 }
 
 void TimelineLaneRegion::mousePressEvent(QMouseEvent* event) {

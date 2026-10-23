@@ -17,6 +17,7 @@
 #include <QString>
 #include <QWidget>
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -315,6 +316,15 @@ class TimelineLaneRegion final : public QWidget {
     [[nodiscard]] bool graphEditorEnabled() const noexcept { return graphEditor_; }
     [[nodiscard]] TimelineGraphView* graphViewForTest() const noexcept { return graphView_; }
 
+    // #358 work counters: playback moves only the playhead strips, and a collapsed layer's key
+    // summary is computed once per document state rather than once per paint.
+    struct Work final {
+        std::uint64_t keySummaryBuilds = 0;
+        std::uint64_t playheadInvalidations = 0;
+        std::uint64_t fullInvalidations = 0;
+    };
+    [[nodiscard]] Work work() const noexcept { return work_; }
+
   Q_SIGNALS:
     void expansionRequested(document::LayerId layer);
 
@@ -329,6 +339,16 @@ class TimelineLaneRegion final : public QWidget {
 
   private:
     void syncKeyframeSurfaces();
+    [[nodiscard]] std::vector<core::RationalTime> computeKeySummaryTimes(int row) const;
+    // Repaints only the strips the playhead leaves and enters.
+    void invalidatePlayhead();
+    void invalidateAll();
+    mutable std::map<std::uint64_t, std::vector<core::RationalTime>> keySummaryCache_;
+    mutable document::Revision keySummaryRevision_;
+    mutable const void* keySummaryProject_ = nullptr;
+    mutable document::CompositionId keySummaryComposition_;
+    std::optional<int> paintedPlayheadX_;
+    mutable Work work_;
     QWidget* keyframeArea_ = nullptr;
     TimelineKeyframePanel* keyframePanel_ = nullptr;
     TimelineGraphView* graphView_ = nullptr;
