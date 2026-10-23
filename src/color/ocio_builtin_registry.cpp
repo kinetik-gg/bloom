@@ -144,9 +144,17 @@ struct InputColorSpaceMappings final {
                                            0.131, 0.046, 0.3127, 0.3290};
     constexpr std::array<double, 8> bt709{0.64, 0.33, 0.30, 0.60, 0.15, 0.06, 0.3127, 0.3290};
     auto toReference = OCIO::GroupTransform::Create();
+    // The HLG built-in style is only valid in configs of version 2.4 or later, and the pinned
+    // configs are 2.0 and 2.1. OCIO's own implementation of the style is therefore taken from a
+    // processor in a minimal raw 2.4 config (it is one 65,536-entry half-domain 1D LUT) and
+    // embedded here, so the pinned configs keep their version and validate unchanged. It is the
+    // exact op the built-in runs: identical CPU output and GPU processor cache id.
+    auto raw = OCIO::Config::CreateRaw()->createEditableCopy();
+    raw->setMajorVersion(2);
+    raw->setMinorVersion(4);
     auto curve = OCIO::BuiltinTransform::Create();
     curve->setStyle("CURVE - HLG-OETF-INVERSE");
-    toReference->appendTransform(curve);
+    toReference->appendTransform(raw->getProcessor(curve)->createGroupTransform());
     auto toXyz = OCIO::MatrixTransform::Create();
     const auto bt2020ToXyz = matrix44(rgbToXyz(bt2020));
     toXyz->setMatrix(bt2020ToXyz.data());
@@ -170,14 +178,8 @@ struct InputColorSpaceMappings final {
     space->setFamily("Input");
     space->setDescription("Bloom-synthesized Rec.2100 HLG scene-light input (no OOTF)");
     space->setTransform(toReference, OCIO::COLORSPACE_DIR_TO_REFERENCE);
-    // The pinned config was validated as-is above. The HLG built-in style requires config
-    // version 2.4, so only this in-memory copy is raised to 2.4 and revalidated. Raising the
-    // version leaves every existing CPU/GPU processor cache id unchanged in both pinned configs
-    // (all colour-space pairs and display/views were compared;
-    // docs/architecture/color-management.md).
+    // The pinned config keeps its version; the copy with the added space is validated.
     auto editable = config->createEditableCopy();
-    if (editable->getMajorVersion() == 2 && editable->getMinorVersion() < 4)
-        editable->setMinorVersion(4);
     editable->addColorSpace(space);
     editable->validate();
     return editable;

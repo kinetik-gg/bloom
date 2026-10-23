@@ -68,14 +68,13 @@ light to the config reference, is:
    Rec.709 reference), or the inverse OCIO built-in `UTILITY - ACES-AP0_to_CIE-XYZ-D65_BFD` for
    the ACES config (ACES2065-1 reference).
 
-The HLG built-in style requires config version 2.4, so only the in-memory copy is raised from the
-pinned version (2.0 Neutral, 2.1 ACES CG) to 2.4, after the pinned config is validated as-is, and
-the copy is then validated with OCIO's `Config::validate()`. Raising the version was checked to
-leave every existing processor unchanged: all 400 colour-space pairs and 300 display/view
-transforms of the ACES CG config, and all pairs and display/views of Bloom Neutral, keep identical
-CPU and GPU processor cache ids, and the existing colour, OCIO and output-colour goldens are
-byte-identical. OCIO logs (without failing) that a 2.2+ config would declare the
-`compositing_log`, `color_timing` and `aces_interchange` roles for Neutral.
+The HLG built-in style is valid only in configs of version 2.4 or later, and the pinned configs are
+2.0 (Neutral) and 2.1 (ACES CG). Bloom therefore takes OCIO's own implementation of the style from a
+processor built in a minimal raw 2.4 config (one 65,536-entry half-domain 1D LUT) and embeds that
+op in the space, so each pinned config keeps its version and its in-memory copy passes OCIO's
+`Config::validate()` with no errors or warnings. The embedded op gives the same CPU output and the
+same GPU processor cache id as the built-in; every existing colour-space pair and display/view of
+both configs keeps an identical CPU and GPU processor cache id.
 
 It is scene-referred: no HLG OOTF and no system gamma are applied. HLG is defined on scene light
 and its OOTF is a display adaptation for a particular display luminance; compositing and the
