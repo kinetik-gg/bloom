@@ -85,11 +85,26 @@ void embeddedGcAndIncompleteFinalize() {
             weakSession = PythonRootRetirementsTestAccess::session(*host);
             weakProvider = PythonRootRetirementsTestAccess::provider(*host);
         }
+        const auto beforeGc = roots->snapshot();
         execute(runtime, "del _bloom._test_host\ngc.collect()\n");
         require(weakSession.expired() && !weakProvider.expired(),
-                "early Python GC destroys heavy Session but retains light closing provider");
+                "early Python GC destroys heavy Session but retains the provider");
         static_cast<void>(roots->collectCompleted()); // This C++ caller has no GIL.
-        require(weakProvider.expired(), "proven early GC record pruned outside GIL");
+        // Every Host of the interpreter shares one provider (one native device) that only the
+        // exit hook retires; early GC prunes the Host's own record and scheduler.
+        require(!weakProvider.expired() &&
+                    roots->snapshot().participants + 1 == beforeGc.participants,
+                "proven early GC participant pruned outside GIL; shared provider retained");
+        {
+            const nb::gil_scoped_acquire acquire;
+            execute(runtime, "_bloom._second_host = _bloom.Host()\n");
+            auto second = nb::cast<std::shared_ptr<NativeHost>>(
+                nb::module_::import_("_bloom").attr("_second_host"));
+            require(PythonRootRetirementsTestAccess::provider(*second) == weakProvider.lock(),
+                    "a later Host joins the same interpreter provider");
+        }
+        execute(runtime, "del _bloom._second_host\ngc.collect()\n");
+        static_cast<void>(roots->collectCompleted());
         const auto beforeFault = roots->snapshot();
         PythonRootRetirementsTestAccess::beforePublish(
             *roots, [](void*) { throw std::runtime_error("post-scheduler constructor failure"); });

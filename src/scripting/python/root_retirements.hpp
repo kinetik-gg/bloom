@@ -61,6 +61,13 @@ class PythonRootRetirements final : public std::enable_shared_from_this<PythonRo
     // provider generations; it never serializes pixel evaluation or closes a borrowed app root.
     [[nodiscard]] std::shared_ptr<host::GpuExportProvider>
     createOwnedProvider(runtime::GpuProcessFrameEvaluatorOptions options = {});
+    // The one GPU export provider (and so the one native device) every Python Host of this
+    // interpreter shares, created on first use. Its root lives for the interpreter: Hosts come and
+    // go as members, and only beginShutdown() -- the module exit hook -- retires it, once and
+    // serially, with no work in flight. Several devices torn down concurrently on different owner
+    // threads deadlock inside at least one vendor driver. Throws std::runtime_error once shutdown
+    // has begun.
+    [[nodiscard]] std::shared_ptr<host::GpuExportProvider> sharedProvider();
     // Off GIL/nonUI: scheduler construction and every failure cleanup may join worker threads.
     [[nodiscard]] std::shared_ptr<PythonHostRetirement>
     registerHost(const std::shared_ptr<host::GpuExportProvider>&, bool ownsProvider);

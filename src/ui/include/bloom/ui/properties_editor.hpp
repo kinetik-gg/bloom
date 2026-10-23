@@ -2,6 +2,7 @@
 
 // Complete, not forward-declared: bindCell() below binds a cell's own gesture signals, which needs
 // the type rather than just its name.
+#include <cstdint>
 #include <bloom/document/animation.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <functional>
@@ -42,6 +43,15 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     [[nodiscard]] EditorChromeSpec& editorChrome() override { return chrome_; }
     explicit PropertiesEditor(CompositionSession& session, QWidget* parent = nullptr);
 
+    // #358 work counters: a playhead move refreshes values in place and never rebuilds rows or
+    // re-walks the upstream graph.
+    struct Work final {
+        std::uint64_t fullRebuilds = 0;
+        std::uint64_t valueRefreshes = 0;
+        std::uint64_t upstreamWalks = 0;
+    };
+    [[nodiscard]] Work work() const noexcept { return work_; }
+
   protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
@@ -68,6 +78,9 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
                   std::optional<document::AnimationComponent> component,
                   const std::function<void()>& change);
     void refreshLiveValues();
+    // Values only: every existing row re-reads its value (and key state) at the session time.
+    void refreshValues();
+    Work work_;
 
     // Task PROPS-1, deliverable 1: the section construction, split out of one constructor that had
     // grown past four hundred lines. Each appends exactly one kit::KSection to `layout`.

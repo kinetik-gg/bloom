@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <utility>
 
@@ -474,8 +475,17 @@ void DynamicLibrary::close() noexcept {
 #endif
 }
 
+namespace {
+// Native device teardown is serialized process-wide. Several devices destroyed concurrently on
+// different owner threads deadlock inside at least one vendor driver (vkDestroyDevice never
+// returns); one-at-a-time teardown is cheap and portable. Scripting additionally shares one device
+// per interpreter, so this is a guard rather than the primary fix.
+std::mutex nativeTeardownMutex;
+} // namespace
+
 DeviceAllocatorState::~DeviceAllocatorState() {
     assert(owner == std::this_thread::get_id());
+    const std::lock_guard serialized(nativeTeardownMutex);
     if (processingPhase) {
         processingPhase->markUnproven();
     }
@@ -483,6 +493,12 @@ DeviceAllocatorState::~DeviceAllocatorState() {
         vmaDestroyAllocator(allocator);
         allocator = VK_NULL_HANDLE;
     }
+    computeQueue = nullptr;
+    presentQueue = nullptr;
+    device.clear();
+    physicalDevice.clear();
+    instance.clear();
+    loader = DynamicLibrary{};
 }
 
 } // namespace vulkan_detail

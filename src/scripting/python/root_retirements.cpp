@@ -74,6 +74,14 @@ PythonRootRetirements::createOwnedProvider(runtime::GpuProcessFrameEvaluatorOpti
     }
     return host::GpuExportProvider::create(std::move(options), impl_->bootstrapGate);
 }
+std::shared_ptr<host::GpuExportProvider> PythonRootRetirements::sharedProvider() {
+    const std::lock_guard lock(impl_->mutex);
+    if (impl_->closing)
+        throw std::runtime_error("Bloom Python rendering is shutting down");
+    if (!impl_->sharedProvider)
+        impl_->sharedProvider = host::GpuExportProvider::create({}, impl_->bootstrapGate);
+    return impl_->sharedProvider;
+}
 std::shared_ptr<PythonHostRetirement>
 PythonRootRetirements::registerHost(const std::shared_ptr<host::GpuExportProvider>& provider,
                                     const bool ownsProvider) {
@@ -106,6 +114,7 @@ PythonRootRetirements::registerHost(const std::shared_ptr<host::GpuExportProvide
             root = std::make_shared<PythonProviderRetirement>();
             root->provider = provider;
             root->ownsProvider = ownsProvider;
+            root->processLifetime = provider == impl_->sharedProvider;
             if (ownsProvider)
                 root->hostOwner = provider->ownedPackedHostRetirementOwner();
             impl_->roots.push_back(root);
@@ -170,7 +179,7 @@ void PythonRootRetirements::release(
             root.closingProvider = provider; // Existing slot, no allocation before Host drops it.
         if (root.memberships > 0)
             --root.memberships;
-        if (root.memberships == 0) {
+        if (root.memberships == 0 && !root.processLifetime) {
             root.closing = true;
             if (root.ownsProvider)
                 ownedClose = root.closingProvider;
@@ -201,6 +210,8 @@ void PythonRootRetirements::beginShutdown() noexcept {
         if (participant->impl_->scheduler)
             participant->impl_->scheduler->beginShutdown();
     }
+    // The shared root's closingProvider (taken above) now carries the provider to retirement.
+    impl_->sharedProvider.reset();
 }
 bool PythonRootRetirements::collectCompleted() noexcept {
     // Snapshotting is off-GIL. If metadata allocation fails, retain the original records and

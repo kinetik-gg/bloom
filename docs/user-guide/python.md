@@ -147,6 +147,8 @@ publication and frame naming paths. `RenderResult` and `RenderFile` are immutabl
 SHA-256 over the published file bytes. These calls release the GIL during native work; no Python
 runs in the evaluator or render kernels. Native progress is available through
 `bloom.tasks.snapshots()` and native task IDs can be cancelled with `bloom.tasks.cancel(id)`.
+Every `_bloom.Host()` in one interpreter renders through the same GPU device, which is released
+once when the interpreter exits.
 
 Long Python work uses a dedicated Python worker and a bounded queue:
 

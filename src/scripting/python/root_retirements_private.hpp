@@ -14,6 +14,8 @@ struct PythonProviderRetirement final {
     std::shared_ptr<runtime::PackedHostRetirementOwner> hostOwner;
     std::size_t memberships = 0;
     bool ownsProvider = false;
+    // The interpreter's shared provider: zero members does not close it; shutdown does.
+    bool processLifetime = false;
     bool closing = false;
     bool collected = false;
 };
@@ -36,6 +38,9 @@ struct PythonRootRetirements::Impl final {
     bool closing = false;
     bool collecting = false;
     std::shared_ptr<std::timed_mutex> bootstrapGate = std::make_shared<std::timed_mutex>();
+    // The strong reference that keeps the shared provider alive between Hosts; released at
+    // shutdown, after which its root's closingProvider carries it through retirement.
+    std::shared_ptr<host::GpuExportProvider> sharedProvider;
     // Private construction-failure seam, empty for all production module/interpreter roots.
     void (*beforeRegistration)(void*) = nullptr;
     void* testContext = nullptr;

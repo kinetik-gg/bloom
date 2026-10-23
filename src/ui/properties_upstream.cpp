@@ -40,6 +40,7 @@ void PropertiesEditor::configureUpstream() {
     // node depends on, pixels included.
     std::vector<std::pair<document::NodeId, int>> nodes;
     if (selected && composition) {
+        ++work_.upstreamWalks;
         const std::array seeds{selected->id};
         for (const auto& upstream :
              session_.upstreamNodes(seeds, UpstreamTraversal::DriverLinksAndInputEdges))

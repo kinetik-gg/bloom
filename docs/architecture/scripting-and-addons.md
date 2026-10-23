@@ -225,8 +225,15 @@ parameter through UI Undo and compare frame-12 bytes from Python, CLI and UI exp
 Native `Render::run` callers explicitly inject one `GpuExportProvider` shared across their still,
 range and concurrent requests; a missing provider is a typed `MissingProcessingRoot` refusal before
 compilation. The Python native host retains a provider for its active lifetime. A live GUI host borrows the
-application's injected provider; an independent headless host owns its provider and worker-sampled
-processing root. Module/interpreter-owned light retirement records deduplicate provider roots and
+application's injected provider; independent headless hosts share ONE interpreter-owned provider
+(one native device), created on first use and kept for the interpreter's life, exactly as the
+application shares one (#357). Only the module exit hook (or `_shutdown_owned_roots`) retires it,
+once and serially, after producers are finished and no work is in flight; a Host constructed after
+that is refused with a typed "shutting down" `RuntimeError`. One device per Host is not used: several
+devices destroyed concurrently on different owner threads deadlocked inside a vendor driver at
+interpreter exit, so native device teardown is also serialized process-wide in `src/render` as a
+guard. Per-Host schedulers, cancellation and early-GC retirement are unchanged; Hosts with colliding
+numeric project/revision identities still render their own pixels through the shared provider. Module/interpreter-owned light retirement records deduplicate provider roots and
 own separate per-Host schedulers without retaining Host, Session or Python objects. Early GC hands
 provider ownership to a closing record before dropping the Host; direct render holds a checked
 active-call lease through session waits/native work. Closing refuses new calls. Borrowed GUI Host
