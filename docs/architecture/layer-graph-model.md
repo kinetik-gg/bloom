@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-09-17
+Updated: 2026-10-23
 
 ## Geometry and transform levels
 
@@ -177,7 +177,8 @@ Dragging a composition from Assets onto Nodes creates one source. Dropping it on
 the source, a Layer and one Merge slot carrying both image and audio, in one undoable transaction.
 The Layer is placed beside its Merge and the source beside the Layer using the common free-space
 placement rule. Its initial range is the nested duration, capped by the containing composition.
-The nested content remains one timeline bar. Properties shows the referenced name and an Open
+The nested content remains one timeline bar. Under layer-owned time the new Layer's
+`contentExtent` references the source, and the source keeps identity offset, scale and Hold. Properties shows the referenced name and an Open
 action; node cards show the same composition name.
 
 ### Transform Parenting
@@ -1077,9 +1078,26 @@ end. An explicit range satisfies `0 <= in < out <= duration`. Commands snap to t
 frame grid; the exact composition end is also a valid endpoint. Existing documents therefore
 retain full-range rendering without migration-injected data.
 
+**Layer-owned time** ([ADR 0024](../decisions/0024-layer-owned-time.md), issue #353; accepted
+direction, implementation in progress). The boundary also owns its time mapping: exact `startTime`
+(default 0), exact positive `speed` (default 1), `contentExtent` (`Unbounded` by default, `Fixed`, or
+`Source{nodeId}`), `beforeMode`/`afterMode` (None / Hold / Loop / PingPong, default None), and an
+optional animatable `bloom.layer.time-remap` parameter on Layer Output node schema 5. The boundary's
+own parameters sample at layer time and its whole upstream at content time, as defined in
+[Layer Time](animation-and-time.md#layer-time). Once implemented, the document validates only
+`in < out` (an explicit `outPoint` stays greater than zero, keeping the sentinel unambiguous); keeping
+at least one frame inside the composition is a gesture rule, and a trim may extend outside the
+composition only as far as the content extent reaches. All members default to identity, so existing
+documents decode without injected data and render unchanged. `SetLayerTiming` commits start, range and
+speed atomically; `SetLayerTimeModes`, `SetLayerContentExtent`, `EnableLayerTimeRemap` and
+`DisableLayerTimeRemap` complete the command surface. `AddImageLayer`, `AddAudioLayer` and the
+composition drop set `contentExtent = Source{source}` and end the range at the frame boundary at or
+after the extent end, capped by the composition; a still image stays full-duration.
+
 `SetLayerRange` edits both endpoints in one transaction. `SplitLayerAtTime` requires an interior
 frame and duplicates the Layer node, its own parameters/curves, boundary and stable stack slot.
-The first range becomes `[in,t)`, the second `[t,out)`. Upstream image/value sources remain shared;
+The first range becomes `[in,t)`, the second `[t,out)`; the tail copies the layer's time mapping
+unchanged. Upstream image/value sources remain shared;
 new parameters, curves, keys, node, layer, edge and slot IDs remain pinned across undo/redo.
 `DuplicateNodes` retains a copied Layer's incoming shared connections and boundary metadata.
 
@@ -1131,7 +1149,9 @@ implementation on Linux, macOS and Windows; local executed desktop qualification
 The snapshot compiler copies the selected asset into `CompiledImageSource`; only sequence
 sources make a plan time-dependent. Missing records remain compilable warning sources.
 
-Frames are selected with `valueGraphFrameIndex` at the composition rate, relative to startFrame.
+Frames are selected with `valueGraphFrameIndex` at the composition rate, relative to startFrame,
+at the content time the source's [time scope](animation-and-time.md#layer-time) supplies (composition
+time for a source with no retimed layer downstream). Source timing composes inside layer timing.
 The numbered first member anchors offset zero; missing numbers hold the preceding member and
 warn. Hold clamps both ends; Loop and PingPong wrap the sequence span after the start. Missing or
 changed files yield transparent output plus a diagnostic, with bounded decode caching keyed by
@@ -1167,7 +1187,9 @@ limits the compiled audio description.
 
 The immutable compiled plan carries `CompiledAudioSource`, `CompiledAudioLayer`, and a
 `CompositionAudioMix` beside the image operations. `CpuCompositionEvaluator::evaluateAudioMix()`
-resolves the source identity, rational start time, sampled level, mute and solo state without
+resolves the source identity, rational start time, sampled level, mute and solo state (and, under
+[layer-owned time](animation-and-time.md#layer-time), the layer's mapping as the first entry of the
+clip's ordered time mappings) without
 touching decoded samples, a device, or the filesystem. The UI/audio boundary resolves those asset
 IDs to bounded planar buffers and hands `AudioClip` values to `AudioEngine`.
 

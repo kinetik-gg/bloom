@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-17
+Updated: 2026-10-23
 
 ## Geometry and transform levels
 
@@ -296,7 +296,7 @@ at gesture start (or the current revision for a menu/clipboard action), with one
 
 | Operation | Admission and result |
 | --- | --- |
-| `MoveKeyframes` | Accepts stable curve/key addresses with destination times. Stages and sorts complete curves, permitting selected keys to exchange their original times. Duplicate addresses, occupied final times and times outside `[0, duration)` reject the whole transaction. IDs and values are preserved; final outgoing interpolation is normalized to Linear |
+| `MoveKeyframes` | Accepts stable curve/key addresses with destination times. Stages and sorts complete curves, permitting selected keys to exchange their original times. Duplicate addresses, occupied final times and non-representable times reject the whole transaction. Under [layer-owned time](#layer-time) a key's clock is its layer or content clock, so admission no longer requires `[0, duration)`; the Timeline clamps moves to the composition interval projected onto the key's clock. IDs and values are preserved; final outgoing interpolation is normalized to Linear |
 | `DeleteKeyframes` | Removes the complete addressed selection across value kinds. If a curve becomes empty, restores a constant holding its earliest pre-delete key's value and erases the curve atomically |
 | `SetKeyframesInterpolation` | Applies Hold, Linear or Ease In-Out to the complete selection. Final keys remain canonical Linear; no effective change creates no history entry |
 | `PasteKeyframes` | Accepts original parameter IDs, exact destination times, typed values and interpolation. Allocates new IDs, creates compatible animation for constant parameters, and rejects missing/driven targets, invalid values and occupied times without publishing a partial result |
@@ -1061,8 +1061,9 @@ cache"](media-io.md#disk-cache) for the complete key, format, eviction, and sett
 
 ## Animated Parent Transforms And Bounds
 
-A layer samples its own position, anchor, scale and rotation at composition time, then composes
-its local matrix with its parent's resolved matrix. This continues through the ancestor chain.
+A layer samples its own position, anchor, scale and rotation at its [layer time](#layer-time), then composes
+its local matrix with its parent's resolved matrix, which the parent samples at its own layer time
+derived from the child's placement time. This continues through the ancestor chain.
 Animated and driven parent values therefore move the child's evaluated content bounds, anchor and
 viewer overlay polygon at the same time as its pixels. Cache dependencies include the resolved
 parent transform; changing an ancestor cannot reuse stale child geometry or imagery. Parent opacity,
@@ -1070,9 +1071,78 @@ enabled/solo state and time range do not suppress or fade children. The child's 
 continue to apply independently.
 
 
+## Layer Time
+
+Status: accepted direction ([ADR 0024](../decisions/0024-layer-owned-time.md), issue #353);
+implementation in progress. Until it lands, the evaluator still samples layers and their upstream at
+absolute composition time.
+
+The time mapping is layer-owned. A layer converts its placement time `t` (composition time for a
+top-level layer, the enclosing layer's content time for a nested one) into two clocks:
+
+```text
+layer time    tau = (t - startTime) * speed
+content time  c   = outOfExtent(timeRemap enabled ? exact(timeRemap sampled at tau) : tau)
+```
+
+- The activity window `[inPoint, outPoint)` is tested in placement time first, unchanged.
+- The Layer Output's own parameters, including the Time Remap curve, sample at `tau`.
+- Everything feeding the Layer Output's image and audio inputs evaluates at `c`: sources, effects,
+  Merges, nested layers, composition sources, and the value nodes that drive those operations. A value
+  node driving the layer's own parameters evaluates at `tau`.
+- Moving `startTime` therefore moves every key of the layer and its upstream without rewriting a key.
+
+`startTime` is exact and may be negative or beyond the duration; `speed` is an exact positive
+rational in `[1/1000, 1000]`. `contentExtent` is `Unbounded`, `Fixed{duration, frameRate}` or
+`Source{nodeId}`, the last resolved at compile time from the source's media or composition length.
+`beforeMode` and `afterMode` are the closed enumeration None / Hold / Loop / PingPong and are inert for
+an `Unbounded` extent. With extent duration `E` and last frame start `L`:
+
+| Region | None | Hold | Loop | PingPong |
+| --- | --- | --- | --- | --- |
+| `r < 0` | absent | `0` | `r mod E` (non-negative) | reflect, period `2L` |
+| `r > L` (Hold) / `r >= E` (others) | absent | `L` | `r mod E` | reflect, period `2L` |
+
+Absent content behaves like a time outside the activity window: no image slot and silence. The
+mapping is one shared core in `src/runtime/composition_time.cpp`; `mapCompositionTime` is that core
+with `before = Hold` and `after = loopMode` and keeps its current results bit-for-bit. Arithmetic is
+checked rational with the existing nanosecond fallback and `ArithmeticOverflow` diagnostic.
+
+Source-level timing composes inside the layer: `source time = sourceMapping(c)`. Image, video and
+audio `startFrame`/`loopMode`, and composition-source `timeOffset`/`timeScale`/`loopMode`, are not
+migrated; they remain the only timing for a source consumed without a layer. Layer-creating commands
+leave the source at identity and put timing on the layer.
+
+The compiler places operations in time scopes. A layer with identity timing creates no scope, so a
+document opened from an earlier schema compiles to the same operation list. A non-identity layer
+creates a scope whose parent is its placement scope; an operation reached from several scopes is
+compiled once per scope and keeps its source-node identity, so the operation cache shares invariant
+copies and time-dependent copies that map to the same content time. Mapped time is the cache
+identity for time-dependent work. Preflight resolves scope clocks top-down and samples each distinct
+time once. Scope and post-clone operation counts are capped with
+`bloom.runtime.compile.time-scope-limit`. Plan semantics advances to 9; animation, evaluator and
+primitive versions and all pixel goldens are unchanged.
+
+GPU scene preparation walks the same scopes as host parameter resolution; no pixel operation is
+added. The coverage contract adds Required axes `feature.layer.time.offset_speed`,
+`feature.layer.time.remap`, `feature.layer.time.extent_modes` and `feature.layer.time.shared_upstream`
+with CPU parity on every required preview and final route.
+
+Audio uses the same mapping per output sample, as a layer entry ahead of nested-composition entries
+in the clip's ordered mapping list; speed and remap are varispeed and None is silence. Mixer detail
+belongs to #354.
+
+A Qt-free projection gives the Timeline the forward map, the exact inverse
+`t = startTime + tau / speed` for layer-clock keys, and the media extent in placement time for the
+bar. Upstream keys project through the same linear inverse and are marked as content time while a
+remap or wrapping mode is active. Keyframe insertion at the playhead converts the session time
+forward to the parameter's clock and is refused where content is absent. Edit footprints are listed
+in [ADR 0024](../decisions/0024-layer-owned-time.md#8-projection-and-footprints).
+
 ## Composition Source Time Mapping
 
-A composition source samples its offset and scale at the containing composition's time, then uses
+A composition source samples its offset and scale at its scope's content time (the containing
+composition's time when no retimed layer encloses it), then uses
 `sourceTime = (compositionTime - timeOffset) * timeScale`. Offset is in seconds; a positive offset
 delays the source. Scale 1 plays at normal speed, 2 plays twice as fast, and a negative scale reverses
 the direction around the offset. Scale 0 freezes the first frame. The referenced composition's own

@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-20
+Updated: 2026-10-23
 
 ## Purpose
 
@@ -276,7 +276,9 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | `Escape` during key drag or box selection | Cancel the gesture without a document edit |
 | `B` / `N` | Set work-area start / exclusive end at the playhead |
 | Drag work-area grips / double-click strip | Set frame-snapped range / reset to full duration |
-| Drag bar edge / body | Trim / move both endpoints; commit once on release, Escape cancels |
+| Drag bar edge / body | Trim one endpoint / move the layer (start time, in and out together, so content and keys move with it); commit once on release, Escape cancels |
+| Alt-drag bar body | Slip: move the start time only; the range stays, the content and keys slide inside it |
+| Alt-drag bar edge | Stretch about the opposite edge: speed changes exactly by the frame ratio, the opposite edge's content time stays fixed |
 | `Shift` during bar drag | Disable magnetic snapping; committed endpoints still land on frames |
 | `Ctrl+K` | Split selected layers at the playhead (also Timeline Edit) |
 | Click / Ctrl-click / Shift-click row | Select one / toggle membership / extend contiguous selection |
@@ -315,6 +317,16 @@ RAM Preview sits in the transport cluster as a button, but its KEYS are declared
 menu, not here: one `Qt::WindowShortcut` owner per sequence, or Qt reports an ambiguous overload and
 fires neither. The button, the menu item, and `Ctrl+Shift+Space` all call the one
 `RamPreviewController::toggle()`, per **Ownership Boundary** below.
+
+Bar gestures follow [layer-owned time](../architecture/animation-and-time.md#layer-time)
+([ADR 0024](../decisions/0024-layer-owned-time.md); the body-move, slip and stretch semantics above are
+the accepted direction while #353 is implemented, and today a body drag still moves only the range).
+Each gesture commits one `SetLayerTiming`. A gesture keeps at least one frame of the range inside the
+composition; a trim may extend an endpoint outside the composition only as far as the content extent
+reaches. The bar draws the media extent inside it. Start time and speed are also editable as
+Properties fields and expanded-layer Time rows (Start, Speed, Time Remap with its diamond, Before,
+After), which is the supported path where a window manager claims Alt-drag. Before and After are
+closed None / Hold / Loop / Ping-pong dropdowns.
 
 Bar magnetic targets are other layers' in/out points, the playhead and work-area edges. A guide
 marks the chosen target. Empty lane space retains ruler scrubbing. Visibility, solo and lock cells
