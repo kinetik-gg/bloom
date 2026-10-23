@@ -4,7 +4,7 @@
 // CompiledCompositionPlan that the production CpuGpuSceneBuilder accepts; the driver keeps only the
 // fixture catalogue and the gate loop.
 
-#include "../plan_time_scopes.hpp"
+#include "plan_time_scopes.hpp"
 #include "gpu_coverage_fixture_support.hpp"
 
 #include <bloom/core/blend_mode.hpp>

@@ -1,6 +1,6 @@
 // ADR 0024 Timeline bar gestures: move, Alt slip, trim and Alt stretch, as exact frame math.
 
-#include "../timeline_layer_timing_gesture.hpp"
+#include "timeline_layer_timing_gesture.hpp"
 
 #include <iostream>
 

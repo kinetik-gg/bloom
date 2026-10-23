@@ -113,7 +113,7 @@ void run(const std::filesystem::path& directory) {
                                   return std::holds_alternative<runtime::CompiledVideoSource>(op);
                               }),
           "typed video arm");
-    check(compiled.plan->planSemanticsVersion() == 8, "plan version 8");
+    check(compiled.plan->planSemanticsVersion() == 9, "plan version 9");
     const auto time = core::RationalTime::create(35, 24);
     if (!time)
         throw std::runtime_error("scrub time");

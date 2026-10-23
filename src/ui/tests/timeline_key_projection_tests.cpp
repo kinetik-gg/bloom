@@ -2,7 +2,7 @@
 // 10 draws its opacity keys 10 frames later, edits them through the same mapping, and keys at the
 // playhead on the layer clock; identity timing is unchanged.
 
-#include "../timeline_key_time.hpp"
+#include "timeline_key_time.hpp"
 
 #include <QApplication>
 #include <QMouseEvent>

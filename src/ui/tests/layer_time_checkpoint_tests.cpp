@@ -3,7 +3,7 @@
 // last frame nothing shows (after mode None), even when its range is extended, and every timing
 // edit undoes exactly.
 
-#include "../node_editor_add.hpp"
+#include "node_editor_add.hpp"
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/layer_time_operations.hpp>

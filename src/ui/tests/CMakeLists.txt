@@ -1785,6 +1785,7 @@ bloom_add_test(NAME bloom.ui.packed_host_shutdown COMMAND bloom_packed_host_shut
 # ADR 0024 checkpoint (#353): nested-composition layers on their own frames.
 add_executable(bloom_ui_layer_time_checkpoint_test layer_time_checkpoint_tests.cpp)
 target_link_libraries(bloom_ui_layer_time_checkpoint_test PRIVATE bloom_ui)
+target_include_directories(bloom_ui_layer_time_checkpoint_test PRIVATE ..)
 bloom_enable_warnings(bloom_ui_layer_time_checkpoint_test)
 bloom_add_test(NAME bloom.ui.layer-time-checkpoint COMMAND bloom_ui_layer_time_checkpoint_test LABELS ui unit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
@@ -1796,5 +1797,6 @@ bloom_add_test(NAME bloom.ui.timeline-key-projection COMMAND bloom_ui_timeline_k
 
 add_executable(bloom_ui_timeline_layer_timing_test timeline_layer_timing_gesture_tests.cpp)
 target_link_libraries(bloom_ui_timeline_layer_timing_test PRIVATE bloom_ui)
+target_include_directories(bloom_ui_timeline_layer_timing_test PRIVATE ..)
 bloom_enable_warnings(bloom_ui_timeline_layer_timing_test)
 bloom_add_test(NAME bloom.ui.timeline-layer-timing COMMAND bloom_ui_timeline_layer_timing_test LABELS ui unit TIMEOUT 30)

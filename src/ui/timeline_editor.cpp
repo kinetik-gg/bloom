@@ -1362,8 +1362,10 @@ void TimelineLaneRegion::paintContentExtent(QPainter& painter, const int row,
     const auto to = std::lround(axis->pixelForTime(*last));
     QColor shade = kit::color(kit::Color::SurfaceSunken);
     shade.setAlphaF(0.6F);
-    const auto top = bar.top() + kit::px(kit::Size::Hairline);
-    const auto height = bar.height() - 2 * kit::px(kit::Size::Hairline);
+    const auto hairline = kit::px(kit::Size::Hairline);
+    const auto inner = bar.adjusted(0, hairline, 0, -hairline);
+    const auto top = inner.top();
+    const auto height = inner.height();
     if (from > bar.left())
         painter.fillRect(QRect(bar.left(), top, static_cast<int>(std::min<long>(from, bar.right()) - bar.left()),
                                height),
