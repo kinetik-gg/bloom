@@ -6,6 +6,7 @@
 #include <QSpinBox>
 #include <QTimer>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
+#include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
@@ -168,21 +169,9 @@ template <typename Predicate> [[nodiscard]] bool waitUntil(Predicate predicate) 
     return *format;
 }
 
-// A composition format whose width alone exceeds the version-1 export hard limit (32768 px) while
-// its total pixel count stays tiny (docs/architecture/frame-output.md's "export hard-limit result":
-// "exceeded iff any source or target pixel width or height ... exceeds 32768"). Empirically (see
-// this task's implementor report's "defects found" -- not this test's fault, and nothing here
-// works around it): this trips ProcessFrameSemanticIdentityV1Preparer's OWN identical
-// exceedsOutputLimits() preflight (src/output/process_frame_semantic_identity.cpp,
-// output_limits.hpp's kOutputAnalysisMaximumDimensionV1/kOutputAnalysisMaximumPixelCountV1) at the
-// Identifying stage, BEFORE the analyzer ever runs -- so it fails the whole attempt
-// (OutputAnalysisAttemptFailureV1) rather than reaching a valid-but-non-approvable
-// OutputAnalysisReportV1. The analyzer's own documented resource.limit-exceeded facet path is real
-// (exercised by src/output/tests/output_analysis_analyzer_tests.cpp's hand-constructed inputs) but
-// is unreachable through the real production pipeline for this reason -- see
-// testAttemptFailureViaOverLimitCompositionSurfacesDiagnostics() below, which exercises the outcome
-// this composition ACTUALLY produces (a typed Failed attempt, not NotApprovable).
-[[nodiscard]] document::CompositionFormat overLimitFormat() {
+// A wide, short frame (33000 x 2). It used to exceed the removed 32768 per-dimension limit; since
+// da1f54ce only the aggregate pixel count bounds an export (frame-output.md), so it exports.
+[[nodiscard]] document::CompositionFormat wideFormat() {
     const auto format = document::CompositionFormat::create(33000, 2);
     if (!format.has_value()) {
         std::abort();
@@ -285,7 +274,8 @@ struct Fixture final {
 // (by-then-discarded) attempt used.
 [[nodiscard]] std::shared_ptr<const output::OutputAnalysisAttemptV1>
 independentlyReanalyze(Expectations& expectations, Fixture& fixture,
-                       const std::filesystem::path& verifyTarget) {
+                       const std::filesystem::path& verifyTarget,
+                       std::shared_ptr<runtime::GpuProcessingPhasePolicy> policy) {
     const auto compileResult = fixture.compiler.compile(
         {.snapshot = fixture.session.snapshot(), .compositionId = fixture.session.compositionId()},
         {});
@@ -310,7 +300,7 @@ independentlyReanalyze(Expectations& expectations, Fixture& fixture,
         .targetPath = verifyTarget,
         .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
         .owner = {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(99)},
-        .processingPhasePolicy = bloom::ui::test::previewProcessingPhase()};
+        .processingPhasePolicy = std::move(policy)};
 
     auto begin = host::beginOutputAnalysisAttemptV1(fixture.scheduler, fixture.artifacts(),
                                                     verifyLedger, std::move(request));
@@ -450,31 +440,69 @@ void testFullDriveApprovedAndPublished(Expectations& expectations) {
                             "full drive: the digest short form is 16 hex characters");
     }
 
-    // "the file REALLY existing and passing the F1 verifier independently".
-    auto independentAttempt =
-        independentlyReanalyze(expectations, fixture, fixture.directory.path() / "verify-only.exr");
-    if (independentAttempt != nullptr) {
-        const output::FlatExrRgba32fLinRec709SceneReopenVerifierV1 verifier;
-        const auto verifyResult = verifier.verify(target, independentAttempt->processIdentity(),
-                                                  independentAttempt->report(), {});
-        expectations.expect(verifyResult.status() == output::FlatExrVerifyStatusV1::Verified,
-                            "full drive: the published file independently reopen-verifies");
+    // "the file REALLY existing and passing the F1 verifier independently". A rooted final frame
+    // needs a packed-host retirement owner (828200c1); this one outlives the attempt and is
+    // collected explicitly afterwards.
+    const auto retirement = bloom::render::PackedHostRetirementOwner::create();
+    {
+        auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(4, retirement);
+        bloom::ui::test::refreshPreviewProcessingPhase(*policy);
+        auto independentAttempt = independentlyReanalyze(
+            expectations, fixture, fixture.directory.path() / "verify-only.exr", policy);
+        if (independentAttempt != nullptr) {
+            const output::FlatExrRgba32fLinRec709SceneReopenVerifierV1 verifier;
+            const auto verifyResult = verifier.verify(target, independentAttempt->processIdentity(),
+                                                      independentAttempt->report(), {});
+            expectations.expect(verifyResult.status() == output::FlatExrVerifyStatusV1::Verified,
+                                "full drive: the published file independently reopen-verifies");
+        }
     }
+    (void)waitUntil([&] { return fixture.scheduler.isQuiescent(); });
+    retirement->beginShutdown();
+    expectations.expect(waitUntil([&] { return retirement->exitAcknowledged(); }) &&
+                            retirement->collect(),
+                        "full drive: the reanalysis retirement owner exits and is collected");
 }
 
 // -------------------------------------------------------------------------------------------
-// Attempt failure via an impossible limit: an over-limit composition format surfaces typed
-// diagnostics instead of an approval prompt, and never writes a file. See overLimitFormat()'s own
-// comment for why this exercises the attempt-FAILURE path (ResourceLimitExceeded at the Identifying
-// stage) rather than a non-approvable-but-successfully-built report: empirically, the identity
-// preparer's own resource-limit preflight always intercepts an over-limit process frame before the
-// analyzer ever runs, so a genuinely non-approvable OutputAnalysisReportV1 is unreachable through
-// the real production pipeline for EXR v1 (documented as a finding in this task's report, not
-// worked around here per the task's scope guard).
+// A wide frame past the former per-dimension limit now exports and verifies.
 // -------------------------------------------------------------------------------------------
 
-void testAttemptFailureViaOverLimitCompositionSurfacesDiagnostics(Expectations& expectations) {
-    Fixture fixture(overLimitFormat());
+void testWideFrameExports(Expectations& expectations) {
+    Fixture fixture(wideFormat());
+    if (!fixture.setUp(expectations, "wide frame: fixture is available")) {
+        return;
+    }
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.1, 0.2, 0.3, 1.0}),
+        "wide frame: the solid layer is added");
+    const auto target = fixture.directory.path() / "wide.exr";
+    fixture.controller().setDestinationProvider(
+        [&target]() -> std::optional<std::filesystem::path> { return target; });
+    fixture.controller().setApprovalDecisionProvider(
+        [](const FrameExportApprovalPrompt&) { return FrameExportApprovalDecision::Export; });
+    int finishedCount = 0;
+    FrameExportOutcome outcome = FrameExportOutcome::Refused;
+    QObject::connect(&fixture.controller(), &FrameExportController::exportFinished,
+                     [&](const FrameExportOutcome resultOutcome, const QString&) {
+                         ++finishedCount;
+                         outcome = resultOutcome;
+                     });
+    fixture.controller().requestExport();
+    expectations.expect(waitUntil([&] { return finishedCount == 1; }),
+                        "wide frame: the export reaches a terminal outcome");
+    expectations.expect(outcome == FrameExportOutcome::Published && std::filesystem::exists(target),
+                        "wide frame: a 33000 x 2 frame is published");
+}
+
+// -------------------------------------------------------------------------------------------
+// Attempt failure: a genuine attempt failure (forced through the test seam with an impossible
+// pixel allowance) surfaces typed diagnostics instead of an approval prompt, and never writes a
+// file.
+// -------------------------------------------------------------------------------------------
+
+void testAttemptFailureSurfacesDiagnostics(Expectations& expectations) {
+    Fixture fixture;
     if (!fixture.setUp(expectations, "impossible limit: fixture is available")) {
         return;
     }
@@ -502,12 +530,17 @@ void testAttemptFailureViaOverLimitCompositionSurfacesDiagnostics(Expectations& 
                          message = resultMessage;
                      });
 
+    fixture.controller().setAttemptRequestAdjusterForTesting(
+        [](host::OutputAnalysisAttemptRequestV1& request) {
+            request.useRootPixelCapacity = false;
+            request.evaluation.pixelStorageByteLimit = 1;
+        });
     fixture.controller().requestExport();
     expectations.expect(waitUntil([&] { return finishedCount == 1; }),
                         "impossible limit: the export reaches a terminal outcome");
     expectations.expect(outcome == FrameExportOutcome::Failed,
-                        "impossible limit: the outcome is typed Failed (ResourceLimitExceeded at "
-                        "Identifying), not silently Published or Refused");
+                        "impossible limit: the outcome is typed Failed, not silently Published or "
+                        "Refused");
     expectations.expect(!message.isEmpty(),
                         "impossible limit: a typed diagnostic message is given");
     expectations.expect(!approvalPromptShown,
@@ -1376,7 +1409,8 @@ int main(int argc, char** argv) {
     Expectations expectations;
     testCanExportGatesOnComposition(expectations);
     testFullDriveApprovedAndPublished(expectations);
-    testAttemptFailureViaOverLimitCompositionSurfacesDiagnostics(expectations);
+    testWideFrameExports(expectations);
+    testAttemptFailureSurfacesDiagnostics(expectations);
     testCancelAtApprovalDiscardsCleanly(expectations);
     testExternalModificationConflictSurfacedAsFailure(expectations);
     testDestinationExtensionSelectsPreset(expectations);
