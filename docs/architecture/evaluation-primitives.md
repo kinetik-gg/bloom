@@ -751,6 +751,20 @@ only after extraction. The base image retains its data/display windows and pixel
 resident two-image GPU paths share the coverage contract, with normal cancellation and budget
 admission. The factor, channel and both input content identities invalidate cached output.
 
+Set Alpha and Multiply Alpha share one closed matte selector, stored as the Integer
+`channel` parameter in track-matte order: 0-4 select Alpha, Red, Green, Blue and Luma, and 5-9 the
+same channels inverted (`render::MatteSelection`). Properties and node cards show it as a ten-entry
+dropdown; a driver supplies the same stored value. An inverted matte uses the exact Float32
+complement `1 - coverage` on both the CPU reference and the resident ImageCombineV1 shader (bit 3
+of its channel word). The matte input is optional. A matte with no image at the requested time --
+unconnected, an empty source, or a Layer outside its range -- is a transparent matte on every
+route: zero coverage, so full coverage when inverted. The CPU reference reads no rows for it, and
+GPU preparation emits the same combine dispatch with the base image bound in the matte slot and an
+empty matte extent, so preview and final render never diverge or fall back for it. Required GPU
+coverage features `feature.matte.invert` and `feature.matte.absent` carry those fixtures. Image
+Mix's second input stays required, but a connected second image with no pixels at the requested
+time is the same transparent image on both routes.
+
 The plan also carries `bypass` and `look`; `EvaluationRequest::bypassLookNodes` skips only marked
 nodes. Bypass shares upstream image storage and bounds. Active colour transforms materialize the
 RGBA32F image, transform straight RGB, then restore the original alpha association. Alpha zero
