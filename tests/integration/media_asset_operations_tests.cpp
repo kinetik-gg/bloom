@@ -8,9 +8,101 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace {
+// A minimal PCM16 mono WAV with `dataBytes` of silence.
+bool writeWav(const std::filesystem::path& path, const std::uint32_t dataBytes) {
+    std::ofstream output(path, std::ios::binary);
+    const auto u16 = [&](std::uint16_t value) {
+        const char bytes[] = {static_cast<char>(value), static_cast<char>(value >> 8U)};
+        output.write(bytes, sizeof(bytes));
+    };
+    const auto u32 = [&](std::uint32_t value) {
+        const char bytes[] = {static_cast<char>(value), static_cast<char>(value >> 8U),
+                              static_cast<char>(value >> 16U), static_cast<char>(value >> 24U)};
+        output.write(bytes, sizeof(bytes));
+    };
+    output.write("RIFF", 4);
+    u32(36U + dataBytes);
+    output.write("WAVEfmt ", 8);
+    u32(16);
+    u16(1);
+    u16(1);
+    u32(48'000);
+    u32(48'000U * 2U);
+    u16(2);
+    u16(16);
+    output.write("data", 4);
+    u32(dataBytes);
+    output.seekp(44 + dataBytes - 1);
+    output.put('\0');
+    return static_cast<bool>(output);
+}
+
+// One bad file never aborts a batch: valid files import in one undoable transaction and every
+// failure is reported with its own path and diagnostic.
+bool mixedBatchImport() {
+    namespace doc = bloom::document;
+    const auto directory =
+        std::filesystem::temp_directory_path() /
+        ("bloom-mixed-import-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(directory);
+    struct RemoveDirectory final {
+        std::filesystem::path path;
+        ~RemoveDirectory() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    } cleanup{directory};
+    const auto first = directory / "first.wav", second = directory / "second.wav";
+    const auto corrupt = directory / "corrupt.png", missing = directory / "missing.wav";
+    if (!writeWav(first, 4800) || !writeWav(second, 9600))
+        return false;
+    {
+        std::ofstream output(corrupt, std::ios::binary);
+        output << "not an image";
+    }
+    const std::vector<std::filesystem::path> paths{first, corrupt, missing, second};
+    auto import = std::make_unique<bloom::commands::ImportAssets>(paths, directory);
+    const auto& failures = import->failures();
+    if (!import->diagnostic().empty() || import->prepared().size() != 2 || failures.size() != 2 ||
+        failures[0].path != corrupt || failures[1].path != missing ||
+        failures[0].diagnostic.empty() || failures[1].diagnostic.empty())
+        return false;
+
+    auto seed = doc::makeNewProject("Import", "Main", bloom::core::RationalTime::fromInteger(2));
+    doc::Document document(std::move(seed.project));
+    bloom::commands::CommandStack stack(document);
+    bloom::commands::Transaction transaction("Import Assets", document.snapshot().revision());
+    if (!transaction.add(std::move(import)))
+        return false;
+    const auto executed = stack.execute(std::move(transaction));
+    if (executed.status != bloom::commands::CommandStatus::Succeeded ||
+        document.snapshot().project().assets().size() != 2)
+        return false;
+    const auto undone = stack.undo();
+    if (undone.status != bloom::commands::CommandStatus::Succeeded ||
+        !document.snapshot().project().assets().empty())
+        return false;
+
+    // Only invalid files: the batch is refused and names each failure.
+    const bloom::commands::ImportAssets refused({corrupt, missing}, directory);
+    if (refused.diagnostic().empty() || !refused.prepared().empty() ||
+        refused.failures().size() != 2 ||
+        refused.diagnostic().find("2 files could not be imported") == std::string::npos)
+        return false;
+    // Cancellation still refuses the whole batch, even after a successful file.
+    bool stop = false;
+    const bloom::commands::ImportAssets cancelled(
+        paths, directory, [&] { return stop; },
+        [&](const std::uint64_t done, std::uint64_t) { stop = done >= 1; });
+    return cancelled.prepared().empty() && cancelled.diagnostic() == "Image import cancelled";
+}
+
 bool audioImportCancellationAndRecovery() {
     const auto path =
         std::filesystem::temp_directory_path() /
@@ -24,34 +116,8 @@ bool audioImportCancellationAndRecovery() {
         }
     } cleanup{path};
     constexpr std::uint32_t dataBytes = 8U * 1024U * 1024U;
-    {
-        std::ofstream output(path, std::ios::binary);
-        const auto u16 = [&](std::uint16_t value) {
-            const char bytes[] = {static_cast<char>(value), static_cast<char>(value >> 8U)};
-            output.write(bytes, sizeof(bytes));
-        };
-        const auto u32 = [&](std::uint32_t value) {
-            const char bytes[] = {static_cast<char>(value), static_cast<char>(value >> 8U),
-                                  static_cast<char>(value >> 16U), static_cast<char>(value >> 24U)};
-            output.write(bytes, sizeof(bytes));
-        };
-        output.write("RIFF", 4);
-        u32(36U + dataBytes);
-        output.write("WAVEfmt ", 8);
-        u32(16);
-        u16(1);
-        u16(1);
-        u32(48'000);
-        u32(48'000U * 2U);
-        u16(2);
-        u16(16);
-        output.write("data", 4);
-        u32(dataBytes);
-        output.seekp(44 + dataBytes - 1);
-        output.put('\0');
-        if (!output)
-            return false;
-    }
+    if (!writeWav(path, dataBytes))
+        return false;
     std::size_t probeChecks = 0;
     const bloom::commands::ImportAssets stoppedProbe({path}, path.parent_path(),
                                                      [&] { return ++probeChecks >= 2; });
@@ -141,5 +207,7 @@ int main() {
         return 7;
     if (!audioImportCancellationAndRecovery())
         return 16;
+    if (!mixedBatchImport())
+        return 17;
     return 0;
 }

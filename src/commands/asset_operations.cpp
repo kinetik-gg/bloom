@@ -162,18 +162,27 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
                            const std::filesystem::path& projectDirectory,
                            const std::function<bool()>& cancel,
                            const std::function<void(std::uint64_t, std::uint64_t)>& progress) {
-    try {
-        if (paths.size() > 100000) {
-            diagnostic_ = "Too many files selected";
-            return;
-        }
-        std::set<std::filesystem::path> admitted;
-        for (const auto& path : paths) {
+    // One failing file never aborts the batch: it is recorded with its own diagnostic and the
+    // remaining files import. Only cancellation or an unusable request refuses the whole batch.
+    const auto failFile = [this](const std::filesystem::path& path, std::string diagnostic,
+                                 std::optional<media::provider::Unavailable> media = {}) {
+        failures_.push_back({path, std::move(diagnostic), std::move(media)});
+    };
+    const auto cancelImport = [this] {
+        diagnostic_ = "Image import cancelled";
+        assets_.clear();
+    };
+    if (paths.size() > 100000) {
+        diagnostic_ = "Too many files selected";
+        return;
+    }
+    std::set<std::filesystem::path> admitted;
+    for (const auto& path : paths) {
+        try {
             if (admitted.contains(std::filesystem::absolute(path).lexically_normal()))
                 continue;
             if (cancel && cancel()) {
-                diagnostic_ = "Image import cancelled";
-                assets_.clear();
+                cancelImport();
                 return;
             }
             auto extension = path.extension().string();
@@ -183,10 +192,9 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
             if (color::isLutExtension(path)) {
                 const auto lut = color::readLutFile(path, cancel);
                 if (lut.error != color::LutError::None) {
-                    diagnostic_ =
-                        "LUT import refused: " + std::string(color::lutErrorName(lut.error));
-                    assets_.clear();
-                    return;
+                    failFile(path,
+                             "LUT import refused: " + std::string(color::lutErrorName(lut.error)));
+                    continue;
                 }
                 document::AssetRecord asset;
                 asset.kind = document::AssetKind::Lut;
@@ -195,7 +203,7 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
                 assets_.push_back(std::move(asset));
                 admitted.insert(std::filesystem::absolute(path).lexically_normal());
                 if (progress)
-                    progress(assets_.size(), paths.size());
+                    progress(assets_.size() + failures_.size(), paths.size());
                 continue;
             }
             if (media::video::isVideoExtension(path)) {
@@ -203,43 +211,47 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
                 const auto probed = session.probe(cancel);
                 const auto* probe = std::get_if<media::provider::ProbeResult>(&probed);
                 if (!probe) {
-                    mediaDiagnostic_ = std::get<media::provider::Unavailable>(probed);
-                    diagnostic_ = mediaDiagnostic_->detail;
-                    assets_.clear();
-                    return;
+                    const auto& unavailable = std::get<media::provider::Unavailable>(probed);
+                    if (unavailable.reason == media::provider::Error::Cancelled) {
+                        cancelImport();
+                        return;
+                    }
+                    failFile(path, unavailable.detail, unavailable);
+                    continue;
                 }
                 auto metadata = assetMetadata(*probe);
                 auto* asset = std::get_if<document::AssetRecord>(&metadata);
                 if (!asset) {
-                    mediaDiagnostic_ = std::get<media::provider::Unavailable>(metadata);
-                    diagnostic_ = mediaDiagnostic_->detail;
-                    assets_.clear();
-                    return;
+                    const auto& unavailable = std::get<media::provider::Unavailable>(metadata);
+                    if (unavailable.reason == media::provider::Error::Cancelled) {
+                        cancelImport();
+                        return;
+                    }
+                    failFile(path, unavailable.detail, unavailable);
+                    continue;
                 }
                 asset->locator = locator(path, projectDirectory);
                 assets_.push_back(std::move(*asset));
                 admitted.insert(std::filesystem::absolute(path).lexically_normal());
                 if (progress)
-                    progress(assets_.size(), paths.size());
+                    progress(assets_.size() + failures_.size(), paths.size());
                 continue;
             }
             if (extension == ".wav" || extension == ".mp3") {
                 const auto probe = media::audio::probeAudio(path, {}, cancel);
                 if (!probe.value()) {
-                    diagnostic_ =
-                        "Audio import failed: " + media::audio::describeAudioError(*probe.error());
-                    assets_.clear();
-                    return;
+                    failFile(path, "Audio import failed: " +
+                                       media::audio::describeAudioError(*probe.error()));
+                    continue;
                 }
                 document::AssetRecord asset;
                 asset.kind = document::AssetKind::Audio;
                 asset.locator = locator(path, projectDirectory);
                 const auto digest = digestFile(path, cancel);
                 if (!digest.value()) {
-                    diagnostic_ =
-                        "Audio import failed: " + media::audio::describeAudioError(*digest.error());
-                    assets_.clear();
-                    return;
+                    failFile(path, "Audio import failed: " +
+                                       media::audio::describeAudioError(*digest.error()));
+                    continue;
                 }
                 asset.contentDigest = *digest.value();
                 asset.rate = probe.value()->rate;
@@ -249,20 +261,26 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
                 assets_.push_back(std::move(asset));
                 admitted.insert(std::filesystem::absolute(path).lexically_normal());
                 if (progress)
-                    progress(assets_.size(), paths.size());
+                    progress(assets_.size() + failures_.size(), paths.size());
                 continue;
             }
             const auto probe = media::probeImage(path, cancel);
             if (!probe.value.has_value()) {
-                diagnostic_ = probe.cancelled ? "Image import cancelled" : probe.diagnostic;
-                assets_.clear();
-                return;
+                if (probe.cancelled) {
+                    cancelImport();
+                    return;
+                }
+                failFile(path, probe.diagnostic);
+                continue;
             }
             auto sequence = media::scanSequence(path, cancel, progress);
             if (!sequence.value.has_value()) {
-                diagnostic_ = sequence.cancelled ? "Image import cancelled" : sequence.diagnostic;
-                assets_.clear();
-                return;
+                if (sequence.cancelled) {
+                    cancelImport();
+                    return;
+                }
+                failFile(path, sequence.diagnostic);
+                continue;
             }
             document::AssetRecord asset;
             asset.locator = locator(path, projectDirectory);
@@ -287,6 +305,7 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
                 asset.manifest.last = scan.last;
                 asset.manifest.gaps = scan.gaps;
                 core::Sha256Hasher hasher;
+                bool digested = true;
                 for (const auto& member : scan.members) {
                     asset.manifest.members.push_back({member.frame,
                                                       locator(member.path, projectDirectory),
@@ -295,23 +314,40 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
                     const auto digest = member.contentDigest.toLowercaseHex();
                     if (!hasher.update(std::as_bytes(std::span(frame))) ||
                         !hasher.update(std::as_bytes(std::span(digest)))) {
-                        diagnostic_ = "Sequence digest failed";
-                        assets_.clear();
-                        return;
+                        digested = false;
+                        break;
                     }
-                    admitted.insert(std::filesystem::absolute(member.path).lexically_normal());
                 }
+                if (!digested) {
+                    failFile(path, "Sequence digest failed");
+                    continue;
+                }
+                for (const auto& member : scan.members)
+                    admitted.insert(std::filesystem::absolute(member.path).lexically_normal());
                 asset.contentDigest = hasher.finalize();
                 asset.locator = asset.manifest.members.front().locator;
             } else
                 admitted.insert(std::filesystem::absolute(path).lexically_normal());
             assets_.push_back(std::move(asset));
             if (progress)
-                progress(assets_.size(), paths.size());
+                progress(assets_.size() + failures_.size(), paths.size());
+        } catch (const std::exception& error) {
+            failFile(path, error.what());
         }
-    } catch (const std::exception& error) {
-        diagnostic_ = error.what();
-        assets_.clear();
+    }
+    // A cancelled batch never commits a partial result.
+    if (!assets_.empty() && cancel && cancel()) {
+        cancelImport();
+        return;
+    }
+    if (assets_.empty() && !failures_.empty()) {
+        // Nothing importable: the batch is refused with the (first) per-file reason.
+        mediaDiagnostic_ = failures_.front().media;
+        diagnostic_ = failures_.size() == 1 ? failures_.front().diagnostic
+                                            : std::to_string(failures_.size()) +
+                                                  " files could not be imported; first: " +
+                                                  failures_.front().path.filename().string() +
+                                                  ": " + failures_.front().diagnostic;
     }
 }
 OperationResult ImportAssets::apply(document::Draft& draft) const {
@@ -343,8 +379,13 @@ OperationResult ImportAssets::apply(document::Draft& draft) const {
                                              "Invalid imported asset");
         outputs.push_back({"asset", *id});
     }
-    return outputs.empty() ? OperationResult::noChange()
-                           : OperationResult::applied(std::move(outputs));
+    auto result = outputs.empty() ? OperationResult::noChange()
+                                  : OperationResult::applied(std::move(outputs));
+    // The successful files commit together; each skipped file stays reported individually.
+    for (const auto& failure : failures_)
+        result.issues.push_back({OperationIssueCode::InvalidValue,
+                                 failure.path.filename().string() + ": " + failure.diagnostic});
+    return result;
 }
 RelinkAsset::RelinkAsset(document::AssetId id, const std::filesystem::path& path,
                          const std::filesystem::path& base, const std::function<bool()>& cancel)

@@ -4,6 +4,8 @@
 #include <bloom/media/provider/contract.hpp>
 #include <filesystem>
 #include <functional>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace bloom::commands {
@@ -146,6 +148,12 @@ class RelinkFontAsset final : public Operation {
 
 // Construct on an import worker: preparation probes, hashes and scans. apply only copies the
 // prepared records into a draft, so publishing the command never performs media I/O.
+// One file a batch import could not admit, with its own reason. The rest of the batch imports.
+struct ImportFailure final {
+    std::filesystem::path path;
+    std::string diagnostic;
+    std::optional<media::provider::Unavailable> media;
+};
 class ImportAssets final : public Operation {
   public:
     ImportAssets(const std::vector<std::filesystem::path>& paths,
@@ -157,7 +165,10 @@ class ImportAssets final : public Operation {
     [[nodiscard]] const std::vector<document::AssetRecord>& prepared() const noexcept {
         return assets_;
     }
+    // Non-empty only when the whole batch is refused: cancellation, an unusable request, or no
+    // importable file (then it names the first per-file failure).
     [[nodiscard]] const std::string& diagnostic() const noexcept { return diagnostic_; }
+    [[nodiscard]] const std::vector<ImportFailure>& failures() const noexcept { return failures_; }
     [[nodiscard]] const std::optional<media::provider::Unavailable>&
     mediaDiagnostic() const noexcept {
         return mediaDiagnostic_;
@@ -165,6 +176,7 @@ class ImportAssets final : public Operation {
 
   private:
     std::vector<document::AssetRecord> assets_;
+    std::vector<ImportFailure> failures_;
     std::string diagnostic_;
     std::optional<media::provider::Unavailable> mediaDiagnostic_;
 };
