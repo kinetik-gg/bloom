@@ -2,6 +2,7 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 
 #include "plan_time_scopes.hpp"
+#include <bloom/runtime/layer_time_projection.hpp>
 #include "snapshot_compiler_support.hpp"
 
 #include <bloom/document/animation.hpp>

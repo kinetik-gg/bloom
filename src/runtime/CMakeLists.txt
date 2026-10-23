@@ -46,6 +46,7 @@ target_sources(
         curve_compilation.cpp
         snapshot_compiler.cpp
         plan_time_scopes.cpp
+        layer_time_projection.cpp
         snapshot_compiler_layer_time.ipp
         snapshot_compiler_lowering.ipp
         snapshot_compiler_support.hpp
@@ -57,6 +58,7 @@ target_sources(
             include/bloom/runtime/compiled_plan.hpp
             include/bloom/runtime/compiled_plan_cache.hpp
             include/bloom/runtime/composition_time.hpp
+            include/bloom/runtime/layer_time_projection.hpp
             include/bloom/runtime/compiled_value_graph.hpp
             include/bloom/runtime/operation_index.hpp
             include/bloom/runtime/curve_compilation.hpp
