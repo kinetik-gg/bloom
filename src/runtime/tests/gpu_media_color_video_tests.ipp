@@ -191,12 +191,17 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
         std::filesystem::remove(corruptPath, ignored);
         idBase += 10;
     }
-    // Issue #365: an untagged stream interpreted through an explicit choice and a tagged
-    // Rec.709 H.264 stream keep GPU/CPU input-to-working parity with filtered 4:2:0 chroma.
-    const std::array<std::tuple<std::string_view, std::string_view, bool>, 2> interpretations{
-        std::tuple<std::string_view, std::string_view, bool>{"untagged-h264.mp4", "untagged", true},
-        std::tuple<std::string_view, std::string_view, bool>{"numbered-h264.mp4", "rec709 h264",
-                                                             true}};
+    // Issue #365: a PQ-tagged BT.2020 stream resolves automatically to the config's Rec.2100 PQ
+    // space, an untagged stream is interpreted through an explicit Rec.2100 PQ choice, and a
+    // tagged Rec.709 stream uses filtered 4:2:0 chroma. All keep GPU/CPU input-to-working parity;
+    // the PQ cases exercise the exact half-domain LUT lookup.
+    const std::array<std::tuple<std::string_view, std::string_view, std::string_view>, 3>
+        interpretations{std::tuple<std::string_view, std::string_view, std::string_view>{
+                            "pq2020-h264.mp4", "pq auto", ""},
+                        std::tuple<std::string_view, std::string_view, std::string_view>{
+                            "untagged-h264.mp4", "untagged pq", "Rec.2100-PQ - Display"},
+                        std::tuple<std::string_view, std::string_view, std::string_view>{
+                            "numbered-h264.mp4", "rec709 h264", "ACES2065-1"}};
     for (const auto& [file, label, explicitSpace] : interpretations) {
         const std::string tag{label};
         const auto path = fixtures / std::string{file};
@@ -207,8 +212,7 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
             expectations.expect(false, tag + ": fixture probe failed: " + error.what());
             continue;
         }
-        if (explicitSpace)
-            asset.interpretation.inputColorSpaceId = std::string{"ACES2065-1"};
+        asset.interpretation.inputColorSpaceId = std::string{explicitSpace};
         const auto plan =
             videoPlan(format(asset.width, asset.height), asset,
                       LayerValues{.position = {static_cast<double>(asset.width) * 0.5,
@@ -218,6 +222,35 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
                                               plan, acesRequest(*plan, kAcesWorking), asset.width,
                                               asset.height, tag + " video interpretation"),
                             tag + ": interpreted video input-to-working parity");
+        idBase += 10;
+    }
+    // Issue #365: HLG streams resolve to the synthesized scene-light Rec.2100 HLG space under both
+    // pinned configs and keep the same parity gate.
+    for (const bool aces : {true, false}) {
+        const std::string tag = aces ? "hlg aces" : "hlg neutral";
+        document::AssetRecord asset;
+        try {
+            asset = videoAsset(fixtures / "hlg2020-h264.mp4", idBase + 100);
+        } catch (const std::exception& error) {
+            expectations.expect(false, tag + ": fixture probe failed: " + error.what());
+            continue;
+        }
+        const auto plan =
+            videoPlan(format(asset.width, asset.height), asset,
+                      LayerValues{.position = {static_cast<double>(asset.width) * 0.5,
+                                               static_cast<double>(asset.height) * 0.5}},
+                      idBase);
+        // A fresh evaluator per config keeps each build cold (no shared raw-upload cache).
+        CpuCompositionEvaluator hlgEvaluator;
+        hlgEvaluator.setAssetBaseDirectory(fixtures);
+        hlgEvaluator.setVideoCacheByteBudget(std::size_t{64} << 20U);
+        const auto hlgContext = legacyPreparedMediaContext(hlgEvaluator);
+        const CpuGpuSceneBuilder hlgBuilder(nullptr, hlgContext, ocioContext);
+        const auto request = aces ? acesRequest(*plan, kAcesWorking) : requestFor(*plan);
+        expectations.expect(expectMediaParity(expectations, *executor.executor, hlgEvaluator,
+                                              hlgBuilder, plan, request, asset.width, asset.height,
+                                              tag + " video interpretation"),
+                            tag + ": HLG input-to-working parity");
         idBase += 10;
     }
 }
@@ -291,4 +324,41 @@ void testMissingAndCorruptMedia(Expectations& expectations, const Fixture& fixtu
     expectations.expect(!corrupt.hasValue(), "corrupt media: preparation fails closed");
     expectations.expect(!corrupt.diagnostic.message.empty(),
                         "corrupt media: the diagnostic is honest and non-empty");
+}
+
+// Issue #365: the Rec.2100 PQ input is a half-domain inverse 1D LUT. Sweep the PQ code range
+// (with out-of-range and negative values) through a still so every pixel exercises the exact
+// half index/fraction lookup against the CPU oracle at the unchanged 2e-6 gate.
+void testPqInputSweep(Expectations& expectations, bloom::render::GpuDevice& device,
+                      CpuCompositionEvaluator& evaluator, const GpuSceneOcioContext& ocioContext) {
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+    auto executor = GpuSceneExecutor::create(device, *cache.cache, GpuSceneExecutorBudgets{});
+    expectations.expect(cache.hasValue() && executor.hasValue(), "pq sweep: the executor hosts");
+    if (!cache || !executor) {
+        return;
+    }
+    const auto directory = std::filesystem::temp_directory_path() / "bloom_gpu_pq_sweep";
+    std::filesystem::create_directories(directory);
+    constexpr int width = 128, height = 128;
+    std::vector<ExrPixel> pixels;
+    pixels.reserve(static_cast<std::size_t>(width) * height);
+    for (int i = 0; i < width * height; ++i) {
+        const auto t = static_cast<float>(i) / static_cast<float>(width * height - 1);
+        pixels.push_back({t, 1.2F * t - 0.1F, 0.7F + 0.3F * t, 1.0F});
+    }
+    const auto path = directory / "pq_sweep.exr";
+    writeExrRgbaWithChromaticities(path, width, height, pixels, acesAp0Chromaticities());
+    auto asset = imageAsset(path, "pq_sweep", 9100);
+    asset.interpretation.inputColorSpaceId = std::string{"Rec.2100-PQ - Display"};
+    evaluator.setAssetBaseDirectory(directory);
+    const auto context = legacyPreparedMediaContext(evaluator);
+    const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
+    const auto plan = mediaPlan(format(width, height), asset,
+                                LayerValues{.position = {width * 0.5, height * 0.5}}, 9100);
+    expectations.expect(expectMediaParity(expectations, *executor.executor, evaluator, builder,
+                                          plan, acesRequest(*plan, kAcesWorking), width, height,
+                                          "pq sweep"),
+                        "pq sweep: Rec.2100 PQ input-to-working parity across the code range");
+    std::error_code ignored;
+    std::filesystem::remove_all(directory, ignored);
 }

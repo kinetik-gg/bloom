@@ -1,5 +1,7 @@
 #include "video_source.hpp"
 #include <algorithm>
+#include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
@@ -56,6 +58,72 @@ void sessionAdmission(const std::filesystem::path& directory) {
     check(context.retainedSessionCount() == runtime::detail::VideoSourceContext::kSnapshotFiles,
           "the source-snapshot file quota bounds retention");
     context.beginShutdown();
+}
+// Issue #365: a project saved with the synthesized "Rec.2100-HLG (Bloom)" input space reopens
+// with that exact id, the space is re-synthesized when the pinned config is resolved, and the
+// HLG video renders without a warning before and after the round trip.
+void hlgInterpretationRoundTrip(const std::filesystem::path& directory) {
+    auto seed = document::makeNewProject("HLG", "Main", core::RationalTime::fromInteger(1));
+    const auto composition = seed.initialCompositionId;
+    const auto format = document::CompositionFormat::create(64, 48);
+    if (!format)
+        throw std::runtime_error("test composition format");
+    seed.project.findComposition(composition)->setFormat(*format);
+    document::Document document(std::move(seed.project));
+    const auto snapshot = document.snapshot();
+    auto draft = document.draft(snapshot);
+    const auto videoPath = directory / "integration-hlg.mp4";
+    std::filesystem::copy_file(directory / "hlg2020-h264.mp4", videoPath,
+                               std::filesystem::copy_options::overwrite_existing);
+    commands::ImportAssets imported({videoPath}, directory);
+    check(imported.apply(draft).status == commands::OperationStatus::Applied, "HLG import");
+    const auto assetId = draft.project().assets().front().id;
+    check(commands::SetAssetInputColor(assetId, document::AssetColorSpace::Auto,
+                                       std::string(color::kBloomRec2100HlgColorSpaceId))
+                  .apply(draft)
+                  .status == commands::OperationStatus::Applied,
+          "explicit synthesized HLG interpretation");
+    check(commands::AddImageLayer(composition, assetId).apply(draft).status ==
+              commands::OperationStatus::Applied,
+          "HLG video layer");
+    check(document.commit(snapshot.revision(), std::move(draft)).committed(), "HLG document");
+    const auto render = [&](const document::Document& source) {
+        runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+        const auto compiled = compiler.compile({source.snapshot(), composition}, {});
+        check(compiled.plan != nullptr, "HLG plan compiles");
+        runtime::CpuCompositionEvaluator evaluator;
+        evaluator.setAssetBaseDirectory(directory);
+        const auto time = core::RationalTime::create(1, 24);
+        const auto result =
+            evaluator.evaluate(compiled.plan,
+                               {.time = *time,
+                                .output = compiled.plan->output(),
+                                .resolution = {},
+                                .pixelStorageByteLimit = std::size_t{16} * 1024 * 1024},
+                               {});
+        for (const auto& d : result.diagnostics())
+            std::cerr << d.summary << '\n';
+        check(result.frame() && result.diagnostics().empty(),
+              "HLG video renders through the synthesized space without a warning");
+        return std::vector<std::byte>(
+            std::as_bytes(result.frame()->processImage().pixels()).begin(),
+            std::as_bytes(result.frame()->processImage().pixels()).end());
+    };
+    const auto before = render(document);
+    const auto saved = document.snapshot();
+    const auto colors = document::makeBloomNeutralColorSettingsV1({});
+    auto archive = project::buildVerifiedSaveArchive(
+        {}, {.snapshot = &saved, .colorSettings = &colors}, {}, memory());
+    check(static_cast<bool>(archive), "HLG project saves");
+    auto opened = project::openProjectArchive(archive.archive()->bytes(), {}, memory());
+    check(opened.outcome() == project::OpenArchiveOutcome::Opened, "HLG project reopens");
+    auto restored = std::move(opened).takeOpened();
+    check(restored.document->snapshot()
+                  .project()
+                  .findAsset(assetId)
+                  ->interpretation.inputColorSpaceId == color::kBloomRec2100HlgColorSpaceId,
+          "the synthesized HLG space id round trips");
+    check(render(*restored.document) == before, "reopened HLG project renders identically");
 }
 void run(const std::filesystem::path& directory) {
     auto seed = document::makeNewProject("Video test", "Main", core::RationalTime::fromInteger(2));
@@ -203,6 +271,7 @@ int main(int argc, char** argv) {
     try {
         check(argc == 2, "fixture directory");
         sessionAdmission(argv[1]);
+        hlgInterpretationRoundTrip(argv[1]);
         run(argv[1]);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

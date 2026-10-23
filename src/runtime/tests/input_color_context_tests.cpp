@@ -197,6 +197,19 @@ void testVideoRules(Expectations& expectations) {
                         "BT.2020 constant luminance is refused by name");
     expectations.expect(hdr.warning.find("Rec.2100 PQ") != std::string::npos,
                         "a config without PQ names the missing Rec.2100 space");
+    const auto neutralHlg =
+        bloom::media::video::resolveVideoInputColorSpace(*config, ColourTags{9, 18, 9, 1}, 0, {});
+    std::string neutralHlgDiagnostic;
+    expectations.expect(
+        neutralHlg.automatic && neutralHlg.id == bloom::color::kBloomRec2100HlgColorSpaceId &&
+            static_cast<bool>(bloom::runtime::detail::prepareInputColorProcessor(
+                *config, {neutralHlg.id, neutralHlg.name, {}, false, true}, neutralHlgDiagnostic)),
+        "Bloom Neutral also gains the synthesized HLG input space");
+    expectations.expect(
+        bloom::color::synthesizedColorSpaceIdentity(bloom::color::kBloomRec2100HlgColorSpaceId)
+                    .find("ocio=") != std::string::npos &&
+            bloom::color::synthesizedColorSpaceIdentity("lin_rec709_scene").empty(),
+        "the synthesized space's identity names its definition and the OCIO version");
     if (auto aces = acesConfig()) {
         const auto pq =
             bloom::media::video::resolveVideoInputColorSpace(*aces, ColourTags{9, 16, 9, 1}, 0, {});
@@ -206,10 +219,14 @@ void testVideoRules(Expectations& expectations) {
         expectations.expect(pq.automatic && pq.id == aces->rec2100PqColorSpaceId() &&
                                 pq.id.find("2100") != std::string::npos,
                             "a PQ stream resolves to the config's Rec.2100 PQ input space");
-        // The pinned CG config lists Rec.2100-HLG as inactive without defining it.
-        expectations.expect(aces->rec2100HlgColorSpaceId().empty() && hlg.id.empty() &&
-                                hlg.warning.find("Rec.2100 HLG") != std::string::npos,
-                            "a config without an HLG space names it and the override");
+        // The pinned CG config defines no HLG space; Bloom synthesizes its scene-light space.
+        expectations.expect(hlg.automatic && hlg.id == bloom::color::kBloomRec2100HlgColorSpaceId &&
+                                aces->rec2100HlgColorSpaceId() == hlg.id,
+                            "an HLG stream resolves to the synthesized Rec.2100 HLG space");
+        std::string hlgDiagnostic;
+        expectations.expect(static_cast<bool>(bloom::runtime::detail::prepareInputColorProcessor(
+                                *aces, {hlg.id, hlg.name, {}, false, true}, hlgDiagnostic)),
+                            "the synthesized HLG input processor builds on the ACES config");
         const auto pqUntaggedMatrix =
             bloom::media::video::resolveVideoInputColorSpace(*aces, ColourTags{9, 16, 2, 0}, 0, {});
         expectations.expect(pqUntaggedMatrix.id.empty() &&

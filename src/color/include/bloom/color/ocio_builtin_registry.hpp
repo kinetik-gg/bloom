@@ -128,6 +128,13 @@ ocioBuiltInContentRevision(OcioConfigLocatorKind locatorKind,
 // (OCIO::ColorSpace::getInteropID()), not by matching a name, role, or alias; the display/view
 // pair is discovered by scanning every (display, view) pair's resolved color space
 // (OCIO::Config::getDisplayViewColorSpaceName()) against the discovered output color-space name.
+// Scene-light Rec.2100 HLG input space Bloom synthesizes into every resolved pinned config that
+// lacks one (OCIO "CURVE - HLG-OETF-INVERSE" then BT.2020 to the reference primaries; no OOTF).
+inline constexpr std::string_view kBloomRec2100HlgColorSpaceId = "Rec.2100-HLG (Bloom)";
+// Identity of a Bloom-synthesized space's math: the definition version and the linked OCIO
+// version whose built-ins it uses. Empty for config-defined spaces. Part of transform identity.
+[[nodiscard]] std::string synthesizedColorSpaceIdentity(std::string_view colorSpaceId);
+
 class ResolvedBloomNeutralConfig final {
   public:
     ResolvedBloomNeutralConfig(ResolvedBloomNeutralConfig&&) noexcept;

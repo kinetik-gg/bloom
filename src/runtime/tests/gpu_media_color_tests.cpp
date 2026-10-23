@@ -113,6 +113,7 @@ int main(const int argc, char** argv) {
             testProxiedIdentityStill(expectations, *device.device, evaluator, fixture, ocioContext);
             testRealVideoColour(expectations, *device.device, evaluator, options.fixtures,
                                 ocioContext);
+            testPqInputSweep(expectations, *device.device, evaluator, ocioContext);
         }
 
         if (!expectations.ok()) {
