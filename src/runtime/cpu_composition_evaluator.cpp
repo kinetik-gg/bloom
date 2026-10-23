@@ -3250,6 +3250,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     m.y * resolved.verticalScale ==
                                         std::floor(m.y * resolved.verticalScale);
                                 if (!nativeGrid || chain.source != layer.input.value()) {
+                                    // ADR 0024: the vector leaf resolves its own operands on its
+                                    // own (content) clock, not on this layer's clock.
+                                    const auto& sourceResolved = detail::resolvedForClock(
+                                        frameResolved,
+                                        plan->operationClock(OperationIndex::fromRaw(chain.source)));
 #include "vector_layer_evaluation.ipp"
                                     if (operationFailure || operationCancelled)
                                         return;

@@ -531,6 +531,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 .plan = plan.get(),
                 .request = &clockRequest,
                 .resolved = &resolved,
+                .frameResolved = &frameResolved,
                 .vectors = &vectors,
                 .commandForOperation = &commandForOperation,
                 .keyOf = &keyOf,
@@ -804,7 +805,11 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 bool consumedShapeLeaf = false;
                 const bool leafPath = direct && nativeGrid;
                 if (const auto error = detail::emitVectorLeafLayer(
-                        leafOperation, *plan, resolved, chainMatrix, *layerWindow,
+                        leafOperation, *plan,
+                        detail::resolvedForClock(
+                            frameResolved,
+                            plan->operationClock(OperationIndex::fromRaw(chainSource))),
+                        chainMatrix, *layerWindow,
                         fullDisplayWindow, fullPixelAspect, hScale, vScale,
                         inputVec->opacity * opacity->value, leafPath && nativeGrid, allowance,
                         operationIndex, &transformValue, coverageCache_, cancellation, emit,

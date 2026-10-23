@@ -139,6 +139,8 @@ struct GpuSceneEffectEmissionContext final {
     const CompiledCompositionPlan* plan = nullptr;
     const EvaluationRequest* request = nullptr;
     const ResolvedEvaluation* resolved = nullptr;
+    // ADR 0024: the frame (clock 0) resolution, so a vector leaf resolves on its own clock.
+    const ResolvedEvaluation* frameResolved = nullptr;
     const std::vector<std::optional<GpuSceneVectorChain>>* vectors = nullptr;
     const std::vector<GpuSceneCommandIndex>* commandForOperation = nullptr;
     const std::vector<std::string>* keyOf = nullptr;
@@ -187,6 +189,12 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     const auto& plan = *ctx.plan;
     const auto& request = *ctx.request;
     const auto& resolved = *ctx.resolved;
+    const auto leafResolution = [&](const std::size_t source) -> const ResolvedEvaluation& {
+        return ctx.frameResolved == nullptr
+                   ? resolved
+                   : resolvedForClock(*ctx.frameResolved,
+                                      plan.operationClock(OperationIndex::fromRaw(source)));
+    };
     const auto& vectors = *ctx.vectors;
     const auto& commandForOperation = *ctx.commandForOperation;
     const auto& keyOf = *ctx.keyOf;
@@ -235,7 +243,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                 return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                             "Discrete image input cannot be materialized");
             if (const auto error = emitVectorLeafLayer(
-                    plan.operations()[chain->source], plan, resolved, chain->matrix, *inputWindow,
+                    plan.operations()[chain->source], plan, leafResolution(chain->source), chain->matrix, *inputWindow,
                     ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale,
                     chain->opacity, false, ctx.allowance, operationIndex, nullptr,
                     ctx.coverageCache, cancellation, emit, charge, chargeCoverage, inputCommand,
@@ -332,7 +340,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                 return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                             "Image combine vector input is not materializable");
             const auto error = emitVectorLeafLayer(
-                plan.operations()[chain->source], plan, resolved, chain->matrix,
+                plan.operations()[chain->source], plan, leafResolution(chain->source), chain->matrix,
                 *outputWindowOf[value], ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale,
                 ctx.vScale, chain->opacity, false, ctx.allowance, operationIndex, nullptr,
                 ctx.coverageCache, cancellation, emit, charge, chargeCoverage, command, key,
@@ -432,7 +440,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                 return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                             "Canvas input vector chain is not materializable");
             if (const auto error = emitVectorLeafLayer(
-                    plan.operations()[chain->source], plan, resolved, chain->matrix, sourceWindow,
+                    plan.operations()[chain->source], plan, leafResolution(chain->source), chain->matrix, sourceWindow,
                     ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale,
                     chain->opacity, false, ctx.allowance, operationIndex, nullptr,
                     ctx.coverageCache, cancellation, emit, charge, chargeCoverage, inputCommand,
@@ -664,7 +672,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         GpuSceneCommandIndex materialized = kInvalidGpuSceneCommand;
         std::string materializedKey;
         if (const auto error = emitVectorLeafLayer(
-                plan.operations()[chain.source], plan, resolved, chain.matrix, *inputWindow,
+                plan.operations()[chain.source], plan, leafResolution(chain.source), chain.matrix, *inputWindow,
                 ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale, chain.opacity,
                 false, ctx.allowance, operationIndex, nullptr, ctx.coverageCache, cancellation,
                 emit, charge, chargeCoverage, materialized, materializedKey, result.consumedText,

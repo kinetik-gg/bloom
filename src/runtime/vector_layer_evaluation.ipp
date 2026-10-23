@@ -13,10 +13,10 @@ const auto pixel = [&](core::Color4d color) {
 };
 const auto& sourceOperation = plan->operations()[chain.source];
 if (const auto* shape = std::get_if<CompiledShape>(&sourceOperation)) {
-    const auto size = detail::resolveParameter(shape->size, *plan, resolved);
-    const auto fill = detail::resolveParameter(shape->fillColor, *plan, resolved);
-    const auto color = detail::resolveParameter(shape->strokeColor, *plan, resolved);
-    const auto width = detail::resolveParameter(shape->strokeWidth, *plan, resolved);
+    const auto size = detail::resolveParameter(shape->size, *plan, sourceResolved);
+    const auto fill = detail::resolveParameter(shape->fillColor, *plan, sourceResolved);
+    const auto color = detail::resolveParameter(shape->strokeColor, *plan, sourceResolved);
+    const auto width = detail::resolveParameter(shape->strokeWidth, *plan, sourceResolved);
     if (!size || !fill || !color || !width)
         return;
     paths.push_back(shapePath(*shape, size->value));
@@ -30,23 +30,23 @@ if (const auto* shape = std::get_if<CompiledShape>(&sourceOperation)) {
     vectorFill = pixel(fill->value);
     vectorStroke = pixel(color->value);
 } else if (const auto* solid = std::get_if<CompiledSolid>(&sourceOperation)) {
-    const auto width = detail::resolveParameter(solid->width, *plan, resolved);
-    const auto height = detail::resolveParameter(solid->height, *plan, resolved);
-    const auto color = detail::resolveParameter(solid->color, *plan, resolved);
+    const auto width = detail::resolveParameter(solid->width, *plan, sourceResolved);
+    const auto height = detail::resolveParameter(solid->height, *plan, sourceResolved);
+    const auto color = detail::resolveParameter(solid->color, *plan, sourceResolved);
     if (!width || !height || !color)
         return;
     paths.push_back(render::rectanglePath(width->value, height->value));
     vectorHasFill = true;
     vectorFill = pixel(color->value);
 } else if (const auto* text = std::get_if<CompiledText>(&sourceOperation)) {
-    const auto size = detail::resolveParameter(text->size, *plan, resolved);
-    const auto color = detail::resolveParameter(text->color, *plan, resolved);
+    const auto size = detail::resolveParameter(text->size, *plan, sourceResolved);
+    const auto color = detail::resolveParameter(text->color, *plan, sourceResolved);
     const auto content = detail::resolveParameter(text->contentParameterId, text->content,
-                                                  text->drivenContent, resolved);
-    const auto lineHeight = detail::resolveParameter(text->layout.lineHeight, *plan, resolved);
-    const auto spacing = detail::resolveParameter(text->layout.letterSpacing, *plan, resolved);
+                                                  text->drivenContent, sourceResolved);
+    const auto lineHeight = detail::resolveParameter(text->layout.lineHeight, *plan, sourceResolved);
+    const auto spacing = detail::resolveParameter(text->layout.letterSpacing, *plan, sourceResolved);
     const auto alignment = detail::resolveParameter(
-        text->layout.alignmentId, text->layout.alignment, text->layout.drivenAlignment, resolved);
+        text->layout.alignmentId, text->layout.alignment, text->layout.drivenAlignment, sourceResolved);
     if (!size || !color || !content || !lineHeight || !spacing || !alignment)
         return;
     const auto parameters = render::TextRasterParameters::create(size->value, size->value);
