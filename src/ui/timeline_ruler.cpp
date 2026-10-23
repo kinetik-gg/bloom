@@ -387,7 +387,8 @@ class TimelineKeyframeRow final : public QWidget {
             return;
         }
         // The lane is in composition time; the key is stored on the owning layer's clock.
-        const auto keyTime = keyTimeOfCompositionTime(session_.keyClockForCurve(curveId_), *snappedTime);
+        const auto keyTime =
+            keyTimeOfCompositionTime(session_.keyClockForCurve(curveId_), *snappedTime);
         if (keyTime && session_.insertKeyframeAtTime(curveId_, *keyTime)) {
             if (auto* panel = parentWidget()) {
                 panel->setFocus(Qt::MouseFocusReason);
@@ -491,8 +492,8 @@ class TimelineKeyframeRow final : public QWidget {
                 // Refusal (duplicate time / model rejection) commits nothing and keeps the
                 // selection; the ghost is cleared unconditionally below either way.
                 // The ghost is a composition time; the command takes the key's own clock.
-                if (const auto keyTime = keyTimeOfCompositionTime(
-                        session_.keyClockForCurve(curveId_), *ghostTime_))
+                if (const auto keyTime =
+                        keyTimeOfCompositionTime(session_.keyClockForCurve(curveId_), *ghostTime_))
                     (void)session_.moveSelectedKeyframe(*keyTime);
             }
         }
@@ -855,9 +856,15 @@ std::vector<QRectF> TimelineRuler::cachedFrameRects() const {
         const auto left = std::max(0.0, axis->pixelForTime(time));
         const auto right = std::min(static_cast<qreal>(width() - kit::px(kit::Size::Hairline)),
                                     axis->pixelForTime(end));
-        if (right > left) {
-            segments.emplace_back(left, height() - barHeight, right - left, barHeight);
+        if (right <= left)
+            continue;
+        // #358: consecutive cached frames merge into one segment, so a fully cached range paints
+        // one rect rather than one per frame.
+        if (!segments.empty() && left <= segments.back().right() + 0.5) {
+            segments.back().setRight(std::max(segments.back().right(), right));
+            continue;
         }
+        segments.emplace_back(left, height() - barHeight, right - left, barHeight);
     }
     return segments;
 }
