@@ -559,12 +559,23 @@ void testAddAndLayout(TestContext& test) {
         const auto& comp = composition(fixture.document.snapshot());
         const auto* node = comp.graph().findNode(*id);
         test.expect(
-            node && node->parameters.size() == definition.parameters.size() &&
+            // ADR 0024: AddNode leaves the optional Time Remap unbound (disabled).
+            node &&
+                node->parameters.size() ==
+                    definition.parameters.size() -
+                        static_cast<std::size_t>(std::ranges::count(
+                            definition.parameters, document::kTimeRemapParameterSchemaKey,
+                            &document::ParameterDefinition::schemaKey)) &&
                 node->schemaVersion == definition.key.schemaVersion &&
                 comp.nodeLayout().contains(*id) &&
                 comp.graph().layerStack().entries().size() == beforeSlots,
             "generic AddNode uses schema defaults, a free requested slot, and no layer or slot");
         for (const auto& parameter : definition.parameters) {
+            if (parameter.schemaKey == document::kTimeRemapParameterSchemaKey) {
+                test.expect(!result.outputId<ParameterId>("parameter." + parameter.role),
+                            "AddNode leaves Time Remap unbound");
+                continue;
+            }
             const auto parameterId = result.outputId<ParameterId>("parameter." + parameter.role);
             const auto* record = parameterId ? comp.parameters().find(*parameterId) : nullptr;
             auto expected = parameter.defaultValue;
