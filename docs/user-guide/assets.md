@@ -10,6 +10,11 @@ Import media with **File > Import**, the Assets footer's **Import** button, or b
 onto the Assets panel. Imports keep stable identities, so organizing them preserves the nodes
 and layers that already use them.
 
+When you import several files at once, one unreadable or unsupported file does not stop the rest.
+Every valid file is added in a single step that one **Undo** reverses. Each skipped file gets its
+own reason: the status bar names the first one, and the import job in **Jobs** lists them all.
+Cancelling an import adds nothing.
+
 ## Folders and names
 
 Choose **Add > New Folder** or the footer's **New Folder** button. The new folder opens for

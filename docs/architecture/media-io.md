@@ -425,7 +425,11 @@ They do not run independent “quick” probes that can disagree with the Asset 
 
 ## Audio v1 Wiring (AUDIO-2)
 
-Audio assets are imported by the same atomic worker transaction as images. `probeAudio` supplies the
+Audio assets are imported by the same worker transaction as images. A batch import records each
+file that fails probing, hashing or scanning as an `ImportFailure` (path and diagnostic) and keeps
+going; the remaining files publish as one undoable `ImportAssets` transaction, and each failure is
+attached to the import job as a warning diagnostic and to the operation result as an issue. Only
+cancellation, an over-large request, or a batch with no importable file refuses the whole import. `probeAudio` supplies the
 persisted rate, channel count, frame count and exact duration; `decodeAudio` and `waveformSummary`
 run only on the blocking-I/O worker. The UI publishes a bounded waveform summary for Assets, the
 timeline bar and the audio source node card. Painting reads the immutable summary and never opens or
