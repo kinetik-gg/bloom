@@ -715,14 +715,50 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
     if (!video)
         source.sourceParameters.push_back(
             {"premultiply", "bloom.image.premultiply", true, "premultiplyParameter"});
-    return addStructuredLayer(draft, *composition, name, std::move(source),
-                              {static_cast<double>(composition->format().width()) / 2.0,
-                               static_cast<double>(composition->format().height()) / 2.0},
-                              1.0,
-                              {"layer", "slot", "imageNode", "layerOutputNode", "positionParameter",
-                               "anchorParameter", "scaleParameter", "rotationParameter",
-                               "opacityParameter", "blendModeParameter", "imageToLayerEdge",
-                               "layerToStackEdge"});
+    auto added = addStructuredLayer(
+        draft, *composition, name, std::move(source),
+        {static_cast<double>(composition->format().width()) / 2.0,
+         static_cast<double>(composition->format().height()) / 2.0},
+        1.0,
+        {"layer", "slot", "imageNode", "layerOutputNode", "positionParameter", "anchorParameter",
+         "scaleParameter", "rotationParameter", "opacityParameter", "blendModeParameter",
+         "imageToLayerEdge", "layerToStackEdge"});
+    if (added.status != OperationStatus::Applied || asset->kind == document::AssetKind::Image)
+        return added;
+    // ADR 0024: timed media starts at its natural length (capped by the composition), with the
+    // media as its content extent, so after its last frame the layer shows nothing.
+    std::optional<document::LayerId> layerId;
+    std::optional<document::NodeId> imageNode;
+    for (const auto& output : added.outputs) {
+        if (output.name == "layer")
+            layerId = std::get<document::LayerId>(output.id);
+        if (output.name == "imageNode")
+            imageNode = std::get<document::NodeId>(output.id);
+    }
+    auto* layer = layerId ? composition->graph().findLayer(*layerId) : nullptr;
+    if (layer == nullptr || !imageNode)
+        return added;
+    layer->timing.contentExtent = document::SourceLayerExtent{*imageNode};
+    const auto rate = composition->format().frameRate();
+    std::optional<core::RationalTime> length;
+    if (asset->kind == document::AssetKind::Sequence &&
+        asset->manifest.last >= asset->manifest.first) {
+        const auto frames = static_cast<std::int64_t>(asset->manifest.last) -
+                            static_cast<std::int64_t>(asset->manifest.first) + 1;
+        length = core::RationalTime::create(frames * rate.denominator(), rate.numerator());
+    } else if (video && asset->duration > core::RationalTime{}) {
+        length = asset->duration;
+    }
+    if (length && *length < composition->duration()) {
+        // End on the first composition frame boundary at or after the media end.
+        const auto frames = (length->numerator() * rate.numerator() +
+                             length->denominator() * rate.denominator() - 1) /
+                            (length->denominator() * rate.denominator());
+        const auto end = core::RationalTime::create(frames * rate.denominator(), rate.numerator());
+        if (end && *end > core::RationalTime{} && *end < composition->duration())
+            layer->outPoint = *end;
+    }
+    return added;
 }
 
 std::string_view AddTextLayer::typeId() const noexcept { return "bloom.layer.add-text"; }

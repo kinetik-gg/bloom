@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <bloom/commands/layer_operations.hpp>
+#include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <limits>
@@ -203,6 +204,12 @@ commands::OperationResult AddCompositionSource::apply(document::Draft& draft) co
     auto range = commands::SetLayerRange(composition_, layerId, {}, duration).apply(draft);
     if (range.status == commands::OperationStatus::Rejected)
         return range;
+    // ADR 0024: the nested duration is the layer's content extent; after it, nothing shows.
+    auto extent = commands::SetLayerContentExtent(composition_, layerId,
+                                                  document::SourceLayerExtent{sourceNode})
+                      .apply(draft);
+    if (extent.status == commands::OperationStatus::Rejected)
+        return extent;
     placeConnectedNode(*composition, layerNode, document::LayerStackInputRef{*merge, {}, "content"},
                        {}, sourceNode);
     placeConnectedNode(*composition, sourceNode, document::NodeInputRef{layerNode, "image"}, {});
