@@ -17,6 +17,7 @@ target_sources(
         shape.cpp
         persisted_text.cpp
         project.cpp
+        project_incremental_validation.cpp
         render_reachability.cpp
         asset.cpp
         value_node_definitions.cpp
@@ -69,6 +70,16 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.document.render-reachability
         COMMAND bloom_document_render_reachability_test
+        LABELS unit
+    )
+
+    add_executable(bloom_document_incremental_validation_test
+                   tests/incremental_validation_tests.cpp)
+    target_link_libraries(bloom_document_incremental_validation_test PRIVATE bloom_document)
+    bloom_enable_warnings(bloom_document_incremental_validation_test)
+    bloom_add_test(
+        NAME bloom.document.incremental-validation
+        COMMAND bloom_document_incremental_validation_test
         LABELS unit
     )
 

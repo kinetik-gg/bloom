@@ -11,9 +11,10 @@
 
 namespace bloom::commands {
 bool canApplyNodeOperation(const document::Snapshot& snapshot, const Operation& operation) {
-    document::Document isolated(snapshot.project(), snapshot.ids().highWater());
-    auto draft = isolated.draft(isolated.snapshot());
-    return operation.apply(draft).status != OperationStatus::Rejected && draft.validate().ok();
+    // #357: a scratch draft shares the snapshot's content and validates only what the operation
+    // changed, instead of rebuilding and revalidating a whole isolated document per query.
+    auto draft = document::Draft::isolatedFrom(snapshot);
+    return operation.apply(draft).status != OperationStatus::Rejected && draft.valid();
 }
 
 OperationResult checkAddNodeEligibility(const document::Project& project,

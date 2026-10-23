@@ -61,9 +61,14 @@ void validateTable(const std::vector<DataBlockTableColumn>& columns, const std::
         if (column.values.size() > 1'000'000)
             result.add(ValidationCode::InvalidValue, columnPath + ".values",
                        "Data block table has too many rows");
-        for (std::size_t row = 0; row < column.values.size(); ++row)
-            validateParameterValue(column.values[row],
-                                   columnPath + ".values[" + std::to_string(row) + "]", result);
+        // #357: probe each row first and build its diagnostic path only when it has an issue.
+        for (std::size_t row = 0; row < column.values.size(); ++row) {
+            ValidationResult probe;
+            validateParameterValue(column.values[row], std::string{}, probe);
+            if (!probe.issues().empty())
+                validateParameterValue(column.values[row],
+                                       columnPath + ".values[" + std::to_string(row) + "]", result);
+        }
         for (const auto& value : column.values) {
             const bool matches = std::visit(
                 [&column](const auto& item) {
