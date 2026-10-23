@@ -7,8 +7,8 @@
   "shader": {
     "language": "GLSL_460",
     "stage": "compute",
-    "sha256": "45628e5c99ff9fb205ccb9bfea999d4146f748f1fb8cfd2763267551b5802623",
-    "spirvSha256": "35228c5398b7a8d94ffede995a36e7341acd9d7211bbc193e7a57e7955980422",
+    "sha256": "985407d91d4ebd36cda47e2cb7e86b65e4338fce3f3cca846a90f52daa758ba6",
+    "spirvSha256": "b91f0141a303bc344c72aedc44e87404093b107b703c7b46600c0e1a4e09834a",
     "localSizeX": 256,
     "localSizeY": 1,
     "localSizeZ": 1
@@ -27,6 +27,8 @@
     "alignment": "Second input sampled at the base image's global integer pixel coordinate; outside its data window is transparent black",
     "alpha": "finite premultiplied RGBA32F; matte RGB channel extraction uses straight scene-linear colour and zero coverage for zero alpha",
     "nonFinitePolicy": "input non-finite/subnormal or non-finite result sets a status flag; never publish a flagged image",
-    "modes": "8 Image Mix; 9 Set Alpha; 10 Multiply Alpha"
+    "modes": "8 Image Mix; 9 Set Alpha; 10 Multiply Alpha",
+    "channel": "bits 0-2 select A, R, G, B or scene-linear luma; bit 3 inverts the unit coverage",
+    "absentMatte": "an empty source extent makes every tap transparent black (zero coverage)"
   }
 }

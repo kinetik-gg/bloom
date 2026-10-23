@@ -16,7 +16,7 @@ layout(push_constant) uniform BloomImageCombinePush {
     int sourceOffsetY;
     uint mode;              // 8=Image Mix, 9=Set Alpha, 10=Multiply Alpha
     float factor;           // finite unit factor, validated by host
-    uint channel;           // 0=A, 1=R, 2=G, 3=B, 4=scene-linear luma
+    uint channel;           // bits 0-2: 0=A, 1=R, 2=G, 3=B, 4=scene-linear luma; bit 3: invert
 } bloom_push;
 
 bool subnormal(float value) {
@@ -68,15 +68,21 @@ float luma(vec3 rgb) {
     float numerator = result.x + result.y;
     return numerator;
 }
-float coverage(vec4 matte) {
-    if (bloom_push.channel == 0u) return matte.a;
+float channelCoverage(vec4 matte) {
+    uint channel = bloom_push.channel & 7u;
+    if (channel == 0u) return matte.a;
     if (matte.a <= 0.0) return 0.0;
     float value = 0.0;
-    if (bloom_push.channel == 1u) value = matte.r / matte.a;
-    else if (bloom_push.channel == 2u) value = matte.g / matte.a;
-    else if (bloom_push.channel == 3u) value = matte.b / matte.a;
+    if (channel == 1u) value = matte.r / matte.a;
+    else if (channel == 2u) value = matte.g / matte.a;
+    else if (channel == 3u) value = matte.b / matte.a;
     else value = luma(matte.rgb) / matte.a;
     return clamp(value, 0.0, 1.0);
+}
+// An inverted matte is the exact Float32 complement, matching render::matteCoverage.
+float coverage(vec4 matte) {
+    precise float value = channelCoverage(matte);
+    return (bloom_push.channel & 8u) != 0u ? 1.0 - value : value;
 }
 
 // Shift alpha by 24 bits so half the least subnormal is a normal Float32.

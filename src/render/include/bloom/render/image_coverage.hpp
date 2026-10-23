@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <optional>
 
 namespace bloom::render {
 
@@ -42,6 +43,31 @@ enum class ImageCoverageChannel : std::uint8_t { Alpha, Red, Green, Blue, Luma }
         return pixel.alpha();
     }
     return static_cast<float>(std::clamp(value, 0.0, 1.0));
+}
+
+// The durable matte selector of Set Alpha and Multiply Alpha is one closed Integer enumeration in
+// the convention of a compositor's track-matte modes: 0-4 select Alpha, Red, Green, Blue and Luma,
+// and 5-9 select the same channels inverted. Every other value is refused.
+struct MatteSelection final {
+    ImageCoverageChannel channel = ImageCoverageChannel::Alpha;
+    bool invert = false;
+    friend bool operator==(const MatteSelection&, const MatteSelection&) = default;
+};
+inline constexpr std::int64_t kMatteSelectionStoredValueCount = 10;
+
+[[nodiscard]] constexpr std::optional<MatteSelection>
+matteSelectionFromStoredValue(const std::int64_t value) noexcept {
+    if (value < 0 || value >= kMatteSelectionStoredValueCount)
+        return std::nullopt;
+    return MatteSelection{static_cast<ImageCoverageChannel>(value % 5), value >= 5};
+}
+
+// An inverted matte is the exact Float32 complement of the unit coverage, so an absent matte
+// (zero coverage) inverts to full coverage. CPU and GPU both compute this one subtraction.
+[[nodiscard]] inline float matteCoverage(const Rgba32f pixel,
+                                         const MatteSelection selection) noexcept {
+    const float coverage = imageCoverage(pixel, selection.channel);
+    return selection.invert ? 1.0F - coverage : coverage;
 }
 
 // All operations use exact composition-space integer pixel centres. A matte tap outside its

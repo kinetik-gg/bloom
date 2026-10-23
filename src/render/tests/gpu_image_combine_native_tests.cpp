@@ -17,7 +17,8 @@ using namespace bloom::render::composite_proof;
 [[nodiscard]] Rgba32f oracle(const Rgba32f base, const Rgba32f second,
                             const GpuImageCombineParameters mode) {
     if (mode.kind == GpuImageCombineKind::SetAlpha) {
-        const auto result = setImageAlpha(base, imageCoverage(second, mode.channel));
+        const auto result =
+            setImageAlpha(base, matteCoverage(second, {mode.channel, mode.invert}));
         if (!result)
             throw std::logic_error("invalid Set Alpha oracle");
         return *result.value();
@@ -26,7 +27,8 @@ using namespace bloom::render::composite_proof;
     // one Float32 conversion. Never use the shader expression as its own oracle.
     const double weight = mode.kind == GpuImageCombineKind::Mix
                               ? static_cast<double>(mode.factor)
-                              : static_cast<double>(imageCoverage(second, mode.channel)) *
+                              : static_cast<double>(
+                                    matteCoverage(second, {mode.channel, mode.invert})) *
                                     static_cast<double>(mode.factor);
     const double baseWeight = mode.kind == GpuImageCombineKind::Mix ? 1.0 - weight : weight;
     const double secondWeight = mode.kind == GpuImageCombineKind::Mix ? weight : 0.0;
@@ -93,11 +95,35 @@ void runImageCombineTests(Expectations& expectations, GpuDevice& device) {
         GpuImageCombineParameters{GpuImageCombineKind::MultiplyAlpha,
                                   std::numeric_limits<float>::min(), ImageCoverageChannel::Red},
         GpuImageCombineParameters{GpuImageCombineKind::MultiplyAlpha, 0.5F,
-                                  ImageCoverageChannel::Red}};
+                                  ImageCoverageChannel::Red},
+        // Inverted mattes: the exact Float32 complement of each channel's unit coverage.
+        GpuImageCombineParameters{GpuImageCombineKind::SetAlpha, 1.0F, ImageCoverageChannel::Luma,
+                                  true},
+        GpuImageCombineParameters{GpuImageCombineKind::SetAlpha, 1.0F, ImageCoverageChannel::Alpha,
+                                  true},
+        // Unit factor: base pixel 7's FLT_MIN alpha stays normal under full inverted coverage.
+        GpuImageCombineParameters{GpuImageCombineKind::MultiplyAlpha, 1.0F,
+                                  ImageCoverageChannel::Green, true},
+        // Absent mattes: every tap is transparent black, plain and inverted.
+        GpuImageCombineParameters{GpuImageCombineKind::SetAlpha, 1.0F, ImageCoverageChannel::Alpha,
+                                  false, true},
+        GpuImageCombineParameters{GpuImageCombineKind::SetAlpha, 1.0F, ImageCoverageChannel::Red,
+                                  true, true},
+        GpuImageCombineParameters{GpuImageCombineKind::MultiplyAlpha, 0.375F,
+                                  ImageCoverageChannel::Alpha, false, true},
+        GpuImageCombineParameters{GpuImageCombineKind::MultiplyAlpha, 1.0F,
+                                  ImageCoverageChannel::Alpha, true, true},
+        GpuImageCombineParameters{GpuImageCombineKind::Mix, 1.0F, ImageCoverageChannel::Alpha,
+                                  false, true}};
     for (const auto mode : modes) {
-        const auto label = "image-combine-" + std::to_string(static_cast<int>(mode.kind));
+        const auto label = "image-combine-" + std::to_string(static_cast<int>(mode.kind)) + "-" +
+                           std::to_string(static_cast<int>(mode.channel)) +
+                           (mode.invert ? "-inverted" : "") + (mode.matteAbsent ? "-absent" : "");
+        // An absent matte binds the base image in the matte slot; no matte texel is read.
         const auto begin = blend.blend->beginBlend(
-            GpuBlendParameters{second, base, core::BlendMode::Normal, mode}, kBudget);
+            GpuBlendParameters{mode.matteAbsent ? base : second, base, core::BlendMode::Normal,
+                               mode},
+            kBudget);
         expectations.expect(begin.code == GpuBlendDiagnosticCode::None,
                             label + ": begin accepted: " + begin.message);
         if (begin.code != GpuBlendDiagnosticCode::None)
@@ -128,7 +154,7 @@ void runImageCombineTests(Expectations& expectations, GpuDevice& device) {
                 const auto globalX = baseWindow.originX() + static_cast<std::int64_t>(x);
                 const auto globalY = baseWindow.originY() + static_cast<std::int64_t>(y);
                 Rgba32f tap = Rgba32f::transparent();
-                if (globalX >= secondWindow.originX() &&
+                if (!mode.matteAbsent && globalX >= secondWindow.originX() &&
                     globalX < secondWindow.maxXExclusive() &&
                     globalY >= secondWindow.originY() &&
                     globalY < secondWindow.maxYExclusive()) {

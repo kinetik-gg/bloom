@@ -70,6 +70,12 @@ struct GpuImageCombineParameters final {
     GpuImageCombineKind kind = GpuImageCombineKind::Mix;
     float factor = 1.0F;
     ImageCoverageChannel channel = ImageCoverageChannel::Alpha;
+    // Use the complement of the selected coverage (MatteSelection::invert).
+    bool invert = false;
+    // The matte input produced no image. Every tap is then transparent black, exactly as a tap
+    // outside a present matte's data window; the dispatch binds the base image in the source slot
+    // and declares an empty source extent, so no matte texel is ever read.
+    bool matteAbsent = false;
 };
 
 struct GpuBlendParameters final {

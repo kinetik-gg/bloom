@@ -55,6 +55,7 @@ struct ImageCombinePush final {
     std::uint32_t channel;
 };
 static_assert(sizeof(ImageCombinePush) == kImageCombinePushBytes);
+inline constexpr std::uint32_t kImageCombineInvertBit = 8U;
 
 [[nodiscard]] inline GpuBlendDiagnostic blendDiagnostic(const GpuBlendDiagnosticCode code,
                                                         std::string message) {

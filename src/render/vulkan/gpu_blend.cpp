@@ -491,18 +491,24 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
     impl.commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *selected.pipeline);
     impl.commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *selected.pipelineLayout,
                                           0, {*impl.descriptorSet}, {});
+    // An absent matte declares an empty source extent: the shader's window test then rejects every
+    // tap, which is the CPU reference's transparent-black matte outside any data window.
+    const bool matteAbsent = parameters.imageCombine && parameters.imageCombine->matteAbsent;
     const BlendPush push{destWidth,
                          destHeight,
-                         sourceWidth,
-                         sourceHeight,
-                         sourceOffsetX,
-                         sourceOffsetY,
+                         matteAbsent ? 0U : sourceWidth,
+                         matteAbsent ? 0U : sourceHeight,
+                         matteAbsent ? 0 : sourceOffsetX,
+                         matteAbsent ? 0 : sourceOffsetY,
                          parameters.imageCombine
                              ? 8U + static_cast<std::uint32_t>(parameters.imageCombine->kind)
                              : static_cast<std::uint32_t>(storedMode)};
     if (parameters.imageCombine) {
-        const ImageCombinePush combined{push, parameters.imageCombine->factor,
-                                        static_cast<std::uint32_t>(parameters.imageCombine->channel)};
+        // Bit 3 of the channel word selects the inverted coverage; bits 0-2 select the channel.
+        const ImageCombinePush combined{
+            push, parameters.imageCombine->factor,
+            static_cast<std::uint32_t>(parameters.imageCombine->channel) |
+                (parameters.imageCombine->invert ? kImageCombineInvertBit : 0U)};
         impl.commandBuffer.pushConstants(*selected.pipelineLayout, vk::ShaderStageFlagBits::eCompute,
                                          0, sizeof(ImageCombinePush), &combined);
     } else {
