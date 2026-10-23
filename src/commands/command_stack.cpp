@@ -27,6 +27,7 @@ CommandResult makeResult(CommandAction action, CommandStatus status,
         .expectedRevision = std::nullopt,
         .label = std::move(label),
         .operationFailures = {},
+        .warnings = {},
         .outputs = {},
         .validation = {},
         .renderAffecting = true,
@@ -311,6 +312,7 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
     std::vector<LayerIdentityRemap> layerIdentityRemaps;
     bool remapsValid = true;
     std::vector<CommandOutput> outputs;
+    std::vector<OperationFailure> warnings;
     std::size_t operationIndex = 0;
     for (const auto& operation : transaction.operations()) {
         OperationResult operationResult = operation->apply(draft);
@@ -338,6 +340,9 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
             outputs.push_back(
                 {operationIndex, std::string(operation->typeId()), std::move(output)});
         }
+        for (auto& issue : operationResult.issues)
+            warnings.push_back(
+                {operationIndex, std::string(operation->typeId()), std::move(issue)});
         changed = changed || operationResult.status == OperationStatus::Applied;
         // Only an operation that actually applied can change pixels. A pixel-affecting operation
         // that reported NoChange contributes nothing, so a layout edit beside it stays layout-only.
@@ -423,6 +428,7 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
         auto result = makeResult(CommandAction::Execute, CommandStatus::NoChange, before,
                                  std::string(transaction.label()));
         result.outputs = std::move(outputs);
+        result.warnings = std::move(warnings);
         notify(result);
         return result;
     }
@@ -504,6 +510,7 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
     auto result = makeResult(CommandAction::Execute, CommandStatus::Succeeded, before,
                              std::string(transaction.label()));
     result.outputs = std::move(outputs);
+    result.warnings = std::move(warnings);
     result.renderAffecting = renderAffecting;
     // A finite footprint is published only when the whole transaction's render effect is confined
     // to it. A layout-only transaction (renderAffecting false) publishes none, matching its

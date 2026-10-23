@@ -11,9 +11,10 @@
 
 namespace bloom::commands {
 bool canApplyNodeOperation(const document::Snapshot& snapshot, const Operation& operation) {
-    document::Document isolated(snapshot.project(), snapshot.ids().highWater());
-    auto draft = isolated.draft(isolated.snapshot());
-    return operation.apply(draft).status != OperationStatus::Rejected && draft.validate().ok();
+    // #357: a scratch draft shares the snapshot's content and validates only what the operation
+    // changed, instead of rebuilding and revalidating a whole isolated document per query.
+    auto draft = document::Draft::isolatedFrom(snapshot);
+    return operation.apply(draft).status != OperationStatus::Rejected && draft.valid();
 }
 
 OperationResult checkAddNodeEligibility(const document::Project& project,
@@ -67,7 +68,7 @@ OperationResult AddNode::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
     // Issue #355: a node added with no links is not compiled, so adding it publishes an empty
     // footprint whenever the compiled topology provably stays the same.
-    const auto reachableBefore = document::RenderReachability::compute(*composition, registry_);
+    const auto reachableBefore = document::RenderReachability::of(*composition, registry_);
     const document::NodeDefinition* definition = nullptr;
     for (const auto& candidate : registry_.definitions()) {
         if (candidate.key.typeId == nodeTypeId_ &&
@@ -145,7 +146,7 @@ OperationResult AddNode::apply(document::Draft& draft) const {
     }
     auto result = OperationResult::applied(std::move(outputs));
     result.affectedTimes =
-        detail::unreachableEditFootprint(*composition, reachableBefore, {*nodeId}, registry_);
+        detail::unreachableEditFootprint(*composition, *reachableBefore, {*nodeId}, registry_);
     return result;
 }
 
@@ -305,7 +306,7 @@ OperationResult RemoveNodes::apply(document::Draft& draft) const {
     // Classify from the pre-erase graph. std::nullopt is the conservative whole-render default; a
     // present footprint (possibly empty) is provable bounded reuse evidence. Issue #355: removing
     // nodes the compiler never reaches is render-neutral, whatever kind of node they are.
-    const auto reachableBefore = document::RenderReachability::compute(*composition, registry_);
+    const auto reachableBefore = document::RenderReachability::of(*composition, registry_);
     const auto touched = removalTouchedNodes(*composition, nodes_);
     auto footprint = removalTimeFootprint(*composition, nodes_);
     for (const auto id : nodes_) {
@@ -316,7 +317,7 @@ OperationResult RemoveNodes::apply(document::Draft& draft) const {
     (void)detail::detachFromNodeGroups(*composition, nodes_);
     detail::eraseOrphanedParameters(*composition, candidates);
     if (auto neutral =
-            detail::unreachableEditFootprint(*composition, reachableBefore, touched, registry_))
+            detail::unreachableEditFootprint(*composition, *reachableBefore, touched, registry_))
         footprint = std::move(neutral);
     auto result = OperationResult::applied();
     result.affectedTimes = footprint;
@@ -348,10 +349,10 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
     if (!composition)
         return detail::invalidTarget();
     auto& graph = composition->graph();
-    const auto reachableBefore = document::RenderReachability::compute(*composition, registry_);
+    const auto reachableBefore = document::RenderReachability::of(*composition, registry_);
     const auto neutral = [&](OperationResult result) {
         result.affectedTimes = detail::unreachableEditFootprint(
-            *composition, reachableBefore, {detail::destinationNode(destination_)}, registry_);
+            *composition, *reachableBefore, {detail::destinationNode(destination_)}, registry_);
         return result;
     };
     const auto sourceKind = graph.outputKind(source_, registry_);
@@ -522,11 +523,11 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
     auto& graph = composition->graph();
     if (!graph.inputKind(input_, registry_))
         return detail::invalidTarget();
-    const auto reachableBefore = document::RenderReachability::compute(*composition, registry_);
+    const auto reachableBefore = document::RenderReachability::of(*composition, registry_);
     std::set<document::NodeId> touched{detail::destinationNode(input_)};
     const auto neutral = [&](OperationResult result) {
         result.affectedTimes =
-            detail::unreachableEditFootprint(*composition, reachableBefore, touched, registry_);
+            detail::unreachableEditFootprint(*composition, *reachableBefore, touched, registry_);
         return result;
     };
     if (const auto* slot = std::get_if<document::LayerStackInputRef>(&input_); slot != nullptr) {
@@ -644,7 +645,7 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
     std::set<document::ParameterId> candidates;
     for (const auto& binding : node->parameters)
         candidates.insert(binding.parameterId);
-    const auto reachableBefore = document::RenderReachability::compute(*composition, registry_);
+    const auto reachableBefore = document::RenderReachability::of(*composition, registry_);
     const auto touched = removalTouchedNodes(*composition, {nodeId_});
     (void)graph.eraseNode(nodeId_);
     composition->nodeLayout().erase(nodeId_);
@@ -659,7 +660,7 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
         return *failure;
     auto result = OperationResult::applied();
     result.affectedTimes =
-        detail::unreachableEditFootprint(*composition, reachableBefore, touched, registry_);
+        detail::unreachableEditFootprint(*composition, *reachableBefore, touched, registry_);
     return result;
 }
 } // namespace bloom::commands

@@ -7,6 +7,11 @@ inline bool changesLockedLayers(const document::Project& before, const document:
         const auto* changed = after.findComposition(composition.id());
         if (!changed)
             continue; // Composition deletion is a separate authoring scope.
+        // #357: untouched content cannot have changed a locked record. `before` is a published
+        // snapshot, so its lock index was built once at freeze time and nodeLocked() is a lookup.
+        if (changed->contentIdentity() == composition.contentIdentity() &&
+            changed->duration() == composition.duration())
+            continue;
         for (const auto& layer : composition.graph().layerOutputs()) {
             if (!layer.locked)
                 continue;

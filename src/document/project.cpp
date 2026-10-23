@@ -1,6 +1,7 @@
 #include <bloom/document/project.hpp>
 
 #include <bloom/document/persisted_text.hpp>
+#include <bloom/document/render_reachability.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -18,7 +19,7 @@ namespace {
 
 template <typename Id>
 void validateProjectUniqueDeclaration(const Id id, const std::size_t compositionOrdinal,
-                                      std::string path, const std::string_view typeName,
+                                      const auto& path, const std::string_view typeName,
                                       std::unordered_map<Id, std::size_t>& declarationOwners,
                                       bloom::document::ValidationResult& result) {
     if (!id.isValid()) {
@@ -27,7 +28,8 @@ void validateProjectUniqueDeclaration(const Id id, const std::size_t composition
 
     const auto [existing, inserted] = declarationOwners.try_emplace(id, compositionOrdinal);
     if (!inserted && existing->second != compositionOrdinal) {
-        result.add(bloom::document::ValidationCode::DuplicateId, std::move(path),
+        // #357: the diagnostic path is built only when there is a diagnostic.
+        result.add(bloom::document::ValidationCode::DuplicateId, path(),
                    std::string(typeName) + " ID is declared by more than one composition");
     }
 }
@@ -120,9 +122,20 @@ void Composition::freezeContent() {
         // storage cannot let a pointer retained from the original Draft mutate a Snapshot.
         auto frozen = std::make_shared<Content>(std::move(*editableContent_));
         frozen->frozenByteCharge = calculateContentByteCharge(*frozen);
-        frozenContent_ = std::move(frozen);
+        frozen->frozenLockIndex = buildLockIndex(*frozen);
+        frozen->frozenDeclaredIds = buildDeclaredIdIndex(*frozen);
+        frozen->frozenNestedReferences = buildNestedReferences(*frozen);
+        // Publish first so the reachability walk reads the frozen payload through *this; nothing
+        // else shares `frozen` until this function returns.
+        frozenContent_ = frozen;
         editableContent_.reset();
+        frozen->frozenReachability = std::make_shared<const RenderReachability>(
+            RenderReachability::compute(*this, builtInNodeDefinitions()));
     }
+}
+
+std::shared_ptr<const RenderReachability> Composition::frozenRenderReachability() const {
+    return !editableContent_ && frozenContent_ ? frozenContent_->frozenReachability : nullptr;
 }
 
 Composition::CopyWork Composition::copyWork() noexcept {
@@ -210,22 +223,26 @@ std::size_t Composition::calculateContentByteCharge(const Content& authored) {
 void Project::freezeCompositionContent() {
     for (auto& composition : compositions_)
         composition.freezeContent();
+    assets_.freeze();
+    assetFolders_.freeze();
+    extensionRecords_.freeze();
+    dataBlocks_.freeze();
 }
 
 std::size_t Project::rootByteCharge() const {
     std::size_t bytes = sizeof(Project);
     charge(bytes, name_.size());
     chargeRecords<Composition>(bytes, compositions_.size());
-    chargeRecords<AssetRecord>(bytes, assets_.size());
-    chargeRecords<AssetFolder>(bytes, assetFolders_.size());
-    chargeRecords<ExtensionRecord>(bytes, extensionRecords_.size());
-    chargeRecords<DataBlockRecord>(bytes, dataBlocks_.size());
+    chargeRecords<AssetRecord>(bytes, assets_.get().size());
+    chargeRecords<AssetFolder>(bytes, assetFolders_.get().size());
+    chargeRecords<ExtensionRecord>(bytes, extensionRecords_.get().size());
+    chargeRecords<DataBlockRecord>(bytes, dataBlocks_.get().size());
     for (const auto& composition : compositions_) {
         charge(bytes, composition.name().size());
         if (composition.workingColorSpaceId())
             charge(bytes, composition.workingColorSpaceId()->size());
     }
-    for (const auto& asset : assets_) {
+    for (const auto& asset : assets_.get()) {
         chargeLocator(bytes, asset.locator);
         charge(bytes, asset.interpretation.inputColorSpaceId.size());
         charge(bytes, asset.manifest.pattern.size());
@@ -250,9 +267,9 @@ std::size_t Project::rootByteCharge() const {
         for (const auto& tag : asset.tags)
             charge(bytes, tag.size());
     }
-    for (const auto& folder : assetFolders_)
+    for (const auto& folder : assetFolders_.get())
         charge(bytes, folder.name.size());
-    for (const auto& block : dataBlocks_) {
+    for (const auto& block : dataBlocks_.get()) {
         charge(bytes, block.typeId.size());
         charge(bytes, block.mediaType.size());
         charge(bytes, block.provenance.createdAt.size());
@@ -293,7 +310,7 @@ std::size_t Project::rootByteCharge() const {
             },
             block.payload);
     }
-    for (const auto& record : extensionRecords_) {
+    for (const auto& record : extensionRecords_.get()) {
         charge(bytes, record.ownerId.size());
         charge(bytes, record.typeId.size());
         charge(bytes, record.mediaType.size());
@@ -312,33 +329,58 @@ std::size_t Project::rootByteCharge() const {
     return bytes;
 }
 
-bool Composition::nodeLocked(const NodeId node) const {
+namespace {
+std::atomic<std::uint64_t> lockIndexBuildCount{0};
+} // namespace
+
+Composition::LockIndex Composition::lockIndex() const {
+    if (!editableContent_ && frozenContent_ && frozenContent_->frozenLockIndex)
+        return *frozenContent_->frozenLockIndex;
+    return buildLockIndex(content());
+}
+
+Composition::LockIndex Composition::buildLockIndex(const Content& authored) {
+    lockIndexBuildCount.fetch_add(1, std::memory_order_relaxed);
+    LockIndex index;
     std::vector<NodeId> pending;
-    for (const auto& layer : graph().layerOutputs())
+    for (const auto& layer : authored.graph.layerOutputs())
         if (layer.locked)
             pending.push_back(layer.nodeId);
-    std::unordered_set<NodeId> seen;
+    if (pending.empty())
+        return index;
+    // One reverse BFS over node inputs from every locked boundary.
+    std::unordered_map<NodeId, std::vector<NodeId>> sources;
+    for (const auto& edge : authored.graph.edges())
+        if (const auto* input = std::get_if<NodeInputRef>(&edge.destination))
+            sources[input->nodeId].push_back(edge.source.nodeId);
     while (!pending.empty()) {
         const auto id = pending.back();
         pending.pop_back();
-        if (id == node)
-            return true;
-        if (!seen.insert(id).second)
+        if (!index.nodes.insert(id).second)
             continue;
-        for (const auto& edge : graph().edges()) {
-            const auto* input = std::get_if<NodeInputRef>(&edge.destination);
-            if (input && input->nodeId == id)
-                pending.push_back(edge.source.nodeId);
-        }
+        if (const auto found = sources.find(id); found != sources.end())
+            pending.insert(pending.end(), found->second.begin(), found->second.end());
     }
-    return false;
+    for (const auto& node : authored.graph.nodes())
+        if (index.nodes.contains(node.id))
+            for (const auto& binding : node.parameters)
+                index.parameters.insert(binding.parameterId);
+    return index;
+}
+
+std::uint64_t Composition::lockIndexBuilds() noexcept {
+    return lockIndexBuildCount.load(std::memory_order_relaxed);
+}
+
+bool Composition::nodeLocked(const NodeId node) const {
+    if (!editableContent_ && frozenContent_ && frozenContent_->frozenLockIndex)
+        return frozenContent_->frozenLockIndex->nodes.contains(node);
+    return buildLockIndex(content()).nodes.contains(node);
 }
 bool Composition::parameterLocked(const ParameterId parameter) const {
-    for (const auto& node : graph().nodes())
-        for (const auto& binding : node.parameters)
-            if (binding.parameterId == parameter && nodeLocked(node.id))
-                return true;
-    return false;
+    if (!editableContent_ && frozenContent_ && frozenContent_->frozenLockIndex)
+        return frozenContent_->frozenLockIndex->parameters.contains(parameter);
+    return buildLockIndex(content()).parameters.contains(parameter);
 }
 
 bool Composition::setDuration(const core::RationalTime duration) noexcept {
@@ -391,41 +433,55 @@ ValidationResult Composition::validate() const {
 }
 
 const AssetRecord* Project::findAsset(AssetId id) const noexcept {
-    const auto found = std::ranges::find(assets_, id, &AssetRecord::id);
-    return found == assets_.end() ? nullptr : &*found;
+    const auto found = std::ranges::find(assets_.get(), id, &AssetRecord::id);
+    return found == assets_.get().end() ? nullptr : &*found;
 }
-AssetRecord* Project::findAsset(AssetId id) noexcept {
-    return const_cast<AssetRecord*>(std::as_const(*this).findAsset(id));
+AssetRecord* Project::findAsset(AssetId id) {
+    // A miss must not detach the shared collection.
+    if (std::as_const(*this).findAsset(id) == nullptr)
+        return nullptr;
+    auto& records = assets_.edit();
+    return &*std::ranges::find(records, id, &AssetRecord::id);
 }
 bool Project::addAsset(AssetRecord asset) {
     if (asset.name.empty())
         asset.name = defaultAssetName(asset);
     if (findAsset(asset.id) || !asset.validate().ok())
         return false;
-    assets_.push_back(std::move(asset));
-    std::ranges::sort(assets_, {}, &AssetRecord::id);
+    auto& assets = assets_.edit();
+    assets.push_back(std::move(asset));
+    std::ranges::sort(assets, {}, &AssetRecord::id);
     return true;
 }
 bool Project::removeAsset(AssetId id) {
-    return std::erase_if(assets_, [id](const auto& asset) { return asset.id == id; }) != 0;
+    if (std::as_const(*this).findAsset(id) == nullptr)
+        return false;
+    return std::erase_if(assets_.edit(), [id](const auto& asset) { return asset.id == id; }) != 0;
 }
 
 const AssetFolder* Project::findAssetFolder(AssetFolderId id) const noexcept {
-    const auto found = std::ranges::find(assetFolders_, id, &AssetFolder::id);
-    return found == assetFolders_.end() ? nullptr : &*found;
+    const auto found = std::ranges::find(assetFolders_.get(), id, &AssetFolder::id);
+    return found == assetFolders_.get().end() ? nullptr : &*found;
 }
-AssetFolder* Project::findAssetFolder(AssetFolderId id) noexcept {
-    return const_cast<AssetFolder*>(std::as_const(*this).findAssetFolder(id));
+AssetFolder* Project::findAssetFolder(AssetFolderId id) {
+    if (std::as_const(*this).findAssetFolder(id) == nullptr)
+        return nullptr;
+    auto& records = assetFolders_.edit();
+    return &*std::ranges::find(records, id, &AssetFolder::id);
 }
 bool Project::addAssetFolder(AssetFolder folder) {
     if (!folder.id.isValid() || !isValidHumanFacingName(folder.name) || findAssetFolder(folder.id))
         return false;
-    assetFolders_.push_back(std::move(folder));
-    std::ranges::sort(assetFolders_, {}, &AssetFolder::id);
+    auto& folders = assetFolders_.edit();
+    folders.push_back(std::move(folder));
+    std::ranges::sort(folders, {}, &AssetFolder::id);
     return true;
 }
 bool Project::removeAssetFolder(AssetFolderId id) {
-    return std::erase_if(assetFolders_, [id](const auto& folder) { return folder.id == id; }) != 0;
+    if (std::as_const(*this).findAssetFolder(id) == nullptr)
+        return false;
+    return std::erase_if(assetFolders_.edit(),
+                         [id](const auto& folder) { return folder.id == id; }) != 0;
 }
 
 const Composition* Project::findComposition(const CompositionId id) const noexcept {
@@ -460,72 +516,84 @@ bool Project::removeComposition(const CompositionId id) {
 }
 
 const ExtensionRecord* Project::findExtensionRecord(const ExtensionRecordId id) const noexcept {
-    const auto iterator = std::ranges::lower_bound(extensionRecords_, id, {}, &ExtensionRecord::id);
-    return iterator == extensionRecords_.end() || iterator->id != id ? nullptr : &*iterator;
+    const auto iterator =
+        std::ranges::lower_bound(extensionRecords_.get(), id, {}, &ExtensionRecord::id);
+    return iterator == extensionRecords_.get().end() || iterator->id != id ? nullptr : &*iterator;
 }
 
-ExtensionRecord* Project::findExtensionRecord(const ExtensionRecordId id) noexcept {
-    return const_cast<ExtensionRecord*>(std::as_const(*this).findExtensionRecord(id));
+ExtensionRecord* Project::findExtensionRecord(const ExtensionRecordId id) {
+    if (std::as_const(*this).findExtensionRecord(id) == nullptr)
+        return nullptr;
+    auto& records = extensionRecords_.edit();
+    return &*std::ranges::lower_bound(records, id, {}, &ExtensionRecord::id);
 }
 
 bool Project::addExtensionRecord(ExtensionRecord record) {
     if (!record.id.isValid()) {
         return false;
     }
-    const auto insertion =
-        std::ranges::lower_bound(extensionRecords_, record.id, {}, &ExtensionRecord::id);
-    if (insertion != extensionRecords_.end() && insertion->id == record.id) {
+    if (std::as_const(*this).findExtensionRecord(record.id) != nullptr)
         return false;
-    }
-    extensionRecords_.insert(insertion, std::move(record));
+    auto& records = extensionRecords_.edit();
+    const auto insertion = std::ranges::lower_bound(records, record.id, {}, &ExtensionRecord::id);
+    records.insert(insertion, std::move(record));
     return true;
 }
 
 bool Project::removeExtensionRecord(const ExtensionRecordId id) {
-    const auto iterator = std::ranges::lower_bound(extensionRecords_, id, {}, &ExtensionRecord::id);
-    if (iterator == extensionRecords_.end() || iterator->id != id) {
+    if (std::as_const(*this).findExtensionRecord(id) == nullptr)
         return false;
-    }
-    extensionRecords_.erase(iterator);
+    auto& records = extensionRecords_.edit();
+    records.erase(std::ranges::lower_bound(records, id, {}, &ExtensionRecord::id));
     return true;
 }
 
 const DataBlockRecord* Project::findDataBlock(const DataBlockRecordId id) const noexcept {
-    const auto found = std::ranges::find_if(dataBlocks_, [id](const auto& block) {
+    const auto found = std::ranges::find_if(dataBlocks_.get(), [id](const auto& block) {
         const auto* blockId = std::get_if<DataBlockRecordId>(&block.id);
         return blockId != nullptr && *blockId == id;
     });
-    return found == dataBlocks_.end() ? nullptr : &*found;
+    return found == dataBlocks_.get().end() ? nullptr : &*found;
 }
 
-DataBlockRecord* Project::findDataBlock(const DataBlockRecordId id) noexcept {
-    return const_cast<DataBlockRecord*>(std::as_const(*this).findDataBlock(id));
+DataBlockRecord* Project::findDataBlock(const DataBlockRecordId id) {
+    if (std::as_const(*this).findDataBlock(id) == nullptr)
+        return nullptr;
+    auto& records = dataBlocks_.edit();
+    return &*std::ranges::find_if(records, [id](const auto& block) {
+        const auto* blockId = std::get_if<DataBlockRecordId>(&block.id);
+        return blockId != nullptr && *blockId == id;
+    });
 }
 
 bool Project::addDataBlock(DataBlockRecord block) {
     const auto* id = std::get_if<DataBlockRecordId>(&block.id);
     if (id == nullptr || findDataBlock(*id) != nullptr || !block.validate(this).ok())
         return false;
-    dataBlocks_.push_back(std::move(block));
-    std::ranges::sort(dataBlocks_, {},
+    auto& blocks = dataBlocks_.edit();
+    blocks.push_back(std::move(block));
+    std::ranges::sort(blocks, {},
                       [](const auto& value) { return std::get<DataBlockRecordId>(value.id); });
     return true;
 }
 
 bool Project::removeDataBlock(const DataBlockRecordId id) {
-    return std::erase_if(dataBlocks_, [id](const auto& block) {
+    if (std::as_const(*this).findDataBlock(id) == nullptr)
+        return false;
+    return std::erase_if(dataBlocks_.edit(), [id](const auto& block) {
                return std::get<DataBlockRecordId>(block.id) == id;
            }) != 0;
 }
 
 std::vector<DataBlockRecord> Project::dataBlocks() const {
     std::vector<DataBlockRecord> blocks;
-    blocks.reserve(assets_.size() + extensionRecords_.size() + dataBlocks_.size());
-    for (const auto& asset : assets_)
+    blocks.reserve(assets_.get().size() + extensionRecords_.get().size() +
+                   dataBlocks_.get().size());
+    for (const auto& asset : assets_.get())
         blocks.push_back(DataBlockRecord::fromAsset(asset));
-    for (const auto& record : extensionRecords_)
+    for (const auto& record : extensionRecords_.get())
         blocks.push_back(DataBlockRecord::fromExtension(record));
-    for (const auto& block : dataBlocks_)
+    for (const auto& block : dataBlocks_.get())
         blocks.push_back(block);
     return blocks;
 }
@@ -537,26 +605,12 @@ ValidationResult Project::validateCompositionNesting() const {
     for (const auto& composition : compositions_)
         incoming.emplace(composition.id(), 0);
     for (const auto& composition : compositions_) {
-        for (const auto& node : composition.graph().nodes()) {
-            if (node.typeId != kCompositionSourceNodeType)
+        for (const auto target : composition.nestedReferences()) {
+            // Missing compositions remain preservable; compilation diagnoses the reference.
+            if (!incoming.contains(target))
                 continue;
-            for (const auto& binding : node.parameters) {
-                if (binding.role != "composition")
-                    continue;
-                const auto* parameter = composition.parameters().find(binding.parameterId);
-                const auto* constant =
-                    parameter ? std::get_if<ConstantValueSource>(&parameter->source) : nullptr;
-                const auto* value =
-                    constant ? std::get_if<std::int64_t>(&constant->value) : nullptr;
-                if (!value || *value <= 0)
-                    continue;
-                const auto target = CompositionId::fromRaw(static_cast<std::uint64_t>(*value));
-                // Missing compositions remain preservable; compilation diagnoses the reference.
-                if (!incoming.contains(target))
-                    continue;
-                references[composition.id()].push_back(target);
-                ++incoming[target];
-            }
+            references[composition.id()].push_back(target);
+            ++incoming[target];
         }
     }
     std::vector<CompositionId> ready;
@@ -583,11 +637,9 @@ std::uint64_t Project::validationCount() noexcept {
     return projectValidations.load(std::memory_order_relaxed);
 }
 
-ValidationResult Project::validate() const {
-    projectValidations.fetch_add(1, std::memory_order_relaxed);
-    ValidationResult result;
+void Project::validateRootRecords(ValidationResult& result) const {
     std::unordered_set<AssetId> assetIds;
-    for (const auto& asset : assets_) {
+    for (const auto& asset : assets_.get()) {
         result.append("assets", asset.validate());
         validateHumanFacingName(asset.name, "assets.name", "Asset name", result);
         if (!assetIds.insert(asset.id).second)
@@ -598,7 +650,7 @@ ValidationResult Project::validate() const {
     }
     std::unordered_map<AssetFolderId, const AssetFolder*> folders;
     std::set<std::pair<std::optional<AssetFolderId>, std::string>> siblingNames;
-    for (const auto& folder : assetFolders_) {
+    for (const auto& folder : assetFolders_.get()) {
         if (!folder.id.isValid() || !folders.emplace(folder.id, &folder).second)
             result.add(ValidationCode::InvalidId, "assetFolders.id",
                        "Invalid or duplicate folder ID");
@@ -609,7 +661,7 @@ ValidationResult Project::validate() const {
     }
     // Mark completed chains once, so deep hierarchies validate in linear time.
     std::unordered_set<AssetFolderId> complete;
-    for (const auto& folder : assetFolders_) {
+    for (const auto& folder : assetFolders_.get()) {
         std::unordered_set<AssetFolderId> chain;
         auto current = std::optional(folder.id);
         while (current && !complete.contains(*current)) {
@@ -632,6 +684,31 @@ ValidationResult Project::validate() const {
         result.add(ValidationCode::InvalidId, "id", "Project ID must not be zero");
     }
     validateHumanFacingName(name_, "name", "Project name", result);
+}
+
+void Project::validateCrossRecords(ValidationResult& result) const {
+    result.append("", validateExtensionRecords(*this));
+    std::size_t aggregateDataBlockBytes = 0;
+    std::unordered_set<DataBlockRecordId> dataBlockIds;
+    for (const auto& block : dataBlocks_.get()) {
+        result.append("dataBlocks", block.validate(this));
+        if (!dataBlockIds.insert(std::get<DataBlockRecordId>(block.id)).second)
+            result.add(ValidationCode::DuplicateId, "dataBlocks.id", "Duplicate data block ID");
+        const auto bytes = block.payloadBytes();
+        if (bytes > kMaxAggregateDataBlockPayloadBytes -
+                        std::min(aggregateDataBlockBytes, kMaxAggregateDataBlockPayloadBytes)) {
+            result.add(ValidationCode::InvalidValue, "dataBlocks",
+                       "Data block payloads exceed the 128 MiB project limit");
+            break;
+        }
+        aggregateDataBlockBytes += bytes;
+    }
+}
+
+ValidationResult Project::validate() const {
+    projectValidations.fetch_add(1, std::memory_order_relaxed);
+    ValidationResult result;
+    validateRootRecords(result);
 
     std::unordered_set<CompositionId> compositionIds;
     std::unordered_map<NodeId, std::size_t> nodeDeclarations;
@@ -655,92 +732,88 @@ ValidationResult Project::validate() const {
         result.append(path, composition.validate());
 
         for (const auto& node : composition.graph().nodes()) {
-            validateProjectUniqueDeclaration(node.id, compositionOrdinal,
-                                             path + ".graph.nodes[" +
-                                                 std::to_string(node.id.value()) + "].id",
-                                             "Node", nodeDeclarations, result);
+            validateProjectUniqueDeclaration(
+                node.id, compositionOrdinal,
+                [&] { return path + ".graph.nodes[" + std::to_string(node.id.value()) + "].id"; },
+                "Node", nodeDeclarations, result);
         }
         for (const auto& edge : composition.graph().edges()) {
-            validateProjectUniqueDeclaration(edge.id, compositionOrdinal,
-                                             path + ".graph.edges[" +
-                                                 std::to_string(edge.id.value()) + "].id",
-                                             "Edge", edgeDeclarations, result);
+            validateProjectUniqueDeclaration(
+                edge.id, compositionOrdinal,
+                [&] { return path + ".graph.edges[" + std::to_string(edge.id.value()) + "].id"; },
+                "Edge", edgeDeclarations, result);
         }
         for (const auto& parameter : composition.parameters().records()) {
-            validateProjectUniqueDeclaration(parameter.id, compositionOrdinal,
-                                             path + ".parameters[" +
-                                                 std::to_string(parameter.id.value()) + "].id",
-                                             "Parameter", parameterDeclarations, result);
+            validateProjectUniqueDeclaration(
+                parameter.id, compositionOrdinal,
+                [&] {
+                    return path + ".parameters[" + std::to_string(parameter.id.value()) + "].id";
+                },
+                "Parameter", parameterDeclarations, result);
         }
         for (const auto& record : composition.animationCurves().records()) {
             const auto curveId = animationCurveId(record);
-            const auto curvePath =
-                path + ".animationCurves[" + std::to_string(curveId.value()) + "]";
-            validateProjectUniqueDeclaration(curveId, compositionOrdinal, curvePath + ".id",
-                                             "Animation curve", animationCurveDeclarations, result);
+            const auto curvePath = [&] {
+                return path + ".animationCurves[" + std::to_string(curveId.value()) + "]";
+            };
+            validateProjectUniqueDeclaration(
+                curveId, compositionOrdinal, [&] { return curvePath() + ".id"; }, "Animation curve",
+                animationCurveDeclarations, result);
             std::visit(
                 [&](const auto& curve) {
                     using Curve = std::decay_t<decltype(curve)>;
-                    const auto validateKey = [&](const auto& keyframe, const std::string& keyPath) {
-                        validateProjectUniqueDeclaration(keyframe.id, compositionOrdinal,
-                                                         keyPath + ".id", "Keyframe",
-                                                         keyframeDeclarations, result);
+                    const auto validateKey = [&](const auto& keyframe, const auto& keyPath) {
+                        validateProjectUniqueDeclaration(
+                            keyframe.id, compositionOrdinal, [&] { return keyPath() + ".id"; },
+                            "Keyframe", keyframeDeclarations, result);
                     };
                     if constexpr (std::is_same_v<Curve, ScalarAnimationCurve>) {
                         for (const auto& keyframe : curve.keyframes)
-                            validateKey(keyframe, curvePath + ".keyframes[" +
-                                                      std::to_string(keyframe.id.value()) + "]");
+                            validateKey(keyframe, [&] {
+                                return curvePath() + ".keyframes[" +
+                                       std::to_string(keyframe.id.value()) + "]";
+                            });
                     } else {
                         for (std::size_t componentIndex = 0;
                              componentIndex < curve.components.size(); ++componentIndex)
                             for (const auto& keyframe : curve.components[componentIndex].keyframes)
-                                validateKey(keyframe,
-                                            curvePath + ".components[" +
-                                                std::to_string(componentIndex) + "].keyframes[" +
-                                                std::to_string(keyframe.id.value()) + "]");
+                                validateKey(keyframe, [&] {
+                                    return curvePath() + ".components[" +
+                                           std::to_string(componentIndex) + "].keyframes[" +
+                                           std::to_string(keyframe.id.value()) + "]";
+                                });
                     }
                 },
                 record);
         }
         for (const auto& boundary : composition.graph().layerOutputs()) {
-            validateProjectUniqueDeclaration(boundary.layerId, compositionOrdinal,
-                                             path + ".graph.layerOutputs[" +
-                                                 std::to_string(boundary.layerId.value()) +
-                                                 "].layerId",
-                                             "Layer", layerDeclarations, result);
+            validateProjectUniqueDeclaration(
+                boundary.layerId, compositionOrdinal,
+                [&] {
+                    return path + ".graph.layerOutputs[" +
+                           std::to_string(boundary.layerId.value()) + "].layerId";
+                },
+                "Layer", layerDeclarations, result);
         }
         for (const auto& [groupId, group] : composition.nodeGroups()) {
-            validateProjectUniqueDeclaration(groupId, compositionOrdinal,
-                                             path + ".nodeGroups[" +
-                                                 std::to_string(groupId.value()) + "].id",
-                                             "Node group", nodeGroupDeclarations, result);
+            validateProjectUniqueDeclaration(
+                groupId, compositionOrdinal,
+                [&] { return path + ".nodeGroups[" + std::to_string(groupId.value()) + "].id"; },
+                "Node group", nodeGroupDeclarations, result);
         }
         for (const auto& stack : composition.graph().merges())
             for (const auto& entry : stack.entries()) {
-                validateProjectUniqueDeclaration(entry.slotId, compositionOrdinal,
-                                                 path + ".graph.layerStack.entries[" +
-                                                     std::to_string(entry.slotId.value()) +
-                                                     "].slotId",
-                                                 "Layer Stack slot", layerSlotDeclarations, result);
+                validateProjectUniqueDeclaration(
+                    entry.slotId, compositionOrdinal,
+                    [&] {
+                        return path + ".graph.layerStack.entries[" +
+                               std::to_string(entry.slotId.value()) + "].slotId";
+                    },
+                    "Layer Stack slot", layerSlotDeclarations, result);
             }
     }
     result.append("", validateCompositionNesting());
-    result.append("", validateExtensionRecords(*this));
-    std::size_t aggregateDataBlockBytes = 0;
-    std::unordered_set<DataBlockRecordId> dataBlockIds;
-    for (const auto& block : dataBlocks_) {
-        result.append("dataBlocks", block.validate(this));
-        if (!dataBlockIds.insert(std::get<DataBlockRecordId>(block.id)).second)
-            result.add(ValidationCode::DuplicateId, "dataBlocks.id", "Duplicate data block ID");
-        const auto bytes = block.payloadBytes();
-        if (bytes > kMaxAggregateDataBlockPayloadBytes -
-                        std::min(aggregateDataBlockBytes, kMaxAggregateDataBlockPayloadBytes)) {
-            result.add(ValidationCode::InvalidValue, "dataBlocks",
-                       "Data block payloads exceed the 128 MiB project limit");
-            break;
-        }
-        aggregateDataBlockBytes += bytes;
-    }
+    validateCrossRecords(result);
     return result;
 }
 

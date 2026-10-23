@@ -8,6 +8,79 @@ namespace bloom::document::detail {
 
 struct DocumentIdentity final {};
 
+template <typename Visitor>
+[[nodiscard]] static bool visitCompositionIds(const Composition& composition,
+                                              Visitor&& visitor) noexcept {
+    if (!visitor(composition.id())) {
+        return false;
+    }
+    for (const auto& parameter : composition.parameters().records()) {
+        if (!visitor(parameter.id)) {
+            return false;
+        }
+        // A driver source carries a NodeId now (task S7), and that node is already visited by
+        // the graph walk below -- so there is nothing to visit here. A driver binding holds no
+        // id of its own any more; see DriverBindingSource in parameter.hpp for why the durable
+        // record is the node-and-port pair rather than an id into a driver table.
+    }
+    for (const auto& record : composition.animationCurves().records()) {
+        if (!visitor(animationCurveId(record))) {
+            return false;
+        }
+        if (const auto* scalar = std::get_if<ScalarAnimationCurve>(&record)) {
+            for (const auto& keyframe : scalar->keyframes) {
+                if (!visitor(keyframe.id))
+                    return false;
+            }
+        } else {
+            const auto visitComponents = [&](const auto& curve) {
+                for (const auto& component : curve.components)
+                    for (const auto& keyframe : component.keyframes)
+                        if (!visitor(keyframe.id))
+                            return false;
+                return true;
+            };
+            if (const auto* vector = std::get_if<Vec2AnimationCurve>(&record)) {
+                if (!visitComponents(*vector))
+                    return false;
+            } else if (const auto* vector3 = std::get_if<Vec3AnimationCurve>(&record)) {
+                if (!visitComponents(*vector3))
+                    return false;
+            } else if (const auto* color = std::get_if<Color4AnimationCurve>(&record)) {
+                if (!visitComponents(*color))
+                    return false;
+            }
+        }
+    }
+    for (const auto& node : composition.graph().nodes()) {
+        if (!visitor(node.id)) {
+            return false;
+        }
+    }
+    for (const auto& edge : composition.graph().edges()) {
+        if (!visitor(edge.id)) {
+            return false;
+        }
+    }
+    for (const auto& boundary : composition.graph().layerOutputs()) {
+        if (!visitor(boundary.layerId)) {
+            return false;
+        }
+    }
+    for (const auto& stack : composition.graph().merges())
+        for (const auto& entry : stack.entries()) {
+            if (!visitor(entry.slotId) || (entry.layerId.isValid() && !visitor(entry.layerId))) {
+                return false;
+            }
+        }
+    for (const auto& [groupId, group] : composition.nodeGroups()) {
+        if (!visitor(groupId)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Central inventory for allocator-backed IDs in durable project truth. When a new durable
 // collection or allocator namespace is added, extend this walk and the publication inventory test.
 template <typename Visitor>
@@ -30,76 +103,37 @@ template <typename Visitor>
             return false;
     }
     for (const auto& composition : project.compositions()) {
-        if (!visitor(composition.id())) {
+        if (!visitCompositionIds(composition, visitor))
             return false;
-        }
-        for (const auto& parameter : composition.parameters().records()) {
-            if (!visitor(parameter.id)) {
-                return false;
-            }
-            // A driver source carries a NodeId now (task S7), and that node is already visited by
-            // the graph walk below -- so there is nothing to visit here. A driver binding holds no
-            // id of its own any more; see DriverBindingSource in parameter.hpp for why the durable
-            // record is the node-and-port pair rather than an id into a driver table.
-        }
-        for (const auto& record : composition.animationCurves().records()) {
-            if (!visitor(animationCurveId(record))) {
-                return false;
-            }
-            if (const auto* scalar = std::get_if<ScalarAnimationCurve>(&record)) {
-                for (const auto& keyframe : scalar->keyframes) {
-                    if (!visitor(keyframe.id))
-                        return false;
-                }
-            } else {
-                const auto visitComponents = [&](const auto& curve) {
-                    for (const auto& component : curve.components)
-                        for (const auto& keyframe : component.keyframes)
-                            if (!visitor(keyframe.id))
-                                return false;
-                    return true;
-                };
-                if (const auto* vector = std::get_if<Vec2AnimationCurve>(&record)) {
-                    if (!visitComponents(*vector))
-                        return false;
-                } else if (const auto* vector3 = std::get_if<Vec3AnimationCurve>(&record)) {
-                    if (!visitComponents(*vector3))
-                        return false;
-                } else if (const auto* color = std::get_if<Color4AnimationCurve>(&record)) {
-                    if (!visitComponents(*color))
-                        return false;
-                }
-            }
-        }
-        for (const auto& node : composition.graph().nodes()) {
-            if (!visitor(node.id)) {
-                return false;
-            }
-        }
-        for (const auto& edge : composition.graph().edges()) {
-            if (!visitor(edge.id)) {
-                return false;
-            }
-        }
-        for (const auto& boundary : composition.graph().layerOutputs()) {
-            if (!visitor(boundary.layerId)) {
-                return false;
-            }
-        }
-        for (const auto& stack : composition.graph().merges())
-            for (const auto& entry : stack.entries()) {
-                if (!visitor(entry.slotId) ||
-                    (entry.layerId.isValid() && !visitor(entry.layerId))) {
-                    return false;
-                }
-            }
-        for (const auto& [groupId, group] : composition.nodeGroups()) {
-            if (!visitor(groupId)) {
-                return false;
-            }
-        }
     }
     return true;
+}
+
+// #357. Reserves only what a draft added relative to the published `base` it was copied from: the
+// draft's allocator already covers everything `base` declared.
+static void reserveChangedProjectIds(IdAllocator& ids, const Project& project,
+                                     const Project& base) noexcept {
+    const auto reserve = [&ids](const auto id) {
+        ids.reserveExisting(id);
+        return true;
+    };
+    if (!project.sameRootRecordStorage(base)) {
+        for (const auto& folder : project.assetFolders())
+            reserve(folder.id);
+        for (const auto& asset : project.assets())
+            reserve(asset.id);
+        for (const auto& record : project.extensionRecords())
+            reserve(record.id);
+        for (const auto& block : project.typedDataBlocks())
+            if (const auto* id = std::get_if<DataBlockRecordId>(&block.id))
+                reserve(*id);
+    }
+    for (const auto& composition : project.compositions()) {
+        const auto* before = base.findComposition(composition.id());
+        if (before != nullptr && before->contentIdentity() == composition.contentIdentity())
+            continue;
+        [[maybe_unused]] const auto visited = visitCompositionIds(composition, reserve);
+    }
 }
 
 static void reserveProjectIds(IdAllocator& ids, const Project& project) noexcept {
@@ -177,8 +211,10 @@ const IdAllocator& Snapshot::ids() const noexcept { return state_->ids; }
 std::size_t Snapshot::rootByteCharge() const noexcept { return state_->rootByteCharge; }
 
 Draft::Draft(Revision baseRevision, std::shared_ptr<const detail::DocumentIdentity> identity,
-             std::unique_ptr<detail::DocumentState> state) noexcept
-    : baseRevision_(baseRevision), identity_(std::move(identity)), state_(std::move(state)) {}
+             std::unique_ptr<detail::DocumentState> state,
+             std::shared_ptr<const detail::DocumentState> base) noexcept
+    : baseRevision_(baseRevision), base_(std::move(base)), identity_(std::move(identity)),
+      state_(std::move(state)) {}
 
 Draft::Draft(Draft&&) noexcept = default;
 Draft& Draft::operator=(Draft&&) noexcept = default;
@@ -190,6 +226,22 @@ const IdAllocator& Draft::ids() const noexcept { return state_->ids; }
 IdAllocator& Draft::ids() noexcept { return state_->ids; }
 std::size_t Draft::rootByteCharge() const { return state_->project.rootByteCharge(); }
 ValidationResult Draft::validate() const { return state_->project.validate(); }
+
+Draft Draft::isolatedFrom(const Snapshot& base) {
+    if (base.state_ == nullptr)
+        throw std::invalid_argument("Cannot draft from an empty snapshot");
+    // A fresh identity matches no Document, so commit() refuses this draft as foreign.
+    return Draft(base.revision_, std::make_shared<detail::DocumentIdentity>(),
+                 std::make_unique<detail::DocumentState>(*base.state_), base.state_);
+}
+
+bool Draft::valid() const {
+    // #357. Published states are always valid, so a draft only has to prove what it changed. When
+    // that proof does not hold, the full validation decides.
+    if (base_ != nullptr && state_->project.validatesAgainst(base_->project))
+        return true;
+    return state_->project.validate().ok();
+}
 
 // Consume moved input; copy the publication shell to isolate escaped authored pointers.
 // NOLINTNEXTLINE(performance-unnecessary-value-param)
@@ -293,7 +345,7 @@ Draft Document::draft(const Snapshot& base) const {
     }
     auto state = std::make_unique<detail::DocumentState>(*base.state_);
     drafts_.fetch_add(1, std::memory_order_relaxed);
-    return Draft(base.revision_, identity_, std::move(state));
+    return Draft(base.revision_, identity_, std::move(state), base.state_);
 }
 
 CommitResult Document::commit(const Revision expectedRevision, Draft&& draftValue) {
@@ -317,9 +369,14 @@ CommitResult Document::commit(const Revision expectedRevision, Draft&& draftValu
         return reject({CommitStatus::InvalidDraft, std::nullopt, std::move(validation)});
     }
     validations_.fetch_add(1, std::memory_order_relaxed);
-    auto validation = draftValue.validate();
-    if (!validation.ok()) {
-        return reject({CommitStatus::InvalidDraft, std::nullopt, std::move(validation)});
+    // #357. A successful commit discards diagnostics, so the incremental proof is enough; only a
+    // draft it cannot prove valid pays for the whole-project validation and its exact diagnostics.
+    if (draftValue.base_ == nullptr ||
+        !draftValue.state_->project.validatesAgainst(draftValue.base_->project)) {
+        auto validation = draftValue.validate();
+        if (!validation.ok()) {
+            return reject({CommitStatus::InvalidDraft, std::nullopt, std::move(validation)});
+        }
     }
 
     // A Draft exposes mutable Project/Composition references. Publish a separate shell and
@@ -341,7 +398,11 @@ CommitResult Document::commit(const Revision expectedRevision, Draft&& draftValu
     }
 
     publishedState->ids.mergeHighWater(state_->ids);
-    detail::reserveProjectIds(publishedState->ids, publishedState->project);
+    if (draftValue.base_ != nullptr)
+        detail::reserveChangedProjectIds(publishedState->ids, publishedState->project,
+                                         draftValue.base_->project);
+    else
+        detail::reserveProjectIds(publishedState->ids, publishedState->project);
     state_ = std::move(publishedState);
     // Leave the caller's Draft independent and alive until its own destructor. A reference kept
     // while editing remains valid, but it can only mutate the unpublished draft copy.
@@ -392,8 +453,9 @@ CommitResult Document::restore(const Revision expectedRevision,
     }
 
     auto restoredState = std::make_shared<detail::DocumentState>(*historicalSnapshot.state_);
+    // #357. A historical state's allocator already covers its own project: construction and every
+    // commit reserved it before publication, so the merge alone keeps both directions covered.
     restoredState->ids.mergeHighWater(state_->ids);
-    detail::reserveProjectIds(restoredState->ids, restoredState->project);
     state_ = std::move(restoredState);
     revision_ = *publishedRevision;
     publications_.fetch_add(1, std::memory_order_relaxed);

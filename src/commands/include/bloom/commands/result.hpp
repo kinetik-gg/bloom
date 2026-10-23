@@ -190,6 +190,10 @@ struct CommandResult {
     std::optional<document::Revision> expectedRevision;
     std::string label;
     std::vector<OperationFailure> operationFailures;
+    // Issues reported by operations that did NOT reject -- for example the files a partial
+    // ImportAssets skipped while importing the rest. Published on Succeeded and NoChange execute
+    // results so scripting, CLI and MCP callers can show them; never replayed by undo/redo.
+    std::vector<OperationFailure> warnings;
     std::vector<CommandOutput> outputs;
     document::ValidationResult validation;
     // True when the applied transaction could change rendered pixels. Conservative default: a

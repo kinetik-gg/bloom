@@ -3,6 +3,7 @@
 #include <bloom/document/project.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <map>
 #include <optional>
 #include <unordered_map>
@@ -35,8 +36,27 @@ class GraphView final {
             nodes_.emplace(node.id, &node);
         for (const auto& boundary : graph_.layerOutputs()) {
             boundaries_.emplace(boundary.nodeId, &boundary);
+            // First boundary per layer wins, exactly as the compiler's linear search does.
+            layers_.try_emplace(boundary.layerId, &boundary);
             anySolo_ = anySolo_ || boundary.solo;
         }
+        // #357: merges and their slots are indexed once, so consuming a slot edge is a lookup
+        // rather than a scan of every merge, slot and boundary.
+        for (const auto& stack : graph_.merges()) {
+            merges_.try_emplace(stack.nodeId(), &stack);
+            for (const auto& entry : stack.entries())
+                slots_.try_emplace(SlotKey{stack.nodeId(), entry.slotId}, &entry);
+        }
+    }
+
+    [[nodiscard]] const LayerStackEntry* slot(const NodeId stack,
+                                              const LayerSlotId slot) const noexcept {
+        const auto found = slots_.find(SlotKey{stack, slot});
+        return found == slots_.end() ? nullptr : found->second;
+    }
+    [[nodiscard]] const LayerStack* merge(const NodeId id) const noexcept {
+        const auto found = merges_.find(id);
+        return found == merges_.end() ? nullptr : found->second;
     }
 
     [[nodiscard]] const NodeRecord* node(const NodeId id) const noexcept {
@@ -69,7 +89,7 @@ class GraphView final {
     }
 
     [[nodiscard]] bool consumesEdge(const NodeRecord& node, const EdgeRecord& edge) const {
-        if (const auto* merge = graph_.merge(node.id); merge && !merge->enabled())
+        if (const auto* stack = merge(node.id); stack && !stack->enabled())
             return false;
         if (isMuted(node.id)) {
             const auto input = firstImageInput(node);
@@ -77,9 +97,8 @@ class GraphView final {
                 return false;
         }
         if (const auto* slot = std::get_if<LayerStackInputRef>(&edge.destination)) {
-            const auto* stack = graph_.merge(slot->stackNodeId);
-            const auto* entry = stack ? stack->find(slot->slotId) : nullptr;
-            if (entry && mutedLayer(*entry))
+            const auto found = slots_.find(SlotKey{slot->stackNodeId, slot->slotId});
+            if (found != slots_.end() && mutedLayer(*found->second))
                 return false;
         }
         return true;
@@ -99,7 +118,7 @@ class GraphView final {
             if (input.valueKind == SocketValueKind::Image)
                 return NodeInputRef{node.id, input.name};
         }
-        const auto* stack = graph_.merge(node.id);
+        const auto* stack = merge(node.id);
         const auto entries = stack ? stack->entries() : std::span<const LayerStackEntry>{};
         if (definition->layerSlotInput &&
             definition->layerSlotInput->valueKind == SocketValueKind::Image && !entries.empty())
@@ -109,19 +128,32 @@ class GraphView final {
     }
 
     [[nodiscard]] bool mutedLayer(const LayerStackEntry& entry) const {
-        for (const auto& boundary : graph_.layerOutputs()) {
-            if (boundary.layerId == entry.layerId)
-                return !boundary.enabled || (anySolo_ && !boundary.solo) ||
-                       isMuted(boundary.nodeId);
-        }
-        return false;
+        const auto found = layers_.find(entry.layerId);
+        if (found == layers_.end())
+            return false;
+        const auto& boundary = *found->second;
+        return !boundary.enabled || (anySolo_ && !boundary.solo) || isMuted(boundary.nodeId);
     }
+
+    struct SlotKey final {
+        NodeId stack;
+        LayerSlotId slot;
+        friend bool operator==(const SlotKey&, const SlotKey&) = default;
+    };
+    struct SlotKeyHash final {
+        [[nodiscard]] std::size_t operator()(const SlotKey& key) const noexcept {
+            return std::hash<std::uint64_t>{}(key.stack.value() * 1'000'003ULL ^ key.slot.value());
+        }
+    };
 
     const Composition& composition_;
     const CanonicalGraph& graph_;
     const NodeDefinitionRegistry& registry_;
     std::unordered_map<NodeId, const NodeRecord*> nodes_;
     std::unordered_map<NodeId, const LayerOutputBoundary*> boundaries_;
+    std::unordered_map<LayerId, const LayerOutputBoundary*> layers_;
+    std::unordered_map<NodeId, const LayerStack*> merges_;
+    std::unordered_map<SlotKey, const LayerStackEntry*, SlotKeyHash> slots_;
     bool anySolo_ = false;
 };
 
@@ -150,8 +182,25 @@ constantCompositionReference(const Composition& owner, const NodeRecord& node, b
 
 } // namespace
 
+namespace {
+std::atomic<std::uint64_t> reachabilityComputations{0};
+} // namespace
+
+std::shared_ptr<const RenderReachability>
+RenderReachability::of(const Composition& composition, const NodeDefinitionRegistry& registry) {
+    if (&registry == &builtInNodeDefinitions())
+        if (auto cached = composition.frozenRenderReachability())
+            return cached;
+    return std::make_shared<const RenderReachability>(compute(composition, registry));
+}
+
+std::uint64_t RenderReachability::computations() noexcept {
+    return reachabilityComputations.load(std::memory_order_relaxed);
+}
+
 RenderReachability RenderReachability::compute(const Composition& composition,
                                                const NodeDefinitionRegistry& registry) {
+    reachabilityComputations.fetch_add(1, std::memory_order_relaxed);
     RenderReachability result;
     const auto& graph = composition.graph();
     if (!graph.compositionOutput().has_value())
@@ -296,8 +345,8 @@ RenderConfinement confineNodeChange(const Composition& composition,
             const auto* slot = std::get_if<LayerStackInputRef>(&edge->destination);
             if (slot == nullptr)
                 return false;
-            const auto* stack = graph.merge(slot->stackNodeId);
-            const auto* entry = stack ? stack->find(slot->slotId) : nullptr;
+            const auto* stack = view.merge(slot->stackNodeId);
+            const auto* entry = stack ? view.slot(slot->stackNodeId, slot->slotId) : nullptr;
             return entry != nullptr && entry->layerId == boundary.layerId && stack->enabled() &&
                    !view.isMuted(stack->nodeId());
         });
@@ -361,12 +410,12 @@ std::set<CompositionId> compositionsDependingOn(const Project& project, const Co
     std::map<CompositionId, std::vector<CompositionId>> referencedBy;
     std::vector<CompositionId> dependsOnEverything;
     for (const auto& composition : project.compositions()) {
-        const auto reachability = RenderReachability::compute(composition, registry);
-        if (!reachability.known() || reachability.nestedReferenceUnknown()) {
+        const auto reachability = RenderReachability::of(composition, registry);
+        if (!reachability->known() || reachability->nestedReferenceUnknown()) {
             dependsOnEverything.push_back(composition.id());
             continue;
         }
-        for (const auto nested : reachability.nestedCompositions())
+        for (const auto nested : reachability->nestedCompositions())
             referencedBy[nested].push_back(composition.id());
     }
     std::vector<CompositionId> pending{target};

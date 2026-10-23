@@ -58,6 +58,7 @@ class Snapshot final {
 
   private:
     friend class Document;
+    friend class Draft;
     Snapshot(Revision revision, std::shared_ptr<const detail::DocumentIdentity> identity,
              std::shared_ptr<const detail::DocumentState> state) noexcept
         : revision_(revision), identity_(std::move(identity)), state_(std::move(state)) {}
@@ -82,13 +83,25 @@ class Draft final {
     [[nodiscard]] const void* stateIdentity() const noexcept { return state_.get(); }
     [[nodiscard]] std::size_t rootByteCharge() const;
     [[nodiscard]] ValidationResult validate() const;
+    // #357. Whether this draft would commit: proven incrementally against its base when possible,
+    // otherwise by full validation. Prefer this over validate().ok() when no diagnostics are
+    // needed.
+    [[nodiscard]] bool valid() const;
+    // #357. A scratch draft of `base` owned by no document, so it can never be committed. Copies
+    // only the root shell; validation through valid() is incremental against `base`. For read-only
+    // "would this operation apply?" probes.
+    [[nodiscard]] static Draft isolatedFrom(const Snapshot& base);
 
   private:
     friend class Document;
     Draft(Revision baseRevision, std::shared_ptr<const detail::DocumentIdentity> identity,
-          std::unique_ptr<detail::DocumentState> state) noexcept;
+          std::unique_ptr<detail::DocumentState> state,
+          std::shared_ptr<const detail::DocumentState> base) noexcept;
 
     Revision baseRevision_;
+    // #357. The published state this draft was copied from: validation and ID reservation only
+    // revisit what the draft changed relative to it.
+    std::shared_ptr<const detail::DocumentState> base_;
     std::shared_ptr<const detail::DocumentIdentity> identity_;
     std::unique_ptr<detail::DocumentState> state_;
 };

@@ -164,6 +164,9 @@ frameRange(std::string_view value) {
             std::cerr << "error[bloom-cli.command-rejected] " << transaction.operation << '\n';
             return 5;
         }
+        for (const auto& warning : result.command->warnings)
+            std::cerr << "warning[bloom-cli.operation-warning] " << warning.operationType << ": "
+                      << warning.issue.message << '\n';
     }
     std::cout << "executed " << parsed.transactions().size()
               << " transaction(s), revision=" << session->snapshot().revision().value() << '\n';

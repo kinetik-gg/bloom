@@ -133,6 +133,14 @@ yyjson_mut_val* commandResult(Json& out, const commands::CommandResult& result) 
         out.set(detail, "message", out.text(failure.issue.message));
         out.append(diagnostics, detail);
     }
+    for (const auto& warning : result.warnings) {
+        auto* detail = out.object();
+        out.set(detail, "code", out.text("bloom.scripting.operation-warning"));
+        out.set(detail, "severity", out.text("warning"));
+        out.set(detail, "operation", out.text(warning.operationType));
+        out.set(detail, "message", out.text(warning.issue.message));
+        out.append(diagnostics, detail);
+    }
     if (!result.succeeded() && result.operationFailures.empty()) {
         auto* detail = out.object();
         out.set(detail, "code",
