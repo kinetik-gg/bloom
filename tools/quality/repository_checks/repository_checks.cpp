@@ -64,7 +64,9 @@ constexpr auto kPythonSourceRoots = std::to_array<std::string_view>(
 // scripting architecture document names this bounded exception, not a general tools/ Python root.
 constexpr auto kPythonQualificationTools = std::to_array<std::string_view>(
     {"tools/ci/configure_gpu_qualification.py", "tools/ci/gpu_qualification.py",
-     "tools/quality/qualify_private_share_outage.py"});
+     "tools/quality/qualify_private_share_outage.py",
+     // The documented local qualification runner and its own test (local-validation.md).
+     "tools/local/sprint_validation.py", "tools/local/test_sprint_validation.py"});
 
 template <std::size_t Size>
 [[nodiscard]] constexpr auto contains(const std::array<std::string_view, Size>& values,
