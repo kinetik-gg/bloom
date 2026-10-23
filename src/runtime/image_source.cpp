@@ -2,6 +2,7 @@
 #include "input_color_context.hpp"
 #include "operation_key.hpp"
 #include <algorithm>
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/media/cache/media_disk_cache_decode.hpp>
 #include <bloom/platform/source_identity.hpp>
 #include <bloom/render/gpu_point_resample.hpp>
@@ -174,6 +175,11 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
     key.add(memberFrame);
     key.add(selected.interpretation.colorSpace);
     key.add(selected.interpretation.inputColorSpaceId);
+    // A Bloom-synthesized input space (Rec.2100 HLG) is defined by OCIO built-ins, so its
+    // definition and the linked OCIO version are part of the source identity (as for video).
+    const auto synthesized =
+        color::synthesizedColorSpaceIdentity(selected.interpretation.inputColorSpaceId);
+    key.add(synthesized);
     key.add(selected.workingColorSpaceId);
     const auto revision = selected.configRevision.toLowercaseHex();
     key.add(std::string(revision.begin(), revision.end()));
@@ -204,6 +210,7 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
     diskInputs.workingColorSpaceId = selected.workingColorSpaceId;
     diskInputs.alphaAssociation = selected.interpretation.alphaAssociation;
     diskInputs.configDigest = selected.configRevision;
+    diskInputs.synthesizedColorSpaceIdentity = synthesized;
     selected.diskCacheKey =
         media::cache::buildImageCacheKey(diskInputs, media::cache::kImageDecoderIdentity);
     return selected;
