@@ -206,8 +206,8 @@ struct GpuPointResample::Impl final {
     // submits one dispatch. Returns false and sets jobDiagnostic on any failure (resources remain
     // owned by Impl for the caller to free).
     [[nodiscard]] bool launchJob(const std::shared_ptr<const GpuImage>& source,
-                                 std::uint32_t outputWidth, std::uint32_t outputHeight,
-                                 ImageWindow displayWindow, core::PixelAspectRatio pixelAspect,
+                                 ImageWindow outputWindow, ImageWindow displayWindow,
+                                 core::PixelAspectRatio pixelAspect,
                                  std::span<const std::int32_t> axisIndices,
                                  std::uint64_t byteBudget);
 

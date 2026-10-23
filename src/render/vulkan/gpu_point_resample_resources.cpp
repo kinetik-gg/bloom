@@ -337,12 +337,13 @@ bool GpuPointResample::Impl::createPipelines() {
 }
 
 bool GpuPointResample::Impl::launchJob(const std::shared_ptr<const GpuImage>& source,
-                                       const std::uint32_t outputWidth,
-                                       const std::uint32_t outputHeight,
+                                       const ImageWindow outputWindow,
                                        const ImageWindow displayWindow,
                                        const core::PixelAspectRatio pixelAspect,
                                        const std::span<const std::int32_t> axisIndices,
                                        const std::uint64_t byteBudget) {
+    const std::uint32_t outputWidth = outputWindow.extent().width();
+    const std::uint32_t outputHeight = outputWindow.extent().height();
     const point_resample_detail::PointResampleFault fault =
         static_cast<point_resample_detail::PointResampleFault>(
             point_resample_detail::pointResampleFault().load());
@@ -381,7 +382,8 @@ bool GpuPointResample::Impl::launchJob(const std::shared_ptr<const GpuImage>& so
         return false;
     }
     resources.residentSlotHeld = true;
-    const auto dataWindow = ImageWindow::create(0, 0, outputWidth, outputHeight);
+    const auto dataWindow = ImageWindow::create(outputWindow.originX(), outputWindow.originY(),
+                                                outputWidth, outputHeight);
     if (!dataWindow) {
         jobDiagnostic = pointResampleDiagnostic(GpuPointResampleDiagnosticCode::InvalidArgument,
                                                 "the point-resample output window is invalid");

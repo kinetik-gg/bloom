@@ -342,9 +342,8 @@ GpuPointResampleDiagnostic GpuPointResample::begin(const GpuPointResampleRequest
         impl.releaseClaim();
         return diagnostic;
     }
-    if (!impl.launchJob(parameters.source, outputWidth, outputHeight,
-                        parameters.output.displayWindow(), parameters.output.pixelAspect(),
-                        axisIndices, byteBudget)) {
+    if (!impl.launchJob(parameters.source, outputWindow, parameters.output.displayWindow(),
+                        parameters.output.pixelAspect(), axisIndices, byteBudget)) {
         const auto diagnostic = impl.jobDiagnostic;
         impl.freeJobResources();
         impl.releaseClaim();
