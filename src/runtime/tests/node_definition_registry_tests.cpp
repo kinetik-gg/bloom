@@ -216,11 +216,13 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // animatable. Solid colour and text size/colour now declare it; text content, a String, does
     // not.
     expectations.expect(
-        layer != nullptr && layer->parameters.size() == 6 &&
+        // ADR 0024: schema 5 appends the optional animatable Time Remap.
+        layer != nullptr && layer->parameters.size() == 7 &&
             std::ranges::all_of(
                 std::span(layer->parameters).first(5),
                 [](const auto& parameter) { return parameter.supportsAnimation; }) &&
-            !layer->parameters[5].supportsAnimation && solid != nullptr &&
+            !layer->parameters[5].supportsAnimation && layer->parameters[6].supportsAnimation &&
+            !layer->parameters[6].required && solid != nullptr &&
             solid->parameters.front().supportsAnimation && text != nullptr &&
             text->parameters.size() == 12 && !text->parameters[0].supportsAnimation &&
             text->parameters[1].supportsAnimation && text->parameters[2].supportsAnimation,
@@ -237,7 +239,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                         "and it agrees with the shared schema predicates for every registered "
                         "parameter, so the two can never drift");
     expectations.expect(
-        layer != nullptr && layer->parameters.size() == 6 &&
+        layer != nullptr && layer->parameters.size() == 7 &&
+            layer->parameters[6].role == document::kTimeRemapParameterRole &&
+            layer->parameters[6].schemaKey == document::kTimeRemapParameterSchemaKey &&
             layer->parameters[0].role == document::kPositionParameterRole &&
             layer->parameters[0].schemaKey == document::kPositionParameterSchemaKey &&
             layer->parameters[0].valueKind == runtime::ParameterValueKind::Vec2d &&
@@ -256,9 +260,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             layer->parameters[5].role == document::kBlendModeParameterRole &&
             layer->parameters[5].schemaKey == document::kBlendModeParameterSchemaKey &&
             layer->parameters[5].valueKind == runtime::ParameterValueKind::Integer,
-        "the Layer Output schema is exactly position, anchor, scale, rotation, opacity, and blend "
-        "mode, in the registered order");
-    expectations.expect(layer != nullptr && layer->parameters.size() == 6 &&
+        "the Layer Output schema is exactly position, anchor, scale, rotation, opacity, blend "
+        "mode and the optional Time Remap, in the registered order");
+    expectations.expect(layer != nullptr && layer->parameters.size() == 7 &&
                             layer->parameters[1].defaultValue ==
                                 document::ParameterValue{document::kDefaultAnchor} &&
                             layer->parameters[2].defaultValue ==
