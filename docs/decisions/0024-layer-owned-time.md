@@ -223,6 +223,13 @@ entry in front of any nested-composition entries. Speed and remap are varispeed 
 - Document schema advances by one additive, version-only step (identity defaults; numbering is
   serialized with other lanes) plus the Layer Output node 4 -> 5 version rewrite.
 
+Implementation notes (2026-10-23): the remap frame-start snap, shared identity claims for clock
+copies, the per-mix resolution of a driven audio Time Remap and the conservative footprint for a
+retimed layer nested inside another layer's upstream are recorded in
+[`animation-and-time.md`](../architecture/animation-and-time.md#layer-time). The stored Integer
+`startFrame`/`loopMode` and composition-source `timeOffset`/`timeScale`/`loopMode` remain as the
+source-level mapping composed inside the layer's, unchanged.
+
 Primary references: [`animation-and-time.md`](../architecture/animation-and-time.md#layer-time),
 [`layer-graph-model.md`](../architecture/layer-graph-model.md#layer-timeline-contract),
 [`interaction-model.md`](../ux/interaction-model.md#timeline), and

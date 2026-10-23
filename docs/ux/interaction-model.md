@@ -319,14 +319,17 @@ fires neither. The button, the menu item, and `Ctrl+Shift+Space` all call the on
 `RamPreviewController::toggle()`, per **Ownership Boundary** below.
 
 Bar gestures follow [layer-owned time](../architecture/animation-and-time.md#layer-time)
-([ADR 0024](../decisions/0024-layer-owned-time.md); the body-move, slip and stretch semantics above are
-the accepted direction while #353 is implemented, and today a body drag still moves only the range).
-Each gesture commits one `SetLayerTiming`. A gesture keeps at least one frame of the range inside the
-composition; a trim may extend an endpoint outside the composition only as far as the content extent
-reaches. The bar draws the media extent inside it. Start time and speed are also editable as
-Properties fields and expanded-layer Time rows (Start, Speed, Time Remap with its diamond, Before,
-After), which is the supported path where a window manager claims Alt-drag. Before and After are
-closed None / Hold / Loop / Ping-pong dropdowns.
+([ADR 0024](../decisions/0024-layer-owned-time.md)). Each gesture commits one `SetLayerTiming`
+(undo names Move, Slip, Trim and Stretch Layer). A move keeps at least one frame of the range inside
+the composition and may pass either bound; a trim may extend an endpoint outside the composition only
+as far as the content extent reaches. A stretch changes speed by the exact frame ratio and keeps the
+opposite edge's content time. The part of the bar outside the content extent is shaded, live during
+a drag. The Properties "Time" section of the layer in context edits Start, In, Out and Frames (whole
+composition frames; Start moves the layer with its content and keys), Before and After (closed
+None / Hold / Loop / Ping-pong dropdowns, default None) and a Time Remap switch; it is the supported
+path where a window manager claims Alt-drag. Its object names are `layerStartFrameEditor`,
+`layerInFrameEditor`, `layerOutFrameEditor`, `layerFrameCountEditor`, `layerBeforeModeDropdown`,
+`layerAfterModeDropdown` and `layerTimeRemapSwitch`.
 
 Bar magnetic targets are other layers' in/out points, the playhead and work-area edges. A guide
 marks the chosen target. Empty lane space retains ruler scrubbing. Visibility, solo and lock cells

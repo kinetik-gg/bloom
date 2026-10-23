@@ -1104,8 +1104,8 @@ end. An explicit range satisfies `0 <= in < out <= duration`. Commands snap to t
 frame grid; the exact composition end is also a valid endpoint. Existing documents therefore
 retain full-range rendering without migration-injected data.
 
-**Layer-owned time** ([ADR 0024](../decisions/0024-layer-owned-time.md), issue #353; accepted
-direction, implementation in progress). The boundary also owns its time mapping: exact `startTime`
+**Layer-owned time** ([ADR 0024](../decisions/0024-layer-owned-time.md), issue #353;
+implemented). The boundary also owns its time mapping: exact `startTime`
 (default 0), exact positive `speed` (default 1), `contentExtent` (`Unbounded` by default, `Fixed`, or
 `Source{nodeId}`), `beforeMode`/`afterMode` (None / Hold / Loop / PingPong, default None), and an
 optional animatable `bloom.layer.time-remap` parameter on Layer Output node schema 5. The boundary's

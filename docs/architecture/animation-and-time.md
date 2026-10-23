@@ -1114,9 +1114,7 @@ continue to apply independently.
 
 ## Layer Time
 
-Status: accepted direction ([ADR 0024](../decisions/0024-layer-owned-time.md), issue #353);
-implementation in progress. Until it lands, the evaluator still samples layers and their upstream at
-absolute composition time.
+Status: accepted and implemented ([ADR 0024](../decisions/0024-layer-owned-time.md), issue #353).
 
 The time mapping is layer-owned. A layer converts its placement time `t` (composition time for a
 top-level layer, the enclosing layer's content time for a nested one) into two clocks:
@@ -1170,8 +1168,30 @@ added. The coverage contract adds Required axes `feature.layer.time.offset_speed
 with CPU parity on every required preview and final route.
 
 Audio uses the same mapping per output sample, as a layer entry ahead of nested-composition entries
-in the clip's ordered mapping list; speed and remap are varispeed and None is silence. Mixer detail
-belongs to #354.
+in the clip's ordered mapping list (`AudioCompositionTimeMapping::layerTime`); the clip keeps the
+compiled plan so a curve Time Remap is sampled at each sample's layer time. Speed and remap are
+varispeed and None is silence. A driven (value-graph) Time Remap on an audio layer is resolved once
+per mix at the request time. Mixer and level detail belong to #354.
+
+Implementation notes:
+
+- A Time Remap result within one nanosecond of a frame start of the extent's frame rate (the
+  composition rate without an extent) is snapped onto that frame start, so binary64 remap seconds
+  that mean frame n (an identity remap at 1/24 s steps) never select frame n - 1.
+- An operation copied onto several clocks shares its parameter and curve identities; preflight
+  claims them once, for the first copy. The Time Remap operand is claimed with the Layer Output.
+- A `Source` extent resolves through `runtime::resolveSourceExtent` (`layer_time_projection`): a
+  numbered sequence, a video, an audio asset, or a composition source with constant identity offset
+  and scale; anything else compiles `Unbounded` with `bloom.runtime.compile.layer-extent-unresolved`.
+- `AddNode` never binds Time Remap (absence means disabled); `EnableLayerTimeRemap` binds it with two
+  Linear keys mapping the layer range identically, and `DisableLayerTimeRemap` erases it with its
+  curve.
+- Key-edit footprints project layer-clock keys (and upstream keys where content time equals layer
+  time) through the layer's start and speed into its span; remapped or wrapping upstream keys cover
+  the layer span, and a retimed layer nested inside another layer's upstream stays whole-composition.
+- The coverage contract's Required axes `feature.layer.time.offset_speed`, `.remap`,
+  `.extent_modes` and `.shared_upstream` are prepared by the production builder and executed with CPU
+  parity on the native gate.
 
 A Qt-free projection gives the Timeline the forward map, the exact inverse
 `t = startTime + tau / speed` for layer-clock keys, and the media extent in placement time for the
