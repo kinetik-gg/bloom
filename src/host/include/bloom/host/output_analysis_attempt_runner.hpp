@@ -6,6 +6,7 @@
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/output/process_frame_semantic_identity.hpp>
 #include <bloom/platform/staged_artifact.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
@@ -94,6 +95,10 @@ struct OutputAnalysisAttemptRequestV1 final {
     // Captured source context for final evaluation. The caller supplies the project/source
     // directory; the export destination never establishes media-locator authority.
     std::filesystem::path assetBaseDirectory{};
+    // Optional final-render evaluator retained across one export's frames for the CPU fallback.
+    // Its verified source revisions and video sessions make per-frame revalidation an identity
+    // check instead of a full source read. Null evaluates with a fresh evaluator per attempt.
+    std::shared_ptr<const runtime::CpuCompositionEvaluator> fallbackEvaluator{};
     std::filesystem::path targetPath;
     platform::ArtifactOverwritePolicy overwritePolicy =
         platform::ArtifactOverwritePolicy::CreateOrReplace;

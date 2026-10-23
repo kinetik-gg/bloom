@@ -100,6 +100,10 @@ struct detail::SequenceExportWorkV1 {
     std::uint64_t gpuDeviceOwnershipEpoch = 0;
     std::unique_ptr<output::OutputAnalysisAttemptTargetV1> target;
     std::optional<SequenceExportResultV1> result;
+    // One final-render evaluator per range: its verified source revisions and video sessions are
+    // reused by every frame's CPU fallback. Released with the work on the retirement owner.
+    std::shared_ptr<const runtime::CpuCompositionEvaluator> fallbackEvaluator =
+        std::make_shared<const runtime::CpuCompositionEvaluator>();
     explicit SequenceExportWorkV1(SequenceExportRequestV1 r,
                                   std::shared_ptr<output::ExportResourceLedgerV1> lifetime)
         : request(std::move(r)), ledgerLifetime(std::move(lifetime)) {}
@@ -610,6 +614,7 @@ struct SequenceExportRunnerV1::State {
                            .pixelStorageByteLimit = 0,
                            .bypassLookNodes = false},
             .assetBaseDirectory = work->request.assetBaseDirectory,
+            .fallbackEvaluator = work->fallbackEvaluator,
             .targetPath = work->request.range.destination,
             .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
             .owner = owner,

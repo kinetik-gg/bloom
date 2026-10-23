@@ -259,6 +259,7 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
         auto evaluation = state_->request.evaluation;
         const bool useRootPixelCapacity = state_->request.useRootPixelCapacity;
         auto assetBaseDirectory = state_->request.assetBaseDirectory;
+        auto fallbackEvaluator = state_->request.fallbackEvaluator;
 
         runtime::TaskRequest cpuRequest(
             "Analyze a frame export attempt", attemptOwner(state_->request.owner),
@@ -267,7 +268,8 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
         auto submission = state_->scheduler->submit<BuildOutcomeV1>(
             std::move(cpuRequest),
             [plan = std::move(plan), evaluation, useRootPixelCapacity,
-             assetBaseDirectory = std::move(assetBaseDirectory), resolved, preset, ledger,
+             assetBaseDirectory = std::move(assetBaseDirectory),
+             fallbackEvaluator = std::move(fallbackEvaluator), resolved, preset, ledger,
              gpuProvider = std::move(gpuProvider), processingPolicy = std::move(processingPolicy),
              forceCpuFallback, outputColorCommand = std::move(outputColorCommand)](
                 runtime::TaskContext& context) mutable -> runtime::TaskResult<BuildOutcomeV1> {
@@ -400,6 +402,8 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                                 : runtime::GpuProcessFrameDiagnosticCode::BudgetRefused);
                     }
                     hostPhase = std::move(grant.lease);
+                    // Revalidate is an identity check against verified revisions; a changed or
+                    // missing original still fails before memoized pixels are accepted.
                     auto cpuEvaluation = evaluation;
                     cpuEvaluation.mediaSourceRevisionPolicy =
                         runtime::MediaSourceRevisionPolicy::Revalidate;
@@ -407,7 +411,11 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                     cpuEvaluation.pixelStorageByteLimit =
                         static_cast<std::size_t>(hostPhase->sourceByteLimit());
                     cpuEvaluation.finalOutputPhase = hostPhase;
-                    const runtime::CpuCompositionEvaluator evaluator;
+                    const auto evaluatorOwner =
+                        fallbackEvaluator
+                            ? fallbackEvaluator
+                            : std::make_shared<const runtime::CpuCompositionEvaluator>();
+                    const auto& evaluator = *evaluatorOwner;
                     evaluator.setAssetBaseDirectory(assetBaseDirectory);
                     auto evalResult =
                         evaluator.evaluate(plan, cpuEvaluation, context.cancellation());
