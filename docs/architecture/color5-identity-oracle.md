@@ -92,3 +92,119 @@ records.update({"aces_process_bytes": process_bytes,
                 "look_suffix_bytes": look_bytes})
 print(json.dumps(records, indent=2))
 ```
+
+## Output identity oracle (plan semantics 9)
+
+ADR 0024 advances compiled-plan semantics 8 -> 9; animation sampling (2), evaluator (10) and image
+primitives (7) are unchanged, and no pixel golden moves. The block below imports no Bloom code. It
+independently packs the process-frame identity, the display-processor identity, the output analysis
+digest and the output semantic identity for the 1x1 test fixture, and prints the digests pinned by
+`output_analysis_digest_tests.cpp`, `output_analysis_analyzer_tests.cpp` and
+`output_semantic_identity_tests.cpp`. Run it as `python3 -I oracle.py PLAN ANIMATION EVALUATOR
+PRIMITIVES`.
+
+Procedure and results for this change:
+
+- With versions `8 2 9 7` it reproduces the previously checked-in pins byte for byte (PNG analysis
+  `a9b4052a...`, EXR analysis `2eda964b...`, PNG output `8a56350e...`, EXR output `82422afc...`). Those
+  pins pre-date the evaluator 9 -> 10 change, so the checked-in set was one evaluator step stale.
+- Fed the golden fixture of `process_frame_semantic_identity_tests.cpp` it reproduces the pixel
+  digest `db7f7d3d...` and the 249-byte identity digest `a403a32e...`.
+- With versions `9 2 10 7` it derives the replacements, which the C++ implementation then matched:
+  PNG analysis `9b8de77e...` (1922 bytes), EXR analysis `2c124174...` (1485), PNG output
+  `e125d85a...` (669) and EXR output `fa7183ae...` (567). Preimage lengths are unchanged.
+
+```python
+"""Independent output-identity oracle (no Bloom code imported). Usage: oracle.py PLAN ANIM EVAL PRIM"""
+import hashlib, struct, sys
+sha = lambda b: hashlib.sha256(b).hexdigest()
+u8 = lambda v: struct.pack(">B", v); u16 = lambda v: struct.pack(">H", v)
+u32 = lambda v: struct.pack(">I", v); u64 = lambda v: struct.pack(">Q", v)
+i32 = lambda v: struct.pack(">i", v); i64 = lambda v: struct.pack(">q", v)
+text = lambda s: u32(len(s.encode())) + s.encode()
+blob = lambda b: u32(len(b)) + b
+
+def process_identity(pixels_f32_bits, versions, project=1, comp=2, rev=6, tnum=0, tden=1, node=4,
+                     w=1, h=1):
+    plan, anim, ev, prim = versions
+    px = b"BloomProcessPixelStream\0" + u16(1) + u64(w*h) + b"".join(u32(b) for b in pixels_f32_bits)
+    pdig = hashlib.sha256(px).digest()
+    win = i64(0)+i64(0)+u32(w)+u32(h)
+    b = (b"BloomProcessFrameSemanticIdentity\0" + u16(1) + u64(project)+u64(comp)+u64(rev)
+         + i64(tnum)+i64(tden) + u64(node) + u8(1) + win + win + u32(1)+u32(1)
+         + text("lin_rec709_scene") + u8(1)+u8(1)+u8(1) + text("bloom.process.rgba32f.semantic.v2")
+         + u32(plan)+u32(anim)+u32(ev)+u32(prim) + pdig)
+    return b
+
+def f32bits(x): return struct.unpack(">I", struct.pack(">f", x))[0]
+REV = bytes(range(32))
+def display_identity():
+    return (b"BloomDisplayProcessorIdentity\0" + u16(1) + REV + u16(1) + text("A")+text("B")
+            + text("lin_rec709_scene") + text("D") + text("V") + u8(1) + u16(2) + text("L")+text("M")
+            + text("srgb_rec709_display") + text("reference") + text("bloom.color.ocio-cpu-display.v1")
+            + text("straight-rgba8"))
+
+CH = ("count=u:4;name-0=utf8:52;name-1=utf8:47;name-2=utf8:42;name-3=utf8:41;"
+      "role-0=id:red;role-1=id:green;role-2=id:blue;role-3=id:alpha")
+SRC = "height=u:1;packing=id:rgba;sample-type=id:binary32;width=u:1"
+PNGP = "height=u:1;packing=id:rgba;sample-type=id:uint8;width=u:1"
+WIN = "height=u:1;origin-x=i:0;origin-y=i:0;width=u:1"
+NONE = "kind=id:none;revision=id:none"
+OCIO = "kind=id:ocio;revision=id:" + REV.hex()
+PREM = "association=id:premultiplied;zero-alpha=id:canonical-zero"
+STR = "association=id:straight;zero-alpha=id:canonical-zero"
+exr_facets = [(1,1,"",SRC,SRC),(2,1,"","component-type=id:binary32","component-type=id:binary32"),
+ (3,1,"","color-id=id:lin_rec709_scene","color-id=id:lin_rec709_scene"),(4,1,"",PREM,PREM),
+ (5,1,"",CH,CH),(6,1,"",WIN,WIN),(7,1,"",WIN,WIN),
+ (8,1,"","denominator=u:1;numerator=u:1","value=f32:3f800000"),(9,1,"","","method=id:zip"),
+ (10,1,"","profile=id:none","profile=id:none"),(11,1,"",NONE,NONE)]
+def analysis_digest(proc, preset, ver, profile, facets, revb=b"", disp=b""):
+    r = (b"BloomOutputAnalysisDigest\0" + u16(1) + blob(proc) + text(preset) + u32(ver) + text(profile)
+         + blob(revb) + blob(disp) + u16(len(facets)))
+    for fid, st, code, s, t in facets:
+        r += u8(fid) + u8(st) + u8(1) + text(code) + text(s) + text(t)
+    return r
+
+png_facets = [(1,3,"png.display-transform-clamp-quantize",SRC,PNGP),
+ (2,3,"png.float32-to-uint8","component-type=id:binary32","component-type=id:uint8"),
+ (3,3,"png.lin-rec709-scene-to-srgb","color-id=id:lin_rec709_scene","color-id=id:srgb_rec709_display"),
+ (4,3,"png.premultiplied-to-straight",PREM,STR),(5,1,"",CH,CH),(6,1,"",WIN,WIN),(7,1,"",WIN,WIN),
+ (8,1,"","denominator=u:1;numerator=u:1","denominator=u:1;numerator=u:1"),
+ (9,1,"","","method=id:deflate-level-6-filter-none"),(10,1,"","profile=id:none","profile=id:none"),
+ (11,5,"png.ocio-external-reference",NONE,OCIO)]
+PNGID=("PngRgba8SrgbV1","bloom.output.png-rgba8-srgb.semantic.v1")
+EXRID=("FlatExrRgba32fLinRec709SceneV1","bloom.output.exr-rgba32f-lin-rec709-scene.semantic.v1")
+CHROMA=[0x3F23D70A,0x3EA8F5C3,0x3E99999A,0x3F19999A,0x3E19999A,0x3D75C28F,0x3EA01A37,0x3EA872B0]
+
+def run(versions):
+    out = {}
+    tiny = [f32bits(x) for x in (0.25,0.5,0.75,1.0)]
+    proc = process_identity(tiny, versions)
+    ar = analysis_digest(proc, PNGID[0], 1, PNGID[1], png_facets, REV, display_identity())
+    out["png_analysis"] = (sha(ar), len(ar))
+    ae = analysis_digest(proc, EXRID[0], 1, EXRID[1], exr_facets)
+    out["exr_analysis(tiny)"] = (sha(ae), len(ae))
+    # PNG output identity
+    payload = bytes([0,0x7F,0x80,0xFF])
+    pr = (b"BloomOutputSemanticIdentity\0" + u16(1) + hashlib.sha256(ar).digest() + blob(proc)
+          + text(PNGID[0]) + u32(1) + text(PNGID[1]) + blob(display_identity()) + u8(1)
+          + u32(1)+u32(1)+u8(1)+u8(1)+text("srgb_rec709_display")+u8(0)
+          + text("png.ihdr-srgb-idat-iend.v1") + u64(len(payload)) + payload)
+    out["png_output"] = (sha(pr), len(pr))
+    # EXR output identity: frame {-0,-1,10,1}
+    bits = [0x80000000,0xBF800000,0x41200000,0x3F800000]
+    proc2 = process_identity(bits, versions)
+    ae2 = analysis_digest(proc2, EXRID[0], 1, EXRID[1], exr_facets)
+    er = (b"BloomOutputSemanticIdentity\0" + u16(1) + hashlib.sha256(ae2).digest() + blob(proc2)
+          + text(EXRID[0]) + u32(1) + text(EXRID[1]) + blob(b"") + u8(2)
+          + i32(0)*8 + u32(0x3F800000) + u8(1) + u8(1) + text("lin_rec709_scene")
+          + b"".join(u32(c) for c in CHROMA) + text("exr.singlepart-scanline-rgba32f.v1") + u64(1)
+          + b"".join(u32(b) for b in bits))
+    out["exr_output"] = (sha(er), len(er))
+    return out
+
+if __name__ == "__main__":
+    v = tuple(int(a) for a in sys.argv[1:5])
+    for k, (d, n) in run(v).items():
+        print(f"{k:20s} {d} preimage={n}")
+```

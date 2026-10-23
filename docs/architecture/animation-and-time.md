@@ -243,9 +243,10 @@ Solid carries one `CompiledColorParameter`, a Text one `CompiledScalarParameter`
 `CompiledColorParameter` for its color, while its content stays a resolved constant. Indices are
 strong types so the wrong table cannot be addressed accidentally.
 
-`kCompiledCompositionPlanSemanticsVersion` is `5`. It moved from `1` when those source fields
-stopped being resolved constants, and TEXT-2 moved it again for the compiled text font-reference
-and box-layout fields. A plan's semantics version is part of the immutable plan identity, so cached
+`kCompiledCompositionPlanSemanticsVersion` is `9`. It moved from `1` when those source fields
+stopped being resolved constants, TEXT-2 moved it for the compiled text font-reference and
+box-layout fields, and ADR 0024 moved it to `9` because operand sampling and media selection are
+relative to an operation's time clock and Layer Output ranges are in placement-clock time. A plan's semantics version is part of the immutable plan identity, so cached
 or persisted frame identities cannot confuse either grammar.
 
 Which parameters may be animated, and with which curve kind, is one set of schema-key predicates in

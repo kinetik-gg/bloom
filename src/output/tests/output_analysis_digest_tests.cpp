@@ -1,3 +1,7 @@
+// ADR 0024: plan semantics 8 -> 9 (animation 2, evaluator 10, primitives 7; pixel bits and preimage
+// lengths unchanged). The standalone oracle in docs/architecture/color5-identity-oracle.md first
+// reproduced the previous pins (which sat at plan 8, evaluator 9) and the process-frame golden, then
+// derived the plan-9 / evaluator-10 values below.
 // MEDIA-3: s5-identity-oracle.py reproduced plan-6 pins before deriving plan 7.
 // Animation 2, evaluator 8, primitives 7, pixel bits and preimage lengths are unchanged.
 #include <bloom/output/output_analysis_digest.hpp>
@@ -118,9 +122,9 @@ constexpr core::Sha256Digest::Bytes kRevisionBytes{
 // links no Bloom code; it was re-validated against every previously checked-in golden set,
 // including both lanes' pre-merge sets, before its combined values were trusted.
 constexpr std::string_view kExpectedExrDigest =
-    "2eda964b003e29778c7a3777df9ab9b91feee0c54a6158ef1be51159470eb3f6";
+    "2c124174385cfce3bfa72aec48b7b3dba25b1996839b12829ad01864a1d933e1";
 constexpr std::string_view kExpectedPngDigest =
-    "a9b4052aac642c0552e058bb8f33dd9f30eb86d7d693bb13e0030cfb9fb898be";
+    "9b8de77e338a3aa04c94ac77d79a610a77cb7c5ff7e7eaca63af292a239c8cf9";
 
 class Expectations final {
   public:

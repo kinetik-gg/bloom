@@ -411,8 +411,11 @@ operation and scanline boundaries, and cancelled/failed evaluation publishes no 
 Operation memoization includes dimension, typography, and dependency values and retains matching
 evaluated geometry. Display preparation remains a separate typed stage.
 
-Evaluator semantics 9, primitive semantics 7, plan semantics 8, and animation semantics 2 are the
-current identities; COLOR-3 moved the plan/evaluator pair to 8/9 for image-effect lowering. TEXT-2 moved the plan version for the text reference/layout grammar and SHAPE-1
+Evaluator semantics 10, primitive semantics 7, plan semantics 9, and animation semantics 2 are the
+current identities; COLOR-3 moved the plan/evaluator pair to 8/9 for image-effect lowering, premultiplied
+pointwise-effect evaluation moved the evaluator to 10, and ADR 0024 moved the plan to 9 (operand
+sampling and media selection are relative to an operation's time clock; Layer Output ranges are in
+placement-clock time) with no pixel change. TEXT-2 moved the plan version for the text reference/layout grammar and SHAPE-1
 moved the evaluator and primitive versions for path rasterization; the two lanes landed together, so
 all three steps are reflected in one set of re-derived identity goldens. Existing point-text pixels
 remain pinned because the zero-box defaults take the old path; only new box-layout pins were added.
@@ -692,7 +695,9 @@ portable CPU reference remains the supported fallback.
 
 COLOR-3 advances compiled-plan semantics to **8** and CPU evaluator semantics to **9**.
 Animation semantics remains **2** and image primitive semantics remains **7**. Existing pixel
-fixtures are unchanged; version-bearing identity digests are independently re-derived.
+fixtures are unchanged; version-bearing identity digests are independently re-derived. ADR 0024
+later advances plan semantics to **9** and the evaluator was already at **10**; the output identity
+goldens were re-derived with the oracle in `color5-identity-oracle.md`.
 
 `CompiledImageEffect` contains its source node identity, an earlier input `OperationIndex`, a
 closed kernel variant, and bypass state. Colour-effect bounds follow their input; canvas effects
@@ -979,7 +984,7 @@ Compiled Solid dimensions, Text layout operands and Shape geometry operands are 
 bounds include the enabled fill and stroke. Layer transforms always place the
 local-bounds anchor at the authored position, and Merge always unions its inputs' bounds. Plans
 carry no historical evaluation selector. Unsupported document node versions are rejected before
-compilation. Current identity uses plan semantics 8, animation sampling 2, evaluator 9, and render
+compilation. Current identity uses plan semantics 9, animation sampling 2, evaluator 10, and render
 primitives 7. SHAPE-1 adds shape pixels and TEXT-2 adds box-text pixels, both while preserving all
 existing source pixel goldens.
 
