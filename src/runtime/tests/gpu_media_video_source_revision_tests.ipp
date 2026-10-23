@@ -22,10 +22,17 @@ void testVideoSourceRevisionBoundary(Expectations& expectations,
     auto request = requestFor(*plan);
     request.mediaSourceRevisionPolicy = bloom::runtime::MediaSourceRevisionPolicy::Retained;
     const auto cold = builder.build(plan, request);
-    expectations.expect(cold && cold.scene->mediaStatistics().sourceRevisionCaptures == 1 &&
-                            cold.scene->mediaStatistics().sourceRevisionBytesHashed ==
-                                std::filesystem::file_size(path),
-                        "cold video selection records a bounded exact-byte source capture");
+    // A cold selection captures the exact bytes once, or adopts a live verified snapshot of the
+    // same digest from its retirement domain with zero source reads (ADR 0025).
+    const auto coldCapturedOrAdopted = [&] {
+        const auto& work = cold.scene->mediaStatistics();
+        return (work.sourceRevisionCaptures == 1 &&
+                work.sourceRevisionBytesHashed == std::filesystem::file_size(path)) ||
+               (work.sourceRevisionCaptures == 0 && work.sourceRevisionCacheHits == 1 &&
+                work.sourceRevisionBytesHashed == 0);
+    };
+    expectations.expect(cold && coldCapturedOrAdopted(),
+                        "cold video selection captures exact bytes or adopts a verified snapshot");
     const auto stamp = std::filesystem::last_write_time(path);
     {
         std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
@@ -63,7 +70,7 @@ void testVideoSourceRevisionBoundary(Expectations& expectations,
         bloom::runtime::detail::prepareExportScene(finalOptions, plan, request, {}, false);
     expectations.expect(
         !missing.scene &&
-            missing.diagnosticMessage.find("Video source capture") != std::string::npos,
+            missing.diagnosticMessage.find("Video source is unavailable") != std::string::npos,
         "final preparation rejects a missing original despite decoded/prepared hits");
     const auto cpuMissing = evaluator.evaluate(plan, finalCpuRequest, {});
     expectations.expect(

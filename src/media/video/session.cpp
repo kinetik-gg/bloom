@@ -204,27 +204,45 @@ struct SnapshotRetirement final : render::detail::PackedHostRetirementNode {
 // semantics are unchanged. Another session for the same digest (thumbnails, preview, export,
 // audio) adopts the live capture instead of copying and hashing the movie again. Adoption always
 // requires the adopter's own identity-verified digest; an entry never vouches for a pathname.
+// Sharing is limited to one retirement domain: a rooted snapshot is only adopted by sessions of
+// the same composition root, so a foreign holder can never delay that root's retirement or exit.
+struct SharedSnapshot final {
+    std::weak_ptr<const platform::ReadOnlyFileSnapshot> snapshot;
+    std::weak_ptr<render::detail::PackedHostRetirementState> retirement;
+    bool rooted = false;
+};
 struct SharedSnapshots final {
     std::mutex mutex;
-    std::vector<std::weak_ptr<const platform::ReadOnlyFileSnapshot>> entries;
+    std::vector<SharedSnapshot> entries;
 };
 SharedSnapshots& sharedSnapshots() {
     static SharedSnapshots value;
     return value;
 }
-std::shared_ptr<const platform::ReadOnlyFileSnapshot> findShared(const Digest& digest) {
+bool sameDomain(const SharedSnapshot& entry,
+                const std::shared_ptr<render::detail::PackedHostRetirementState>& retirement) {
+    if (!retirement)
+        return !entry.rooted;
+    return entry.rooted && !entry.retirement.owner_before(retirement) &&
+           !retirement.owner_before(entry.retirement);
+}
+std::shared_ptr<const platform::ReadOnlyFileSnapshot>
+findShared(const Digest& digest,
+           const std::shared_ptr<render::detail::PackedHostRetirementState>& retirement) {
     auto& registry = sharedSnapshots();
     const std::lock_guard lock(registry.mutex);
     for (const auto& entry : registry.entries)
-        if (auto snapshot = entry.lock(); snapshot && snapshot->digest() == digest)
+        if (auto snapshot = entry.snapshot.lock();
+            snapshot && snapshot->digest() == digest && sameDomain(entry, retirement))
             return snapshot;
     return {};
 }
-void publishShared(const std::shared_ptr<const platform::ReadOnlyFileSnapshot>& snapshot) {
+void publishShared(const std::shared_ptr<const platform::ReadOnlyFileSnapshot>& snapshot,
+                   const std::shared_ptr<render::detail::PackedHostRetirementState>& retirement) {
     auto& registry = sharedSnapshots();
     const std::lock_guard lock(registry.mutex);
-    std::erase_if(registry.entries, [](const auto& entry) { return entry.expired(); });
-    registry.entries.push_back(snapshot);
+    std::erase_if(registry.entries, [](const auto& entry) { return entry.snapshot.expired(); });
+    registry.entries.push_back({snapshot, retirement, retirement != nullptr});
 }
 Unavailable sourceChanged() {
     return Unavailable{Error::SourceChanged, "Video changed; relink the asset in Assets"};
@@ -234,7 +252,7 @@ std::size_t sharedSourceSnapshotCount() {
     auto& registry = sharedSnapshots();
     const std::lock_guard lock(registry.mutex);
     return static_cast<std::size_t>(std::ranges::count_if(
-        registry.entries, [](const auto& entry) { return !entry.expired(); }));
+        registry.entries, [](const auto& entry) { return !entry.snapshot.expired(); }));
 }
 Result<std::shared_ptr<const platform::ReadOnlyFileSnapshot>>
 VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const Cancel& cancel,
@@ -266,7 +284,7 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
             return sourceChanged();
         auto reusable = state_->revision && state_->revision->digest() == *verified
                             ? state_->revision
-                            : findShared(*verified);
+                            : findShared(*verified, state_->retirement);
         if (reusable) {
             if (access.allowRetention)
                 state_->revision = reusable;
@@ -322,7 +340,7 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
         });
     if (access.allowRetention) {
         state_->revision = result;
-        publishShared(result);
+        publishShared(result, state_->retirement);
     }
     return result;
 }
