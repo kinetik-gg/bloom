@@ -79,6 +79,12 @@ if(BUILD_TESTING)
             "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_api.py"
             "${CMAKE_BINARY_DIR}/python" $<TARGET_FILE:bloom-cli>
         LABELS scripting python integration device)
+    # #357: several Hosts rendering through one interpreter device must exit promptly.
+    bloom_add_test(NAME bloom.scripting.python-shared-device
+        COMMAND "${Python3_EXECUTABLE}" -I
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_shared_device.py"
+            "${CMAKE_BINARY_DIR}/python"
+        LABELS scripting python integration device)
     bloom_add_test(NAME bloom.scripting.python-embedding
         COMMAND bloom-cli run "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/embedding.py"
         LABELS scripting python integration device)
