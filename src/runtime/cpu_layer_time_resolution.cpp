@@ -138,7 +138,9 @@ PreflightOutcome resolveLayerClocks(const std::shared_ptr<const CompiledComposit
                 const auto seconds = sampled ? secondsToTime(sampled->value) : std::nullopt;
                 if (!seconds)
                     return failure("Layer Time Remap cannot be represented", layer->sourceNodeId);
-                remapped = *seconds;
+                remapped = snapRemappedTime(*seconds, mapping.extentDuration
+                                                          ? mapping.extentFrameRate
+                                                          : plan->format().frameRate());
             }
             if (mapping.extentDuration) {
                 const auto wrapped =

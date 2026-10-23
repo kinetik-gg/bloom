@@ -173,6 +173,19 @@ std::optional<RationalTime> mapLayerTime(const RationalTime placementTime,
     return nanoseconds(seconds);
 }
 
+RationalTime snapRemappedTime(const RationalTime time, const document::FrameRate rate) {
+    const double frames = time.toSeconds() * rate.numerator() / rate.denominator();
+    const double nearest = std::round(frames);
+    if (!std::isfinite(nearest) || std::abs(nearest) > 1.0e15)
+        return time;
+    const auto candidate = RationalTime::create(
+        static_cast<std::int64_t>(nearest) * static_cast<std::int64_t>(rate.denominator()),
+        rate.numerator());
+    if (!candidate || std::abs(candidate->toSeconds() - time.toSeconds()) > 1.0e-9)
+        return time;
+    return *candidate;
+}
+
 std::optional<RationalTime> secondsToTime(const double seconds) {
     if (!std::isfinite(seconds))
         return std::nullopt;

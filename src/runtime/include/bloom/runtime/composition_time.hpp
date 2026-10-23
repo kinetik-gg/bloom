@@ -44,6 +44,11 @@ mapLayerTime(core::RationalTime placementTime, core::RationalTime startTime,
 // nanosecond rounding when the exact value needs more than an int64 denominator.
 [[nodiscard]] std::optional<core::RationalTime> secondsToTime(double seconds);
 
+// A Time Remap result within one nanosecond of a frame start of `rate` is that frame start, so a
+// binary64 remap that means "frame n" (an identity remap, 1/24 s) never selects frame n - 1.
+[[nodiscard]] core::RationalTime snapRemappedTime(core::RationalTime time,
+                                                  document::FrameRate rate);
+
 // Source time is (parent time - offset) * scale. Negative times hold zero. Hold and
 // PingPong use the last frame start; Loop wraps at the half-open duration. This is wrapToExtent
 // with before = Hold and after = the stored loop mode.

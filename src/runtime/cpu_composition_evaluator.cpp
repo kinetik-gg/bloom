@@ -1106,7 +1106,10 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                                       registerScalar(layer.rotation, "rotation",
                                                      ScalarDomain::Unbounded, operationSubject) &&
                                       registerScalar(layer.opacity, "opacity", ScalarDomain::Unit,
-                                                     operationSubject));
+                                                     operationSubject) &&
+                                      (!layer.time || !layer.time->timeRemap ||
+                                       registerScalar(*layer.time->timeRemap, "timeRemap",
+                                                      ScalarDomain::Unbounded, operationSubject)));
                 },
                 [&](const CompiledCompositionSource& source) {
                     static_cast<void>(registerScalar(source.timeMapping.offset, "timeOffset",
@@ -1521,7 +1524,10 @@ layerContentTime(const CompiledLayerTime& mapping, const CompiledCompositionPlan
         const auto remapped = seconds ? secondsToTime(*seconds) : std::nullopt;
         if (!remapped)
             return std::nullopt;
-        content = *remapped;
+        content = snapRemappedTime(*remapped, mapping.extentDuration ? mapping.extentFrameRate
+                                                                     : plan != nullptr
+                                                                         ? plan->format().frameRate()
+                                                                         : mapping.extentFrameRate);
     }
     if (mapping.extentDuration) {
         const auto wrapped = wrapToExtent(content, {*mapping.extentDuration, mapping.extentFrameRate},

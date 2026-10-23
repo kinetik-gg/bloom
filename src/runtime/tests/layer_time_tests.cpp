@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 using namespace bloom;
 namespace {
@@ -260,6 +261,27 @@ void audio() {
     expect(!runtime::mapAudioClipTime(clip, at(7, 2)),
            "silent after the content extent (after mode None), though the range continues");
 }
+// An identity Time Remap (two Linear keys over the range) shows exactly the same frames: its
+// binary64 seconds are snapped onto frame starts within a nanosecond.
+void identityRemap() {
+    Fixture fixture;
+    std::vector<int> plain;
+    for (std::int64_t frame = 0; frame < 48; ++frame)
+        plain.push_back(fixture.covered(at(frame, 24)));
+    commands::Transaction enable("Remap", fixture.document.snapshot().revision());
+    enable.emplace<commands::EnableLayerTimeRemap>(fixture.initial.initialCompositionId,
+                                                   fixture.layer);
+    expect(fixture.commands.execute(std::move(enable)).changed(), "Time Remap enables");
+    bool same = true;
+    for (std::int64_t frame = 0; frame < 48; ++frame)
+        same = same && fixture.covered(at(frame, 24)) == plain[static_cast<std::size_t>(frame)];
+    expect(same, "an identity Time Remap selects exactly the same frames");
+    commands::Transaction disable("Remap", fixture.document.snapshot().revision());
+    disable.emplace<commands::DisableLayerTimeRemap>(fixture.initial.initialCompositionId,
+                                                     fixture.layer);
+    expect(fixture.commands.execute(std::move(disable)).changed(), "Time Remap disables");
+    expect(fixture.covered(at(30, 24)) == plain[30], "disabling restores plain playback");
+}
 } // namespace
 
 int main() {
@@ -267,6 +289,7 @@ int main() {
         mappingCore();
         evaluation();
         audio();
+        identityRemap();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
