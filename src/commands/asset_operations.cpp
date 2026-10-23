@@ -2,8 +2,8 @@
 #include <array>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/commands/asset_operations.hpp>
-#include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/core/file_uri.hpp>
+#include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/media/audio/audio.hpp>
 #include <bloom/media/image.hpp>
 
@@ -61,7 +61,8 @@ assetMetadata(const media::provider::ProbeResult& probe) {
             {stream.id, static_cast<std::uint32_t>(stream.kind), stream.codec, stream.profile,
              stream.pixelFormat, stream.timecode, *timebase, *period, *duration, stream.width,
              stream.height, stream.sampleRate, stream.colour.primaries, stream.colour.transfer,
-             stream.colour.matrix, stream.colour.range, stream.channelLayout});
+             stream.colour.matrix, stream.colour.range, stream.fieldOrder,
+             document::timecodeTypeFor(stream.timecode), stream.channelLayout});
     }
     if (asset.width == 0)
         return Unavailable{Error::Unavailable, "The file has no video stream"};

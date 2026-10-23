@@ -85,9 +85,20 @@ struct AssetVideoStream {
     core::RationalTime timebase{}, framePeriod{}, duration{};
     std::uint32_t width = 1, height = 1, sampleRate = 0;
     std::int64_t primaries = -1, transfer = -1, matrix = -1, range = -1;
+    // Document 1.25. Coded field order (0 unknown, 1 progressive, 2 top first, 3 bottom first,
+    // 4 top coded/bottom displayed first, 5 the reverse) and timecode type (0 none, 1 non-drop,
+    // 2 drop-frame), captured at import and shown in Assets and Properties.
+    std::uint32_t fieldOrder = 0, timecodeType = 0;
     std::vector<std::string> channelLayout;
     friend bool operator==(const AssetVideoStream&, const AssetVideoStream&) = default;
 };
+// SMPTE timecode type from its text: drop-frame timecode separates frames with ';' (or '.'),
+// non-drop with ':'; no timecode is type 0. Import and the 1.23 -> 1.25 migration share it.
+[[nodiscard]] inline std::uint32_t timecodeTypeFor(const std::string_view timecode) noexcept {
+    if (timecode.empty())
+        return 0;
+    return timecode.find_first_of(";.") != std::string_view::npos ? 2U : 1U;
+}
 struct AssetRecord {
     AssetId id;
     AssetKind kind = AssetKind::Image;

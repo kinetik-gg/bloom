@@ -410,6 +410,8 @@ struct CompiledAudioSource final {
     // stream plays once.
     std::int64_t loopMode = 0;
     std::optional<TimeExtent> loopExtent{};
+    // Document 1.25: which of the asset's audio streams (0-based among its audio streams) plays.
+    std::uint32_t audioStream = 0;
 
     friend bool operator==(const CompiledAudioSource&, const CompiledAudioSource&) = default;
 };

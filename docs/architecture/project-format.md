@@ -1,7 +1,9 @@
 # Bloom Project Format
 
 The current document schema is 1.26. It advances the Image source node to v2 (optional `part` and
-`layer` parameters and a `channels` output; see "Channel Sets In Document 1.26") on top of the 1.24
+`layer` parameters and a `channels` output; see "Channel Sets In Document 1.26") on top of the 1.25
+video stream field order and timecode type and the optional Video node audio stream selection (see
+"Video Stream Metadata In Document 1.25"), the 1.24
 optional layer masks and track matte on Layer Output boundaries, the Path animation curve kind and the optional `layerMask` allocator namespace (see
 "Layer Masks In Document 1.24") on top of the 1.23 layer-owned time members (see "Layer Time In
 Document 1.23"), the 1.22 explicit external file-URI asset
@@ -1497,10 +1499,9 @@ Document `1.26` persists the multi-channel nodes of
   (`bloom.cryptomatte.layer`, at most 256 bytes) and `mattes` (`bloom.cryptomatte.mattes`, the
   Nuke-syntax matte list, at most 65536 bytes).
 
-The `1.24` → `1.26` DOM step rewrites only the node-record `schemaVersion` of `bloom.image-source`
+The `1.25` → `1.26` DOM step rewrites only the node-record `schemaVersion` of `bloom.image-source`
 nodes from 1 to 2; the new parameters are optional, so no record is inserted and every edge and
-binding is copied unchanged. The step is registered by its source version and chained from 1.24
-because the 1.25 step (video I/O) is not merged yet; when it is, this step's source becomes 1.25.
+binding is copied unchanged.
 
 ## Layer Masks In Document 1.24
 
@@ -1590,3 +1591,24 @@ file defines it: Bloom synthesizes it into the resolved config (HLG-OETF-INVERSE
 the BT.2020 to reference-primaries matrix; scene light, no OOTF) whenever the config is resolved,
 so opening a project that names it never depends on the config file. See
 [`color-management.md`](color-management.md#synthesized-rec2100-hlg-input-space).
+
+## Video Stream Metadata In Document 1.25
+
+Document 1.25 adds two members after `range` in every
+video-asset stream object, written by the canonical writer and required by the decoder:
+
+| Member | Values |
+| --- | --- |
+| `fieldOrder` | coded field order, FFmpeg numbering: 0 unknown, 1 progressive, 2 top first, 3 bottom first, 4 top coded/bottom displayed first, 5 the reverse |
+| `timecodeType` | 0 none, 1 non-drop, 2 drop-frame (`;` or `.` before the frames field); 0 exactly when `timecode` is empty |
+
+The Video node (`bloom.video-source`, schema 1) gains the optional, non-animatable integer parameter
+`bloom.video.audio-stream`, the 0-based index among the asset's audio streams that the node plays
+(0 to 255). A node without the binding plays the first audio stream; the Properties Audio Stream
+control creates the binding on first use through `bloom.video.set-audio-stream`.
+
+The 1.24 -> 1.25 migration step `migrateVideoSourceMetadataV1_24` is deterministic: it inserts
+`"fieldOrder":0` (older files never recorded it) and the `timecodeType` derived from the stream's
+timecode text, copies every other byte unchanged and writes version 1.25. The 1.26 channel-set step
+follows it.
+

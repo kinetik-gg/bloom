@@ -26,6 +26,29 @@ QString imageRangeText(const document::AssetRecord* asset) {
         .arg(asset->manifest.first)
         .arg(asset->manifest.last);
 }
+QString videoFieldOrderText(const std::uint32_t fieldOrder) {
+    switch (fieldOrder) {
+    case 1:
+        return QObject::tr("Progressive");
+    case 2:
+        return QObject::tr("Interlaced, top field first");
+    case 3:
+        return QObject::tr("Interlaced, bottom field first");
+    case 4:
+        return QObject::tr("Interlaced, top coded, bottom displayed first");
+    case 5:
+        return QObject::tr("Interlaced, bottom coded, top displayed first");
+    default:
+        return QObject::tr("Unknown");
+    }
+}
+QString videoTimecodeText(const document::AssetVideoStream& stream) {
+    if (stream.timecodeType == 0)
+        return QObject::tr("None");
+    return QObject::tr("%1 (%2)").arg(QString::fromStdString(stream.timecode),
+                                      stream.timecodeType == 2 ? QObject::tr("drop-frame")
+                                                               : QObject::tr("non-drop"));
+}
 QString imageAssetDisplayName(const document::AssetRecord& asset) {
     return QString::fromStdString(asset.name);
 }
@@ -250,22 +273,16 @@ PropertiesRowControl propertiesRowControl(std::string_view schemaKey) {
 
 QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view schemaKey) {
     if (schemaKey == document::kGradientRepeatParameterSchemaKey)
-        return {{QObject::tr("Clamp"), 0}, {QObject::tr("Repeat"), 1},
-                {QObject::tr("Mirror"), 2}};
+        return {{QObject::tr("Clamp"), 0}, {QObject::tr("Repeat"), 1}, {QObject::tr("Mirror"), 2}};
     if (schemaKey == "bloom.blur.edge")
         return {{QObject::tr("Transparent"), 0}, {QObject::tr("Clamp"), 1}};
     // #361: the closed matte selector (render::MatteSelection) in track-matte order.
     if (schemaKey == "bloom.set-alpha.channel" || schemaKey == "bloom.multiply-alpha.channel")
-        return {{QObject::tr("Alpha"), 0},
-                {QObject::tr("Red"), 1},
-                {QObject::tr("Green"), 2},
-                {QObject::tr("Blue"), 3},
-                {QObject::tr("Luma"), 4},
-                {QObject::tr("Alpha Inverted"), 5},
-                {QObject::tr("Red Inverted"), 6},
-                {QObject::tr("Green Inverted"), 7},
-                {QObject::tr("Blue Inverted"), 8},
-                {QObject::tr("Luma Inverted"), 9}};
+        return {{QObject::tr("Alpha"), 0},         {QObject::tr("Red"), 1},
+                {QObject::tr("Green"), 2},         {QObject::tr("Blue"), 3},
+                {QObject::tr("Luma"), 4},          {QObject::tr("Alpha Inverted"), 5},
+                {QObject::tr("Red Inverted"), 6},  {QObject::tr("Green Inverted"), 7},
+                {QObject::tr("Blue Inverted"), 8}, {QObject::tr("Luma Inverted"), 9}};
     QList<std::pair<QString, std::int64_t>> items;
     const auto add = [&items](const QString& text, const std::int64_t stored) {
         items.append({text, stored});

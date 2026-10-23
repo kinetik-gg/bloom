@@ -1,4 +1,5 @@
 #include "assets_editor_internal.hpp"
+#include "properties_registry_row.hpp"
 #include <QHBoxLayout>
 #include <QMetaType>
 #include <QSignalBlocker>
@@ -71,13 +72,25 @@ QString itemKey(const QTreeWidgetItem* item) {
 
 QString videoContainerTags(const document::AssetRecord& asset) {
     QStringList tags;
-    for (const auto& stream : asset.videoStreams)
+    for (const auto& stream : asset.videoStreams) {
+        if (stream.kind == 2) {
+            tags.push_back(QObject::tr("Stream %1: audio, %2 ch, %3 Hz")
+                               .arg(stream.id)
+                               .arg(stream.channelLayout.size())
+                               .arg(stream.sampleRate));
+            continue;
+        }
         tags.push_back(QObject::tr("Stream %1: primaries=%2, transfer=%3, matrix=%4, range=%5")
                            .arg(stream.id)
                            .arg(stream.primaries)
                            .arg(stream.transfer)
                            .arg(stream.matrix)
                            .arg(stream.range));
+        if (stream.kind == 1)
+            tags.push_back(
+                QObject::tr("Field order: %1; timecode: %2")
+                    .arg(videoFieldOrderText(stream.fieldOrder), videoTimecodeText(stream)));
+    }
     return tags.join(QStringLiteral("\n"));
 }
 } // namespace

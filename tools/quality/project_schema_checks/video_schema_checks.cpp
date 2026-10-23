@@ -484,8 +484,65 @@ void validateManifestSchemaV1_24(const json::Value& schema) {
     validateManifestSchemaV1_23(previous);
 }
 // Document 1.26 (ADR 0026): the Image source node schema advances to v2. Node schema versions are
-// not constrained by the document schema, so the artifact differs from 1.24 only in its version.
-// It is chained from 1.24 until the video-io 1.25 schema is merged.
+// not constrained by the document schema, so the artifact differs from 1.25 only in its version.
+// Document 1.25 (issue #367): video stream field order and timecode type. Stripping exactly
+// those additions must leave the accepted 1.24 schema.
+void validateDocumentSchemaV1_25(const json::Value& schema) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-document:1.25",
+                       "video metadata document id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.25").at("properties").at("minor"),
+                 R"({"const":25})", "video metadata document minor");
+    const auto& stream = schema.at("$defs").at("videoStream-1.25").at("properties");
+    requireExact(stream.at("fieldOrder"), R"({"type":"integer","minimum":0,"maximum":5})",
+                 "video stream field order");
+    requireExact(stream.at("timecodeType"), R"({"type":"integer","minimum":0,"maximum":2})",
+                 "video stream timecode type");
+    auto previous = schema;
+    auto& defs = previous.at("$defs");
+    for (auto& member : defs.asObject()) {
+        if (member.first == "fixedVersion-1.25") {
+            member.first = "fixedVersion-1.24";
+            member.second.at("properties").at("minor") = json::parse(R"({"const":24})");
+        } else if (member.first == "videoStream-1.25") {
+            member.first = "videoStream-1.17";
+            std::erase_if(member.second.at("properties").asObject(), [](const auto& property) {
+                return property.first == "fieldOrder" || property.first == "timecodeType";
+            });
+            auto& required = member.second.at("required").asArray();
+            std::erase_if(required, [](const auto& name) {
+                return name.asString() == "fieldOrder" || name.asString() == "timecodeType";
+            });
+        }
+    }
+    defs.at("video-1.17").at("properties").at("streams").at("items") =
+        json::parse(R"({"$ref":"#/$defs/videoStream-1.17"})");
+    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-document:1.24"));
+    previous.at("title") = json::Value(std::string("Bloom Project Document 1.24"));
+    previous.at("properties").at("schemaVersion") =
+        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.24"})");
+    validateDocumentSchemaV1_24(previous);
+}
+void validateManifestSchemaV1_25(const json::Value& schema) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-manifest:1.25",
+                       "video metadata manifest id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.25").at("properties").at("minor"),
+                 R"({"const":25})", "video metadata manifest minor");
+    auto previous = schema;
+    auto& defs = previous.at("$defs");
+    for (auto& member : defs.asObject())
+        if (member.first == "fixedVersion-1.25") {
+            member.first = "fixedVersion-1.24";
+            member.second.at("properties").at("minor") = json::parse(R"({"const":24})");
+        }
+    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-manifest:1.24"));
+    defs.at("document-1.0").at("properties").at("schemaVersion") =
+        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.24"})");
+    validateManifestSchemaV1_24(previous);
+}
 void validateDocumentSchemaV1_26(const json::Value& schema) {
     using namespace schema_detail;
     validateReferences(schema, schema);
@@ -500,13 +557,13 @@ void validateDocumentSchemaV1_26(const json::Value& schema) {
                      [](const auto& member) { return member.first == "fixedVersion-1.26"; });
     if (fixed == defs.asObject().end())
         throw std::runtime_error("document 1.26 version is missing");
-    fixed->first = "fixedVersion-1.24";
-    fixed->second.at("properties").at("minor") = json::parse(R"({"const":24})");
-    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-document:1.24"));
-    previous.at("title") = json::Value(std::string("Bloom Project Document 1.24"));
+    fixed->first = "fixedVersion-1.25";
+    fixed->second.at("properties").at("minor") = json::parse(R"({"const":25})");
+    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-document:1.25"));
+    previous.at("title") = json::Value(std::string("Bloom Project Document 1.25"));
     previous.at("properties").at("schemaVersion") =
-        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.24"})");
-    validateDocumentSchemaV1_24(previous);
+        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.25"})");
+    validateDocumentSchemaV1_25(previous);
 }
 void validateManifestSchemaV1_26(const json::Value& schema) {
     using namespace schema_detail;
@@ -522,11 +579,11 @@ void validateManifestSchemaV1_26(const json::Value& schema) {
                      [](const auto& member) { return member.first == "fixedVersion-1.26"; });
     if (fixed == defs.asObject().end())
         throw std::runtime_error("manifest 1.26 version is missing");
-    fixed->first = "fixedVersion-1.24";
-    fixed->second.at("properties").at("minor") = json::parse(R"({"const":24})");
-    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-manifest:1.24"));
+    fixed->first = "fixedVersion-1.25";
+    fixed->second.at("properties").at("minor") = json::parse(R"({"const":25})");
+    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-manifest:1.25"));
     defs.at("document-1.0").at("properties").at("schemaVersion") =
-        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.24"})");
-    validateManifestSchemaV1_24(previous);
+        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.25"})");
+    validateManifestSchemaV1_25(previous);
 }
 } // namespace bloom::quality

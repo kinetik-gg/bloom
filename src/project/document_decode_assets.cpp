@@ -150,10 +150,11 @@ bool video(const JsonValue& node, DecodeState& state, const std::string& path,
         fields[2]->kind() != JsonValueKind::Array || fields[2]->arrayElements().empty() ||
         fields[2]->arrayElements().size() > 256)
         return false;
-    constexpr std::array<std::string_view, 17> streamKeys{
-        "id",        "kind",        "codec",    "profile", "pixelFormat",  "timecode",
-        "timebase",  "framePeriod", "duration", "width",   "height",       "sampleRate",
-        "primaries", "transfer",    "matrix",   "range",   "channelLayout"};
+    constexpr std::array<std::string_view, 19> streamKeys{
+        "id",       "kind",       "codec",        "profile",      "pixelFormat",
+        "timecode", "timebase",   "framePeriod",  "duration",     "width",
+        "height",   "sampleRate", "primaries",    "transfer",     "matrix",
+        "range",    "fieldOrder", "timecodeType", "channelLayout"};
     for (const auto& value : fields[2]->arrayElements()) {
         document::AssetVideoStream stream;
         std::vector<const JsonValue*> members;
@@ -192,9 +193,12 @@ bool video(const JsonValue& node, DecodeState& state, const std::string& path,
             return false;
         if (!integer(*members[15], state, path, stream.range))
             return false;
-        if (members[16]->kind() != JsonValueKind::Array || members[16]->arrayElements().size() > 64)
+        if (!number(*members[16], state, path, stream.fieldOrder) ||
+            !number(*members[17], state, path, stream.timecodeType))
             return false;
-        for (const auto& channel : members[16]->arrayElements()) {
+        if (members[18]->kind() != JsonValueKind::Array || members[18]->arrayElements().size() > 64)
+            return false;
+        for (const auto& channel : members[18]->arrayElements()) {
             std::string name;
             if (!text(channel, state, path, name))
                 return false;

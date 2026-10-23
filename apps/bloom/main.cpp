@@ -168,11 +168,10 @@ int main(int argc, char* argv[]) try {
     const auto decodedVideoCacheBytes =
         playbackSettings.value(QStringLiteral("playback/decoded-video-cache-bytes"), 0)
             .toULongLong();
-    cpuEvaluator.setVideoCacheByteBudget(
-        decodedVideoCacheBytes != 0
-            ? static_cast<std::size_t>(decodedVideoCacheBytes)
-            : bloom::media::video::automaticDecodedVideoCacheBytes(
-                  bloom::runtime::physicalMemoryBytes()));
+    cpuEvaluator.setVideoCacheByteBudget(decodedVideoCacheBytes != 0
+                                             ? static_cast<std::size_t>(decodedVideoCacheBytes)
+                                             : bloom::media::video::automaticDecodedVideoCacheBytes(
+                                                   bloom::runtime::physicalMemoryBytes()));
     cpuEvaluator.operationCache()->setByteBudget(cacheBudgets.operationCacheByteBudget);
     // CACHE-2 (docs/architecture/media-io.md "Disk cache"): one instance shared by the evaluator
     // and the Asset Controller's proxy/thumbnail decodes below -- "the same store". Built from
@@ -563,9 +562,9 @@ int main(int argc, char* argv[]) try {
     application.setQuitOnLastWindowClosed(false);
     QSettings settings;
     auto& playback = previewController.playbackController();
-    bloom::ui::AudioPlaybackSession audioPlaybackSession(
-        compositionSession, taskScheduler, taskUiBridge, snapshotCompiler, compiledPlanCache,
-        cpuEvaluator);
+    bloom::ui::AudioPlaybackSession audioPlaybackSession(compositionSession, taskScheduler,
+                                                         taskUiBridge, snapshotCompiler,
+                                                         compiledPlanCache, cpuEvaluator);
     audioPlaybackSession.setAudioBufferSource(assetController);
     playback.setAudioDeviceControl(&audioDeviceControl);
     QObject::connect(&shutdownCoordinator,
@@ -582,7 +581,8 @@ int main(int argc, char* argv[]) try {
         std::vector<bloom::media::audio::playback::AudioClip> clips;
         clips.reserve(mix->clips.size());
         for (const auto& description : mix->clips) {
-            const auto buffer = audioPlaybackSession.audioBuffer(description.assetId);
+            const auto buffer =
+                audioPlaybackSession.audioBuffer(description.assetId, description.audioStream);
             if (buffer == nullptr)
                 continue;
             clips.push_back({.buffer = buffer,

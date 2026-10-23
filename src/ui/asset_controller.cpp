@@ -724,9 +724,10 @@ AssetController::waveform(const document::AssetId id) const {
     return found == waveforms_.end() ? nullptr : found->second;
 }
 std::shared_ptr<const media::audio::AudioBuffer>
-AssetController::audioBuffer(const document::AssetId id) const {
-    const auto* asset = session_.snapshot().project().findAsset(id);
-    const auto preview = previews_.find(id);
+AssetController::audioBuffer(const document::AssetId assetId, const std::uint32_t stream) const {
+    const runtime::AudioStreamKey id{assetId, stream};
+    const auto* asset = session_.snapshot().project().findAsset(assetId);
+    const auto preview = previews_.find(assetId);
     if (!asset || preview == previews_.end() || preview->second.missing)
         return nullptr;
     const auto digest = asset->contentDigest.toLowercaseHex();
@@ -1067,7 +1068,7 @@ void AssetController::startThumbnails() {
                 return runtime::processMemoryBudgetLedger().cacheByteBudget(audioOwner);
             };
             const auto keepAudio =
-                [&](const document::AssetId id,
+                [&](const runtime::AudioStreamKey id,
                     const std::shared_ptr<const media::audio::AudioBuffer>& buffer) {
                     const auto cost = audioBufferByteCost(*buffer);
                     const auto limit = audioLimit();
@@ -1370,19 +1371,27 @@ void AssetController::startThumbnails() {
                             keepProxy(preview.key, preview.image);
                         }
                         const auto previous = cachedPreviews.find(asset.id);
-                        const auto cachedBuffer = cachedAudio.find(asset.id);
+                        // Every audio stream of the file is decoded so each Video node can play
+                        // its selected stream (document 1.25); the waveform shows the first.
                         const auto waveform = cachedWaveforms.find(asset.id);
-                        if (available && previous != cachedPreviews.end() &&
-                            previous->second.key == preview.key &&
-                            cachedBuffer != cachedAudio.end() &&
-                            waveform != cachedWaveforms.end()) {
-                            keepAudio(asset.id, cachedBuffer->second);
-                            results->waveforms.emplace(asset.id, waveform->second);
-                        } else if (available && asset.channels > 0) {
-                            const auto audioStream = std::ranges::find(
-                                probe.streams, media::provider::MediaKind::Audio,
-                                &media::provider::StreamDescriptor::kind);
-                            const auto frames = audioStream == probe.streams.end()
+                        const bool sameSource = available && previous != cachedPreviews.end() &&
+                                                previous->second.key == preview.key;
+                        const auto audioCount = static_cast<std::uint32_t>(std::ranges::count(
+                            probe.streams, media::provider::MediaKind::Audio,
+                            &media::provider::StreamDescriptor::kind));
+                        for (std::uint32_t ordinal = 0;
+                             available && asset.channels > 0 && ordinal < audioCount; ++ordinal) {
+                            const runtime::AudioStreamKey audioKey{asset.id, ordinal};
+                            const auto cachedBuffer = cachedAudio.find(audioKey);
+                            if (sameSource && cachedBuffer != cachedAudio.end() &&
+                                (ordinal != 0 || waveform != cachedWaveforms.end())) {
+                                keepAudio(audioKey, cachedBuffer->second);
+                                if (ordinal == 0)
+                                    results->waveforms.emplace(asset.id, waveform->second);
+                                continue;
+                            }
+                            const auto* audioStream = media::video::audioStreamAt(probe, ordinal);
+                            const auto frames = audioStream == nullptr
                                                     ? std::nullopt
                                                     : media::video::audioClipFrameCount(*audioStream);
                             const auto claim = frames
@@ -1393,61 +1402,69 @@ void AssetController::startThumbnails() {
                                                           .frames = *frames},
                                                          media::provider::Limits::audioSamples)
                                                    : std::nullopt;
-                            if (claim) {
-                                std::shared_ptr<render::GpuProcessingPhaseLease> phase;
-                                std::optional<render::ProcessingHostStorageToken> scratch;
-                                if (audioAdmission.policy) {
-                                    auto granted = audioAdmission.policy->reserve(
-                                        {.output = runtime::GpuProcessingPhaseOutput::FloatFinal,
-                                         .pixels = 0,
-                                         .metadataBytes = claim->retainedBytes,
-                                         .sourceFree = true,
-                                         .native = false});
-                                    if (granted.status ==
-                                        render::GpuProcessingPhaseAdmission::AwaitingCapacity)
-                                        results->retryAudioAfterCapacitySample = true;
-                                    if (granted.lease) {
-                                        phase = std::move(granted.lease);
-                                        auto scratchGrant = render::ProcessingHostStorageToken::reserve(
-                                            phase, claim->scratchBytes);
-                                        scratch = std::move(scratchGrant.token);
-                                    }
-                                }
-                                const auto enoughStandalone = !audioAdmission.policy &&
-                                    claim->retainedBytes + claim->scratchBytes <=
-                                        audioAdmission.standaloneByteAllowance;
-                                if ((phase && scratch) || enoughStandalone) {
-                                    auto decoded = media::video::decodeAudioClip(
-                                        video(), probe, claim->samples,
-                                        [&] { return context.isCancellationRequested(); });
-                                    if (auto* audio = std::get_if<media::audio::AudioBuffer>(&decoded)) {
-                                        const auto summary = media::audio::waveformSummary(*audio, 256);
-                                        if (!summary.value())
-                                            preview.audioDiagnostic =
-                                                media::audio::describeAudioError(*summary.error());
-                                        else if (auto buffer =
-                                                     adoptAudioBuffer(std::move(*audio), phase)) {
-                                            results->waveforms.emplace(
-                                                asset.id,
-                                                std::make_shared<const media::audio::WaveformSummary>(
-                                                    *summary.value()));
-                                            keepAudio(asset.id, buffer);
-                                        } else
-                                            preview.audioDiagnostic =
-                                                "Video audio storage exceeded its admitted phase";
-                                    } else
-                                        preview.audioDiagnostic =
-                                            std::get<media::provider::Unavailable>(decoded).detail;
-                                } else {
-                                    preview.audioDiagnostic =
-                                        "Video audio requests " +
-                                        std::to_string(claim->retainedBytes + claim->scratchBytes) +
-                                        " processing bytes; admission was refused";
-                                }
-                            } else {
+                            if (!claim) {
                                 preview.audioDiagnostic =
                                     "Video audio sample count exceeds addressable storage";
+                                continue;
                             }
+                            std::shared_ptr<render::GpuProcessingPhaseLease> phase;
+                            std::optional<render::ProcessingHostStorageToken> scratch;
+                            if (audioAdmission.policy) {
+                                auto granted = audioAdmission.policy->reserve(
+                                    {.output = runtime::GpuProcessingPhaseOutput::FloatFinal,
+                                     .pixels = 0,
+                                     .metadataBytes = claim->retainedBytes,
+                                     .sourceFree = true,
+                                     .native = false});
+                                if (granted.status ==
+                                    render::GpuProcessingPhaseAdmission::AwaitingCapacity)
+                                    results->retryAudioAfterCapacitySample = true;
+                                if (granted.lease) {
+                                    phase = std::move(granted.lease);
+                                    auto scratchGrant = render::ProcessingHostStorageToken::reserve(
+                                        phase, claim->scratchBytes);
+                                    scratch = std::move(scratchGrant.token);
+                                }
+                            }
+                            const auto enoughStandalone =
+                                !audioAdmission.policy &&
+                                claim->retainedBytes + claim->scratchBytes <=
+                                    audioAdmission.standaloneByteAllowance;
+                            if (!(phase && scratch) && !enoughStandalone) {
+                                preview.audioDiagnostic =
+                                    "Video audio requests " +
+                                    std::to_string(claim->retainedBytes + claim->scratchBytes) +
+                                    " processing bytes; admission was refused";
+                                continue;
+                            }
+                            auto decoded = media::video::decodeAudioClip(
+                                video(), probe, claim->samples,
+                                [&] { return context.isCancellationRequested(); }, ordinal);
+                            auto* audio = std::get_if<media::audio::AudioBuffer>(&decoded);
+                            if (audio == nullptr) {
+                                preview.audioDiagnostic =
+                                    std::get<media::provider::Unavailable>(decoded).detail;
+                                continue;
+                            }
+                            std::optional<media::audio::WaveformSummary> summary;
+                            if (ordinal == 0) {
+                                const auto computed = media::audio::waveformSummary(*audio, 256);
+                                if (!computed.value()) {
+                                    preview.audioDiagnostic =
+                                        media::audio::describeAudioError(*computed.error());
+                                    continue;
+                                }
+                                summary = *computed.value();
+                            }
+                            if (auto buffer = adoptAudioBuffer(std::move(*audio), phase)) {
+                                if (summary)
+                                    results->waveforms.emplace(
+                                        asset.id, std::make_shared<const media::audio::WaveformSummary>(
+                                                      std::move(*summary)));
+                                keepAudio(audioKey, buffer);
+                            } else
+                                preview.audioDiagnostic =
+                                    "Video audio storage exceeded its admitted phase";
                         }
                         results->assets.emplace(asset.id, std::move(preview));
                     } else if (asset.kind == document::AssetKind::Audio) {
@@ -1465,13 +1482,13 @@ void AssetController::startThumbnails() {
                             const auto digest = asset.contentDigest.toLowercaseHex();
                             preview.key.assign(digest.begin(), digest.end());
                             const auto oldPreview = cachedPreviews.find(asset.id);
-                            const auto oldBuffer = cachedAudio.find(asset.id);
+                            const auto oldBuffer = cachedAudio.find(runtime::AudioStreamKey{asset.id});
                             const auto oldWaveform = cachedWaveforms.find(asset.id);
                             if (oldPreview != cachedPreviews.end() &&
                                 oldPreview->second.key == preview.key &&
                                 oldBuffer != cachedAudio.end() &&
                                 oldWaveform != cachedWaveforms.end()) {
-                                keepAudio(asset.id, oldBuffer->second);
+                                keepAudio(runtime::AudioStreamKey{asset.id}, oldBuffer->second);
                                 results->waveforms.emplace(asset.id, oldWaveform->second);
                                 preview.missing = false;
                             } else {
@@ -1556,7 +1573,7 @@ void AssetController::startThumbnails() {
                                                         std::make_shared<const media::audio::
                                                                                  WaveformSummary>(
                                                             std::move(*summary.value())));
-                                                    keepAudio(asset.id, buffer);
+                                                    keepAudio(runtime::AudioStreamKey{asset.id}, buffer);
                                                     preview.missing = false;
                                                 } else {
                                                     preview.audioDiagnostic =

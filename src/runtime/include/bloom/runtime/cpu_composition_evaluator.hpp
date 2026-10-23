@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/runtime/audio_stream_key.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/row_band_execution.hpp>
@@ -58,6 +59,8 @@ struct AudioClipDescription final {
     // after every mapping above to the clip's content time; see wrapSourceAudioTime.
     std::int64_t sourceLoopMode = 0;
     std::optional<TimeExtent> sourceLoopExtent{};
+    // The asset audio stream the clip plays (0-based among the asset's audio streams).
+    std::uint32_t audioStream = 0;
 
     friend bool operator==(const AudioClipDescription&, const AudioClipDescription&) = default;
 };

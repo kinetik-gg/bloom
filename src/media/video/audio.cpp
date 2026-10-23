@@ -18,14 +18,24 @@ audioClipFrameCount(const provider::StreamDescriptor& stream) noexcept {
     // A positive fractional tail is still an audible frame in range/export playback.
     return static_cast<std::uint64_t>(std::ceil(samples));
 }
+const provider::StreamDescriptor* audioStreamAt(const provider::ProbeResult& probe,
+                                                const std::uint32_t ordinal) noexcept {
+    std::uint32_t seen = 0;
+    for (const auto& stream : probe.streams)
+        if (stream.kind == provider::MediaKind::Audio && seen++ == ordinal)
+            return &stream;
+    return nullptr;
+}
 provider::Result<audio::AudioBuffer> decodeAudioClip(VideoDecodeSession& session,
                                                      const provider::ProbeResult& probe,
                                                      const std::uint64_t admittedSamples,
-                                                     const Cancel& cancel) {
-    const auto stream = std::ranges::find(probe.streams, provider::MediaKind::Audio,
-                                          &provider::StreamDescriptor::kind);
-    if (stream == probe.streams.end())
-        return provider::Unavailable{provider::Error::Unavailable, "Video has no audio stream"};
+                                                     const Cancel& cancel,
+                                                     const std::uint32_t audioStream) {
+    const auto* stream = audioStreamAt(probe, audioStream);
+    if (stream == nullptr)
+        return provider::Unavailable{provider::Error::Unavailable,
+                                     audioStream == 0 ? "Video has no audio stream"
+                                                      : "The selected audio stream does not exist"};
     const auto frames = audioClipFrameCount(*stream);
     if (!frames || *frames > admittedSamples / stream->channelLayout.size() ||
         *frames > std::numeric_limits<std::size_t>::max() /

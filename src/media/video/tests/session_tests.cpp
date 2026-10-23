@@ -364,10 +364,14 @@ void timingAndLayout(const std::filesystem::path& directory) {
         const auto decoded = session.frame(probe, 0, 3, 0, nullptr);
         check(std::holds_alternative<Frame>(decoded), "interlaced decode is no longer refused");
         const auto& plane = std::get<Frame>(decoded)->planes[0];
-        const auto background = high(plane, 0, 2);
-        check(std::abs(static_cast<int>(background) - static_cast<int>(16 + 3 * 3)) <= 2 &&
-                  std::abs(static_cast<int>(high(plane, 0, 1)) - static_cast<int>(background)) <= 1,
-              "the dominant (top) field is kept and the other field rebuilt from it");
+        // FFmpeg bwdif keeps the dominant (top) field and rebuilds the bottom field lines, so the
+        // flickering bottom field (40 in odd frames) does not comb through the picture.
+        for (const auto y : {2U, 20U, 40U})
+            check(std::abs(static_cast<int>(high(plane, 0, y)) - (16 + 3 * 3)) <= 1,
+                  "the dominant field lines are kept");
+        for (const auto y : {3U, 21U, 41U})
+            check(std::abs(static_cast<int>(high(plane, 0, y)) - 40) > 8,
+                  "the other field is reconstructed instead of woven");
     }
     {
         video::VideoDecodeSession session(directory / "rgb-tiff.mov");

@@ -3,6 +3,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/commands/video_source_operations.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/video/audio.hpp>
@@ -167,6 +168,29 @@ void run(const std::filesystem::path& directory) {
                           .apply(draft)
                           .status == commands::OperationStatus::Applied,
                   "video start frame offsets both ports");
+    // Document 1.24: import records the timecode type and field order; a Video node selects
+    // which audio stream plays, creating its parameter on first use, and refuses a missing one.
+    check(asset.videoStreams.front().timecode == "01:00:00:00" &&
+              asset.videoStreams.front().timecodeType == 1 &&
+              asset.videoStreams.front().fieldOrder <= 1,
+          "import records timecode type and field order");
+    const auto* videoNode = [&]() -> const document::NodeRecord* {
+        for (const auto& node : draft.project().findComposition(composition)->graph().nodes())
+            if (node.typeId == "bloom.video-source")
+                return &node;
+        return nullptr;
+    }();
+    check(videoNode != nullptr, "video source node");
+    const auto videoNodeId = videoNode->id;
+    check(commands::SetVideoAudioStream(composition, videoNodeId, 1).apply(draft).status ==
+              commands::OperationStatus::Rejected,
+          "a missing audio stream is refused");
+    check(commands::SetVideoAudioStream(composition, videoNodeId, 0).apply(draft).status ==
+              commands::OperationStatus::Applied,
+          "the first stream selection creates the node's audio stream parameter");
+    check(commands::SetVideoAudioStream(composition, videoNodeId, 0).apply(draft).status ==
+              commands::OperationStatus::NoChange,
+          "re-selecting the same stream is no change");
     check(document.commit(snapshot.revision(), std::move(draft)).committed(),
           "video document validates");
     runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
@@ -247,6 +271,18 @@ void run(const std::filesystem::path& directory) {
     check(restored.schemaMinor >= 21 &&
               *restored.document->snapshot().project().findAsset(asset.id) == asset,
           "video streams, timing and identity round trip");
+    const auto* restoredNode = restored.document->snapshot()
+                                   .project()
+                                   .findComposition(composition)
+                                   ->graph()
+                                   .findNode(videoNodeId);
+    check(restoredNode != nullptr &&
+              std::ranges::any_of(restoredNode->parameters,
+                                  [](const auto& binding) {
+                                      return binding.role ==
+                                             document::kVideoAudioStreamParameterRole;
+                                  }),
+          "the Video node's audio stream selection round trips");
     {
         std::ofstream changed(videoPath, std::ios::app | std::ios::binary);
         changed << "changed";

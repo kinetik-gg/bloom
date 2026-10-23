@@ -153,7 +153,8 @@ library-only, LGPL-2.1-or-later, disables GPL/nonfree/version-3/network/autodete
 external codec or crypto libraries. Its closed preview allow-list covers MOV, Matroska, MXF, MPEG-TS,
 WAV, MP3, and AAC demuxing; MOV, Matroska, MXF, and WAV muxing; H.264/HEVC, ProRes, DNxHD, MJPEG,
 TIFF, AAC, MP3, and explicit PCM-family decoding; ProRes KS, DNxHD, PCM-family, AAC, and TIFF
-encoding; the required parsers/bitstream filters; and the `file` protocol. VA-API H.264/HEVC
+encoding; the required parsers/bitstream filters; the libavfilter `buffer`, `buffersink` and
+`bwdif` filters for deinterlacing; and the `file` protocol. VA-API H.264/HEVC
 hardware acceleration is enabled when `libva` is available and can be disabled for a host without
 the development files. On x86 and x86-64 hosts FFmpeg's hand-written SIMD is enabled: the superbuild
 assembles it with NASM 2.16.03, a source-built, build-host-only tool installed outside the
@@ -1458,15 +1459,20 @@ rest of Bloom sees display geometry:
 - Sample aspect ratio. A non-square SAR (container value first, then the bitstream's) is resampled
   horizontally to square pixels with the same bit-exact bilinear `sws` pass; probe reports the
   square-pixel width.
-- Interlace. An interlaced frame keeps its temporally first field (top or bottom per the frame's
-  field order) and rebuilds the other field's lines as the mean of the neighbouring kept lines.
-  This is deterministic single-frame field interpretation, not temporal deinterlacing.
+- Interlace. Interlaced frames are deinterlaced with FFmpeg's `bwdif` filter (libavfilter, enabled
+  in the intake with `buffer` and `buffersink`), field-aware and honouring each frame's field order
+  (`parity=auto`, one output frame per frame). The retained decoder feeds it the previous decoded
+  frame, the requested frame and the next one, which it keeps as a lookahead for the next forward
+  request; at a seek point or the stream end bwdif uses only the neighbours that exist. Hardware
+  frames that are interlaced fall back to the software decoder.
 - RGB-coded streams (the intake's TIFF-in-MOV) decode to one packed RGBA16 plane with their
   identity matrix tag and are interpreted only through a config input space. The TIFF decoder runs
   without `AV_EF_EXPLODE`, which otherwise rejects descriptive tags its own encoder writes.
 
-Drop-frame timecode is preserved in the timecode string (`;`); field order, an explicit timecode
-type, and selecting among several audio streams need document fields and UI that other lanes own.
+Document 1.25 records each video stream's field order and timecode type (drop-frame or non-drop),
+shown in the Assets tooltip and in the Video node's Properties, and the Video node can choose which
+of the asset's audio streams it plays (Properties, Audio Stream). Preview and export decode and key
+audio buffers by asset and stream.
 
 Audio requests name a starting sample and exact count; decoding from
 the beginning preserves codec priming and refuses timestamp gaps or overlaps. A retained worker

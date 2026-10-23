@@ -122,6 +122,9 @@
 --enable-bsf=pcm_rechunk
 --enable-bsf=remove_extradata
 --enable-bsf=vp9_superframe
+--enable-filter=buffer
+--enable-filter=buffersink
+--enable-filter=bwdif
 --enable-protocol=file
 --enable-libopenh264
 --enable-vaapi

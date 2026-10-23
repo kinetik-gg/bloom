@@ -174,10 +174,10 @@ void olderDocumentsMigrateAndRefuseNewMembers() {
             project::migrateDocumentDom(parsed.document()->root(), {1, 23}, {1, 26},
                                         project::kProductionDocumentMigrationSteps, {}, operation);
         expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-                   migrated.stepsApplied() == 2 &&
+                   migrated.stepsApplied() == 3 &&
                    static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
-               "the 1.23 -> 1.24 step and the 1.24 -> 1.26 channel-set step only advance the "
-               "version");
+               "the 1.23 -> 1.24 mask, 1.24 -> 1.25 video-metadata and 1.25 -> 1.26 channel-set "
+               "steps only advance the version");
     }
 
     Fixture fixture;

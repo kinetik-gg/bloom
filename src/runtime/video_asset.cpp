@@ -17,6 +17,7 @@ provider::ProbeResult probeMetadata(const document::AssetRecord& asset) {
         descriptor.profile = stream.profile;
         descriptor.pixelFormat = stream.pixelFormat;
         descriptor.timecode = stream.timecode;
+        descriptor.fieldOrder = static_cast<std::uint8_t>(stream.fieldOrder);
         descriptor.timebase = {stream.timebase.numerator(), stream.timebase.denominator()};
         descriptor.rate = {stream.framePeriod.denominator(), stream.framePeriod.numerator()};
         descriptor.duration = {stream.duration.numerator(), stream.duration.denominator()};

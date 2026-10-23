@@ -62,6 +62,11 @@
       "cmakeOptions": [],
       "featureDecisions": [
         {
+          "id": "bloom.feature.ffmpeg-bwdif",
+          "state": "enabled",
+          "reason": "libavfilter bwdif with buffer/buffersink: field-aware deinterlacing of interlaced video in the worker"
+        },
+        {
           "id": "bloom.feature.ffmpeg-openh264",
           "state": "enabled",
           "reason": "OpenH264 2.6.0 is built only as a private FFmpeg link-time stub; Cisco's runtime binary is fetched separately"

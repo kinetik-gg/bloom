@@ -578,6 +578,112 @@ inline constexpr NodeSchemaRewrite kChannelSetRewrite{
     append(output, "}");
     return true;
 }
+// Video source metadata (-> 1.25): every video-asset stream gains "fieldOrder" (0, unknown;
+// older files never recorded it) and "timecodeType" derived from its timecode text, both after
+// "range". Every other byte is copied unchanged.
+[[nodiscard]] bool emitVideoMetadataStream(const JsonValue& stream, Buffer& output) {
+    if (stream.kind() != JsonValueKind::Object)
+        return false;
+    const auto* timecode = stream.findMember("timecode");
+    const auto text = timecode ? timecode->asString() : std::nullopt;
+    if (!text || stream.findMember("range") == nullptr ||
+        stream.findMember("fieldOrder") != nullptr)
+        return false;
+    append(output, "{");
+    bool first = true;
+    for (const auto& member : stream.objectMembers()) {
+        if (!first)
+            append(output, ",");
+        first = false;
+        if (!quoted(output, member.key()))
+            return false;
+        append(output, ":");
+        if (!copyValue(member.value(), output))
+            return false;
+        if (member.key() == "range") {
+            append(output, ",\"fieldOrder\":0,\"timecodeType\":");
+            append(output, std::array<std::string_view, 3>{"0", "1",
+                                                           "2"}[document::timecodeTypeFor(*text)]);
+        }
+    }
+    append(output, "}");
+    return true;
+}
+
+[[nodiscard]] bool emitVideoMetadataObject(const JsonValue& object, const std::string_view key,
+                                           const auto& rewrite, Buffer& output) {
+    if (object.kind() != JsonValueKind::Object)
+        return false;
+    append(output, "{");
+    bool first = true;
+    for (const auto& member : object.objectMembers()) {
+        if (!first)
+            append(output, ",");
+        first = false;
+        if (!quoted(output, member.key()))
+            return false;
+        append(output, ":");
+        if (member.key() == key ? !rewrite(member.value(), output)
+                                : !copyValue(member.value(), output))
+            return false;
+    }
+    append(output, "}");
+    return true;
+}
+
+[[nodiscard]] bool emitVideoMetadataArray(const JsonValue& array, const auto& element,
+                                          Buffer& output) {
+    if (array.kind() != JsonValueKind::Array)
+        return false;
+    append(output, "[");
+    bool first = true;
+    for (const auto& value : array.arrayElements()) {
+        if (!first)
+            append(output, ",");
+        first = false;
+        if (!element(value, output))
+            return false;
+    }
+    append(output, "]");
+    return true;
+}
+
+[[nodiscard]] bool emitVideoMetadataDocument(const JsonValue& root, Buffer& output) {
+    const auto streams = [](const JsonValue& value, Buffer& out) {
+        return emitVideoMetadataArray(value, emitVideoMetadataStream, out);
+    };
+    const auto video = [&](const JsonValue& value, Buffer& out) {
+        return emitVideoMetadataObject(value, "streams", streams, out);
+    };
+    const auto asset = [&](const JsonValue& value, Buffer& out) {
+        return emitVideoMetadataObject(value, "video", video, out);
+    };
+    const auto assets = [&](const JsonValue& value, Buffer& out) {
+        return emitVideoMetadataArray(value, asset, out);
+    };
+    const auto project = [&](const JsonValue& value, Buffer& out) {
+        return emitVideoMetadataObject(value, "assets", assets, out);
+    };
+    if (root.kind() != JsonValueKind::Object)
+        return false;
+    append(output, "{");
+    bool first = true;
+    for (const auto& member : root.objectMembers()) {
+        if (!first)
+            append(output, ",");
+        first = false;
+        if (!quoted(output, member.key()))
+            return false;
+        append(output, ":");
+        if (member.key() == "schemaVersion")
+            append(output, "{\"major\":1,\"minor\":25}");
+        else if (member.key() == "project" ? !project(member.value(), output)
+                                           : !copyValue(member.value(), output))
+            return false;
+    }
+    append(output, "}");
+    return true;
+}
 } // namespace
 
 MigrationStepOutcome migrateNodeLayoutV1_0(const JsonValue& root,
@@ -750,10 +856,17 @@ MigrationStepOutcome migrateLayerMasksV1_23(const JsonValue& root, std::pmr::mem
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }
-MigrationStepOutcome migrateChannelSetsV1_24(const JsonValue& root, std::pmr::memory_resource*,
+MigrationStepOutcome migrateChannelSetsV1_25(const JsonValue& root, std::pmr::memory_resource*,
                                              Buffer& output) {
-    if (!sourceVersionIs(root, "24") || !emitNodeSchemaDocument(root, kChannelSetRewrite, output))
+    if (!sourceVersionIs(root, "25") || !emitNodeSchemaDocument(root, kChannelSetRewrite, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }
+MigrationStepOutcome migrateVideoSourceMetadataV1_24(const JsonValue& root,
+                                                     std::pmr::memory_resource*, Buffer& output) {
+    if (!sourceVersionIs(root, "24") || !emitVideoMetadataDocument(root, output))
+        return MigrationStepOutcome::failure("/project/assets");
+    return MigrationStepOutcome::success();
+}
+
 } // namespace bloom::project

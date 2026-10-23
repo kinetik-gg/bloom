@@ -15,6 +15,9 @@
 #include <thread>
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavfilter/avfilter.h>
+#include <libavfilter/buffersink.h>
+#include <libavfilter/buffersrc.h>
 #include <libavformat/avformat.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/display.h>
@@ -245,6 +248,9 @@ ProbeResult probe(Input& input, const Digest& digest, std::uint64_t bytes) {
                            ? PixelFormat::Rgba16
                            : PixelFormat::Yuva444p16;
             s.colour = colour(p);
+            s.fieldOrder = p.field_order >= AV_FIELD_UNKNOWN && p.field_order <= AV_FIELD_BT
+                               ? static_cast<std::uint8_t>(p.field_order)
+                               : 0;
         } else if (p.codec_type == AVMEDIA_TYPE_AUDIO) {
             s.kind = MediaKind::Audio;
             require(p.sample_rate > 0 && p.sample_rate <= static_cast<int>(Limits::sampleRate),
@@ -388,42 +394,6 @@ bool next(Input& input, unsigned stream, bool& eof) {
         }
     }
 }
-// Field-aware interpretation of an interlaced frame: the temporally first (dominant) field is kept
-// and each line of the other field is rebuilt as the mean of the dominant-field lines above and
-// below it (edges repeat). The result is one progressive picture at the frame's presentation time,
-// deterministic and without temporal reconstruction.
-void deinterlace(FrameProduct& product, const bool topFieldFirst) {
-    const unsigned keep = topFieldFirst ? 0U : 1U;
-    // Every non-8-bit product stores 16-bit little-endian samples.
-    const bool wide = product.format != PixelFormat::Yuv420p8;
-    for (auto& plane : product.planes) {
-        const auto samples = plane.stride / (wide ? 2U : 1U);
-        if (plane.height < 2)
-            continue;
-        auto* bytes = reinterpret_cast<std::uint8_t*>(plane.bytes.data());
-        const auto sample = [&](std::uint32_t row, std::uint32_t x) -> unsigned {
-            const auto* at =
-                bytes + static_cast<std::size_t>(row) * plane.stride + x * (wide ? 2U : 1U);
-            return wide ? static_cast<unsigned>(at[0] | (at[1] << 8U)) : at[0];
-        };
-        for (std::uint32_t y = 0; y < plane.height; ++y) {
-            if (y % 2U == keep)
-                continue;
-            // Nearest dominant-field rows above and below (within the plane).
-            const auto above = y == 0 ? y + 1 : y - 1;
-            const auto below = y + 1 < plane.height ? y + 1 : above;
-            auto* row = bytes + static_cast<std::size_t>(y) * plane.stride;
-            for (std::uint32_t x = 0; x < samples; ++x) {
-                const auto value = (sample(above, x) + sample(below, x) + 1U) / 2U;
-                if (wide) {
-                    row[2U * x] = static_cast<std::uint8_t>(value & 255U);
-                    row[2U * x + 1U] = static_cast<std::uint8_t>(value >> 8U);
-                } else
-                    row[x] = static_cast<std::uint8_t>(value);
-            }
-        }
-    }
-}
 // Applies a display orientation to full-resolution planes (16-bit samples, RGBA16 pixels).
 void orient(FrameProduct& product, const Orientation turn) {
     for (auto& plane : product.planes) {
@@ -465,8 +435,63 @@ void orient(FrameProduct& product, const Orientation turn) {
         plane = std::move(rotated);
     }
 }
-FrameProduct frame(Input& input, const AVStream& stream) {
-    auto* decoded = input.frame;
+using FrameHandle = std::shared_ptr<AVFrame>;
+FrameHandle cloneFrame(const AVFrame* source) {
+    auto* copy = av_frame_clone(source);
+    require(copy != nullptr, "Frame reference failed", Error::Oversized);
+    return {copy, [](AVFrame* frame) { av_frame_free(&frame); }};
+}
+// FFmpeg's bwdif (Bob Weaver) deinterlacer, field-aware and honouring each frame's field order
+// (parity=auto), applied to one interlaced frame with its decoded neighbours. bwdif needs the
+// previous and next frame; at a seek point or the stream end it uses only what exists.
+FrameHandle bwdif(const AVStream& stream, const FrameHandle& previous, const FrameHandle& current,
+                  const FrameHandle& following) {
+    struct Graph final {
+        AVFilterGraph* graph = avfilter_graph_alloc();
+        ~Graph() { avfilter_graph_free(&graph); }
+    } owner;
+    require(owner.graph != nullptr, "Deinterlacer allocation failed", Error::Oversized);
+    std::array<char, 256> args{};
+    std::snprintf(args.data(), args.size(),
+                  "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=1/1", current->width,
+                  current->height, current->format, stream.time_base.num, stream.time_base.den);
+    AVFilterContext *source = nullptr, *deinterlace = nullptr, *sink = nullptr;
+    require(avfilter_graph_create_filter(&source, avfilter_get_by_name("buffer"), "in", args.data(),
+                                         nullptr, owner.graph) >= 0 &&
+                avfilter_graph_create_filter(&deinterlace, avfilter_get_by_name("bwdif"), "bwdif",
+                                             "mode=send_frame:parity=auto:deint=all", nullptr,
+                                             owner.graph) >= 0 &&
+                avfilter_graph_create_filter(&sink, avfilter_get_by_name("buffersink"), "out",
+                                             nullptr, nullptr, owner.graph) >= 0 &&
+                avfilter_link(source, 0, deinterlace, 0) >= 0 &&
+                avfilter_link(deinterlace, 0, sink, 0) >= 0 &&
+                avfilter_graph_config(owner.graph, nullptr) >= 0,
+            "Deinterlacer unavailable", Error::Unavailable);
+    for (const auto* frame : {previous.get(), current.get(), following.get()}) {
+        if (frame == nullptr)
+            continue;
+        auto input = cloneFrame(frame);
+        input->pts = frame->best_effort_timestamp;
+        require(av_buffersrc_add_frame_flags(source, input.get(), 0) >= 0,
+                "Deinterlacer input refused");
+    }
+    if (!following)
+        require(av_buffersrc_add_frame(source, nullptr) >= 0, "Deinterlacer flush refused");
+    auto output = cloneFrame(current.get());
+    av_frame_unref(output.get());
+    while (true) {
+        const auto status = av_buffersink_get_frame(sink, output.get());
+        require(status >= 0, "Deinterlaced frame unavailable", Error::Unavailable);
+        // bwdif halves the time base (it can emit one frame per field); compare in stream time.
+        if (av_rescale_q(output->pts, av_buffersink_get_time_base(sink), stream.time_base) ==
+            current->best_effort_timestamp) {
+            output->pts = output->best_effort_timestamp = current->best_effort_timestamp;
+            return output;
+        }
+        av_frame_unref(output.get());
+    }
+}
+FrameProduct frame(Input& input, const AVStream& stream, AVFrame* decoded) {
     if (decoded->format == AV_PIX_FMT_VAAPI) {
         av_frame_unref(input.transfer);
         require(av_hwframe_transfer_data(input.transfer, decoded, 0) >= 0,
@@ -475,8 +500,6 @@ FrameProduct frame(Input& input, const AVStream& stream) {
         decoded = input.transfer;
     }
     extent(decoded->width, decoded->height);
-    const bool interlaced = (decoded->flags & AV_FRAME_FLAG_INTERLACED) != 0;
-    const bool topFieldFirst = (decoded->flags & AV_FRAME_FLAG_TOP_FIELD_FIRST) != 0;
     FrameProduct product;
     product.pts = timestamp(decoded->best_effort_timestamp, stream.time_base);
     product.colour = {decoded->color_primaries, decoded->color_trc, decoded->colorspace,
@@ -595,8 +618,6 @@ FrameProduct frame(Input& input, const AVStream& stream) {
                           data.data(), strides.data()) == decoded->height,
                 "Pixel layout conversion failed");
     }
-    if (interlaced)
-        deinterlace(product, topFieldFirst);
     if (!turn.identity())
         orient(product, turn);
     assignPlaneDigests(product.planes);
@@ -611,6 +632,10 @@ struct VideoCursor final {
     // Presentation timestamp of the last frame this decoder returned.
     std::optional<std::int64_t> position;
     bool indexed = false;
+    // The last decoded frame before the current position, and a frame decoded past it. Both feed
+    // the deinterlacer; the lookahead is served to the next forward request before decoding.
+    FrameHandle previous;
+    FrameHandle lookahead;
     // Packet presentation times do not follow the nominal cadence (phone, screen and OBS
     // recordings). Requests then name a slot on the nominal grid instead of a packet ordinal.
     bool variable = false;
@@ -712,25 +737,49 @@ FrameProduct video(Input& input, const CallRequest& request, AVBufferRef* device
     av_frame_unref(input.frame);
     if (!continueForward(cursor, target)) {
         cursor.position.reset();
+        cursor.previous.reset();
+        cursor.lookahead.reset();
         require(av_seek_frame(input.format, static_cast<int>(request.stream),
                               seekTimestamp(cursor, target), AVSEEK_FLAG_BACKWARD) >= 0,
                 "Cannot seek video", Error::Unavailable);
         avcodec_flush_buffers(input.codec);
         cursor.eof = false;
     }
-    while (next(input, request.stream, cursor.eof)) {
+    const auto pull = [&] {
+        if (cursor.lookahead) {
+            av_frame_unref(input.frame);
+            av_frame_move_ref(input.frame, cursor.lookahead.get());
+            cursor.lookahead.reset();
+            return true;
+        }
+        return next(input, request.stream, cursor.eof);
+    };
+    while (pull()) {
         const auto pts = input.frame->best_effort_timestamp;
         require(pts != AV_NOPTS_VALUE, "Frame timestamp unavailable", Error::Unavailable);
         if (device && input.frame->format != AV_PIX_FMT_VAAPI)
             throw HardwareMiss{};
         if (pts == target) {
-            auto product = frame(input, stream);
+            auto current = cloneFrame(input.frame);
             cursor.position = pts;
-            return product;
+            if ((current->flags & AV_FRAME_FLAG_INTERLACED) == 0) {
+                cursor.previous = current;
+                return frame(input, stream, current.get());
+            }
+            require(!device, "Interlaced video is deinterlaced by the software decoder",
+                    Error::Unavailable);
+            FrameHandle following;
+            if (pull())
+                following = cloneFrame(input.frame);
+            const auto deinterlaced = bwdif(stream, cursor.previous, current, following);
+            cursor.previous = current;
+            cursor.lookahead = following;
+            return frame(input, stream, deinterlaced.get());
         }
         require(pts < target, "Exact frame timestamp unavailable (variable frame rate)",
                 Error::Unavailable);
         cursor.position = pts;
+        cursor.previous = cloneFrame(input.frame);
         av_frame_unref(input.frame);
     }
     throw Unavailable{Error::Unavailable, "Frame is outside the video duration"};

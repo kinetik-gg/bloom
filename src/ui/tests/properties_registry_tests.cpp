@@ -1,5 +1,6 @@
 #include <QAction>
 #include <QApplication>
+#include <bloom/ui/kit/controls.hpp>
 #include <QElapsedTimer>
 #include <QGraphicsItem>
 #include <QKeyEvent>
@@ -644,6 +645,16 @@ void videoRows() {
         expect(selector && selector->count() == 3,
                "Video loop modes use the shared registry selector");
     }
+    // Document 1.25: the audio stream row lists the asset's streams and selects one by command;
+    // field order and timecode type are read-only source metadata.
+    expect(row(panel, "audioStream") == nullptr,
+           "the audio stream uses its purpose-built row, not a generic integer");
+    auto* streams = panel.findChild<ui::kit::KDropdown*>("propertiesVideoAudioStream");
+    expect(streams && streams->count() == 1 && !streams->isEnabled(),
+           "a Video node without an asset offers no stream choice");
+    expect(panel.findChild<ui::kit::KLabel*>("propertiesVideoFieldOrder") &&
+               panel.findChild<ui::kit::KLabel*>("propertiesVideoTimecode"),
+           "Video Properties shows field order and timecode");
 }
 } // namespace
 int main(int argc, char** argv) try {

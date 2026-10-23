@@ -84,7 +84,7 @@ struct CompositionOutputStreamV1::State {
     std::unique_ptr<EncodeSessionV1> encoder;
     std::unique_ptr<AudioEngine> mixer;
     NullBackend* audioSink = nullptr;
-    std::map<document::AssetId, OwnedAudioBuffer> audioBuffers;
+    std::map<runtime::AudioStreamKey, OwnedAudioBuffer> audioBuffers;
     std::uint64_t samples = 0;
     bool started = false;
     State(CompositionOutputSourceV1 input, EncodeSettingsV1 settings, EncodeSessionOptionsV1 worker,
@@ -132,7 +132,8 @@ struct CompositionOutputStreamV1::State {
             std::vector<media::audio::playback::AudioClip> clips;
             clips.reserve(mix.clips.size());
             for (const auto& description : mix.clips) {
-                auto found = audioBuffers.find(description.assetId);
+                const runtime::AudioStreamKey key{description.assetId, description.audioStream};
+                auto found = audioBuffers.find(key);
                 if (found == audioBuffers.end()) {
                     const auto* asset = source.snapshot.project().findAsset(description.assetId);
                     require(asset != nullptr, "Audio source asset is missing", Error::Unavailable);
@@ -145,9 +146,9 @@ struct CompositionOutputStreamV1::State {
                     const auto probe = checked(decoder->probe(cancel));
                     require(probe.sourceDigest == asset->contentDigest, "Audio source changed",
                             Error::SourceChanged);
-                    const auto stream =
-                        std::ranges::find(probe.streams, MediaKind::Audio, &StreamDescriptor::kind);
-                    require(stream != probe.streams.end() && stream->duration.denominator > 0,
+                    const auto* stream =
+                        media::video::audioStreamAt(probe, description.audioStream);
+                    require(stream != nullptr && stream->duration.denominator > 0,
                             "Audio stream unavailable", Error::Unavailable);
                     const auto frames = media::video::audioClipFrameCount(*stream);
                     require(frames.has_value() &&
@@ -195,8 +196,8 @@ struct CompositionOutputStreamV1::State {
                                 ExportResourceAdmissionStatusV1::Reserved,
                             "Audio decode ledger reservation refused", Error::Oversized);
                     }
-                    auto buffer = checked(
-                        media::video::decodeAudioClip(*decoder, probe, decodedSampleCount, cancel));
+                    auto buffer = checked(media::video::decodeAudioClip(
+                        *decoder, probe, decodedSampleCount, cancel, description.audioStream));
                     decoder.reset();
                     auto backing = std::make_unique<media::audio::AudioBuffer>(std::move(buffer));
                     std::shared_ptr<const media::audio::AudioBuffer> published;
@@ -214,11 +215,10 @@ struct CompositionOutputStreamV1::State {
                             std::shared_ptr<const media::audio::AudioBuffer>(std::move(backing));
                     }
                     scratchClaim.reset();
-                    found =
-                        audioBuffers
-                            .emplace(description.assetId, OwnedAudioBuffer{std::move(retainedClaim),
-                                                                           std::move(published)})
-                            .first;
+                    found = audioBuffers
+                                .emplace(key, OwnedAudioBuffer{std::move(retainedClaim),
+                                                               std::move(published)})
+                                .first;
                 }
                 require(found->second.buffer != nullptr, "Audio source buffer unavailable",
                         Error::Unavailable);

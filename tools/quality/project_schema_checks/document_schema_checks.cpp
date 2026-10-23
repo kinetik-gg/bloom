@@ -373,6 +373,10 @@ void checkProjectSchemas(const std::filesystem::path& repositoryRoot) {
         json::parseFile(repositoryRoot / "schemas/project/document-1.24.schema.json"));
     validateManifestSchemaV1_24(
         json::parseFile(repositoryRoot / "schemas/project/manifest-1.24.schema.json"));
+    validateDocumentSchemaV1_25(
+        json::parseFile(repositoryRoot / "schemas/project/document-1.25.schema.json"));
+    validateManifestSchemaV1_25(
+        json::parseFile(repositoryRoot / "schemas/project/manifest-1.25.schema.json"));
     validateDocumentSchemaV1_26(
         json::parseFile(repositoryRoot / "schemas/project/document-1.26.schema.json"));
     validateManifestSchemaV1_26(

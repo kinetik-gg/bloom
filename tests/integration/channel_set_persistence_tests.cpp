@@ -199,8 +199,8 @@ void imageSourceV1Migrates() {
         project::migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 26},
                                     project::kProductionDocumentMigrationSteps, {}, operation);
     expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-               migrated.stepsApplied() == 1,
-           "the 1.24 -> 1.26 step runs once");
+               migrated.stepsApplied() == 2,
+           "the 1.24 -> 1.25 video-metadata and 1.25 -> 1.26 channel-set steps run once each");
     if (migrated.outcome() != project::MigrationOutcome::Migrated)
         return;
     const auto decoded = project::decodeDocumentEnvelope(*migrated.migratedRoot());

@@ -20,6 +20,10 @@ class QLabel;
 class QLineEdit;
 class QVBoxLayout;
 
+namespace bloom::document {
+struct AssetRecord;
+struct NodeRecord;
+} // namespace bloom::document
 namespace bloom::ui {
 
 class CompositionSession;
@@ -59,6 +63,8 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
+    void refreshVideoSourceRows(const document::NodeRecord* node,
+                                const document::AssetRecord* asset);
     EditorChromeSpec chrome_;
     void rebuild();
     void configureRegistryRows();

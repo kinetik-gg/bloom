@@ -342,6 +342,10 @@ constantMatchesSchema(const std::string_view schemaKey,
     }
     if (schemaKey == "bloom.video.asset")
         return std::holds_alternative<std::string>(constant.value);
+    if (schemaKey == kVideoAudioStreamParameterSchemaKey) {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value && *value >= 0 && *value < 256;
+    }
     if (schemaKey == "bloom.video.start-frame" || schemaKey == "bloom.video.loop-mode" ||
         schemaKey == "bloom.video.color-space") {
         const auto* value = std::get_if<std::int64_t>(&constant.value);

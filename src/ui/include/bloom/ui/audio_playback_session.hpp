@@ -2,6 +2,7 @@
 
 #include <bloom/document/document.hpp>
 #include <bloom/media/audio/audio.hpp>
+#include <bloom/runtime/audio_stream_key.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -51,7 +52,7 @@ class AudioPlaybackSession final : public QObject {
     }
     void setAudioBufferSource(AssetController& source);
     [[nodiscard]] std::shared_ptr<const media::audio::AudioBuffer>
-    audioBuffer(document::AssetId id) const;
+    audioBuffer(document::AssetId id, std::uint32_t stream = 0) const;
 
     // Requests a worker evaluation for the live snapshot/time. At most one task runs and one
     // newest request waits. A static direct mix skips subsequent time ticks at the same revision.
@@ -93,7 +94,8 @@ class AudioPlaybackSession final : public QObject {
     document::Revision revision_;
     std::optional<runtime::AudioMixDescription> mix_;
     AssetController* audioSource_ = nullptr;
-    std::map<document::AssetId, std::shared_ptr<const media::audio::AudioBuffer>> pinnedAudio_;
+    std::map<runtime::AudioStreamKey, std::shared_ptr<const media::audio::AudioBuffer>>
+        pinnedAudio_;
     std::optional<Active> active_;
     std::optional<Request> pending_;
     std::uint64_t generation_ = 0;

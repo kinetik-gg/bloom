@@ -9,6 +9,7 @@
 #include <bloom/document/document.hpp>
 #include <bloom/media/audio/audio.hpp>
 #include <bloom/media/image.hpp>
+#include <bloom/runtime/audio_stream_key.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -72,8 +73,9 @@ class AssetController final : public QObject {
     [[nodiscard]] QString inputColorCatalogDiagnostic() const;
     [[nodiscard]] std::shared_ptr<const media::audio::WaveformSummary>
     waveform(document::AssetId id) const;
+    // The decoded buffer of one audio stream (0-based among the asset's audio streams).
     [[nodiscard]] std::shared_ptr<const media::audio::AudioBuffer>
-    audioBuffer(document::AssetId id) const;
+    audioBuffer(document::AssetId id, std::uint32_t stream = 0) const;
     // Called by the playback session after it has adopted the active mix's buffers.
     void releaseAudioDelivery();
     void retryAudioAfterCapacitySample();
@@ -120,7 +122,7 @@ class AssetController final : public QObject {
     using Waveforms =
         std::map<document::AssetId, std::shared_ptr<const media::audio::WaveformSummary>>;
     using AudioBuffers =
-        std::map<document::AssetId, std::shared_ptr<const media::audio::AudioBuffer>>;
+        std::map<runtime::AudioStreamKey, std::shared_ptr<const media::audio::AudioBuffer>>;
     struct Thumbnails {
         Previews assets;
         std::map<document::NodeId, Preview> nodes;
@@ -174,7 +176,7 @@ class AssetController final : public QObject {
     Waveforms waveforms_;
     AudioBuffers audioBuffers_;
     AudioBuffers audioDeliveryBuffers_;
-    std::map<document::AssetId, std::weak_ptr<const media::audio::AudioBuffer>>
+    std::map<runtime::AudioStreamKey, std::weak_ptr<const media::audio::AudioBuffer>>
         adoptedAudioBuffers_;
     std::size_t proxyCacheBytes_ = 0;
     std::size_t decodedAudioBytes_ = 0;

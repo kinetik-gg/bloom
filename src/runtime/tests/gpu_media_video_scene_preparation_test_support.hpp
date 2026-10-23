@@ -72,7 +72,8 @@ namespace provider = bloom::media::provider;
             stream.id, static_cast<std::uint32_t>(stream.kind), stream.codec, stream.profile,
             stream.pixelFormat, stream.timecode, *timebase, *period, *duration, stream.width,
             stream.height, stream.sampleRate, stream.colour.primaries, stream.colour.transfer,
-            stream.colour.matrix, stream.colour.range, stream.channelLayout});
+            stream.colour.matrix, stream.colour.range, stream.fieldOrder,
+            document::timecodeTypeFor(stream.timecode), stream.channelLayout});
     }
     if (asset.width == 0) {
         throw std::logic_error("video fixture has no video stream");

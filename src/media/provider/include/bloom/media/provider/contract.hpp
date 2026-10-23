@@ -185,6 +185,9 @@ struct StreamDescriptor {
     Rational duration;
     std::uint64_t frameCount = 0;
     std::string pixelFormat = "unknown", timecode;
+    // Coded field order (FFmpeg AVFieldOrder numbering): 0 unknown, 1 progressive, 2 top first,
+    // 3 bottom first, 4 top coded first/bottom displayed first, 5 the reverse.
+    std::uint8_t fieldOrder = 0;
     bool appleAuthorized = false;
     std::uint32_t sampleRate = 0;
     std::vector<std::string> channelLayout;

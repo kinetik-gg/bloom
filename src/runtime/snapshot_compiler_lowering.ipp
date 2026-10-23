@@ -461,8 +461,8 @@ lower(const std::vector<document::NodeId>& order) {
         // it through the existing empty Merge path rather than losing the connected input.
         if (node->typeId == "bloom.image-mix" || node->typeId == "bloom.set-alpha" ||
             node->typeId == "bloom.multiply-alpha") {
-            const auto* second = fixedInputEdge(
-                nodeId, node->typeId == "bloom.image-mix" ? "second" : "matte");
+            const auto* second =
+                fixedInputEdge(nodeId, node->typeId == "bloom.image-mix" ? "second" : "matte");
             if (second && emptyImages_.contains(second->source.nodeId) &&
                 !indices.contains(second->source.nodeId)) {
                 const auto empty = runtime::OperationIndex::fromRaw(operations.size());
@@ -656,8 +656,11 @@ lower(const std::vector<document::NodeId>& order) {
         std::move(curveTables->vec3), std::move(curveTables->color4),
         std::move(valueOperations_), valueOutputCount_,
         runtime::kCompiledCompositionPlanSemanticsVersion,
-        runtime::kAnimationSamplingSemanticsVersion, !request_.parameterOverrides.empty(),
-        *audioMix, std::move(nestedPlans_), composition_->duration()};
+        runtime::kAnimationSamplingSemanticsVersion,
+        !request_.parameterOverrides.empty(),
+        *audioMix,
+        std::move(nestedPlans_),
+        composition_->duration()};
     // ADR 0024: place every operation on its layer time clock.
     if (const auto failure = runtime::detail::scopeLayerTime(definition)) {
         addFailure(runtime::CompileDiagnosticCode::TimeScopeLimit, subject({}, "layerTime"),
@@ -703,9 +706,14 @@ lower(const std::vector<document::NodeId>& order) {
             addTopologyFailure(audioSource.id, "Audio source parameters could not be lowered.");
             return std::nullopt;
         }
-        runtime::CompiledAudioSource compiled{
-            audioSource.id, document::AssetId::fromRaw(assetRaw), *startFrame, *level};
+        runtime::CompiledAudioSource compiled{audioSource.id, document::AssetId::fromRaw(assetRaw),
+                                              *startFrame, *level};
         if (audioSource.typeId == "bloom.video-source") {
+            // Document 1.25: the optional stream selection; absent plays the first audio stream.
+            if (const auto* selected = parameterConstant<std::int64_t>(findParameterBinding(
+                    audioSource, std::string(document::kVideoAudioStreamParameterRole)));
+                selected != nullptr && *selected >= 0 && *selected < 256)
+                compiled.audioStream = static_cast<std::uint32_t>(*selected);
             // #354: embedded audio follows its picture's loop mode over the picture extent.
             const auto* loop =
                 parameterConstant<std::int64_t>(findParameterBinding(audioSource, "loopMode"));
@@ -1029,17 +1037,18 @@ lowerImageEffect(const document::NodeRecord& node,
             const auto factor = compiledScalarParameter(findParameterBinding(node, "factor"));
             const auto* channelBinding = findParameterBinding(node, "channel");
             const auto* channel = parameterConstant<std::int64_t>(channelBinding);
-            const auto channelDriver = drivenOutput(channelBinding, runtime::SocketValueKind::Integer);
+            const auto channelDriver =
+                drivenOutput(channelBinding, runtime::SocketValueKind::Integer);
             const auto selection =
                 channel ? render::matteSelectionFromStoredValue(*channel) : std::nullopt;
             if (factor && (selection || channelDriver))
                 return runtime::CompiledImageEffect{
                     node.id,
                     *input,
-                    runtime::ImageCombineKernel{
-                        runtime::ImageCombineMode::MultiplyAlpha, *factor,
-                        selection ? selection->channel : render::ImageCoverageChannel::Alpha,
-                        channelDriver, selection && selection->invert},
+                    runtime::ImageCombineKernel{runtime::ImageCombineMode::MultiplyAlpha, *factor,
+                                                selection ? selection->channel
+                                                          : render::ImageCoverageChannel::Alpha,
+                                                channelDriver, selection && selection->invert},
                     false,
                     false,
                     *second};
@@ -1066,18 +1075,20 @@ lowerImageEffect(const document::NodeRecord& node,
         } else {
             const auto* channelBinding = findParameterBinding(node, "channel");
             const auto* channel = parameterConstant<std::int64_t>(channelBinding);
-            const auto channelDriver = drivenOutput(channelBinding, runtime::SocketValueKind::Integer);
+            const auto channelDriver =
+                drivenOutput(channelBinding, runtime::SocketValueKind::Integer);
             const auto selection =
                 channel ? render::matteSelectionFromStoredValue(*channel) : std::nullopt;
             if (selection || channelDriver)
                 return runtime::CompiledImageEffect{
                     node.id,
                     *input,
-                    runtime::ImageCombineKernel{
-                        runtime::ImageCombineMode::SetAlpha,
-                        {},
-                        selection ? selection->channel : render::ImageCoverageChannel::Alpha,
-                        channelDriver, selection && selection->invert},
+                    runtime::ImageCombineKernel{runtime::ImageCombineMode::SetAlpha,
+                                                {},
+                                                selection ? selection->channel
+                                                          : render::ImageCoverageChannel::Alpha,
+                                                channelDriver,
+                                                selection && selection->invert},
                     false,
                     false,
                     *second};

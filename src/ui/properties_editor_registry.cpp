@@ -9,6 +9,8 @@
 #include <QVBoxLayout>
 #include <algorithm>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/commands/transaction.hpp>
+#include <bloom/commands/video_source_operations.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/runtime/cryptomatte_matte_list.hpp>
 #include <bloom/ui/asset_controller.hpp>
@@ -17,6 +19,7 @@
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <limits>
@@ -165,6 +168,40 @@ void PropertiesEditor::configureRegistryRows() {
                 addOutputLayerRow(*node, section);
             if (node->typeId == document::kCryptomatteNodeType)
                 addCryptomatteRows(*node, section);
+            if (node->typeId == "bloom.video-source") {
+                // Document 1.25: the played audio stream and the source's field order/timecode.
+                auto* label = kit::makePropertyRowLabel(tr("Audio Stream"), section->body());
+                auto* selector = new kit::KDropdown(section->body());
+                selector->setObjectName(QStringLiteral("propertiesVideoAudioStream"));
+                selector->setControlSize(kit::KDropdown::ControlSize::Compact);
+                auto* row = new kit::KPropertyRow(label, nullptr, {selector}, section->body());
+                row->setProperty("rowLabel", tr("Audio Stream"));
+                section->bodyLayout()->addWidget(row);
+                const auto nodeId = node->id;
+                connect(selector, &kit::KDropdown::currentIndexChanged, this,
+                        [this, selector, nodeId](int index) {
+                            if (index < 0 || !selector->isEnabled())
+                                return;
+                            commands::Transaction transaction(
+                                tr("Choose Audio Stream").toStdString(),
+                                session_.snapshot().revision());
+                            transaction.emplace<commands::SetVideoAudioStream>(
+                                session_.compositionId(), nodeId,
+                                static_cast<std::uint32_t>(selector->itemData(index).toUInt()));
+                            (void)session_.executeTransaction(std::move(transaction));
+                        });
+                for (const auto& [name, object] :
+                     std::array{std::pair{tr("Field Order"), "propertiesVideoFieldOrder"},
+                                std::pair{tr("Timecode"), "propertiesVideoTimecode"}}) {
+                    auto* rowLabel = kit::makePropertyRowLabel(name, section->body());
+                    auto* value = new kit::KLabel(section->body());
+                    value->setObjectName(object);
+                    auto* infoRow =
+                        new kit::KPropertyRow(rowLabel, nullptr, {value}, section->body());
+                    infoRow->setProperty("rowLabel", name);
+                    section->bodyLayout()->addWidget(infoRow);
+                }
+            }
             if (node->typeId == "bloom.audio-source") {
                 const document::AssetRecord* asset = nullptr;
                 for (const auto& binding : node->parameters) {
@@ -312,6 +349,7 @@ void PropertiesEditor::configureRegistryRows() {
                             document::AssetId::fromRaw(value->toULongLong()));
                 }
         dimensions->setText(imageDimensionsText(asset));
+        refreshVideoSourceRows(node, asset);
         if (auto* range = findChild<kit::KLabel*>("propertiesImageRange")) {
             range->setText(imageRangeText(asset));
             range->parentWidget()->setProperty("unavailableReadout", range->text().isEmpty());
@@ -691,4 +729,41 @@ void PropertiesEditor::populateCryptomatteRows(const document::NodeRecord& node)
     }
 }
 
+void PropertiesEditor::refreshVideoSourceRows(const document::NodeRecord* node,
+                                              const document::AssetRecord* asset) {
+    auto* selector = findChild<kit::KDropdown*>(QStringLiteral("propertiesVideoAudioStream"));
+    if (selector == nullptr || node == nullptr)
+        return;
+    std::uint32_t selected = 0;
+    for (const auto& binding : node->parameters)
+        if (binding.role == document::kVideoAudioStreamParameterRole)
+            if (const auto value = session_.constantValue(binding.parameterId))
+                selected = static_cast<std::uint32_t>(*value);
+    const QSignalBlocker blocker(selector);
+    selector->clearItems();
+    std::uint32_t ordinal = 0;
+    if (asset != nullptr)
+        for (const auto& stream : asset->videoStreams) {
+            if (stream.kind != 2)
+                continue;
+            selector->addItem(tr("Stream %1 — %2 ch, %3 Hz (%4)")
+                                  .arg(ordinal + 1)
+                                  .arg(stream.channelLayout.size())
+                                  .arg(stream.sampleRate)
+                                  .arg(QString::fromStdString(stream.codec)),
+                              QVariant::fromValue(ordinal));
+            ++ordinal;
+        }
+    if (ordinal == 0)
+        selector->addItem(tr("No audio stream"), QVariant::fromValue(0U));
+    selector->setCurrentIndex(static_cast<int>(std::min(selected, ordinal == 0 ? 0 : ordinal - 1)));
+    selector->setEnabled(ordinal > 1 && !session_.composition()->nodeLocked(node->id));
+    const auto* video = asset == nullptr ? nullptr
+                                         : &*std::ranges::find(asset->videoStreams, 1U,
+                                                               &document::AssetVideoStream::kind);
+    if (auto* fieldOrder = findChild<kit::KLabel*>(QStringLiteral("propertiesVideoFieldOrder")))
+        fieldOrder->setText(video ? videoFieldOrderText(video->fieldOrder) : tr("Unavailable"));
+    if (auto* timecode = findChild<kit::KLabel*>(QStringLiteral("propertiesVideoTimecode")))
+        timecode->setText(video ? videoTimecodeText(*video) : tr("Unavailable"));
+}
 } // namespace bloom::ui

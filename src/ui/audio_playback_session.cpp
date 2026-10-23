@@ -52,8 +52,8 @@ void AudioPlaybackSession::setAudioBufferSource(AssetController& source) {
 }
 
 std::shared_ptr<const media::audio::AudioBuffer>
-AudioPlaybackSession::audioBuffer(const document::AssetId id) const {
-    const auto found = pinnedAudio_.find(id);
+AudioPlaybackSession::audioBuffer(const document::AssetId id, const std::uint32_t stream) const {
+    const auto found = pinnedAudio_.find(runtime::AudioStreamKey{id, stream});
     return found == pinnedAudio_.end() ? nullptr : found->second;
 }
 
@@ -248,14 +248,15 @@ void AudioPlaybackSession::refreshPins(const bool notify) {
     decltype(pinnedAudio_) next;
     if (mix_ && !shuttingDown_)
         for (const auto& clip : mix_->clips) {
-            auto buffer = audioSource_->audioBuffer(clip.assetId);
+            const runtime::AudioStreamKey key{clip.assetId, clip.audioStream};
+            auto buffer = audioSource_->audioBuffer(clip.assetId, clip.audioStream);
             if (!buffer && !audioSource_->missing(clip.assetId)) {
-                const auto old = pinnedAudio_.find(clip.assetId);
+                const auto old = pinnedAudio_.find(key);
                 if (old != pinnedAudio_.end())
                     buffer = old->second;
             }
             if (buffer)
-                next.insert_or_assign(clip.assetId, std::move(buffer));
+                next.insert_or_assign(key, std::move(buffer));
         }
     const bool changed = next != pinnedAudio_;
     pinnedAudio_ = std::move(next);

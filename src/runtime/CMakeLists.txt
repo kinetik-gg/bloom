@@ -200,6 +200,7 @@ target_sources(
         FILES
             include/bloom/runtime/operation_cache.hpp
             include/bloom/runtime/animation_sampling.hpp
+            include/bloom/runtime/audio_stream_key.hpp
             include/bloom/runtime/cpu_composition_evaluator.hpp
             include/bloom/runtime/evaluation.hpp
             include/bloom/runtime/gpu_neutral_display_qualification.hpp

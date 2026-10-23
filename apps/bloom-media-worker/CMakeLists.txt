@@ -63,7 +63,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_subdirectory(openh264_shim)
     add_library(bloom_media_ffmpeg_worker_provider STATIC ffmpeg_provider.cpp)
     target_link_libraries(bloom_media_ffmpeg_worker_provider PRIVATE bloom_media_provider bloom_platform_process
-                          FFmpeg::avformat FFmpeg::avcodec FFmpeg::swscale FFmpeg::swresample
+                          FFmpeg::avformat FFmpeg::avcodec FFmpeg::avfilter FFmpeg::swscale FFmpeg::swresample
                           "${BLOOM_DEPENDENCY_PREFIX}/lib/libopenh264.so")
     bloom_enable_warnings(bloom_media_ffmpeg_worker_provider)
     add_executable(bloom-media-worker main.cpp)
@@ -207,7 +207,7 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_library(bloom_media_ffmpeg_fixture_worker_provider STATIC ffmpeg_provider.cpp)
     target_compile_definitions(bloom_media_ffmpeg_fixture_worker_provider PRIVATE BLOOM_MEDIA_FIXTURE_GENERATOR)
     target_link_libraries(bloom_media_ffmpeg_fixture_worker_provider PRIVATE bloom_media_provider bloom_platform_process
-                          FFmpeg::avformat FFmpeg::avcodec FFmpeg::swscale FFmpeg::swresample
+                          FFmpeg::avformat FFmpeg::avcodec FFmpeg::avfilter FFmpeg::swscale FFmpeg::swresample
                           "${BLOOM_DEPENDENCY_PREFIX}/lib/libopenh264.so")
     bloom_enable_warnings(bloom_media_ffmpeg_fixture_worker_provider)
     add_executable(bloom_media_generate_fixtures tests/generate_fixtures.cpp)

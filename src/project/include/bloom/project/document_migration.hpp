@@ -203,6 +203,10 @@ migrateAssetInputColorSpaceV1_19(const JsonValue& root, std::pmr::memory_resourc
 [[nodiscard]] MigrationStepOutcome
 migrateExternalFileLocatorsV1_21(const JsonValue& root, std::pmr::memory_resource* resource,
                                  std::pmr::vector<char>& output);
+// Video stream field order and timecode type (issue #367), document 1.24 -> 1.25.
+[[nodiscard]] MigrationStepOutcome
+migrateVideoSourceMetadataV1_24(const JsonValue& root, std::pmr::memory_resource* resource,
+                                std::pmr::vector<char>& output);
 [[nodiscard]] MigrationStepOutcome migrateLayerTimeV1_22(const JsonValue& root,
                                                          std::pmr::memory_resource* resource,
                                                          std::pmr::vector<char>& output);
@@ -211,7 +215,7 @@ migrateExternalFileLocatorsV1_21(const JsonValue& root, std::pmr::memory_resourc
                                                           std::pmr::vector<char>& output);
 // ADR 0026. Chained from 1.24 while the video-io 1.25 step is unmerged; it becomes 1.25 -> 1.26
 // when that step lands.
-[[nodiscard]] MigrationStepOutcome migrateChannelSetsV1_24(const JsonValue& root,
+[[nodiscard]] MigrationStepOutcome migrateChannelSetsV1_25(const JsonValue& root,
                                                            std::pmr::memory_resource* resource,
                                                            std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
@@ -239,7 +243,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 21}, {1, 22}, migrateExternalFileLocatorsV1_21},
     MigrationStepDescriptor{{1, 22}, {1, 23}, migrateLayerTimeV1_22},
     MigrationStepDescriptor{{1, 23}, {1, 24}, migrateLayerMasksV1_23},
-    MigrationStepDescriptor{{1, 24}, {1, 26}, migrateChannelSetsV1_24}};
+    MigrationStepDescriptor{{1, 24}, {1, 25}, migrateVideoSourceMetadataV1_24},
+    MigrationStepDescriptor{{1, 25}, {1, 26}, migrateChannelSetsV1_25}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

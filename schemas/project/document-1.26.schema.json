@@ -2485,7 +2485,7 @@
       },
       "unevaluatedProperties": false
     },
-    "videoStream-1.17": {
+    "videoStream-1.25": {
       "type": "object",
       "required": [
         "id",
@@ -2504,6 +2504,8 @@
         "transfer",
         "matrix",
         "range",
+        "fieldOrder",
+        "timecodeType",
         "channelLayout"
       ],
       "properties": {
@@ -2570,6 +2572,16 @@
         "range": {
           "$ref": "#/$defs/signed64Decimal"
         },
+        "fieldOrder": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "timecodeType": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
         "channelLayout": {
           "type": "array",
           "maxItems": 64,
@@ -2601,7 +2613,7 @@
           "minItems": 1,
           "maxItems": 256,
           "items": {
-            "$ref": "#/$defs/videoStream-1.17"
+            "$ref": "#/$defs/videoStream-1.25"
           }
         }
       },

@@ -89,6 +89,10 @@ inline constexpr std::string_view kImageInputColorSpaceIdParameterSchemaKey =
 inline constexpr std::string_view kVideoInputColorSpaceIdParameterRole = "inputColorSpaceId";
 inline constexpr std::string_view kVideoInputColorSpaceIdParameterSchemaKey =
     "bloom.video.input-color-space-id";
+// Document 1.25: which of the asset's audio streams (0-based among its audio streams) the Video
+// node plays. Optional and non-animatable; absent means the first audio stream.
+inline constexpr std::string_view kVideoAudioStreamParameterRole = "audioStream";
+inline constexpr std::string_view kVideoAudioStreamParameterSchemaKey = "bloom.video.audio-stream";
 
 // ---------------------------------------------------------------------------------------------
 // Value-graph parameter schemas (task S7).

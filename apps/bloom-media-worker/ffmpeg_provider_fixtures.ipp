@@ -394,8 +394,9 @@ void special(const std::filesystem::path& path, const Special kind) {
                             row[x * 6 + c * 2 + 1] = static_cast<std::uint8_t>(rgb[c] >> 8U);
                         }
                     } else {
-                        // Interlaced: the top field carries frame n, the bottom field 255 - n.
-                        const auto value = (y % 2 == 0 ? luma(n, x, y) : 200U) * 4U;
+                        // Interlaced: the top field carries frame n; the bottom field is a
+                        // later instant that flickers between 200 and 40 (field-rate motion).
+                        const auto value = (y % 2 == 0 ? luma(n, x, y) : n % 2 ? 40U : 200U) * 4U;
                         row[x * 2] = static_cast<std::uint8_t>(value & 255U);
                         row[x * 2 + 1] = static_cast<std::uint8_t>(value >> 8U);
                     }

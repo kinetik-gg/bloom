@@ -134,9 +134,10 @@ template <typename Definition>
         if (definition.key.typeId == "bloom.gaussian-blur" ||
             definition.key.typeId == "bloom.box-blur") {
             return definition.key.schemaVersion == 1 &&
-                   definition.inputs == std::vector<InputPortDefinition>{
-                       {"input", SocketValueKind::Image},
-                       {"radius", SocketValueKind::Scalar, false}} &&
+                   definition.inputs ==
+                       std::vector<InputPortDefinition>{
+                           {"input", SocketValueKind::Image},
+                           {"radius", SocketValueKind::Scalar, false}} &&
                    definition.parameters.size() == 2 &&
                    hasParameter(definition, 0, "radius", "bloom.blur.radius",
                                 ParameterValueKind::Float64, true) &&
@@ -249,7 +250,7 @@ template <typename Definition>
         return hasCanonicalKey(definition, "bloom.video-source", 1) &&
                hasOutput(definition, "image", SocketValueKind::Image) &&
                hasOutput(definition, "audio", SocketValueKind::Audio) &&
-               definition.outputs.size() == 2 && definition.parameters.size() == 5 &&
+               definition.outputs.size() == 2 && definition.parameters.size() == 6 &&
                definition.inputs.empty() &&
                hasParameter(definition, 0, "asset", "bloom.video.asset",
                             ParameterValueKind::String) &&
@@ -261,7 +262,10 @@ template <typename Definition>
                             ParameterValueKind::Integer) &&
                hasParameter(definition, 4, kVideoInputColorSpaceIdParameterRole,
                             kVideoInputColorSpaceIdParameterSchemaKey, ParameterValueKind::String,
-                            false, false);
+                            false, false) &&
+               hasParameter(definition, 5, kVideoAudioStreamParameterRole,
+                            kVideoAudioStreamParameterSchemaKey, ParameterValueKind::Integer, false,
+                            false);
     case NodeLoweringKind::ImageSource:
         // ADR 0026 v2: the colour `image` plus every channel of the selected part on `channels`.
         return hasCanonicalKey(definition, kImageSourceNodeType, kImageSourceNodeSchemaVersion) &&
@@ -659,7 +663,10 @@ template <typename Definition>
               std::int64_t{0}},
              {std::string(kVideoInputColorSpaceIdParameterRole),
               std::string(kVideoInputColorSpaceIdParameterSchemaKey), ParameterValueKind::String,
-              false, false, std::string{}}},
+              false, false, std::string{}},
+             {std::string(kVideoAudioStreamParameterRole),
+              std::string(kVideoAudioStreamParameterSchemaKey), ParameterValueKind::Integer, false,
+              false, std::int64_t{0}}},
             std::nullopt,
             NodeCardinality::Many,
             NodeCategory::Sources};

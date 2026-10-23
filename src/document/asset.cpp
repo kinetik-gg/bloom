@@ -131,7 +131,8 @@ ValidationResult AssetRecord::validate() const {
                 stream.channelLayout.size() > 64 || stream.sampleRate > 384000 ||
                 stream.primaries < -1 || stream.primaries > 255 || stream.transfer < -1 ||
                 stream.transfer > 255 || stream.matrix < -1 || stream.matrix > 255 ||
-                stream.range < -1 || stream.range > 2)
+                stream.range < -1 || stream.range > 2 || stream.fieldOrder > 5 ||
+                stream.timecodeType > 2 || (stream.timecodeType == 0) != stream.timecode.empty())
                 result.add(ValidationCode::InvalidValue, "video.streams",
                            "Invalid stream metadata");
             if (stream.kind == 2 && (stream.sampleRate == 0 || stream.channelLayout.empty()))

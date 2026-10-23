@@ -174,13 +174,15 @@ propertiesRowVisibility(const std::string_view role, const std::string_view sche
     // Properties surface decides which declared values are meaningful to an artist.
     const bool technicalRole = role == "alpha-association" || role == "color-encoding" ||
                                role == "color-space" || role == "encoding";
-    // ADR 0026: part, layer and the output layer list have purpose-built pickers.
+    // ADR 0026: part, layer and the output layer list have purpose-built pickers, as does the
+    // Video node's audio stream (document 1.25).
     const bool technicalSchema =
         schemaKey == "bloom.color.alpha-association" || schemaKey == "bloom.color.encoding" ||
         schemaKey == "bloom.solid.alpha-association" || schemaKey == "bloom.solid.encoding" ||
         schemaKey == "bloom.image.part" || schemaKey == "bloom.image.layer" ||
         schemaKey == "bloom.composition-output.layers" || schemaKey == "bloom.cryptomatte.layer" ||
-        schemaKey == "bloom.cryptomatte.mattes";
+        schemaKey == "bloom.cryptomatte.mattes" ||
+        schemaKey == document::kVideoAudioStreamParameterSchemaKey;
     return technicalRole || technicalSchema ? PropertiesRowVisibility::Hidden
                                             : PropertiesRowVisibility::Visible;
 }
@@ -199,17 +201,17 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             ? node_editor::displayTypeName(definition_.role)
         : isInputColorSpaceSchema(definition_.schemaKey)             ? tr("Input colour space")
         : definition_.schemaKey == document::kTextParameterSchemaKey ? tr("Text")
-        : definition_.schemaKey == "bloom.exposure.stops" ? tr("Exposure (stops)")
-        : definition_.schemaKey == "bloom.offset.amount" ? tr("Offset")
-        : definition_.schemaKey == "bloom.multiply.factor" ? tr("Factor")
-        : definition_.schemaKey == "bloom.image-mix.factor" ? tr("Mix factor")
-        : definition_.schemaKey == "bloom.multiply-alpha.factor" ? tr("Alpha factor")
+        : definition_.schemaKey == "bloom.exposure.stops"            ? tr("Exposure (stops)")
+        : definition_.schemaKey == "bloom.offset.amount"             ? tr("Offset")
+        : definition_.schemaKey == "bloom.multiply.factor"           ? tr("Factor")
+        : definition_.schemaKey == "bloom.image-mix.factor"          ? tr("Mix factor")
+        : definition_.schemaKey == "bloom.multiply-alpha.factor"     ? tr("Alpha factor")
         : definition_.schemaKey == "bloom.multiply-alpha.channel" ||
                 definition_.schemaKey == "bloom.set-alpha.channel"
             ? tr("Matte channel")
         : definition_.schemaKey == "bloom.rotate-90.quarter-turns" ? tr("Quarter turns (clockwise)")
-        : definition_.schemaKey == "bloom.blur.radius"               ? tr("Radius (pixels)")
-        : definition_.schemaKey == "bloom.blur.edge"                 ? tr("Edges")
+        : definition_.schemaKey == "bloom.blur.radius"             ? tr("Radius (pixels)")
+        : definition_.schemaKey == "bloom.blur.edge"               ? tr("Edges")
         : definition_.schemaKey == document::kTextAlignmentParameterSchemaKey ? tr("Text Alignment")
         : definition_.schemaKey == document::kTextLineHeightParameterSchemaKey ? tr("Line Height")
         : definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey
