@@ -170,11 +170,16 @@ struct InputColorSpaceMappings final {
     space->setFamily("Input");
     space->setDescription("Bloom-synthesized Rec.2100 HLG scene-light input (no OOTF)");
     space->setTransform(toReference, OCIO::COLORSPACE_DIR_TO_REFERENCE);
-    // The pinned config was validated above. Config::validate() would refuse the copy only
-    // because the 2.4 built-in style postdates the pinned config's version, so the copy is not
-    // revalidated (and its version is not changed); the processor is built from OCIO 2.5 itself.
+    // The pinned config was validated as-is above. The HLG built-in style requires config
+    // version 2.4, so only this in-memory copy is raised to 2.4 and revalidated. Raising the
+    // version leaves every existing CPU/GPU processor cache id unchanged in both pinned configs
+    // (all colour-space pairs and display/views were compared;
+    // docs/architecture/color-management.md).
     auto editable = config->createEditableCopy();
+    if (editable->getMajorVersion() == 2 && editable->getMinorVersion() < 4)
+        editable->setMinorVersion(4);
     editable->addColorSpace(space);
+    editable->validate();
     return editable;
 }
 

@@ -68,6 +68,15 @@ light to the config reference, is:
    Rec.709 reference), or the inverse OCIO built-in `UTILITY - ACES-AP0_to_CIE-XYZ-D65_BFD` for
    the ACES config (ACES2065-1 reference).
 
+The HLG built-in style requires config version 2.4, so only the in-memory copy is raised from the
+pinned version (2.0 Neutral, 2.1 ACES CG) to 2.4, after the pinned config is validated as-is, and
+the copy is then validated with OCIO's `Config::validate()`. Raising the version was checked to
+leave every existing processor unchanged: all 400 colour-space pairs and 300 display/view
+transforms of the ACES CG config, and all pairs and display/views of Bloom Neutral, keep identical
+CPU and GPU processor cache ids, and the existing colour, OCIO and output-colour goldens are
+byte-identical. OCIO logs (without failing) that a 2.2+ config would declare the
+`compositing_log`, `color_timing` and `aces_interchange` roles for Neutral.
+
 It is scene-referred: no HLG OOTF and no system gamma are applied. HLG is defined on scene light
 and its OOTF is a display adaptation for a particular display luminance; compositing and the
 working space are scene-linear, and a display-side OOTF belongs to the output transform, not the
