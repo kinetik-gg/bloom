@@ -448,7 +448,8 @@ void minorGating() {
     // additions additive rather than a one-version island.
     {
         auto text = baseline;
-        text.replace(minor, anchor.size(), "\"minor\": 22");
+        text.replace(minor, anchor.size(),
+                     "\"minor\": " + std::to_string(kCanonicalDocumentSchemaVersionV1.minor + 1));
         auto dom = parseStrictJsonDom(test::toBytes(text), {}, memory());
         expect(static_cast<bool>(dom), "the 1.4-labelled document parses");
         if (!dom) {

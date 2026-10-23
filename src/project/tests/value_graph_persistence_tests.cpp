@@ -20,6 +20,7 @@
 #include <bloom/project/strict_json_dom.hpp>
 #include <bloom/project/zip_container.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <iostream>
@@ -284,9 +285,17 @@ void roundTripAndReopen() {
     }
 
     const auto* vector3 = composition->parameters().find(authored.vector3Parameter);
-    expect(std::ranges::equal(composition->graph().nodes(), original->graph().nodes()) &&
-               std::ranges::equal(composition->parameters().records(),
-                                  original->parameters().records()),
+    // The archive canonicalizes binding order by role and parameter records by id (the same
+    // contract the blur persistence test follows); identities and values must reopen exactly.
+    auto canonicalNodes =
+        std::vector(original->graph().nodes().begin(), original->graph().nodes().end());
+    for (auto& node : canonicalNodes)
+        std::ranges::sort(node.parameters, {}, &document::ParameterBinding::role);
+    auto canonicalRecords = std::vector(original->parameters().records().begin(),
+                                        original->parameters().records().end());
+    std::ranges::sort(canonicalRecords, {}, [](const auto& record) { return record.id.value(); });
+    expect(std::ranges::equal(composition->graph().nodes(), canonicalNodes) &&
+               std::ranges::equal(composition->parameters().records(), canonicalRecords),
            "Resize/Fit node identities, output size, PAR and Fill policy reopen exactly");
     const auto* vector3Constant =
         vector3 == nullptr ? nullptr : std::get_if<document::ConstantValueSource>(&vector3->source);
@@ -350,7 +359,8 @@ void minorGating() {
     // gate is "the minor that declares it or later", not "exactly 1.4". That is what makes 1.4's
     // additions additive rather than a one-version island.
     {
-        const auto decoded = decodeClaiming("\"minor\": 22");
+        const auto decoded = decodeClaiming(
+            "\"minor\": " + std::to_string(kCanonicalDocumentSchemaVersionV1.minor + 1));
         expect(
             decoded.outcome() == DocumentDecodeOutcome::Decoded &&
                 decoded.classification() == DocumentClassification::EditableWithRoundTrip,
