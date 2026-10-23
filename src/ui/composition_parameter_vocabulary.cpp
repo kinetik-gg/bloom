@@ -118,6 +118,18 @@ QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view
                 {QObject::tr("Mirror"), 2}};
     if (schemaKey == "bloom.blur.edge")
         return {{QObject::tr("Transparent"), 0}, {QObject::tr("Clamp"), 1}};
+    // #361: the closed matte selector (render::MatteSelection) in track-matte order.
+    if (schemaKey == "bloom.set-alpha.channel" || schemaKey == "bloom.multiply-alpha.channel")
+        return {{QObject::tr("Alpha"), 0},
+                {QObject::tr("Red"), 1},
+                {QObject::tr("Green"), 2},
+                {QObject::tr("Blue"), 3},
+                {QObject::tr("Luma"), 4},
+                {QObject::tr("Alpha Inverted"), 5},
+                {QObject::tr("Red Inverted"), 6},
+                {QObject::tr("Green Inverted"), 7},
+                {QObject::tr("Blue Inverted"), 8},
+                {QObject::tr("Luma Inverted"), 9}};
     QList<std::pair<QString, std::int64_t>> items;
     const auto add = [&items](const QString& text, const std::int64_t stored) {
         items.append({text, stored});

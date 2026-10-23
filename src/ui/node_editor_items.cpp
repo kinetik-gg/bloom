@@ -135,7 +135,7 @@ QString displayTypeName(const std::string_view typeId) {
     if (typeId == "factor")
         return QCoreApplication::translate("node_editor", "Factor");
     if (typeId == "channel")
-        return QCoreApplication::translate("node_editor", "Channel (0 A, 1 R, 2 G, 3 B, 4 Luma)");
+        return QCoreApplication::translate("node_editor", "Matte Channel");
     if (typeId == "amount")
         return QCoreApplication::translate("node_editor", "Amount");
     if (typeId == "bloom.resize")

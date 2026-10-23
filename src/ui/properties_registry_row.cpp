@@ -200,10 +200,9 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         : definition_.schemaKey == "bloom.multiply.factor" ? tr("Factor")
         : definition_.schemaKey == "bloom.image-mix.factor" ? tr("Mix factor")
         : definition_.schemaKey == "bloom.multiply-alpha.factor" ? tr("Alpha factor")
-        : definition_.schemaKey == "bloom.multiply-alpha.channel"
-            ? tr("Matte channel (0 A, 1 R, 2 G, 3 B, 4 Luma)")
-        : definition_.schemaKey == "bloom.set-alpha.channel"
-            ? tr("Matte channel (0 A, 1 R, 2 G, 3 B, 4 Luma)")
+        : definition_.schemaKey == "bloom.multiply-alpha.channel" ||
+                definition_.schemaKey == "bloom.set-alpha.channel"
+            ? tr("Matte channel")
         : definition_.schemaKey == "bloom.rotate-90.quarter-turns" ? tr("Quarter turns (clockwise)")
         : definition_.schemaKey == "bloom.blur.radius"               ? tr("Radius (pixels)")
         : definition_.schemaKey == "bloom.blur.edge"                 ? tr("Edges")
