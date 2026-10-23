@@ -1342,10 +1342,9 @@ OperationResult MoveKeyframes::apply(document::Draft& draft) const {
     auto result = stageKeys(*composition, addresses, edits);
     if (result.status == OperationStatus::Rejected)
         return result;
+    // ADR 0024: a key's time is on its layer or content clock, which may lie before composition
+    // zero or past its end; the Timeline clamps moves to the composition projected onto that clock.
     for (const auto& move : keys_) {
-        if (move.time < core::RationalTime::fromInteger(0) || move.time >= composition->duration())
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Key time is outside the composition");
         std::visit(
             [&](auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
@@ -1729,8 +1728,7 @@ OperationResult PasteKeyframes::apply(document::Draft& draft) const {
     CurveEdits edits;
     std::set<document::AnimationCurveId> created;
     for (const auto& paste : keys_) {
-        if (paste.time < core::RationalTime::fromInteger(0) ||
-            paste.time >= composition->duration() || !validInterpolation(paste.interpolation) ||
+        if (!validInterpolation(paste.interpolation) ||
             !document::isValidKeyframeHandle(paste.outgoingHandle) ||
             !document::isValidKeyframeHandle(paste.incomingHandle))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
