@@ -1137,6 +1137,11 @@ target_link_libraries(bloom_properties_registry_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_properties_registry_test)
 bloom_add_test(NAME bloom.ui.properties-registry COMMAND bloom_properties_registry_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(bloom_properties_layer_time_test properties_layer_time_tests.cpp)
+target_link_libraries(bloom_properties_layer_time_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_properties_layer_time_test)
+bloom_add_test(NAME bloom.ui.properties-layer-time COMMAND bloom_properties_layer_time_test LABELS ui integration TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_text_box_overlay_test text_box_overlay_tests.cpp)
 target_link_libraries(bloom_text_box_overlay_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_text_box_overlay_test)
@@ -1782,3 +1787,8 @@ add_executable(bloom_ui_layer_time_checkpoint_test layer_time_checkpoint_tests.c
 target_link_libraries(bloom_ui_layer_time_checkpoint_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_ui_layer_time_checkpoint_test)
 bloom_add_test(NAME bloom.ui.layer-time-checkpoint COMMAND bloom_ui_layer_time_checkpoint_test LABELS ui unit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(bloom_ui_timeline_layer_timing_test timeline_layer_timing_gesture_tests.cpp)
+target_link_libraries(bloom_ui_timeline_layer_timing_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_timeline_layer_timing_test)
+bloom_add_test(NAME bloom.ui.timeline-layer-timing COMMAND bloom_ui_timeline_layer_timing_test LABELS ui unit TIMEOUT 30)

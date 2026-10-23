@@ -337,6 +337,14 @@ class TimelineLaneRegion final : public QWidget {
         document::WorkArea original, preview;
         double pressSeconds;
         int handle; // -1: in, 0: body, 1: out
+        // ADR 0024: Alt slips (body) or stretches (edge); the layer clock at press and in preview.
+        bool alt = false;
+        core::RationalTime startTime{};
+        document::LayerSpeed speed{};
+        std::optional<core::RationalTime> extentStart{};
+        std::optional<core::RationalTime> extentEnd{};
+        core::RationalTime previewStart{};
+        document::LayerSpeed previewSpeed{};
     };
     std::optional<RangeDrag> drag_{};
     std::optional<core::RationalTime> guide_{};

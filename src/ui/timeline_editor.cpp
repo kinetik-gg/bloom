@@ -11,6 +11,7 @@
 #include <bloom/ui/viewer_editor.hpp>
 
 #include "composition_editor_support.hpp"
+#include "timeline_layer_timing_gesture.hpp"
 #include "timeline_property_rows.hpp"
 
 #include <bloom/ui/composition_authoring.hpp>
@@ -18,6 +19,7 @@
 #include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
+#include <bloom/runtime/layer_time_projection.hpp>
 
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
@@ -1537,9 +1539,21 @@ void TimelineLaneRegion::mousePressEvent(QMouseEvent* event) {
                            : std::abs(x - bar->right()) <= hit ? 1
                                                                : 0;
         session_.selectLayer(layerId);
-        if (!locked)
+        if (!locked) {
             drag_ = RangeDrag{layerId, session_.snapshot().revision(), range,
                               range,   mapping->secondsForPixel(x),    handle};
+            drag_->alt = event->modifiers().testFlag(Qt::AltModifier);
+            drag_->startTime = drag_->previewStart = layer->timing.startTime;
+            drag_->speed = drag_->previewSpeed = layer->timing.speed;
+            // The content extent in placement time bounds how far a trim may leave the
+            // composition (ADR 0024).
+            if (const auto extent = runtime::resolveLayerExtent(session_.snapshot().project(),
+                                                                *composition, layer->timing)) {
+                drag_->extentStart = runtime::placementTimeOfLayerTime(layer->timing, {});
+                drag_->extentEnd =
+                    runtime::placementTimeOfLayerTime(layer->timing, extent->duration);
+            }
+        }
         update();
         event->accept();
         return;
@@ -1574,23 +1588,13 @@ void TimelineLaneRegion::mouseMoveEvent(QMouseEvent* event) {
         update();
         return;
     }
-    const double duration = composition->duration().toSeconds();
-    const double frame =
-        static_cast<double>(mapping->frameRate.denominator()) / mapping->frameRate.numerator();
-    const double delta = mapping->secondsForPixel(event->position().x()) - drag_->pressSeconds;
-    double start = drag_->original.start.toSeconds(), end = drag_->original.end.toSeconds();
-    const auto minimumSpan = std::min(frame, end - start);
-    if (drag_->handle < 0)
-        start = std::clamp(start + delta, 0.0, end - minimumSpan);
-    else if (drag_->handle > 0)
-        end = std::clamp(end + delta, start + minimumSpan, duration);
-    else {
-        const auto shift = std::clamp(delta, -start, duration - end);
-        start += shift;
-        end += shift;
-    }
+    double delta = mapping->secondsForPixel(event->position().x()) - drag_->pressSeconds;
+    const double start = drag_->original.start.toSeconds();
+    const double end = drag_->original.end.toSeconds();
     guide_.reset();
-    if (snapping_ && !event->modifiers().testFlag(Qt::ShiftModifier)) {
+    // Magnetic snapping moves the dragged edge(s) onto a target; a slip moves no edge.
+    if (snapping_ && !event->modifiers().testFlag(Qt::ShiftModifier) &&
+        !(drag_->alt && drag_->handle == 0)) {
         std::vector<core::RationalTime> targets{session_.currentTime(), session_.workArea().start,
                                                 session_.workArea().end};
         for (const auto& layer : composition->graph().layerOutputs())
@@ -1603,7 +1607,7 @@ void TimelineLaneRegion::mouseMoveEvent(QMouseEvent* event) {
             for (const int edge : {-1, 1}) {
                 if (drag_->handle != 0 && drag_->handle != edge)
                     continue;
-                const auto seconds = edge < 0 ? start : end;
+                const auto seconds = (edge < 0 ? start : end) + delta;
                 const auto distance =
                     std::abs(mapping->pixelForTime(target) - mapping->pixelForSeconds(seconds));
                 if (distance < best) {
@@ -1613,25 +1617,24 @@ void TimelineLaneRegion::mouseMoveEvent(QMouseEvent* event) {
                 }
             }
         }
-        if (guide_) {
-            if (drag_->handle <= 0)
-                start += adjustment;
-            if (drag_->handle >= 0)
-                end += adjustment;
-        }
+        delta += adjustment;
     }
-    const auto snap = [&](const double seconds) -> std::optional<core::RationalTime> {
-        if (seconds >= duration)
-            return composition->duration();
-        if (seconds < 0)
-            return std::nullopt;
-        const auto index = static_cast<std::uint64_t>(std::llround(seconds / frame));
-        return frameTimeForIndex(mapping->frameRate, mapping->duration,
-                                 std::min(index, mapping->maxIndex));
-    };
-    const auto in = snap(start), out = snap(end);
-    if (in && out && *in < *out && start >= 0 && end <= duration)
-        drag_->preview = {*in, *out};
+    const auto proposal = proposeLayerTiming({.start = drag_->startTime,
+                                              .in = drag_->original.start,
+                                              .out = drag_->original.end,
+                                              .speed = drag_->speed,
+                                              .rate = composition->format().frameRate(),
+                                              .duration = composition->duration(),
+                                              .extentStart = drag_->extentStart,
+                                              .extentEnd = drag_->extentEnd,
+                                              .handle = drag_->handle,
+                                              .alt = drag_->alt,
+                                              .deltaSeconds = delta});
+    if (proposal) {
+        drag_->preview = {proposal->in, proposal->out};
+        drag_->previewStart = proposal->start;
+        drag_->previewSpeed = proposal->speed;
+    }
     update();
     event->accept();
 }
@@ -1650,30 +1653,15 @@ void TimelineLaneRegion::mouseReleaseEvent(QMouseEvent* event) {
         const auto* composition = session_.composition();
         const auto* boundary =
             composition ? composition->graph().findLayer(completed.layer) : nullptr;
-        commands::Transaction transaction(completed.handle == 0 ? "Move Layer" : "Set Layer Range",
-                                          completed.revision);
-        if (completed.handle == 0 && boundary != nullptr) {
-            // ADR 0024: a body drag moves the layer's start time with its range, so its content
-            // and keys move with the bar. The shift is a whole number of composition frames.
-            const auto rate = composition->format().frameRate();
-            const auto frames = std::llround(
-                (completed.preview.start.toSeconds() - completed.original.start.toSeconds()) *
-                rate.numerator() / rate.denominator());
-            const auto& from = boundary->timing.startTime;
-            const auto start = core::RationalTime::create(
-                from.numerator() * static_cast<std::int64_t>(rate.numerator()) +
-                    frames * static_cast<std::int64_t>(rate.denominator()) * from.denominator(),
-                from.denominator() * static_cast<std::int64_t>(rate.numerator()));
-            if (!start)
-                return;
-            transaction.emplace<commands::SetLayerTiming>(
-                session_.compositionId(), completed.layer, *start, completed.preview.start,
-                completed.preview.end, boundary->timing.speed);
-        } else {
-            transaction.emplace<commands::SetLayerRange>(session_.compositionId(), completed.layer,
-                                                         completed.preview.start,
-                                                         completed.preview.end);
-        }
+        if (boundary == nullptr)
+            return;
+        // ADR 0024: every bar gesture commits one SetLayerTiming (move, slip, trim or stretch).
+        const char* name = completed.handle == 0 ? (completed.alt ? "Slip Layer" : "Move Layer")
+                                                 : (completed.alt ? "Stretch Layer" : "Trim Layer");
+        commands::Transaction transaction(name, completed.revision);
+        transaction.emplace<commands::SetLayerTiming>(
+            session_.compositionId(), completed.layer, completed.previewStart,
+            completed.preview.start, completed.preview.end, completed.previewSpeed);
         (void)session_.executeTransaction(std::move(transaction));
         update();
         event->accept();

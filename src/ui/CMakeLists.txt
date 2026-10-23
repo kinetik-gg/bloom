@@ -400,6 +400,8 @@ target_sources(
         properties_editor_registry.cpp
         properties_upstream.cpp
         properties_layer_time.cpp
+        timeline_layer_timing_gesture.cpp
+        timeline_layer_timing_gesture.hpp
         properties_layer_time.hpp
         properties_driven_rows.cpp
         composition_parameter_vocabulary.cpp
