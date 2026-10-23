@@ -67,4 +67,37 @@ class SetLayerContentExtent final : public Operation {
     document::LayerContentExtent extent_;
 };
 
+// Binds an animatable Time Remap on the layer's Layer Output (schema 5) with two Linear keys that
+// map its range identically: content time equals layer time at the in and out points.
+class EnableLayerTimeRemap final : public Operation {
+  public:
+    EnableLayerTimeRemap(document::CompositionId composition, document::LayerId layer)
+        : composition_(composition), layer_(layer) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
+        return composition_;
+    }
+
+  private:
+    document::CompositionId composition_;
+    document::LayerId layer_;
+};
+
+// Unbinds the Time Remap parameter and erases it with its curve.
+class DisableLayerTimeRemap final : public Operation {
+  public:
+    DisableLayerTimeRemap(document::CompositionId composition, document::LayerId layer)
+        : composition_(composition), layer_(layer) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
+        return composition_;
+    }
+
+  private:
+    document::CompositionId composition_;
+    document::LayerId layer_;
+};
+
 } // namespace bloom::commands

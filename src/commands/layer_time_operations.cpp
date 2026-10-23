@@ -1,6 +1,8 @@
 #include "node_operation_support.hpp"
 
+#include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
+#include <bloom/core/rational_time.hpp>
 
 #include <algorithm>
 #include <limits>
@@ -178,6 +180,87 @@ OperationResult SetLayerContentExtent::apply(document::Draft& draft) const {
         return invalidTiming("Layer content extent source must be a node in the composition");
     timing.contentExtent = extent_;
     return spanResult(composition_, *target.layer, target.composition->duration());
+}
+
+std::string_view EnableLayerTimeRemap::typeId() const noexcept {
+    return "bloom.layer.enable-time-remap";
+}
+
+OperationResult EnableLayerTimeRemap::apply(document::Draft& draft) const {
+    Target target;
+    if (auto failure = findTarget(draft, composition_, layer_, target))
+        return std::move(*failure);
+    auto& composition = *target.composition;
+    auto* node = composition.graph().findNode(target.layer->nodeId);
+    if (node == nullptr || node->schemaVersion != document::kLayerOutputNodeSchemaVersion)
+        return detail::invalidTarget();
+    if (std::ranges::any_of(node->parameters, [](const auto& binding) {
+            return binding.role == document::kTimeRemapParameterRole;
+        }))
+        return OperationResult::noChange();
+    const auto duration = composition.duration();
+    const auto& timing = target.layer->timing;
+    const auto layerTime = [&](const RationalTime t) {
+        return (t.toSeconds() - timing.startTime.toSeconds()) *
+               static_cast<double>(timing.speed.numerator()) /
+               static_cast<double>(timing.speed.denominator());
+    };
+    // Keys sit at the layer times of the in and out points; their values are the same seconds.
+    const auto inSeconds = layerTime(target.layer->inPoint);
+    const auto outSeconds = layerTime(target.layer->endPoint(duration));
+    const auto inKey = RationalTime::create(
+        static_cast<std::int64_t>(std::llround(inSeconds * 1'000'000'000.0)), 1'000'000'000);
+    const auto outKey = RationalTime::create(
+        static_cast<std::int64_t>(std::llround(outSeconds * 1'000'000'000.0)), 1'000'000'000);
+    const auto parameterId = draft.ids().allocateParameter();
+    if (!parameterId || !inKey || !outKey || !(*inKey < *outKey))
+        return invalidTiming("Time Remap needs a non-empty layer range");
+    if (!composition.parameters().insert({*parameterId,
+                                          std::string(document::kTimeRemapParameterSchemaKey),
+                                          document::ConstantValueSource{inSeconds}}))
+        return invalidTiming("Time Remap parameter could not be created");
+    node->parameters.push_back({std::string(document::kTimeRemapParameterRole), *parameterId});
+    auto animated = CreateAnimationForParameter(composition_, *parameterId, *inKey).apply(draft);
+    if (animated.status != OperationStatus::Applied)
+        return animated;
+    auto last =
+        SetKeyframeAtTimeForParameter(composition_, *parameterId, *outKey, outSeconds).apply(draft);
+    if (last.status != OperationStatus::Applied)
+        return last;
+    // An identity remap of the range changes no pixel inside it, but frame selection rounds the
+    // remapped seconds, so publish the layer span conservatively.
+    auto result = spanResult(composition_, *target.layer, duration);
+    result.outputs.push_back({"parameter", *parameterId});
+    return result;
+}
+
+std::string_view DisableLayerTimeRemap::typeId() const noexcept {
+    return "bloom.layer.disable-time-remap";
+}
+
+OperationResult DisableLayerTimeRemap::apply(document::Draft& draft) const {
+    Target target;
+    if (auto failure = findTarget(draft, composition_, layer_, target))
+        return std::move(*failure);
+    auto& composition = *target.composition;
+    auto* node = composition.graph().findNode(target.layer->nodeId);
+    if (node == nullptr)
+        return detail::invalidTarget();
+    const auto binding = std::ranges::find(node->parameters, document::kTimeRemapParameterRole,
+                                           &document::ParameterBinding::role);
+    if (binding == node->parameters.end())
+        return OperationResult::noChange();
+    const auto parameterId = binding->parameterId;
+    const auto* record = composition.parameters().find(parameterId);
+    std::optional<document::AnimationCurveId> curve;
+    if (record != nullptr)
+        if (const auto* source = std::get_if<document::AnimationCurveSource>(&record->source))
+            curve = source->curveId;
+    node->parameters.erase(binding);
+    if (!composition.parameters().erase(parameterId) ||
+        (curve && !composition.animationCurves().erase(*curve)))
+        return invalidTiming("Time Remap parameter could not be removed");
+    return spanResult(composition_, *target.layer, composition.duration());
 }
 
 } // namespace bloom::commands
