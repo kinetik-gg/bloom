@@ -36,6 +36,25 @@ subsampled, mixed-type, malformed, and truncated files return typed diagnostics 
 project truth. EXR decode runs on a worker and uses the same disk-cache key and thumbnail path as
 PNG/JPEG.
 
+**OpenEXR ingest correctness (#362).**
+
+- *Alpha association.* A new image layer or node-canvas image source inherits the asset's probed
+  association: `premultiply` is on only for straight-alpha assets, so a premultiplied EXR is never
+  multiplied by alpha twice. Existing layers keep their authored value.
+- *Windows.* The probe records the frame (display window) and the data window's offset inside it.
+  CPU evaluation and GPU preparation publish the data window at that offset, scaled by the shared
+  PointResampleV1 window rule (`render::pointResampleProxyWindow`), and an image source whose data
+  differs from its frame uses the frame as its local content bounds. Crops, overscan and passes of
+  one shot therefore register under the default layer transform; ordinary images are unchanged.
+- *Non-finite and out-of-range pixels.* Decode never fails a frame for them. A NaN or infinite
+  component becomes 0, alpha is clamped to [0, 1], and a component that overflows on
+  premultiplication or colour conversion is repaired the same way. The v1 process image cannot carry
+  premultiplied RGB at zero alpha, so additive "emission" pixels become transparent. Every changed
+  pixel is counted: the CPU evaluator reports a warning naming the count and GPU preparation records
+  `imageRepairedPixels`. The count is reported when the source is decoded; a decoded-cache hit
+  returns the same repaired pixels without repeating it. Preserving zero-alpha emission would change
+  the process image contract for every operation and needs its own ADR.
+
 TIFF is content-probed by classic and BigTIFF magic, but its read and write operations are provider
 operations. `ImageProvider` carries explicit Decode and Encode callbacks matching the worker image
 product; no global registry is consulted. MEDIA-4 enables `TiffRgba16SrgbV1` export through the isolated FFmpeg worker on Linux.
