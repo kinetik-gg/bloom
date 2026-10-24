@@ -147,6 +147,9 @@ The [performance and reliability sprint](plans/performance-reliability-sprint.md
 node, recovery, RAM preview, cache, audio, media and document work under #306, with
 [local milestone validation](development/local-validation.md).
 
+The [production workflows release](plans/production-workflows-release.md) records what landed under
+#374 (timeline, footage, masking, EXR, composition settings and Assets) and the work still open.
+
 See [Export](user-guide/exporting-video.md) for composition export presets, audio,
 verification and cancellation.
 
