@@ -422,8 +422,31 @@ unproven. The gate relies on in-composition evaluation being time-local; nested 
 mapping is outside this proof, so `compositionsDependingOn()` reports every composition that
 transitively nests a changed one, and those compositions treat any non-empty change as whole.
 Features that add cross-layer or temporal dependencies (track mattes, layer-owned time mapping)
-must extend these gates before they may rely on them. The cost is linear in the one composition's
+must extend these gates before they may rely on them. Track mattes do
+([ADR 0028](../decisions/0028-layer-masks-and-track-mattes.md)): a reached matte target reaches its
+source layer whatever the source's slot, enabled or solo state; a matte source's own Merge slot is
+not consumed; and the confinement walk never gates a matte source by its own span but continues to
+its targets, whose spans then bound the change. The cost is linear in the one composition's
 nodes, edges and parameter bindings, with work counters for tests.
+
+### Layer Masks And Track Mattes
+
+[ADR 0028](../decisions/0028-layer-masks-and-track-mattes.md) makes masks and mattes typed document
+truth on the `LayerOutputBoundary`:
+
+- `masks` is an ordered list of `LayerMask { id, name, mode, inverted, path, feather, expansion,
+  opacity }`. The four values are parameters each mask owns (animatable; the path through a Path
+  curve). Masks live in the layer's content space and multiply the content, in premultiplied space,
+  by their accumulated coverage before the layer transform. The compiler lowers them to one
+  `LayerMaskKernel` image effect on the Layer Output's input.
+- `trackMatte` is an optional `TrackMatte { source, channel: Alpha|Luma, inverted }`. The source is
+  another layer of the same Merge, the relation is acyclic, and a matte source contributes nothing
+  to its Merge's composite while it is evaluated for its targets on its own clock. The compiler
+  lowers a matted entry to a Multiply Alpha effect of the target's Layer Output by the source's; the
+  Merge reads the target's blend mode and clock through it (`mergeEntryLayerIndex`).
+- Typed commands with exact undo add, remove, reorder, rename, re-mode, invert and re-path masks
+  and set the matte; deleting, duplicating, splitting and cloning layers carry masks with fresh ids.
+  A matte source cannot be split.
 
 ## Hard-Case Contracts
 

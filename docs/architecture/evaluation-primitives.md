@@ -69,7 +69,11 @@ depth, normals, motion, UV, ID, or arbitrary data images can use it safely.
 Storage resemblance does not imply semantic interchangeability:
 
 - `Color` is not `Vec4`.
-- `Mask` is not a grayscale color image.
+- `Mask` is not a grayscale color image. `SocketValueKind::Mask` (ADR 0028) carries single-channel
+  coverage in `[0, 1]` over composition pixel space, transported privately as premultiplied white
+  (every channel holds the coverage; consumers read alpha; zero outside its data window). It
+  connects only to Mask inputs, with no conversion to or from Image in either direction. The Mask
+  node produces one; Image Mix's optional `mask` input consumes one (factor × mask per pixel).
 - Depth, normals, motion vectors, UVs, object IDs, and arbitrary data channels are not color.
 - A uniform value, per-element field, image grid, and variable-length list are different shapes even
   when their element type matches.

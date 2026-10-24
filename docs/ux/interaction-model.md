@@ -125,6 +125,15 @@ The guide toggles use `Ctrl+Alt+S` for Safe Areas and `Ctrl+Shift+C`, `Ctrl+Shif
 is suppressed below 400% even when enabled. Guides follow the viewer's active zoom/pan transform;
 they are not part of the display buffer or any export.
 
+Masks (ADR 0028). With a layer selected, the Rectangle, Ellipse and Pen tools add a mask to that
+layer instead of creating a shape layer: Rectangle draws four corner anchors, Ellipse four anchors
+with circular handles, and Pen the clicked path, all mapped into the layer's content space through
+the inverse of its evaluated content-to-composition transform (a layer with no evaluated bounds at
+the playhead drops the gesture). With nothing selected, the tools behave as before. The selected
+mask draws its outline, anchors and handles and dashed feather bounds at expansion ± feather / 2;
+dragging an anchor or handle commits one path edit on release (a key at the playhead on the layer's
+own clock when the path is keyed), and clicking an outline with the Select tool selects that mask.
+
 ## Assets
 
 Assets is a project-level composition browser. It has no modifier-free keyboard bindings: text
@@ -376,6 +385,11 @@ layout. New object names are `timelinePropertyRow`, `timelinePropertyLabel`,
 `timelinePropertyColor`, `timelinePropertyComponent`, and `timelineKeyframeRow`. The driven display
 adds `timelinePropertyDriven`, `timelinePropertyDriverLink` and `timelinePropertyDrivenValue`.
 
+An expanded layer with masks shows a collapsible Masks group: one row per mask labelled with its
+name and mode (and Inverted), keying the path, with Feather, Expansion and Opacity rows beneath. A
+row press selects the mask. Each layer row has a Matte column (`layerTrackMatteDropdown`) listing
+None and the other layers of the same Merge, then Alpha, Luma and Inverted for the current matte.
+
 ## Properties
 
 | Gesture | Action |
@@ -401,6 +415,12 @@ and the timeline row for one parameter always show the same string. A driven Str
 resolved text read-only, exactly as every other kind shows its resolved value. A stale result cannot
 overwrite a newer selection, snapshot, or time. Collapsed section state
 is a UI preference; searching temporarily exposes matches without changing that preference.
+
+A layer's Masks section lists each mask with a name field, a closed Mode dropdown (None, Add,
+Subtract, Intersect, Difference), an Inverted switch, a keyable Path summary, Feather, Expansion and
+Opacity rows, and move-up, move-down and remove buttons; touching a group selects that mask for the
+Viewer. The Track Matte section has a source dropdown (None and the layers of the same Merge), an
+Alpha/Luma channel dropdown and an Inverted switch. A locked layer disables both sections.
 
 ## Retired Bindings
 

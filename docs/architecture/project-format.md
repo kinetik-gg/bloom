@@ -1,7 +1,9 @@
 # Bloom Project Format
 
-The current document schema is 1.23. It adds optional layer-owned time members to Layer Output
-boundaries (see "Layer Time In Document 1.23") on top of the 1.22 explicit external file-URI asset
+The current document schema is 1.24. It adds optional layer masks and a track matte to Layer Output
+boundaries, the Path animation curve kind and the optional `layerMask` allocator namespace (see
+"Layer Masks In Document 1.24") on top of the 1.23 layer-owned time members (see "Layer Time In
+Document 1.23"), the 1.22 explicit external file-URI asset
 locators, the 1.21 LUT asset kind, 1.20 config-managed asset input colour-space ids,
 the 1.19 optional per-composition working colour-space override, the 1.18 `project.dataBlocks`
 collection, and the `dataBlock` allocator namespace.
@@ -45,13 +47,13 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.23`.
+The container version remains `1.0`; the current document schema is `1.24`.
 The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. Versioned artifacts through `1.11` remain checked as
-historical fixtures, with the current `1.23` contract also enforced by the canonical writer and
+historical fixtures, with the current `1.24` contract also enforced by the canonical writer and
 decoder tests. The manifest artifact still requires container `1.0`; its document
 declaration follows the current document minor. Every historical artifact from `1.0` through `1.11`,
 manifest and document, remains checked, and each version's checker validates what its own minor adds
@@ -918,10 +920,10 @@ schema-version path. Reconstruction applies the same registry validation to deco
 names the node ID. Old or future versions of a known kind are never silently upgraded, downgraded,
 or interpreted through another definition. No parameters or IDs are injected and no edges are dropped.
 
-The canonical writer is **1.23** and the load floor is **1.15**. Opening 1.15 applies the additive
-asset metadata defaults during typed decoding and reports the resulting document as 1.23. The
+The canonical writer is **1.24** and the load floor is **1.15**. Opening 1.15 applies the additive
+asset metadata defaults during typed decoding and reports the resulting document as 1.24. The
 registered 1.15 → 1.16, 1.16 → 1.17, 1.17 → 1.18, 1.18 → 1.19, 1.19 → 1.20,
-1.20 → 1.21, 1.21 → 1.22 and 1.22 → 1.23 DOM
+1.20 → 1.21, 1.21 → 1.22, 1.22 → 1.23 and 1.23 → 1.24 DOM
 transforms are tested against the same decoded result. The input-id step adds only the deterministic
 mapping, preserving inheritance and `lin_rec709_scene`; the LUT and locator steps advance only
 the version, and the layer-time step also advances the Layer Output node schema (below). No other node version, parameter source or rendering meaning changes. The earlier numbered ladder remains independently
@@ -1246,7 +1248,7 @@ the new artifacts to 1.5 and run the complete historical ladder.
 ## Content Bounds Introduced In Document 1.7
 
 Solid v2 introduced explicit Scalar width and height. Text v2, Layer v4 (v5 from 1.23), and Merge v2 use local
-content bounds. These are now the only supported definitions; the current 1.23 schema includes
+content bounds. These are now the only supported definitions; the current 1.24 schema includes
 those contracts together with per-component animation, image assets, and audio. Documents carrying
 older node versions fail validation. There is no coordinate conversion or compatibility evaluator.
 
@@ -1371,9 +1373,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.23`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.24`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-The current artifacts are `document-1.23.schema.json` and `manifest-1.23.schema.json`; the
+The current artifacts are `document-1.24.schema.json` and `manifest-1.24.schema.json`; the
 historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
@@ -1408,7 +1410,7 @@ and unknown additive members.
 Document `1.16` adds organization metadata without changing media identity or evaluation. The
 introduction artifacts are `document-1.16.schema.json` and `manifest-1.16.schema.json`. Container
 version remains `1.0`; the load floor remains `1.15` so existing projects can acquire these
-additive defaults when opened. The current writer saves 1.23; opening alone leaves the
+additive defaults when opened. The current writer saves 1.24; opening alone leaves the
 original file untouched.
 
 Each asset appends `name`, optional `folder`, `tags`, then `order` after its existing media
@@ -1475,14 +1477,40 @@ bindings and values unchanged; opening an older document through typed decoding 
 node-schema upgrade. A document opened from `1.22` therefore saves as `1.23` with identity timing
 and no layer time member.
 
+## Layer Masks In Document 1.24
+
+Document `1.24` persists the masks, track mattes and Path curves of
+[ADR 0028](../decisions/0028-layer-masks-and-track-mattes.md). Every addition is optional and
+written only when present, so a document without masks keeps its 1.23 bytes apart from the version.
+
+A Layer Output boundary gains two members after the layer-time members:
+
+| Member | Encoding |
+| --- | --- |
+| `masks` | non-empty array (at most 64) of `{"id", "name", "mode", "inverted", "path", "feather", "expansion", "opacity"}`: the mask id, a human-facing name, `"none"`, `"add"`, `"subtract"`, `"intersect"` or `"difference"`, a boolean, and the ids of the four parameters it owns (schema keys `bloom.mask.path`, `bloom.mask.feather`, `bloom.mask.expansion`, `bloom.mask.opacity`) |
+| `trackMatte` | `{"source": <layer id>, "channel": "alpha" or "luma", "inverted": <boolean>}` |
+
+A mask is a collection element identified by its id (round-trip kind `LayerMask`), so unknown
+trailing members of a mask object are preserved like those of any other element. Mask parameters
+are ordinary parameter records owned by exactly one mask and never bound by a node.
+
+An animation curve may be `{"id", "kind": "path", "keyframes"}`. Each key is `{"id", "time",
+"value", "outgoingInterpolation"}` plus the optional ease handles, where `value` is a constant-value
+object of kind `"path"`. Only a `bloom.mask.path` parameter may own a Path curve.
+
+`idAllocation.highestIssued` gains an optional `layerMask` member, written once a mask id has been
+issued. The decoder accepts these members only at `1.24` or later. The `1.23` → `1.24` DOM step only
+advances the version: every new member is optional, so no record is inserted or rewritten.
+
 ## Video Assets In Document 1.17
 
-The current document and manifest schema artifacts are `document-1.23.schema.json` and
-`manifest-1.23.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
+The current document and manifest schema artifacts are `document-1.24.schema.json` and
+`manifest-1.24.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
 The 1.16 → 1.17 migration only advances the version; the 1.17 → 1.18 and 1.18 → 1.19 steps
 likewise preserve existing assets and pixels. Opening 1.15 first applies asset-organization
 defaults and the historical video and working-space steps, then the 1.19 → 1.20 input-id step,
-1.20 → 1.21 LUT step, 1.21 → 1.22 locator version step and 1.22 → 1.23 layer-time step.
+1.20 → 1.21 LUT step, 1.21 → 1.22 locator version step, 1.22 → 1.23 layer-time step and
+1.23 → 1.24 layer-mask version step.
 
 `AssetKind::Video` serializes as `"video"`. It retains the shared asset identity, locator,
 interpretation, dimensions and organization envelope, with a closed `video` member before

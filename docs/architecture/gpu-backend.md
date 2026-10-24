@@ -1170,6 +1170,19 @@ latching startup values. The rooted service request and preparation executor use
 ceiling independently; a host source ceiling does not cap GPU intermediates. Each request remains subject to real phase and device admission; a snapshot is neither
 allocation ownership nor a new independent allowance.
 
+Layer masks and mattes (ADR 0028). A `LayerMaskKernel` effect prepares as one generated
+neighbourhood program (`GpuOcioTransformKind::LayerMask`, semantics `bloom.render.layer-mask.v1`)
+through the same preparer, compile cache and executor as the separable blur. The host samples and
+flattens the masks once (`sampleLayerMasks`, `layerMaskProgramText`) and bakes segments, reciprocal
+factors and per-mask controls into the program text, so the content identity covers the geometry.
+The per-pixel math uses no division and a multiply-only square root, so coverage is bit-identical to
+the CPU reference. More than 8192 segments fail GPU preparation closed. Image Mix's Mask is binding 4
+of `ImageCombineV1` (push mask extent, offset and mode; an absent mask is zero coverage), carried as
+a third resident input on the blend command and planned, retained and released like its other two.
+A track matte is the existing Multiply Alpha dispatch over two Layer Output commands. Required
+axes `feature.mask.layer`, `feature.mask.value` and `feature.matte.track` and the effect and Mask
+node ids are fixtured through the production builder with native parity.
+
 A requested executor size is a ceiling, not a need. The phase budget grants a native phase at most
 half of the remaining device room (never less than the phase's stated minimum), so concurrent
 phases such as a Viewer request beside a RAM-preview fill are not refused while most of the device

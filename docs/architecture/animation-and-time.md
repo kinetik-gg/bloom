@@ -1132,6 +1132,19 @@ enabled/solo state and time range do not suppress or fade children. The child's 
 continue to apply independently.
 
 
+## Path Curves
+
+[ADR 0028](../decisions/0028-layer-masks-and-track-mattes.md) adds `PathAnimationCurve`, a
+whole-value curve of `PathKeyframe { id, time, value: PathValue, outgoingInterpolation, ease
+handles }`; only a mask path (`bloom.mask.path`) may own one. A sample before the first key or after
+the last holds the end key. Inside a segment the factor is the scalar sampler's own 0 → 1 segment
+with the keys' interpolation and handles (a handle's value offset is a fraction of that progress),
+and each anchor's point and handles interpolate by it; a missing handle counts as its point. Keys
+whose anchor counts or `closed` flags differ hold the earlier key. Path curves compile inline into
+the mask operation that samples them and are sampled at the operation's own clock time. Keyframe
+move, delete, interpolation and paste commands treat a Path key as a whole-value key; value and
+handle edits that address a scalar axis do not apply to it.
+
 ## Layer Time
 
 Status: accepted and implemented ([ADR 0024](../decisions/0024-layer-owned-time.md), issue #353).
