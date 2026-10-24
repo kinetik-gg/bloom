@@ -533,9 +533,47 @@ displayProofRunner(const bool customView) {
         }
         return combined;
     };
-    add("operation.CompiledChannelShuffle", GpuCoverageFixtureCriterion::Prepared,
+    // A Colour Shuffle whose input space differs from an ACEScg working space: the gather is the raw
+    // upload and the input->working conversion is a genuine GPU OCIO ProcessEffect.
+    const auto runColourChannels = [] {
+        const bloom::runtime::CpuCompositionEvaluator evaluator;
+        auto asset = bloom::gpu_coverage_media::layeredImage().asset;
+        asset.interpretation.inputColorSpaceId =
+            std::string{bloom::gpu_coverage_working_space::kAcesTextureInput};
+        const auto plan = bloom::gpu_coverage_media::channelShufflePlan(
+            asset, LayerValues{.position = {4.3, 3.1}, .opacity = 1.0}, 113300,
+            bloom::gpu_coverage_media::ChannelFixture::Shuffle);
+        auto context = bloom::runtime::GpuSceneMediaContext::fromEvaluator(evaluator);
+        context.assetBaseDirectory = bloom::gpu_coverage_media::gateDirectory();
+        const CpuGpuSceneBuilder builder(nullptr, context, bloom::gpu_coverage_ocio::context());
+        const auto request = bloom::gpu_coverage_working_space::acesRequest(*plan);
+        FixtureRun result;
+        const auto prepared = builder.build(plan, request);
+        if (prepared) {
+            result.prepared = true;
+            result.frames.push_back(FrameRun{plan, request,
+                                             bloom::gpu_coverage_media::gateDirectory(),
+                                             prepared.scene});
+            result.evidence = "prepared colour shuffle " +
+                              std::to_string(prepared.scene->commands().size()) + " commands";
+            return result;
+        }
+        result.evidence = codeName(prepared.diagnostic.code) + ": " + prepared.diagnostic.message;
+        return result;
+    };
+    add(
+        "operation.CompiledChannelShuffle", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime channel shuffle production scene preparation",
-        [runAllChannels] { return runAllChannels(113000); });
+        [runAllChannels, runColourChannels] {
+            auto combined = runAllChannels(113000);
+            auto colour = runColourChannels();
+            combined.prepared = combined.prepared && colour.prepared;
+            combined.evidence += colour.evidence;
+            for (auto& frame : colour.frames)
+                combined.frames.push_back(std::move(frame));
+            return combined;
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     add("node.bloom.channel-shuffle", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime channel shuffle production scene preparation", [runChannels] {
             return runChannels(bloom::gpu_coverage_media::ChannelFixture::Shuffle, 113400);
