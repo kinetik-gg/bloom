@@ -119,6 +119,7 @@ void forEachInput(const CompiledOperation& operation, Function&& function) {
                    [](const CompiledImageSource&) {},
                    [](const CompiledVideoSource&) {},
                    [](const CompiledCompositionSource&) {},
+                   [](const CompiledChannelShuffle&) {},
                    [&function](const CompiledLayerOutput& layer) {
                        function(layer.input);
                        if (layer.parent)

@@ -507,6 +507,47 @@ displayProofRunner(const bool customView) {
         "src/document node_definition_registry tests", [] { return runBuilder(basePlan()); });
     add("node.bloom.composition-output", GpuCoverageFixtureCriterion::Prepared,
         "src/document node_definition_registry tests", [] { return runBuilder(basePlan()); });
+    // ADR 0026: Shuffle (Colour), Remove and Channel Copy (Raw data with NaN repair) through the
+    // production channel gather, upload, proxy resample and OCIO input pass.
+    const auto runChannels = [](const bloom::gpu_coverage_media::ChannelFixture kind,
+                                const std::uint64_t idBase) {
+        const bloom::runtime::CpuCompositionEvaluator evaluator;
+        const auto& image = bloom::gpu_coverage_media::layeredImage();
+        const auto plan = bloom::gpu_coverage_media::channelShufflePlan(
+            image.asset, LayerValues{.position = {4.3, 3.1}, .opacity = 1.0}, idBase, kind);
+        return runMediaBuilder(plan, evaluator, bloom::gpu_coverage_media::gateDirectory());
+    };
+    const auto runAllChannels = [runChannels](const std::uint64_t idBase) {
+        using bloom::gpu_coverage_media::ChannelFixture;
+        FixtureRun combined;
+        combined.prepared = true;
+        std::uint64_t offset = 0;
+        for (const auto kind :
+             {ChannelFixture::Shuffle, ChannelFixture::Remove, ChannelFixture::Copy}) {
+            auto frame = runChannels(kind, idBase + offset);
+            offset += 100;
+            combined.prepared = combined.prepared && frame.prepared;
+            combined.evidence += frame.evidence + "; ";
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+        }
+        return combined;
+    };
+    add("operation.CompiledChannelShuffle", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime channel shuffle production scene preparation",
+        [runAllChannels] { return runAllChannels(113000); });
+    add("node.bloom.channel-shuffle", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime channel shuffle production scene preparation", [runChannels] {
+            return runChannels(bloom::gpu_coverage_media::ChannelFixture::Shuffle, 113400);
+        });
+    add("node.bloom.channel-remove", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime channel shuffle production scene preparation", [runChannels] {
+            return runChannels(bloom::gpu_coverage_media::ChannelFixture::Remove, 113500);
+        });
+    add("node.bloom.channel-copy", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime channel shuffle production scene preparation", [runChannels] {
+            return runChannels(bloom::gpu_coverage_media::ChannelFixture::Copy, 113600);
+        });
     add("node.bloom.image-source", GpuCoverageFixtureCriterion::Prepared,
         "src/media image source tests", [] {
             const bloom::runtime::CpuCompositionEvaluator evaluator;

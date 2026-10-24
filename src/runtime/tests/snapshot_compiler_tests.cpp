@@ -1718,7 +1718,7 @@ void testOverrideVectorKindsAndLimits(Expectations& expectations) {
     auto imageProject = makeProject(singleLayerOptions());
     auto* composition = imageProject.findComposition(kCompositionId);
     auto* node = composition->graph().findNode(kFirstSolidNode);
-    const auto* definition = registry.find("bloom.image-source", 1);
+    const auto* definition = registry.find("bloom.image-source", 2);
     require(definition != nullptr, "image definition exists");
     node->typeId = definition->key.typeId;
     node->schemaVersion = definition->key.schemaVersion;

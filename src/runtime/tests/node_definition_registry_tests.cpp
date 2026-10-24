@@ -1,3 +1,4 @@
+#include <bloom/document/channel_nodes.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
@@ -132,8 +133,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // image-node batch adds Exposure, Offset, Multiply, Invert, the two Combine nodes, Crop, Pad,
     // Multiply Alpha, Checker, Flip, Rotate 90, Resize, Fit, Gaussian and Box Blur, and Linear and
     // Radial Gradient: 30 structural/image definitions plus 100 value-library definitions. ADR 0028
-    // adds the Mask node.
-    expectations.expect(registry.definitions().size() == 131,
+    // adds the Mask node; ADR 0026 adds Shuffle, Channel Copy and Remove.
+    expectations.expect(registry.definitions().size() == 134,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -298,10 +299,14 @@ void testStructuralLoweringsRequireCanonicalKeys(Expectations& expectations) {
         const auto output = builtInDefinition(document::kCompositionOutputNodeType,
                                               document::kCompositionOutputNodeSchemaVersion);
         expectations.expect(
-            output.outputs.empty() && output.inputs.size() == 2 &&
+            output.outputs.empty() && output.inputs.size() == 3 &&
                 output.inputs[1].name == document::kCompositionOutputAudioInputPort &&
-                output.inputs[1].valueKind == runtime::SocketValueKind::Audio,
-            "the composition Output declares image and optional audio inputs and no output");
+                output.inputs[1].valueKind == runtime::SocketValueKind::Audio &&
+                output.inputs[2].name == document::kCompositionOutputChannelsInputPort &&
+                output.inputs[2].valueKind == runtime::SocketValueKind::ChannelSet &&
+                !output.inputs[2].required,
+            "the composition Output declares image, optional audio and optional channel inputs "
+            "and no output");
         runtime::NodeDefinitionRegistry sourcingOutput;
         auto spoof = output;
         spoof.outputs.push_back(
@@ -314,7 +319,7 @@ void testStructuralLoweringsRequireCanonicalKeys(Expectations& expectations) {
         // Output is an empty composition that draws nothing, not a required-input failure. The
         // registry refuses a definition that claims it is required, so optionality is a registry
         // fact rather than an editor convention.
-        expectations.expect(output.inputs.size() == 2 &&
+        expectations.expect(output.inputs.size() == 3 &&
                                 output.inputs[0].name == document::kCompositionOutputInputPort &&
                                 output.inputs[0].valueKind == runtime::SocketValueKind::Image &&
                                 !output.inputs[0].required,

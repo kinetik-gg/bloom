@@ -298,10 +298,28 @@ lower(const std::vector<document::NodeId>& order) {
                 return edge->source.nodeId == nodeId && edge->source.port == "image";
             }))
             continue;
+        // ADR 0026: an Image source whose colour `image` output feeds nothing is reachable only
+        // through its `channels` output, which compiles into a Shuffle's channel expression.
+        if (definition->second->lowering == runtime::NodeLoweringKind::ImageSource &&
+            !hasReachableOutput(nodeId, document::kImageSourceImageOutputPort))
+            continue;
         if (emptyImages_.contains(nodeId) && !transformParents_.contains(nodeId))
             continue;
         if (isValueNode(nodeId))
             continue;
+        // Channel algebra (Remove, Channel Copy, a Shuffle's channel output) touches no pixels and
+        // compiles into the expression of the Shuffle whose image output reads it.
+        if (definition->second->lowering == runtime::NodeLoweringKind::Channel) {
+            if (node->typeId != document::kChannelShuffleNodeType ||
+                !hasReachableOutput(nodeId, document::kChannelShuffleImagePort))
+                continue;
+            auto shuffle = lowerChannelShuffle(*node);
+            if (!shuffle)
+                return {};
+            indices.emplace(nodeId, runtime::OperationIndex::fromRaw(operations.size()));
+            operations.emplace_back(std::move(*shuffle));
+            continue;
+        }
         // An Image Reroute is ELIDED rather than compiled: its consumers read its input's operation
         // directly, so it costs nothing at evaluation -- the same treatment a muted node's bypass
         // already gets, and the generalisation of DissolveNode's single Image pair to a node that
@@ -1049,6 +1067,169 @@ lowerImageEffect(const document::NodeRecord& node,
     return std::nullopt;
 }
 
+[[nodiscard]] bool hasReachableOutput(const document::NodeId nodeId,
+                                      const std::string_view port) const {
+    return std::ranges::any_of(reachableEdges_, [&](const auto* edge) {
+        return edge->source.nodeId == nodeId && edge->source.port == port;
+    });
+}
+
+[[nodiscard]] const std::string* channelText(const document::NodeRecord& node,
+                                             const std::string_view role) {
+    const auto* value = parameterConstant<std::string>(findParameterBinding(node, role));
+    if (value == nullptr)
+        addTopologyFailure(node.id, "Channel node parameters must be constant text.");
+    return value;
+}
+
+// Appends the steps that produce the ChannelSet on `output` and returns the index of its step.
+// `memo` shares a step between consumers of the same output.
+[[nodiscard]] std::optional<std::uint32_t>
+lowerChannelStep(const document::OutputPortRef& output, runtime::CompiledChannelExpression& expression,
+                 std::map<std::pair<document::NodeId, std::string>, std::uint32_t>& memo,
+                 const std::size_t depth) {
+    if (depth > 256) {
+        addTopologyFailure(output.nodeId, "Channel graph is too deep.");
+        return std::nullopt;
+    }
+    const auto memoKey = std::pair{output.nodeId, output.port};
+    if (const auto found = memo.find(memoKey); found != memo.end())
+        return found->second;
+    const auto* node = findNode(output.nodeId);
+    if (node == nullptr) {
+        addTopologyFailure(output.nodeId, "Channel source node is missing.");
+        return std::nullopt;
+    }
+    const auto input = [&](const std::string_view port) -> std::optional<std::uint32_t> {
+        const auto* edge = fixedInputEdge(node->id, port);
+        if (edge == nullptr) {
+            addTopologyFailure(node->id, "Channel node input is not connected.");
+            return std::nullopt;
+        }
+        return lowerChannelStep(edge->source, expression, memo, depth + 1);
+    };
+    runtime::CompiledChannelStep step;
+    step.nodeId = node->id;
+    if (node->typeId == document::kImageSourceNodeType) {
+        const auto* asset = parameterConstant<std::string>(findParameterBinding(*node, "asset"));
+        const auto* start =
+            parameterConstant<std::int64_t>(findParameterBinding(*node, "startFrame"));
+        const auto* loop = parameterConstant<std::int64_t>(findParameterBinding(*node, "loopMode"));
+        const auto* space =
+            parameterConstant<std::int64_t>(findParameterBinding(*node, "colorSpace"));
+        const auto* inputSpace =
+            parameterConstant<std::string>(findParameterBinding(*node, "inputColorSpaceId"));
+        const auto* part = parameterConstant<std::string>(
+            findParameterBinding(*node, document::kImagePartParameterRole));
+        if (!asset || !start || !loop || !space) {
+            addTopologyFailure(node->id, "Image source parameters could not be lowered.");
+            return std::nullopt;
+        }
+        std::uint64_t raw = 0;
+        const auto parsed = std::from_chars(asset->data(), asset->data() + asset->size(), raw);
+        const auto* record =
+            parsed.ec == std::errc{} && parsed.ptr == asset->data() + asset->size()
+                ? request_.snapshot.project().findAsset(document::AssetId::fromRaw(raw))
+                : nullptr;
+        // A muted source contributes no asset; resolution then reports it unavailable.
+        expression.sources.push_back(runtime::CompiledChannelSource{
+            node->id, record && !isMuted(node->id) ? std::optional{*record} : std::nullopt,
+            *start, *loop, *space, inputSpace == nullptr ? std::string{} : *inputSpace,
+            part == nullptr ? std::string{} : *part});
+        step.kind = runtime::CompiledChannelStepKind::Source;
+        step.source = static_cast<std::uint32_t>(expression.sources.size() - 1);
+    } else if (isMuted(node->id) && (node->typeId == document::kChannelRemoveNodeType ||
+                                     node->typeId == document::kChannelCopyNodeType ||
+                                     node->typeId == document::kChannelShuffleNodeType)) {
+        // A muted channel node passes its primary set through unchanged.
+        const auto through = input(document::kChannelSetPort);
+        if (through)
+            memo.emplace(memoKey, *through);
+        return through;
+    } else if (node->typeId == document::kChannelRemoveNodeType) {
+        const auto from = input(document::kChannelSetPort);
+        const auto* select = channelText(*node, "select");
+        const auto* keep = parameterConstant<bool>(findParameterBinding(*node, "keep"));
+        if (!from || !select || !keep)
+            return std::nullopt;
+        step.kind = runtime::CompiledChannelStepKind::Remove;
+        step.input = *from;
+        step.select = *select;
+        step.keep = *keep;
+    } else if (node->typeId == document::kChannelCopyNodeType) {
+        const auto target = input(document::kChannelSetPort);
+        const auto from = input(document::kChannelCopyFromPort);
+        const auto* select = channelText(*node, "select");
+        if (!target || !from || !select)
+            return std::nullopt;
+        step.kind = runtime::CompiledChannelStepKind::Copy;
+        step.input = *target;
+        step.from = *from;
+        step.select = *select;
+    } else if (node->typeId == document::kChannelShuffleNodeType &&
+               output.port == document::kChannelSetPort) {
+        const auto from = input(document::kChannelSetPort);
+        if (!from)
+            return std::nullopt;
+        step.kind = runtime::CompiledChannelStepKind::Rename;
+        step.input = *from;
+        constexpr std::array<std::string_view, 4> kSlots{"red", "green", "blue", "alpha"};
+        for (std::size_t slot = 0; slot < 4; ++slot) {
+            const auto* value = channelText(*node, kSlots[slot]);
+            if (!value)
+                return std::nullopt;
+            step.mapping[slot] = *value;
+        }
+        const auto* layer = channelText(*node, "layer");
+        if (!layer)
+            return std::nullopt;
+        step.layer = *layer;
+    } else {
+        addTopologyFailure(node->id, "Node does not produce a channel set.");
+        return std::nullopt;
+    }
+    expression.steps.push_back(std::move(step));
+    const auto index = static_cast<std::uint32_t>(expression.steps.size() - 1);
+    memo.emplace(memoKey, index);
+    return index;
+}
+
+[[nodiscard]] std::optional<runtime::CompiledOperation>
+lowerChannelShuffle(const document::NodeRecord& node) {
+    runtime::CompiledChannelShuffle shuffle;
+    shuffle.sourceNodeId = node.id;
+    const auto* edge = fixedInputEdge(node.id, document::kChannelSetPort);
+    if (edge == nullptr) {
+        addTopologyFailure(node.id, "Shuffle has no channel set.");
+        return std::nullopt;
+    }
+    std::map<std::pair<document::NodeId, std::string>, std::uint32_t> memo;
+    const auto root = lowerChannelStep(edge->source, shuffle.channels, memo, 0);
+    if (!root)
+        return std::nullopt;
+    // Steps are emitted in dependency order, so the root is the last step appended.
+    if (*root + 1 != shuffle.channels.steps.size()) {
+        auto copy = shuffle.channels.steps[*root];
+        shuffle.channels.steps.push_back(std::move(copy));
+    }
+    constexpr std::array<std::string_view, 4> kSlots{"red", "green", "blue", "alpha"};
+    for (std::size_t slot = 0; slot < 4; ++slot) {
+        const auto* value = channelText(node, kSlots[slot]);
+        if (!value)
+            return std::nullopt;
+        shuffle.mapping[slot] = *value;
+    }
+    const auto* mode = parameterConstant<std::int64_t>(findParameterBinding(node, "mode"));
+    const auto* associated = parameterConstant<bool>(findParameterBinding(node, "associated"));
+    if (!mode || !associated) {
+        addTopologyFailure(node.id, "Shuffle parameters could not be lowered.");
+        return std::nullopt;
+    }
+    shuffle.mode = *mode;
+    shuffle.associated = *associated;
+    return runtime::CompiledOperation{std::move(shuffle)};
+}
+
 [[nodiscard]] std::optional<runtime::CompiledOperation>
 lowerImageSource(const document::NodeRecord& node) {
     const auto* asset = parameterConstant<std::string>(findParameterBinding(node, "asset"));
@@ -1068,9 +1249,20 @@ lowerImageSource(const document::NodeRecord& node) {
         parsed.ec == std::errc{} && parsed.ptr == asset->data() + asset->size()
             ? request_.snapshot.project().findAsset(document::AssetId::fromRaw(raw))
             : nullptr;
-    return runtime::CompiledImageSource{
-        node.id, record ? std::optional{*record} : std::nullopt,      *start,      *loop,
-        *space,  inputSpace == nullptr ? std::string{} : *inputSpace, *premultiply};
+    // ADR 0026: part and layer are optional bindings (absent in a migrated v1 node).
+    const auto* part = parameterConstant<std::string>(
+        findParameterBinding(node, document::kImagePartParameterRole));
+    const auto* layer = parameterConstant<std::string>(
+        findParameterBinding(node, document::kImageLayerParameterRole));
+    return runtime::CompiledImageSource{node.id,
+                                        record ? std::optional{*record} : std::nullopt,
+                                        *start,
+                                        *loop,
+                                        *space,
+                                        inputSpace == nullptr ? std::string{} : *inputSpace,
+                                        *premultiply,
+                                        part == nullptr ? std::string{} : *part,
+                                        layer == nullptr ? std::string{} : *layer};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

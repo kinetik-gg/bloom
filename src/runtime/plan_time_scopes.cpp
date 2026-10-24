@@ -29,7 +29,7 @@ void forEachScopedInput(const CompiledOperation& operation, const std::uint32_t 
     std::visit(Visit{[](const CompiledShape&) {}, [](const CompiledSolid&) {},
                      [](const CompiledChecker&) {}, [](const CompiledText&) {},
                      [](const CompiledImageSource&) {}, [](const CompiledVideoSource&) {},
-                     [](const CompiledCompositionSource&) {},
+                     [](const CompiledCompositionSource&) {}, [](const CompiledChannelShuffle&) {},
                      [&](const CompiledImageEffect& effect) {
                          function(effect.input, clock);
                          if (effect.secondaryInput)
@@ -54,7 +54,7 @@ template <typename Function>
 void remapInputs(CompiledOperation& operation, Function&& function) {
     std::visit(Visit{[](CompiledShape&) {}, [](CompiledSolid&) {}, [](CompiledChecker&) {},
                      [](CompiledText&) {}, [](CompiledImageSource&) {}, [](CompiledVideoSource&) {},
-                     [](CompiledCompositionSource&) {},
+                     [](CompiledCompositionSource&) {}, [](CompiledChannelShuffle&) {},
                      [&](CompiledImageEffect& effect) {
                          effect.input = function(effect.input, false);
                          if (effect.secondaryInput)

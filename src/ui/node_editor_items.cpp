@@ -3,6 +3,7 @@
 #include <QPainterPathStroker>
 #include <QShortcut>
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/document/channel_nodes.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <memory>
@@ -224,6 +225,14 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Video");
     if (typeId == "bloom.image-source")
         return QCoreApplication::translate("node_editor", "Image");
+    // ADR 0026 channel nodes. The Remove node keeps or drops channels by pattern, so it reads as
+    // "Select Channels" (a menu item never claims a remove operation it is not).
+    if (typeId == document::kChannelShuffleNodeType)
+        return QCoreApplication::translate("node_editor", "Shuffle");
+    if (typeId == document::kChannelCopyNodeType)
+        return QCoreApplication::translate("node_editor", "Channel Copy");
+    if (typeId == document::kChannelRemoveNodeType)
+        return QCoreApplication::translate("node_editor", "Select Channels");
     if (typeId == "bloom.audio-source")
         return QCoreApplication::translate("node_editor", "Audio");
     if (typeId == document::kSolidSourceNodeType)

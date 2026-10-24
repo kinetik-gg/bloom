@@ -167,6 +167,17 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
     return std::nullopt;
 }
 
+// ADR 0026: the Shuffle colour leaf (prepareChannelShuffleColorLeaf).
+[[nodiscard]] std::optional<GpuSceneLeafFailure>
+buildChannelShuffleColorLeaf(const CompiledChannelShuffle& shuffle, const EvaluationRequest& request,
+                             const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
+                             const GpuSceneMediaContext& context,
+                             const GpuSceneOcioContext& ocioContext, std::uint64_t pixelBudget,
+                             double hScale, double vScale,
+                             const GpuSceneMediaChargeBytes& chargeBytes,
+                             const CancellationToken& cancellation,
+                             GpuSceneMediaStatistics& statistics, GpuSceneUploadLeafResult& result);
+
 // Build one ImageSource or VideoSource colour leaf and emit its scene commands, filling the
 // builder's per-operation outputs. Defined here so the builder orchestrator's image and video
 // blocks share one call site. The remaining media bytes are charged by the leaf helpers through
@@ -194,6 +205,10 @@ template <typename Emit, typename ChargeRetained, typename ChargeTransient>
         built =
             buildVideoColorLeaf(*video, request, plan, resolved, context, ocioContext, pixelBudget,
                                 hScale, vScale, chargeRetained, cancellation, statistics, leaf);
+    } else if (const auto* shuffle = std::get_if<CompiledChannelShuffle>(&operation)) {
+        built = buildChannelShuffleColorLeaf(*shuffle, request, plan, resolved, context,
+                                             ocioContext, pixelBudget, hScale, vScale,
+                                             chargeRetained, cancellation, statistics, leaf);
     } else {
         return GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::InternalInvariant,
                                    "a media leaf was requested for a non-media operation"};

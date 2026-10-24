@@ -160,6 +160,19 @@ buildImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest& 
     return finishUploadLeaf(outcome, result, hScale, vScale, chargeBytes);
 }
 
+std::optional<GpuSceneLeafFailure> buildChannelShuffleColorLeaf(
+    const CompiledChannelShuffle& shuffle, const EvaluationRequest& request,
+    const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
+    const GpuSceneMediaContext& context, const GpuSceneOcioContext& ocioContext,
+    const std::uint64_t pixelBudget, const double hScale, const double vScale,
+    const GpuSceneMediaChargeBytes& chargeBytes, const CancellationToken& cancellation,
+    GpuSceneMediaStatistics& statistics, GpuSceneUploadLeafResult& result) {
+    const auto outcome = prepareChannelShuffleColorLeaf(
+        shuffle, request, plan, resolved, context, ocioContext, pixelBudget,
+        request.bypassOperationCache, plan.bypassOperationCache(), cancellation, statistics);
+    return finishUploadLeaf(outcome, result, hScale, vScale, chargeBytes);
+}
+
 std::optional<GpuSceneLeafFailure>
 buildVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest& request,
                     const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,

@@ -65,6 +65,10 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                     return true;
                 else if constexpr (std::is_same_v<Step, CompiledImageSource>)
                     return step.asset && step.asset->kind == document::AssetKind::Sequence;
+                else if constexpr (std::is_same_v<Step, CompiledChannelShuffle>)
+                    return std::ranges::any_of(step.channels.sources, [](const auto& source) {
+                        return source.asset && source.asset->kind == document::AssetKind::Sequence;
+                    });
                 else if constexpr (std::is_same_v<Step, CompiledImageEffect>) {
                     if (input(step.input) ||
                         (step.secondaryInput && input(*step.secondaryInput)) ||

@@ -91,6 +91,7 @@ BLOOM_GPU_REQUIRED_OPERATION(CompiledCompositionOutput, "composition output");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledShape, "shape source");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledCompositionSource, "nested composition source");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledImageEffect, "image effect");
+BLOOM_GPU_REQUIRED_OPERATION(CompiledChannelShuffle, "channel shuffle (ADR 0026)");
 
 #define BLOOM_GPU_REQUIRED_EFFECT(Alternative, Label)                                              \
     template <> struct GpuImageEffectCoverageTraits<Alternative> final {                           \

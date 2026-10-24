@@ -20,7 +20,8 @@ namespace bloom::media::cache {
 // source bytes and interpretation -- an entry keyed on the old identity is never read back
 // (docs/architecture/media-io.md "Disk cache": "cache key includes the decoder's identity so a
 // decoder upgrade invalidates entries").
-inline constexpr std::string_view kImageDecoderIdentity = "bloom-image-decode-3";
+// 4: ADR 0026 multipart and layered OpenEXR decode with part and layer selection.
+inline constexpr std::string_view kImageDecoderIdentity = "bloom-image-decode-4";
 
 // The inputs that make a decoded image's on-disk identity: everything selectImageSource() /
 // selectThumbnail() already resolve per docs/architecture/media-io.md's cache-key contract (asset
@@ -39,6 +40,10 @@ struct ImageCacheKeyInputs final {
     // OCIO version of a Bloom-synthesized space (Rec.2100 HLG). Empty for ordinary config spaces,
     // whose keys are then byte-identical to the keys before this field existed.
     std::string synthesizedColorSpaceIdentity;
+    // ADR 0026: the selected OpenEXR part and colour layer. Both empty select the first part's
+    // root layer and add nothing to the key.
+    std::string part{};
+    std::string layer{};
 
     friend bool operator==(const ImageCacheKeyInputs&, const ImageCacheKeyInputs&) = default;
 };

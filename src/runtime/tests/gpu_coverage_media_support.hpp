@@ -23,9 +23,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace bloom::gpu_coverage_media {
@@ -176,6 +178,142 @@ imageSourcePlan(const bloom::document::AssetRecord& asset, const LayerValues lay
     std::vector<CompiledOperation> operations;
     operations.emplace_back(bloom::runtime::CompiledImageSource{NodeId::fromRaw(idBase + 10), asset,
                                                                 0, 0, 0, std::string{}, false});
+    operations.emplace_back(layerOutput(NodeId::fromRaw(idBase + 11),
+                                        bloom::document::LayerId::fromRaw(idBase + 12),
+                                        OperationIndex::fromRaw(0), ids, layer));
+    operations.emplace_back(CompiledMerge{
+        NodeId::fromRaw(idBase + 13),
+        std::vector<CompiledMergeInput>{CompiledMergeInput{
+            bloom::document::LayerSlotId::fromRaw(idBase + 14),
+            bloom::document::LayerId::fromRaw(idBase + 12), OperationIndex::fromRaw(1)}}});
+    operations.emplace_back(
+        CompiledCompositionOutput{NodeId::fromRaw(idBase + 15), OperationIndex::fromRaw(2)});
+    return publish(CompiledCompositionPlanDefinition{
+        bloom::document::Revision::fromRaw(7), bloom::document::ProjectId::fromRaw(1),
+        bloom::document::CompositionId::fromRaw(2), format(8, 8), std::move(operations),
+        OperationIndex::fromRaw(3)});
+}
+
+// ADR 0026: a layered 3x2 EXR -- premultiplied root RGBA, a diffuse colour layer and a depth data
+// channel with a negative value and a NaN -- for the Shuffle, Channel Copy and Remove fixtures.
+[[nodiscard]] inline const ImageFixture& layeredImage() {
+    static const ImageFixture fixture = [] {
+        std::filesystem::create_directories(gateDirectory());
+        ImageFixture value;
+        value.path = gateDirectory() / "layered_channels.exr";
+        const Imath::Box2i window(Imath::V2i(0, 0), Imath::V2i(2, 1));
+        Imf::Header header(window, window);
+        header.insert("chromaticities", Imf::ChromaticitiesAttribute(Imf::Chromaticities()));
+        const auto pixels = signedHdrPixels();
+        std::vector<std::pair<std::string, std::vector<float>>> planes;
+        const auto plane = [&](std::string name, auto&& sample) {
+            std::vector<float> values;
+            for (std::size_t index = 0; index < pixels.size(); ++index)
+                values.push_back(sample(index));
+            planes.emplace_back(std::move(name), std::move(values));
+        };
+        plane("R", [&](std::size_t i) { return pixels[i].red; });
+        plane("G", [&](std::size_t i) { return pixels[i].green; });
+        plane("B", [&](std::size_t i) { return pixels[i].blue; });
+        plane("A", [&](std::size_t i) { return pixels[i].alpha; });
+        plane("diffuse.R", [](std::size_t i) { return 0.125F * static_cast<float>(i); });
+        plane("diffuse.G", [](std::size_t i) { return 1.5F - 0.25F * static_cast<float>(i); });
+        plane("diffuse.B", [](std::size_t) { return 0.75F; });
+        plane("depth.Z", [](std::size_t i) {
+            return i == 4 ? std::numeric_limits<float>::quiet_NaN()
+                          : -0.5F + 0.375F * static_cast<float>(i);
+        });
+        for (const auto& [name, values] : planes)
+            header.channels().insert(name, Imf::Channel(Imf::FLOAT));
+        Imf::FrameBuffer frameBuffer;
+        for (auto& [name, values] : planes)
+            frameBuffer.insert(name, Imf::Slice(Imf::FLOAT, reinterpret_cast<char*>(values.data()),
+                                                sizeof(float), 3 * sizeof(float)));
+        {
+            Imf::OutputFile file(value.path.string().c_str(), header);
+            file.setFrameBuffer(frameBuffer);
+            file.writePixels(2);
+        }
+        const auto probe = bloom::media::probeImage(value.path);
+        if (!probe.value.has_value())
+            throw std::logic_error("layered EXR could not be probed: " + probe.diagnostic);
+        value.asset.id = bloom::document::AssetId::fromRaw(901);
+        value.asset.kind = bloom::document::AssetKind::Image;
+        value.asset.locator.kind = "file";
+        value.asset.locator.portability = "project-relative";
+        value.asset.locator.path = value.path.filename().string();
+        value.asset.locator.relinkHint = "file:" + value.path.string();
+        value.asset.contentDigest = probe.value->contentDigest;
+        value.asset.interpretation.colorSpace = bloom::document::AssetColorSpace::Auto;
+        value.asset.width = probe.value->width;
+        value.asset.height = probe.value->height;
+        value.asset.name = "layered_channels";
+        return value;
+    }();
+    return fixture;
+}
+
+enum class ChannelFixture : std::uint8_t {
+    // Source -> slots diffuse.R/G/B and A, Colour mapping.
+    Shuffle,
+    // Source -> Remove "diffuse, @depth" -> slots R/G/B/A, Colour mapping.
+    Remove,
+    // Source -> Remove keep "A" -> Copy depth.Z from the source -> slots depth.Z x3 and "1", Raw.
+    Copy,
+};
+
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+channelShufflePlan(const bloom::document::AssetRecord& asset, const LayerValues layer,
+                   const std::uint64_t idBase, const ChannelFixture kind) {
+    using bloom::document::NodeId;
+    using bloom::document::ParameterId;
+    using bloom::runtime::CompiledChannelStep;
+    using bloom::runtime::CompiledChannelStepKind;
+    const LayerIds ids{ParameterId::fromRaw(idBase + 0), ParameterId::fromRaw(idBase + 1),
+                       ParameterId::fromRaw(idBase + 2), ParameterId::fromRaw(idBase + 3),
+                       ParameterId::fromRaw(idBase + 4), ParameterId::fromRaw(idBase + 5)};
+    bloom::runtime::CompiledChannelShuffle shuffle;
+    shuffle.sourceNodeId = NodeId::fromRaw(idBase + 20);
+    shuffle.channels.sources.push_back(
+        bloom::runtime::CompiledChannelSource{NodeId::fromRaw(idBase + 10), asset, 0, 0, 0, {}, {}});
+    CompiledChannelStep source;
+    source.kind = CompiledChannelStepKind::Source;
+    source.nodeId = NodeId::fromRaw(idBase + 10);
+    shuffle.channels.steps.push_back(source);
+    switch (kind) {
+    case ChannelFixture::Shuffle:
+        shuffle.mapping = {"diffuse.R", "diffuse.G", "diffuse.B", "A"};
+        break;
+    case ChannelFixture::Remove: {
+        CompiledChannelStep remove;
+        remove.kind = CompiledChannelStepKind::Remove;
+        remove.nodeId = NodeId::fromRaw(idBase + 21);
+        remove.select = "diffuse, @depth";
+        shuffle.channels.steps.push_back(remove);
+        shuffle.mapping = {"R", "G", "B", "A"};
+        break;
+    }
+    case ChannelFixture::Copy: {
+        CompiledChannelStep keep;
+        keep.kind = CompiledChannelStepKind::Remove;
+        keep.nodeId = NodeId::fromRaw(idBase + 21);
+        keep.select = "A";
+        keep.keep = true;
+        shuffle.channels.steps.push_back(keep);
+        CompiledChannelStep copy;
+        copy.kind = CompiledChannelStepKind::Copy;
+        copy.nodeId = NodeId::fromRaw(idBase + 22);
+        copy.input = 1;
+        copy.from = 0;
+        copy.select = "depth.Z";
+        shuffle.channels.steps.push_back(copy);
+        shuffle.mapping = {"depth.Z", "depth.Z", "depth.Z", "1"};
+        shuffle.mode = 1;
+        break;
+    }
+    }
+    std::vector<CompiledOperation> operations;
+    operations.emplace_back(std::move(shuffle));
     operations.emplace_back(layerOutput(NodeId::fromRaw(idBase + 11),
                                         bloom::document::LayerId::fromRaw(idBase + 12),
                                         OperationIndex::fromRaw(0), ids, layer));

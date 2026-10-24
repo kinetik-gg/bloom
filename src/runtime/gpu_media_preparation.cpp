@@ -1,3 +1,4 @@
+#include "channel_shuffle.hpp"
 #include "gpu_media_preparation.hpp"
 
 #include "image_source.hpp"
@@ -578,6 +579,161 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
         if (!outcome.cancelled) {
             outcome.image.reset();
         }
+        return outcome;
+    }
+    return outcome;
+}
+
+MediaUploadOutcome prepareChannelShuffleColorLeaf(
+    const CompiledChannelShuffle& shuffle, const EvaluationRequest& request,
+    const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
+    const GpuSceneMediaContext& context, const GpuSceneOcioContext& ocioContext,
+    const std::uint64_t pixelBudget, const bool explicitBypass, const bool planBypass,
+    const CancellationToken& cancellation, GpuSceneMediaStatistics& statistics) {
+    ++statistics.imageSources;
+    MediaUploadOutcome outcome;
+    if (context.operationCache == nullptr) {
+        outcome.failure = "Channel source context is unavailable";
+        return outcome;
+    }
+    const auto selection = selectChannelShuffle(
+        shuffle, request.time, plan.format().frameRate(), context.assetBaseDirectory, cancellation,
+        request.colorIntent, explicitBypass ? nullptr : context.operationCache.get(),
+        (explicitBypass || request.requireVerifiedMediaSources)
+            ? MediaSourceRevisionPolicy::Revalidate
+            : request.mediaSourceRevisionPolicy,
+        byteBudget(request.pixelStorageByteLimit), !planBypass);
+    for (const auto& source : selection.sources)
+        recordSourceRevisionWork(source, statistics);
+    if (selection.cancelled) {
+        outcome.cancelled = true;
+        return outcome;
+    }
+    if (!selection.available) {
+        if (pixelBudget == 0 || selection.budgetExceeded)
+            outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
+        outcome.failure =
+            selection.warning.empty() ? "Channel source is unavailable" : selection.warning;
+        return outcome;
+    }
+    outcome.frameBounds = channelShuffleFrameBounds(selection);
+    const auto* colour =
+        selection.colourSource ? &selection.sources[*selection.colourSource] : nullptr;
+    const std::string fromId = colour ? colour->interpretation.inputColorSpaceId : std::string{};
+    const std::string toId = colour ? colour->workingColorSpaceId : std::string{};
+    const bool noConversion = colour == nullptr || colour->inputProcessor == nullptr;
+    const bool identityTransform = colourTransformIsIdentity(fromId, toId, noConversion);
+    // Without a GPU OCIO preparer a non-identity Colour mapping uses the CPU reference upload.
+    if (!identityTransform && ocioContext.preparer == nullptr) {
+        outcome.semanticKey = uploadSemanticKey("channel-shuffle", selection.cacheKey, resolved);
+        outcome.uploadSemanticKey = outcome.semanticKey;
+        ++statistics.uploadKeyConstructions;
+        if (pixelBudget == 0) {
+            outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
+            outcome.failure = "A new shuffle backing exceeds the remaining source allowance";
+            return outcome;
+        }
+        auto image = evaluateChannelShuffle(selection, resolved.imageDescriptor,
+                                            resolved.horizontalScale, resolved.verticalScale,
+                                            byteBudget(pixelBudget), cancellation);
+        addMediaWork(statistics.imageRepairedPixels, image.repairedPixels);
+        ++statistics.imageConversions;
+        if (image.cancelled) {
+            outcome.cancelled = true;
+            return outcome;
+        }
+        if (!image.value.has_value()) {
+            if (image.code == media::ImageDiagnosticCode::PixelBudgetExceeded)
+                outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
+            outcome.failure = image.diagnostic.empty() ? "Shuffle could not be evaluated"
+                                                       : image.diagnostic;
+            return outcome;
+        }
+        outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(*image.value));
+        outcome.converted = true;
+        return outcome;
+    }
+    std::optional<color::ResolvedBloomNeutralConfig> config;
+    if (!identityTransform) {
+        config = resolveInputColorConfig(request.colorIntent);
+        if (!config) {
+            outcome.failure = "The selected OCIO input configuration is unavailable";
+            return outcome;
+        }
+    }
+    const auto backingKey = rawDecodeUploadKey("channel-shuffle-raw", selection.decodeKey);
+    ++statistics.uploadKeyConstructions;
+    if (!explicitBypass && context.preparedUploadCache != nullptr) {
+        if (auto cached = context.preparedUploadCache->find(backingKey)) {
+            outcome.image = std::move(cached);
+            outcome.cacheHit = true;
+            ++statistics.uploadCacheHits;
+        } else {
+            ++statistics.uploadCacheMisses;
+        }
+    }
+    if (outcome.image == nullptr) {
+        if (pixelBudget == 0) {
+            outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
+            outcome.failure = "A new raw shuffle backing exceeds the remaining source allowance";
+            return outcome;
+        }
+        auto gathered = gatherChannelShuffle(selection, false, byteBudget(pixelBudget),
+                                             cancellation);
+        addMediaWork(statistics.imageRepairedPixels, gathered.repairedPixels);
+        ++statistics.imageConversions;
+        if (gathered.cancelled) {
+            outcome.cancelled = true;
+            return outcome;
+        }
+        if (!gathered.value.has_value()) {
+            if (gathered.code == media::ImageDiagnosticCode::PixelBudgetExceeded)
+                outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
+            outcome.failure = gathered.diagnostic.empty() ? "Shuffle channels could not be decoded"
+                                                          : gathered.diagnostic;
+            return outcome;
+        }
+        outcome.image = std::move(*gathered.value);
+        outcome.converted = true;
+        if (!explicitBypass && !planBypass && context.preparedUploadCache != nullptr)
+            context.preparedUploadCache->store(backingKey, outcome.image);
+    }
+    if (outcome.image->descriptor() == nullptr) {
+        outcome.failure = "Raw shuffle upload has no descriptor";
+        outcome.image.reset();
+        return outcome;
+    }
+    const auto uploadDescriptor =
+        rawUploadDescriptor(*outcome.image, resolved.imageDescriptor, true);
+    if (!uploadDescriptor) {
+        outcome.failure = "Raw shuffle upload descriptor is invalid";
+        outcome.image.reset();
+        return outcome;
+    }
+    outcome.uploadDescriptor = *uploadDescriptor;
+    outcome.uploadSemanticKey = rawUploadCommandKey(backingKey, *uploadDescriptor);
+    outcome.semanticKey = outcome.uploadSemanticKey;
+    const auto& descriptor = *uploadDescriptor;
+    if (!resolvedProxyIsUnit(resolved)) {
+        const auto proxyDescriptor = proxyOutputDescriptor(descriptor, resolved);
+        if (!proxyDescriptor.has_value()) {
+            outcome.failure = "Shuffle proxy output descriptor is invalid";
+            outcome.image.reset();
+            return outcome;
+        }
+        outcome.resample =
+            MediaResamplePlan{*proxyDescriptor, resolved.horizontalScale, resolved.verticalScale};
+    }
+    if (identityTransform)
+        return outcome;
+    const auto ocioWindow = outcome.resample.has_value() ? outcome.resample->output.dataWindow()
+                                                         : descriptor.dataWindow();
+    const auto ocioAspect = outcome.resample.has_value() ? outcome.resample->output.pixelAspect()
+                                                         : descriptor.pixelAspect();
+    if (!prepareMediaOcioProgram(*config, fromId, toId, ocioWindow, ocioAspect, ocioContext,
+                                 cancellation, outcome, statistics)) {
+        if (!outcome.cancelled)
+            outcome.image.reset();
         return outcome;
     }
     return outcome;

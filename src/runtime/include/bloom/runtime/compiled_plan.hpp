@@ -9,6 +9,7 @@
 #include <bloom/document/shape.hpp>
 #include <bloom/render/embedded_fonts.hpp>
 #include <bloom/render/image_coverage.hpp>
+#include <bloom/runtime/channel_expression.hpp>
 #include <bloom/runtime/compiled_curves.hpp>
 #include <bloom/runtime/compiled_value_graph.hpp>
 #include <bloom/runtime/composition_time.hpp>
@@ -342,7 +343,23 @@ struct CompiledImageSource {
     std::int64_t colorSpace = 0;
     std::string inputColorSpaceId;
     bool premultiply = true;
+    // ADR 0026: the OpenEXR part (empty: first) and colour layer (empty: root) of the image output.
+    std::string part{};
+    std::string layer{};
     friend bool operator==(const CompiledImageSource&, const CompiledImageSource&) = default;
+};
+
+// ADR 0026: a Shuffle's image output. The channel expression is resolved against the probed
+// sources; the four slots name resolved channels or the constants "0" and "1". Colour mode converts
+// the RGB triple from the red slot's source input colour space; Raw places the values unchanged.
+// `associated` says the mapped RGB is already premultiplied by the mapped alpha.
+struct CompiledChannelShuffle {
+    document::NodeId sourceNodeId;
+    CompiledChannelExpression channels;
+    std::array<std::string, 4> mapping{};
+    std::int64_t mode = 0;
+    bool associated = true;
+    friend bool operator==(const CompiledChannelShuffle&, const CompiledChannelShuffle&) = default;
 };
 
 struct CompiledVideoSource {
@@ -550,7 +567,7 @@ struct CompiledCompositionOutput {
 using CompiledOperation =
     std::variant<CompiledSolid, CompiledChecker, CompiledText, CompiledImageSource, CompiledVideoSource,
                  CompiledLayerOutput, CompiledMerge, CompiledCompositionOutput, CompiledShape,
-                 CompiledCompositionSource, CompiledImageEffect>;
+                 CompiledCompositionSource, CompiledImageEffect, CompiledChannelShuffle>;
 
 // ADR 0024 time clocks. Clock 0 is the plan's own clock (the request time). A Layer clock maps its
 // parent clock through a layer's start time and speed; a Content clock (whose parent is that Layer

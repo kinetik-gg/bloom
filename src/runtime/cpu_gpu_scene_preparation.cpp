@@ -77,7 +77,8 @@ using detail::GpuSceneVectorChain;
            std::holds_alternative<CompiledLayerOutput>(operation) ||
            std::holds_alternative<CompiledMerge>(operation) ||
            std::holds_alternative<CompiledCompositionSource>(operation) ||
-           std::holds_alternative<CompiledCompositionOutput>(operation);
+           std::holds_alternative<CompiledCompositionOutput>(operation) ||
+           std::holds_alternative<CompiledChannelShuffle>(operation);
 }
 
 } // namespace
@@ -242,6 +243,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             if (reachable[index] &&
                 (std::holds_alternative<CompiledImageSource>(plan->operations()[index]) ||
                  std::holds_alternative<CompiledVideoSource>(plan->operations()[index]) ||
+                 std::holds_alternative<CompiledChannelShuffle>(plan->operations()[index]) ||
                  std::holds_alternative<CompiledCompositionSource>(plan->operations()[index]))) {
                 envelope.sourceFree = false;
                 break;
@@ -506,7 +508,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         }
 
         if (std::holds_alternative<CompiledImageSource>(operation) ||
-            std::holds_alternative<CompiledVideoSource>(operation)) {
+            std::holds_alternative<CompiledVideoSource>(operation) ||
+            std::holds_alternative<CompiledChannelShuffle>(operation)) {
             // The RAW upload is host-retained (charged against `retainedBytes`); the point-resample
             // and OCIO outputs are GPU-transient and charged through `chargeTransient` (a no-op
             // under main's host-only accounting, where the executor's live-pin ledger bounds GPU

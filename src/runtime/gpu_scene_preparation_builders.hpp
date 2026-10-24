@@ -32,7 +32,8 @@ namespace bloom::runtime::detail {
            std::holds_alternative<CompiledLayerOutput>(operation) ||
            std::holds_alternative<CompiledMerge>(operation) ||
            std::holds_alternative<CompiledCompositionOutput>(operation) ||
-           std::holds_alternative<CompiledCompositionSource>(operation);
+           std::holds_alternative<CompiledCompositionSource>(operation) ||
+           std::holds_alternative<CompiledChannelShuffle>(operation);
 }
 
 // Computes the reachable operation mask from the terminal output, following pixel inputs and layer

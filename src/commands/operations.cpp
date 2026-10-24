@@ -1,6 +1,7 @@
 #include <bloom/commands/operations.hpp>
 
 #include <bloom/core/utf8.hpp>
+#include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/layer_stack.hpp>
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/project.hpp>
@@ -732,6 +733,16 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
                                            asset->interpretation.alphaAssociation !=
                                                document::AssetAlphaAssociation::Premultiplied,
                                            "premultiplyParameter"});
+    // ADR 0026: an image layer starts on the first part's root layer; binding the selection makes
+    // it editable in Properties.
+    if (!video) {
+        source.sourceParameters.push_back({document::kImagePartParameterRole,
+                                           document::kImagePartParameterSchemaKey, std::string{},
+                                           "partParameter"});
+        source.sourceParameters.push_back({document::kImageLayerParameterRole,
+                                           document::kImageLayerParameterSchemaKey, std::string{},
+                                           "layerParameter"});
+    }
     auto added = addStructuredLayer(
         draft, *composition, name, std::move(source),
         {static_cast<double>(composition->format().width()) / 2.0,

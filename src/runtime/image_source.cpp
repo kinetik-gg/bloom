@@ -133,6 +133,8 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
     selected.interpretation.alphaAssociation = source.premultiply
                                                    ? media::ImageAlphaAssociation::Straight
                                                    : media::ImageAlphaAssociation::Premultiplied;
+    selected.interpretation.part = source.part;
+    selected.interpretation.layer = source.layer;
     selected.available = selected.sourceRevision != nullptr &&
                          selected.sourceRevision->probe().contentDigest == selected.digest;
     if (selected.available) {
@@ -141,9 +143,18 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
             selected.available = false;
             selected.warning = "The selected OCIO input configuration is unavailable";
         } else {
-            const auto resolution = resolveImageInputColorSpace(
-                *config, selected.sourceRevision->probe(), selected.interpretation.colorSpace,
-                selected.interpretation.inputColorSpaceId);
+            // ADR 0026: an Auto interpretation reads the selected part's own chromaticities.
+            const auto* probe = &selected.sourceRevision->probe();
+            std::optional<media::ImageProbe> partProbe;
+            if (const auto* part = probe->findPart(source.part);
+                part != nullptr && part->colorSpaceTag != probe->colorSpaceTag) {
+                partProbe = *probe;
+                partProbe->colorSpaceTag = part->colorSpaceTag;
+                probe = &*partProbe;
+            }
+            const auto resolution =
+                resolveImageInputColorSpace(*config, *probe, selected.interpretation.colorSpace,
+                                            selected.interpretation.inputColorSpaceId);
             selected.inputColorSpaceAutomatic = resolution.automatic;
             selected.resolvedInputColorSpaceName = resolution.name;
             selected.inputColorSpaceWarning = resolution.warning;
@@ -184,6 +195,8 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
     const auto revision = selected.configRevision.toLowercaseHex();
     key.add(std::string(revision.begin(), revision.end()));
     key.add(selected.interpretation.alphaAssociation);
+    key.add(selected.interpretation.part);
+    key.add(selected.interpretation.layer);
     key.add(std::string(config.begin(), config.end()));
     key.add(selected.available);
     key.add(locator->path);
@@ -194,9 +207,11 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
     // path/relink fields are deliberately absent, so a changed working space or display keeps the
     // same decoded upload while a changed frame or alpha association is a miss.
     OperationKey decodeKey;
-    decodeKey.add(std::string{"gpu-raw-decode-v1"});
+    decodeKey.add(std::string{"gpu-raw-decode-v2"});
     decodeKey.add(std::string(digest.begin(), digest.end()));
     decodeKey.add(selected.interpretation.alphaAssociation);
+    decodeKey.add(selected.interpretation.part);
+    decodeKey.add(selected.interpretation.layer);
     selected.decodeKey = decodeKey.digest();
     // Content-addressed and restart-stable (docs/architecture/media-io.md "Disk cache"): asset
     // digest + member frame + interpretation + Bloom Neutral config digest + decoder identity, so
@@ -211,6 +226,8 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
     diskInputs.alphaAssociation = selected.interpretation.alphaAssociation;
     diskInputs.configDigest = selected.configRevision;
     diskInputs.synthesizedColorSpaceIdentity = synthesized;
+    diskInputs.part = selected.interpretation.part;
+    diskInputs.layer = selected.interpretation.layer;
     selected.diskCacheKey =
         media::cache::buildImageCacheKey(diskInputs, media::cache::kImageDecoderIdentity);
     return selected;
@@ -273,6 +290,8 @@ decodeRawImageSource(const ImageSourceSelection& selected, const std::size_t bud
     rawInterpretation.colorSpace = media::ImageColorSpace::Raw;
     rawInterpretation.inputColorSpaceId = {};
     rawInterpretation.alphaAssociation = selected.interpretation.alphaAssociation;
+    rawInterpretation.part = selected.interpretation.part;
+    rawInterpretation.layer = selected.interpretation.layer;
     if (!selected.sourceRevision)
         return {{}, "Image selection has no immutable source revision"};
     return media::decodeImage(
@@ -297,6 +316,14 @@ imageSourceFrameBounds(const ImageSourceSelection& selection) noexcept {
     if (!selection.sourceRevision)
         return std::nullopt;
     const auto& probe = selection.sourceRevision->probe();
+    // ADR 0026: a selected OpenEXR part carries its own data and display windows.
+    if (const auto* part = probe.findPart(selection.interpretation.part)) {
+        if (part->dataX == part->displayX && part->dataY == part->displayY &&
+            part->dataWidth == part->displayWidth && part->dataHeight == part->displayHeight)
+            return std::nullopt;
+        return ContentBounds{0.0, 0.0, static_cast<double>(part->displayWidth),
+                             static_cast<double>(part->displayHeight)};
+    }
     if (probe.dataOffsetX == 0 && probe.dataOffsetY == 0 &&
         probe.effectiveFrameWidth() == probe.width && probe.effectiveFrameHeight() == probe.height)
         return std::nullopt;

@@ -112,6 +112,20 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
                       std::uint64_t pixelBudget, bool explicitBypass, bool planBypass,
                       const CancellationToken& cancellation, GpuSceneMediaStatistics& statistics);
 
+// ADR 0026: the Shuffle twin of prepareImageColorLeaf. Host preparation gathers the mapped source
+// channels into one raw RGBA upload (decode layout: source samples, constants, zeros outside a
+// channel's window); the proxy PointResampleV1 and, for a Colour mapping, the input->working OCIO
+// pass are GPU commands, exactly as for an Image source.
+[[nodiscard]] MediaUploadOutcome
+prepareChannelShuffleColorLeaf(const CompiledChannelShuffle& shuffle,
+                               const EvaluationRequest& request, const CompiledCompositionPlan& plan,
+                               const ResolvedEvaluation& resolved,
+                               const GpuSceneMediaContext& context,
+                               const GpuSceneOcioContext& ocioContext, std::uint64_t pixelBudget,
+                               bool explicitBypass, bool planBypass,
+                               const CancellationToken& cancellation,
+                               GpuSceneMediaStatistics& statistics);
+
 // The VideoSource twin of prepareImageColorLeaf. Video's YUV->RGB transfer/primaries conversion is
 // codec-side plane conversion and stays host preparation; the resolved config OCIO processor is the
 // colour pass. Until the codec-side split lands (see work-result.md) a non-identity video transform

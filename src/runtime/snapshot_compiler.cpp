@@ -6,6 +6,7 @@
 #include <bloom/runtime/layer_time_projection.hpp>
 
 #include <bloom/document/animation.hpp>
+#include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/parameter.hpp>

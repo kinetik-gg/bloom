@@ -101,6 +101,39 @@ constexpr std::uint64_t kPngJpegStagingBytesPerPixel = 8U;
             ((byte(2) == 0U && byte(3) == 42U) || (byte(2) == 0U && byte(3) == 43U)));
 }
 
+// ADR 0026: a still has one unnamed part whose channels are its decoded R, G, B and, when the file
+// carries alpha, A (see decodeImageChannels).
+[[nodiscard]] ImagePartInfo stillPart(const detail::ImageInfo& info) {
+    ImagePartInfo part;
+    part.dataWidth = part.displayWidth = static_cast<std::uint32_t>(info.width);
+    part.dataHeight = part.displayHeight = static_cast<std::uint32_t>(info.height);
+    part.alphaAssociation = ImageAlphaAssociation::Straight;
+    part.colorSpaceTag = "srgb_rec709_display";
+    for (const auto* name : {"R", "G", "B", "A"}) {
+        if (std::string_view(name) == "A" && info.channels != 2 && info.channels != 4)
+            continue;
+        part.channels.push_back({name, ImageChannelSampleKind::Float});
+    }
+    part.layers = {std::string{}};
+    part.colourLayers = {std::string{}};
+    return part;
+}
+
+[[nodiscard]] ImageProbe stillProbe(const detail::ImageInfo& info, const core::Sha256Digest digest,
+                                    const ImageFormat format) {
+    ImageProbe probe{static_cast<std::uint32_t>(info.width),
+                     static_cast<std::uint32_t>(info.height),
+                     static_cast<std::uint8_t>(info.sixteenBit ? 16 : 8),
+                     digest,
+                     format,
+                     ImageColorSpace::Srgb,
+                     ImageAlphaAssociation::Straight,
+                     "srgb_rec709_display",
+                     {}};
+    probe.parts.push_back(stillPart(info));
+    return probe;
+}
+
 template <typename T> [[nodiscard]] ImageResult<T> providerMissing() {
     return {{},
             "TIFF provider is missing; MEDIA-3 must provide the worker adapter",
@@ -283,15 +316,8 @@ captureImageSourceRevision(const std::filesystem::path& path, const std::size_t 
                         "Invalid PNG/JPEG header or image dimensions",
                         false,
                         ImageDiagnosticCode::InvalidHeader};
-            probe = {ImageProbe{static_cast<std::uint32_t>(info.width),
-                                static_cast<std::uint32_t>(info.height),
-                                static_cast<std::uint8_t>(info.sixteenBit ? 16 : 8),
-                                digest,
-                                isPngMagic(view) ? ImageFormat::Png : ImageFormat::Jpeg,
-                                ImageColorSpace::Srgb,
-                                ImageAlphaAssociation::Straight,
-                                "srgb_rec709_display",
-                                {}},
+            probe = {stillProbe(info, digest,
+                                isPngMagic(view) ? ImageFormat::Png : ImageFormat::Jpeg),
                      {}};
         }
         detail::addImageWork(statistics.probeNanoseconds, detail::imageWorkNanoseconds(probeStart));
@@ -353,15 +379,8 @@ ImageResult<ImageProbe> probeImage(const std::filesystem::path& path, const Canc
                     "Invalid PNG/JPEG header or image dimensions",
                     false,
                     ImageDiagnosticCode::InvalidHeader};
-        return {ImageProbe{static_cast<std::uint32_t>(info.width),
-                           static_cast<std::uint32_t>(info.height),
-                           static_cast<std::uint8_t>(info.sixteenBit ? 16 : 8),
-                           *digest.value,
-                           isPngMagic(view) ? ImageFormat::Png : ImageFormat::Jpeg,
-                           ImageColorSpace::Srgb,
-                           ImageAlphaAssociation::Straight,
-                           "srgb_rec709_display",
-                           {}},
+        return {stillProbe(info, *digest.value,
+                           isPngMagic(view) ? ImageFormat::Png : ImageFormat::Jpeg),
                 {}};
     } catch (const std::exception&) {
         return {{}, "Image probe allocation or I/O failed"};

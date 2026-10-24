@@ -136,8 +136,9 @@ struct ImageProbe {
     std::int64_t dataOffsetY = 0;
     std::uint32_t frameWidth = 0;
     std::uint32_t frameHeight = 0;
-    // OpenEXR parts (ADR 0026); empty for PNG, JPEG and provider formats. The scalar fields above
-    // describe the first part and its root colour layer.
+    // Parts (ADR 0026): every OpenEXR part, or the one unnamed part of a PNG or JPEG still (its
+    // R, G, B and optional A); empty for provider formats. The scalar fields above describe the
+    // first part and its root colour layer.
     std::vector<ImagePartInfo> parts{};
     [[nodiscard]] const ImagePartInfo* findPart(const std::string_view name) const noexcept {
         if (parts.empty())

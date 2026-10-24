@@ -236,6 +236,11 @@ target_link_libraries(bloom_runtime_layer_mask_test PRIVATE bloom_runtime_compil
 bloom_enable_warnings(bloom_runtime_layer_mask_test)
 bloom_add_test(NAME bloom.runtime.layer-masks COMMAND bloom_runtime_layer_mask_test LABELS unit runtime TIMEOUT 120)
 
+add_executable(bloom_runtime_channel_shuffle_test ${PROJECT_SOURCE_DIR}/tests/integration/channel_shuffle_tests.cpp)
+target_link_libraries(bloom_runtime_channel_shuffle_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands OpenEXR::OpenEXR)
+bloom_enable_warnings(bloom_runtime_channel_shuffle_test)
+bloom_add_test(NAME bloom.runtime.channel-shuffle COMMAND bloom_runtime_channel_shuffle_test LABELS unit runtime TIMEOUT 120)
+
 add_executable(bloom_runtime_audio_timing_test ${PROJECT_SOURCE_DIR}/tests/integration/audio_timing_tests.cpp)
 target_link_libraries(bloom_runtime_audio_timing_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_media_audio)
 bloom_enable_warnings(bloom_runtime_audio_timing_test)
