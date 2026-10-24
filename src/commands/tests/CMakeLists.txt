@@ -99,3 +99,9 @@ bloom_add_test(
     COMMAND bloom_commands_network_share_locator_test
     LABELS unit commands media
 )
+
+add_executable(bloom_commands_layer_mask_test layer_mask_operations_tests.cpp)
+target_link_libraries(bloom_commands_layer_mask_test PRIVATE bloom_commands)
+bloom_enable_warnings(bloom_commands_layer_mask_test)
+bloom_add_test(NAME bloom.commands.layer-masks COMMAND bloom_commands_layer_mask_test
+               LABELS commands unit)

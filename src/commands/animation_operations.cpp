@@ -1038,7 +1038,8 @@ OperationResult DeleteKeyframe::apply(document::Draft& draft) const {
     // A vector or colour curve is nothing but its components, so "grouped" is now exactly "not a
     // scalar curve": the key is deleted from one component, or from every component sharing its
     // exact time when the address names no component.
-    const bool grouped = !std::holds_alternative<document::ScalarAnimationCurve>(*record);
+    const bool grouped = !std::holds_alternative<document::ScalarAnimationCurve>(*record) &&
+                         !std::holds_alternative<document::PathAnimationCurve>(*record);
     if (component_.has_value()) {
         const auto* componentCurve =
             composition->animationCurves().findComponent(curveId_, *component_);
@@ -1052,7 +1053,7 @@ OperationResult DeleteKeyframe::apply(document::Draft& draft) const {
         std::visit(
             [&](const auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
-                if constexpr (!std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (!document::kWholeValueAnimationCurve<Curve>) {
                     for (const auto& component : curve.components)
                         totalKeys += component.keyframes.size();
                 }
@@ -1086,7 +1087,7 @@ OperationResult DeleteKeyframe::apply(document::Draft& draft) const {
         std::visit(
             [&](const auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
-                if constexpr (!std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (!document::kWholeValueAnimationCurve<Curve>) {
                     for (const auto& component : curve.components) {
                         const auto key = std::ranges::find(component.keyframes, keyframeId_,
                                                            &document::ScalarKeyframe::id);
@@ -1105,7 +1106,7 @@ OperationResult DeleteKeyframe::apply(document::Draft& draft) const {
         std::visit(
             [&](const auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
-                if constexpr (!std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (!document::kWholeValueAnimationCurve<Curve>) {
                     for (const auto& component : curve.components) {
                         totalKeys += component.keyframes.size();
                         keysAtTime += static_cast<std::size_t>(std::ranges::count(
@@ -1136,7 +1137,7 @@ OperationResult DeleteKeyframe::apply(document::Draft& draft) const {
         std::visit(
             [&](const auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
-                if constexpr (!std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (!document::kWholeValueAnimationCurve<Curve>) {
                     const auto names = [&] {
                         if constexpr (std::is_same_v<Curve, document::Vec2AnimationCurve>)
                             return std::array{document::AnimationComponent::X,
@@ -1167,14 +1168,25 @@ OperationResult DeleteKeyframe::apply(document::Draft& draft) const {
                        : OperationResult::rejected(OperationIssueCode::InvalidValue,
                                                    "Component keyframe could not be deleted");
     }
-    // Everything above returned: this is a scalar curve, whose keys it owns directly.
-    const auto* scalar = std::get_if<document::ScalarAnimationCurve>(record);
-    if (scalar == nullptr || std::ranges::none_of(scalar->keyframes, [&](const auto& keyframe) {
-            return keyframe.id == keyframeId_;
-        })) {
+    // Everything above returned: this is a whole-value (scalar or Path) curve, whose keys it owns
+    // directly.
+    std::size_t keyCount = 0;
+    bool present = false;
+    std::visit(
+        [&](const auto& curve) {
+            using Curve = std::decay_t<decltype(curve)>;
+            if constexpr (document::kWholeValueAnimationCurve<Curve>) {
+                keyCount = curve.keyframes.size();
+                present = std::ranges::any_of(curve.keyframes, [&](const auto& keyframe) {
+                    return keyframe.id == keyframeId_;
+                });
+            }
+        },
+        *record);
+    if (!present) {
         return invalidKeyframe(keyframeId_);
     }
-    if (scalar->keyframes.size() == 1) {
+    if (keyCount == 1) {
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "The final keyframe cannot be deleted");
     }
@@ -1268,7 +1280,7 @@ OperationResult stageKeys(const document::Composition& composition,
         const bool found = std::visit(
             [&](const auto& record) {
                 using Curve = std::decay_t<decltype(record)>;
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                     return key.component == std::nullopt &&
                            std::ranges::any_of(record.keyframes, [&](const auto& k) {
                                return k.id == key.keyframeId;
@@ -1302,11 +1314,11 @@ OperationResult publishCurves(document::Composition& composition, CurveEdits edi
             [](auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
                 const auto normalize = [](auto& keys) {
-                    std::ranges::sort(keys, {}, &document::ScalarKeyframe::time);
+                    std::ranges::sort(keys, {}, [](const auto& key) { return key.time; });
                     if (!keys.empty())
                         keys.back().outgoingInterpolation = document::KeyframeInterpolation::Linear;
                 };
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                     normalize(curve.keyframes);
                 } else {
                     for (auto& component : curve.components)
@@ -1348,7 +1360,7 @@ OperationResult MoveKeyframes::apply(document::Draft& draft) const {
         std::visit(
             [&](auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                     for (auto& key : curve.keyframes)
                         if (key.id == move.key.keyframeId)
                             key.time = move.time;
@@ -1401,9 +1413,14 @@ OperationResult DeleteKeyframes::apply(document::Draft& draft) const {
         bool valid = std::visit(
             [&](auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
-                    const auto fallback =
-                        curve.keyframes.empty() ? 0.0 : curve.keyframes.front().value;
+                if constexpr (document::kWholeValueAnimationCurve<Curve>) {
+                    const auto fallback = [&]() -> document::ParameterValue {
+                        if constexpr (std::is_same_v<Curve, document::PathAnimationCurve>)
+                            return curve.keyframes.empty() ? document::PathValue{}
+                                                           : curve.keyframes.front().value;
+                        else
+                            return curve.keyframes.empty() ? 0.0 : curve.keyframes.front().value;
+                    }();
                     std::erase_if(curve.keyframes, [&](const auto& key) {
                         return std::ranges::any_of(keys_, [&](const auto& address) {
                             return address.curveId == id && !address.component.has_value() &&
@@ -1542,7 +1559,7 @@ OperationResult SetKeyframesInterpolation::apply(document::Draft& draft) const {
         std::visit(
             [&](auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                     for (auto& key : curve.keyframes)
                         if (key.id == address.keyframeId)
                             key.outgoingInterpolation = interpolation_;
@@ -1587,7 +1604,9 @@ namespace {
 template <typename Curve>
 [[nodiscard]] std::vector<document::ScalarKeyframe>*
 addressedKeyframes(Curve& curve, const std::optional<document::AnimationComponent> component) {
-    if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+    if constexpr (std::is_same_v<Curve, document::PathAnimationCurve>) {
+        return nullptr; // A Path key has no scalar axis to re-value or shape by value.
+    } else if constexpr (document::kWholeValueAnimationCurve<Curve>) {
         return component.has_value() ? nullptr : &curve.keyframes;
     } else {
         if (!component.has_value())
@@ -1682,7 +1701,7 @@ OperationResult SetKeyframeValues::apply(document::Draft& draft) const {
         const bool admitted = std::visit(
             [&](const auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                     return !edit.key.component.has_value() &&
                            validValueForCurve<Curve>(*composition, edit.key.curveId, edit.value);
                 } else {
@@ -1755,7 +1774,7 @@ OperationResult PasteKeyframes::apply(document::Draft& draft) const {
                 std::visit(
                     [](auto& curve) {
                         using Curve = std::decay_t<decltype(curve)>;
-                        if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                        if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                             curve.keyframes.clear();
                         } else {
                             for (auto& component : curve.components)
@@ -1767,7 +1786,23 @@ OperationResult PasteKeyframes::apply(document::Draft& draft) const {
         auto result = std::visit(
             [&](auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (std::is_same_v<Curve, document::PathAnimationCurve>) {
+                    const auto* value = std::get_if<document::PathValue>(&paste.value);
+                    if (!value || !value->isValid() || paste.component.has_value())
+                        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                         "Pasted value does not match parameter");
+                    if (std::ranges::any_of(curve.keyframes, [&](const auto& key) {
+                            return key.time == paste.time;
+                        }))
+                        return OperationResult::rejected(OperationIssueCode::InvalidOrder,
+                                                         "Paste time is occupied");
+                    const auto id = draft.ids().allocateKeyframe();
+                    if (!id)
+                        return exhaustedIds();
+                    curve.keyframes.push_back({*id, paste.time, *value, paste.interpolation,
+                                               paste.outgoingHandle, paste.incomingHandle});
+                    return OperationResult::applied();
+                } else if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                     const auto* value = std::get_if<double>(&paste.value);
                     if (!value || !validValueForCurve<Curve>(*composition, curveId, *value))
                         return OperationResult::rejected(OperationIssueCode::InvalidValue,

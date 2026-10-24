@@ -12,7 +12,7 @@ namespace {
 template <typename Curve, typename Callback>
 void forEachStoredKeyframe(Curve& curve, Callback&& callback) {
     using CurveType = std::remove_cvref_t<Curve>;
-    if constexpr (std::is_same_v<CurveType, document::ScalarAnimationCurve>) {
+    if constexpr (document::kWholeValueAnimationCurve<CurveType>) {
         for (auto& keyframe : curve.keyframes)
             callback(keyframe);
     } else {
@@ -148,6 +148,33 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
         if (auto* source = std::get_if<document::SourceLayerExtent>(&copy.timing.contentExtent))
             if (const auto mapped = nodeIds.find(source->sourceNodeId); mapped != nodeIds.end())
                 source->sourceNodeId = mapped->second;
+        // ADR 0028: every mask gets its own id and parameters (and curves) in the copy.
+        for (auto& mask : copy.masks) {
+            const auto maskId = draft.ids().allocateLayerMask();
+            if (!maskId)
+                return detail::exhaustedIds();
+            mask.id = *maskId;
+            for (auto* parameterId : {&mask.path, &mask.feather, &mask.expansion, &mask.opacity}) {
+                const auto* sourceParameter = original.parameters().find(*parameterId);
+                if (sourceParameter == nullptr)
+                    return detail::invalidTarget();
+                auto parameter = *sourceParameter;
+                const auto newParameterId = draft.ids().allocateParameter();
+                if (!newParameterId)
+                    return detail::exhaustedIds();
+                parameter.id = *newParameterId;
+                if (auto* source = std::get_if<document::AnimationCurveSource>(&parameter.source)) {
+                    const auto curveId = copyCurve(draft, *composition, source->curveId);
+                    if (!curveId)
+                        return detail::exhaustedIds();
+                    source->curveId = *curveId;
+                }
+                if (!composition->parameters().insert(std::move(parameter)))
+                    return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                     "Duplicated mask parameter could not be inserted");
+                *parameterId = *newParameterId;
+            }
+        }
         if (!graph.addLayerOutput(std::move(copy)))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Duplicated layer name or boundary is invalid");
@@ -156,6 +183,10 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
     }
     for (const auto& [originalId, copyId] : layerIds) {
         const auto parent = original.graph().findLayer(originalId)->parent;
+        // A matte whose source is duplicated too follows the copy; otherwise it keeps its source.
+        auto* copied = graph.findLayer(copyId);
+        if (copied->trackMatte && layerIds.contains(copied->trackMatte->source))
+            copied->trackMatte->source = layerIds.at(copied->trackMatte->source);
         graph.findLayer(copyId)->parent = parent && layerIds.contains(*parent)
                                               ? std::optional{layerIds.at(*parent)}
                                               : std::nullopt;

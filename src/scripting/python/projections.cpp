@@ -57,6 +57,26 @@ nb::list keyframes(const std::vector<document::ScalarKeyframe>& keys) {
     return result;
 }
 
+// ADR 0028: a Path key's value projects as its anchor points and closed flag.
+nb::list keyframes(const std::vector<document::PathKeyframe>& keys) {
+    nb::list result;
+    for (const auto& key : keys) {
+        nb::dict row;
+        row["id"] = key.id.value();
+        row["time"] = nb::make_tuple(key.time.numerator(), key.time.denominator());
+        nb::list anchors;
+        for (const auto& anchor : key.value.anchors)
+            anchors.append(nb::make_tuple(anchor.point.x, anchor.point.y));
+        nb::dict value;
+        value["anchors"] = anchors;
+        value["closed"] = key.value.closed;
+        row["value"] = value;
+        row["interpolation"] = static_cast<int>(key.outgoingInterpolation);
+        result.append(row);
+    }
+    return result;
+}
+
 } // namespace
 
 nb::dict projectSnapshot(const document::Snapshot& snapshot) {
@@ -140,7 +160,7 @@ nb::dict projectSnapshot(const document::Snapshot& snapshot) {
             std::visit(
                 [&components](const auto& item) {
                     using T = std::decay_t<decltype(item)>;
-                    if constexpr (std::is_same_v<T, document::ScalarAnimationCurve>) {
+                    if constexpr (document::kWholeValueAnimationCurve<T>) {
                         components.append(keyframes(item.keyframes));
                     } else {
                         for (const auto& component : item.components) {

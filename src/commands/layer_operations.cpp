@@ -172,6 +172,11 @@ OperationResult SplitLayerAtTime::apply(document::Draft& draft) const {
     const auto time = snap(time_, *composition);
     if (!time || *time <= original.inPoint || *time >= original.endPoint(composition->duration()))
         return invalidRange();
+    // A track matte source is hidden from its Merge; its tail copy would appear as a plain layer.
+    for (const auto& other : composition->graph().layerOutputs())
+        if (other.trackMatte && other.trackMatte->source == layer_)
+            return OperationResult::rejected(OperationIssueCode::Unsupported,
+                                             "A track matte source layer cannot be split");
     // Classify from the pre-split graph.
     const bool equivalent = splitIsOutputEquivalent(*composition, original);
     const auto originalOut = original.endPoint(composition->duration());

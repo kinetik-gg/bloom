@@ -444,7 +444,8 @@ struct KeyframeMove {
 struct KeyframePaste {
     document::ParameterId parameterId;
     core::RationalTime time;
-    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d> value;
+    // PathValue: a whole-value Path key (ADR 0028).
+    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d, document::PathValue> value;
     document::KeyframeInterpolation interpolation = document::KeyframeInterpolation::Linear;
     std::optional<document::AnimationComponent> component{};
     // Ease handles travel with a copied key, so paste and move reproduce the curve SHAPE and not

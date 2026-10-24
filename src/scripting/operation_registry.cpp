@@ -1,3 +1,4 @@
+#include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/scripting/operation_registry.hpp>
@@ -2540,6 +2541,139 @@ OperationRegistry OperationRegistry::builtIn() {
                         std::make_unique<commands::DisableLayerTimeRemap>(compositionId, layerId);
                 return OperationCreateResult(std::move(operation), std::nullopt);
             });
+
+    // ADR 0028 layer masks and track mattes. Operations that carry a path are not scriptable: the
+    // scripting value model has no path kind.
+    const auto maskArgument = [] {
+        return need("mask", ValueKind::Id, StableId{1}, "The layer mask to edit.");
+    };
+    add("bloom.layer.remove-mask", {compositionArgument(), layerArgument(), maskArgument()},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            const auto mask = id(args, op, "mask", error);
+            if (!composition || !layer || !mask)
+                return error;
+            return OperationCreateResult(std::make_unique<commands::RemoveLayerMask>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::LayerId::fromRaw(*layer),
+                                             document::LayerMaskId::fromRaw(*mask)),
+                                         std::nullopt);
+        });
+    add("bloom.layer.move-mask",
+        {compositionArgument(), layerArgument(), maskArgument(),
+         need("index", ValueKind::Integer, std::int64_t{0}, "The new zero-based position.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            const auto mask = id(args, op, "mask", error);
+            const auto index = integer(args, op, "index", error);
+            if (!composition || !layer || !mask || !index)
+                return error;
+            if (*index < 0)
+                return failure(op, "index", "index must not be negative");
+            return OperationCreateResult(std::make_unique<commands::MoveLayerMask>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::LayerId::fromRaw(*layer),
+                                             document::LayerMaskId::fromRaw(*mask),
+                                             static_cast<std::size_t>(*index)),
+                                         std::nullopt);
+        });
+    add("bloom.layer.set-mask-mode",
+        {compositionArgument(), layerArgument(), maskArgument(),
+         need("mode", ValueKind::Integer, std::int64_t{1},
+              "0 None, 1 Add, 2 Subtract, 3 Intersect, 4 Difference.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            const auto mask = id(args, op, "mask", error);
+            const auto mode = integer(args, op, "mode", error);
+            if (!composition || !layer || !mask || !mode)
+                return error;
+            if (*mode < 0 || *mode > 4)
+                return failure(op, "mode", "modes are 0 None, 1 Add, 2 Subtract, 3 Intersect, "
+                                           "4 Difference");
+            return OperationCreateResult(
+                std::make_unique<commands::SetLayerMaskMode>(
+                    document::CompositionId::fromRaw(*composition),
+                    document::LayerId::fromRaw(*layer), document::LayerMaskId::fromRaw(*mask),
+                    static_cast<document::LayerMaskMode>(*mode)),
+                std::nullopt);
+        });
+    add("bloom.layer.set-mask-inverted",
+        {compositionArgument(), layerArgument(), maskArgument(),
+         need("inverted", ValueKind::Boolean, true, "Whether the mask coverage is inverted.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            const auto mask = id(args, op, "mask", error);
+            const auto inverted = boolean(args, op, "inverted", error);
+            if (!composition || !layer || !mask || !inverted)
+                return error;
+            return OperationCreateResult(std::make_unique<commands::SetLayerMaskInverted>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::LayerId::fromRaw(*layer),
+                                             document::LayerMaskId::fromRaw(*mask), *inverted),
+                                         std::nullopt);
+        });
+    add("bloom.layer.rename-mask",
+        {compositionArgument(), layerArgument(), maskArgument(),
+         need("name", ValueKind::String, "Mask 1", "The new mask name.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            const auto mask = id(args, op, "mask", error);
+            const auto name = text(args, op, "name", error);
+            if (!composition || !layer || !mask || !name)
+                return error;
+            return OperationCreateResult(std::make_unique<commands::RenameLayerMask>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::LayerId::fromRaw(*layer),
+                                             document::LayerMaskId::fromRaw(*mask), *name),
+                                         std::nullopt);
+        });
+    add("bloom.layer.set-track-matte",
+        {compositionArgument(), layerArgument(),
+         need("source", ValueKind::Id, StableId{1}, "The matte source layer in the same Merge."),
+         need("channel", ValueKind::Integer, std::int64_t{0}, "0 Alpha, 1 Luma."),
+         need("inverted", ValueKind::Boolean, false, "Whether the matte is inverted.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            const auto source = id(args, op, "source", error);
+            const auto channel = integer(args, op, "channel", error);
+            const auto inverted = boolean(args, op, "inverted", error);
+            if (!composition || !layer || !source || !channel || !inverted)
+                return error;
+            if (*channel < 0 || *channel > 1)
+                return failure(op, "channel", "channels are 0 Alpha, 1 Luma");
+            return OperationCreateResult(
+                std::make_unique<commands::SetTrackMatte>(
+                    document::CompositionId::fromRaw(*composition),
+                    document::LayerId::fromRaw(*layer),
+                    document::TrackMatte{document::LayerId::fromRaw(*source),
+                                         static_cast<document::TrackMatteChannel>(*channel),
+                                         *inverted}),
+                std::nullopt);
+        });
+    add("bloom.layer.clear-track-matte", {compositionArgument(), layerArgument()},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            if (!composition || !layer)
+                return error;
+            return OperationCreateResult(std::make_unique<commands::SetTrackMatte>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::LayerId::fromRaw(*layer), std::nullopt),
+                                         std::nullopt);
+        });
 
     add("bloom.layer.split-at-time", {compositionArgument(), layerArgument(), timeArgument()},
         [](const std::string& op, const Arguments& args) {

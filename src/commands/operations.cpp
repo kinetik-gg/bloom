@@ -68,7 +68,7 @@ struct CompositionCloneIds final {
 template <typename Curve, typename Callback>
 void forEachStoredKeyframe(Curve& curve, Callback&& callback) {
     using CurveType = std::remove_cvref_t<Curve>;
-    if constexpr (std::is_same_v<CurveType, document::ScalarAnimationCurve>) {
+    if constexpr (document::kWholeValueAnimationCurve<CurveType>) {
         for (auto& keyframe : curve.keyframes)
             callback(keyframe);
     } else {
@@ -80,7 +80,7 @@ void forEachStoredKeyframe(Curve& curve, Callback&& callback) {
 
 template <typename Curve> std::size_t storedKeyframeCount(const Curve& curve) {
     using CurveType = std::remove_cvref_t<Curve>;
-    if constexpr (std::is_same_v<CurveType, document::ScalarAnimationCurve>) {
+    if constexpr (document::kWholeValueAnimationCurve<CurveType>) {
         return curve.keyframes.size();
     } else {
         std::size_t count = 0;
@@ -201,6 +201,19 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
         auto boundary = sourceBoundary;
         boundary.nodeId = remap(ids->nodes, sourceBoundary.nodeId);
         boundary.layerId = remap(ids->layers, sourceBoundary.layerId);
+        // ADR 0028: masks take fresh ids and the cloned parameters; a matte follows its source.
+        for (auto& mask : boundary.masks) {
+            const auto maskId = draft.ids().allocateLayerMask();
+            if (!maskId)
+                return std::nullopt;
+            mask.id = *maskId;
+            mask.path = remap(ids->parameters, mask.path);
+            mask.feather = remap(ids->parameters, mask.feather);
+            mask.expansion = remap(ids->parameters, mask.expansion);
+            mask.opacity = remap(ids->parameters, mask.opacity);
+        }
+        if (boundary.trackMatte)
+            boundary.trackMatte->source = remap(ids->layers, boundary.trackMatte->source);
         if (sourceBoundary.parent)
             boundary.parent = remap(ids->layers, *sourceBoundary.parent);
         if (!graph.addLayerOutput(std::move(boundary))) {

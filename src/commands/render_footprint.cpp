@@ -52,8 +52,8 @@ using document::RenderTimeSpan;
 // the two segments around it in the list that holds it, and holds before the first and after the
 // last key extend to the composition's ends. Curves are local: no key's shape reads a non-adjacent
 // key.
-void componentChangeSpans(const std::vector<document::ScalarKeyframe>& before,
-                          const std::vector<document::ScalarKeyframe>& after,
+template <typename Keyframe>
+void componentChangeSpans(const std::vector<Keyframe>& before, const std::vector<Keyframe>& after,
                           const core::RationalTime duration, std::vector<RenderTimeSpan>& out,
                           const core::RationalTime low = {}) {
     if (before == after)
@@ -62,8 +62,8 @@ void componentChangeSpans(const std::vector<document::ScalarKeyframe>& before,
         out.push_back({low, duration});
         return;
     }
-    const auto collect = [&](const std::vector<document::ScalarKeyframe>& keys,
-                             const std::vector<document::ScalarKeyframe>& other) {
+    const auto collect = [&](const std::vector<Keyframe>& keys,
+                             const std::vector<Keyframe>& other) {
         for (std::size_t index = 0; index < keys.size(); ++index) {
             if (std::ranges::find(other, keys[index]) != other.end())
                 continue;
@@ -90,7 +90,7 @@ void componentChangeSpans(const std::vector<document::ScalarKeyframe>& before,
         [&](const auto& left) {
             using Curve = std::decay_t<decltype(left)>;
             const auto& right = std::get<Curve>(after);
-            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+            if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                 componentChangeSpans(left.keyframes, right.keyframes, duration, out, low);
             } else {
                 for (std::size_t index = 0; index < left.components.size(); ++index)

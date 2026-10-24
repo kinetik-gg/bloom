@@ -3,6 +3,7 @@
 #include "node_operation_support.hpp"
 #include "render_footprint.hpp"
 
+#include <bloom/document/layer_masks.hpp>
 #include <bloom/document/persisted_text.hpp>
 
 #include <algorithm>
@@ -175,6 +176,12 @@ removalTimeFootprint(const document::Composition& composition,
         removedLayers.insert(boundary->layerId);
     }
 
+    // A removed track matte source changes its surviving targets outside the removed span.
+    for (const auto& layer : graph.layerOutputs())
+        if (!nodes.contains(layer.nodeId) && layer.trackMatte &&
+            removedLayers.contains(layer.trackMatte->source))
+            return std::nullopt;
+
     // A surviving child parented to a removed boundary follows only the deleted head, so its output
     // outside the deleted span changes too.
     for (const auto& layer : graph.layerOutputs()) {
@@ -302,6 +309,15 @@ OperationResult RemoveNodes::apply(document::Draft& draft) const {
                 "Output and its directly connected Merge cannot be removed");
         for (const auto& binding : node->parameters)
             candidates.insert(binding.parameterId);
+        // ADR 0028: a removed layer's masks own parameters (and curves) outside node bindings.
+        if (const auto boundary = std::ranges::find(composition->graph().layerOutputs(), id,
+                                                    &document::LayerOutputBoundary::nodeId);
+            boundary != composition->graph().layerOutputs().end())
+            for (const auto& mask : boundary->masks)
+                for (const auto& [parameterId, schemaKey] : document::layerMaskParameters(mask)) {
+                    (void)schemaKey;
+                    candidates.insert(parameterId);
+                }
     }
     // Classify from the pre-erase graph. std::nullopt is the conservative whole-render default; a
     // present footprint (possibly empty) is provable bounded reuse evidence. Issue #355: removing

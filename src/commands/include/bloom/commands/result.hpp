@@ -42,7 +42,8 @@ using DurableObjectId =
     std::variant<document::CompositionId, document::NodeId, document::EdgeId, document::LayerId,
                  document::LayerSlotId, document::ParameterId, document::AnimationCurveId,
                  document::KeyframeId, document::DriverBindingId, document::NodeGroupId,
-                 document::AssetId, document::AssetFolderId, document::DataBlockRecordId>;
+                 document::AssetId, document::AssetFolderId, document::DataBlockRecordId,
+                 document::LayerMaskId>;
 
 struct OperationOutput {
     std::string name;

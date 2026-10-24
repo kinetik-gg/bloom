@@ -12,6 +12,7 @@ target_sources(
         node_operations.cpp
         layer_operations.cpp
         layer_time_operations.cpp
+        layer_mask_operations.cpp
         node_duplication.cpp
         node_group_operations.cpp
         node_operation_eligibility.cpp
@@ -32,6 +33,7 @@ target_sources(
             include/bloom/commands/node_operations.hpp
             include/bloom/commands/layer_operations.hpp
             include/bloom/commands/layer_time_operations.hpp
+            include/bloom/commands/layer_mask_operations.hpp
             include/bloom/commands/result.hpp
             include/bloom/commands/transaction.hpp
 )

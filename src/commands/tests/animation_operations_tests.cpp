@@ -877,7 +877,7 @@ void testBatchKeyframeTransactions(TestContext& test) {
         std::visit(
             [&](const auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                     for (const auto& key : curve.keyframes)
                         selected.push_back({curve.id, key.id});
                 } else {
@@ -905,7 +905,7 @@ void testBatchKeyframeTransactions(TestContext& test) {
                                         document::KeyframeInterpolation::Linear,
                                 "final keys stay canonical; every outgoing interval is edited");
                 };
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                     edits(curve.keyframes);
                 } else {
                     for (const auto& component : curve.components)
