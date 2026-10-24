@@ -1309,6 +1309,28 @@ void testManyRowsStayBoundedAndThePlayheadNeverRelayoutsThem(Expectations& expec
                         "moving the playhead relayouts nothing -- it is one repaint of the lane "
                         "region, never a per-frame row relayout");
 
+    // #358: playback invalidates only the playhead strips, and the collapsed rows' key summaries
+    // are built once per document state, never per paint.
+    auto* lanes = editor->findChild<ui::TimelineLaneRegion*>(QStringLiteral("timelineLaneRegion"));
+    expectations.expect(lanes != nullptr, "the lane region exists");
+    if (lanes != nullptr) {
+        static_cast<void>(lanes->grab());
+        const auto painted = lanes->work();
+        for (int frame = 0; frame < 60; ++frame) {
+            static_cast<void>(fixture.session.setCurrentTime(
+                core::RationalTime::create(frame, 6).value_or(time(0))));
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        }
+        static_cast<void>(lanes->grab());
+        const auto played = lanes->work();
+        expectations.expect(played.fullInvalidations == painted.fullInvalidations,
+                            "playback never invalidates the whole lane region");
+        expectations.expect(played.playheadInvalidations >= painted.playheadInvalidations + 59,
+                            "each playhead move invalidates only its strips");
+        expectations.expect(played.keySummaryBuilds == painted.keySummaryBuilds,
+                            "key summaries are not rebuilt while the document is unchanged");
+    }
+
     delete editor;
     finishFixture(fixture);
 }

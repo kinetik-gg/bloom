@@ -24,7 +24,13 @@ class DrivenValueResolver final : public QObject {
         std::map<document::ParameterId, QString> parameters;
         std::map<ValueOutputKey, QString> outputs;
     };
+    // #358 work counters, shared with the worker task.
+    struct Work final {
+        std::atomic<std::uint64_t> probeCompiles{0};
+        std::atomic<std::uint64_t> evaluations{0};
+    };
     explicit DrivenValueResolver(CompositionSession& session, QObject* parent);
+    [[nodiscard]] const Work& work() const noexcept { return *work_; }
     ~DrivenValueResolver() override;
     void request(std::vector<document::ParameterId> parameters);
     std::function<void(const Values&)> ready;
@@ -35,6 +41,11 @@ class DrivenValueResolver final : public QObject {
     CompositionSession& session_;
     std::shared_ptr<runtime::TaskScheduler> scheduler_;
     std::shared_ptr<std::atomic_bool> retire_;
+    // #358: the driver probe compiles once per (document state, composition, parameter set);
+    // every later time only evaluates the cached plan's value graph.
+    struct ProbeCache;
+    std::shared_ptr<ProbeCache> probeCache_;
+    std::shared_ptr<Work> work_ = std::make_shared<Work>();
     runtime::TaskHandle<std::shared_ptr<Values>> task_;
     QTimer* timer_;
     std::vector<document::ParameterId> parameters_;

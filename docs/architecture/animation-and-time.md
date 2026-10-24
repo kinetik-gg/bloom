@@ -778,6 +778,26 @@ no extra leases, and is stopped when the resident set becomes empty. Direct memb
 full-coverage autoplay boundary check lease validity immediately. Delivery cadence remains separate
 work; this timer does not replace task completion delivery.
 
+### Per-frame UI cost during playback (#358)
+
+A playhead move is a value change, not a document change, and every surface treats it so:
+
+- Properties refreshes the values and key indicators of its existing rows in place; it never
+  rebuilds rows or re-walks the upstream graph on a time change (`PropertiesEditor::work()`).
+- Driven values compile their probe once per document state, composition and parameter set; each
+  later time only evaluates the cached plan's value graph (`CompositionSession::drivenValueWork()`).
+- The Timeline lane region and the curve view invalidate only the strips the playhead leaves and
+  enters. Collapsed layers' key summaries are cached per document state, and curve polylines per
+  compiled-curve generation, time axis, size and value viewport. The ruler merges adjacent cached
+  frames into one RAM-preview coverage segment.
+- Audio remixes only when an edit moved the active composition's evaluation provenance
+  (`CompositionSession::lastDocumentChangeAffectedEvaluation()`), keeps the previous mix audible
+  until the new one is ready, and silences explicitly only on a composition switch or document
+  rebind. Layout-only edits, edits the render reachability proves neutral, and edits to
+  compositions this one does not render cause no remix and no dropout.
+
+Each of these has work counters, and tests assert them over sixty playhead moves.
+
 ### Playback never blocks
 
 Space and the transport button toggle the same session transport. Space belongs to the window and

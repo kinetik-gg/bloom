@@ -8,8 +8,8 @@
 #include <QTemporaryDir>
 #include <bloom/commands/operations.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
-#include <bloom/ui/audio_playback_session.hpp>
 #include <bloom/ui/audio_device_control.hpp>
+#include <bloom/ui/audio_playback_session.hpp>
 #include <bloom/ui/composition_plan_cache.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/playback_controller.hpp>
@@ -191,14 +191,32 @@ int run(int argc, char** argv) {
         std::map<document::NodeId, document::Vec2d> positions;
         for (const auto& node : fixture.session.composition()->graph().nodes())
             positions.emplace(node.id, document::Vec2d{40.0, 40.0});
+        const auto before = audioPlaybackSession.work();
         commands::Transaction move("Move nodes", fixture.session.snapshot().revision());
         move.emplace<commands::MoveNodes>(fixture.session.compositionId(), std::move(positions));
         require(fixture.session.executeTransaction(std::move(move)).succeeded(), "move nodes");
-        require(awaitMix(), "stage 7: worker republished layout-only mix");
+        require(awaitMix(), "stage 7: the mix follows the layout-only revision");
         const auto& moved = audioPlaybackSession.mix();
         require(moved.has_value() && !moved->clips.empty(),
                 "stage 7: mix survives a layout-only edit");
         require(appliedClips == 1, "stage 7: engine still holds the clip");
+        // #358: a render-neutral edit neither remixes nor silences.
+        const auto after = audioPlaybackSession.work();
+        require(after.mixRequests == before.mixRequests && after.silences == before.silences &&
+                    after.neutralEdits == before.neutralEdits + 1,
+                "stage 7: a layout-only edit requests no remix and never silences");
+
+        // An unconnected node is render-neutral too: no remix, no dropout.
+        commands::Transaction loose("Loose node", fixture.session.snapshot().revision());
+        loose.emplace<commands::AddNode>(fixture.session.compositionId(),
+                                         std::string(document::kSolidSourceNodeType),
+                                         document::Vec2d{0.0, 0.0});
+        require(fixture.session.executeTransaction(std::move(loose)).changed(), "loose node");
+        require(awaitMix(), "stage 7b: the mix follows the neutral revision");
+        const auto unrelated = audioPlaybackSession.work();
+        require(unrelated.mixRequests == before.mixRequests &&
+                    unrelated.silences == before.silences && appliedClips == 1,
+                "stage 7b: an unconnected node requests no remix and keeps the clip playing");
     }
 
     document::NodeId layerNode;

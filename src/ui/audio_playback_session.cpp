@@ -32,7 +32,7 @@ AudioPlaybackSession::AudioPlaybackSession(CompositionSession& session,
     connect(&session_, &CompositionSession::snapshotChanged, this,
             &AudioPlaybackSession::handleSnapshotChanged);
     connect(&session_, &CompositionSession::compositionChanged, this,
-            &AudioPlaybackSession::handleSnapshotChanged);
+            &AudioPlaybackSession::handleCompositionChanged);
     connect(&session_, &CompositionSession::currentTimeChanged, this, [this] {
         if (!staticForCurrent_)
             (void)refresh();
@@ -81,9 +81,9 @@ bool AudioPlaybackSession::refresh() {
     if (active_ && (&active_->request.snapshot.project() != &snapshot.project() ||
                     active_->request.compositionId != compositionId ||
                     active_->request.snapshot.revision() != snapshot.revision())) {
+        // #358: the previous mix stays audible until the newer request publishes its own.
         active_->handle.cancel();
         staticForCurrent_ = false;
-        setMix(std::nullopt);
     }
     submitPending();
     return true;
@@ -105,12 +105,37 @@ void AudioPlaybackSession::handleSnapshotChanged() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (shuttingDown_)
         return;
+    // #358: an edit that cannot change the active composition's render -- layout only, proven
+    // unreachable, or in a composition this one does not nest -- cannot change its audio either.
+    // The published mix still describes the document, so nothing is re-derived or silenced.
+    if (!session_.lastDocumentChangeAffectedEvaluation() && mix_.has_value() && !active_ &&
+        !pending_) {
+        ++work_.neutralEdits;
+        revision_ = session_.snapshot().revision();
+        return;
+    }
+    // A render-affecting edit re-derives the mix; the previous one keeps playing until the new
+    // one is ready, and consumeReady() never publishes a result for an older revision.
+    staticForCurrent_ = false;
+    (void)refresh();
+}
+
+void AudioPlaybackSession::handleCompositionChanged() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (shuttingDown_)
+        return;
     staticForCurrent_ = false;
     if (active_)
         active_->handle.cancel();
-    // Silence a previous document immediately; no stale result may revive it.
-    setMix(std::nullopt);
+    // Another composition (or a rebound document) must never be heard with this one's mix.
+    silence();
     (void)refresh();
+}
+
+void AudioPlaybackSession::silence() {
+    if (mix_.has_value())
+        ++work_.silences;
+    setMix(std::nullopt);
 }
 
 void AudioPlaybackSession::submitPending() {
@@ -118,11 +143,10 @@ void AudioPlaybackSession::submitPending() {
     if (shuttingDown_ || active_ || !pending_)
         return;
     const auto request = *pending_;
-    runtime::TaskRequest task(
-        "Prepare audio mix",
-        {.kind = runtime::TaskOwnerKind::Composition,
-         .id = runtime::TaskOwnerId::fromRaw(request.compositionId.value())},
-        runtime::TaskPriority::Visible);
+    runtime::TaskRequest task("Prepare audio mix",
+                              {.kind = runtime::TaskOwnerKind::Composition,
+                               .id = runtime::TaskOwnerId::fromRaw(request.compositionId.value())},
+                              runtime::TaskPriority::Visible);
     task.sourceVersion = {.documentRevision = request.snapshot.revision().value(),
                           .requestGeneration = request.generation};
     const auto submission = scheduler_.submit<ResultHandle>(
@@ -152,8 +176,8 @@ void AudioPlaybackSession::submitPending() {
                                std::holds_alternative<runtime::ValueOutputIndex>(
                                    layer.time->timeRemap->source);
                     });
-                prepared->mix =
-                    evaluator->evaluateAudioMix(compiled.plan, request.time, context.cancellation());
+                prepared->mix = evaluator->evaluateAudioMix(compiled.plan, request.time,
+                                                            context.cancellation());
             } else {
                 prepared->timeDependent = false;
             }
@@ -169,6 +193,7 @@ void AudioPlaybackSession::submitPending() {
         }
         return;
     }
+    ++work_.mixRequests;
     active_.emplace(Active{request, submission.handle});
     pending_.reset();
     bridge_.wake();

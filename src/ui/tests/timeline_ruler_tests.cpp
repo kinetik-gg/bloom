@@ -1281,6 +1281,19 @@ void testCacheBarTracksAxisIdentityEvictionAndBatches(Expectations& expectations
                         }),
                         "edited frame ready");
     expectations.expect(ruler.cachedFrameRects().size() == 1, "new revision coverage returns");
+    // #358: adjacent cached frames paint as ONE segment rather than one rect per frame.
+    (void)fixture.session.setCurrentTime(time(1, 24));
+    expectations.expect(waitUntil([&] {
+                            return fixture.controller.state().activity ==
+                                   ui::PreviewActivity::Ready;
+                        }),
+                        "the adjacent frame is ready");
+    const auto merged = ruler.cachedFrameRects();
+    const auto mergedAxis = ruler.axisForWidth(ruler.width());
+    expectations.expect(
+        mergedAxis.has_value() && merged.size() == 1 &&
+            std::abs(merged.front().right() - mergedAxis->pixelForTime(time(2, 24))) < 0.001,
+        "two adjacent cached frames merge into one coverage segment");
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
     expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),

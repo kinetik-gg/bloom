@@ -15,6 +15,7 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/ui/composition_session.hpp>
 
+#include <QPainterPath>
 #include <QPointF>
 #include <QRectF>
 #include <QWidget>
@@ -98,6 +99,15 @@ class TimelineGraphView final : public QWidget {
     [[nodiscard]] std::optional<QPointF> keyCenter(const GraphCurveId& curve,
                                                    document::KeyframeId keyframeId) const;
 
+    // #358 work counters: playback repaints only the playhead strips, and a curve is resampled
+    // only when its compiled table, the time axis, the size or its value viewport changes.
+    struct Work final {
+        std::uint64_t curveSamples = 0;
+        std::uint64_t playheadInvalidations = 0;
+        std::uint64_t fullInvalidations = 0;
+    };
+    [[nodiscard]] Work work() const noexcept { return work_; }
+
   protected:
     void paintEvent(QPaintEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
@@ -140,6 +150,26 @@ class TimelineGraphView final : public QWidget {
     mutable std::map<GraphCurveId, runtime::CompiledScalarCurve> compiled_;
     mutable std::uint64_t compiledRevision_ = 0;
     mutable bool compiledValid_ = false;
+    // Bumped whenever compiled_ is rebuilt, so cached polylines can never outlive their tables.
+    mutable std::uint64_t compiledGeneration_ = 0;
+    struct CachedPath final {
+        std::uint64_t generation = 0;
+        double t0 = 0.0;
+        double t1 = 0.0;
+        int width = 0;
+        double top = 0.0;
+        double band = 0.0;
+        double minimum = 0.0;
+        double maximum = 0.0;
+        QPainterPath path;
+    };
+    mutable std::map<GraphCurveId, CachedPath> paths_;
+    [[nodiscard]] const QPainterPath& pathFor(const GraphCurveId& curve,
+                                              const runtime::CompiledScalarCurve& compiled) const;
+    void invalidatePlayhead();
+    void invalidateAll();
+    std::optional<int> paintedPlayheadX_;
+    mutable Work work_;
     std::optional<QPointF> panOrigin_;
     bool snapping_ = true;
 

@@ -38,6 +38,14 @@ class AudioPlaybackSession final : public QObject {
     ~AudioPlaybackSession() override;
 
     [[nodiscard]] document::Revision revision() const noexcept { return revision_; }
+    // #358 work counters: a render-neutral edit requests no remix, and a remix never silences the
+    // previous mix while the new one is prepared.
+    struct Work final {
+        std::uint64_t mixRequests = 0;
+        std::uint64_t neutralEdits = 0;
+        std::uint64_t silences = 0;
+    };
+    [[nodiscard]] Work work() const noexcept { return work_; }
     [[nodiscard]] const std::optional<runtime::AudioMixDescription>& mix() const noexcept {
         return mix_;
     }
@@ -55,6 +63,9 @@ class AudioPlaybackSession final : public QObject {
 
   private:
     void handleSnapshotChanged();
+    void handleCompositionChanged();
+    void silence();
+    Work work_;
     void consumeReady();
     void submitPending();
     void setMix(std::optional<runtime::AudioMixDescription> mix);

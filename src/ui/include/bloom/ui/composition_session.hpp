@@ -12,8 +12,8 @@
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
-#include <bloom/document/layer_time.hpp>
 #include <bloom/document/ids.hpp>
+#include <bloom/document/layer_time.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/render/display_buffer.hpp>
 #include <bloom/runtime/evaluation.hpp>
@@ -462,6 +462,21 @@ class CompositionSession final : public QObject {
     // time, same parameters -- starts nothing, so a surface may call it from the same refresh that
     // drivenValuesChanged() triggered without looping.
     void refreshDrivenValues();
+    // #358 work counters of the driven-value resolver: probe compiles happen once per document
+    // state and parameter set; every playhead move after that is one value evaluation.
+    struct DrivenValueWork final {
+        std::uint64_t probeCompiles = 0;
+        std::uint64_t evaluations = 0;
+    };
+    [[nodiscard]] DrivenValueWork drivenValueWork() const noexcept;
+    // #358. Whether the newest document change moved the active composition's evaluation
+    // provenance (what documentEvaluationChanged() announces). False for a layout-only edit, an
+    // edit the render reachability proves neutral, or an edit to a composition this one does not
+    // render -- the rendered pixels AND audio of the active composition are unchanged. Valid from
+    // the snapshotChanged() emission of that change; a rebind counts as a change.
+    [[nodiscard]] bool lastDocumentChangeAffectedEvaluation() const noexcept {
+        return lastDocumentChangeAffectedEvaluation_;
+    }
 
     // Writes one authored value onto an EXACT parameter, by the same constant-or-keyframe rule
     // every layer row already follows (task FIX1, item G): a constant source is rewritten, an
@@ -770,7 +785,8 @@ class CompositionSession final : public QObject {
 
     // TEMPORAL-2A. Rebuilds the time-indexed provenance to a single full-cover span of the live
     // snapshot. Used on rebind, a composition switch without usable retained spans, and every
-    // conservative (whole/unknown/mixed) transition. Returns true when the provenance actually changed.
+    // conservative (whole/unknown/mixed) transition. Returns true when the provenance actually
+    // changed.
     [[nodiscard]] bool resetEvaluationRangesToLive();
     // Applies a finite footprint: spans outside the half-open changed intervals keep their genuine
     // snapshot, spans inside switch to the live snapshot. Returns true when anything changed;
@@ -858,6 +874,7 @@ class CompositionSession final : public QObject {
     std::vector<EvaluationSnapshotRange> evaluationRanges_;
     // #355. Retained spans of inactive compositions, oldest first.
     std::vector<RetainedCompositionRanges> retainedRanges_;
+    bool lastDocumentChangeAffectedEvaluation_ = true;
     document::CompositionId compositionId_;
     core::RationalTime currentTime_ = core::RationalTime::fromInteger(0);
     CompositionSelection selection_;
