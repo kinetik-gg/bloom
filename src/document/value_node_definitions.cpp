@@ -817,6 +817,7 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     case NodeLoweringKind::CompositionOutput:
     case NodeLoweringKind::Unsupported:
     case NodeLoweringKind::Mask:
+    case NodeLoweringKind::Channel:
         break;
     }
     return false;

@@ -84,7 +84,7 @@ void roundTripAndValidation() {
     const auto settings = document::makeBloomNeutralColorSettingsV1({});
     auto archive = buildVerifiedSaveArchive({}, {.snapshot = &snapshot, .colorSettings = &settings},
                                             {}, memory());
-    expect(static_cast<bool>(archive), "organized project saves at 1.24");
+    expect(static_cast<bool>(archive), "organized project saves at 1.26");
     if (!archive)
         return;
     auto result = openProjectArchive(archive.archive()->bytes(), {}, memory());
@@ -93,10 +93,10 @@ void roundTripAndValidation() {
         return;
     auto opened = std::move(result).takeOpened();
     auto restored = opened.document->snapshot();
-    expect(opened.schemaMinor == 24 && *restored.project().findAsset(asset.id) == asset,
-           "name, tags, folder, order and media identity round-trip at 1.24");
+    expect(opened.schemaMinor == 26 && *restored.project().findAsset(asset.id) == asset,
+           "name, tags, folder, order and media identity round-trip at 1.26");
     expect(restored.project().findAsset(lut.id) && *restored.project().findAsset(lut.id) == lut,
-           "LUT locator, kind and digest round-trip at 1.24");
+           "LUT locator, kind and digest round-trip at 1.26");
     expect(restored.project().findAsset(sequence.id) &&
                *restored.project().findAsset(sequence.id) == sequence,
            "wide EXR sequence metadata round-trips without pixel allocation");
@@ -175,8 +175,8 @@ void migration() {
     legacy = std::regex_replace(legacy, std::regex(R"(,\s*"inputColorSpaceId": "")"), "");
     legacy = std::regex_replace(legacy, std::regex(R"(,\s*"dataBlocks"\s*:\s*\[\])"), "");
     legacy = std::regex_replace(legacy, std::regex(R"(,\s*"dataBlock"\s*:\s*"0")"), "");
-    const auto version = legacy.find("\"minor\": 24");
-    legacy.replace(version, std::string_view("\"minor\": 24").size(), "\"minor\": 15");
+    const auto version = legacy.find("\"minor\": 26");
+    legacy.replace(version, std::string_view("\"minor\": 26").size(), "\"minor\": 15");
     auto operation = memory();
     auto parsed = parseStrictJsonDom(std::as_bytes(std::span(legacy)), {}, operation);
     if (!parsed)
@@ -211,7 +211,7 @@ void migration() {
     if (opened.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto result = std::move(opened).takeOpened();
-    expect(result.schemaMinor == 24 &&
+    expect(result.schemaMinor == 26 &&
                result.document->snapshot().project().assets().front().name == "shot.v02",
            "opened archive reports current schema and migrated display name");
 }
@@ -234,10 +234,10 @@ void inputInterpretationMigration() {
         std::string text(*size.value(), '\0');
         if (!encodeCanonicalDocument(input, text))
             throw std::runtime_error("input migration canonical encode");
-        const auto rootVersion = text.find("\"minor\": 24\n  },\n  \"project\"");
+        const auto rootVersion = text.find("\"minor\": 26\n  },\n  \"project\"");
         if (rootVersion == std::string::npos)
             throw std::runtime_error("input migration root version anchor");
-        text.replace(rootVersion, std::string_view("\"minor\": 24").size(), "\"minor\": 19");
+        text.replace(rootVersion, std::string_view("\"minor\": 26").size(), "\"minor\": 19");
         const auto interpretation = text.find("\"interpretation\": {");
         if (interpretation == std::string::npos)
             throw std::runtime_error("input migration interpretation anchor");

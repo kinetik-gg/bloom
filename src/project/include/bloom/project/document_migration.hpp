@@ -209,6 +209,11 @@ migrateExternalFileLocatorsV1_21(const JsonValue& root, std::pmr::memory_resourc
 [[nodiscard]] MigrationStepOutcome migrateLayerMasksV1_23(const JsonValue& root,
                                                           std::pmr::memory_resource* resource,
                                                           std::pmr::vector<char>& output);
+// ADR 0026. Chained from 1.24 while the video-io 1.25 step is unmerged; it becomes 1.25 -> 1.26
+// when that step lands.
+[[nodiscard]] MigrationStepOutcome migrateChannelSetsV1_24(const JsonValue& root,
+                                                           std::pmr::memory_resource* resource,
+                                                           std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -233,7 +238,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 20}, {1, 21}, migrateLutAssetsV1_20},
     MigrationStepDescriptor{{1, 21}, {1, 22}, migrateExternalFileLocatorsV1_21},
     MigrationStepDescriptor{{1, 22}, {1, 23}, migrateLayerTimeV1_22},
-    MigrationStepDescriptor{{1, 23}, {1, 24}, migrateLayerMasksV1_23}};
+    MigrationStepDescriptor{{1, 23}, {1, 24}, migrateLayerMasksV1_23},
+    MigrationStepDescriptor{{1, 24}, {1, 26}, migrateChannelSetsV1_24}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

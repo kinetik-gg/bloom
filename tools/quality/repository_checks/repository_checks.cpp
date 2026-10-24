@@ -354,6 +354,8 @@ constexpr auto kAllowedModuleDependencies =
         {"color", "render"},       {"runtime", "media"}, /* Image evaluation consumes the bounded
                                                             media decoder. */
         {"runtime", "color"},      {"output", "color"},       {"output", "core"},
+        {"runtime", "platform"}, /* ADR 0025: identity-verified source digests and revalidation. */
+        {"commands", "platform"}, /* ADR 0025: asset import records the source file identity. */
         {"output", "document"},    {"output", "media"},       {"output", "platform"},
         {"output", "render"},      {"output", "runtime"},     {"host", "color"},
         {"host", "commands"},      {"host", "core"},          {"host", "document"},

@@ -483,4 +483,50 @@ void validateManifestSchemaV1_24(const json::Value& schema) {
         json::parse(R"({"$ref":"#/$defs/fixedVersion-1.23"})");
     validateManifestSchemaV1_23(previous);
 }
+// Document 1.26 (ADR 0026): the Image source node schema advances to v2. Node schema versions are
+// not constrained by the document schema, so the artifact differs from 1.24 only in its version.
+// It is chained from 1.24 until the video-io 1.25 schema is merged.
+void validateDocumentSchemaV1_26(const json::Value& schema) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-document:1.26",
+                       "channel set document id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.26").at("properties").at("minor"),
+                 R"({"const":26})", "channel set document minor");
+    auto previous = schema;
+    auto& defs = previous.at("$defs");
+    auto fixed =
+        std::find_if(defs.asObject().begin(), defs.asObject().end(),
+                     [](const auto& member) { return member.first == "fixedVersion-1.26"; });
+    if (fixed == defs.asObject().end())
+        throw std::runtime_error("document 1.26 version is missing");
+    fixed->first = "fixedVersion-1.24";
+    fixed->second.at("properties").at("minor") = json::parse(R"({"const":24})");
+    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-document:1.24"));
+    previous.at("title") = json::Value(std::string("Bloom Project Document 1.24"));
+    previous.at("properties").at("schemaVersion") =
+        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.24"})");
+    validateDocumentSchemaV1_24(previous);
+}
+void validateManifestSchemaV1_26(const json::Value& schema) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-manifest:1.26",
+                       "channel set manifest id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.26").at("properties").at("minor"),
+                 R"({"const":26})", "channel set manifest minor");
+    auto previous = schema;
+    auto& defs = previous.at("$defs");
+    auto fixed =
+        std::find_if(defs.asObject().begin(), defs.asObject().end(),
+                     [](const auto& member) { return member.first == "fixedVersion-1.26"; });
+    if (fixed == defs.asObject().end())
+        throw std::runtime_error("manifest 1.26 version is missing");
+    fixed->first = "fixedVersion-1.24";
+    fixed->second.at("properties").at("minor") = json::parse(R"({"const":24})");
+    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-manifest:1.24"));
+    defs.at("document-1.0").at("properties").at("schemaVersion") =
+        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.24"})");
+    validateManifestSchemaV1_24(previous);
+}
 } // namespace bloom::quality

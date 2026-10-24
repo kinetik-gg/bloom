@@ -2,6 +2,7 @@
 #include <bloom/document/shape.hpp>
 
 #include <bloom/core/utf8.hpp>
+#include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/value_operations.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
@@ -319,6 +320,8 @@ constantMatchesSchema(const std::string_view schemaKey,
                (schemaKey == "bloom.ocio-file.lut" ||
                 *value <= (schemaKey == "bloom.ocio-file.interpolation" ? 2 : 1));
     }
+    if (isChannelParameterSchemaKey(schemaKey))
+        return isChannelParameterValueValid(schemaKey, constant.value);
     if (schemaKey == "bloom.image.asset")
         return std::holds_alternative<std::string>(constant.value);
     if (schemaKey == kImageInputColorSpaceIdParameterSchemaKey ||

@@ -444,18 +444,40 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
     return major && minor && major->asNumberToken() == "1" &&
            minor->asNumberToken() == minorToken && version->objectMembers().size() == 2;
 }
+// A node-schema step rewrites only the node-record schemaVersion of one node type at the listed
+// source versions; every binding and every other byte is copied unchanged, so no record is inserted
+// and no value is rewritten.
+//
 // Layer time (1.22 -> 1.23): the boundary gains optional members that an older file cannot contain,
-// and the Layer Output node schema advances to declare the optional Time Remap role. Only the
-// node-record schemaVersion of "bloom.layer-output" nodes at 3 or 4 changes; every binding and
-// every other byte is copied unchanged, so no record is inserted and no value is rewritten.
-[[nodiscard]] bool emitLayerTimeNode(const JsonValue& node, Buffer& output) {
+// and the Layer Output node schema advances (3 or 4 -> 5) to declare the optional Time Remap role.
+//
+// Channel sets (1.24 -> 1.26, ADR 0026): Image source v1 becomes v2. Its new `part` and `layer`
+// parameters are optional (absent means the first part and the root layer) and its new `channels`
+// output starts unconnected, so existing projects evaluate byte-identically. The step is chained
+// from 1.24 because the video-io 1.25 step is not merged yet; once it is, this step's source
+// version becomes 1.25.
+struct NodeSchemaRewrite final {
+    std::string_view typeId;
+    std::array<std::string_view, 2> sourceVersions;
+    std::string_view targetVersion;
+    std::string_view documentVersion;
+};
+
+inline constexpr NodeSchemaRewrite kLayerTimeRewrite{
+    "bloom.layer-output", {"3", "4"}, "5", "{\"major\":1,\"minor\":23}"};
+inline constexpr NodeSchemaRewrite kChannelSetRewrite{
+    "bloom.image-source", {"1", "1"}, "2", "{\"major\":1,\"minor\":26}"};
+
+[[nodiscard]] bool emitRewrittenNode(const JsonValue& node, const NodeSchemaRewrite& rewrite,
+                                     Buffer& output) {
     if (node.kind() != JsonValueKind::Object)
         return false;
     const auto* typeId = node.findMember("typeId");
     const auto* schemaVersion = node.findMember("schemaVersion");
-    const auto layerOutput =
-        typeId && typeId->asString() == "bloom.layer-output" && schemaVersion &&
-        (schemaVersion->asNumberToken() == "3" || schemaVersion->asNumberToken() == "4");
+    const auto version = schemaVersion ? schemaVersion->asNumberToken() : std::nullopt;
+    const auto matches = typeId && typeId->asString() == rewrite.typeId && version &&
+                         (*version == rewrite.sourceVersions[0] ||
+                          *version == rewrite.sourceVersions[1]);
     append(output, "{");
     bool first = true;
     for (const auto& member : node.objectMembers()) {
@@ -465,8 +487,8 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
         if (!quoted(output, member.key()))
             return false;
         append(output, ":");
-        if (layerOutput && member.key() == "schemaVersion")
-            append(output, "5");
+        if (matches && member.key() == "schemaVersion")
+            append(output, rewrite.targetVersion);
         else if (!copyValue(member.value(), output))
             return false;
     }
@@ -474,23 +496,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
     return true;
 }
 
-[[nodiscard]] bool emitLayerTimeArray(const JsonValue& array, Buffer& output) {
-    if (array.kind() != JsonValueKind::Array)
-        return false;
-    append(output, "[");
-    bool first = true;
-    for (const auto& node : array.arrayElements()) {
-        if (!first)
-            append(output, ",");
-        first = false;
-        if (!emitLayerTimeNode(node, output))
-            return false;
-    }
-    append(output, "]");
-    return true;
-}
-
-[[nodiscard]] bool emitLayerTimeObject(const JsonValue& object, const std::string_view rewriteKey,
+[[nodiscard]] bool emitRewrittenObject(const JsonValue& object, const std::string_view rewriteKey,
                                        const auto& rewrite, Buffer& output) {
     if (object.kind() != JsonValueKind::Object)
         return false;
@@ -511,12 +517,28 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
     return true;
 }
 
-[[nodiscard]] bool emitLayerTimeDocument(const JsonValue& root, Buffer& output) {
-    const auto graph = [](const JsonValue& value, Buffer& out) {
-        return emitLayerTimeObject(value, "nodes", emitLayerTimeArray, out);
+[[nodiscard]] bool emitNodeSchemaDocument(const JsonValue& root, const NodeSchemaRewrite& rewrite,
+                                          Buffer& output) {
+    const auto nodes = [&](const JsonValue& array, Buffer& out) {
+        if (array.kind() != JsonValueKind::Array)
+            return false;
+        append(out, "[");
+        bool firstNode = true;
+        for (const auto& node : array.arrayElements()) {
+            if (!firstNode)
+                append(out, ",");
+            firstNode = false;
+            if (!emitRewrittenNode(node, rewrite, out))
+                return false;
+        }
+        append(out, "]");
+        return true;
+    };
+    const auto graph = [&](const JsonValue& value, Buffer& out) {
+        return emitRewrittenObject(value, "nodes", nodes, out);
     };
     const auto composition = [&](const JsonValue& value, Buffer& out) {
-        return emitLayerTimeObject(value, "graph", graph, out);
+        return emitRewrittenObject(value, "graph", graph, out);
     };
     const auto compositions = [&](const JsonValue& value, Buffer& out) {
         if (value.kind() != JsonValueKind::Array)
@@ -534,7 +556,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
         return true;
     };
     const auto project = [&](const JsonValue& value, Buffer& out) {
-        return emitLayerTimeObject(value, "compositions", compositions, out);
+        return emitRewrittenObject(value, "compositions", compositions, out);
     };
     if (root.kind() != JsonValueKind::Object)
         return false;
@@ -548,7 +570,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
             return false;
         append(output, ":");
         if (member.key() == "schemaVersion")
-            append(output, "{\"major\":1,\"minor\":23}");
+            append(output, rewrite.documentVersion);
         else if (member.key() == "project" ? !project(member.value(), output)
                                            : !copyValue(member.value(), output))
             return false;
@@ -718,13 +740,19 @@ MigrationStepOutcome migrateExternalFileLocatorsV1_21(const JsonValue& root,
 }
 MigrationStepOutcome migrateLayerTimeV1_22(const JsonValue& root, std::pmr::memory_resource*,
                                            Buffer& output) {
-    if (!sourceVersionIs(root, "22") || !emitLayerTimeDocument(root, output))
+    if (!sourceVersionIs(root, "22") || !emitNodeSchemaDocument(root, kLayerTimeRewrite, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }
 MigrationStepOutcome migrateLayerMasksV1_23(const JsonValue& root, std::pmr::memory_resource*,
                                             Buffer& output) {
     if (!sourceVersionIs(root, "23") || !transform(root, Scope::Root, Step::LayerMasks, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateChannelSetsV1_24(const JsonValue& root, std::pmr::memory_resource*,
+                                             Buffer& output) {
+    if (!sourceVersionIs(root, "24") || !emitNodeSchemaDocument(root, kChannelSetRewrite, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

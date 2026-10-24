@@ -1,7 +1,8 @@
 # Bloom Project Format
 
-The current document schema is 1.24. It adds optional layer masks and a track matte to Layer Output
-boundaries, the Path animation curve kind and the optional `layerMask` allocator namespace (see
+The current document schema is 1.26. It advances the Image source node to v2 (optional `part` and
+`layer` parameters and a `channels` output; see "Channel Sets In Document 1.26") on top of the 1.24
+optional layer masks and track matte on Layer Output boundaries, the Path animation curve kind and the optional `layerMask` allocator namespace (see
 "Layer Masks In Document 1.24") on top of the 1.23 layer-owned time members (see "Layer Time In
 Document 1.23"), the 1.22 explicit external file-URI asset
 locators, the 1.21 LUT asset kind, 1.20 config-managed asset input colour-space ids,
@@ -1373,9 +1374,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.24`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.26`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-The current artifacts are `document-1.24.schema.json` and `manifest-1.24.schema.json`; the
+The current artifacts are `document-1.26.schema.json` and `manifest-1.26.schema.json`; the
 historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
@@ -1477,6 +1478,26 @@ bindings and values unchanged; opening an older document through typed decoding 
 node-schema upgrade. A document opened from `1.22` therefore saves as `1.23` with identity timing
 and no layer time member.
 
+## Channel Sets In Document 1.26
+
+Document `1.26` persists the multi-channel nodes of
+[ADR 0026](../decisions/0026-multi-channel-and-data-images.md):
+
+- `bloom.image-source` advances to node schema 2. It gains the optional String parameters `part`
+  (`bloom.image.part`, an OpenEXR part name; empty is the first part) and `layer`
+  (`bloom.image.layer`, the colour layer; empty is the root layer), and a `channels` ChannelSet
+  output beside `image`.
+- `bloom.channel-shuffle`, `bloom.channel-copy` and `bloom.channel-remove` (node schema 1) are new
+  node types. Their String parameters are bounded to 256 bytes (channel names) or 4096 bytes
+  (patterns).
+- The Composition Output gains an optional `channels` input and an optional `layers` parameter
+  (`bloom.composition-output.layers`) for layered OpenEXR output.
+
+The `1.24` → `1.26` DOM step rewrites only the node-record `schemaVersion` of `bloom.image-source`
+nodes from 1 to 2; the new parameters are optional, so no record is inserted and every edge and
+binding is copied unchanged. The step is registered by its source version and chained from 1.24
+because the 1.25 step (video I/O) is not merged yet; when it is, this step's source becomes 1.25.
+
 ## Layer Masks In Document 1.24
 
 Document `1.24` persists the masks, track mattes and Path curves of
@@ -1513,8 +1534,8 @@ advances the version: every new member is optional, so no record is inserted or 
 
 ## Video Assets In Document 1.17
 
-The current document and manifest schema artifacts are `document-1.24.schema.json` and
-`manifest-1.24.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
+The current document and manifest schema artifacts are `document-1.26.schema.json` and
+`manifest-1.26.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
 The 1.16 → 1.17 migration only advances the version; the 1.17 → 1.18 and 1.18 → 1.19 steps
 likewise preserve existing assets and pixels. Opening 1.15 first applies asset-organization
 defaults and the historical video and working-space steps, then the 1.19 → 1.20 input-id step,

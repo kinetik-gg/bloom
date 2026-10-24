@@ -417,6 +417,7 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     case NodeLoweringKind::LayerStack:
     case NodeLoweringKind::CompositionOutput:
     case NodeLoweringKind::Mask:
+    case NodeLoweringKind::Channel:
         return true;
     case NodeLoweringKind::AudioSource:
     case NodeLoweringKind::Unsupported:
@@ -461,6 +462,8 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     case NodeLoweringKind::ImageEffect:
     case NodeLoweringKind::Mask: // a canvas Solid masked by a LayerMaskKernel effect
         return "operation.CompiledImageEffect";
+    case NodeLoweringKind::Channel: // channel algebra reaches pixels only through the gather
+        return "operation.CompiledChannelShuffle";
     case NodeLoweringKind::VideoSource:
         return "operation.CompiledVideoSource";
     case NodeLoweringKind::CompositionSource:

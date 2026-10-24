@@ -12,6 +12,7 @@ target_sources(
         node_definition_registry.cpp
         node_layout.cpp
         layer_masks.cpp
+        channel_nodes.cpp
         layer_stack.cpp
         new_project.cpp
         parameter.cpp
@@ -28,6 +29,7 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/document/animation.hpp
+            include/bloom/document/channel_nodes.hpp
             include/bloom/document/color_settings.hpp
             include/bloom/document/composition_settings.hpp
             include/bloom/document/document.hpp

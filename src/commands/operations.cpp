@@ -714,7 +714,7 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
                                          "Asset is not visual media");
     StructuredLayerDescriptor source{
         video ? "bloom.video-source" : "bloom.image-source",
-        1,
+        video ? 1U : 2U,
         "image",
         {{"asset", video ? "bloom.video.asset" : "bloom.image.asset",
           std::to_string(asset_.value()), "assetParameter"},

@@ -708,6 +708,9 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     case NodeLoweringKind::Shape:
         return lowerShape(node);
     case NodeLoweringKind::Mask: // lowered in the main loop: a canvas Solid then a mask effect
+    // ADR 0026: channel nodes are lowered in the main loop (a Shuffle's image output is a
+    // CompiledChannelShuffle; channel algebra compiles into its expression).
+    case NodeLoweringKind::Channel:
     case NodeLoweringKind::Unsupported:
     // A value lowering never reaches here: compileValueGraph() compiled it into the plan's value
     // operations, and lower()'s own loop skips it. Reaching this arm means the two passes disagree

@@ -1,3 +1,4 @@
+#include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 
 #include "value_node_definitions.hpp"
@@ -262,9 +263,11 @@ template <typename Definition>
                             kVideoInputColorSpaceIdParameterSchemaKey, ParameterValueKind::String,
                             false, false);
     case NodeLoweringKind::ImageSource:
-        return hasCanonicalKey(definition, "bloom.image-source", 1) &&
-               hasImageOutput(definition, "image") && definition.parameters.size() == 6 &&
-               definition.inputs.empty() &&
+        // ADR 0026 v2: the colour `image` plus every channel of the selected part on `channels`.
+        return hasCanonicalKey(definition, kImageSourceNodeType, kImageSourceNodeSchemaVersion) &&
+               definition.outputs.size() == 2 && hasImageOutput(definition, "image") &&
+               hasOutput(definition, kImageSourceChannelsOutputPort, SocketValueKind::ChannelSet) &&
+               definition.parameters.size() == 8 && definition.inputs.empty() &&
                hasParameter(definition, 0, "asset", "bloom.image.asset",
                             ParameterValueKind::String) &&
                hasParameter(definition, 1, "startFrame", "bloom.image.start-frame",
@@ -277,7 +280,15 @@ template <typename Definition>
                             ParameterValueKind::Boolean) &&
                hasParameter(definition, 5, kImageInputColorSpaceIdParameterRole,
                             kImageInputColorSpaceIdParameterSchemaKey, ParameterValueKind::String,
-                            false, false);
+                            false, false) &&
+               hasParameter(definition, 6, kImagePartParameterRole, kImagePartParameterSchemaKey,
+                            ParameterValueKind::String, false, false) &&
+               hasParameter(definition, 7, kImageLayerParameterRole,
+                            kImageLayerParameterSchemaKey, ParameterValueKind::String, false,
+                            false);
+    case NodeLoweringKind::Channel:
+        return definition == channelShuffleDefinition() ||
+               definition == channelCopyDefinition() || definition == channelRemoveDefinition();
     case NodeLoweringKind::CompositionSource:
         return hasCanonicalKey(definition, kCompositionSourceNodeType, 1) &&
                definition.inputs.empty() && definition.outputs.size() == 2 &&
@@ -397,16 +408,22 @@ template <typename Definition>
                // item B): a disconnected Composition Output is an ordinary empty composition that
                // renders transparent, not a topology failure. The lowering owns that empty path.
                hasLeadingImageInput(definition, kCompositionOutputInputPort, false) &&
-               definition.inputs.size() == 2 &&
+               definition.inputs.size() == 3 &&
                definition.inputs[1].name == kCompositionOutputAudioInputPort &&
                definition.inputs[1].valueKind == SocketValueKind::Audio &&
                !definition.inputs[1].required &&
+               // ADR 0026 §7: optional channel layers written beside RGBA by layered OpenEXR.
+               definition.inputs[2].name == kCompositionOutputChannelsInputPort &&
+               definition.inputs[2].valueKind == SocketValueKind::ChannelSet &&
+               !definition.inputs[2].required && definition.parameters.size() == 1 &&
+               hasParameter(definition, 0, kCompositionOutputLayersParameterRole,
+                            kCompositionOutputLayersParameterSchemaKey, ParameterValueKind::String,
+                            false, false) &&
                // Task FIX1, item H: a SINK. It declares no output port at all, because nothing may
                // connect from the end of the composition -- the compiler never followed such an
                // edge, and a socket that leads nowhere is an invitation to draw a wire that means
                // nothing.
-               definition.outputs.empty() && definition.parameters.empty() &&
-               !definition.layerSlotInput.has_value();
+               definition.outputs.empty() && !definition.layerSlotInput.has_value();
     case NodeLoweringKind::Unsupported:
         return true;
     // The value lowerings share ONE shape contract rather than fifteen bespoke ones; see
@@ -611,9 +628,15 @@ template <typename Definition>
             // The image input is OPTIONAL, matching the Layer Output content port: a disconnected
             // output is an empty composition that draws nothing, not a failed compile.
             {{std::string(kCompositionOutputInputPort), SocketValueKind::Image, false},
-             {std::string(kCompositionOutputAudioInputPort), SocketValueKind::Audio, false}},
+             {std::string(kCompositionOutputAudioInputPort), SocketValueKind::Audio, false},
+             {std::string(kCompositionOutputChannelsInputPort), SocketValueKind::ChannelSet,
+              false}},
             {},
-            {},
+            // Comma-separated channel layer names written beside RGBA; empty writes every layer of
+            // the connected channel set.
+            {{std::string(kCompositionOutputLayersParameterRole),
+              std::string(kCompositionOutputLayersParameterSchemaKey), ParameterValueKind::String,
+              false, false, std::string{}}},
             std::nullopt,
             NodeCardinality::OnePerComposition,
             NodeCategory::Output};
@@ -816,10 +839,11 @@ template <typename Definition>
 [[nodiscard]] NodeDefinition imageDefinition() {
     using namespace bloom::document;
     return {
-        {"bloom.image-source", 1},
+        {std::string(kImageSourceNodeType), kImageSourceNodeSchemaVersion},
         NodeLoweringKind::ImageSource,
         {},
-        {{"image", SocketValueKind::Image}},
+        {{"image", SocketValueKind::Image},
+         {std::string(kImageSourceChannelsOutputPort), SocketValueKind::ChannelSet}},
         {{"asset", "bloom.image.asset", ParameterValueKind::String, true, false, std::string{}},
          {"startFrame", "bloom.image.start-frame", ParameterValueKind::Integer, true, false,
           std::int64_t{0}},
@@ -830,7 +854,12 @@ template <typename Definition>
          {"premultiply", "bloom.image.premultiply", ParameterValueKind::Boolean, true, false, true},
          {std::string(kImageInputColorSpaceIdParameterRole),
           std::string(kImageInputColorSpaceIdParameterSchemaKey), ParameterValueKind::String, false,
-          false, std::string{}}},
+          false, std::string{}},
+         // ADR 0026: the EXR part (empty: first) and colour layer (empty: root).
+         {std::string(kImagePartParameterRole), std::string(kImagePartParameterSchemaKey),
+          ParameterValueKind::String, false, false, std::string{}},
+         {std::string(kImageLayerParameterRole), std::string(kImageLayerParameterSchemaKey),
+          ParameterValueKind::String, false, false, std::string{}}},
         std::nullopt,
         NodeCardinality::Many,
         NodeCategory::Sources};
@@ -1039,7 +1068,10 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         blurDefinition("bloom.box-blur"),
         videoDefinition(),
         audioDefinition(),
-        compositionSourceDefinition()};
+        compositionSourceDefinition(),
+        channelShuffleDefinition(),
+        channelCopyDefinition(),
+        channelRemoveDefinition()};
     // The value library is appended, not interleaved: the five above are the structural node types
     // a composition is built out of, and reading them first in one place is what makes the
     // registry's own contract legible.

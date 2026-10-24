@@ -249,6 +249,9 @@ enum class NodeLoweringKind {
     Unsupported,
     // ADR 0028: the Mask node (path coverage over the composition canvas).
     Mask,
+    // ADR 0026: Shuffle, Channel Copy and Remove. Channel algebra compiles away; the pixel work is
+    // the Shuffle gather (runtime::CompiledChannelShuffle).
+    Channel,
 };
 
 // Whether this lowering belongs to the value graph rather than the image chain. The compiler reads
@@ -289,6 +292,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::CompositionOutput:
     case NodeLoweringKind::Unsupported:
     case NodeLoweringKind::Mask:
+    case NodeLoweringKind::Channel:
         return false;
     }
     return false;
