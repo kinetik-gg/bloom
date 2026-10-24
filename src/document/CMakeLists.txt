@@ -11,6 +11,7 @@ target_sources(
         graph.cpp
         node_definition_registry.cpp
         node_layout.cpp
+        layer_masks.cpp
         layer_stack.cpp
         new_project.cpp
         parameter.cpp

@@ -363,6 +363,14 @@ bool CanonicalGraph::eraseNode(const NodeId id) {
                 child.parent.reset();
         }
     }
+    // ADR 0028: a matte whose source layer disappears is cleared, as a parent is.
+    for (auto& target : layerOutputs_) {
+        if (target.trackMatte) {
+            const auto* source = findLayer(target.trackMatte->source);
+            if (source && source->nodeId == id)
+                target.trackMatte.reset();
+        }
+    }
     std::erase_if(layerOutputs_, [id](const auto& boundary) { return boundary.nodeId == id; });
     std::erase_if(nodes_, [id](const auto& node) { return node.id == id; });
     return true;
@@ -509,6 +517,56 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
         checkedParentChains.insert(ancestors.begin(), ancestors.end());
     }
 
+    // ADR 0028 track mattes: the source is another layer of the same Merge, the channel is a
+    // closed value, and the relation is acyclic (checked with the evaluation order below).
+    std::unordered_map<LayerId, NodeId> mergeOfLayer;
+    for (const auto& stack : layerStacks_)
+        for (const auto& entry : stack.entries())
+            mergeOfLayer.emplace(entry.layerId, stack.nodeId());
+    for (const auto& boundary : layerOutputs_) {
+        if (!boundary.trackMatte)
+            continue;
+        const auto path =
+            "layerOutputs[" + std::to_string(boundary.layerId.value()) + "].trackMatte";
+        const auto& matte = *boundary.trackMatte;
+        if (matte.channel != TrackMatteChannel::Alpha && matte.channel != TrackMatteChannel::Luma)
+            result.add(ValidationCode::InvalidValue, path + ".channel",
+                       "Track matte channel must be Alpha or Luma");
+        if (matte.source == boundary.layerId) {
+            result.add(ValidationCode::InvalidLayerBoundary, path + ".source",
+                       "A layer cannot be its own track matte");
+            continue;
+        }
+        if (!boundariesByLayer.contains(matte.source)) {
+            result.add(ValidationCode::MissingReference, path + ".source",
+                       "Track matte source must be a layer in the same composition");
+            continue;
+        }
+        const auto targetMerge = mergeOfLayer.find(boundary.layerId);
+        const auto sourceMerge = mergeOfLayer.find(matte.source);
+        if (targetMerge == mergeOfLayer.end() || sourceMerge == mergeOfLayer.end() ||
+            targetMerge->second != sourceMerge->second)
+            result.add(ValidationCode::InvalidLayerBoundary, path + ".source",
+                       "Track matte source must be a layer in the same Merge");
+    }
+    for (const auto& boundary : layerOutputs_) {
+        std::unordered_set<LayerId> chain{boundary.layerId};
+        auto matte = boundary.trackMatte;
+        while (matte) {
+            const auto found = boundariesByLayer.find(matte->source);
+            if (found == boundariesByLayer.end())
+                break;
+            if (!chain.insert(matte->source).second) {
+                result.add(ValidationCode::InvalidLayerBoundary,
+                           "layerOutputs[" + std::to_string(boundary.layerId.value()) +
+                               "].trackMatte",
+                           "Track mattes must not form a cycle");
+                break;
+            }
+            matte = found->second->trackMatte;
+        }
+    }
+
     std::unordered_set<EdgeId> edgeIds;
     std::unordered_set<std::string> destinations;
     std::unordered_map<NodeId, std::vector<NodeId>> adjacency;
@@ -525,6 +583,16 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
         if (parent != boundariesByLayer.end() && indegree.contains(boundary.nodeId) &&
             indegree.contains(parent->second->nodeId)) {
             adjacency[parent->second->nodeId].push_back(boundary.nodeId);
+            ++indegree[boundary.nodeId];
+        }
+        // A matte target evaluates after its source.
+        const auto matteSource = boundary.trackMatte
+                                     ? boundariesByLayer.find(boundary.trackMatte->source)
+                                     : boundariesByLayer.end();
+        if (matteSource != boundariesByLayer.end() && indegree.contains(boundary.nodeId) &&
+            indegree.contains(matteSource->second->nodeId) &&
+            matteSource->second->nodeId != boundary.nodeId) {
+            adjacency[matteSource->second->nodeId].push_back(boundary.nodeId);
             ++indegree[boundary.nodeId];
         }
     }

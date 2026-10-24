@@ -39,6 +39,8 @@ class GraphView final {
             // First boundary per layer wins, exactly as the compiler's linear search does.
             layers_.try_emplace(boundary.layerId, &boundary);
             anySolo_ = anySolo_ || boundary.solo;
+            if (boundary.trackMatte)
+                matteSources_.insert(boundary.trackMatte->source);
         }
         // #357: merges and their slots are indexed once, so consuming a slot edge is a lookup
         // rather than a scan of every merge, slot and boundary.
@@ -57,6 +59,11 @@ class GraphView final {
     [[nodiscard]] const LayerStack* merge(const NodeId id) const noexcept {
         const auto found = merges_.find(id);
         return found == merges_.end() ? nullptr : found->second;
+    }
+
+    // ADR 0028: a layer that is any layer's track matte contributes nothing to its Merge.
+    [[nodiscard]] bool isMatteSource(const LayerId layer) const noexcept {
+        return matteSources_.contains(layer);
     }
 
     [[nodiscard]] const NodeRecord* node(const NodeId id) const noexcept {
@@ -98,7 +105,8 @@ class GraphView final {
         }
         if (const auto* slot = std::get_if<LayerStackInputRef>(&edge.destination)) {
             const auto found = slots_.find(SlotKey{slot->stackNodeId, slot->slotId});
-            if (found != slots_.end() && mutedLayer(*found->second))
+            if (found != slots_.end() &&
+                (mutedLayer(*found->second) || isMatteSource(found->second->layerId)))
                 return false;
         }
         return true;
@@ -154,6 +162,7 @@ class GraphView final {
     std::unordered_map<LayerId, const LayerOutputBoundary*> layers_;
     std::unordered_map<NodeId, const LayerStack*> merges_;
     std::unordered_map<SlotKey, const LayerStackEntry*, SlotKeyHash> slots_;
+    std::unordered_set<LayerId> matteSources_;
     bool anySolo_ = false;
 };
 
@@ -247,6 +256,12 @@ RenderReachability RenderReachability::compute(const Composition& composition,
             if (const auto* parent = graph.findLayer(*boundary->parent))
                 pending.push_back(parent->nodeId);
         }
+        // ADR 0028: a reached matte target consumes its source layer whatever the source's slot,
+        // enabled or solo state.
+        if (const auto* boundary = view.boundary(nodeId); boundary && boundary->trackMatte) {
+            if (const auto* source = graph.findLayer(boundary->trackMatte->source))
+                pending.push_back(source->nodeId);
+        }
         if (const auto found = incoming.find(nodeId); found != incoming.end()) {
             for (const auto* edge : found->second) {
                 ++result.work_.edgesVisited;
@@ -329,9 +344,14 @@ RenderConfinement confineNodeChange(const Composition& composition,
                                      [&](const NodeId source) { drives[source].push_back(id); });
     }
     std::unordered_map<LayerId, std::vector<NodeId>> children;
-    for (const auto& boundary : graph.layerOutputs())
+    // ADR 0028: a matte source reaches output only through its targets, inside their spans.
+    std::unordered_map<LayerId, std::vector<NodeId>> matteTargets;
+    for (const auto& boundary : graph.layerOutputs()) {
         if (boundary.parent && reachability.reaches(boundary.nodeId))
             children[*boundary.parent].push_back(boundary.nodeId);
+        if (boundary.trackMatte && reachability.reaches(boundary.nodeId))
+            matteTargets[boundary.trackMatte->source].push_back(boundary.nodeId);
+    }
 
     // A boundary gates its own output when every consumer is an enabled, unmuted layer-stack slot
     // that belongs to this layer, and nothing reads it as a driver.
@@ -377,14 +397,33 @@ RenderConfinement confineNodeChange(const Composition& composition,
                 hasSuccessor = true;
                 pending.insert(pending.end(), found->second.begin(), found->second.end());
             }
-            if (gates(*boundary)) {
+            if (view.isMatteSource(boundary->layerId)) {
+                // Hidden from its Merge: its own slot is not a consumer, its targets are. It is
+                // never gated by its own span.
+                if (const auto found = matteTargets.find(boundary->layerId);
+                    found != matteTargets.end()) {
+                    hasSuccessor = true;
+                    pending.insert(pending.end(), found->second.begin(), found->second.end());
+                }
+            } else if (gates(*boundary)) {
                 spans.push_back({boundary->inPoint, boundary->endPoint(duration)});
                 continue;
             }
         }
+        const auto* hiddenSource = view.boundary(id);
+        if (hiddenSource != nullptr && !view.isMatteSource(hiddenSource->layerId))
+            hiddenSource = nullptr;
         if (const auto found = outgoing.find(id); found != outgoing.end()) {
             for (const auto* edge : found->second) {
                 ++counters.edgesVisited;
+                if (hiddenSource != nullptr) {
+                    // A matte source's own slot is hidden from its Merge.
+                    const auto* slot = std::get_if<LayerStackInputRef>(&edge->destination);
+                    const auto* stack = slot ? graph.merge(slot->stackNodeId) : nullptr;
+                    const auto* entry = stack ? stack->find(slot->slotId) : nullptr;
+                    if (entry != nullptr && entry->layerId == hiddenSource->layerId)
+                        continue;
+                }
                 hasSuccessor = true;
                 pending.push_back(destinationNodeOf(edge->destination));
             }

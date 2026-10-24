@@ -3,6 +3,7 @@
 #include "value_node_definitions.hpp"
 
 #include <bloom/document/graph.hpp>
+#include <bloom/document/layer_masks.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/shape.hpp>
 
@@ -147,12 +148,16 @@ template <typename Definition>
         if (definition.key.typeId == "bloom.image-mix" ||
             definition.key.typeId == "bloom.set-alpha") {
             const bool mix = definition.key.typeId == "bloom.image-mix";
-            return definition.key.schemaVersion == 1 && definition.inputs.size() == 3 &&
+            return definition.key.schemaVersion == 1 &&
+                   definition.inputs.size() == (mix ? 4U : 3U) &&
                    hasLeadingImageInput(definition, "input") &&
                    // #361: Set Alpha's matte is optional; Image Mix's second image is not.
                    definition.inputs[1] == InputPortDefinition{mix ? "second" : "matte",
                                                                SocketValueKind::Image, mix} &&
-                   hasParameterSockets(definition, 2) &&
+                   (!mix ||
+                    definition.inputs[2] == InputPortDefinition{"mask", SocketValueKind::Mask,
+                                                                false}) &&
+                   hasParameterSockets(definition, mix ? 3 : 2) &&
                    hasParameter(definition, 0, mix ? "factor" : "channel",
                                 mix ? "bloom.image-mix.factor" : "bloom.set-alpha.channel",
                                 mix ? ParameterValueKind::Float64 : ParameterValueKind::Integer,
@@ -184,6 +189,8 @@ template <typename Definition>
                !definition.layerSlotInput && !definition.audioLayerSlotInput;
     case NodeLoweringKind::Shape:
         return definition == shapeDefinition();
+    case NodeLoweringKind::Mask:
+        return definition == maskDefinition();
     case NodeLoweringKind::Solid:
         return hasImageOutput(definition, kSolidSourceOutputPort) &&
                (definition.parameters.size() == 3 &&
@@ -716,11 +723,17 @@ template <typename Definition>
     return {
         {mix ? "bloom.image-mix" : "bloom.set-alpha", 1},
         NodeLoweringKind::ImageEffect,
-        {{"input", SocketValueKind::Image},
-         // An unconnected matte is a transparent matte (zero coverage), never a compile failure.
-         {mix ? "second" : "matte", SocketValueKind::Image, mix},
-         {mix ? "factor" : "channel", mix ? SocketValueKind::Scalar : SocketValueKind::Integer,
-          false}},
+        mix ? std::vector<InputPortDefinition>{{"input", SocketValueKind::Image},
+                                               {"second", SocketValueKind::Image, true},
+                                               // ADR 0028: optional per-pixel factor scale.
+                                               {"mask", SocketValueKind::Mask, false},
+                                               {"factor", SocketValueKind::Scalar, false}}
+            : std::vector<InputPortDefinition>{
+                  {"input", SocketValueKind::Image},
+                  // An unconnected matte is a transparent matte (zero coverage), never a compile
+                  // failure.
+                  {"matte", SocketValueKind::Image, false},
+                  {"channel", SocketValueKind::Integer, false}},
         {{"image", SocketValueKind::Image}},
         {{mix ? "factor" : "channel", mix ? "bloom.image-mix.factor" : "bloom.set-alpha.channel",
           mix ? ParameterValueKind::Float64 : ParameterValueKind::Integer, true, mix,
@@ -997,6 +1010,7 @@ bool NodeDefinitionRegistry::containsType(const std::string_view typeId) const n
 bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
     std::vector<NodeDefinition> definitions{
         shapeDefinition(),
+        maskDefinition(),
         solidDefinition(),
         checkerDefinition(),
         gradientDefinition(kLinearGradientNodeType),

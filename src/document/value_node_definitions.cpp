@@ -453,6 +453,7 @@ struct KindVocabulary final {
         return ParameterValueKind::Boolean;
     case SocketValueKind::Image:
     case SocketValueKind::Audio:
+    case SocketValueKind::Mask:
     case SocketValueKind::Scalar:
         break;
     }
@@ -480,6 +481,7 @@ struct KindVocabulary final {
         return kBooleanOperandParameterSchemaKey;
     case SocketValueKind::Image:
     case SocketValueKind::Audio:
+    case SocketValueKind::Mask:
     case SocketValueKind::Scalar:
         break;
     }
@@ -504,6 +506,7 @@ descriptorDefaultValue(const bloom::document::ValueUtilityOperand& operand) {
         return operand.flag;
     case SocketValueKind::Image:
     case SocketValueKind::Audio:
+    case SocketValueKind::Mask:
     case SocketValueKind::Scalar:
         break;
     }
@@ -810,6 +813,7 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     case NodeLoweringKind::LayerStack:
     case NodeLoweringKind::CompositionOutput:
     case NodeLoweringKind::Unsupported:
+    case NodeLoweringKind::Mask:
         break;
     }
     return false;

@@ -132,6 +132,35 @@ struct EdgeRecord {
     friend bool operator==(const EdgeRecord&, const EdgeRecord&) = default;
 };
 
+// ADR 0028 layer masks. Stored integers are durable and never reordered.
+enum class LayerMaskMode : std::int64_t { None, Add, Subtract, Intersect, Difference };
+inline constexpr std::size_t kMaximumLayerMasks = 64;
+
+// One ordered mask in the layer's content space. Path, feather, expansion and opacity are
+// parameters in the composition store (animatable); mode and inversion are plain closed fields.
+struct LayerMask {
+    LayerMaskId id;
+    std::string name;
+    LayerMaskMode mode = LayerMaskMode::Add;
+    bool inverted = false;
+    ParameterId path;
+    ParameterId feather;
+    ParameterId expansion;
+    ParameterId opacity;
+
+    friend bool operator==(const LayerMask&, const LayerMask&) = default;
+};
+
+// ADR 0028 track matte: the target layer's output multiplied by the source layer's coverage.
+enum class TrackMatteChannel : std::int64_t { Alpha, Luma };
+struct TrackMatte {
+    LayerId source;
+    TrackMatteChannel channel = TrackMatteChannel::Alpha;
+    bool inverted = false;
+
+    friend bool operator==(const TrackMatte&, const TrackMatte&) = default;
+};
+
 struct LayerOutputBoundary {
     NodeId nodeId;
     LayerId layerId;
@@ -149,6 +178,9 @@ struct LayerOutputBoundary {
     std::optional<LayerId> parent{};
     // Layer-owned time (ADR 0024). Identity by default.
     LayerTiming timing{};
+    // ADR 0028 (document schema 1.24): ordered masks and an optional track matte.
+    std::vector<LayerMask> masks{};
+    std::optional<TrackMatte> trackMatte{};
     [[nodiscard]] core::RationalTime endPoint(core::RationalTime duration) const noexcept {
         return outPoint == core::RationalTime{} ? duration : outPoint;
     }

@@ -406,4 +406,81 @@ void validateManifestSchemaV1_23(const json::Value& schema) {
         json::parse(R"({"$ref":"#/$defs/fixedVersion-1.22"})");
     validateManifestSchemaV1_22(previous);
 }
+// Document 1.24 (ADR 0028): layer masks, track matte, the path curve kind and the layerMask id
+// namespace. Stripping exactly those additions must leave the accepted 1.23 schema.
+void validateDocumentSchemaV1_24(const json::Value& schema) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-document:1.24",
+                       "layer mask document id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.24").at("properties").at("minor"),
+                 R"({"const":24})", "layer mask document minor");
+    const auto& defs = schema.at("$defs");
+    const auto& boundary = defs.at("layerOutput-1.0").at("properties");
+    requireExact(boundary.at("masks"),
+                 R"({"type":"array","minItems":1,"maxItems":64,"items":{"$ref":"#/$defs/layerMask-1.24"}})",
+                 "layer masks");
+    requireExact(boundary.at("trackMatte"), R"({"$ref":"#/$defs/trackMatte-1.24"})", "track matte");
+    requireExact(defs.at("layerMask-1.24").at("required"),
+                 R"(["id","name","mode","inverted","path","feather","expansion","opacity"])",
+                 "layer mask members");
+    requireExact(defs.at("layerMask-1.24").at("properties").at("mode").at("enum"),
+                 R"(["none","add","subtract","intersect","difference"])", "layer mask modes");
+    requireExact(defs.at("trackMatte-1.24").at("required"), R"(["source","channel","inverted"])",
+                 "track matte members");
+    requireExact(defs.at("trackMatte-1.24").at("properties").at("channel").at("enum"),
+                 R"(["alpha","luma"])", "track matte channels");
+    const auto& curves = defs.at("animationCurve-1.9").at("oneOf").asArray();
+    requireExact(curves.back().at("properties").at("kind"), R"({"const":"path"})",
+                 "path curve kind");
+    requireExact(defs.at("pathKeyframe-1.24").at("properties").at("value"),
+                 R"({"$ref":"#/$defs/parameterValue-1.4"})", "path keyframe value");
+    requireExact(defs.at("idAllocation-1.0").at("properties").at("highestIssued"),
+                 R"({"$ref":"#/$defs/highestIssued-1.24"})", "layer mask id namespace");
+
+    auto previous = schema;
+    auto& previousDefs = previous.at("$defs");
+    auto fixed = std::find_if(previousDefs.asObject().begin(), previousDefs.asObject().end(),
+                              [](const auto& member) { return member.first == "fixedVersion-1.24"; });
+    if (fixed == previousDefs.asObject().end())
+        throw std::runtime_error("document 1.24 version is missing");
+    fixed->first = "fixedVersion-1.23";
+    fixed->second.at("properties").at("minor") = json::parse(R"({"const":23})");
+    auto& previousBoundary = previousDefs.at("layerOutput-1.0").at("properties").asObject();
+    std::erase_if(previousBoundary, [](const auto& member) {
+        return member.first == "masks" || member.first == "trackMatte";
+    });
+    previousDefs.at("animationCurve-1.9").at("oneOf").asArray().pop_back();
+    previousDefs.at("idAllocation-1.0").at("properties").at("highestIssued") =
+        json::parse(R"({"$ref":"#/$defs/highestIssued-1.2"})");
+    std::erase_if(previousDefs.asObject(), [](const auto& member) {
+        return member.first == "layerMask-1.24" || member.first == "trackMatte-1.24" ||
+               member.first == "pathKeyframe-1.24" || member.first == "highestIssued-1.24";
+    });
+    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-document:1.23"));
+    previous.at("properties").at("schemaVersion") =
+        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.23"})");
+    validateDocumentSchemaV1_23(previous);
+}
+void validateManifestSchemaV1_24(const json::Value& schema) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-manifest:1.24",
+                       "layer mask manifest id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.24").at("properties").at("minor"),
+                 R"({"const":24})", "layer mask manifest minor");
+    auto previous = schema;
+    auto& defs = previous.at("$defs");
+    auto fixed =
+        std::find_if(defs.asObject().begin(), defs.asObject().end(),
+                     [](const auto& member) { return member.first == "fixedVersion-1.24"; });
+    if (fixed == defs.asObject().end())
+        throw std::runtime_error("manifest 1.24 version is missing");
+    fixed->first = "fixedVersion-1.23";
+    fixed->second.at("properties").at("minor") = json::parse(R"({"const":23})");
+    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-manifest:1.23"));
+    defs.at("document-1.0").at("properties").at("schemaVersion") =
+        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.23"})");
+    validateManifestSchemaV1_23(previous);
+}
 } // namespace bloom::quality

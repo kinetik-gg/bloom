@@ -94,6 +94,8 @@ struct SortWindows final {
                            std::get_if<bloom::document::Color4AnimationCurve>(&record)) {
                 for (const auto& component : color->components)
                     plan.window2 = maximumOf(plan.window2, component.keyframes.size());
+            } else if (const auto* path = std::get_if<bloom::document::PathAnimationCurve>(&record)) {
+                plan.window2 = maximumOf(plan.window2, path->keyframes.size());
             }
         }
     }
@@ -205,6 +207,8 @@ struct WalkState final {
         return "HostReference";
     case RoundTripCollectionKind::NodeGroup:
         return "NodeGroup";
+    case RoundTripCollectionKind::LayerMask:
+        return "LayerMask";
     }
     return "Unknown";
 }
@@ -804,8 +808,8 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
            emitFloat64Member(state, "value", handle.value) && state.ok(writer.endObject());
 }
 
-[[nodiscard]] bool emitKeyframeHandles(EmitState& state,
-                                       const bloom::document::ScalarKeyframe& key) noexcept {
+template <typename Keyframe>
+[[nodiscard]] bool emitKeyframeHandles(EmitState& state, const Keyframe& key) noexcept {
     return emitKeyframeHandle(state, "outgoingHandle", key.outgoingHandle) &&
            emitKeyframeHandle(state, "incomingHandle", key.incomingHandle);
 }
@@ -860,6 +864,33 @@ emitInterpolation(EmitState& state,
         return false;
     }
     return state.ok(writer.endObject());
+}
+
+// ADR 0028 (document 1.24): a whole-value Path key. Its value is the ordinary constant-value
+// object of kind "path".
+[[nodiscard]] bool emitPathKeyframe(EmitState& state,
+                                    const bloom::document::PathKeyframe& key) noexcept {
+    auto& writer = state.writer;
+    const auto idText = bloom::project::formatCanonicalUInt64(key.id.value());
+    const PathScope keyframeScope(state, RoundTripCollectionKind::Keyframe, idText.view());
+    if (!state.ok(writer.beginObject()) || !emitNamedId(state, "id", key.id.value()) ||
+        !state.ok(writer.memberName("time")))
+        return false;
+    {
+        const PathScope timeScope(state, "time");
+        if (!emitRational(state, key.time.numerator(), key.time.denominator()))
+            return false;
+    }
+    if (!state.ok(writer.memberName("value")))
+        return false;
+    {
+        const PathScope valueScope(state, "value");
+        if (!emitConstantValue(state, bloom::document::ParameterValue{key.value}))
+            return false;
+    }
+    return state.ok(writer.memberName("outgoingInterpolation")) &&
+           emitInterpolation(state, key.outgoingInterpolation) && emitKeyframeHandles(state, key) &&
+           emitRetainedTrailing(state) && state.ok(writer.endObject());
 }
 
 [[nodiscard]] std::string_view
@@ -1022,6 +1053,24 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
                             color->components[componentIndex].keyframes[keyIndex]))
                         return false;
             }
+        } else if (const auto* path = std::get_if<PathAnimationCurve>(&record)) {
+            if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("path")) ||
+                !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray()))
+                return false;
+            std::span<const std::size_t> keyOrder;
+            if (!makeOrder(
+                    path->keyframes, [](const PathKeyframe& key) noexcept { return key.time; },
+                    state.sort.window2, keyOrder, state.walk.error)) {
+                state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
+                                compositionIndex);
+                return false;
+            }
+            for (const auto keyIndex : keyOrder)
+                if (!emitPathKeyframe(state, path->keyframes[keyIndex])) {
+                    state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve,
+                                    compositionIndex);
+                    return false;
+                }
         } else {
             {
                 state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve, compositionIndex);
@@ -1064,6 +1113,68 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
         }
     }
     return state.ok(writer.endArray());
+}
+
+[[nodiscard]] std::string_view layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
+    using bloom::document::LayerMaskMode;
+    switch (mode) {
+    case LayerMaskMode::None:
+        return "none";
+    case LayerMaskMode::Add:
+        return "add";
+    case LayerMaskMode::Subtract:
+        return "subtract";
+    case LayerMaskMode::Intersect:
+        return "intersect";
+    case LayerMaskMode::Difference:
+        return "difference";
+    }
+    return "add";
+}
+
+// Layer masks and track matte (1.24, ADR 0028): written only when present, so a layer without
+// them keeps its pre-1.24 bytes.
+[[nodiscard]] bool emitLayerMasks(EmitState& state,
+                                  const bloom::document::LayerOutputBoundary& boundary) noexcept {
+    using namespace bloom::document;
+    auto& writer = state.writer;
+    if (!boundary.masks.empty()) {
+        const PathScope scope(state, "masks");
+        if (!state.ok(writer.memberName("masks")) || !state.ok(writer.beginArray()))
+            return false;
+        for (const auto& mask : boundary.masks) {
+            const auto idText = bloom::project::formatCanonicalUInt64(mask.id.value());
+            const PathScope maskScope(state, RoundTripCollectionKind::LayerMask, idText.view());
+            if (!state.ok(writer.beginObject()) || !emitNamedId(state, "id", mask.id.value()) ||
+                !state.ok(writer.memberName("name")) || !state.ok(writer.stringValue(mask.name)) ||
+                !state.ok(writer.memberName("mode")) ||
+                !state.ok(writer.stringValue(layerMaskModeName(mask.mode))) ||
+                !state.ok(writer.memberName("inverted")) ||
+                !state.ok(writer.booleanValue(mask.inverted)) ||
+                !emitNamedId(state, "path", mask.path.value()) ||
+                !emitNamedId(state, "feather", mask.feather.value()) ||
+                !emitNamedId(state, "expansion", mask.expansion.value()) ||
+                !emitNamedId(state, "opacity", mask.opacity.value()) ||
+                !emitRetainedTrailing(state) || !state.ok(writer.endObject()))
+                return false;
+        }
+        if (!state.ok(writer.endArray()))
+            return false;
+    }
+    if (boundary.trackMatte) {
+        const PathScope scope(state, "trackMatte");
+        const auto& matte = *boundary.trackMatte;
+        if (!state.ok(writer.memberName("trackMatte")) || !state.ok(writer.beginObject()) ||
+            !emitNamedId(state, "source", matte.source.value()) ||
+            !state.ok(writer.memberName("channel")) ||
+            !state.ok(writer.stringValue(matte.channel == TrackMatteChannel::Luma ? "luma"
+                                                                                   : "alpha")) ||
+            !state.ok(writer.memberName("inverted")) ||
+            !state.ok(writer.booleanValue(matte.inverted)) || !emitRetainedTrailing(state) ||
+            !state.ok(writer.endObject()))
+            return false;
+    }
+    return true;
 }
 
 // Layer time (1.23): every member is written only when it differs from the identity default, so a
@@ -1366,7 +1477,7 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
         }
         if (boundary.parent && !emitNamedId(state, "parent", boundary.parent->value()))
             return false;
-        if (!emitLayerTiming(state, boundary.timing))
+        if (!emitLayerTiming(state, boundary.timing) || !emitLayerMasks(state, boundary))
             return false;
         if (!emitRetainedTrailing(state)) {
             return false;
@@ -2329,7 +2440,10 @@ dataBlockWireKind(const bloom::document::DataBlockKind kind) noexcept {
                 !emitHighWaterMember(state, "asset", water.asset) ||
                 (water.assetFolder != 0 &&
                  !emitHighWaterMember(state, "assetFolder", water.assetFolder)) ||
-                !emitHighWaterMember(state, "dataBlock", water.dataBlock)) {
+                !emitHighWaterMember(state, "dataBlock", water.dataBlock) ||
+                // Document 1.24 (ADR 0028): written only once a mask id has been issued.
+                (water.layerMask != 0 &&
+                 !emitHighWaterMember(state, "layerMask", water.layerMask))) {
                 return false;
             }
             if (!emitRetainedTrailing(state)) {

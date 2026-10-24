@@ -1149,6 +1149,9 @@ namespace {
         keys.push_back("assetFolder");
     if (state.documentMinor >= 18)
         keys.push_back("dataBlock");
+    const bool hasLayerMask = state.documentMinor >= 24 && node.findMember("layerMask") != nullptr;
+    if (hasLayerMask)
+        keys.push_back("layerMask");
     std::vector<const JsonValue*> members;
     if (!matchOrderedMembers(node, keys, true, state, path, members)) {
         return false;
@@ -1189,6 +1192,12 @@ namespace {
     if (state.documentMinor >= 18 &&
         !decodeAllocatorHighWaterMember(*members[nextMember], state, joinPath(path, "dataBlock"),
                                         out.dataBlock))
+        return false;
+    if (state.documentMinor >= 18)
+        ++nextMember;
+    if (hasLayerMask &&
+        !decodeAllocatorHighWaterMember(*members[nextMember], state, joinPath(path, "layerMask"),
+                                        out.layerMask))
         return false;
     return decodeAllocatorHighWaterMember(*members[10], state, joinPath(path, "nodeGroup"),
                                           out.nodeGroup);

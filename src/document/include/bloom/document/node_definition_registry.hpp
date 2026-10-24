@@ -30,6 +30,8 @@ enum class SocketValueKind {
     Integer,
     Boolean,
     Vector3,
+    // ADR 0028: single-channel coverage. Never interchangeable with Image in either direction.
+    Mask,
 };
 
 enum class ParameterValueKind {
@@ -111,6 +113,7 @@ isPromotedSocketConnection(const SocketValueKind source,
     case SocketValueKind::Vector2:
     case SocketValueKind::String:
     case SocketValueKind::Vector3:
+    case SocketValueKind::Mask:
         return false;
     }
     return false;
@@ -241,6 +244,8 @@ enum class NodeLoweringKind {
     // the validation, the lowering and the kernel all read one table instead of four copies of it.
     ValueUtility,
     Unsupported,
+    // ADR 0028: the Mask node (path coverage over the composition canvas).
+    Mask,
 };
 
 // Whether this lowering belongs to the value graph rather than the image chain. The compiler reads
@@ -280,6 +285,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::LayerStack:
     case NodeLoweringKind::CompositionOutput:
     case NodeLoweringKind::Unsupported:
+    case NodeLoweringKind::Mask:
         return false;
     }
     return false;

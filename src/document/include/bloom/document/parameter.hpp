@@ -234,6 +234,15 @@ inline constexpr double kDefaultRotationDegrees = 0.0;
 inline constexpr std::int64_t kDefaultBlendModeValue =
     core::blendModeStoredValue(core::kDefaultBlendMode);
 
+// ADR 0028 mask parameter schemas, shared by layer masks and the Mask node.
+inline constexpr std::string_view kLayerMaskPathSchemaKey = "bloom.mask.path";
+inline constexpr std::string_view kLayerMaskFeatherSchemaKey = "bloom.mask.feather";
+inline constexpr std::string_view kLayerMaskExpansionSchemaKey = "bloom.mask.expansion";
+inline constexpr std::string_view kLayerMaskOpacitySchemaKey = "bloom.mask.opacity";
+inline constexpr std::string_view kLayerMaskInvertedSchemaKey = "bloom.mask.inverted";
+inline constexpr double kMaximumLayerMaskFeatherPixels = 1000.0;
+inline constexpr double kMaximumLayerMaskExpansionPixels = 1000.0;
+
 // The animatable schema set, split by the curve value kind each member requires. These predicates
 // are the single authority every layer asks -- document validation, the animation commands, and the
 // snapshot compiler's override gate -- so the set cannot be widened in one place and stay narrow in
@@ -270,7 +279,14 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == "bloom.crop.right" || schemaKey == "bloom.crop.bottom" ||
            schemaKey == "bloom.pad.left" || schemaKey == "bloom.pad.top" ||
            schemaKey == "bloom.pad.right" || schemaKey == "bloom.pad.bottom" ||
-           schemaKey == "bloom.multiply-alpha.factor" || schemaKey == "bloom.blur.radius";
+           schemaKey == "bloom.multiply-alpha.factor" || schemaKey == "bloom.blur.radius" ||
+           schemaKey == kLayerMaskFeatherSchemaKey || schemaKey == kLayerMaskExpansionSchemaKey ||
+           schemaKey == kLayerMaskOpacitySchemaKey;
+}
+
+// ADR 0028: Path parameters animate through whole-value Path curves.
+[[nodiscard]] constexpr bool isPathAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
+    return schemaKey == kLayerMaskPathSchemaKey;
 }
 
 [[nodiscard]] constexpr bool isCanvasMarginSchemaKey(const std::string_view schemaKey) noexcept {
@@ -300,7 +316,8 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 
 [[nodiscard]] constexpr bool isAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return isVec2AnimatableSchemaKey(schemaKey) || isVec3AnimatableSchemaKey(schemaKey) ||
-           isScalarAnimatableSchemaKey(schemaKey) || isColor4AnimatableSchemaKey(schemaKey);
+           isScalarAnimatableSchemaKey(schemaKey) || isColor4AnimatableSchemaKey(schemaKey) ||
+           isPathAnimatableSchemaKey(schemaKey);
 }
 
 // Whether a scalar value under this schema is confined to [0, 1]. Opacity is the only one: rotation
@@ -308,7 +325,8 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 // the schema rather than to "scalar values" as a class.
 [[nodiscard]] constexpr bool hasUnitDomainSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == kOpacityParameterSchemaKey || schemaKey == kAudioLevelParameterSchemaKey ||
-           schemaKey == "bloom.image-mix.factor" || schemaKey == "bloom.multiply-alpha.factor";
+           schemaKey == "bloom.image-mix.factor" || schemaKey == "bloom.multiply-alpha.factor" ||
+           schemaKey == kLayerMaskOpacitySchemaKey;
 }
 
 // Whether a scalar value under this schema is confined to the text size domain (0, kMaximumText-
@@ -328,6 +346,11 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
         return value >= 0.0 && value <= 16777216.0;
     if (schemaKey == "bloom.blur.radius")
         return value >= 0.0 && value <= kMaximumBlurRadiusPixels;
+    if (schemaKey == kLayerMaskFeatherSchemaKey)
+        return value >= 0.0 && value <= kMaximumLayerMaskFeatherPixels;
+    if (schemaKey == kLayerMaskExpansionSchemaKey)
+        return value >= -kMaximumLayerMaskExpansionPixels &&
+               value <= kMaximumLayerMaskExpansionPixels;
     if (schemaKey == "bloom.shape.stroke-width")
         return value >= 0.0;
     if (schemaKey == kSolidWidthParameterSchemaKey || schemaKey == kSolidHeightParameterSchemaKey)

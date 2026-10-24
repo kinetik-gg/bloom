@@ -25,6 +25,7 @@ struct KeyframeIdTag;
 struct DriverBindingIdTag;
 struct ExtensionRecordIdTag;
 struct DataBlockRecordIdTag;
+struct LayerMaskIdTag;
 
 using AssetFolderId = core::Id<AssetFolderIdTag>;
 using AssetId = core::Id<AssetIdTag>;
@@ -41,6 +42,8 @@ using KeyframeId = core::Id<KeyframeIdTag>;
 using DriverBindingId = core::Id<DriverBindingIdTag>;
 using ExtensionRecordId = core::Id<ExtensionRecordIdTag>;
 using DataBlockRecordId = core::Id<DataBlockRecordIdTag>;
+// ADR 0028: a layer mask's stable identity (document schema 1.24).
+using LayerMaskId = core::Id<LayerMaskIdTag>;
 
 struct IdAllocatorHighWater final {
     std::uint64_t composition = 0;
@@ -59,6 +62,8 @@ struct IdAllocatorHighWater final {
     std::uint64_t asset = 0;
     std::uint64_t assetFolder = 0;
     std::uint64_t dataBlock = 0;
+    // Appended last (document schema 1.24, ADR 0028): an older file has no value for it.
+    std::uint64_t layerMask = 0;
 
     friend constexpr auto operator<=>(const IdAllocatorHighWater&,
                                       const IdAllocatorHighWater&) noexcept = default;
@@ -89,6 +94,7 @@ class IdAllocator final {
             .asset = asset_,
             .assetFolder = assetFolder_,
             .dataBlock = dataBlock_,
+            .layerMask = layerMask_,
         };
     }
 
@@ -124,6 +130,9 @@ class IdAllocator final {
     [[nodiscard]] std::optional<DataBlockRecordId> allocateDataBlock() noexcept {
         return allocate<DataBlockRecordId>(dataBlock_);
     }
+    [[nodiscard]] std::optional<LayerMaskId> allocateLayerMask() noexcept {
+        return allocate<LayerMaskId>(layerMask_);
+    }
 
     [[nodiscard]] std::optional<AssetId> allocateAsset() noexcept {
         return allocate<AssetId>(asset_);
@@ -151,6 +160,7 @@ class IdAllocator final {
     void reserveExisting(DriverBindingId id) noexcept { reserve(id, driverBinding_); }
     void reserveExisting(ExtensionRecordId id) noexcept { reserve(id, extensionRecord_); }
     void reserveExisting(DataBlockRecordId id) noexcept { reserve(id, dataBlock_); }
+    void reserveExisting(LayerMaskId id) noexcept { reserve(id, layerMask_); }
 
     [[nodiscard]] constexpr bool covers(const CompositionId id) const noexcept {
         return coversId(id, composition_);
@@ -188,6 +198,9 @@ class IdAllocator final {
     [[nodiscard]] constexpr bool covers(const DataBlockRecordId id) const noexcept {
         return coversId(id, dataBlock_);
     }
+    [[nodiscard]] constexpr bool covers(const LayerMaskId id) const noexcept {
+        return coversId(id, layerMask_);
+    }
 
     void mergeHighWater(const IdAllocator& other) noexcept {
         composition_ = std::max(composition_, other.composition_);
@@ -204,6 +217,7 @@ class IdAllocator final {
         asset_ = std::max(asset_, other.asset_);
         assetFolder_ = std::max(assetFolder_, other.assetFolder_);
         dataBlock_ = std::max(dataBlock_, other.dataBlock_);
+        layerMask_ = std::max(layerMask_, other.layerMask_);
     }
 
   private:
@@ -213,7 +227,8 @@ class IdAllocator final {
           animationCurve_(highWater.animationCurve), keyframe_(highWater.keyframe),
           driverBinding_(highWater.driverBinding), extensionRecord_(highWater.extensionRecord),
           nodeGroup_(highWater.nodeGroup), asset_(highWater.asset),
-          assetFolder_(highWater.assetFolder), dataBlock_(highWater.dataBlock) {}
+          assetFolder_(highWater.assetFolder), dataBlock_(highWater.dataBlock),
+          layerMask_(highWater.layerMask) {}
 
     template <core::TypedId IdType>
     [[nodiscard]] static std::optional<IdType> allocate(std::uint64_t& highestIssued) noexcept {
@@ -252,6 +267,7 @@ class IdAllocator final {
     std::uint64_t asset_ = 0;
     std::uint64_t assetFolder_ = 0;
     std::uint64_t dataBlock_ = 0;
+    std::uint64_t layerMask_ = 0;
 };
 
 } // namespace bloom::document

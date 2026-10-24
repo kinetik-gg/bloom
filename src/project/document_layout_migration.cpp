@@ -148,7 +148,8 @@ enum class Step {
     WorkingColorSpace,
     AssetInputColorSpace,
     LutAssets,
-    ExternalFileLocators
+    ExternalFileLocators,
+    LayerMasks
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -158,6 +159,9 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     if (step == Step::DataBlocks)
         return (scope == Scope::Project && value.findMember("dataBlocks")) ||
                (scope == Scope::HighestIssued && value.findMember("dataBlock"));
+    // Layer masks (1.23 -> 1.24, ADR 0028) is version-only: every member it adds is optional.
+    if (step == Step::LayerMasks)
+        return false;
     if (step == Step::Images) {
         return (scope == Scope::Project && value.findMember("assets")) ||
                (scope == Scope::Composition && value.findMember("backgroundColor")) ||
@@ -329,6 +333,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::WorkingColorSpace    ? "{\"major\":1,\"minor\":19}"
                            : step == Step::AssetInputColorSpace ? "{\"major\":1,\"minor\":20}"
                            : step == Step::LutAssets            ? "{\"major\":1,\"minor\":21}"
+                           : step == Step::LayerMasks           ? "{\"major\":1,\"minor\":24}"
                                                                 : "{\"major\":1,\"minor\":22}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
@@ -714,6 +719,12 @@ MigrationStepOutcome migrateExternalFileLocatorsV1_21(const JsonValue& root,
 MigrationStepOutcome migrateLayerTimeV1_22(const JsonValue& root, std::pmr::memory_resource*,
                                            Buffer& output) {
     if (!sourceVersionIs(root, "22") || !emitLayerTimeDocument(root, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateLayerMasksV1_23(const JsonValue& root, std::pmr::memory_resource*,
+                                            Buffer& output) {
+    if (!sourceVersionIs(root, "23") || !transform(root, Scope::Root, Step::LayerMasks, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

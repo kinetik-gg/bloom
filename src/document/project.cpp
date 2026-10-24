@@ -1,4 +1,5 @@
 #include <bloom/document/project.hpp>
+#include <bloom/document/layer_masks.hpp>
 
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/render_reachability.hpp>
@@ -210,6 +211,10 @@ std::size_t Composition::calculateContentByteCharge(const Content& authored) {
                 using Record = std::decay_t<decltype(record)>;
                 if constexpr (std::is_same_v<Record, ScalarAnimationCurve>) {
                     chargeRecords<ScalarKeyframe>(bytes, record.keyframes.size());
+                } else if constexpr (std::is_same_v<Record, PathAnimationCurve>) {
+                    chargeRecords<PathKeyframe>(bytes, record.keyframes.size());
+                    for (const auto& keyframe : record.keyframes)
+                        chargeRecords<PathAnchor>(bytes, keyframe.value.anchors.size());
                 } else {
                     for (const auto& component : record.components)
                         chargeRecords<ScalarKeyframe>(bytes, component.keyframes.size());
@@ -365,6 +370,14 @@ Composition::LockIndex Composition::buildLockIndex(const Content& authored) {
         if (index.nodes.contains(node.id))
             for (const auto& binding : node.parameters)
                 index.parameters.insert(binding.parameterId);
+    // ADR 0028: a layer mask's parameters follow its layer's lock.
+    for (const auto& layer : authored.graph.layerOutputs())
+        if (layer.locked)
+            for (const auto& mask : layer.masks)
+                for (const auto& [owned, schemaKey] : layerMaskParameters(mask)) {
+                    static_cast<void>(schemaKey);
+                    index.parameters.insert(owned);
+                }
     return index;
 }
 
@@ -427,6 +440,7 @@ ValidationResult Composition::validate() const {
     result.append("animationCurves", animationCurves().validate());
     result.append("", validateAnimationCurveReferences(parameters(), animationCurves()));
     result.append("graph", graph().validate(parameters(), builtInNodeDefinitions(), id_));
+    result.append("", validateLayerMasks(graph(), parameters()));
     result.append("", validateNodeLayout(nodeLayout(), graph()));
     result.append("", validateNodeGroups(nodeGroups(), graph()));
     return result;
@@ -767,7 +781,7 @@ ValidationResult Project::validate() const {
                             keyframe.id, compositionOrdinal, [&] { return keyPath() + ".id"; },
                             "Keyframe", keyframeDeclarations, result);
                     };
-                    if constexpr (std::is_same_v<Curve, ScalarAnimationCurve>) {
+                    if constexpr (kWholeValueAnimationCurve<Curve>) {
                         for (const auto& keyframe : curve.keyframes)
                             validateKey(keyframe, [&] {
                                 return curvePath() + ".keyframes[" +

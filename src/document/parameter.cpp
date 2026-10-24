@@ -178,6 +178,18 @@ constantMatchesSchema(const std::string_view schemaKey,
     using namespace bloom::document;
     if (schemaKey.starts_with("bloom.shape."))
         return shapeConstantMatchesSchema(schemaKey, constant.value);
+    // ADR 0028 mask schemas (layer masks and the Mask node).
+    if (schemaKey == kLayerMaskPathSchemaKey) {
+        const auto* path = std::get_if<PathValue>(&constant.value);
+        return path != nullptr && path->isValid();
+    }
+    if (schemaKey == kLayerMaskInvertedSchemaKey)
+        return std::holds_alternative<bool>(constant.value);
+    if (schemaKey == kLayerMaskFeatherSchemaKey || schemaKey == kLayerMaskExpansionSchemaKey ||
+        schemaKey == kLayerMaskOpacitySchemaKey) {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value && std::isfinite(*value) && isScalarWithinSchemaDomain(schemaKey, *value);
+    }
     if (schemaKey == kSolidWidthParameterSchemaKey || schemaKey == kSolidHeightParameterSchemaKey) {
         const auto* value = std::get_if<double>(&constant.value);
         return value && std::isfinite(*value) && isScalarWithinSchemaDomain(schemaKey, *value);

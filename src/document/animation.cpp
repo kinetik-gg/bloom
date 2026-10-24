@@ -18,6 +18,8 @@ using bloom::document::Color4AnimationCurve;
 using bloom::document::ComponentAnimationCurve;
 using bloom::document::KeyframeId;
 using bloom::document::KeyframeInterpolation;
+using bloom::document::PathAnimationCurve;
+using bloom::document::PathKeyframe;
 using bloom::document::ScalarAnimationCurve;
 using bloom::document::ScalarKeyframe;
 using bloom::document::ValidationCode;
@@ -37,7 +39,12 @@ using bloom::document::Vec3AnimationCurve;
     return std::isfinite(keyframe.value);
 }
 
-[[nodiscard]] bool validHandles(const ScalarKeyframe& keyframe) noexcept {
+// A Path key's value is representable when the path itself is.
+[[nodiscard]] bool finiteValue(const PathKeyframe& keyframe) noexcept {
+    return keyframe.value.isValid();
+}
+
+template <typename Keyframe> [[nodiscard]] bool validHandles(const Keyframe& keyframe) noexcept {
     return bloom::document::isValidKeyframeHandle(keyframe.outgoingHandle) &&
            bloom::document::isValidKeyframeHandle(keyframe.incomingHandle);
 }
@@ -194,9 +201,8 @@ void validateComponentCurve(const ComponentAnimationCurve& curve, const std::str
     }
 }
 
-template <typename Curve>
-[[nodiscard]] bool insertKeyframe(Curve& curve, ScalarKeyframe keyframe,
-                                  const bool idAlreadyExists) {
+template <typename Curve, typename Keyframe>
+[[nodiscard]] bool insertKeyframe(Curve& curve, Keyframe keyframe, const bool idAlreadyExists) {
     if (!keyframe.id.isValid() || idAlreadyExists || !finiteValue(keyframe) ||
         !validHandles(keyframe) || !validInterpolation(keyframe.outgoingInterpolation)) {
         return false;
@@ -207,27 +213,28 @@ template <typename Curve>
     if (position != curve.keyframes.end() && position->time == keyframe.time) {
         return false;
     }
-    curve.keyframes.insert(position, keyframe);
+    curve.keyframes.insert(position, std::move(keyframe));
     normalizeFinalInterpolation(curve);
     return true;
 }
 
-template <typename Curve> [[nodiscard]] bool updateKeyframe(Curve& curve, ScalarKeyframe keyframe) {
+template <typename Curve, typename Keyframe>
+[[nodiscard]] bool updateKeyframe(Curve& curve, Keyframe keyframe) {
     if (!keyframe.id.isValid() || !finiteValue(keyframe) || !validHandles(keyframe) ||
         !validInterpolation(keyframe.outgoingInterpolation)) {
         return false;
     }
-    const auto current = std::ranges::find(curve.keyframes, keyframe.id, &ScalarKeyframe::id);
+    const auto current = std::ranges::find(curve.keyframes, keyframe.id, &Keyframe::id);
     if (current == curve.keyframes.end()) {
         return false;
     }
-    const auto occupied = std::ranges::find(curve.keyframes, keyframe.time, &ScalarKeyframe::time);
+    const auto occupied = std::ranges::find(curve.keyframes, keyframe.time, &Keyframe::time);
     if (occupied != curve.keyframes.end() && occupied->id != keyframe.id) {
         return false;
     }
 
-    *current = keyframe;
-    std::ranges::sort(curve.keyframes, {}, &ScalarKeyframe::time);
+    *current = std::move(keyframe);
+    std::ranges::sort(curve.keyframes, {}, &Keyframe::time);
     normalizeFinalInterpolation(curve);
     return true;
 }
@@ -264,6 +271,13 @@ template <typename Curve>
 [[nodiscard]] bool isColor4(const AnimationCurveRecord& record) noexcept {
     return std::holds_alternative<Color4AnimationCurve>(record);
 }
+
+[[nodiscard]] bool isPath(const AnimationCurveRecord& record) noexcept {
+    return std::holds_alternative<PathAnimationCurve>(record);
+}
+
+template <typename Curve>
+inline constexpr bool kWholeValueCurve = bloom::document::kWholeValueAnimationCurve<Curve>;
 
 } // namespace
 
@@ -354,6 +368,9 @@ AnimationCurveId animationCurveId(const AnimationCurveRecord& record) noexcept {
     if (const auto* color = std::get_if<Color4AnimationCurve>(&record)) {
         return color->id;
     }
+    if (const auto* path = std::get_if<PathAnimationCurve>(&record)) {
+        return path->id;
+    }
     return {};
 }
 
@@ -395,6 +412,11 @@ AnimationCurveStore::findColor4(const AnimationCurveId id) const noexcept {
     return record == nullptr ? nullptr : std::get_if<Color4AnimationCurve>(record);
 }
 
+const PathAnimationCurve* AnimationCurveStore::findPath(const AnimationCurveId id) const noexcept {
+    const auto* record = find(id);
+    return record == nullptr ? nullptr : std::get_if<PathAnimationCurve>(record);
+}
+
 const ComponentAnimationCurve*
 AnimationCurveStore::findComponent(const AnimationCurveId id,
                                    const AnimationComponent component) const noexcept {
@@ -418,7 +440,7 @@ bool AnimationCurveStore::insert(AnimationCurveRecord record) {
     const bool valid = std::visit(
         [](const auto& curve) {
             using Curve = std::decay_t<decltype(curve)>;
-            if constexpr (std::is_same_v<Curve, ScalarAnimationCurve>) {
+            if constexpr (kWholeValueCurve<Curve>) {
                 return curveCanEnterStore(curve);
             } else {
                 return componentCurveRecordCanEnterStore(curve.id, curve.components);
@@ -435,7 +457,7 @@ bool AnimationCurveStore::insert(AnimationCurveRecord record) {
                 return std::ranges::any_of(
                     keys, [&](const auto& keyframe) { return containsKeyframe(keyframe.id); });
             };
-            if constexpr (std::is_same_v<std::decay_t<decltype(curve)>, ScalarAnimationCurve>) {
+            if constexpr (kWholeValueCurve<std::decay_t<decltype(curve)>>) {
                 return duplicated(curve.keyframes);
             } else {
                 return std::ranges::any_of(curve.components, [&](const auto& component) {
@@ -451,7 +473,7 @@ bool AnimationCurveStore::insert(AnimationCurveRecord record) {
     std::visit(
         [](auto& curve) {
             using Curve = std::decay_t<decltype(curve)>;
-            if constexpr (std::is_same_v<Curve, ScalarAnimationCurve>) {
+            if constexpr (kWholeValueCurve<Curve>) {
                 normalizeFinalInterpolation(curve);
             } else {
                 for (auto& component : curve.components) {
@@ -494,6 +516,9 @@ bool AnimationCurveStore::containsKeyframe(const KeyframeId id) const noexcept {
         if (const auto* scalar = std::get_if<ScalarAnimationCurve>(&record)) {
             return contains(*scalar);
         }
+        if (const auto* path = std::get_if<PathAnimationCurve>(&record)) {
+            return contains(*path);
+        }
         return containsComponentKey(std::get_if<Vec2AnimationCurve>(&record)) ||
                containsComponentKey(std::get_if<Vec3AnimationCurve>(&record)) ||
                containsComponentKey(std::get_if<Color4AnimationCurve>(&record));
@@ -519,7 +544,7 @@ bool AnimationCurveStore::insertKeyframe(const AnimationCurveId curveId,
     std::visit(
         [&](auto& value) {
             using Curve = std::decay_t<decltype(value)>;
-            if constexpr (!std::is_same_v<Curve, ScalarAnimationCurve>) {
+            if constexpr (!kWholeValueCurve<Curve>) {
                 curve = value.component(component);
             }
         },
@@ -533,6 +558,20 @@ bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId, ScalarK
     return curve != nullptr && ::updateKeyframe(*curve, keyframe);
 }
 
+bool AnimationCurveStore::insertKeyframe(const AnimationCurveId curveId, PathKeyframe keyframe) {
+    const auto keyframeId = keyframe.id;
+    auto* record = findMutable(curveId);
+    auto* curve = record == nullptr ? nullptr : std::get_if<PathAnimationCurve>(record);
+    return curve != nullptr &&
+           ::insertKeyframe(*curve, std::move(keyframe), containsKeyframe(keyframeId));
+}
+
+bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId, PathKeyframe keyframe) {
+    auto* record = findMutable(curveId);
+    auto* curve = record == nullptr ? nullptr : std::get_if<PathAnimationCurve>(record);
+    return curve != nullptr && ::updateKeyframe(*curve, std::move(keyframe));
+}
+
 bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId,
                                          const AnimationComponent component,
                                          ScalarKeyframe keyframe) {
@@ -544,7 +583,7 @@ bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId,
     std::visit(
         [&](auto& value) {
             using Curve = std::decay_t<decltype(value)>;
-            if constexpr (!std::is_same_v<Curve, ScalarAnimationCurve>) {
+            if constexpr (!kWholeValueCurve<Curve>) {
                 curve = value.component(component);
             }
         },
@@ -561,11 +600,14 @@ bool AnimationCurveStore::eraseKeyframe(const AnimationCurveId curveId,
     if (auto* scalar = std::get_if<ScalarAnimationCurve>(record)) {
         return eraseCurveKeyframe(*scalar, keyframeId);
     }
+    if (auto* path = std::get_if<PathAnimationCurve>(record)) {
+        return eraseCurveKeyframe(*path, keyframeId);
+    }
     bool erased = false;
     std::visit(
         [&](auto& curve) {
             using Curve = std::decay_t<decltype(curve)>;
-            if constexpr (!std::is_same_v<Curve, ScalarAnimationCurve>) {
+            if constexpr (!kWholeValueCurve<Curve>) {
                 for (auto& component : curve.components) {
                     if (std::ranges::find(component.keyframes, keyframeId, &ScalarKeyframe::id) !=
                         component.keyframes.end()) {
@@ -590,7 +632,7 @@ bool AnimationCurveStore::eraseKeyframe(const AnimationCurveId curveId,
     std::visit(
         [&](auto& value) {
             using Curve = std::decay_t<decltype(value)>;
-            if constexpr (!std::is_same_v<Curve, ScalarAnimationCurve>) {
+            if constexpr (!kWholeValueCurve<Curve>) {
                 curve = value.component(component);
             }
         },
@@ -629,7 +671,7 @@ ValidationResult AnimationCurveStore::validate() const {
         std::visit(
             [&](const auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
-                if constexpr (std::is_same_v<Curve, ScalarAnimationCurve>) {
+                if constexpr (kWholeValueCurve<Curve>) {
                     validateCurve(curve, result);
                     for (const auto& keyframe : curve.keyframes) {
                         if (keyframe.id.isValid() && !keyframeIds.insert(keyframe.id).second) {
@@ -714,6 +756,11 @@ ValidationResult validateAnimationCurveReferences(const ParameterStore& paramete
             if (!isColor4(*curve)) {
                 result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
                            "This color parameter requires a Color4 animation curve");
+            }
+        } else if (isPathAnimatableSchemaKey(parameter.schemaKey)) {
+            if (!isPath(*curve)) {
+                result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
+                           "This path parameter requires a Path animation curve");
             }
         } else {
             result.add(ValidationCode::InvalidValue, parameterPath + ".source",

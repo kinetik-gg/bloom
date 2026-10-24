@@ -91,7 +91,7 @@ struct TargetDeclarations final {
             std::visit(
                 [&declarations](const auto& curve) {
                     using Curve = std::decay_t<decltype(curve)>;
-                    if constexpr (std::is_same_v<Curve, ScalarAnimationCurve>) {
+                    if constexpr (kWholeValueAnimationCurve<Curve>) {
                         for (const auto& keyframe : curve.keyframes)
                             declarations.keyframes.insert(keyframe.id);
                     } else {

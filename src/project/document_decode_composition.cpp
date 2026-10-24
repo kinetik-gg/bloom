@@ -592,10 +592,11 @@ void appendPresentHandleKeys(const JsonValue& node, const DecodeState& state,
     }
 }
 
+template <typename Keyframe>
 [[nodiscard]] bool decodeHandleMembers(const std::vector<const JsonValue*>& members,
                                        const std::vector<std::string_view>& keys,
                                        const std::size_t knownCount, DecodeState& state,
-                                       const std::string& path, ScalarKeyframe& out) {
+                                       const std::string& path, Keyframe& out) {
     for (auto index = knownCount; index < keys.size(); ++index) {
         auto& handle = keys[index] == "outgoingHandle" ? out.outgoingHandle : out.incomingHandle;
         if (!decodeKeyframeHandle(*members[index], state, joinPath(path, keys[index]), handle)) {
@@ -651,6 +652,47 @@ void appendPresentHandleKeys(const JsonValue& node, const DecodeState& state,
     out.time = time;
     out.value = value;
     out.outgoingInterpolation = interpolation;
+    return decodeHandleMembers(members, keys, knownCount, state, path, out);
+}
+
+// ADR 0028 (document 1.24): a whole-value Path key whose value is a constant of kind "path".
+[[nodiscard]] bool decodePathKeyframe(const JsonValue& node, DecodeState& state,
+                                      const std::string& path, document::PathKeyframe& out) {
+    std::vector<std::string_view> keys{"id", "time", "value", "outgoingInterpolation"};
+    const auto knownCount = keys.size();
+    appendPresentHandleKeys(node, state, knownCount, keys);
+    std::vector<const JsonValue*> members;
+    std::vector<RetainedJsonMember> trailing;
+    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing))
+        return false;
+    document::KeyframeId id;
+    if (!decodeObjectId(*members[0], state, joinPath(path, "id"), id))
+        return false;
+    const AttachmentScope keyframeScope(state, RoundTripCollectionKind::Keyframe,
+                                        std::to_string(id.value()));
+    if (!trailing.empty() && state.roundTrip != nullptr)
+        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
+    {
+        const AttachmentScope timeScope(state, "time");
+        if (!decodeRationalTimeValue(*members[1], state, joinPath(path, "time"), out.time))
+            return false;
+    }
+    ParameterValue value;
+    {
+        const AttachmentScope valueScope(state, "value");
+        if (!decodeConstantValue(*members[2], state, joinPath(path, "value"), value))
+            return false;
+    }
+    auto* pathValue = std::get_if<document::PathValue>(&value);
+    if (pathValue == nullptr || !pathValue->isValid()) {
+        state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, "value"));
+        return false;
+    }
+    if (!decodeInterpolation(*members[3], state, joinPath(path, "outgoingInterpolation"),
+                             out.outgoingInterpolation))
+        return false;
+    out.id = id;
+    out.value = std::move(*pathValue);
     return decodeHandleMembers(members, keys, knownCount, state, path, out);
 }
 
@@ -883,6 +925,20 @@ template <typename Keyframe, typename DecodeOne>
                 curve.components)) {
             return false;
         }
+        out = std::move(curve);
+        return true;
+    }
+
+    if (kindText == "path" && state.documentMinor >= 24) {
+        static constexpr std::array<std::string_view, 3> keys{"id", "kind", "keyframes"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        document::PathAnimationCurve curve;
+        curve.id = id;
+        if (!decodeKeyframeArray(*members[2], state, joinPath(path, "keyframes"), curve.keyframes,
+                                 decodePathKeyframe))
+            return false;
         out = std::move(curve);
         return true;
     }
@@ -1418,6 +1474,101 @@ template <typename Keyframe, typename DecodeOne>
     return true;
 }
 
+// Layer masks and track matte (1.24, ADR 0028). Both are optional; a present member is strict.
+[[nodiscard]] bool decodeLayerMasks(const JsonValue& node, DecodeState& state,
+                                    const std::string& path, LayerOutputBoundary& out) {
+    if (const auto* masks = node.findMember("masks")) {
+        const auto masksPath = joinPath(path, "masks");
+        const AttachmentScope masksScope(state, "masks");
+        if (masks->kind() != JsonValueKind::Array || masks->arrayElements().empty() ||
+            masks->arrayElements().size() > document::kMaximumLayerMasks) {
+            state.fail(DocumentDecodeError::WrongValueKind, masksPath);
+            return false;
+        }
+        std::size_t index = 0;
+        for (const auto& element : masks->arrayElements()) {
+            const auto elementPath = joinPathIndex(masksPath, index++);
+            static constexpr std::array<std::string_view, 8> kKeys{
+                "id", "name", "mode", "inverted", "path", "feather", "expansion", "opacity"};
+            std::vector<const JsonValue*> members;
+            std::vector<RetainedJsonMember> trailing;
+            if (!matchOrderedMembers(element, kKeys, true, state, elementPath, members, trailing))
+                return false;
+            document::LayerMask mask;
+            if (!decodeObjectId(*members[0], state, joinPath(elementPath, "id"), mask.id))
+                return false;
+            const AttachmentScope maskScope(state, RoundTripCollectionKind::LayerMask,
+                                            std::to_string(mask.id.value()));
+            if (!trailing.empty() && state.roundTrip != nullptr)
+                state.roundTrip->attach(state.attachmentPath, std::move(trailing));
+            std::string_view name;
+            std::string_view mode;
+            if (!decodeStringMember(*members[1], state, joinPath(elementPath, "name"), name) ||
+                !decodeStringMember(*members[2], state, joinPath(elementPath, "mode"), mode))
+                return false;
+            mask.name = std::string(name);
+            static constexpr std::array<std::pair<std::string_view, document::LayerMaskMode>, 5>
+                kModes{{{"none", document::LayerMaskMode::None},
+                        {"add", document::LayerMaskMode::Add},
+                        {"subtract", document::LayerMaskMode::Subtract},
+                        {"intersect", document::LayerMaskMode::Intersect},
+                        {"difference", document::LayerMaskMode::Difference}}};
+            const auto found = std::ranges::find(kModes, mode, &std::pair<std::string_view,
+                                                                          document::LayerMaskMode>::first);
+            if (found == kModes.end()) {
+                state.fail(DocumentDecodeError::DomainViolation, joinPath(elementPath, "mode"));
+                return false;
+            }
+            mask.mode = found->second;
+            const auto inverted = members[3]->asBoolean();
+            if (!inverted) {
+                state.fail(DocumentDecodeError::WrongValueKind, joinPath(elementPath, "inverted"));
+                return false;
+            }
+            mask.inverted = *inverted;
+            if (!decodeObjectId(*members[4], state, joinPath(elementPath, "path"), mask.path) ||
+                !decodeObjectId(*members[5], state, joinPath(elementPath, "feather"),
+                                mask.feather) ||
+                !decodeObjectId(*members[6], state, joinPath(elementPath, "expansion"),
+                                mask.expansion) ||
+                !decodeObjectId(*members[7], state, joinPath(elementPath, "opacity"),
+                                mask.opacity))
+                return false;
+            out.masks.push_back(std::move(mask));
+        }
+    }
+    if (const auto* matte = node.findMember("trackMatte")) {
+        const auto mattePath = joinPath(path, "trackMatte");
+        const AttachmentScope matteScope(state, "trackMatte");
+        static constexpr std::array<std::string_view, 3> kKeys{"source", "channel", "inverted"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(*matte, kKeys, true, state, mattePath, members))
+            return false;
+        document::TrackMatte value;
+        if (!decodeObjectId(*members[0], state, joinPath(mattePath, "source"), value.source))
+            return false;
+        std::string_view channel;
+        if (!decodeStringMember(*members[1], state, joinPath(mattePath, "channel"), channel))
+            return false;
+        if (channel == "alpha")
+            value.channel = document::TrackMatteChannel::Alpha;
+        else if (channel == "luma")
+            value.channel = document::TrackMatteChannel::Luma;
+        else {
+            state.fail(DocumentDecodeError::DomainViolation, joinPath(mattePath, "channel"));
+            return false;
+        }
+        const auto inverted = members[2]->asBoolean();
+        if (!inverted) {
+            state.fail(DocumentDecodeError::WrongValueKind, joinPath(mattePath, "inverted"));
+            return false;
+        }
+        value.inverted = *inverted;
+        out.trackMatte = value;
+    }
+    return true;
+}
+
 // A Layer Output boundary is a collection element identified by `layerId` (see
 // docs/architecture/project-format.md, "Versions, Migrations, And Preservation": "layer ID for a
 // Layer Output"). `layerId` is its second member, so its own trailing capture must be deferred
@@ -1434,6 +1585,10 @@ template <typename Keyframe, typename DecodeOne>
         keys.push_back("parent");
     if (state.documentMinor >= 23)
         for (const auto* key : {"startTime", "speed", "contentExtent", "beforeMode", "afterMode"})
+            if (node.findMember(key))
+                keys.push_back(key);
+    if (state.documentMinor >= 24)
+        for (const auto* key : {"masks", "trackMatte"})
             if (node.findMember(key))
                 keys.push_back(key);
     std::vector<const JsonValue*> members;
@@ -1513,7 +1668,8 @@ template <typename Keyframe, typename DecodeOne>
                 return false;
         }
     }
-    return state.documentMinor < 23 || decodeLayerTiming(node, state, path, out.timing);
+    return (state.documentMinor < 23 || decodeLayerTiming(node, state, path, out.timing)) &&
+           (state.documentMinor < 24 || decodeLayerMasks(node, state, path, out));
 }
 
 [[nodiscard]] bool decodeLayerOutputs(const JsonValue& node, DecodeState& state,

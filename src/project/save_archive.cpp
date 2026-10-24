@@ -120,6 +120,9 @@ measureScratch(const bloom::document::Snapshot& snapshot) noexcept {
                 for (const auto& component : color->components) {
                     thirdWindow = std::max(thirdWindow, component.keyframes.size());
                 }
+            } else if (const auto* pathCurve =
+                           std::get_if<bloom::document::PathAnimationCurve>(&curve)) {
+                thirdWindow = std::max(thirdWindow, pathCurve->keyframes.size());
             }
         }
     }
