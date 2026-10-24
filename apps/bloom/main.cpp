@@ -414,11 +414,12 @@ int main(int argc, char* argv[]) try {
             const bloom::document::Snapshot& snapshot,
             const bloom::document::CompositionId composition, const bloom::document::NodeId node,
             const bloom::core::RationalTime time,
-            const bloom::runtime::EvaluationColorIntent& colorIntent, const std::int64_t x,
+            const bloom::runtime::EvaluationColorIntent& colorIntent,
+            const std::optional<bloom::runtime::ChannelInspection>& inspection, const std::int64_t x,
             const std::int64_t y, const bloom::runtime::CancellationToken& cancellation) {
             return bloom::runtime::pickCryptomatte(snapshotCompiler, snapshot, composition, node,
                                                    cpuEvaluator.assetBaseDirectory(), time,
-                                                   colorIntent, x, y, cancellation);
+                                                   colorIntent, inspection, x, y, cancellation);
         });
     bloom::ui::BackgroundPreviewController backgroundPreviewController(
         compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline,

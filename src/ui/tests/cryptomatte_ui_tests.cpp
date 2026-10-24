@@ -5,10 +5,13 @@
 // on a worker (manifest names, and raw IDs without a manifest).
 
 #include "cryptomatte_fixture_support.hpp"
+#include "layer_parent_transform.hpp"
 
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/commands/layer_time_operations.hpp>
+#include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/new_project.hpp>
@@ -64,11 +67,7 @@ template <typename Predicate> bool waitUntil(Predicate predicate, const int mill
 
 struct Scene final {
     std::filesystem::path folder;
-    document::NewProject initial = document::makeNewProject(
-        "Cryptomatte UI", "Main", core::RationalTime::fromInteger(1),
-        *document::CompositionFormat::create(fixture::kWidth, fixture::kHeight,
-                                             core::PixelAspectRatio::square(),
-                                             *document::FrameRate::create(24, 1)));
+    document::NewProject initial;
     document::Document document{std::move(initial.project)};
     commands::CommandStack stack{document};
     ui::CompositionSession session{document, stack, initial.initialCompositionId};
@@ -86,14 +85,24 @@ struct Scene final {
         return result;
     }
 
-    explicit Scene(const bool manifest) {
+    // `sequence` writes a two-frame sequence whose second frame names different objects.
+    explicit Scene(const bool manifest, const std::uint32_t width = fixture::kWidth,
+                   const std::uint32_t height = fixture::kHeight, const bool sequence = false)
+        : initial(document::makeNewProject(
+              "Cryptomatte UI", "Main", core::RationalTime::fromInteger(1),
+              *document::CompositionFormat::create(width, height, core::PixelAspectRatio::square(),
+                                                   *document::FrameRate::create(24, 1)))) {
         std::mt19937_64 random{std::random_device{}()};
         folder = std::filesystem::temp_directory_path() /
                  ("bloom-cryptomatte-ui-" + std::to_string(random()));
         std::filesystem::create_directories(folder);
-        fixture::writeCryptomatteExr(folder / "crypto.exr", manifest);
+        const auto first = folder / (sequence ? "crypto.0001.exr" : "crypto.exr");
+        fixture::writeCryptomatteExr(first, manifest);
+        if (sequence)
+            fixture::writeCryptomatteExr(folder / "crypto.0002.exr", manifest, "CryptoObject", {},
+                                         1);
         const auto composition = session.compositionId();
-        run<commands::ImportAssets>(std::vector{folder / "crypto.exr"}, folder);
+        run<commands::ImportAssets>(std::vector{first}, folder);
         run<commands::AddImageLayer>(composition, session.snapshot().project().assets().front().id);
         for (const auto& node : session.composition()->graph().nodes()) {
             if (node.typeId == document::kImageSourceNodeType)
@@ -154,10 +163,11 @@ struct Pipeline final {
     return [&pipeline,
             base](const document::Snapshot& snapshot, const document::CompositionId composition,
                   const document::NodeId node, const core::RationalTime time,
-                  const runtime::EvaluationColorIntent& colorIntent, const std::int64_t x,
+                  const runtime::EvaluationColorIntent& colorIntent,
+                  const std::optional<runtime::ChannelInspection>& inspection, const std::int64_t x,
                   const std::int64_t y, const runtime::CancellationToken& cancellation) {
         return runtime::pickCryptomatte(*pipeline.compiler, snapshot, composition, node, base, time,
-                                        colorIntent, x, y, cancellation);
+                                        colorIntent, inspection, x, y, cancellation);
     };
 }
 
@@ -342,6 +352,145 @@ void testPropertiesAndViewer() {
     shutdown(scheduler, bridge, &preview);
 }
 
+// The eyedropper through a moved, scaled and rotated layer, a proxy, a parented layer and a
+// time-offset layer: each click aims at the centre of one source pixel, placed in composition space
+// by the evaluator's own layer matrix, and must pick that pixel's object.
+void testLayerMapping() {
+    Scene scene(true, 32, 32, true);
+    Pipeline pipeline;
+    pipeline.evaluator.setAssetBaseDirectory(scene.folder);
+    runtime::TaskScheduler scheduler;
+    ui::TaskUiBridge bridge(scheduler, nullptr, std::chrono::milliseconds{1});
+    ui::CompositionPreviewController preview(
+        scene.session, scheduler, bridge,
+        ui::makeCompositionPreviewPipeline(*pipeline.compiler, pipeline.evaluator,
+                                           pipeline.displayPreparer, pipeline.qualified));
+    ui::CryptomatteController controller(scene.session, scheduler, bridge,
+                                         layerProvider(pipeline, scene.folder),
+                                         pickProvider(pipeline, scene.folder));
+    QWidget window;
+    auto* viewer = new ui::ViewerEditor(scene.session, preview, nullptr, &window);
+    viewer->setGeometry(0, 0, 900, 900);
+    window.resize(900, 900);
+    window.show();
+    const auto composition = scene.session.compositionId();
+    document::LayerId layer;
+    for (const auto& boundary : scene.session.composition()->graph().layerOutputs())
+        if (boundary.nodeId == scene.layer)
+            layer = boundary.layerId;
+    const auto setTransform = [&](const document::NodeId node, const document::Vec2d position,
+                                  const document::Vec2d anchor, const document::Vec2d scale,
+                                  const double rotation) {
+        scene.run<commands::SetNodeParameterValue>(composition, node,
+                                                   std::string(document::kPositionParameterRole),
+                                                   document::ParameterValue{position});
+        scene.run<commands::SetNodeParameterValue>(composition, node,
+                                                   std::string(document::kAnchorParameterRole),
+                                                   document::ParameterValue{anchor});
+        scene.run<commands::SetNodeParameterValue>(composition, node,
+                                                   std::string(document::kScaleParameterRole),
+                                                   document::ParameterValue{scale});
+        scene.run<commands::SetNodeParameterValue>(composition, node,
+                                                   std::string(document::kRotationParameterRole),
+                                                   document::ParameterValue{rotation});
+    };
+    // The last current mapping: a pick re-renders the frame, and the next click aims through the
+    // geometry the artist still sees.
+    std::optional<ui::ViewerMapping> lastMapping;
+    const auto settle = [&](const std::string& label) {
+        expect(waitUntil([&] {
+                   const auto& state = preview.state();
+                   return state.activity == ui::PreviewActivity::Ready && state.frame != nullptr &&
+                          state.frame->desiredIdentity().sourceRevision ==
+                              scene.session.snapshot().revision() &&
+                          viewer->mappingForTest().has_value();
+               }),
+               label + ": the Viewer shows the edited composition");
+        lastMapping = viewer->mappingForTest();
+    };
+    scene.session.selectNode(scene.cryptomatte);
+    if (auto* tool = viewer->findChild<QToolButton*>("viewerCryptomatteTool"))
+        tool->click();
+    const auto pickAt = [&](const runtime::detail::LayerMatrix& world, const int pixel,
+                            const Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        const auto& mapping = lastMapping;
+        if (!mapping)
+            return;
+        const auto point = world.map({(pixel % fixture::kWidth) + 0.5, (pixel / fixture::kWidth) + 0.5});
+        QTest::mouseClick(viewer, Qt::LeftButton, modifiers, mapping->toScreen(point).toPoint());
+        waitUntil([&] { return !controller.pickPending(); });
+        QApplication::processEvents();
+    };
+    using runtime::detail::LayerMatrix;
+
+    // A layer pivots about its content centre plus its anchor (the 4x2 source's centre is (2, 1);
+    // a parent solid's is the composition centre).
+    const auto authored = [](const document::Vec2d position, const document::Vec2d centre,
+                             const document::Vec2d scale, const double rotation) {
+        return LayerMatrix::authored(position, centre, scale, rotation);
+    };
+    const document::Vec2d centre{2, 1};
+
+    // Moved, 4x scaled and rotated a quarter turn about the content centre.
+    setTransform(scene.layer, {16, 16}, {0, 0}, {4, 4}, 90);
+    settle("rotated");
+    const auto rotated = authored({16, 16}, centre, {4, 4}, 90);
+    pickAt(rotated, 6);
+    expect(controller.mattes(scene.cryptomatte) == std::vector<std::string>{"cube"},
+           "a scaled, rotated layer picks the object under the cursor");
+    pickAt(rotated, 4, Qt::ShiftModifier);
+    expect(controller.mattes(scene.cryptomatte) == std::vector<std::string>{"cube", "sky"},
+           "a second pick through the rotated layer adds its object");
+    pickAt(LayerMatrix{}, 0); // composition pixel (0, 0) lies outside the rotated content
+    expect(controller.lastPickMessage() == "No object under the cursor" &&
+               controller.mattes(scene.cryptomatte) == std::vector<std::string>{"cube", "sky"},
+           "a point outside the source reports no object");
+
+    // The same layer under a half-resolution proxy.
+    preview.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
+    expect(controller.setMattes(scene.cryptomatte, {}, "Clear"), "clear before the proxy pick");
+    settle("proxy");
+    pickAt(rotated, 0);
+    expect(controller.mattes(scene.cryptomatte) == std::vector<std::string>{"sphere"},
+           "a proxy preview picks the full-resolution object");
+    preview.setResolutionPolicy(runtime::PreviewResolutionPolicy::Full);
+
+    // A parented layer: the parent's rotation and offset compose with the child's own transform.
+    const auto before = scene.session.composition()->graph().layerOutputs();
+    scene.run<commands::AddSolidLayer>(composition, "Parent", core::Color4d{0, 0, 0, 0});
+    document::LayerId parent;
+    document::NodeId parentNode;
+    for (const auto& boundary : scene.session.composition()->graph().layerOutputs())
+        if (std::ranges::none_of(before, [&](const auto& old) { return old.layerId == boundary.layerId; })) {
+            parent = boundary.layerId;
+            parentNode = boundary.nodeId;
+        }
+    setTransform(parentNode, {16, 16}, {0, 0}, {1, 1}, 30);
+    setTransform(scene.layer, {18, 15}, {0, 0}, {3, 3}, 0);
+    scene.run<commands::SetLayerParent>(composition, layer, parent);
+    expect(controller.setMattes(scene.cryptomatte, {}, "Clear"), "clear before the parent pick");
+    settle("parented");
+    const auto parented = authored({16, 16}, {16, 16}, {1, 1}, 30)
+                              .times(authored({18, 15}, centre, {3, 3}, 0));
+    pickAt(parented, 6);
+    expect(controller.mattes(scene.cryptomatte) == std::vector<std::string>{"cube"},
+           "a parented layer picks through its parent's transform");
+    scene.run<commands::SetLayerParent>(composition, layer, std::nullopt);
+
+    // A time-offset layer: at composition time 0 the layer shows the sequence's second frame, whose
+    // pixel 0 is the cube rather than the sphere.
+    setTransform(scene.layer, {16, 16}, {0, 0}, {4, 4}, 0);
+    scene.run<commands::SetLayerTiming>(composition, layer, *core::RationalTime::create(-1, 24),
+                                        core::RationalTime{}, core::RationalTime::fromInteger(1));
+    expect(controller.setMattes(scene.cryptomatte, {}, "Clear"), "clear before the time pick");
+    settle("time offset");
+    pickAt(authored({16, 16}, centre, {4, 4}, 0), 0);
+    expect(controller.mattes(scene.cryptomatte) == std::vector<std::string>{"cube"},
+           "a time-offset layer picks from the source frame it shows");
+
+    shutdown(scheduler, bridge, &preview);
+}
+
 void testRawIdsWithoutManifest() {
     Scene scene(false);
     Pipeline pipeline;
@@ -372,6 +521,7 @@ int main(int argc, char** argv) {
     try {
         testPropertiesAndViewer();
         testRawIdsWithoutManifest();
+        testLayerMapping();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

@@ -8,6 +8,7 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/runtime/cancellation.hpp>
+#include <bloom/runtime/channel_inspection.hpp>
 #include <bloom/runtime/evaluation.hpp>
 
 #include <cstdint>
@@ -43,13 +44,18 @@ struct CryptomattePick final {
     std::string diagnostic;
 };
 
-// The object with the largest coverage at pixel (`x`, `y`) of the node's selected layer. The
-// coordinates are pixels of the channel set's frame, relative to its display window origin.
+// The object with the largest coverage at pixel (`x`, `y`) of the node's selected layer, at the
+// composition time `time` mapped through the layer time of the plan the Viewer shows (the
+// composition, or the `inspection` it displays): a retimed or offset layer reads its own source
+// frame, and absent content reads nothing. The coordinates are pixels of the channel set's frame,
+// relative to its display window origin; the caller maps the Viewer point there through the
+// layer's world transform.
 [[nodiscard]] CryptomattePick
 pickCryptomatte(const SnapshotCompiler& compiler, const document::Snapshot& snapshot,
                 document::CompositionId composition, document::NodeId node,
                 const std::filesystem::path& assetBase, core::RationalTime time,
-                const EvaluationColorIntent& colorIntent, std::int64_t x, std::int64_t y,
+                const EvaluationColorIntent& colorIntent,
+                const std::optional<ChannelInspection>& inspection, std::int64_t x, std::int64_t y,
                 const CancellationToken& cancellation);
 
 } // namespace bloom::runtime

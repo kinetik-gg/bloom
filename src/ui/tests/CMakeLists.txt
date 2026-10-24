@@ -1199,7 +1199,8 @@ endforeach()
 # Viewer eyedropper on a real multi-rank Cryptomatte EXR generated in-test.
 add_executable(bloom_cryptomatte_ui_test cryptomatte_ui_tests.cpp)
 target_include_directories(bloom_cryptomatte_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS} "${PROJECT_SOURCE_DIR}/src/runtime/tests")
+    ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS} "${PROJECT_SOURCE_DIR}/src/runtime/tests"
+    "${PROJECT_SOURCE_DIR}/src/runtime")
 target_link_libraries(bloom_cryptomatte_ui_test PRIVATE bloom_ui bloom_runtime_compiler
     bloom_runtime_evaluator bloom_commands OpenEXR::OpenEXR Qt6::Test)
 bloom_enable_warnings(bloom_cryptomatte_ui_test)

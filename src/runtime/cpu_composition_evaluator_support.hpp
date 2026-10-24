@@ -93,6 +93,13 @@ struct PreflightOutcome final {
                                                   OperationCache* cache,
                                                   OperationCacheStatistics* statistics);
 
+// The time of every clock of `plan` at `request.time` (index = clock; nullopt = absent content),
+// through the same sampling and resolveLayerClocks the evaluator runs. nullopt when the clocks
+// cannot be resolved. Used by worker reads that need an operation's own time (#364 eyedropper).
+[[nodiscard]] std::optional<std::vector<std::optional<core::RationalTime>>>
+resolveClockTimes(const std::shared_ptr<const CompiledCompositionPlan>& plan,
+                  const EvaluationRequest& request, const CancellationToken& cancellation);
+
 [[nodiscard]] EvaluationDiagnostic diagnostic(EvaluationDiagnosticCode code, std::string summary,
                                               std::string detail = {},
                                               EvaluationSubject subject = {});

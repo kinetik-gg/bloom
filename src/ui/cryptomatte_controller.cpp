@@ -122,8 +122,18 @@ bool CryptomatteController::setMattes(const document::NodeId node,
         document::ParameterValue{runtime::joinCryptomatteMatteList(mattes)}, label);
 }
 
+void CryptomatteController::reportPick(QString message) {
+    if (pickTask_) {
+        pickTask_->handle.cancel();
+        pickTask_.reset();
+    }
+    lastPickMessage_ = std::move(message);
+    emit changed();
+}
+
 void CryptomatteController::pick(const document::NodeId node, const std::int64_t x,
-                                 const std::int64_t y, const PickAction action) {
+                                 const std::int64_t y, const PickAction action,
+                                 std::optional<runtime::ChannelInspection> inspection) {
     if (!pickProvider_ || bridge_.isShuttingDown())
         return;
     if (pickTask_) {
@@ -134,13 +144,13 @@ void CryptomatteController::pick(const document::NodeId node, const std::int64_t
     auto submission = scheduler_.submit<std::shared_ptr<const runtime::CryptomattePick>>(
         workerRequest("Pick Cryptomatte", composition),
         [provider = pickProvider_, snapshot = session_.snapshot(), composition, node,
-         time = session_.currentTime(), colorIntent = session_.colorIntent(), x,
-         y](runtime::TaskContext& context) {
+         time = session_.currentTime(), colorIntent = session_.colorIntent(),
+         inspection = std::move(inspection), x, y](runtime::TaskContext& context) {
             using Result = runtime::TaskResult<std::shared_ptr<const runtime::CryptomattePick>>;
             if (context.isCancellationRequested())
                 return Result::cancelled();
-            auto pick = provider(snapshot, composition, node, time, colorIntent, x, y,
-                                 context.cancellation());
+            auto pick = provider(snapshot, composition, node, time, colorIntent, inspection, x,
+                                 y, context.cancellation());
             if (context.isCancellationRequested())
                 return Result::cancelled();
             return Result::succeeded(

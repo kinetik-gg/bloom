@@ -58,9 +58,11 @@ inline const std::array<std::vector<std::pair<int, float>>, kWidth * kHeight> kP
 }
 
 // `manifestText`, when non-empty, is written verbatim as the manifest (a malformed-manifest case).
+// `objectShift` rotates which object each coverage entry names (a second sequence frame).
 inline void writeCryptomatteExr(const std::filesystem::path& path, const bool manifest,
                                 const std::string& layer = "CryptoObject",
-                                const std::string& manifestText = {}) {
+                                const std::string& manifestText = {},
+                                const std::size_t objectShift = 0) {
     const Imath::Box2i window(Imath::V2i(0, 0), Imath::V2i(kWidth - 1, kHeight - 1));
     Imf::Header header(window, window);
     header.insert("chromaticities", Imf::ChromaticitiesAttribute(Imf::Chromaticities()));
@@ -109,7 +111,8 @@ inline void writeCryptomatteExr(const std::filesystem::path& path, const bool ma
                                  std::vector<float>& coverage) {
                 if (rank < entries.size()) {
                     id[pixel] = std::bit_cast<float>(runtime::cryptomatteNameId(
-                        kObjects[static_cast<std::size_t>(entries[rank].first)]));
+                        kObjects[(static_cast<std::size_t>(entries[rank].first) + objectShift) %
+                                 kObjects.size()]));
                     coverage[pixel] = entries[rank].second;
                 }
             };

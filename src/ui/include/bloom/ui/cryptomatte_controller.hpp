@@ -34,8 +34,8 @@ class CryptomatteController final : public QObject {
         const runtime::EvaluationColorIntent&, const runtime::CancellationToken&)>;
     using PickProvider = std::function<runtime::CryptomattePick(
         const document::Snapshot&, document::CompositionId, document::NodeId, core::RationalTime,
-        const runtime::EvaluationColorIntent&, std::int64_t, std::int64_t,
-        const runtime::CancellationToken&)>;
+        const runtime::EvaluationColorIntent&, const std::optional<runtime::ChannelInspection>&,
+        std::int64_t, std::int64_t, const runtime::CancellationToken&)>;
     enum class PickAction : std::uint8_t { Add, Remove };
 
     CryptomatteController(CompositionSession& session, runtime::TaskScheduler& scheduler,
@@ -50,8 +50,13 @@ class CryptomatteController final : public QObject {
     [[nodiscard]] QString layerDiagnostic(document::NodeId node) const;
 
     // Reads the object under frame pixel (x, y) of `node`'s channel set on a worker and adds it to
-    // (or removes it from) the node's matte list as one undoable edit.
-    void pick(document::NodeId node, std::int64_t x, std::int64_t y, PickAction action);
+    // (or removes it from) the node's matte list as one undoable edit. `inspection` is the plan
+    // the Viewer shows (nullopt: the composition); the worker reads the node's source frame at the
+    // playhead mapped through that plan's layer time.
+    void pick(document::NodeId node, std::int64_t x, std::int64_t y, PickAction action,
+              std::optional<runtime::ChannelInspection> inspection = std::nullopt);
+    // Reports a pick that never reached the worker (the cursor is outside the source).
+    void reportPick(QString message);
     [[nodiscard]] bool pickPending() const noexcept { return pickTask_.has_value(); }
     [[nodiscard]] const QString& lastPickMessage() const noexcept { return lastPickMessage_; }
 

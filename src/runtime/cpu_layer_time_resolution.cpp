@@ -171,4 +171,42 @@ PreflightOutcome resolveLayerClocks(const std::shared_ptr<const CompiledComposit
     return PreflightOutcome::success(std::move(base));
 }
 
+std::optional<std::vector<std::optional<core::RationalTime>>>
+resolveClockTimes(const std::shared_ptr<const CompiledCompositionPlan>& plan,
+                  const EvaluationRequest& request, const CancellationToken& cancellation) {
+    const auto format = plan->format();
+    const auto window = render::ImageWindow::create(0, 0, format.width(), format.height());
+    if (!window)
+        return std::nullopt;
+    const auto descriptor =
+        render::Rgba32fImageDescriptor::create(*window.value(), *window.value(), format.pixelAspect());
+    if (!descriptor)
+        return std::nullopt;
+    bool cancelled = false;
+    const ResolvedEvaluation empty{.imageDescriptor = *descriptor.value(),
+                                   .horizontalScale = 1.0,
+                                   .verticalScale = 1.0,
+                                   .imageBytes = 0,
+                                   .peakPixelStorageBytes = 0,
+                                   .remainingConsumers = {},
+                                   .scalarCurveValues = {},
+                                   .vec2CurveValues = {},
+                                   .color4CurveValues = {},
+                                   .valueOutputs = {},
+                                   .clockTimes = {},
+                                   .clockResolutions = {}};
+    auto base = sampleAt(*plan, empty, request.time, cancellation, nullptr, nullptr, cancelled);
+    if (!base)
+        return std::nullopt;
+    auto resolved =
+        resolveLayerClocks(plan, request, std::move(*base), cancellation, nullptr, nullptr);
+    if (!resolved.resolved)
+        return std::nullopt;
+    std::vector<std::optional<core::RationalTime>> times(std::max<std::size_t>(plan->clocks().size(), 1));
+    for (std::size_t clock = 0; clock < times.size(); ++clock)
+        times[clock] = timeForClock(*resolved.resolved, request.time,
+                                    static_cast<std::uint32_t>(clock));
+    return times;
+}
+
 } // namespace bloom::runtime::detail
