@@ -10,7 +10,7 @@ text layer, with its node positions authored through MoveNodes. Focus and pointe
 | Metric grid | Dimension scan; `ui_grammar_audit_tests.cpp` at DPR 1, 1.5 and 2 |
 | Crisp icons | SVG QIcon engine; every icon and weight tested at DPR 1, 1.25, 1.5 and 2; whole-window physical-size audit |
 | Declared chrome | `EditorChromeSpec`; one `EditorArea` builder and measured overflow; width-sweep and hosted chrome tests |
-| Shared rows | `KRow` in Assets and timeline; `KPropertyRow` in Properties, node cards and timeline groups; geometry audit and window-level row command tests |
+| Shared rows | `KRow` in timeline (Assets moved to kit item-view columns in #378); `KPropertyRow` in Properties, node cards and timeline groups; geometry audit and window-level row command tests |
 | Typography | Font-construction scan; Inter family-resolution and embedded SHA-256 tests |
 | Canvas painting | Exact canvas-owner rules; empty allowlist enforced in the C++ scanner |
 | Window appearance | Two full-window golden tests; tolerance and approval procedure in `src/ui/tests/goldens/README.md` |

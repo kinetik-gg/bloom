@@ -1,14 +1,26 @@
 # Organizing Assets
 
-## Inspector
+## The project panel
 
-The Assets panel has Media, Data, and Compositions filters. Data shows authored non-media blocks
-with their kind, provenance summary, and digest. Media continues to use the existing asset folders,
-tags, relinking, and missing-media indicators.
+Assets works like the After Effects Project panel. One tree holds your folders, compositions and
+imported media, with columns for **Name**, **Type**, **Size**, **Duration**, **Frame Rate**,
+**Tags** and **File Location**. Click a column header to sort by it, and click again to reverse;
+folders always stay at the top. Drag a header divider to resize a column or a header to move it.
+Right-click the header, or open **View > Columns**, to choose which columns show. Bloom remembers
+your columns for the next session.
 
-Import media with **File > Import**, the Assets footer's **Import** button, or by dropping files
-onto the Assets panel. Imports keep stable identities, so organizing them preserves the nodes
-and layers that already use them.
+Select an item to see it at the top of the panel: a thumbnail (or the item's symbol), its size,
+duration and frame rate, how its colour is interpreted (including the note when Bloom had to assume
+the colour of an untagged video), its alpha, and how often it is used in compositions.
+
+The **Data** group at the bottom lists authored non-media blocks with their kind, provenance
+summary and digest. Missing media shows a warning symbol instead of its type symbol; hover over it
+for the reason.
+
+Import media with **File > Import**, **Add > Import…**, the footer's **Import** button, or by
+dropping files onto the panel. Imports land in the selected folder (or the folder of the selected
+item); a drop lands in the folder you drop on, or at the top level on empty space. Imports keep
+stable identities, so organizing them preserves the nodes and layers that already use them.
 
 When you import several files at once, one unreadable or unsupported file does not stop the rest.
 Every valid file is added in a single step that one **Undo** reverses. Each skipped file gets its
@@ -17,38 +29,52 @@ Cancelling an import adds nothing.
 
 ## Folders and names
 
-Choose **Add > New Folder** or the footer's **New Folder** button. The new folder opens for
-renaming immediately. Select an existing folder first to create a child folder; select a root
-asset or the Compositions root to create a root folder. Use the caret beside a folder to open
-or close it, or **View > Expand All / Collapse All** for the tree.
+Choose **Add > New Folder**, the footer's **New Folder** button, or **New Folder** in any context
+menu. The new folder opens for renaming immediately and is created inside the selected folder (or
+the folder of the selected item). Folders hold media, compositions and other folders. Use the arrow
+beside a folder, the Left and Right keys, or **View > Expand All / Collapse All** to open and close
+them.
 
-To rename an asset or folder, select it and press **F2**, or right-click and choose **Rename**.
-Press Enter to commit or Escape to cancel. Asset names are display names inside the project;
-the media file's path stays the same. Existing projects receive file-stem display names when
-opened, and you can change them independently.
+To rename an asset, composition or folder, select it and press **F2** or **Enter**, or right-click
+and choose **Rename**. Press Enter to commit or Escape to cancel. Asset names are display names
+inside the project; the media file's path stays the same.
 
-Drag one or more assets onto a folder to move them there. Drop on empty space to move them back
-to the project root. Drop above or below another asset to change their order. Dragged assets keep
-their relative order, and the arrangement is saved with the project.
+Drag items onto a folder to move them there, onto any row to move them into that row's folder, or
+onto empty space to move them to the top level. You can drag media, compositions and folders
+together; one **Undo** reverses the whole move. A folder cannot be moved into itself.
 
-**Remove Folder** moves its contents into its parent: assets append after that parent's existing
-assets, and child folders become siblings. If a child folder would conflict with an existing
-sibling name, rename the conflicting folder first. Removing a folder does not remove media.
+## Context menus
+
+Right-click an item for the commands that apply to it:
+
+- **Media:** New Composition from Selection, Input Colour… (how its colours are interpreted),
+  Replace Footage…, Reload Footage, Reveal in File Manager, Rename, Edit Tags…, Delete.
+- **Compositions:** Open, Composition Settings…, Rename, Duplicate, Delete.
+- **Folders:** Rename, Delete.
+
+Every menu ends with New Folder, New Composition… and Import…, which is all you get on empty space.
+**New Composition from Selection** makes a composition named and sized after the first selected
+clip, with its frame rate and duration, holding a layer for each selected clip, and opens it.
+
+## Deleting
+
+Press **Delete**, use the footer's **Delete** button, or choose **Delete** in a menu. Unused items
+go at once. If an item is used in a composition, Bloom tells you how often and asks first; the
+layers that used it then show it as missing. Deleting a folder that holds items asks whether to
+**Delete Folders Only**, which moves everything inside up one level, or **Delete with Contents**.
+Every delete is a single step that one **Undo** restores.
 
 ## Tags and search
 
 Right-click an asset and choose **Edit Tags…**. Enter one tag per field, use **Add Tag** for
 another, or the × button to remove one, then choose **Apply**. Blank fields are ignored. When
 multiple assets are selected, Apply replaces the tags on all of them. Tags are stored as a
-sorted, unique set, with up to 64 tags per asset.
-
-A tagged row shows its first tag and a count of any others. Click the tag to filter by it, or
-click the count to edit the complete set. Narrow panels show just the complete tag count to keep
-asset names readable. Hover over a chip to see all tags.
+sorted, unique set, with up to 64 tags per asset. The **Tags** column (choose it from the header
+menu) lists them; click a Tags cell to filter by its first tag.
 
 Type a name or tag in Search to narrow the list. Use **tag:hero** to match only tags containing
-“hero”; names alone will not match that query. Searches ignore letter case. Matching assets keep
-their folder ancestors visible, and clearing Search restores your previous folder expansion.
+“hero”; names alone will not match that query. Searches ignore letter case. Matching items keep
+their folders visible, and clearing Search restores your previous folder expansion.
 
 ## Using organized media
 
@@ -57,7 +83,8 @@ source. Dropping media on Timeline creates the matching layer. Cards, Properties
 and imported default Timeline labels show the asset's display name. A layer name you author
 separately remains independent.
 
-Compositions stay in their own **Compositions** listing. Double-click one to open it. Dragging a
+Compositions sit in the tree with your media and can be filed in folders. Double-click one to
+open it. Dragging a
 composition onto Nodes creates a Composition source. Connect its image or audio output as needed.
 Drop it onto Timeline to create one nested layer, initially as long as the source composition
 (up to the containing composition's duration). This is one undoable edit.
@@ -71,16 +98,15 @@ would create a cycle. If a source composition is deleted, choose a replacement i
 Nested audio follows the same offset, speed and loop settings. Multiple nested layers mix
 together; a composition without audio is silent. Layer mute, solo and time ranges apply.
 
-Folder edits, names, tags, moves and reorder are undoable. Saving records the organization in
-project schema 1.17. Opening a 1.15 project supplies the new defaults without changing its media
-references; saving then writes the current schema. Use **Relink…** for missing media; relinking
-preserves the asset's name, folder, tags and order.
+Folder edits, names, tags and moves are undoable and saved with the project; composition folders
+need project schema 1.27, and older projects open with their compositions at the top level. Use
+**Replace Footage…** for missing media; it preserves the asset's name, folder and tags.
 
 ## Importing Video
 
 On Linux, choose **Import** in Assets and select an MP4, MOV, MKV, MXF, M4V or supported
-transport-stream file. Bloom probes the file in its media worker and lists it as
-**Video · HH:MM:SS**. A malformed or unsupported file produces a diagnostic. Native video
+transport-stream file. Bloom probes the file in its media worker and lists it as a **Video** with
+its size, duration and frame rate. A malformed or unsupported file produces a diagnostic. Native video
 providers for macOS and Windows are not available yet.
 
 Drag the asset into the Timeline to create a Video source and Layer at the normal Arrange position.

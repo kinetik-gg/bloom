@@ -24,6 +24,8 @@ This contract supersedes conflicting component metrics in [Visual Language](visu
 Every interactive control is a kit class: `KDropdown`, `KMenuButton`, `KButton`,
 `KIconButton`, `KIconToggle`, `KCheckBox`, `KSwitch`, `KValueField`, `KSlider`,
 `KSearchField`, `KLineEdit`, `KSection`, or `KColorSwatch`. Text uses TypeRole-bound `KLabel`.
+A read-only picture uses `KThumbnail`: the `ImageThumbnail` square on `SurfaceSunken`, showing a
+worker-decoded proxy or a glyph fitted without changing its aspect ratio; it never loads anything.
 The panel switcher is the icon variant of **KDropdown**, with the same height, styling,
 interaction and popup. Menus are created only through `kit::makeMenu`.
 Constructing QToolButton, QPushButton, QComboBox, QLineEdit, QCheckBox, QSlider,
@@ -88,8 +90,9 @@ The slider maps the full composition through a logarithmic range down to individ
 
 `KRow` owns list layout: fixed-pitch toggle cells, flexible name, fixed-width dropdown columns
 and trailing cell. `KPropertyRow` owns the label, control and reserved diamond columns,
-promoting the Properties layout into the kit. Timeline, assets and properties use these
-shared row layouts.
+promoting the Properties layout into the kit. Timeline and properties use these shared row
+layouts. Tables with sortable columns (Assets, Jobs) use the kit theme's item-view and header
+styling at the `ListRow` pitch, with no per-row widgets.
 
 Painting outside the kit is limited to viewer canvas, node scene items, and timeline
 ruler, lanes, graph editor, work area and navigator. Other surfaces compose kit widgets.
@@ -545,34 +548,62 @@ row to exact reference numbers with the `reference` suffix.
 
 ## Image Assets And Source Cards
 
-Assets rows use `KRow` with a leading Chrome kind glyph: Composition (`film-slate`), Image
-(`image`), Sequence (`images`), Audio (`music-notes`), or Font (`text-t`). Kind text remains
-Composition, Image, Sequence [member count], Audio · duration, or Font · family/style.
-A missing/changed first member has a warning glyph; the context menu exposes Relink and Remove.
-The footer is four `KIconButton` controls with Chrome glyphs and exact tooltips New Composition,
-New Folder, Import, Delete. New Folder is live in both Add and the footer. Compositions have a
-separate expandable **Compositions** root; folders form a hierarchy for imported assets. Folder
-rows use the kit caret disclosure, with Qt owning indentation and keyboard navigation. Expansion
-and selection survive project projections; filtering temporarily opens matching ancestors.
+Assets is one tree after the After Effects Project panel (#378): folders, compositions and
+imported assets together, with a selection header and a search field above it. The columns are
+Name, Type, Size, Duration, Frame Rate, Tags and File Location. Name carries the kind glyph in its
+per-kind label colour (the Timeline bar colours): Composition (`cube`, DataComposition), Folder
+(`folder`, Label 3), Image or EXR (`image`, DataImage), Sequence (`images`, DataSequence), Video
+(`film-slate`, DataImage), Audio (`music-notes`, DataAudio), Font (`text-t`, DataClip) and LUT
+(`sliders-horizontal`, muted). Type names the kind; Size is `W × H`;
+Duration is After Effects timecode `H:MM:SS:FF` at the item's rate, `N frames` for a sequence and
+seconds for audio; Frame Rate is a composition's or video's rate. A missing or unshowable source
+replaces the Name glyph with the warning glyph in Warn ink, and an untagged video whose colour was
+assumed shows the Info glyph in muted ink; the tooltip states the reason, the input colour space and
+the colour note. A data-only image has no mark.
 
-Assets and folders rename in place through a kit line edit, from Rename or F2. Escape restores
-the row without an edit. Every accepted rename uses the shared command transaction. Tagged rows
-compose compact `KButton` chips in `KRow`'s trailing area: the first tag and a `+n` count when
-more tags exist. The full tag list is available in the tooltip. Clicking a tag filters by it;
-the count opens Edit Tags. Narrow rows show a compact count for the complete tag set, preserving
-space for the asset name. The context menu also exposes **Edit Tags…**, with one kit line edit
-per tag, Add Tag and Remove Tag controls. Applying to multiple selected assets replaces their
-sets in one transaction.
+Every column sorts on a header click; folders stay first and the Data group last in either
+direction, sizes, times and rates sort by value and names in natural, case-insensitive order.
+Columns resize and reorder by dragging; the header's context menu and View > Columns choose which
+columns show (Name always shows; Tags starts hidden). Visibility, widths, order and sort are a
+per-user setting, never project data. Folder rows expand with Qt's own branch and keyboard
+navigation; expansion and selection survive project projections, and filtering temporarily opens
+matching ancestors.
+
+The selection header pairs a `KThumbnail` (the controller's worker thumbnail, including
+Cryptomatte ID colours and the first data channel of a data-only image, or the kind glyph when
+there is no picture, never a blank cell) with four Control-height `KLabel` lines: the name; kind,
+size, duration and rate; colour interpretation with the assumed-colour note and alpha; and usage
+(`Used 3 times in 2 compositions`, `Not used`). The lines keep their height when empty, so the tree
+never moves with the selection. Usage counts nodes whose asset, font, LUT or
+composition reference names the item.
+
+Context menus follow After Effects. An asset: New Composition from Selection, Input Colour…
+(interpret footage), Replace Footage…, Reload Footage, Reveal in File Manager, Rename, Edit Tags…,
+Delete. A composition: Open, Composition Settings…, Rename, Duplicate, Delete. A folder: Rename,
+Delete. Each ends with New Folder, New Composition… and Import…, which is the whole menu on empty
+space. Reveal opens the folder holding the file, the behaviour every platform's file manager
+supports. Deleting unused items is immediate; deleting a used item, or a folder that holds items,
+first asks in a warning box that names the usage, and for folders offers Delete Folders Only (the
+contents move up) or Delete with Contents. Every delete is one transaction and one undo step.
+
+Rename edits the Name cell in place through a kit line edit, from Rename, F2 or Return. Escape
+restores the row without an edit. Every accepted rename uses the shared command transaction. The
+Tags column lists an asset's tags; clicking it filters by the first tag. Edit Tags… opens one kit
+line edit per tag with Add Tag and Remove Tag controls; applying to multiple selected assets
+replaces their sets in one transaction.
 
 Search accepts `tag:` followed by a case-insensitive tag substring; plain text matches names and
-tags. Unmatched ancestors remain visible only when a descendant matches. Internal asset drags
-move onto a folder, move back to the root by dropping on empty space, or reorder above/below
-siblings. The internal selection MIME coexists with `application/x-bloom-asset`, retaining
-canvas and Timeline media drops. Internal drags are tied to the originating tree and snapshot;
-a changed or replaced project refuses a stale drag. Composition canvas drops remain refused
-with a user-visible message until composition sources are supported.
+tags. Unmatched ancestors remain visible only when a descendant matches. Internal drags move assets,
+compositions and folders together onto a folder row, into the folder of the row under the pointer,
+or to the root on empty space; a folder never moves into itself or a subfolder. Rows are sorted, so
+a drop names a folder, never a position. The internal selection MIME coexists with
+`application/x-bloom-asset` (the first asset) or `application/x-bloom-composition` (the first
+composition when no asset is dragged), retaining Timeline, Viewer and Nodes drops. Internal drags
+are tied to the originating tree and snapshot; a changed or replaced project refuses a stale drag.
 
-File > Import, footer Import and file drops onto Assets all prepare one worker import transaction.
+File > Import, footer Import, Add > Import… and file drops onto Assets all prepare one worker import
+transaction. Imports land in the selected folder (a selected folder, or the folder of the selected
+item); a drop lands in the folder under the pointer, or at the root on empty space.
 A drop onto Assets also accepts an `smb://` URL a file manager hands Bloom for a mounted network
 share, resolving it through the same GVFS mount the file manager used; an `smb://` URL naming a
 share this machine has not mounted yet is still accepted (the cursor stays honest about there

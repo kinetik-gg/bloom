@@ -15,7 +15,7 @@ Once mounted, you can:
 - **Drag files from your file manager onto the Assets panel.** A file manager hands Bloom an
   `smb://server/share/path` URL on drop; Bloom resolves it to the mounted share and imports it
   exactly as it would a local file.
-- **Use File > Import, the Assets footer's Import button, or Relink**, and pick the file from the
+- **Use File > Import, the Assets footer's Import button, or Replace Footage…**, and pick the file from the
   mounted share in the Open dialog's sidebar, which lists every currently mounted network share.
 - **Open Project, Save Project As, and Export Frame** also list mounted network shares in their
   dialog sidebar, so you can read from or write to a share without typing its full mounted path.

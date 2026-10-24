@@ -160,22 +160,50 @@ the playhead on the layer's own clock when the path is keyed), and clicking an o
 
 ## Assets
 
-Assets is a project-level composition browser. It has no modifier-free keyboard bindings: text
-entry stays in the search or inline rename field, while persistent commands remain visible in the
-panel menus or the composition context menu.
+Assets is the project panel (#378), after the After Effects Project panel: one tree of folders,
+compositions and imported assets with columns, a search field and a selection header
+(`ui-grammar.md` owns the presentation). Its keys belong to the focused tree, which claims them
+through `ShortcutOverride` so a window-level shortcut cannot take them; text entry stays in the
+search or inline rename field.
 
 | Gesture or control | Action |
 | --- | --- |
-| Search field text | Filters the tree by composition name, case-insensitively |
-| View > Expand All / Collapse All | Expands or collapses the asset tree |
-| Add > New Composition… | Opens the Composition dialog in create mode, then adds one composition through the command path (see "Composition Dialog" below) |
-| Add > New Folder | Disabled; tooltip: `Folders arrive with asset organisation` |
+| Search field text | Filters the tree by name and tag, case-insensitively; `tag:` matches tags only; matching rows keep their folders visible |
+| Click a column header | Sorts by that column, again to reverse; folders stay first |
+| Drag a header divider / header | Resizes / reorders a column |
+| Right-click the header, View > Columns | Chooses the visible columns; the choice is a per-user setting |
+| View > Expand All / Collapse All | Expands or collapses every folder |
+| Add > New Composition…, footer New Composition | Opens the Composition dialog in create mode and adds one composition, filed in the selected folder (see "Composition Dialog" below) |
+| Add > New Folder, footer New Folder | Creates a folder in the selected folder and starts its inline rename |
+| Add > Import…, footer Import, File > Import | Imports into the selected folder: a selected folder, or the folder of the selected item; the root with nothing selected |
 | Select > All / None | Selects all visible rows or clears the selection |
-| Double-click a composition | Switches the shared `CompositionSession` to that composition, as in After Effects; it opens no dialog |
-| Right-click a composition | Open, Composition Settings…, Rename (inline), Duplicate, or Delete |
-| Footer: New Composition | Opens the same dialog in create mode |
-| Footer: New Folder / Import | Disabled; Import tooltip: `Image and sequence import arrives with the media pipeline` |
-| Footer: Delete | Deletes the active composition through one undoable command; deleting the final composition returns to the blank project and undo restores it |
+| Click, Shift-click, Ctrl-click; Up/Down/Left/Right, Home/End | Selects one row, a range or a set; arrows move and Left/Right collapse or expand folders |
+| F2 or Return | Renames the current row in place (asset, composition or folder); Escape cancels |
+| Delete or Backspace, footer Delete | Deletes the selection; a used item, or a folder that holds items, asks first (see below) |
+| Double-click a composition | Switches the shared `CompositionSession` to that composition, as in After Effects; it opens no dialog. Double-clicking a folder expands it |
+| Click a Tags cell | Filters by the asset's first tag |
+| Drag rows onto a folder, onto a row, or onto empty space | Moves the dragged assets, compositions and folders into that folder, the row's folder, or the root, as one undoable step; a folder never moves into itself or a subfolder |
+| Drag rows to Timeline, Viewer or Nodes | Adds the first asset (or composition when no asset is dragged) as before |
+| Drop files onto Assets | Imports them into the folder under the pointer, or the root on empty space |
+| Right-click an asset | New Composition from Selection, Input Colour…, Replace Footage…, Reload Footage, Reveal in File Manager, Rename, Edit Tags…, Delete, then New Folder, New Composition…, Import… |
+| Right-click a composition | Open, Composition Settings…, Rename, Duplicate, Delete, then the same three |
+| Right-click a folder | Rename, Delete, then the same three; empty space offers only the three |
+
+New Composition from Selection makes one composition named and sized from the first selected
+footage item, with a video's frame rate and duration, a sequence's frame count or an audio file's
+duration (the active composition supplies anything the footage does not state). It holds a layer
+for every selected image, sequence, video or audio asset, the first on top, is filed in the clicked
+item's folder, opens, and is one undo step. Reload Footage probes the asset's own file again on the
+import worker, as a relink to the same path. Reveal in File Manager opens the folder holding the
+file.
+
+Deleting unused items or empty folders is immediate. Deleting an item that is used, or a folder that
+holds items, opens a warning first: one used item names how often and in how many compositions it is
+used; a folder states how many items it holds and how many of them are used, and offers Delete
+Folders Only (assets, compositions and subfolders move up to the parent) or Delete with Contents.
+Cancel deletes nothing. Every delete is one transaction and one undo step; deleting the active
+composition switches to the remaining one with the lowest id, and deleting the final composition
+returns to the blank project.
 
 ### Composition Dialog
 
@@ -184,7 +212,7 @@ section and a collapsed Advanced section. Create mode starts from the active com
 `AddCompositionWithSettings` ("Add Composition"); settings mode edits one composition and commits
 `SetCompositionSettings` ("Composition Settings"). Each is exactly one undoable command, and
 unchanged settings commit nothing. Entry points: Composition menu (`Ctrl+Alt+N`, `Ctrl+Alt+K`), the
-Viewer composition menu, and the Assets Add menu, footer and composition context menu.
+Viewer composition menu, and the Assets Add menu, footer and context menus.
 
 | Control | Behaviour |
 | --- | --- |
