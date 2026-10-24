@@ -734,7 +734,7 @@ void testParentedTransformsCommitAtomically() {
         return std::visit(
             [](const auto& held) {
                 using Curve = std::decay_t<decltype(held)>;
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                     return held.keyframes.size();
                 } else {
                     std::set<core::RationalTime> times;

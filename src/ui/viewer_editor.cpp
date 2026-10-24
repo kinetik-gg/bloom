@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "composition_editor_support.hpp"
+#include "layer_mask_support.hpp"
 #include "viewer_editor_text_layout.hpp"
 
 #include <bloom/ui/composition_commands.hpp>
@@ -1604,7 +1605,13 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     connect(&session_, &CompositionSession::currentTimeChanged, this, [this] { cancelCreation(); });
     connect(&session_, &CompositionSession::selectionChanged, this, [this] {
         cancelPathDrag();
+        cancelMaskDrag();
         selectedAnchor_.reset();
+        update();
+    });
+    connect(&session_, &CompositionSession::maskSelectionChanged, this, [this] {
+        cancelMaskDrag();
+        selectedMaskAnchor_.reset();
         update();
     });
     connect(&session_, &CompositionSession::liveValueChanged, this, [this] {
@@ -2473,6 +2480,7 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
     paintRoi(painter);
     paintCreation(painter);
     paintPathTools(painter);
+    paintMaskTools(painter);
     paintTextEditing(painter);
 
     if (coverSnapshotInProgress_)
@@ -2686,6 +2694,8 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
         return;
     if (textPress(event))
         return;
+    if (maskPress(event))
+        return;
     if (pathPress(event))
         return;
     if (creationPress(event))
@@ -2805,6 +2815,8 @@ void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
+    if (maskMove(event))
+        return;
     if (pathMove(event))
         return;
     if (creationMove(event))
@@ -2877,6 +2889,8 @@ void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
+    if (maskRelease(event))
+        return;
     if (pathRelease(event))
         return;
     if (creationRelease(event))
@@ -3098,6 +3112,7 @@ void ViewerEditor::contextMenuEvent(QContextMenuEvent* event) {
 
 #include "viewer_tools.ipp"
 #include "viewer_tools_path.ipp"
+#include "viewer_tools_mask.ipp"
 
 #include "viewer_editor_gpu.ipp"
 #include "viewer_editor_gpu_retire.ipp"

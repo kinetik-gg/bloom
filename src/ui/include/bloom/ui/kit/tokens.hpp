@@ -212,7 +212,7 @@ enum class Size : int {
     TimelineToggleColumn = 4 * ToggleCell + 3 * static_cast<int>(Spacing::XS),
     TimelineNameMin = 120,
     TimelineNameDefault = 280,
-    TimelineLeftColumn = TimelineToggleColumn + TimelineNameDefault + 2 * DropdownWidth,
+    TimelineLeftColumn = TimelineToggleColumn + TimelineNameDefault + 3 * DropdownWidth,
     TimelineColumn = 100,
     TimelineWorkArea = 10,
     TimelineSeparator = 2,

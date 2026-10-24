@@ -91,6 +91,8 @@ void testCreationTools(Expectations& expectations) {
     toolKey(fixture, Qt::Key_Escape);
     expectations.expect(fixture.viewer.findChild<QToolButton*>("viewerSelectTool")->isChecked(),
                         "Escape returns to Select");
+    // ADR 0028: with a layer selected the primitives draw masks; these cases create shape layers.
+    fixture.session.clearSelection();
     toolKey(fixture, Qt::Key_E);
     toolDrag(fixture, {20, 30}, {90, 70}, Qt::ShiftModifier);
     expectations.expect(toolVector(fixture, "size", 70, 70), "Shift ellipse makes a circle");
@@ -117,6 +119,7 @@ void testCreationTools(Expectations& expectations) {
     expectations.expect(toolVector(fixture, "lineStart", 40, 40) && near(end.x - 40, end.y - 40),
                         "Shift line snaps to 45 degrees");
     toolReady(fixture, expectations);
+    fixture.session.clearSelection();
     toolKey(fixture, Qt::Key_R);
     toolDrag(fixture, {160, 120}, {160, 120});
     expectations.expect(toolVector(fixture, "size", 100, 100) &&
@@ -389,4 +392,123 @@ void testViewerProbe(Expectations& expectations) {
                         "late probe completion cannot repopulate a cleared cursor readout");
     toolShutdown(fixture, expectations);
     QSettings().remove("viewer/analysis/default");
+}
+// ADR 0028: with a layer selected, Rectangle, Ellipse and Pen draw masks in the layer's content
+// space; the selected mask's anchors drag into one SetLayerMaskPath.
+void testMaskTools(Expectations& expectations) {
+    using namespace bloom;
+    ViewerFixture fixture(toolProject());
+    fixture.viewer.resize(800, 650);
+    fixture.viewer.show();
+    toolReady(fixture, expectations);
+    expectations.expect(fixture.session.addSolidLayer("Plate", {0.2, 0.3, 0.4, 1}),
+                        "mask fixture adds a solid layer");
+    const auto* selectedLayer = std::get_if<document::LayerId>(&fixture.session.selection().primary);
+    if (selectedLayer == nullptr) {
+        expectations.expect(false, "mask fixture selects the new layer");
+        toolShutdown(fixture, expectations);
+        return;
+    }
+    const auto layer = *selectedLayer;
+    toolReady(fixture, expectations);
+    const auto layersBefore = fixture.session.composition()->graph().layerOutputs().size();
+    const auto boundsOf = [&] { return fixture.controller.selectedLayerBounds(); };
+    const auto contentPoint = [&](document::Vec2d content) {
+        const auto bounds = boundsOf();
+        const auto world = ui::masks::contentToComposition(bounds.front());
+        const auto mapped = world->map(QPointF(content.x, content.y));
+        return mapped;
+    };
+    expectations.expect(!boundsOf().empty(), "the selected layer has evaluated bounds");
+    if (boundsOf().empty()) {
+        toolShutdown(fixture, expectations);
+        return;
+    }
+
+    const auto before = fixture.commands.size();
+    toolKey(fixture, Qt::Key_R);
+    toolDrag(fixture, {50, 60}, {150, 110});
+    const auto* boundary = fixture.session.composition()->graph().findLayer(layer);
+    expectations.expect(fixture.commands.size() == before + 1 &&
+                            fixture.session.composition()->graph().layerOutputs().size() ==
+                                layersBefore && boundary->masks.size() == 1,
+                        "a rectangle with a selected layer adds one mask, not a shape layer");
+    const auto mask = boundary->masks.front();
+    const auto* record = fixture.session.composition()->parameters().find(mask.path);
+    const auto* constant = record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+    const auto* path = constant ? std::get_if<document::PathValue>(&constant->value) : nullptr;
+    expectations.expect(path && path->closed && path->anchors.size() == 4, "a closed rectangle path");
+    if (path && path->anchors.size() == 4) {
+        const auto first = contentPoint(path->anchors[0].point);
+        const auto third = contentPoint(path->anchors[2].point);
+        expectations.expect(near(first.x(), 50) && near(first.y(), 60) && near(third.x(), 150) &&
+                                near(third.y(), 110),
+                            "the mask path is in content space: it maps back to the drawn corners");
+    }
+    expectations.expect(fixture.session.selectedMask() &&
+                            fixture.session.selectedMask()->mask == mask.id,
+                        "the new mask is the selected mask");
+
+    // Ellipse: four anchors with handles.
+    toolReady(fixture, expectations);
+    toolKey(fixture, Qt::Key_E);
+    toolDrag(fixture, {200, 100}, {300, 200});
+    boundary = fixture.session.composition()->graph().findLayer(layer);
+    expectations.expect(boundary->masks.size() == 2, "the ellipse adds a second mask");
+    if (boundary->masks.size() == 2) {
+        const auto* ellipseRecord =
+            fixture.session.composition()->parameters().find(boundary->masks[1].path);
+        const auto* ellipseConstant =
+            std::get_if<document::ConstantValueSource>(&ellipseRecord->source);
+        const auto& ellipse = std::get<document::PathValue>(ellipseConstant->value);
+        expectations.expect(ellipse.closed && ellipse.anchors.size() == 4 &&
+                                ellipse.anchors[0].inHandle && ellipse.anchors[0].outHandle,
+                            "an ellipse is four anchors with cubic handles");
+    }
+
+    // Dragging an anchor of the selected mask commits one SetLayerMaskPath.
+    toolReady(fixture, expectations);
+    fixture.session.selectMask(layer, mask.id);
+    toolReady(fixture, expectations);
+    toolKey(fixture, Qt::Key_V);
+    const auto beforeDrag = fixture.commands.size();
+    toolMouse(fixture, QEvent::MouseButtonPress, {50, 60});
+    toolMouse(fixture, QEvent::MouseMove, {70, 80});
+    expectations.expect(fixture.commands.size() == beforeDrag,
+                        "a mask anchor drag publishes no history before release");
+    toolMouse(fixture, QEvent::MouseButtonRelease, {70, 80});
+    expectations.expect(fixture.commands.size() == beforeDrag + 1,
+                        "a mask anchor drag is exactly one transaction");
+    {
+        const auto* moved = fixture.session.composition()->parameters().find(mask.path);
+        const auto& value = std::get<document::PathValue>(
+            std::get<document::ConstantValueSource>(moved->source).value);
+        const auto corner = contentPoint(value.anchors[0].point);
+        expectations.expect(near(corner.x(), 70) && near(corner.y(), 80),
+                            "the dragged anchor lands where it was released");
+    }
+    expectations.expect(fixture.session.undo(), "the anchor drag undoes");
+
+    // Pen closes into a mask as well.
+    toolReady(fixture, expectations);
+    toolKey(fixture, Qt::Key_P);
+    toolDrag(fixture, {20, 200}, {20, 200});
+    toolDrag(fixture, {120, 200}, {120, 200});
+    toolDrag(fixture, {70, 280}, {70, 280});
+    toolDrag(fixture, {20, 200}, {20, 200});
+    boundary = fixture.session.composition()->graph().findLayer(layer);
+    expectations.expect(boundary->masks.size() == 3 &&
+                            fixture.session.composition()->graph().layerOutputs().size() ==
+                                layersBefore,
+                        "the Pen adds a mask to the selected layer");
+
+    // No selection keeps today's behaviour: a shape layer.
+    fixture.session.clearSelection();
+    toolReady(fixture, expectations);
+    toolKey(fixture, Qt::Key_R);
+    toolDrag(fixture, {10, 10}, {40, 40});
+    expectations.expect(fixture.session.composition()->graph().layerOutputs().size() ==
+                            layersBefore + 1,
+                        "with no layer selected a rectangle still creates a shape layer");
+    toolShutdown(fixture, expectations);
 }

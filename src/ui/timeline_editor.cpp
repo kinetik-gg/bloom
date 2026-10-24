@@ -13,6 +13,7 @@
 #include "composition_editor_support.hpp"
 #include "timeline_key_time.hpp"
 #include "timeline_layer_timing_gesture.hpp"
+#include "timeline_matte_cell.hpp"
 #include "timeline_property_rows.hpp"
 
 #include <bloom/runtime/layer_time_projection.hpp>
@@ -63,6 +64,8 @@
 #include <QVariant>
 #include <QWheelEvent>
 
+#include <bloom/document/layer_masks.hpp>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -90,6 +93,8 @@ constexpr int kToggleCellCount = 4;
 constexpr int kToggleColumnWidth = kit::px(kit::Size::TimelineToggleColumn);
 constexpr int kNameCellMinWidth = kit::px(kit::Size::TimelineNameMin);
 constexpr int kColumnWidth = kit::px(kit::Size::TimelineColumn);
+// Blending, Parent and (ADR 0028) Matte.
+constexpr int kRightColumnCount = 3;
 
 constexpr int kToggleStripX = kit::px(kit::Spacing::ChromePadding);
 constexpr int kNameCellX = kToggleStripX + kToggleColumnWidth;
@@ -110,7 +115,7 @@ constexpr int kScrollGutterWidth = kit::px(kit::Size::ScrollBarHover);
     return kToggleStripX + index * (kToggleCellWidth + kCellGap);
 }
 [[nodiscard]] int nameCellWidth(const int width) {
-    return std::max(kNameCellMinWidth, width - kNameCellX - 2 * kColumnWidth);
+    return std::max(kNameCellMinWidth, width - kNameCellX - kRightColumnCount * kColumnWidth);
 }
 // ---------------------------------------------------------------------------------------------
 // Visibility, audio, solo and lock share the same cell geometry in headings and rows.
@@ -338,6 +343,19 @@ class TimelineLayerRow final : public kit::KRow {
                     QVariant::fromValue(static_cast<qulonglong>(current ? current->value() : 0))));
             }
         });
+        matteDropdown_ = new kit::KDropdown(this);
+        matteDropdown_->setObjectName("layerTrackMatteDropdown");
+        matteDropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
+        matteDropdown_->setAccessibleName(TimelineEditor::tr("Track Matte"));
+        connect(matteDropdown_, &kit::KDropdown::currentIndexChanged, this, [this](int index) {
+            if (binding_ || !layerId_ || index < 0)
+                return;
+            const auto layer = *layerId_;
+            (void)matte_cell::activate(*session_, layer,
+                                       matteDropdown_->itemData(index).toLongLong());
+            const QSignalBlocker blocker(matteDropdown_);
+            matte_cell::populate(*matteDropdown_, *session_, layer);
+        });
         QList<QWidget*> cells;
         for (int index = 0; index < kToggleCellCount; ++index) {
             auto* toggle = new kit::KIconToggle(toggleIcon(index), this);
@@ -353,7 +371,7 @@ class TimelineLayerRow final : public kit::KRow {
             connect(toggle, &QToolButton::clicked, this,
                     [this, index] { activateAt(toggleCellX(index) + kToggleCellWidth / 2); });
         }
-        setCells(cells, nullptr, {blending_, parentDropdown_}, nullptr, kCellGap);
+        setCells(cells, nullptr, {blending_, parentDropdown_, matteDropdown_}, nullptr, kCellGap);
         disclosureButton()->setAccessibleName(TimelineEditor::tr("Expand layer properties"));
         connect(disclosureButton(), &QToolButton::clicked, this,
                 [this] { activateAt(kNameCellX + kit::px(kit::Spacing::S) + kCellGap); });
@@ -429,6 +447,9 @@ class TimelineLayerRow final : public kit::KRow {
         parentDropdown_->setEnabled(layer && !locked_);
         parentDropdown_->setToolTip(TimelineEditor::tr("Transform relative to another layer"));
         parentDropdown_->show();
+        // ADR 0028 Track Matte column.
+        matte_cell::populate(*matteDropdown_, *session_, entry.layerId);
+        matteDropdown_->setEnabled(layer && !locked_ && !collapsedImage_);
         blending_->setCurrentIndex(row >= 0 ? row : 0);
         blending_->setToolTip(mode.has_value()
                                   ? TimelineEditor::tr("How this layer combines with the layers "
@@ -489,6 +510,7 @@ class TimelineLayerRow final : public kit::KRow {
     bool binding_ = false;
     kit::KDropdown* blending_ = nullptr;
     kit::KDropdown* parentDropdown_ = nullptr;
+    kit::KDropdown* matteDropdown_ = nullptr;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -522,7 +544,8 @@ TimelineColumnHeaders::TimelineColumnHeaders(QWidget* parent) : QWidget(parent) 
     auto* blending = makeBlendingDropdown(row);
     auto* blendingLabel = new kit::KLabel(tr("Blending"), row);
     auto* parentLabel = new kit::KLabel(tr("Parent"), row);
-    row->setCells(glyphs, name, {blendingLabel, parentLabel}, nullptr, kCellGap);
+    auto* matteLabel = new kit::KLabel(tr("Matte"), row);
+    row->setCells(glyphs, name, {blendingLabel, parentLabel, matteLabel}, nullptr, kCellGap);
     blendingLabel->setFixedWidth(
         std::max(kit::px(kit::Size::DropdownWidth), blending->minimumSizeHint().width()));
     delete blending;
@@ -1467,7 +1490,7 @@ std::vector<core::RationalTime> TimelineLaneRegion::computeKeySummaryTimes(int r
                 std::visit(
                     [&](const auto& record) {
                         using Curve = std::decay_t<decltype(record)>;
-                        if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                        if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                             for (const auto& key : record.keyframes)
                                 times.insert(projectedKeyTime(clock, key.time));
                         } else {
@@ -1479,6 +1502,28 @@ std::vector<core::RationalTime> TimelineLaneRegion::computeKeySummaryTimes(int r
                     *curve);
         }
     }
+    // ADR 0028: a layer mask's parameters are keyed outside any node binding but move the layer.
+    if (layerRecord)
+        for (const auto& mask : layerRecord->masks)
+            for (const auto& [parameterId, schemaKey] : document::layerMaskParameters(mask)) {
+                (void)schemaKey;
+                const auto* parameter = composition->parameters().find(parameterId);
+                const auto* source =
+                    parameter ? std::get_if<document::AnimationCurveSource>(&parameter->source)
+                              : nullptr;
+                const auto* curve =
+                    source ? composition->animationCurves().find(source->curveId) : nullptr;
+                if (curve)
+                    std::visit(
+                        [&](const auto& record) {
+                            using Curve = std::decay_t<decltype(record)>;
+                            if constexpr (document::kWholeValueAnimationCurve<Curve>) {
+                                for (const auto& key : record.keyframes)
+                                    times.insert(projectedKeyTime(clock, key.time));
+                            }
+                        },
+                        *curve);
+            }
     return {times.begin(), times.end()};
 }
 
@@ -1819,7 +1864,7 @@ int TimelineEditor::layerColumnWidth() { return kLayerColumnWidthPx; }
 // cells, the name column at its own documented minimum, and both 100px dropdown columns, still all
 // visible. Below this the table would have to start hiding columns, which dragging never does.
 int TimelineEditor::minLayerColumnWidth() const noexcept {
-    return kToggleColumnWidth + kNameCellMinWidth + 2 * kColumnWidth;
+    return kToggleColumnWidth + kNameCellMinWidth + kRightColumnCount * kColumnWidth;
 }
 
 TimelineEditor::TimelineEditor(CompositionSession& session,

@@ -210,8 +210,7 @@ void agree(const Surfaces& surfaces, const std::string& where) {
                         std::visit(
                             [&expectedUnion](const auto& curveRecord) {
                                 using Curve = std::decay_t<decltype(curveRecord)>;
-                                if constexpr (std::is_same_v<Curve,
-                                                             document::ScalarAnimationCurve>) {
+                                if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                                     for (const auto& key : curveRecord.keyframes) {
                                         expectedUnion.insert(key.time);
                                     }

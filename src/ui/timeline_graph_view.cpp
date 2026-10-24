@@ -204,7 +204,7 @@ void TimelineGraphView::refreshCurves() {
             std::visit(
                 [&](const auto& curve) {
                     using Curve = std::decay_t<decltype(curve)>;
-                    if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                    if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                         const GraphCurveId id{curve.id, std::nullopt};
                         if (!selectedComponent && std::ranges::find(curves, id) == curves.end())
                             curves.push_back(id);
@@ -241,7 +241,9 @@ std::vector<document::ScalarKeyframe> TimelineGraphView::keysFor(const GraphCurv
     return std::visit(
         [&](const auto& record2) -> std::vector<document::ScalarKeyframe> {
             using Curve = std::decay_t<decltype(record2)>;
-            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+            if constexpr (std::is_same_v<Curve, document::PathAnimationCurve>) {
+                return {}; // A Path curve has no value graph.
+            } else if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                 return curve.component.has_value() ? std::vector<document::ScalarKeyframe>{}
                                                    : record2.keyframes;
             } else {
@@ -273,7 +275,9 @@ TimelineGraphView::compiledFor(const GraphCurveId& curve) const {
     auto built = std::visit(
         [&](const auto& record2) -> std::optional<runtime::CompiledScalarCurve> {
             using Curve = std::decay_t<decltype(record2)>;
-            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+            if constexpr (std::is_same_v<Curve, document::PathAnimationCurve>) {
+                return std::nullopt;
+            } else if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                 if (curve.component.has_value())
                     return std::nullopt;
                 return runtime::compileAnimationCurve(record2);

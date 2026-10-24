@@ -1,4 +1,5 @@
 #include "editor_chrome_test_support.hpp"
+#include "layer_mask_support.hpp"
 #include <array>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/image_types.hpp>
@@ -2132,6 +2133,7 @@ int main(int argc, char** argv) {
         testViewerRoi(expectations);
         testCreationTools(expectations);
         testPenTools(expectations);
+        testMaskTools(expectations);
         testTextTool(expectations);
     } catch (const std::exception& error) {
         expectations.expect(false, error.what());

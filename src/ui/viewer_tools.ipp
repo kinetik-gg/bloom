@@ -148,7 +148,22 @@ bool ViewerEditor::creationRelease(QMouseEvent* event) {
         const auto geometry = creationGeometry();
         const auto kind = creationKind();
         cancelCreation();
-        (void)session_.addShapeLayer(kind, geometry);
+        // ADR 0028: with a layer selected, Rectangle and Ellipse draw a mask on it instead.
+        const auto maskTarget = (kind == document::ShapeKind::Rectangle ||
+                                 kind == document::ShapeKind::Ellipse)
+                                    ? maskCreationTarget()
+                                    : std::nullopt;
+        if (maskTarget) {
+            if (geometry.position && geometry.size) {
+                const QRectF rect(
+                    toolPoint(*geometry.position) - QPointF(geometry.size->x, geometry.size->y) / 2,
+                    QSizeF(geometry.size->x, geometry.size->y));
+                addMaskFromPath(*maskTarget, kind == document::ShapeKind::Ellipse
+                                                 ? masks::ellipsePath(rect)
+                                                 : masks::rectanglePath(rect));
+            }
+        } else
+            (void)session_.addShapeLayer(kind, geometry);
     } else
         cancelCreation();
     event->accept();

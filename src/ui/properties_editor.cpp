@@ -7,6 +7,7 @@
 
 #include "composition_editor_support.hpp"
 #include "properties_anchor_grid.hpp"
+#include "properties_layer_masks.hpp"
 #include "properties_layer_time.hpp"
 #include "properties_registry_row.hpp"
 #include "properties_sections.hpp"
@@ -201,6 +202,9 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     buildTransformSection(selectionLayout);
     // ADR 0024: the layer's own time (start, range); self-refreshing, see properties_layer_time.
     properties::addLayerTimeSection(session_, selectionLayout, selectionSection_);
+    // ADR 0028: the layer's masks and track matte; self-refreshing like the Time section.
+    properties::addLayerMasksSection(session_, selectionLayout, selectionSection_);
+    properties::addTrackMatteSection(session_, selectionLayout, selectionSection_);
     buildSolidSection(selectionLayout);
     buildTextSection(selectionLayout);
 

@@ -3,6 +3,7 @@
 #include "numeric_field_projection.hpp"
 #include "properties_registry_row.hpp"
 #include "properties_value_edits.hpp"
+#include "timeline_mask_rows.hpp"
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLayoutItem>
@@ -241,6 +242,8 @@ timelinePropertyEntries(const CompositionSession& session,
             add(*boundary, document::kScaleParameterRole, QObject::tr("Scale"));
             add(*boundary, document::kRotationParameterRole, QObject::tr("Rotation"));
         }
+        // ADR 0028: the layer's masks, between its own rows and its source's.
+        appendMaskEntries(session, layer, collapsedGroups, rows);
         if (const auto source = session.directSourceNodeForLayer(layer.layerId)) {
             const auto* node = composition->graph().findNode(*source);
             bool heading = false;
@@ -515,7 +518,7 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
     const int depth = std::max(1, entry.depth);
     indent_->changeSize(propertyRowIndent(depth), 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
     layout()->invalidate();
-    const int labelWidth = componentRow
+    const int labelWidth = (componentRow || depth >= 3)
                                ? kit::px(kit::Size::PropertyLabelCompact) - kPropertyIndentStep
                                : kit::px(kit::Size::PropertyLabelCompact);
     label_->setFixedWidth(labelWidth);
@@ -682,6 +685,12 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         setEnabled(layer && !layer->locked);
     }
     binding_ = false;
+}
+
+void TimelinePropertyRow::mousePressEvent(QMouseEvent* event) {
+    if (entry_.maskId.isValid())
+        session_.selectMask(entry_.layerId, entry_.maskId);
+    QWidget::mousePressEvent(event);
 }
 
 void TimelinePropertyRow::bindDriven(const bool driven) {

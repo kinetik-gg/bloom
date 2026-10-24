@@ -622,6 +622,39 @@ class ViewerEditor final : public QWidget,
     void cancelPathDrag();
     void finishPen(bool closed);
     void paintPathTools(QPainter& painter) const;
+    // ADR 0028 layer masks. A mask path lives in the layer's content space; toWorld maps it to
+    // composition space. The drag edits a copy and commits one SetLayerMaskPath on release.
+    struct MaskTarget {
+        document::LayerId layer;
+        document::LayerMaskId mask;
+        document::PathValue path;
+        QTransform toWorld;
+        double feather = 0.0;
+        double expansion = 0.0;
+    };
+    struct MaskDrag {
+        CreationGesture gesture;
+        MaskTarget target;
+        document::PathValue base;
+        QPointF origin;
+        std::size_t index;
+        int part; // 0 anchor, 1 incoming handle, 2 outgoing handle
+    };
+    struct MaskCreationTarget {
+        document::LayerId layer;
+        std::optional<QTransform> toContent; // empty when the layer has no evaluated bounds now
+    };
+    std::optional<MaskDrag> maskDrag_;
+    std::optional<std::size_t> selectedMaskAnchor_;
+    [[nodiscard]] std::optional<MaskTarget> selectedMaskTarget() const;
+    [[nodiscard]] std::optional<MaskCreationTarget> maskCreationTarget() const;
+    // Adds `compositionPath` (composition space) as a mask of the target layer.
+    void addMaskFromPath(const MaskCreationTarget& target, const document::PathValue& path);
+    bool maskPress(QMouseEvent* event);
+    bool maskMove(QMouseEvent* event);
+    bool maskRelease(QMouseEvent* event);
+    void cancelMaskDrag();
+    void paintMaskTools(QPainter& painter) const;
     Tool tool_ = Tool::Select;
     QWidget* toolColumn_ = nullptr;
     bool panActive_ = false;

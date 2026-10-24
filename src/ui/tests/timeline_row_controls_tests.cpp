@@ -196,7 +196,10 @@ int run(int argc, char** argv) {
     auto* row = surfaces.layerRow(0);
     expect(row != nullptr, "row zero is on screen");
     if (row != nullptr) {
-        click(row, QPoint(TimelineEditor::layerColumnWidth() / 2, row->height() / 2));
+        // The name cell, which sits between the toggle strip and the three dropdown columns.
+        click(row, QPoint(kit::px(kit::Size::TimelineToggleColumn) +
+                              kit::px(kit::Size::TimelineNameMin) / 2,
+                          row->height() / 2));
         expect(stack->currentRow() == 0, "clicking a row still selects it");
         expect(surfaces.session.selection().primary == SelectionTarget{*otherLayer},
                "and selection is still the column's one truth");

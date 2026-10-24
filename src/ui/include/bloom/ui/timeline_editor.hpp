@@ -76,6 +76,8 @@ struct TimelineLayerEntry final {
     std::string role{};
     bool expanded = false;
     QString group{};
+    // ADR 0028: the layer mask a Masks-group row belongs to (invalid elsewhere).
+    document::LayerMaskId maskId{};
     document::NodeId imageNodeId{};
     document::NodeId audioNodeId{};
     std::shared_ptr<const media::audio::WaveformSummary> waveform{};

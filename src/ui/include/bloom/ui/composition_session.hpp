@@ -70,6 +70,16 @@ struct KeyframeSelection final {
     friend bool operator==(const KeyframeSelection&, const KeyframeSelection&) = default;
 };
 
+// ADR 0028: the layer mask the Viewer outlines and edits. Session/UI state only: it is never
+// persisted, and selectedMask() answers nothing once the mask, its layer or the layer selection
+// goes away.
+struct MaskSelection final {
+    document::LayerId layer;
+    document::LayerMaskId mask;
+
+    friend bool operator==(const MaskSelection&, const MaskSelection&) = default;
+};
+
 using SelectionTarget =
     std::variant<std::monostate, document::LayerId, document::NodeId, document::ParameterId,
                  document::DataBlockRecordId, KeyframeSelection>;
@@ -226,6 +236,10 @@ class CompositionSession final : public QObject {
     [[nodiscard]] std::set<document::NodeId>
     dataBlockReaders(document::DataBlockRecordId blockId) const;
     void selectParameter(document::ParameterId parameterId);
+    // Selects the layer and marks one of its masks as the Viewer's editable outline.
+    void selectMask(document::LayerId layerId, document::LayerMaskId maskId);
+    void clearMaskSelection();
+    [[nodiscard]] std::optional<MaskSelection> selectedMask() const;
     // Selecting a keyframe REPLACES the primary selection like every other select* method (one
     // primary/contextual selection truth -- docs/roadmap.md's Batch-4 gate). A missing curve/key
     // reports unavailable and leaves the selection untouched, mirroring selectLayer/selectNode/
@@ -291,6 +305,18 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool addShapeLayer(document::ShapeKind kind,
                                      commands::ShapeLayerGeometry geometry = {});
     [[nodiscard]] bool addSolidLayer(const QString& name, core::Color4d color);
+    // ADR 0028 authoring. Adds a mask whose path is in the layer's CONTENT space and selects it.
+    [[nodiscard]] bool addLayerMask(document::LayerId layerId, document::PathValue path,
+                                    document::LayerMaskMode mode = document::LayerMaskMode::Add);
+    // One SetLayerMaskPath at the playhead on the path parameter's own clock (a constant path is
+    // simply replaced).
+    [[nodiscard]] bool commitMaskPath(document::LayerId layerId, document::LayerMaskId maskId,
+                                      document::PathValue path);
+    // The keyframe gesture for a mask path parameter: constant -> one key, no key here -> a key at
+    // the sampled path, key here -> delete it (the last key becomes a constant).
+    [[nodiscard]] bool toggleMaskPathKey(document::ParameterId pathParameter);
+    [[nodiscard]] bool setTrackMatte(document::LayerId target,
+                                     std::optional<document::TrackMatte> matte);
     // `size` is the em size in pixels and `color` a straight reference-linear-sRGB authoring value;
     // both default to the registered text schema's own defaults.
     [[nodiscard]] bool addTextLayer(const QString& name, const QString& text,
@@ -674,6 +700,7 @@ class CompositionSession final : public QObject {
     void compositionChanged();
     void currentTimeChanged();
     void selectionChanged();
+    void maskSelectionChanged();
     void historyChanged();
     void commandRejected(const QString& message);
     // Emitted on begin/update/cancel/commit of a position interaction (docs/architecture/
@@ -878,6 +905,7 @@ class CompositionSession final : public QObject {
     document::CompositionId compositionId_;
     core::RationalTime currentTime_ = core::RationalTime::fromInteger(0);
     CompositionSelection selection_;
+    std::optional<MaskSelection> maskSelection_;
     std::vector<commands::KeyframePaste> keyframeClipboard_;
     std::set<document::NodeId> selectedNodes_;
     std::optional<TransformInteraction> transformInteraction_;

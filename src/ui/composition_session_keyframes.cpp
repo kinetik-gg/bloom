@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/document/layer_masks.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
@@ -26,6 +27,13 @@ bool editableParameter(const CompositionSession& session, document::ParameterId 
             if (layer && layer->locked)
                 return false;
         }
+    for (const auto& layer : composition->graph().layerOutputs())
+        for (const auto& mask : layer.masks)
+            for (const auto& [owned, schemaKey] : document::layerMaskParameters(mask)) {
+                (void)schemaKey;
+                if (owned == parameter && layer.locked)
+                    return false;
+            }
     return true;
 }
 } // namespace
@@ -96,7 +104,7 @@ std::vector<commands::KeyframePaste> CompositionSession::selectedKeyframeData() 
                 using Curve = std::decay_t<decltype(curve)>;
                 if (address.component.has_value()) {
                     const auto* component = [&]() {
-                        if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>)
+                        if constexpr (document::kWholeValueAnimationCurve<Curve>)
                             return static_cast<const document::ComponentAnimationCurve*>(nullptr);
                         else
                             return curve.component(*address.component);
@@ -110,7 +118,7 @@ std::vector<commands::KeyframePaste> CompositionSession::selectedKeyframeData() 
                     }
                     return;
                 }
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                     for (const auto& key : curve.keyframes)
                         if (key.id == address.keyframeId)
                             result.push_back({*parameter, key.time, key.value,
@@ -188,7 +196,9 @@ bool CompositionSession::resetSelectedKeyframeHandles() {
         const auto* keyframes = std::visit(
             [&](const auto& curve) -> const std::vector<document::ScalarKeyframe>* {
                 using Curve = std::decay_t<decltype(curve)>;
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (std::is_same_v<Curve, document::PathAnimationCurve>) {
+                    return nullptr; // A Path key has no scalar value lane.
+                } else if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                     return address.component.has_value() ? nullptr : &curve.keyframes;
                 } else {
                     if (!address.component.has_value())
@@ -243,7 +253,7 @@ bool CompositionSession::pasteKeyframes(const std::vector<commands::KeyframePast
             [&](const auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
                 if (paste.component.has_value()) {
-                    if constexpr (!std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                    if constexpr (!document::kWholeValueAnimationCurve<Curve>) {
                         const auto* component = curve.component(*paste.component);
                         if (component != nullptr) {
                             for (const auto& key : component->keyframes)
@@ -253,7 +263,7 @@ bool CompositionSession::pasteKeyframes(const std::vector<commands::KeyframePast
                     }
                     return;
                 }
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                     for (const auto& key : curve.keyframes)
                         if (key.time == paste.time)
                             selection.push_back({curve.id, key.id, std::nullopt});

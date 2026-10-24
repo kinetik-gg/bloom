@@ -222,6 +222,13 @@ void ViewerEditor::finishPen(bool closed) {
         return;
     }
     penPath_.closed = closed;
+    // ADR 0028: with a layer selected, the Pen draws a mask on it instead of a shape layer.
+    if (const auto maskTarget = maskCreationTarget()) {
+        auto drawn = penPath_;
+        cancelCreation();
+        addMaskFromPath(*maskTarget, drawn);
+        return;
+    }
     commands::ShapeLayerGeometry geometry;
     geometry.path = penPath_;
     geometry.position = toolValue(toolOutline(toolRenderPath(penPath_)).boundingRect().center());

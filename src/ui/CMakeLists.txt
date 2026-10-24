@@ -349,6 +349,7 @@ target_sources(
         audio_device_control.cpp
         composition_session_drivers.cpp
         composition_session_keyframes.cpp
+        composition_session_masks.cpp
         driven_value_resolver.cpp
         editor_area.cpp
         editor_chrome.cpp
@@ -400,11 +401,15 @@ target_sources(
         properties_editor_registry.cpp
         properties_upstream.cpp
         properties_layer_time.cpp
+        properties_layer_masks.cpp
+        layer_mask_support.cpp
         timeline_layer_timing_gesture.cpp
         timeline_key_time.cpp
         timeline_key_time.hpp
         timeline_layer_timing_gesture.hpp
         properties_layer_time.hpp
+        properties_layer_masks.hpp
+        layer_mask_support.hpp
         properties_driven_rows.cpp
         composition_parameter_vocabulary.cpp
         composition_driver_probe.cpp
@@ -417,6 +422,8 @@ target_sources(
         text_box_overlay.cpp
         timeline_editor.cpp
         timeline_property_rows.cpp
+        timeline_mask_rows.cpp
+        timeline_matte_cell.cpp
         timeline_editor_menus.cpp
         timeline_frame_math.cpp
         timeline_ruler.cpp

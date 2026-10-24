@@ -12,6 +12,7 @@
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/core/utf8.hpp>
 #include <bloom/document/graph.hpp>
+#include <bloom/document/layer_masks.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/render_reachability.hpp>
@@ -989,6 +990,46 @@ void CompositionSession::clearSelection() {
     selection_ = {};
     selectedNodes_.clear();
     emit selectionChanged();
+}
+
+void CompositionSession::selectMask(const document::LayerId layerId,
+                                    const document::LayerMaskId maskId) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const auto* current = composition();
+    const auto* layer = current ? current->graph().findLayer(layerId) : nullptr;
+    if (layer == nullptr ||
+        std::ranges::none_of(layer->masks, [&](const auto& m) { return m.id == maskId; })) {
+        reportUnavailable(QStringLiteral("The selected mask is no longer available"));
+        return;
+    }
+    selectLayer(layerId);
+    const MaskSelection next{layerId, maskId};
+    if (maskSelection_ != next) {
+        maskSelection_ = next;
+        emit maskSelectionChanged();
+    }
+}
+
+void CompositionSession::clearMaskSelection() {
+    if (maskSelection_.has_value()) {
+        maskSelection_.reset();
+        emit maskSelectionChanged();
+    }
+}
+
+std::optional<MaskSelection> CompositionSession::selectedMask() const {
+    const auto* current = composition();
+    if (!maskSelection_ || current == nullptr)
+        return std::nullopt;
+    const auto* layer = current->graph().findLayer(maskSelection_->layer);
+    if (layer == nullptr ||
+        std::ranges::none_of(layer->masks, [&](const auto& m) { return m.id == maskSelection_->mask; }))
+        return std::nullopt;
+    const auto inContext = std::holds_alternative<document::LayerId>(selection_.primary)
+                               ? std::get<document::LayerId>(selection_.primary) ==
+                                     maskSelection_->layer
+                               : selection_.contextualLayer == maskSelection_->layer;
+    return inContext ? maskSelection_ : std::nullopt;
 }
 
 void CompositionSession::selectLayer(const document::LayerId layerId, const bool extend) {
@@ -2210,7 +2251,7 @@ bool CompositionSession::keyframeSelectionExists(const KeyframeSelection& select
                 return std::ranges::any_of(
                     keys, [&](const auto& key) { return key.id == selection.keyframeId; });
             };
-            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+            if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                 return !selection.component.has_value() && holdsKey(curve.keyframes);
             } else if (selection.component.has_value()) {
                 const auto* component = curve.component(*selection.component);
@@ -2238,7 +2279,7 @@ CompositionSession::componentForKeyframe(const document::AnimationCurveId curveI
     return std::visit(
         [keyframeId](const auto& curve) -> std::optional<document::AnimationComponent> {
             using Curve = std::decay_t<decltype(curve)>;
-            if constexpr (!std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+            if constexpr (!document::kWholeValueAnimationCurve<Curve>) {
                 for (const auto component : animationComponentsOf<Curve>()) {
                     const auto* values = curve.component(component);
                     if (values != nullptr &&
@@ -2261,10 +2302,10 @@ CompositionSession::keyframeTimeForSelection(const document::AnimationCurveRecor
             using Curve = std::decay_t<decltype(curve)>;
             const auto timeOf = [&](const auto& keys) -> std::optional<core::RationalTime> {
                 const auto key =
-                    std::ranges::find(keys, selection.keyframeId, &document::ScalarKeyframe::id);
+                    std::ranges::find_if(keys, [&](const auto& item) { return item.id == selection.keyframeId; });
                 return key == keys.end() ? std::nullopt : std::optional{key->time};
             };
-            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+            if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                 return selection.component.has_value() ? std::nullopt : timeOf(curve.keyframes);
             } else if (selection.component.has_value()) {
                 const auto* component = curve.component(*selection.component);
@@ -2538,7 +2579,7 @@ CompositionSession::keyframeAtExactTime(const document::ParameterRecord& paramet
     return std::visit(
         [time](const auto& curve) -> std::optional<document::KeyframeId> {
             using Curve = std::decay_t<decltype(curve)>;
-            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+            if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                 for (const auto& key : curve.keyframes)
                     if (key.time == time)
                         return key.id;
@@ -2562,7 +2603,7 @@ std::size_t CompositionSession::keyframeCount(const document::AnimationCurveId c
     return std::visit(
         [](const auto& curve) {
             using Curve = std::decay_t<decltype(curve)>;
-            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+            if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                 return curve.keyframes.size();
             } else {
                 std::size_t count = 0;
@@ -2646,7 +2687,7 @@ CompositionSession::keyframeParameterState(const document::ParameterId parameter
     return std::visit(
         [time](const auto& curve) {
             using Curve = std::decay_t<decltype(curve)>;
-            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+            if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                 return std::ranges::any_of(curve.keyframes,
                                            [time](const auto& key) { return key.time == time; })
                            ? KeyframeParameterState::All
@@ -2802,6 +2843,8 @@ bool CompositionSession::toggleKeyframeFor(const document::ParameterRecord* para
         return false;
     }
     const auto parameterId = parameter->id;
+    if (parameter->schemaKey == document::kLayerMaskPathSchemaKey)
+        return toggleMaskPathKey(parameter->id);
     const auto label = keyframeCommandLabel(parameter->schemaKey);
     // The key lands on the parameter's own clock (ADR 0024), not the composition's.
     const auto keyTime = keyTimeAtPlayhead(parameterId);
@@ -2906,10 +2949,10 @@ CompositionSession::selectedKeyframeInterpolation() const {
             using Curve = std::decay_t<decltype(curve)>;
             const auto interpolationOf =
                 [keyframeId](const auto& keys) -> std::optional<document::KeyframeInterpolation> {
-                const auto key = std::ranges::find(keys, keyframeId, &document::ScalarKeyframe::id);
+                const auto key = std::ranges::find_if(keys, [&](const auto& item) { return item.id == keyframeId; });
                 return key == keys.end() ? std::nullopt : std::optional{key->outgoingInterpolation};
             };
-            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+            if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                 return component.has_value() ? std::nullopt : interpolationOf(curve.keyframes);
             } else if (component.has_value()) {
                 const auto* values = curve.component(*component);
@@ -2940,7 +2983,7 @@ bool CompositionSession::selectedKeyframeIsFinal() const {
             const auto endsWithKey = [keyframeId](const auto& keys) {
                 return !keys.empty() && keys.back().id == keyframeId;
             };
-            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+            if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                 return !component.has_value() && endsWithKey(curve.keyframes);
             } else if (component.has_value()) {
                 const auto* values = curve.component(*component);
@@ -2982,6 +3025,14 @@ CompositionSession::contextualLayerForParameter(const document::ParameterId para
             return layerForNode(node.id);
         }
     }
+    // ADR 0028: a layer mask owns its four parameters outside any node binding.
+    for (const auto& layer : current->graph().layerOutputs())
+        for (const auto& mask : layer.masks)
+            for (const auto& [owned, schemaKey] : document::layerMaskParameters(mask)) {
+                (void)schemaKey;
+                if (owned == parameterId)
+                    return layer.layerId;
+            }
     return std::nullopt;
 }
 

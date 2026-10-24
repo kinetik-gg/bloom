@@ -5,6 +5,7 @@
 #include <functional>
 
 class QLabel;
+class QMouseEvent;
 class QSpacerItem;
 namespace bloom::ui {
 class KeyframeDiamond;
@@ -34,6 +35,10 @@ class TimelinePropertyRow final : public QWidget {
     void bind(const TimelineLayerEntry& entry);
     std::function<void(document::LayerId, QString)> toggleGroup;
     std::function<void(document::ParameterId)> toggleParameter;
+
+  protected:
+    // ADR 0028: pressing a Masks-group row selects that mask for the Viewer.
+    void mousePressEvent(QMouseEvent* event) override;
 
   private:
     void commitValues(std::size_t index);

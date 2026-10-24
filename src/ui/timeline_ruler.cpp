@@ -573,7 +573,7 @@ class TimelineKeyframeRow final : public QWidget {
                         entries.push_back({key.id, projectedKeyTime(clock, key.time),
                                            key.outgoingInterpolation, component});
                 };
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>)
+                if constexpr (document::kWholeValueAnimationCurve<Curve>)
                     append(curve.keyframes, std::nullopt);
                 else {
                     const std::array vectorNames{document::AnimationComponent::X,

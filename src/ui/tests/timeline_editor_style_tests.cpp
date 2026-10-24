@@ -556,8 +556,9 @@ void testTimelineHeaderMenus(Expectations& expectations) {
     expectations.expect(ui::TimelineEditor::layerColumnWidth() ==
                             ui::kit::px(ui::kit::Size::TimelineToggleColumn) +
                                 ui::kit::px(ui::kit::Size::TimelineNameDefault) +
-                                2 * ui::kit::px(ui::kit::Size::TimelineColumn),
-                        "the default left column is the exact toggle/name/blending/parent sum");
+                                3 * ui::kit::px(ui::kit::Size::TimelineColumn),
+                        "the default left column is the exact toggle/name/blending/parent/matte "
+                        "sum");
     expectations.expect(area->findChild<ui::kit::KDropdown*>("timelineCompositionSelector") ==
                                 nullptr &&
                             area->findChild<QAction*>("timelineKeyframesAction") != nullptr &&
@@ -1283,9 +1284,9 @@ void testManyRowsStayBoundedAndThePlayheadNeverRelayoutsThem(Expectations& expec
                                                   std::to_string(kLayerCount) + " layers, bound " +
                                                   std::to_string(bound) + ")");
     expectations.expect(rows.size() >= 2, "the pool is not empty either (test sanity)");
-    expectations.expect(editor->findChildren<ui::kit::KDropdown*>().size() == 2 * rows.size(),
-                        "two KDropdowns per pooled row -- not "
-                        "two per LAYER, which is the whole reason the pool exists");
+    expectations.expect(editor->findChildren<ui::kit::KDropdown*>().size() == 3 * rows.size(),
+                        "three KDropdowns (Blending, Parent, Track Matte) per pooled row -- not "
+                        "three per LAYER, which is the whole reason the pool exists");
 
     // A fixed buffer rather than a growing container: the pool is bounded by the viewport, so the
     // count is known to be small, and main() in this suite must stay non-throwing.

@@ -44,7 +44,7 @@ std::vector<TimelineKeyframePanel::LaneKey> TimelineKeyframePanel::laneKeys() co
                                         key.outgoingInterpolation,
                                         gridRows_[i]});
                 };
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                     append(curve.keyframes, std::nullopt);
                 } else {
                     const std::array vectorNames{document::AnimationComponent::X,
