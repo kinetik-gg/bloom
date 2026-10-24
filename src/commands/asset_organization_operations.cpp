@@ -95,8 +95,68 @@ OperationResult RemoveAssetFolder::apply(document::Draft& draft) const {
     for (const auto& child : project.assetFolders())
         if (child.parent == id_)
             project.findAssetFolder(child.id)->parent = parent;
+    std::vector<document::CompositionId> compositions;
+    for (const auto& composition : project.compositions())
+        if (composition.folder() == id_)
+            compositions.push_back(composition.id());
+    for (const auto id : compositions)
+        project.findComposition(id)->setFolder(parent);
     (void)project.removeAssetFolder(id_);
     return OperationResult::applied();
+}
+OperationResult MoveAssetFolders::apply(document::Draft& draft) const {
+    auto& project = draft.project();
+    std::unordered_set<document::AssetFolderId> moving;
+    for (const auto id : folders_)
+        if (!project.findAssetFolder(id) || !moving.insert(id).second)
+            return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                             "Choose existing folders, each once");
+    if (!folderExists(project, parent_))
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                         "The destination folder does not exist");
+    // The destination and its ancestors must not be one of the moving folders.
+    for (auto cursor = parent_; cursor; cursor = project.findAssetFolder(*cursor)->parent)
+        if (moving.contains(*cursor))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "A folder cannot move into itself or a subfolder");
+    std::set<std::string> names;
+    for (const auto& folder : project.assetFolders())
+        if (folder.parent == parent_ && !moving.contains(folder.id))
+            names.insert(folder.name);
+    bool changed = false;
+    for (const auto id : folders_) {
+        const auto* folder = project.findAssetFolder(id);
+        if (!names.insert(folder->name).second)
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "The destination already holds a folder named \"" +
+                                                 folder->name + "\"");
+        changed = changed || folder->parent != parent_;
+    }
+    if (!changed)
+        return OperationResult::noChange();
+    for (const auto id : folders_)
+        project.findAssetFolder(id)->parent = parent_;
+    return OperationResult::applied();
+}
+OperationResult MoveCompositions::apply(document::Draft& draft) const {
+    auto& project = draft.project();
+    std::unordered_set<document::CompositionId> unique;
+    for (const auto id : compositions_)
+        if (!project.findComposition(id) || !unique.insert(id).second)
+            return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                             "Choose existing compositions, each once");
+    if (!folderExists(project, folder_))
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                         "The destination folder does not exist");
+    bool changed = false;
+    for (const auto id : compositions_) {
+        auto* composition = project.findComposition(id);
+        if (composition->folder() == folder_)
+            continue;
+        composition->setFolder(folder_);
+        changed = true;
+    }
+    return changed ? OperationResult::applied() : OperationResult::noChange();
 }
 OperationResult RenameAsset::apply(document::Draft& draft) const {
     auto* asset = draft.project().findAsset(id_);

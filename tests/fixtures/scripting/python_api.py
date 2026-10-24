@@ -177,6 +177,22 @@ class PythonApi(unittest.TestCase):
             bloom.ops.composition.set_settings(anchor=9)
         self.assertEqual(bloom.data.snapshot()['revision'], revision + 1)
 
+    def test_asset_folders(self):
+        """#378: compositions and folders move between Assets folders as single operations."""
+        def folder(name, **kwargs):
+            result = bloom.ops.asset.create_folder(name, **kwargs)
+            return next(o['id'] for o in result['outputs'] if o['name'] == 'folder')
+        comps = folder('Comps')
+        nested = folder('Nested', parent=comps)
+        composition = bloom.context.composition
+        revision = bloom.data.snapshot()['revision']
+        self.assertTrue(bloom.ops.asset.move_compositions([composition], folder=comps)['succeeded'])
+        self.assertTrue(bloom.ops.asset.move_folders([nested])['succeeded'])
+        self.assertEqual(bloom.data.snapshot()['revision'], revision + 2)
+        with self.assertRaises(bloom.OperationError):
+            bloom.ops.asset.move_folders([comps], parent=comps)
+        self.assertTrue(bloom.ops.asset.move_compositions([composition])['succeeded'])
+
     def test_owner_first_minutes(self):
         """The three lines from the owner's first session in the Script editor."""
         # 1. No composition argument: the current composition is the default.

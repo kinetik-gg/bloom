@@ -36,6 +36,39 @@ class RenameAssetFolder final : public Operation {
     document::AssetFolderId id_;
     std::string name_;
 };
+// Moves folders under another folder (nullopt is the project root). A folder cannot move into
+// itself or a descendant, and the destination must not already hold a folder of the same name.
+class MoveAssetFolders final : public Operation {
+  public:
+    MoveAssetFolders(std::vector<document::AssetFolderId> folders,
+                     std::optional<document::AssetFolderId> parent)
+        : folders_(std::move(folders)), parent_(parent) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.asset.move-folders";
+    }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    std::vector<document::AssetFolderId> folders_;
+    std::optional<document::AssetFolderId> parent_;
+};
+// Moves compositions into an Assets folder (nullopt is the project root). Compositions keep their
+// project order; the Assets panel sorts them by its columns.
+class MoveCompositions final : public Operation {
+  public:
+    MoveCompositions(std::vector<document::CompositionId> compositions,
+                     std::optional<document::AssetFolderId> folder)
+        : compositions_(std::move(compositions)), folder_(folder) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.asset.move-compositions";
+    }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    std::vector<document::CompositionId> compositions_;
+    std::optional<document::AssetFolderId> folder_;
+};
+// Removes one folder. Its assets, compositions and child folders move up to its parent.
 class RemoveAssetFolder final : public Operation {
   public:
     explicit RemoveAssetFolder(document::AssetFolderId id) : id_(id) {}
@@ -162,6 +195,12 @@ class ImportAssets final : public Operation {
                  const std::function<void(std::uint64_t, std::uint64_t)>& progress = {});
     [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.asset.import"; }
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    // The Assets folder the new assets land in, after its existing assets (#378). A folder removed
+    // while the import was being prepared sends them to the root rather than losing the import.
+    void setFolder(std::optional<document::AssetFolderId> folder) noexcept { folder_ = folder; }
+    [[nodiscard]] const std::optional<document::AssetFolderId>& folder() const noexcept {
+        return folder_;
+    }
     [[nodiscard]] const std::vector<document::AssetRecord>& prepared() const noexcept {
         return assets_;
     }
@@ -176,6 +215,7 @@ class ImportAssets final : public Operation {
 
   private:
     std::vector<document::AssetRecord> assets_;
+    std::optional<document::AssetFolderId> folder_;
     std::vector<ImportFailure> failures_;
     std::string diagnostic_;
     std::optional<media::provider::Unavailable> mediaDiagnostic_;

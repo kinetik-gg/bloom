@@ -1682,12 +1682,15 @@ OperationRegistry OperationRegistry::builtIn() {
         {need("paths", ValueKind::Array, ValueArray{Value("footage/plate.exr")},
               "Absolute or project-relative media paths to import."),
          need("projectDirectory", ValueKind::String, ".",
-              "The project directory the locators are made relative to.")},
+              "The project directory the locators are made relative to."),
+         maybe("folder", ValueKind::Id, StableId{1},
+               "The Assets folder the new assets land in. Omit for the project root.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto paths = strings(args, op, "paths", error);
             const auto directory = text(args, op, "projectDirectory", error);
-            if (!paths || !directory) {
+            const auto folder = id(args, op, "folder", error, false);
+            if (!paths || !directory || error) {
                 return error;
             }
             if (paths->empty()) {
@@ -1698,9 +1701,11 @@ OperationRegistry OperationRegistry::builtIn() {
             for (const auto& entry : *paths) {
                 files.emplace_back(entry);
             }
-            return OperationCreateResult(
-                std::make_unique<commands::ImportAssets>(files, std::filesystem::path(*directory)),
-                std::nullopt);
+            auto import =
+                std::make_unique<commands::ImportAssets>(files, std::filesystem::path(*directory));
+            if (folder.has_value())
+                import->setFolder(document::AssetFolderId::fromRaw(*folder));
+            return OperationCreateResult(std::move(import), std::nullopt);
         });
 
     add("bloom.asset.relink",
@@ -1751,6 +1756,55 @@ OperationRegistry OperationRegistry::builtIn() {
                     folder.has_value() ? std::optional(document::AssetFolderId::fromRaw(*folder))
                                        : std::nullopt,
                     static_cast<std::size_t>(index.value_or(0))),
+                std::nullopt);
+        });
+
+    add("bloom.asset.move-folders",
+        {need("folders", ValueKind::Array, ValueArray{Value(StableId{1})}, "The folders to move."),
+         maybe("parent", ValueKind::Id, StableId{1},
+               "The destination folder. Omit for the project root.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto folders = identities(args, op, "folders", error);
+            const auto parent = id(args, op, "parent", error, false);
+            if (!folders || error) {
+                return error;
+            }
+            std::vector<document::AssetFolderId> ids;
+            ids.reserve(folders->size());
+            for (const auto identity : *folders) {
+                ids.push_back(document::AssetFolderId::fromRaw(identity));
+            }
+            return OperationCreateResult(
+                std::make_unique<commands::MoveAssetFolders>(
+                    std::move(ids), parent.has_value()
+                                        ? std::optional(document::AssetFolderId::fromRaw(*parent))
+                                        : std::nullopt),
+                std::nullopt);
+        });
+
+    add("bloom.asset.move-compositions",
+        {need("compositions", ValueKind::Array, ValueArray{Value(StableId{1})},
+              "The compositions to move."),
+         maybe("folder", ValueKind::Id, StableId{1},
+               "The destination folder. Omit for the project root.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto compositions = identities(args, op, "compositions", error);
+            const auto folder = id(args, op, "folder", error, false);
+            if (!compositions || error) {
+                return error;
+            }
+            std::vector<document::CompositionId> ids;
+            ids.reserve(compositions->size());
+            for (const auto identity : *compositions) {
+                ids.push_back(document::CompositionId::fromRaw(identity));
+            }
+            return OperationCreateResult(
+                std::make_unique<commands::MoveCompositions>(
+                    std::move(ids), folder.has_value()
+                                        ? std::optional(document::AssetFolderId::fromRaw(*folder))
+                                        : std::nullopt),
                 std::nullopt);
         });
 

@@ -355,6 +355,8 @@ OperationResult ImportAssets::apply(document::Draft& draft) const {
     if (!diagnostic_.empty())
         return OperationResult::rejected(OperationIssueCode::InvalidValue, diagnostic_);
     std::vector<OperationOutput> outputs;
+    const auto folder =
+        folder_ && draft.project().findAssetFolder(*folder_) ? folder_ : std::nullopt;
     for (auto asset : assets_) {
         const auto existing =
             std::ranges::find_if(draft.project().assets(), [&](const auto& candidate) {
@@ -369,8 +371,10 @@ OperationResult ImportAssets::apply(document::Draft& draft) const {
                                              "Asset ID space is exhausted");
         asset.id = *id;
         asset.name = document::defaultAssetName(asset);
+        asset.folder = folder;
+        asset.order = 0;
         for (const auto& existingAsset : draft.project().assets())
-            if (!existingAsset.folder)
+            if (existingAsset.folder == folder)
                 asset.order = std::max(
                     asset.order, (existingAsset.order == std::numeric_limits<std::uint64_t>::max()
                                       ? existingAsset.order

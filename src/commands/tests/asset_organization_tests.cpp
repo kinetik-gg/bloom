@@ -1,9 +1,11 @@
 #include "command_test_support.hpp"
+#include <algorithm>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/document/new_project.hpp>
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <string>
 
 namespace bloom::commands::test {
@@ -302,6 +304,173 @@ void testRelinkAndSaturatedOrder(TestContext& test) {
                     *document.snapshot().project().findAsset(imported) == organized,
                 "relink undo restores source and organization");
 }
+// #378: folders hold compositions and other folders, move without cycles or name clashes, give
+// their contents back to their parent on removal, and "Delete with contents" is one transaction.
+void testFolderStructure(TestContext& test) {
+    auto initial = document::makeNewProject("Folders", "Main", core::RationalTime::fromInteger(24));
+    const auto main = initial.initialCompositionId;
+    const auto a = AssetId::fromRaw(1);
+    document::AssetRecord asset;
+    asset.id = a;
+    asset.locator = {"file", "project-relative", "media/a.png", "file:///media/a.png"};
+    asset.width = 4;
+    asset.height = 3;
+    requireFixture(initial.project.addAsset(asset), "asset fixture");
+    Document document(std::move(initial.project));
+    CommandStack stack(document);
+    const auto folder = [&](const std::string& name, std::optional<AssetFolderId> parent = {}) {
+        return execute<CreateAssetFolder>(document, stack, name, parent)
+            .outputId<AssetFolderId>(kCreateAssetFolderOutput)
+            .value_or(AssetFolderId{});
+    };
+    const auto comps = folder("Comps");
+    const auto footage = folder("Footage");
+    const auto plates = folder("Plates", footage);
+    test.expect(comps.isValid() && footage.isValid() && plates.isValid(), "folder fixtures");
+    // The live project; each call refreshes the held snapshot.
+    auto held = document.snapshot();
+    const auto project = [&]() -> const document::Project& {
+        held = document.snapshot();
+        return held.project();
+    };
+
+    using Compositions = std::vector<document::CompositionId>;
+    test.expect(execute<MoveCompositions>(document, stack, Compositions{main}, comps).changed() &&
+                    project().findComposition(main)->folder() == comps,
+                "a composition moves into a folder");
+    test.expect(stack.undo().changed() && !project().findComposition(main)->folder(),
+                "composition move undo returns it to the root");
+    test.expect(stack.redo().changed() && project().findComposition(main)->folder() == comps,
+                "composition move redo");
+    test.expect(execute<MoveCompositions>(document, stack, Compositions{main}, comps).status ==
+                    CommandStatus::NoChange,
+                "moving a composition to its own folder is no change");
+    const auto beforeRefusals = document.snapshot().revision();
+    test.expect(
+        execute<MoveCompositions>(document, stack, Compositions{main, main}, std::nullopt).status ==
+            CommandStatus::Rejected,
+        "a repeated composition is refused");
+    test.expect(
+        execute<MoveCompositions>(document, stack, Compositions{main}, AssetFolderId::fromRaw(999))
+                .status == CommandStatus::Rejected,
+        "a missing destination folder is refused");
+    test.expect(execute<MoveCompositions>(
+                    document, stack, Compositions{document::CompositionId::fromRaw(999)}, comps)
+                        .status == CommandStatus::Rejected,
+                "a missing composition is refused");
+
+    using Folders = std::vector<AssetFolderId>;
+    test.expect(execute<MoveAssetFolders>(document, stack, Folders{footage}, footage).status ==
+                    CommandStatus::Rejected,
+                "a folder cannot move into itself");
+    test.expect(execute<MoveAssetFolders>(document, stack, Folders{footage}, plates).status ==
+                    CommandStatus::Rejected,
+                "a folder cannot move into its own subfolder");
+    const auto clash = folder("Plates");
+    test.expect(execute<MoveAssetFolders>(document, stack, Folders{clash}, footage).status ==
+                    CommandStatus::Rejected,
+                "a destination that already holds the name refuses the move");
+    test.expect(stack.undo().changed(), "clash fixture undone");
+    test.expect(document.snapshot().revision() != beforeRefusals,
+                "fixture bookkeeping moved the revision");
+    test.expect(execute<MoveAssetFolders>(document, stack, Folders{plates}, comps).changed() &&
+                    project().findAssetFolder(plates)->parent == comps,
+                "a folder moves under another folder");
+    test.expect(
+        execute<MoveAssetFolders>(document, stack, Folders{plates}, std::nullopt).changed() &&
+            !project().findAssetFolder(plates)->parent,
+        "a folder moves to the root");
+    test.expect(stack.undo().changed() && stack.undo().changed() &&
+                    project().findAssetFolder(plates)->parent == footage,
+                "folder moves undo back to the original parent");
+    test.expect(execute<MoveAssetFolders>(document, stack, Folders{plates}, footage).status ==
+                    CommandStatus::NoChange,
+                "moving a folder to its own parent is no change");
+
+    test.expect(execute<MoveAssets>(document, stack, Assets{a}, plates, 0).changed(),
+                "asset fixture moved into the nested folder");
+    test.expect(execute<MoveCompositions>(document, stack, Compositions{main}, plates).changed(),
+                "composition fixture moved into the nested folder");
+    test.expect(execute<RemoveAssetFolder>(document, stack, plates).changed() &&
+                    project().findComposition(main)->folder() == footage &&
+                    project().findAsset(a)->folder == footage,
+                "removing a folder moves its compositions and assets up to the parent");
+    test.expect(stack.undo().changed() && project().findComposition(main)->folder() == plates &&
+                    project().findAsset(a)->folder == plates,
+                "folder removal undo puts the composition back");
+
+    // "Delete with contents": every item, then the folders bottom-up, as one undoable step.
+    const auto before = document.snapshot();
+    Transaction transaction("Delete Folder", before.revision());
+    transaction.emplace<RemoveAsset>(a);
+    transaction.emplace<DeleteComposition>(main);
+    transaction.emplace<RemoveAssetFolder>(plates);
+    transaction.emplace<RemoveAssetFolder>(footage);
+    test.expect(stack.execute(std::move(transaction)).changed() && !project().findAsset(a) &&
+                    !project().findComposition(main) && !project().findAssetFolder(plates) &&
+                    !project().findAssetFolder(footage),
+                "delete with contents removes the folder, its subfolders and their items");
+    test.expect(stack.undo().changed() && project().findAsset(a) &&
+                    project().findComposition(main) &&
+                    project().findComposition(main)->folder() == plates &&
+                    project().findAssetFolder(plates)->parent == footage,
+                "one undo restores the whole deleted folder");
+}
+
+// #378: an import prepared for a folder lands there after the folder's existing assets; a folder
+// removed while the import was prepared sends the assets to the root instead of losing them.
+void testImportIntoFolder(TestContext& test) {
+    const auto directory = std::filesystem::current_path() / "assets-folder-import-fixtures";
+    std::filesystem::create_directories(directory);
+    struct Cleanup final {
+        std::filesystem::path path;
+        ~Cleanup() { std::filesystem::remove_all(path); }
+    } cleanup{directory};
+    const auto lut = [&](const std::string& name) {
+        const auto path = directory / name;
+        std::ofstream out(path);
+        out << "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+        return path;
+    };
+    const auto first = lut("first.cube");
+    const auto second = lut("second.cube");
+    auto initial =
+        document::makeNewProject("Folder import", "Main", core::RationalTime::fromInteger(1));
+    Document document(std::move(initial.project));
+    CommandStack stack(document);
+    const auto looks = execute<CreateAssetFolder>(document, stack, "Looks")
+                           .outputId<AssetFolderId>(kCreateAssetFolderOutput)
+                           .value_or(AssetFolderId{});
+    const auto import = [&](const std::filesystem::path& path,
+                            std::optional<AssetFolderId> folder) {
+        auto prepared =
+            std::make_unique<ImportAssets>(std::vector<std::filesystem::path>{path}, directory);
+        prepared->setFolder(folder);
+        Transaction transaction("Import", document.snapshot().revision());
+        requireFixture(transaction.add(std::move(prepared)), "prepared import");
+        return stack.execute(std::move(transaction));
+    };
+    test.expect(import(first, looks).changed(), "an import into a folder publishes");
+    test.expect(import(second, looks).changed(), "a second import into the folder publishes");
+    const auto snapshot = document.snapshot();
+    const auto find = [&](const std::string& path) {
+        return std::ranges::find_if(snapshot.project().assets(),
+                                    [&](const auto& asset) { return asset.locator.path == path; });
+    };
+    const auto one = find("first.cube");
+    const auto two = find("second.cube");
+    test.expect(one != snapshot.project().assets().end() &&
+                    two != snapshot.project().assets().end() && one->folder == looks &&
+                    two->folder == looks && one->order == 0 && two->order == 1,
+                "imported assets land in the folder after its existing assets");
+    test.expect(stack.undo().changed() && stack.undo().changed() &&
+                    document.snapshot().project().assets().empty(),
+                "each folder import undoes as one step");
+    test.expect(execute<RemoveAssetFolder>(document, stack, looks).changed(), "folder removed");
+    test.expect(import(first, looks).changed() &&
+                    !document.snapshot().project().assets().front().folder,
+                "a vanished folder sends the import to the root");
+}
 } // namespace
 } // namespace bloom::commands::test
 int main() {
@@ -309,6 +478,8 @@ int main() {
     try {
         bloom::commands::test::testLutImport(test);
         bloom::commands::test::testOrganization(test);
+        bloom::commands::test::testFolderStructure(test);
+        bloom::commands::test::testImportIntoFolder(test);
         bloom::commands::test::testWideImageAssetCommand(test);
         bloom::commands::test::testAssetInputColor(test);
         bloom::commands::test::testRelinkAndSaturatedOrder(test);

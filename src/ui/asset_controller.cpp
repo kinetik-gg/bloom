@@ -785,7 +785,11 @@ void AssetController::requestImport(QWidget* parent) {
             importFiles(paths);
     }
 }
-void AssetController::importFiles(const QStringList& paths) { prepare(paths); }
+void AssetController::importFiles(const QStringList& paths) { importFiles(paths, importFolder_); }
+void AssetController::importFiles(const QStringList& paths,
+                                  const std::optional<document::AssetFolderId> folder) {
+    prepare(paths, {}, folder);
+}
 void AssetController::relink(document::AssetId id, QWidget* parent) {
     if (!host_.canSave())
         return;
@@ -811,7 +815,8 @@ void AssetController::remove(document::AssetId id) {
     transaction.emplace<commands::RemoveAsset>(id);
     static_cast<void>(session_.executeTransaction(std::move(transaction)));
 }
-void AssetController::prepare(const QStringList& paths, document::AssetId relinkId) {
+void AssetController::prepare(const QStringList& paths, document::AssetId relinkId,
+                              const std::optional<document::AssetFolderId> folder) {
     if (!host_.canSave()) {
         emit diagnostic(tr("Media import requires an idle, editable project"));
         return;
@@ -830,7 +835,8 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
             "Import media",
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
-        [files = std::move(files), directory, relinkId, relinkFont](runtime::TaskContext& context) {
+        [files = std::move(files), directory, relinkId, relinkFont,
+         folder](runtime::TaskContext& context) {
             auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
             std::vector<runtime::TaskDiagnostic> warnings;
             auto cancel = [&] { return context.isCancellationRequested(); };
@@ -860,6 +866,7 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
             else {
                 auto prepared =
                     std::make_unique<commands::ImportAssets>(files, directory, cancel, progress);
+                prepared->setFolder(folder);
                 if (context.isCancellationRequested())
                     return runtime::TaskResult<OperationHandle>::cancelled();
                 if (!prepared->diagnostic().empty()) {

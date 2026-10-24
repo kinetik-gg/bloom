@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 
 class QWidget;
 namespace bloom::media::cache {
@@ -49,7 +50,18 @@ class AssetController final : public QObject {
                     AudioProcessingAdmission audioAdmission = AudioProcessingAdmission{});
     ~AssetController() override;
     void requestImport(QWidget* parent = nullptr);
+    // Imports into the current import folder (see setImportFolder).
     void importFiles(const QStringList& paths);
+    // Imports into `folder`; nullopt is the Assets root.
+    void importFiles(const QStringList& paths, std::optional<document::AssetFolderId> folder);
+    // Session state (#378): the Assets folder an import lands in when no drop target names one.
+    // The Assets panel keeps it on the selected folder, or the folder of the selected item.
+    void setImportFolder(std::optional<document::AssetFolderId> folder) noexcept {
+        importFolder_ = folder;
+    }
+    [[nodiscard]] const std::optional<document::AssetFolderId>& importFolder() const noexcept {
+        return importFolder_;
+    }
     void relink(document::AssetId id, QWidget* parent = nullptr);
     void remove(document::AssetId id);
     [[nodiscard]] bool busy() const noexcept { return busy_; }
@@ -147,7 +159,8 @@ class AssetController final : public QObject {
         std::vector<color::OcioColorSpaceInfo> spaces;
         QString diagnostic;
     };
-    void prepare(const QStringList& paths, document::AssetId relinkId = {});
+    void prepare(const QStringList& paths, document::AssetId relinkId = {},
+                 std::optional<document::AssetFolderId> folder = {});
     void refresh();
     void refreshNodeThumbnails();
     void startThumbnails();
@@ -155,6 +168,7 @@ class AssetController final : public QObject {
     // One status notice for an import job's diagnostics; the Jobs panel keeps each one.
     void emitImportFailures(const std::vector<runtime::TaskDiagnostic>& issues);
     CompositionSession& session_;
+    std::optional<document::AssetFolderId> importFolder_;
     ProjectHost& host_;
     runtime::TaskScheduler& scheduler_;
     TaskUiBridge& bridge_;
