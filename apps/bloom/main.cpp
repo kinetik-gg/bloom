@@ -24,7 +24,6 @@
 #include <bloom/ui/acceleration_status.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 #include <bloom/ui/asset_controller.hpp>
-#include <bloom/ui/cryptomatte_controller.hpp>
 #include <bloom/ui/audio_device_control.hpp>
 #include <bloom/ui/audio_playback_session.hpp>
 #include <bloom/ui/background_preview_controller.hpp>
@@ -34,6 +33,7 @@
 #include <bloom/ui/composition_preview_gpu_scene_stage.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/cryptomatte_controller.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/gpu_viewer_bootstrap.hpp>
@@ -400,12 +400,12 @@ int main(int argc, char* argv[]) try {
     // through the same compiler and media base directory on a worker.
     bloom::ui::CryptomatteController cryptomatteController(
         compositionSession, taskScheduler, taskUiBridge,
-        [&snapshotCompiler, &cpuEvaluator](
-            const bloom::document::Snapshot& snapshot,
-            const bloom::document::CompositionId composition, const bloom::document::NodeId node,
-            const bloom::core::RationalTime time,
-            const bloom::runtime::EvaluationColorIntent& colorIntent,
-            const bloom::runtime::CancellationToken& cancellation) {
+        [&snapshotCompiler, &cpuEvaluator](const bloom::document::Snapshot& snapshot,
+                                           const bloom::document::CompositionId composition,
+                                           const bloom::document::NodeId node,
+                                           const bloom::core::RationalTime time,
+                                           const bloom::runtime::EvaluationColorIntent& colorIntent,
+                                           const bloom::runtime::CancellationToken& cancellation) {
             return bloom::runtime::listCryptomatteLayers(snapshotCompiler, snapshot, composition,
                                                          node, cpuEvaluator.assetBaseDirectory(),
                                                          time, colorIntent, cancellation);
