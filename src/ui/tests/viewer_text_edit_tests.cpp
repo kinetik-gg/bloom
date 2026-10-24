@@ -205,7 +205,7 @@ void testClickTypingCommit() {
            "Enter commits exactly one Edit Text transaction");
     expect(f.session.undo() && f.stored() == "Abc", "undo restores original content");
 }
-void testCancelAndNavigation() {
+void testEscapeAndNavigation() {
     Fixture f;
     const auto before = f.history.size();
     const auto layer = f.session.selection().contextualLayer;
@@ -234,8 +234,10 @@ void testCancelAndNavigation() {
     expect(f.viewer.inputMethodQuery(Qt::ImCursorPosition).toInt() == 0,
            "Home reaches line start while layout pending");
     f.key(Qt::Key_Escape);
-    expect(!f.viewer.textEditing() && f.history.size() == before && f.live() == "Abc",
-           "Escape restores without history");
+    expect(!f.viewer.textEditing() && f.history.size() == before + 1 && f.stored() == "hello é" &&
+               f.session.undoLabel() == "Edit Text",
+           "Escape keeps the edits to existing text as one Edit Text transaction");
+    expect(f.session.undo() && f.stored() == "Abc", "one undo discards the kept edit");
 }
 void testIme() {
     Fixture f;
@@ -372,7 +374,7 @@ int main(int argc, char** argv) {
     QApplication::setOrganizationName("BloomTextEditTests");
     QApplication::setApplicationName("BloomTextEditTests");
     testClickTypingCommit();
-    testCancelAndNavigation();
+    testEscapeAndNavigation();
     testIme();
     testWrappedAndTransformed();
     testFocusAndProperties();

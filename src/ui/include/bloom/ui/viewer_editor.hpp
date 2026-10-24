@@ -541,6 +541,10 @@ class ViewerEditor final : public QWidget,
     };
     std::optional<CreationGesture> creation_;
     [[nodiscard]] bool creationValid() const;
+    [[nodiscard]] bool creationIsClick() const;
+    // Commits the drawn primitive (a shape layer, or a mask on the selected layer) at its current
+    // size; a zero-size gesture creates nothing. True when an object was created.
+    bool commitCreation();
     [[nodiscard]] document::ShapeKind creationKind() const;
     [[nodiscard]] commands::ShapeLayerGeometry creationGeometry() const;
     bool creationPress(QMouseEvent* event);
@@ -620,7 +624,13 @@ class ViewerEditor final : public QWidget,
     bool pathRelease(QMouseEvent* event);
     bool pathKey(QKeyEvent* event);
     void cancelPathDrag();
-    void finishPen(bool closed);
+    // Escape keeps work: commits the active path anchor drag as one command.
+    void commitPathDrag();
+    // Finishes the Pen draft with the anchors placed so far; true when an object was created. A
+    // mask needs an outline, so a mask path always closes and needs at least three anchors.
+    bool finishPen(bool closed);
+    // Escape keeps work: commits the active mask anchor drag as it stands.
+    void commitMaskDrag();
     void paintPathTools(QPainter& painter) const;
     // ADR 0028 layer masks. A mask path lives in the layer's content space; toWorld maps it to
     // composition space. The drag edits a copy and commits one SetLayerMaskPath on release.
@@ -649,7 +659,7 @@ class ViewerEditor final : public QWidget,
     [[nodiscard]] std::optional<MaskTarget> selectedMaskTarget() const;
     [[nodiscard]] std::optional<MaskCreationTarget> maskCreationTarget() const;
     // Adds `compositionPath` (composition space) as a mask of the target layer.
-    void addMaskFromPath(const MaskCreationTarget& target, const document::PathValue& path);
+    bool addMaskFromPath(const MaskCreationTarget& target, const document::PathValue& path);
     bool maskPress(QMouseEvent* event);
     bool maskMove(QMouseEvent* event);
     bool maskRelease(QMouseEvent* event);

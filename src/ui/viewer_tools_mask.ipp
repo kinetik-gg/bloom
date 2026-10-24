@@ -55,13 +55,13 @@ std::optional<ViewerEditor::MaskCreationTarget> ViewerEditor::maskCreationTarget
     return target;
 }
 
-void ViewerEditor::addMaskFromPath(const MaskCreationTarget& target,
+bool ViewerEditor::addMaskFromPath(const MaskCreationTarget& target,
                                    const document::PathValue& path) {
     // A layer without evaluated bounds at this time (inactive, audio only) has no content space to
     // draw into; the gesture is dropped rather than guessed.
     if (!target.toContent)
-        return;
-    (void)session_.addLayerMask(target.layer, masks::mappedPath(path, *target.toContent));
+        return false;
+    return session_.addLayerMask(target.layer, masks::mappedPath(path, *target.toContent));
 }
 
 void ViewerEditor::cancelMaskDrag() {
@@ -183,18 +183,22 @@ bool ViewerEditor::maskMove(QMouseEvent* event) {
     return true;
 }
 
+void ViewerEditor::commitMaskDrag() {
+    if (!maskDrag_)
+        return;
+    const auto drag = std::move(*maskDrag_);
+    maskDrag_.reset();
+    // A zero-delta gesture commits nothing; one drag is exactly one SetLayerMaskPath.
+    if (drag.target.path != drag.base)
+        (void)session_.commitMaskPath(drag.target.layer, drag.target.mask, drag.target.path);
+    update();
+}
+
 bool ViewerEditor::maskRelease(QMouseEvent* event) {
     if (!maskDrag_ || event->button() != Qt::LeftButton)
         return false;
     (void)maskMove(event);
-    if (maskDrag_) {
-        const auto drag = std::move(*maskDrag_);
-        maskDrag_.reset();
-        // A zero-delta gesture commits nothing; one drag is exactly one SetLayerMaskPath.
-        if (drag.target.path != drag.base)
-            (void)session_.commitMaskPath(drag.target.layer, drag.target.mask, drag.target.path);
-        update();
-    }
+    commitMaskDrag();
     event->accept();
     return true;
 }

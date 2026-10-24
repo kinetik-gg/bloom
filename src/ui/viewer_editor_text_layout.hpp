@@ -70,6 +70,17 @@ struct ViewerTextEdit final {
     QTransform emptyWorld;
     QString layoutStatus;
     ViewerTextLayout* worker = nullptr;
+    // Set when the Text tool created this layer for this edit. Committing folds the typed text into
+    // the creation, so the new layer stays one undo step, and empty text leaves no layer.
+    struct Created final {
+        document::Revision revision;
+        QString name;
+        QString placeholder;
+        double size = 0.0;
+        core::Color4d color;
+        document::Vec2d position;
+    };
+    std::optional<Created> created;
 };
 
 } // namespace bloom::ui

@@ -122,7 +122,8 @@ bool ViewerEditor::pathPress(QMouseEvent* event) {
     if (penPath_.anchors.size() >= 3 &&
         QLineF(mapping->toScreen(penPath_.anchors.front().point), event->position()).length() <=
             kit::px(kit::Size::GizmoHandle)) {
-        finishPen(true);
+        if (finishPen(true))
+            selectTool(Tool::Select);
     } else if (penPath_.anchors.size() < document::kMaximumPathAnchors) {
         penPath_.anchors.push_back({mapping->toComposition(event->position()), {}, {}});
         creation_->origin = event->position();
@@ -199,12 +200,7 @@ bool ViewerEditor::pathRelease(QMouseEvent* event) {
         return false;
     if (pathDrag_) {
         (void)pathMove(event);
-        if (pathDrag_) {
-            pathDrag_.reset();
-            (void)session_.commitValueEdit();
-            previewController_.notifyScrubEnded();
-            update();
-        }
+        commitPathDrag();
         event->accept();
         return true;
     }
@@ -216,36 +212,60 @@ bool ViewerEditor::pathRelease(QMouseEvent* event) {
     return true;
 }
 
-void ViewerEditor::finishPen(bool closed) {
+bool ViewerEditor::finishPen(bool closed) {
     if (!creationValid() || penPath_.anchors.size() < 2) {
         cancelCreation();
-        return;
+        return false;
     }
-    penPath_.closed = closed;
-    // ADR 0028: with a layer selected, the Pen draws a mask on it instead of a shape layer.
+    // ADR 0028: with a layer selected, the Pen draws a mask on it instead of a shape layer. A mask
+    // is an area, so its path always closes; with fewer than three anchors there is no area and
+    // nothing is created.
     if (const auto maskTarget = maskCreationTarget()) {
         auto drawn = penPath_;
         cancelCreation();
-        addMaskFromPath(*maskTarget, drawn);
-        return;
+        if (drawn.anchors.size() < 3)
+            return false;
+        drawn.closed = true;
+        return addMaskFromPath(*maskTarget, drawn);
     }
+    penPath_.closed = closed;
     commands::ShapeLayerGeometry geometry;
     geometry.path = penPath_;
     geometry.position = toolValue(toolOutline(toolRenderPath(penPath_)).boundingRect().center());
     cancelCreation();
-    (void)session_.addShapeLayer(document::ShapeKind::Path, std::move(geometry));
+    return session_.addShapeLayer(document::ShapeKind::Path, std::move(geometry));
+}
+
+void ViewerEditor::commitPathDrag() {
+    if (!pathDrag_)
+        return;
+    pathDrag_.reset();
+    (void)session_.commitValueEdit();
+    previewController_.notifyScrubEnded();
+    update();
 }
 
 bool ViewerEditor::pathKey(QKeyEvent* event) {
-    if (event->key() == Qt::Key_Escape && (creation_ || pathDrag_)) {
-        cancelCreation();
+    // Escape confirms what already exists and returns to Select; discarding is Undo. A drag in
+    // progress commits at its current size, the Pen finishes open with the anchors placed so far,
+    // and an anchor drag keeps its edit as one command. Empty or zero-size work creates nothing.
+    if (event->key() == Qt::Key_Escape && (creation_ || pathDrag_ || maskDrag_)) {
+        commitPathDrag();
+        commitMaskDrag();
+        if (creation_) {
+            if (tool_ == Tool::Pen)
+                (void)finishPen(false);
+            else
+                (void)commitCreation();
+        }
         selectTool(Tool::Select);
         event->accept();
         return true;
     }
     if (tool_ == Tool::Pen && creation_ &&
         (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
-        finishPen(false);
+        if (finishPen(false))
+            selectTool(Tool::Select);
         event->accept();
         return true;
     }

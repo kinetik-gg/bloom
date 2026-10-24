@@ -66,6 +66,13 @@ pending selection outline or a different project/composition/time has no passive
 Once a gesture begins, its mapping stays frozen through preparation/presentation lag and admission
 lease expiry. Actual time, composition format, viewport/transform, selection, domain or lifecycle
 changes cancel it; Escape, mouse-ungrab and window deactivation keep their cancellation behavior.
+Creation tools are one-shot and Escape confirms rather than discards: committing a shape, a mask on
+the selected layer, a Pen path or text returns the Viewer to Select, so the next click outside
+selects or deselects instead of creating another object. Escape commits a mid-drag shape or mask at
+its current size, finishes a Pen path with the anchors placed so far (a Pen mask closes), keeps
+typed text, and keeps an edit to existing text or anchors as one command; Undo is the discard, one
+step per created or edited object. Empty text, a Pen draft below its minimum and a zero-size press
+create nothing; a zero-size press keeps the tool. `ui-grammar.md` owns the full tool rules.
 Pending or failed viewer EV/gamma changes may keep the prior complete image visibly stale. The
 window status follows the active visible Viewer, then the last-active visible Viewer, then a stable
 first visible Viewer. Hiding or replacing that Viewer switches or clears its probe readout. With no
@@ -84,7 +91,7 @@ visible Viewer, the window makes no displayed qualification claim.
 | `Ctrl+1` | Actual size (100%) |
 | Middle drag | Pan |
 | Wheel | Zoom about the pointer |
-| `Esc` | Cancel the drag in flight |
+| `Esc` | Cancel a gizmo transform drag in flight. With a creation tool, or while editing text, Path anchors or mask anchors, confirm what exists and return to Select (see below) |
 | `Left` / `Right` | Step one frame |
 | `Home` / `End` | Go to start / end |
 

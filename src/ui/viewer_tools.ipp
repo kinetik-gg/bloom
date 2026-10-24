@@ -39,6 +39,11 @@ bool ViewerEditor::creationValid() const {
     return mapping && *mapping == creation_->mapping;
 }
 
+bool ViewerEditor::creationIsClick() const {
+    return creation_ && QLineF(creation_->origin, creation_->pointer).length() <
+                            QApplication::startDragDistance();
+}
+
 document::ShapeKind ViewerEditor::creationKind() const {
     switch (tool_) {
     case Tool::Ellipse:
@@ -62,11 +67,7 @@ commands::ShapeLayerGeometry ViewerEditor::creationGeometry() const {
     const auto& gesture = *creation_;
     const auto start = toolPoint(gesture.mapping.toComposition(gesture.origin));
     auto delta = toolPoint(gesture.mapping.toComposition(gesture.pointer)) - start;
-    const bool click =
-        QLineF(gesture.origin, gesture.pointer).length() < QApplication::startDragDistance();
     const bool line = tool_ == Tool::Line;
-    if (click)
-        delta = line ? QPointF(100, 0) : QPointF(100, 100);
     if (gesture.modifiers.testFlag(Qt::ShiftModifier)) {
         if (line) {
             const double length = std::hypot(delta.x(), delta.y());
@@ -86,10 +87,7 @@ commands::ShapeLayerGeometry ViewerEditor::creationGeometry() const {
     }
     QPointF first = start;
     QPointF last = start + delta;
-    if (click) {
-        first = start - delta / 2;
-        last = start + delta / 2;
-    } else if (gesture.modifiers.testFlag(Qt::AltModifier)) {
+    if (gesture.modifiers.testFlag(Qt::AltModifier)) {
         first = start - delta;
     }
     commands::ShapeLayerGeometry geometry;
@@ -139,39 +137,52 @@ bool ViewerEditor::creationMove(QMouseEvent* event) {
     return true;
 }
 
+bool ViewerEditor::commitCreation() {
+    // A press-release inside the drag distance is a zero-size gesture: it creates nothing.
+    if (!creation_ || !creationValid() || creationIsClick()) {
+        cancelCreation();
+        return false;
+    }
+    const auto geometry = creationGeometry();
+    const auto kind = creationKind();
+    cancelCreation();
+    // ADR 0028: with a layer selected, Rectangle and Ellipse draw a mask on it instead.
+    const auto maskTarget =
+        (kind == document::ShapeKind::Rectangle || kind == document::ShapeKind::Ellipse)
+            ? maskCreationTarget()
+            : std::nullopt;
+    if (maskTarget) {
+        if (!geometry.position || !geometry.size || geometry.size->x <= 0.0 ||
+            geometry.size->y <= 0.0)
+            return false;
+        const QRectF rect(toolPoint(*geometry.position) -
+                              QPointF(geometry.size->x, geometry.size->y) / 2,
+                          QSizeF(geometry.size->x, geometry.size->y));
+        addMaskFromPath(*maskTarget, kind == document::ShapeKind::Ellipse
+                                         ? masks::ellipsePath(rect)
+                                         : masks::rectanglePath(rect));
+        return true;
+    }
+    return session_.addShapeLayer(kind, geometry);
+}
+
 bool ViewerEditor::creationRelease(QMouseEvent* event) {
     if (!creation_ || event->button() != Qt::LeftButton)
         return false;
     if (creationValid()) {
         creation_->pointer = event->position();
         creation_->modifiers = event->modifiers();
-        const auto geometry = creationGeometry();
-        const auto kind = creationKind();
-        cancelCreation();
-        // ADR 0028: with a layer selected, Rectangle and Ellipse draw a mask on it instead.
-        const auto maskTarget = (kind == document::ShapeKind::Rectangle ||
-                                 kind == document::ShapeKind::Ellipse)
-                                    ? maskCreationTarget()
-                                    : std::nullopt;
-        if (maskTarget) {
-            if (geometry.position && geometry.size) {
-                const QRectF rect(
-                    toolPoint(*geometry.position) - QPointF(geometry.size->x, geometry.size->y) / 2,
-                    QSizeF(geometry.size->x, geometry.size->y));
-                addMaskFromPath(*maskTarget, kind == document::ShapeKind::Ellipse
-                                                 ? masks::ellipsePath(rect)
-                                                 : masks::rectanglePath(rect));
-            }
-        } else
-            (void)session_.addShapeLayer(kind, geometry);
-    } else
-        cancelCreation();
+    }
+    // A committed object returns the Viewer to Select, so the next click selects or deselects
+    // instead of drawing another object. A zero-size gesture keeps the tool.
+    if (commitCreation())
+        selectTool(Tool::Select);
     event->accept();
     return true;
 }
 
 void ViewerEditor::paintCreation(QPainter& painter) const {
-    if (tool_ == Tool::Pen || !creation_ || !creationValid())
+    if (tool_ == Tool::Pen || !creation_ || !creationValid() || creationIsClick())
         return;
     const auto geometry = creationGeometry();
     render::Path path;
@@ -234,17 +245,24 @@ bool ViewerEditor::textPress(QMouseEvent* event) {
     if (!mapping || !contentRect().contains(event->position()))
         return true;
     playback_->pause();
-    if (session_.addTextLayer(tr("Text"), tr("Text"), document::kDefaultTextSizePixels,
-                              {1, 1, 1, 1}, mapping->toComposition(event->position()))) {
+    const ViewerTextEdit::Created created{{},           tr("Text"),
+                                          tr("Text"),   document::kDefaultTextSizePixels,
+                                          {1, 1, 1, 1}, mapping->toComposition(event->position())};
+    if (session_.addTextLayer(created.name, created.placeholder, created.size, created.color,
+                              created.position)) {
         selectTool(Tool::Select);
-        (void)beginTextEditing(std::nullopt, true);
+        if (beginTextEditing(std::nullopt, true) && textEdit_) {
+            textEdit_->created = created;
+            textEdit_->created->revision = session_.snapshot().revision();
+        }
     }
     event->accept();
     return true;
 }
 
 void ViewerEditor::publishRoi() {
-    previewController_.setRegionOfInterest(roiButton_ && roiButton_->isChecked() ? roiRect_ : std::nullopt);
+    previewController_.setRegionOfInterest(roiButton_ && roiButton_->isChecked() ? roiRect_
+                                                                                 : std::nullopt);
     if (roiClearButton_)
         roiClearButton_->setEnabled(roiRect_.has_value());
     update();
@@ -265,8 +283,12 @@ bool ViewerEditor::roiPress(QMouseEvent* event) {
         return false;
     playback_->pause();
     setFocus(Qt::MouseFocusReason);
-    roiGesture_ = CreationGesture{*mapping, session_.snapshot().revision(), session_.currentTime(),
-                                  session_.compositionId(), event->position(), event->position(),
+    roiGesture_ = CreationGesture{*mapping,
+                                  session_.snapshot().revision(),
+                                  session_.currentTime(),
+                                  session_.compositionId(),
+                                  event->position(),
+                                  event->position(),
                                   event->modifiers()};
     event->accept();
     return true;
@@ -292,8 +314,10 @@ bool ViewerEditor::roiRelease(QMouseEvent* event) {
     if (mapping && *mapping == roiGesture_->mapping) {
         const auto first = mapping->toComposition(roiGesture_->origin);
         const auto last = mapping->toComposition(event->position());
-        const auto region = QRectF(QPointF(first.x, first.y), QPointF(last.x, last.y)).normalized()
-            .intersected(QRectF(0, 0, mapping->compositionFormat.width(), mapping->compositionFormat.height()));
+        const auto region = QRectF(QPointF(first.x, first.y), QPointF(last.x, last.y))
+                                .normalized()
+                                .intersected(QRectF(0, 0, mapping->compositionFormat.width(),
+                                                    mapping->compositionFormat.height()));
         if (region.width() >= 1 && region.height() >= 1) {
             roiRect_ = region;
             roiButton_->setChecked(true);
@@ -315,7 +339,7 @@ void ViewerEditor::paintRoi(QPainter& painter) const {
         screen = QRectF(roiGesture_->origin, roiGesture_->pointer).normalized();
     else if (roiRect_ && roiButton_->isChecked())
         screen = QRectF(mapping->toScreen({roiRect_->left(), roiRect_->top()}),
-                         mapping->toScreen({roiRect_->right(), roiRect_->bottom()}));
+                        mapping->toScreen({roiRect_->right(), roiRect_->bottom()}));
     if (!screen)
         return;
     painter.save();

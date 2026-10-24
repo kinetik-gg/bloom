@@ -54,6 +54,12 @@ bool toolVector(ViewerFixture& fixture, std::string_view role, double x, double 
     const auto* vector = std::get_if<bloom::document::Vec2d>(&value);
     return vector && near(vector->x, x) && near(vector->y, y);
 }
+bool selectToolActive(ViewerFixture& fixture) {
+    return fixture.viewer.findChild<QToolButton*>("viewerSelectTool")->isChecked();
+}
+std::size_t layerCount(ViewerFixture& fixture) {
+    return fixture.session.composition()->graph().layerOutputs().size();
+}
 bloom::document::NewProject toolProject() {
     const auto format = bloom::document::CompositionFormat::create(400, 300);
     if (!format)
@@ -88,14 +94,31 @@ void testCreationTools(Expectations& expectations) {
     toolReady(fixture, expectations);
     expectations.expect(!fixture.controller.selectedLayerBounds().empty(),
                         "new shape selected with gizmo geometry");
-    toolKey(fixture, Qt::Key_Escape);
-    expectations.expect(fixture.viewer.findChild<QToolButton*>("viewerSelectTool")->isChecked(),
-                        "Escape returns to Select");
+    expectations.expect(selectToolActive(fixture),
+                        "releasing a rectangle returns the Viewer to Select");
+    // The next click outside the new shape deselects; it never draws another object.
+    {
+        const auto layers = layerCount(fixture);
+        const auto history = fixture.commands.size();
+        toolDrag(fixture, {300, 250}, {300, 250});
+        expectations.expect(layerCount(fixture) == layers && fixture.commands.size() == history &&
+                                fixture.session.selectedNodes().empty(),
+                            "a click outside after creation deselects and creates nothing");
+    }
     // ADR 0028: with a layer selected the primitives draw masks; these cases create shape layers.
     fixture.session.clearSelection();
     toolKey(fixture, Qt::Key_E);
     toolDrag(fixture, {20, 30}, {90, 70}, Qt::ShiftModifier);
     expectations.expect(toolVector(fixture, "size", 70, 70), "Shift ellipse makes a circle");
+    expectations.expect(selectToolActive(fixture),
+                        "releasing an ellipse returns the Viewer to Select");
+    {
+        fixture.session.clearSelection();
+        const auto layers = layerCount(fixture);
+        toolDrag(fixture, {380, 290}, {380, 290});
+        expectations.expect(layerCount(fixture) == layers,
+                            "a click after the ellipse creates no second ellipse");
+    }
     toolReady(fixture, expectations);
     fixture.viewer.findChild<QToolButton*>("viewerStarTool")->click();
     toolDrag(fixture, {160, 120}, {210, 140}, Qt::ShiftModifier | Qt::AltModifier);
@@ -121,18 +144,34 @@ void testCreationTools(Expectations& expectations) {
     toolReady(fixture, expectations);
     fixture.session.clearSelection();
     toolKey(fixture, Qt::Key_R);
-    toolDrag(fixture, {160, 120}, {160, 120});
-    expectations.expect(toolVector(fixture, "size", 100, 100) &&
-                            toolVector(fixture, "position", 160, 120),
-                        "click creates default size centred on click");
+    {
+        const auto layers = layerCount(fixture);
+        const auto history = fixture.commands.size();
+        toolDrag(fixture, {160, 120}, {160, 120});
+        expectations.expect(layerCount(fixture) == layers && fixture.commands.size() == history &&
+                                !selectToolActive(fixture),
+                            "a zero-size click creates nothing and keeps the Rectangle tool");
+        toolMouse(fixture, QEvent::MouseButtonPress, {200, 200});
+        toolKey(fixture, Qt::Key_Escape);
+        toolMouse(fixture, QEvent::MouseButtonRelease, {200, 200});
+        expectations.expect(layerCount(fixture) == layers && fixture.commands.size() == history &&
+                                selectToolActive(fixture),
+                            "Escape on a zero-size press creates nothing and returns to Select");
+    }
     toolReady(fixture, expectations);
-    const auto beforeCancel = fixture.commands.size();
+    toolKey(fixture, Qt::Key_R);
+    const auto beforeEscape = fixture.commands.size();
     toolMouse(fixture, QEvent::MouseButtonPress, {20, 30});
     toolMouse(fixture, QEvent::MouseMove, {100, 100});
     toolKey(fixture, Qt::Key_Escape);
     toolMouse(fixture, QEvent::MouseButtonRelease, {100, 100});
-    expectations.expect(fixture.commands.size() == beforeCancel,
-                        "Escape cancels creation without history");
+    expectations.expect(fixture.commands.size() == beforeEscape + 1 &&
+                            toolVector(fixture, "size", 80, 70) && selectToolActive(fixture),
+                        "Escape mid-drag commits the shape at its current size and returns to "
+                        "Select");
+    toolReady(fixture, expectations);
+    fixture.session.clearSelection();
+    const auto beforeCancel = fixture.commands.size();
     toolKey(fixture, Qt::Key_R);
     toolMouse(fixture, QEvent::MouseButtonPress, {20, 30});
     fixture.viewer.resize(810, 650);
@@ -159,6 +198,7 @@ void testPenTools(Expectations& expectations) {
     expectations.expect(path.closed && path.anchors.size() == 3 &&
                             fixture.commands.size() == before + 1,
                         "closing pen triangle commits three anchors in one transaction");
+    expectations.expect(selectToolActive(fixture), "closing a Pen path returns to Select");
     toolReady(fixture, expectations);
     const auto plan = fixture.pipeline.compiler.compile(
         {fixture.document.snapshot(), fixture.session.compositionId()}, {});
@@ -225,12 +265,22 @@ void testPenTools(Expectations& expectations) {
     expectations.expect(std::get<document::PathValue>(toolParameter(fixture, "path")) == path,
                         "one undo restores complete path");
     toolReady(fixture, expectations);
-    toolMouse(fixture, QEvent::MouseButtonPress, {80, 80});
-    toolMouse(fixture, QEvent::MouseMove, {95, 95});
-    toolKey(fixture, Qt::Key_Escape);
-    expectations.expect(std::get<document::PathValue>(toolParameter(fixture, "path")) == path &&
-                            !fixture.session.valueEditActive(),
-                        "Escape cancels path override");
+    {
+        const auto undoLabel = fixture.session.undoLabel();
+        toolMouse(fixture, QEvent::MouseButtonPress, {80, 80});
+        toolMouse(fixture, QEvent::MouseMove, {95, 95});
+        toolKey(fixture, Qt::Key_Escape);
+        toolMouse(fixture, QEvent::MouseButtonRelease, {95, 95});
+        const auto kept = std::get<document::PathValue>(toolParameter(fixture, "path"));
+        expectations.expect(
+            near(kept.anchors.front().point.x, 95) && near(kept.anchors.front().point.y, 95) &&
+                !fixture.session.valueEditActive() && fixture.session.undoLabel() != undoLabel,
+            "Escape keeps an anchor drag as a command");
+        expectations.expect(fixture.session.undo() && std::get<document::PathValue>(
+                                                          toolParameter(fixture, "path")) == path,
+                            "exactly one undo discards the kept anchor drag");
+        toolReady(fixture, expectations);
+    }
     toolDrag(fixture, {80, 80}, {80, 80});
     toolKey(fixture, Qt::Key_Delete);
     expectations.expect(
@@ -249,6 +299,7 @@ void testPenTools(Expectations& expectations) {
                             near(inHandle->x, 10) && near(inHandle->y, 160) &&
                             near(outHandle->x, 70) && near(outHandle->y, 160),
                         "dragged pen anchor has symmetric handles and Enter finishes open path");
+    expectations.expect(selectToolActive(fixture), "Enter finishing a Pen path returns to Select");
     toolReady(fixture, expectations);
     // This horizontal open path has symmetric stroke bounds, so local and composition coordinates
     // match.
@@ -265,8 +316,28 @@ void testPenTools(Expectations& expectations) {
     toolDrag(fixture, {40, 40}, {60, 60});
     toolKey(fixture, Qt::Key_Escape);
     expectations.expect(fixture.session.snapshot().revision() == cancelRevision &&
-                            fixture.viewer.findChild<QToolButton*>("viewerSelectTool")->isChecked(),
-                        "Escape discards an unfinished pen draft without a transaction");
+                            selectToolActive(fixture),
+                        "Escape on a one-anchor pen draft creates nothing and returns to Select");
+    // Escape confirms: three placed anchors finish as one open path.
+    toolReady(fixture, expectations);
+    fixture.session.clearSelection();
+    toolKey(fixture, Qt::Key_P);
+    {
+        const auto history = fixture.commands.size();
+        toolDrag(fixture, {40, 40}, {40, 40});
+        toolDrag(fixture, {140, 40}, {140, 40});
+        toolDrag(fixture, {90, 120}, {90, 120});
+        toolKey(fixture, Qt::Key_Escape);
+        const auto kept = std::get<document::PathValue>(toolParameter(fixture, "path"));
+        expectations.expect(!kept.closed && kept.anchors.size() == 3 &&
+                                fixture.commands.size() == history + 1 && selectToolActive(fixture),
+                            "Escape finishes a three-anchor Pen path open, in one command");
+        const auto layers = layerCount(fixture);
+        fixture.session.clearSelection();
+        toolDrag(fixture, {300, 250}, {300, 250});
+        expectations.expect(layerCount(fixture) == layers,
+                            "a click after the Pen path creates nothing");
+    }
     toolShutdown(fixture, expectations);
 }
 void testTextTool(Expectations& expectations) {
@@ -291,7 +362,41 @@ void testTextTool(Expectations& expectations) {
         waitUntil([&] { return fixture.viewer.textEditing() && fixture.viewer.hasFocus(); }),
         "Text tool enters canvas edit mode");
     expectations.expect(field && field->isVisible(), "Text field is visible after focus");
-    toolKey(fixture, Qt::Key_Escape);
+    expectations.expect(selectToolActive(fixture), "placing text returns the Viewer to Select");
+    // Escape commits what was typed, exactly like click-away, and the new layer stays one step.
+    {
+        QKeyEvent typed(QEvent::KeyPress, 0, Qt::NoModifier, QStringLiteral("Hello"));
+        QCoreApplication::sendEvent(&fixture.viewer, &typed);
+        toolKey(fixture, Qt::Key_Escape);
+        expectations.expect(
+            !fixture.viewer.textEditing() && fixture.commands.size() == before + 1 &&
+                fixture.session.effectiveStringValue(
+                    fixture.session.parameterForSelection(document::kTextParameterRole)->id) ==
+                    QStringLiteral("Hello"),
+            "Escape keeps the typed text in the one Add Text Layer step");
+        const auto layers = layerCount(fixture);
+        toolDrag(fixture, {350, 280}, {350, 280});
+        expectations.expect(layerCount(fixture) == layers && !fixture.viewer.textEditing(),
+                            "a click after the text commit creates no second text layer");
+        expectations.expect(fixture.session.undo() && layerCount(fixture) == layers - 1,
+                            "one undo removes the typed text layer");
+    }
+    // Empty text creates nothing.
+    {
+        toolReady(fixture, expectations);
+        const auto layers = layerCount(fixture);
+        const auto undoLabel = fixture.session.undoLabel();
+        toolKey(fixture, Qt::Key_T);
+        toolMouse(fixture, QEvent::MouseButtonPress, {60, 200});
+        expectations.expect(waitUntil([&] { return fixture.viewer.textEditing(); }),
+                            "a second text placement enters edit mode");
+        toolKey(fixture, Qt::Key_Backspace);
+        toolKey(fixture, Qt::Key_Escape);
+        expectations.expect(layerCount(fixture) == layers &&
+                                fixture.session.undoLabel() == undoLabel &&
+                                !fixture.viewer.textEditing() && selectToolActive(fixture),
+                            "Escape on emptied new text leaves no layer and no undo step");
+    }
     toolShutdown(fixture, expectations);
     fixture.viewer.setParent(nullptr);
     properties.setParent(nullptr);
@@ -403,7 +508,8 @@ void testMaskTools(Expectations& expectations) {
     toolReady(fixture, expectations);
     expectations.expect(fixture.session.addSolidLayer("Plate", {0.2, 0.3, 0.4, 1}),
                         "mask fixture adds a solid layer");
-    const auto* selectedLayer = std::get_if<document::LayerId>(&fixture.session.selection().primary);
+    const auto* selectedLayer =
+        std::get_if<document::LayerId>(&fixture.session.selection().primary);
     if (selectedLayer == nullptr) {
         expectations.expect(false, "mask fixture selects the new layer");
         toolShutdown(fixture, expectations);
@@ -431,13 +537,16 @@ void testMaskTools(Expectations& expectations) {
     const auto* boundary = fixture.session.composition()->graph().findLayer(layer);
     expectations.expect(fixture.commands.size() == before + 1 &&
                             fixture.session.composition()->graph().layerOutputs().size() ==
-                                layersBefore && boundary->masks.size() == 1,
+                                layersBefore &&
+                            boundary->masks.size() == 1,
                         "a rectangle with a selected layer adds one mask, not a shape layer");
     const auto mask = boundary->masks.front();
     const auto* record = fixture.session.composition()->parameters().find(mask.path);
-    const auto* constant = record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+    const auto* constant =
+        record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
     const auto* path = constant ? std::get_if<document::PathValue>(&constant->value) : nullptr;
-    expectations.expect(path && path->closed && path->anchors.size() == 4, "a closed rectangle path");
+    expectations.expect(path && path->closed && path->anchors.size() == 4,
+                        "a closed rectangle path");
     if (path && path->anchors.size() == 4) {
         const auto first = contentPoint(path->anchors[0].point);
         const auto third = contentPoint(path->anchors[2].point);
@@ -448,6 +557,8 @@ void testMaskTools(Expectations& expectations) {
     expectations.expect(fixture.session.selectedMask() &&
                             fixture.session.selectedMask()->mask == mask.id,
                         "the new mask is the selected mask");
+    expectations.expect(selectToolActive(fixture),
+                        "drawing a mask on the selected layer returns to Select");
 
     // Ellipse: four anchors with handles.
     toolReady(fixture, expectations);
@@ -501,6 +612,46 @@ void testMaskTools(Expectations& expectations) {
                             fixture.session.composition()->graph().layerOutputs().size() ==
                                 layersBefore,
                         "the Pen adds a mask to the selected layer");
+    expectations.expect(selectToolActive(fixture), "closing a mask path returns to Select");
+
+    // Escape confirms a mask too: three Pen anchors close into a mask; a mid-drag rectangle
+    // commits at its current size; two anchors are no area and create nothing.
+    toolReady(fixture, expectations);
+    toolKey(fixture, Qt::Key_P);
+    toolDrag(fixture, {200, 220}, {200, 220});
+    toolDrag(fixture, {300, 220}, {300, 220});
+    toolDrag(fixture, {250, 280}, {250, 280});
+    toolKey(fixture, Qt::Key_Escape);
+    boundary = fixture.session.composition()->graph().findLayer(layer);
+    expectations.expect(boundary->masks.size() == 4 && selectToolActive(fixture),
+                        "Escape closes a three-anchor Pen mask");
+    if (boundary->masks.size() == 4) {
+        const auto* escaped =
+            fixture.session.composition()->parameters().find(boundary->masks[3].path);
+        const auto& value = std::get<document::PathValue>(
+            std::get<document::ConstantValueSource>(escaped->source).value);
+        expectations.expect(value.closed && value.anchors.size() == 3,
+                            "the Escape-finished mask path is closed");
+    }
+    toolReady(fixture, expectations);
+    toolKey(fixture, Qt::Key_R);
+    toolMouse(fixture, QEvent::MouseButtonPress, {30, 30});
+    toolMouse(fixture, QEvent::MouseMove, {90, 80});
+    toolKey(fixture, Qt::Key_Escape);
+    toolMouse(fixture, QEvent::MouseButtonRelease, {90, 80});
+    boundary = fixture.session.composition()->graph().findLayer(layer);
+    expectations.expect(boundary->masks.size() == 5 && selectToolActive(fixture),
+                        "Escape mid-drag commits the mask at its current size");
+    toolReady(fixture, expectations);
+    toolKey(fixture, Qt::Key_P);
+    toolDrag(fixture, {20, 20}, {20, 20});
+    toolDrag(fixture, {60, 20}, {60, 20});
+    toolKey(fixture, Qt::Key_Escape);
+    boundary = fixture.session.composition()->graph().findLayer(layer);
+    expectations.expect(boundary->masks.size() == 5 &&
+                            fixture.session.composition()->graph().layerOutputs().size() ==
+                                layersBefore,
+                        "a two-anchor Pen mask has no area and creates nothing");
 
     // No selection keeps today's behaviour: a shape layer.
     fixture.session.clearSelection();

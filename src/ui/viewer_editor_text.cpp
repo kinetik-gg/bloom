@@ -139,7 +139,17 @@ void ViewerEditor::finishTextEditing(const bool commit) {
     QGuiApplication::inputMethod()->reset();
     edit->worker->cancel();
     edit->worker->deleteLater();
-    if (session_.isValueEditing(edit->parameter)) {
+    const bool fresh = edit->created && session_.snapshot().revision() == edit->created->revision;
+    if (commit && fresh && edit->text != edit->created->placeholder) {
+        // The layer this edit created is still the last change: replace it with the layer as typed
+        // (one undo step), or withdraw it when the text is empty.
+        if (session_.isValueEditing(edit->parameter))
+            session_.cancelValueEdit();
+        const auto created = *edit->created;
+        if (session_.undo() && !edit->text.isEmpty())
+            (void)session_.addTextLayer(created.name, edit->text, created.size, created.color,
+                                        created.position);
+    } else if (session_.isValueEditing(edit->parameter)) {
         if (commit) {
             (void)session_.updateValueEdit(edit->text.toStdString());
             (void)session_.commitValueEdit();

@@ -1573,8 +1573,8 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     addTool(Tool::Line, kit::IconId::Line,
             tr("Line: drag; Shift snaps to 45 degrees; Alt draws from centre"), "viewerLineTool");
     addTool(Tool::Pen, kit::IconId::Pen,
-            tr("Pen: click anchors; drag handles; click first to close; Enter finishes; Escape "
-               "cancels (P)"),
+            tr("Pen: click anchors; drag handles; click first to close; Enter or Escape "
+               "finishes (P)"),
             "viewerPenTool");
     tools->adjustSize();
     tools->move(0, 0);
@@ -3111,8 +3111,8 @@ void ViewerEditor::contextMenuEvent(QContextMenuEvent* event) {
 }
 
 #include "viewer_tools.ipp"
-#include "viewer_tools_path.ipp"
 #include "viewer_tools_mask.ipp"
+#include "viewer_tools_path.ipp"
 
 #include "viewer_editor_gpu.ipp"
 #include "viewer_editor_gpu_retire.ipp"

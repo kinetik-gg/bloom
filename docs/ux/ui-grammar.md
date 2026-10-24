@@ -114,21 +114,43 @@ natural tracking. `KSurface` owns neutral surface backgrounds.
 `KToolColumn` owns ten enabled, exclusive `KIconToggle` choices. Select (V), Hand (H), Zoom (Z),
 Text (T), Rectangle (R), Ellipse (E), Polygon, Star, Line and Pen (P) are viewer-local tools.
 Hand pans; Zoom clicks zoom about the pointer, with Alt-click reversing the direction. Middle-button
-pan and keyboard zoom remain available. Escape cancels unfinished creation and returns to Select;
-after creation it also returns to Select. Choosing a tool alone never authors a node.
+pan and keyboard zoom remain available. Choosing a tool alone never authors a node.
+
+Creation tools are one-shot. Once a shape, mask or text object is committed (drag release for
+Rectangle, Ellipse, Polygon, Star and Line; closing or finishing a Pen path; committing or clicking
+away from new text) the Viewer returns to Select, for a new layer and for a new mask on the selected
+layer alike. The next click outside therefore selects or deselects and never creates another
+object; drawing again means choosing the tool again. Each created object is exactly one undo entry.
+
+Escape confirms what already exists, never throws work away, and then returns to Select. Discarding
+is Undo, one step per created or edited object.
+
+- A shape or mask mid-drag commits at its current size.
+- The Pen finishes with the anchors placed so far as an open path (two or more anchors). A mask is
+  an area, so a Pen mask always closes, and needs at least three anchors.
+- Text keeps what was typed, exactly like a click-away.
+- Editing existing text, a Path layer's anchors or handles, or a mask's anchors keeps the edit made
+  so far as one command.
+- Empty or zero-size work creates nothing: emptied new text, a Pen draft below its minimum, or a
+  press-release inside the drag distance.
+
+A press-release inside the drag distance with a primitive tool is a zero-size gesture: it creates
+nothing and leaves the tool active, so a slip of the mouse never authors an object. Escape at that
+point also creates nothing and returns to Select. Gizmo transform drags keep their Escape-cancels
+rule (direct manipulation, below).
 
 Rectangle, Ellipse, Polygon, Star and Line draw a live Accent outline on press-drag. Shift constrains
 rectangles and ellipses to equal sides, keeps polygons and stars regular, or snaps a line to 45-degree steps; Alt draws from the press point
-as centre. Polygon and Star start with five points. A click creates a 100 × 100 composition-pixel
-shape, or a 100-pixel horizontal line, centred on the click. Release creates and selects the layer
+as centre. Polygon and Star start with five points. Release creates and selects the layer
 with one undo entry. The selection gizmo appears with the evaluated frame.
 
 Pen clicks append straight anchors; dragging an anchor during creation sets symmetric cubic
-handles. Clicking the first anchor closes a path with at least three anchors; Enter finishes an
-open path with at least two. Escape discards the draft. Selected Path layers display screen-sized
+handles. Clicking the first anchor closes a path with at least three anchors; Enter or Escape
+finishes an open path with at least two. Selected Path layers display screen-sized
 anchor squares and handle circles. Dragging edits the live path, Alt moves a handle independently,
 and Delete removes the selected anchor. Text clicks create a layer and enter canvas text editing
-with the placeholder selected. Properties mirrors the live text.
+with the placeholder selected; the typed text folds into that creation, so a new text layer is one
+undo entry. Properties mirrors the live text.
 
 All glyphs use the DPR-exact SVG renderer and kit state tints. Rectangle, Pen and Text retain their
 Phosphor assets; the four added shape glyphs are Bloom-authored SVG paths.

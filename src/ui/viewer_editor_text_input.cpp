@@ -72,7 +72,9 @@ bool ViewerEditor::textEditKey(QKeyEvent* event) {
     const bool control = event->modifiers().testFlag(Qt::ControlModifier) ||
                          event->modifiers().testFlag(Qt::MetaModifier);
     if (key == Qt::Key_Escape) {
-        finishTextEditing(false);
+        // Escape confirms: the typed text is kept exactly as a click-away keeps it.
+        QGuiApplication::inputMethod()->commit();
+        finishTextEditing(true);
     } else if (key == Qt::Key_Return || key == Qt::Key_Enter) {
         if (control || (!textEdit_->multiline && !shift)) {
             QGuiApplication::inputMethod()->commit();
