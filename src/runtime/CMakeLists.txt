@@ -60,6 +60,7 @@ target_sources(
             include/bloom/runtime/channel_expression.hpp
             include/bloom/runtime/channel_inspection.hpp
             include/bloom/runtime/channel_inspection_listing.hpp
+            include/bloom/runtime/cryptomatte_inspection.hpp
             include/bloom/runtime/channel_layers.hpp
             include/bloom/runtime/cryptomatte_matte_list.hpp
             include/bloom/runtime/compiled_plan_cache.hpp
@@ -89,6 +90,7 @@ target_sources(
         channel_resolution.cpp
         channel_shuffle.cpp
         channel_inspection_listing.cpp
+        cryptomatte_inspection.cpp
         channel_layers.cpp
         cryptomatte.cpp
         image_source.hpp

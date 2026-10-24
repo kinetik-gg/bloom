@@ -145,6 +145,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/cursor.svg
         kit/third_party/phosphor-icons/regular/diamond.svg
         kit/third_party/phosphor-icons/regular/dots-three-vertical.svg
+        kit/third_party/phosphor-icons/regular/eyedropper.svg
         kit/third_party/phosphor-icons/regular/eye-slash.svg
         kit/third_party/phosphor-icons/regular/eye.svg
         kit/third_party/phosphor-icons/regular/film-slate.svg
@@ -210,6 +211,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/diamond-bold.svg
         kit/third_party/phosphor-icons/bold/dots-three-vertical-bold.svg
         kit/third_party/phosphor-icons/bold/eye-bold.svg
+        kit/third_party/phosphor-icons/bold/eyedropper-bold.svg
         kit/third_party/phosphor-icons/bold/eye-slash-bold.svg
         kit/third_party/phosphor-icons/bold/film-slate-bold.svg
         kit/third_party/phosphor-icons/bold/film-strip-bold.svg
@@ -262,6 +264,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/diamond-fill.svg
         kit/third_party/phosphor-icons/fill/dots-three-vertical-fill.svg
         kit/third_party/phosphor-icons/fill/eye-fill.svg
+        kit/third_party/phosphor-icons/fill/eyedropper-fill.svg
         kit/third_party/phosphor-icons/fill/eye-slash-fill.svg
         kit/third_party/phosphor-icons/fill/film-slate-fill.svg
         kit/third_party/phosphor-icons/fill/film-strip-fill.svg
@@ -376,6 +379,7 @@ target_sources(
         assets_editor_actions.cpp
         assets_editor_internal.hpp
         asset_controller.cpp
+        cryptomatte_controller.cpp
         asset_drop.cpp
         asset_drop.hpp
         network_share_paths.cpp
@@ -440,6 +444,7 @@ target_sources(
     viewer_editor_shutdown.cpp
         viewer_channel_display.cpp
         viewer_editor_channel.cpp
+        viewer_editor_cryptomatte.cpp
         viewer_editor_analysis.cpp
         viewer_editor_probe.cpp
         composition_preview_controller_analysis.cpp
@@ -491,6 +496,7 @@ target_sources(
             include/bloom/ui/main_window.hpp
             include/bloom/ui/assets_editor.hpp
             include/bloom/ui/asset_controller.hpp
+            include/bloom/ui/cryptomatte_controller.hpp
             include/bloom/ui/media_disk_cache_settings.hpp
             include/bloom/ui/node_editor.hpp
             include/bloom/ui/node_layout_arrange.hpp

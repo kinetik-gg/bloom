@@ -97,6 +97,8 @@ enum class IconId : std::uint8_t {
     Import,
     DeleteAsset,
     Images,
+    // #364: the Viewer's Cryptomatte picker.
+    Eyedropper,
 };
 
 // Regular is the default interface weight; Fill marks a selected or toggled state. ADR 0010: add

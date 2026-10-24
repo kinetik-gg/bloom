@@ -14,13 +14,16 @@ Reviewed: 2026-09-15
 | License | MIT |
 | License file | `LICENSE` (upstream `core-2.0.8/LICENSE`, byte-identical) |
 | License file SHA-256 | `b5b1f1da112d18ea2147decfd48ddc1bf2b5aeb6c265381579340e95b15a2bb2` |
-| Modified | Six pre-existing circle/magnet SVGs differ from the pinned archive; retained unchanged by this intake. All new MEDIA-1 glyphs are byte-identical. |
+| Modified | Six pre-existing circle/magnet SVGs differ from the pinned archive; retained unchanged by this intake. All new MEDIA-1 and #364 glyphs are byte-identical. |
 
 MEDIA-1 downloaded the pinned codeload release archive on 2026-09-15 and computed its digest
 from the downloaded bytes. All twelve new files (folder-simple-plus, download-simple,
 trash-simple, images in regular/fill/bold) were extracted without modification and byte-verified.
 The existing Composition and Image glyphs were also byte-verified in every weight. The six
 pre-existing exceptions are `bold/circle-bold.svg`, `bold/magnet-bold.svg`, `fill/circle-fill.svg`, `fill/magnet-fill.svg`, `regular/circle.svg`, `regular/magnet.svg`.
+Issue #364 (Cryptomatte eyedropper) downloaded the same pinned archive on 2026-10-24, verified its
+SHA-256 above from the downloaded bytes, and extracted `eyedropper` in regular, fill and bold
+without modification.
 The table and manifest below cover the actual complete checked-in subset, including those
 pre-existing exceptions; they do not claim that those exceptions are upstream-identical.
 
@@ -28,7 +31,7 @@ pre-existing exceptions; they do not claim that those exceptions are upstream-id
 
 ADR 0010 and `docs/ux/visual-language.md` require a curated, pinned subset rather than the
 complete catalog: the upstream release carries 1248 icons in six weights (7488 files), and Bloom
-embeds 62 of them in three weights (186 files). The three weights are exactly the three the
+embeds 63 of them in three weights (189 files). The three weights are exactly the three the
 Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp`):
 
 - `regular` -- the resting interface weight, and the default of every non-role call.
@@ -38,7 +41,7 @@ Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp
 Task VIEW-1 completed the `bold` subset. It previously held five files (the timeline's own
 toggles); `IconRole::Chrome` asks for Bold on every chrome glyph in the application, so a partial
 subset would have rendered some chrome icons blank. All three weights are now complete over the
-same 62 assets, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
+same 63 assets, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
 exception list. The other three upstream weights (`thin`, `light`, `duotone`) are deliberately not
 vendored, because no Kinetik icon role names one.
 
@@ -78,6 +81,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `regular/dots-six-vertical.svg` | `01e0c8e778cec9c1c0ff5c2e4aaadc5808a8d1dec0db8b9a51bcd5c5e9c8dcae` |
 | `regular/dots-three-vertical.svg` | `85fdecd2193efcd7e80a83607b66d2680fef8f3d1e93380c26f9851b24edbd01` |
 | `regular/download-simple.svg` | `6450d3cf43dd9364eab343f1ada9bf4a77a85ded6e62d76deb17606ebfd62388` |
+| `regular/eyedropper.svg` | `87cad5a974a6f152cc7dce67fd6c41fdc21f75d59bed20508b68c95f65d9ebc5` |
 | `regular/eye-slash.svg` | `070b0296a7df89ebf4cec12436e323b5531d458aa9aed3608924085889e1fd17` |
 | `regular/eye.svg` | `91d39f20bf95e0f36c07bd79b83a85fe6ff4ca20e2759c4afee7419ef80403fe` |
 | `regular/film-slate.svg` | `58b84e6c5a2950cfa0d8cae68c04e65dc32407dde463c3a2c79d265464726e0c` |
@@ -146,6 +150,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `fill/dots-three-vertical-fill.svg` | `7dd0eff7a0107728f568f08679b5fefb8309534dff749f779fc21805e1b9186c` |
 | `fill/download-simple-fill.svg` | `ffd45964adc39f8e0027ebd66ea6c843fb8e5a21290a78ef6940436f7d292466` |
 | `fill/eye-fill.svg` | `86381b51cb6f305019503b4c5d4b02fe8df5941bab3f1475ee873006a8708420` |
+| `fill/eyedropper-fill.svg` | `8fb839f52aaadbe156dc9982deab2288c1e23fe335d65f7a638ba21ac8078037` |
 | `fill/eye-slash-fill.svg` | `c5c57b58e51b8b5eb30573a58fd1cc2672ef5d877759c01b948352ecb20b642c` |
 | `fill/film-slate-fill.svg` | `9b93a0c8e74ddaa01ee402f7c182c0189e25df713eb533b86eb4b9ef08ac7aca` |
 | `fill/film-strip-fill.svg` | `aae7abd682bd0985d015c90cd952e5fdb667c5c5e23a3494b30b422a6ab5ef5b` |
@@ -213,6 +218,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `bold/dots-three-vertical-bold.svg` | `4bb50d6e3099a6599b8800303a2f457954ad557213554761df79ee61b5aa7b9a` |
 | `bold/download-simple-bold.svg` | `213b1d74439be031407a09958efc541c87158922a3a57e4dee785dddeef3f955` |
 | `bold/eye-bold.svg` | `766b10b6ed7d8a899a76ba28f3f066ca49e8ce0a75ae68b65bfec0e615d8130d` |
+| `bold/eyedropper-bold.svg` | `84cca4e37e3c813098a0b4dada7bfce670c56ad5ec0e924d0e3002e7218b7786` |
 | `bold/eye-slash-bold.svg` | `2c90457e608c86c1e880b897f2258eeea8ea7f60e7eaf61592b9674d7978647e` |
 | `bold/film-slate-bold.svg` | `b61683707f518cb825c158e3ea703887e6a787e40fa79f3cbdae1c7409a95287` |
 | `bold/film-strip-bold.svg` | `75f500a192705172ce51686fc8a9a2f62d22e91987419c3bd91448cec2760e38` |

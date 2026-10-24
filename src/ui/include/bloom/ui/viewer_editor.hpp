@@ -544,7 +544,20 @@ class ViewerEditor final : public QWidget,
 
     // Zoom/pan (decision 2).
     ViewTransform transform_;
-    enum class Tool { Select, Hand, Zoom, Rectangle, Ellipse, Polygon, Star, Line, Pen, Text };
+    enum class Tool {
+        Select,
+        Hand,
+        Zoom,
+        Rectangle,
+        Ellipse,
+        Polygon,
+        Star,
+        Line,
+        Pen,
+        Text,
+        // #364: picks Cryptomatte objects of the selected Cryptomatte node.
+        Cryptomatte
+    };
     void selectTool(Tool tool);
     struct CreationGesture {
         ViewerMapping mapping;
@@ -564,6 +577,12 @@ class ViewerEditor final : public QWidget,
     [[nodiscard]] document::ShapeKind creationKind() const;
     [[nodiscard]] commands::ShapeLayerGeometry creationGeometry() const;
     bool creationPress(QMouseEvent* event);
+    // #364 Cryptomatte eyedropper: click or Shift-click adds the object under the cursor to the
+    // selected Cryptomatte's matte list, Alt- or Ctrl-click removes it (a worker read).
+    bool cryptomattePress(QMouseEvent* event);
+    void cryptomattePickFinished();
+    bool cryptomattePickOutstanding_ = false;
+    QPointF cryptomattePickPosition_;
     bool textPress(QMouseEvent* event);
     bool creationMove(QMouseEvent* event);
     bool creationRelease(QMouseEvent* event);

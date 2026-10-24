@@ -1,6 +1,7 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
+#include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <QSignalBlocker>
 #include <bloom/ui/kit/dropdown.hpp>
@@ -148,13 +149,27 @@ void ViewerEditor::refreshChannelInspectionChoices() {
                 }
         }
     }
-    if (target == listingTarget_)
+    // #364: a Cryptomatte offers its matte preview (the Mask output shown directly); there is no
+    // channel set of its own to list.
+    std::optional<ChannelSetTarget> matteTarget;
+    if (const auto* node = session_.selectedNode();
+        !target && node != nullptr && node->typeId == document::kCryptomatteNodeType)
+        matteTarget = ChannelSetTarget{node->id, std::string(document::kCryptomatteMaskOutputPort),
+                                       session_.snapshot().revision()};
+    const auto effective = target ? target : matteTarget;
+    if (effective == listingTarget_)
         return;
-    listingTarget_ = target;
+    listingTarget_ = effective;
     if (listingTask_) {
         listingTask_->cancel();
         listingTask_.reset();
         listingTaskTarget_.reset();
+    }
+    if (matteTarget) {
+        inspectionChoices_ = {runtime::ChannelInspectionChoice{"Cryptomatte matte", {}}};
+        choicesTarget_ = matteTarget;
+        rebuildChannelDropdown();
+        return;
     }
     if (!target) {
         // Keep the choices of an active inspection so its entry stays visible after deselection.

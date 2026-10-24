@@ -69,6 +69,14 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     QPointer<kit::KDropdown> imagePartPicker_;
     QPointer<kit::KDropdown> imageLayerPicker_;
     QPointer<kit::KLineEdit> outputLayersField_;
+    // #364 Cryptomatte: the layer picker, the selected matte list and a name field.
+    void addCryptomatteRows(const document::NodeRecord& node, kit::KSection* section);
+    void populateCryptomatteRows(const document::NodeRecord& node);
+    void cryptomatteLayersMayHaveArrived();
+    bool awaitingCryptomatteLayers_ = false;
+    QPointer<kit::KDropdown> cryptomatteLayerPicker_;
+    QPointer<QWidget> cryptomatteMatteList_;
+    QPointer<kit::KLineEdit> cryptomatteAddField_;
     void configureUpstream();
     void configureDrivenRows();
     // Task DRIVE-1: this panel reads the session's resolved driven values rather than

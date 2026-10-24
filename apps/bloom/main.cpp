@@ -24,6 +24,7 @@
 #include <bloom/ui/acceleration_status.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 #include <bloom/ui/asset_controller.hpp>
+#include <bloom/ui/cryptomatte_controller.hpp>
 #include <bloom/ui/audio_device_control.hpp>
 #include <bloom/ui/audio_playback_session.hpp>
 #include <bloom/ui/background_preview_controller.hpp>
@@ -395,6 +396,30 @@ int main(int argc, char* argv[]) try {
                 snapshotCompiler, snapshot, composition, node, port,
                 cpuEvaluator.assetBaseDirectory(), time, colorIntent, cancellation);
         });
+    // #364 Cryptomatte: the Properties layer picker and the Viewer eyedropper read the channel set
+    // through the same compiler and media base directory on a worker.
+    bloom::ui::CryptomatteController cryptomatteController(
+        compositionSession, taskScheduler, taskUiBridge,
+        [&snapshotCompiler, &cpuEvaluator](
+            const bloom::document::Snapshot& snapshot,
+            const bloom::document::CompositionId composition, const bloom::document::NodeId node,
+            const bloom::core::RationalTime time,
+            const bloom::runtime::EvaluationColorIntent& colorIntent,
+            const bloom::runtime::CancellationToken& cancellation) {
+            return bloom::runtime::listCryptomatteLayers(snapshotCompiler, snapshot, composition,
+                                                         node, cpuEvaluator.assetBaseDirectory(),
+                                                         time, colorIntent, cancellation);
+        },
+        [&snapshotCompiler, &cpuEvaluator](
+            const bloom::document::Snapshot& snapshot,
+            const bloom::document::CompositionId composition, const bloom::document::NodeId node,
+            const bloom::core::RationalTime time,
+            const bloom::runtime::EvaluationColorIntent& colorIntent, const std::int64_t x,
+            const std::int64_t y, const bloom::runtime::CancellationToken& cancellation) {
+            return bloom::runtime::pickCryptomatte(snapshotCompiler, snapshot, composition, node,
+                                                   cpuEvaluator.assetBaseDirectory(), time,
+                                                   colorIntent, x, y, cancellation);
+        });
     bloom::ui::BackgroundPreviewController backgroundPreviewController(
         compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline,
         nullptr, gpuPreviewDisplaySubmitter);
@@ -450,6 +475,9 @@ int main(int argc, char* argv[]) try {
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
                      &ramPreviewController, &bloom::ui::RamPreviewController::beginShutdown);
+    QObject::connect(&shutdownCoordinator,
+                     &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
+                     &cryptomatteController, &bloom::ui::CryptomatteController::cancel);
     // Pre-host retirement is installed below once the window exists. The early setup path
     // has no Viewer pins, but still stops the producer before closing the host owner.
     shutdownCoordinator.setPackedHostRetirement(

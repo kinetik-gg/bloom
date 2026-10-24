@@ -1575,6 +1575,10 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
                "finishes. On a selected path: click a segment to add a point, an anchor to "
                "remove it, an open end to continue (P)"),
             "viewerPenTool");
+    addTool(Tool::Cryptomatte, kit::IconId::Eyedropper,
+            tr("Cryptomatte: on a selected Cryptomatte, click or Shift-click adds the object under "
+               "the cursor; Alt- or Ctrl-click removes it"),
+            "viewerCryptomatteTool");
     tools->adjustSize();
     tools->move(0, 0);
     buildAnchorModeSwitcher();
@@ -2694,7 +2698,7 @@ void ViewerEditor::updatePanCursor() {
 
     } else if (tool_ == Tool::Hand) {
         setCursor(Qt::OpenHandCursor);
-    } else if (tool_ == Tool::Zoom) {
+    } else if (tool_ == Tool::Zoom || tool_ == Tool::Cryptomatte) {
         setCursor(Qt::CrossCursor);
     } else {
         unsetCursor();
@@ -2703,6 +2707,8 @@ void ViewerEditor::updatePanCursor() {
 
 void ViewerEditor::mousePressEvent(QMouseEvent* event) {
     if (roiPress(event))
+        return;
+    if (cryptomattePress(event))
         return;
     if (textEditPress(event))
         return;

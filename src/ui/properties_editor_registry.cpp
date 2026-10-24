@@ -1,5 +1,7 @@
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/asset_controller.hpp>
+#include <bloom/ui/cryptomatte_controller.hpp>
+#include <bloom/runtime/cryptomatte_matte_list.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include "asset_drop.hpp"
 #include "composition_editor_support.hpp"
@@ -34,6 +36,7 @@ namespace {
 
 void PropertiesEditor::configureRegistryRows() {
     awaitingImageParts_ = false;
+    awaitingCryptomatteLayers_ = false;
     const auto* node = session_.selectedNode();
     if (const auto* layer = std::get_if<document::LayerId>(&session_.selection().primary))
         node = directSourceNode(session_, *layer);
@@ -146,6 +149,8 @@ void PropertiesEditor::configureRegistryRows() {
                 addImageSelectionRows(*node, section);
             if (node->typeId == document::kCompositionOutputNodeType)
                 addOutputLayerRow(*node, section);
+            if (node->typeId == document::kCryptomatteNodeType)
+                addCryptomatteRows(*node, section);
             if (node->typeId == "bloom.audio-source") {
                 const document::AssetRecord* asset = nullptr;
                 for (const auto& binding : node->parameters) {
@@ -244,6 +249,8 @@ void PropertiesEditor::configureRegistryRows() {
         row->refresh();
     if (node != nullptr && node->typeId == document::kImageSourceNodeType)
         populateImageSelectionRows(*node);
+    if (node != nullptr && node->typeId == document::kCryptomatteNodeType)
+        populateCryptomatteRows(*node);
     if (node != nullptr && node->typeId == document::kCompositionOutputNodeType &&
         outputLayersField_ != nullptr && !outputLayersField_->hasFocus())
         outputLayersField_->setText(
@@ -433,6 +440,159 @@ void PropertiesEditor::addOutputLayerRow(const document::NodeRecord& node,
                 tr("Set Channel Layers")))
             configureRegistryRows();
     });
+}
+
+void PropertiesEditor::cryptomatteLayersMayHaveArrived() {
+    if (awaitingCryptomatteLayers_)
+        configureRegistryRows();
+}
+
+// #364: the Cryptomatte layer picker lists the types in the node's channel set (a worker read);
+// the selected mattes are listed by name with a remove button each, and a field adds a name or a
+// raw ID. The Viewer eyedropper edits the same list.
+void PropertiesEditor::addCryptomatteRows(const document::NodeRecord& node,
+                                          kit::KSection* section) {
+    const auto nodeId = node.id;
+    {
+        const auto name = tr("Layer");
+        auto* label = kit::makePropertyRowLabel(name, section->body());
+        auto* picker = new kit::KDropdown(section->body());
+        picker->setObjectName("propertiesCryptomatteLayer");
+        auto* row = new kit::KPropertyRow(label, nullptr, {picker}, section->body());
+        row->setProperty("rowLabel", name);
+        section->bodyLayout()->addWidget(row);
+        cryptomatteLayerPicker_ = picker;
+        connect(picker, &kit::KDropdown::currentIndexChanged, this,
+                [this, nodeId](const int index) {
+                    if (index < 0 || cryptomatteLayerPicker_ == nullptr)
+                        return;
+                    if (!session_.setNodeParameterValue(
+                            nodeId, std::string(document::kCryptomatteLayerParameterRole),
+                            document::ParameterValue{
+                                cryptomatteLayerPicker_->itemData(index).toString().toStdString()},
+                            tr("Choose Cryptomatte Layer")))
+                        configureRegistryRows();
+                });
+    }
+    auto* list = new QWidget(section->body());
+    list->setObjectName("propertiesCryptomatteMattes");
+    auto* listLayout = new QVBoxLayout(list);
+    listLayout->setContentsMargins(0, 0, 0, 0);
+    listLayout->setSpacing(0);
+    section->bodyLayout()->addWidget(list);
+    cryptomatteMatteList_ = list;
+    {
+        const auto name = tr("Add Matte");
+        auto* label = kit::makePropertyRowLabel(name, section->body());
+        auto* field = new kit::KLineEdit(section->body());
+        field->setObjectName("propertiesCryptomatteAdd");
+        field->setPlaceholderText(tr("Name or <ID>"));
+        field->setToolTip(tr("Type an object name, or pick in the Viewer with the Cryptomatte "
+                             "eyedropper: click or Shift-click adds, Alt- or Ctrl-click removes"));
+        auto* row = new kit::KPropertyRow(label, nullptr, {field}, section->body());
+        row->setProperty("rowLabel", name);
+        section->bodyLayout()->addWidget(row);
+        cryptomatteAddField_ = field;
+        connect(field, &QLineEdit::returnPressed, this, [this, nodeId] {
+            auto* controller = session_.cryptomatteController();
+            if (cryptomatteAddField_ == nullptr || controller == nullptr)
+                return;
+            const auto text = cryptomatteAddField_->text().trimmed().toStdString();
+            if (text.empty())
+                return;
+            auto mattes = controller->mattes(nodeId);
+            for (auto& added : runtime::splitCryptomatteMatteList(text))
+                if (std::ranges::find(mattes, added) == mattes.end())
+                    mattes.push_back(std::move(added));
+            cryptomatteAddField_->clear();
+            if (!controller->setMattes(nodeId, mattes, tr("Add Cryptomatte Matte")))
+                configureRegistryRows();
+        });
+    }
+}
+
+void PropertiesEditor::populateCryptomatteRows(const document::NodeRecord& node) {
+    auto* controller = session_.cryptomatteController();
+    const auto currentLayer = boundText(session_, node, document::kCryptomatteLayerParameterRole);
+    if (cryptomatteLayerPicker_ != nullptr) {
+        const std::vector<std::string>* layers =
+            controller != nullptr ? controller->layers(node.id) : nullptr;
+        awaitingCryptomatteLayers_ = controller != nullptr && layers == nullptr;
+        if (awaitingCryptomatteLayers_) {
+            controller->requestLayers(node.id);
+            connect(controller, &CryptomatteController::changed, this,
+                    &PropertiesEditor::cryptomatteLayersMayHaveArrived, Qt::UniqueConnection);
+        }
+        auto* picker = cryptomatteLayerPicker_.data();
+        const QSignalBlocker blocker(picker);
+        picker->clearItems();
+        int current = -1;
+        if (layers != nullptr)
+            for (const auto& layer : *layers) {
+                const auto name = QString::fromStdString(layer);
+                picker->addItem(name, name);
+                if (name == currentLayer)
+                    current = picker->count() - 1;
+            }
+        if (current < 0) {
+            picker->addItem(layers == nullptr ? currentLayer : tr("%1 (missing)").arg(currentLayer),
+                            currentLayer);
+            current = picker->count() - 1;
+        }
+        picker->setCurrentIndex(current);
+        picker->setEnabled(layers != nullptr && !layers->empty());
+        const auto diagnostic =
+            controller != nullptr ? controller->layerDiagnostic(node.id) : QString{};
+        picker->setToolTip(layers == nullptr       ? tr("Reading the Cryptomatte layers…")
+                           : !diagnostic.isEmpty() ? diagnostic
+                           : layers->empty()       ? tr("The channel set has no Cryptomatte layer")
+                                                   : QString{});
+    }
+    if (cryptomatteMatteList_ == nullptr)
+        return;
+    auto* list = cryptomatteMatteList_.data();
+    for (auto* child : list->findChildren<QWidget*>(Qt::FindDirectChildrenOnly)) {
+        child->hide();
+        child->deleteLater();
+    }
+    const auto mattes = controller != nullptr
+                            ? controller->mattes(node.id)
+                            : runtime::splitCryptomatteMatteList(
+                                  boundText(session_, node,
+                                            document::kCryptomatteMattesParameterRole)
+                                      .toStdString());
+    const auto nodeId = node.id;
+    const auto addRow = [&](const QString& text, QWidget* value) {
+        auto* label = kit::makePropertyRowLabel(text, list);
+        auto* row = new kit::KPropertyRow(label, nullptr, {value}, list);
+        row->setProperty("rowLabel", text);
+        list->layout()->addWidget(row);
+    };
+    auto* count = new QLabel(mattes.empty() ? tr("None selected")
+                                            : tr("%n selected", nullptr,
+                                                 static_cast<int>(mattes.size())),
+                             list);
+    count->setObjectName("propertiesCryptomatteCount");
+    addRow(tr("Mattes"), count);
+    for (std::size_t index = 0; index < mattes.size(); ++index) {
+        const auto name = QString::fromStdString(mattes[index]);
+        auto* remove = new kit::KButton(kit::IconId::Subtract, tr("Remove"), list);
+        remove->setObjectName("propertiesCryptomatteRemove");
+        remove->setVariant(kit::KButton::Variant::Ghost);
+        remove->setControlSize(kit::KButton::ControlSize::Compact);
+        remove->setToolTip(tr("Remove %1 from the matte").arg(name));
+        remove->setProperty("matteName", name);
+        connect(remove, &QAbstractButton::clicked, this, [this, nodeId, matte = mattes[index]] {
+            auto* current = session_.cryptomatteController();
+            if (current == nullptr)
+                return;
+            auto list = current->mattes(nodeId);
+            std::erase(list, matte);
+            if (!current->setMattes(nodeId, list, tr("Remove Cryptomatte Matte")))
+                configureRegistryRows();
+        });
+        addRow(name, remove);
+    }
 }
 
 } // namespace bloom::ui

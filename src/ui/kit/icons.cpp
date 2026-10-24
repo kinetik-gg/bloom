@@ -93,6 +93,7 @@ const auto& iconAssets() {
         {IconId::DeleteAsset, QLatin1StringView("trash-simple")},
         {IconId::Images, QLatin1StringView("images")},
         {IconId::Snap, QLatin1StringView("magnet")},
+        {IconId::Eyedropper, QLatin1StringView("eyedropper")},
     });
     return entries;
 }
