@@ -3,6 +3,7 @@ import inspect
 import keyword
 import math
 import sys
+from collections.abc import Mapping
 from fractions import Fraction
 from types import ModuleType
 
@@ -14,7 +15,7 @@ _TYPES = {"bool": bool, "int": int, "float": float, "str": str, "id": int,
           "vec2": tuple[float, float], "vec3": tuple[float, float, float],
           "color4": tuple[float, float, float, float], "array": tuple,
           "time": int | tuple[int, int] | Fraction | float,
-          "value": float | tuple[float, ...]}
+          "value": float | tuple[float, ...], "path": Mapping}
 
 _EXPECTED = {
     "bool": "true or false",
@@ -28,7 +29,11 @@ _EXPECTED = {
     "array": "a list or tuple",
     "time": "a whole frame, a Fraction, or an exact (numerator, denominator) time",
     "value": "a number, (x, y), (x, y, z) or (r, g, b, a)",
+    "path": "a path {'closed': bool, 'anchors': [{'point': (x, y), 'in_handle': (x, y) or None, "
+            "'out_handle': (x, y) or None}, ...]}",
 }
+
+_HANDLES = ("in_handle", "out_handle", "inHandle", "outHandle")
 
 _CONTEXT_DEFAULTS = {
     "project": "bloom.context.project",
@@ -47,6 +52,8 @@ def _plain(value):
         return (value.numerator, value.denominator)
     if isinstance(value, (list, tuple)):
         return tuple(_plain(item) for item in value)
+    if isinstance(value, Mapping):
+        return {key: _plain(item) for key, item in value.items()}
     return value
 
 
@@ -79,7 +86,17 @@ def _valid(value, kind):
                     and all(type(item) is int for item in value)))
     if kind == "value":
         return _finite(value) or any(_sequence(value, size) for size in (2, 3, 4))
+    if kind == "path":
+        return (isinstance(value, dict) and set(value) == {"closed", "anchors"}
+                and type(value["closed"]) is bool and isinstance(value["anchors"], tuple)
+                and all(_anchor(anchor) for anchor in value["anchors"]))
     return True
+
+
+def _anchor(anchor):
+    return (isinstance(anchor, dict) and "point" in anchor
+            and set(anchor) <= {"point", *_HANDLES} and _sequence(anchor["point"], 2)
+            and all(anchor.get(name) is None or _sequence(anchor[name], 2) for name in _HANDLES))
 
 
 class Operation:

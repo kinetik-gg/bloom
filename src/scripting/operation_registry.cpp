@@ -325,6 +325,21 @@ vec2(const Arguments& arguments, const std::string& operationId, const std::stri
                 vec2Of);
 }
 
+// ADR 0028: a whole path value. Its anchors and closed flag must form a valid document path.
+[[nodiscard]] std::optional<document::PathValue>
+path(const Arguments& arguments, const std::string& operationId, const std::string& name,
+     OperationCreateResult& error, const bool required = true) {
+    return read(arguments, operationId, name, error, required,
+                "expects a path: {\"closed\": bool, \"anchors\": [{\"point\": (x, y), "
+                "\"in_handle\": (x, y) or None, \"out_handle\": (x, y) or None}, ...]} with "
+                "finite coordinates",
+                [](const Value& value) -> std::optional<document::PathValue> {
+                    const auto* result = std::get_if<document::PathValue>(&value.storage);
+                    return result != nullptr && result->isValid() ? std::optional(*result)
+                                                                  : std::nullopt;
+                });
+}
+
 [[nodiscard]] std::optional<document::Vec3d>
 vec3(const Arguments& arguments, const std::string& operationId, const std::string& name,
      OperationCreateResult& error, const bool required = true) {
@@ -917,8 +932,9 @@ void addDescriptor(std::vector<OperationDescriptor>& descriptors, std::string id
 } // namespace
 
 std::string_view valueKindName(const ValueKind kind) noexcept {
-    constexpr std::array<std::string_view, 11> names{
-        "bool", "int", "float", "str", "vec2", "vec3", "color4", "id", "array", "time", "value"};
+    constexpr std::array<std::string_view, 12> names{"bool",  "int",  "float",  "str",
+                                                     "vec2",  "vec3", "color4", "id",
+                                                     "array", "time", "value",  "path"};
     const auto index = static_cast<std::size_t>(kind);
     return index < names.size() ? names[index] : "value";
 }
@@ -976,6 +992,20 @@ std::string pythonLiteral(const Value& value) {
                 return "(" + pythonLiteral(Value(held.red)) + ", " +
                        pythonLiteral(Value(held.green)) + ", " + pythonLiteral(Value(held.blue)) +
                        ", " + pythonLiteral(Value(held.alpha)) + ")";
+            } else if constexpr (std::is_same_v<Held, document::PathValue>) {
+                const auto handle = [](const std::optional<document::Vec2d>& point) {
+                    return point ? pythonLiteral(Value(*point)) : std::string("None");
+                };
+                std::string text = std::string("{\"closed\": ") + (held.closed ? "True" : "False") +
+                                   ", \"anchors\": [";
+                for (std::size_t index = 0; index < held.anchors.size(); ++index) {
+                    const auto& anchor = held.anchors[index];
+                    text += (index == 0 ? std::string() : std::string(", ")) +
+                            "{\"point\": " + pythonLiteral(Value(anchor.point)) +
+                            ", \"in_handle\": " + handle(anchor.inHandle) +
+                            ", \"out_handle\": " + handle(anchor.outHandle) + "}";
+                }
+                return text + "]}";
             } else {
                 std::string text = "(";
                 for (std::size_t index = 0; index < held.size(); ++index) {
@@ -2471,8 +2501,7 @@ OperationRegistry OperationRegistry::builtIn() {
          need("start", ValueKind::Time, std::int64_t{0}, "The layer's first frame."),
          need("end", ValueKind::Time, std::int64_t{24}, "The layer's exclusive end frame."),
          need("speedNumerator", ValueKind::Integer, std::int64_t{1}, "Exact speed numerator."),
-         need("speedDenominator", ValueKind::Integer, std::int64_t{1},
-              "Exact speed denominator.")},
+         need("speedDenominator", ValueKind::Integer, std::int64_t{1}, "Exact speed denominator.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -2488,11 +2517,11 @@ OperationRegistry OperationRegistry::builtIn() {
             const auto speed = document::LayerSpeed::create(*numerator, *denominator);
             if (!speed)
                 return failure(op, "speedNumerator", "speed must be in [1/1000, 1000]");
-            return OperationCreateResult(
-                std::make_unique<commands::SetLayerTiming>(
-                    document::CompositionId::fromRaw(*composition),
-                    document::LayerId::fromRaw(*layer), *startTime, *start, *end, *speed),
-                std::nullopt);
+            return OperationCreateResult(std::make_unique<commands::SetLayerTiming>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::LayerId::fromRaw(*layer), *startTime, *start,
+                                             *end, *speed),
+                                         std::nullopt);
         });
 
     add("bloom.layer.set-time-modes",
@@ -2542,11 +2571,105 @@ OperationRegistry OperationRegistry::builtIn() {
                 return OperationCreateResult(std::move(operation), std::nullopt);
             });
 
-    // ADR 0028 layer masks and track mattes. Operations that carry a path are not scriptable: the
-    // scripting value model has no path kind.
+    // ADR 0028 layer masks and track mattes. A path argument is a whole PathValue in the layer's
+    // content space (ValueKind::Path).
     const auto maskArgument = [] {
         return need("mask", ValueKind::Id, StableId{1}, "The layer mask to edit.");
     };
+    const auto examplePath = [] {
+        document::PathValue path;
+        path.closed = true;
+        path.anchors = {{{0.0, 0.0}, std::nullopt, std::nullopt},
+                        {{100.0, 0.0}, std::nullopt, std::nullopt},
+                        {{100.0, 100.0}, std::nullopt, std::nullopt},
+                        {{0.0, 100.0}, std::nullopt, std::nullopt}};
+        return path;
+    };
+    add("bloom.layer.add-mask",
+        {compositionArgument(), layerArgument(),
+         need("path", ValueKind::Path, examplePath(),
+              "The mask outline in the layer's content space (closed to cover an area)."),
+         maybe("mode", ValueKind::Integer, std::int64_t{1},
+               "0 None, 1 Add, 2 Subtract, 3 Intersect, 4 Difference. Defaults to Add."),
+         maybe("name", ValueKind::String, "Mask 1", "The mask name. Defaults to Mask N.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            auto outline = path(args, op, "path", error);
+            const auto mode = integer(args, op, "mode", error, false);
+            const auto name = text(args, op, "name", error, false);
+            if (!composition || !layer || !outline || error.diagnostic() != nullptr)
+                return error;
+            if (mode && (*mode < 0 || *mode > 4))
+                return failure(op, "mode",
+                               "modes are 0 None, 1 Add, 2 Subtract, 3 Intersect, "
+                               "4 Difference");
+            return OperationCreateResult(std::make_unique<commands::AddLayerMask>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::LayerId::fromRaw(*layer),
+                                             std::move(*outline),
+                                             mode ? static_cast<document::LayerMaskMode>(*mode)
+                                                  : document::LayerMaskMode::Add,
+                                             name.value_or(std::string{})),
+                                         std::nullopt);
+        });
+    add("bloom.layer.set-mask-path",
+        {compositionArgument(), layerArgument(), maskArgument(),
+         need("path", ValueKind::Path, examplePath(),
+              "The new outline in the layer's content space."),
+         timeArgument()},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            const auto mask = id(args, op, "mask", error);
+            auto outline = path(args, op, "path", error);
+            const auto time = rational(args, op, "time", error);
+            if (!composition || !layer || !mask || !outline || !time)
+                return error;
+            return OperationCreateResult(std::make_unique<commands::SetLayerMaskPath>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::LayerId::fromRaw(*layer),
+                                             document::LayerMaskId::fromRaw(*mask), *time,
+                                             std::move(*outline)),
+                                         std::nullopt);
+        });
+    add("bloom.layer.animate-mask-path",
+        {compositionArgument(), layerArgument(), maskArgument(), timeArgument()},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            const auto mask = id(args, op, "mask", error);
+            const auto time = rational(args, op, "time", error);
+            if (!composition || !layer || !mask || !time)
+                return error;
+            return OperationCreateResult(std::make_unique<commands::AnimateLayerMaskPath>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::LayerId::fromRaw(*layer),
+                                             document::LayerMaskId::fromRaw(*mask), *time),
+                                         std::nullopt);
+        });
+    add("bloom.layer.stop-animating-mask-path",
+        {compositionArgument(), layerArgument(), maskArgument(),
+         need("path", ValueKind::Path, examplePath(),
+              "The constant outline the mask keeps once its keys are removed.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            const auto mask = id(args, op, "mask", error);
+            auto outline = path(args, op, "path", error);
+            if (!composition || !layer || !mask || !outline)
+                return error;
+            return OperationCreateResult(std::make_unique<commands::StopAnimatingLayerMaskPath>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::LayerId::fromRaw(*layer),
+                                             document::LayerMaskId::fromRaw(*mask),
+                                             std::move(*outline)),
+                                         std::nullopt);
+        });
     add("bloom.layer.remove-mask", {compositionArgument(), layerArgument(), maskArgument()},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
@@ -2594,14 +2717,15 @@ OperationRegistry OperationRegistry::builtIn() {
             if (!composition || !layer || !mask || !mode)
                 return error;
             if (*mode < 0 || *mode > 4)
-                return failure(op, "mode", "modes are 0 None, 1 Add, 2 Subtract, 3 Intersect, "
-                                           "4 Difference");
-            return OperationCreateResult(
-                std::make_unique<commands::SetLayerMaskMode>(
-                    document::CompositionId::fromRaw(*composition),
-                    document::LayerId::fromRaw(*layer), document::LayerMaskId::fromRaw(*mask),
-                    static_cast<document::LayerMaskMode>(*mode)),
-                std::nullopt);
+                return failure(op, "mode",
+                               "modes are 0 None, 1 Add, 2 Subtract, 3 Intersect, "
+                               "4 Difference");
+            return OperationCreateResult(std::make_unique<commands::SetLayerMaskMode>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::LayerId::fromRaw(*layer),
+                                             document::LayerMaskId::fromRaw(*mask),
+                                             static_cast<document::LayerMaskMode>(*mode)),
+                                         std::nullopt);
         });
     add("bloom.layer.set-mask-inverted",
         {compositionArgument(), layerArgument(), maskArgument(),

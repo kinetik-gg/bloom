@@ -195,6 +195,11 @@ matte command declares its composition `renderScope()`.
   the Viewer from a session-only parameter override of the path (`beginMaskPathEdit`, accepted by
   the snapshot compiler for a reachable layer's mask path, feather, expansion and opacity) and
   commits one `SetLayerMaskPath` on release. The document never changes mid-drag. Dashed feather bounds are drawn at `expansion +/- feather / 2`.
+- **Scripting.** Python, the CLI and MCP add and edit masks through `bloom.layer.add-mask`,
+  `set-mask-path`, `animate-mask-path`, `stop-animating-mask-path`, `remove-mask`, `move-mask`,
+  `set-mask-mode`, `set-mask-inverted` and `rename-mask`, and set mattes through
+  `set-track-matte`/`clear-track-matte`. A path argument is the scripting `path` value kind (ADR
+  0022) in the layer's content space.
 - **Timeline.** A layer row discloses a Masks group with one row per mask (name, mode, inverted) and
   key rows for its path, feather, expansion and opacity. A Track Matte column selects the source
   layer, the channel and the invert bit.

@@ -17,7 +17,9 @@
 
 int main() {
     auto registry = bloom::scripting::OperationRegistry::builtIn();
-    if (registry.descriptors().size() != 92U || registry.find("bloom.layer.set-timing") == nullptr || registry.find("bloom.layer.add-solid") == nullptr ||
+    if (registry.descriptors().size() != 96U ||
+        registry.find("bloom.layer.set-timing") == nullptr ||
+        registry.find("bloom.layer.add-solid") == nullptr ||
         registry.find("bloom.project.set-name") == nullptr) {
         std::cerr << "operation registry inventory failed\n";
         return 1;

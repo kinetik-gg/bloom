@@ -156,6 +156,34 @@ class Protocol(unittest.TestCase):
         self.assertTrue(any(record['source'] == 'constant' and record['value'] == color
                             for record in content['records']))
 
+    def test_layer_mask_path_values(self):
+        """ADR 0028: MCP adds and edits a mask with the path shape its projection publishes."""
+        solid = {'op': 'bloom.layer.add-solid',
+                 'args': {'composition': 1, 'name': 'Plate', 'color': [1, 1, 1, 1]}}
+        first = exchange([INIT, READY, tool(2, 'transact', {'expectedRevision': 0,
+                                                            'operations': [solid]})])
+        outputs = first[-1]['result']['structuredContent']['outputs']
+        layer = next(o['id'] for o in outputs if o['name'] == 'layer')
+        path = {'closed': True, 'anchors': [
+            {'point': [0, 0], 'inHandle': None, 'outHandle': [3, 0]},
+            {'point': [10, 0], 'inHandle': None, 'outHandle': None},
+            {'point': [10, 10], 'inHandle': None, 'outHandle': None}]}
+        responses = exchange([INIT, READY, tool(2, 'transact', {
+            'expectedRevision': 0, 'operations': [
+                solid, {'op': 'bloom.layer.add-mask',
+                        'args': {'composition': 1, 'layer': layer, 'path': path}}]}),
+            tool(3, 'query', {'kind': 'parameters', 'composition': 1}),
+            tool(4, 'transact', {'expectedRevision': 1, 'operations': [
+                {'op': 'bloom.layer.add-mask',
+                 'args': {'composition': 1, 'layer': layer, 'path': [0, 1]}}]})])
+        added = responses[1]['result']['structuredContent']
+        self.assertTrue(added['succeeded'], added)
+        path_id = next(o['id'] for o in added['outputs'] if o['name'] == 'path')
+        record = next(r for r in responses[2]['result']['structuredContent']['records']
+                      if r['id'] == path_id)
+        self.assertEqual(record['value'], path)
+        self.assertIn('error', responses[3])
+
     def test_handshake_transactions_and_events(self):
         responses = exchange([
             INIT, READY, request(2, 'tools/list', {}),

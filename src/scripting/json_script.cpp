@@ -1,7 +1,9 @@
 #include <bloom/scripting/json_script.hpp>
 
+#include <array>
 #include <cctype>
 #include <charconv>
+#include <cmath>
 #include <cstdlib>
 #include <map>
 #include <string>
@@ -302,6 +304,73 @@ class Parser final {
     std::size_t offset_ = 0;
 };
 
+[[nodiscard]] std::optional<document::Vec2d> pointOf(const JsonValue& json) {
+    const auto* array = std::get_if<JsonArray>(&json.storage);
+    if (array == nullptr || array->size() != 2)
+        return std::nullopt;
+    std::array<double, 2> components{};
+    for (std::size_t index = 0; index < 2; ++index) {
+        const auto& item = (*array)[index].storage;
+        if (const auto* real = std::get_if<double>(&item))
+            components[index] = *real;
+        else if (const auto* whole = std::get_if<std::int64_t>(&item))
+            components[index] = static_cast<double>(*whole);
+        else
+            return std::nullopt;
+        if (!std::isfinite(components[index]))
+            return std::nullopt;
+    }
+    return document::Vec2d{components[0], components[1]};
+}
+
+// ADR 0028: a path object, the same shape the MCP projection publishes: {"closed": bool,
+// "anchors": [{"point": [x, y], "inHandle": [x, y] | null, "outHandle": [x, y] | null}]}. The
+// Python spelling (in_handle / out_handle) is accepted too.
+[[nodiscard]] std::optional<Value> pathOf(const JsonObject& object) {
+    const auto closed = object.find("closed");
+    const auto anchors = object.find("anchors");
+    if (object.size() != 2 || closed == object.end() || anchors == object.end())
+        return std::nullopt;
+    const auto* isClosed = std::get_if<bool>(&closed->second.storage);
+    const auto* rows = std::get_if<JsonArray>(&anchors->second.storage);
+    if (isClosed == nullptr || rows == nullptr || rows->size() > document::kMaximumPathAnchors)
+        return std::nullopt;
+    document::PathValue path;
+    path.closed = *isClosed;
+    for (const auto& row : *rows) {
+        const auto* fields = std::get_if<JsonObject>(&row.storage);
+        if (fields == nullptr)
+            return std::nullopt;
+        document::PathAnchor anchor;
+        bool hasPoint = false;
+        for (const auto& [key, value] : *fields) {
+            const bool none = std::holds_alternative<std::nullptr_t>(value.storage);
+            if (key == "point") {
+                const auto point = pointOf(value);
+                if (!point)
+                    return std::nullopt;
+                anchor.point = *point;
+                hasPoint = true;
+            } else if (key == "inHandle" || key == "in_handle" || key == "outHandle" ||
+                       key == "out_handle") {
+                auto& handle = key.front() == 'i' ? anchor.inHandle : anchor.outHandle;
+                if (none)
+                    continue;
+                const auto point = pointOf(value);
+                if (!point)
+                    return std::nullopt;
+                handle = *point;
+            } else {
+                return std::nullopt;
+            }
+        }
+        if (!hasPoint)
+            return std::nullopt;
+        path.anchors.push_back(anchor);
+    }
+    return Value{std::move(path)};
+}
+
 [[nodiscard]] std::optional<Value> convert(const JsonValue& json) {
     return std::visit(
         [](const auto& value) -> std::optional<Value> {
@@ -317,8 +386,9 @@ class Parser final {
                     result.push_back(*converted);
                 }
                 return Value{std::move(result)};
-            } else if constexpr (std::is_same_v<Type, JsonObject> ||
-                                 std::is_same_v<Type, std::nullptr_t>) {
+            } else if constexpr (std::is_same_v<Type, JsonObject>) {
+                return pathOf(value);
+            } else if constexpr (std::is_same_v<Type, std::nullptr_t>) {
                 return std::nullopt;
             } else {
                 return Value{value};

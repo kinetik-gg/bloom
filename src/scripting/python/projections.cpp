@@ -57,20 +57,15 @@ nb::list keyframes(const std::vector<document::ScalarKeyframe>& keys) {
     return result;
 }
 
-// ADR 0028: a Path key's value projects as its anchor points and closed flag.
+// ADR 0028: a Path key's value projects as the whole path (closed flag, anchors and handles), the
+// same mapping a path argument accepts, so a key read here can be passed straight back.
 nb::list keyframes(const std::vector<document::PathKeyframe>& keys) {
     nb::list result;
     for (const auto& key : keys) {
         nb::dict row;
         row["id"] = key.id.value();
         row["time"] = nb::make_tuple(key.time.numerator(), key.time.denominator());
-        nb::list anchors;
-        for (const auto& anchor : key.value.anchors)
-            anchors.append(nb::make_tuple(anchor.point.x, anchor.point.y));
-        nb::dict value;
-        value["anchors"] = anchors;
-        value["closed"] = key.value.closed;
-        row["value"] = value;
+        row["value"] = parameterValue(key.value);
         row["interpolation"] = static_cast<int>(key.outgoingInterpolation);
         result.append(row);
     }
@@ -125,6 +120,30 @@ nb::dict projectSnapshot(const document::Snapshot& snapshot) {
                 nb::make_tuple(boundary.inPoint.numerator(), boundary.inPoint.denominator());
             record["out"] =
                 nb::make_tuple(boundary.outPoint.numerator(), boundary.outPoint.denominator());
+            // ADR 0028: masks in order with their parameter ids, and the optional track matte.
+            nb::list masks;
+            for (const auto& mask : boundary.masks) {
+                nb::dict maskRecord;
+                maskRecord["id"] = mask.id.value();
+                maskRecord["name"] = mask.name;
+                maskRecord["mode"] = static_cast<std::int64_t>(mask.mode);
+                maskRecord["inverted"] = mask.inverted;
+                maskRecord["path"] = mask.path.value();
+                maskRecord["feather"] = mask.feather.value();
+                maskRecord["expansion"] = mask.expansion.value();
+                maskRecord["opacity"] = mask.opacity.value();
+                masks.append(maskRecord);
+            }
+            record["masks"] = masks;
+            if (boundary.trackMatte) {
+                nb::dict matte;
+                matte["source"] = boundary.trackMatte->source.value();
+                matte["channel"] = static_cast<std::int64_t>(boundary.trackMatte->channel);
+                matte["inverted"] = boundary.trackMatte->inverted;
+                record["track_matte"] = matte;
+            } else {
+                record["track_matte"] = nb::none();
+            }
             layers.append(record);
         }
         row["layers"] = layers;

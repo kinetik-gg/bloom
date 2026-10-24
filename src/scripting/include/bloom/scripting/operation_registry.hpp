@@ -32,6 +32,9 @@ enum class ValueKind : std::uint8_t {
     // colour. Parameter-keyed animation operations take the parameter's own width, which the
     // caller knows and the schema cannot.
     Value,
+    // ADR 0028: a whole path value -- the closed flag and its anchors, each a point with optional
+    // incoming and outgoing cubic handles.
+    Path,
 };
 
 // Which live-session value fills an omitted argument. The flag travels with the schema so every

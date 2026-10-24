@@ -51,6 +51,54 @@ std::size_t parseParameterCursor(const std::string_view cursor, const std::uint6
     return static_cast<std::size_t>(values[4]);
 }
 
+document::Vec2d pathPoint(yyjson_val* item) {
+    if (!yyjson_is_arr(item) || yyjson_arr_size(item) != 2 ||
+        !yyjson_is_num(yyjson_arr_get(item, 0)) || !yyjson_is_num(yyjson_arr_get(item, 1)))
+        throw InvalidInput("A path point is two finite numbers");
+    const document::Vec2d point{yyjson_get_num(yyjson_arr_get(item, 0)),
+                                yyjson_get_num(yyjson_arr_get(item, 1))};
+    if (!std::isfinite(point.x) || !std::isfinite(point.y))
+        throw InvalidInput("A path point is two finite numbers");
+    return point;
+}
+
+// ADR 0028: a path argument has the shape the parameter projection publishes: {"closed": bool,
+// "anchors": [{"point": [x, y], "inHandle": [x, y] | null, "outHandle": [x, y] | null}]}.
+document::PathValue pathValue(yyjson_val* item) {
+    auto* closed = yyjson_obj_get(item, "closed");
+    auto* anchors = yyjson_obj_get(item, "anchors");
+    if (yyjson_obj_size(item) != 2 || !yyjson_is_bool(closed) || !yyjson_is_arr(anchors) ||
+        yyjson_arr_size(anchors) > document::kMaximumPathAnchors)
+        throw InvalidInput("A path is {closed, anchors}");
+    document::PathValue path;
+    path.closed = yyjson_get_bool(closed);
+    yyjson_arr_iter rows = yyjson_arr_iter_with(anchors);
+    while (auto* row = yyjson_arr_iter_next(&rows)) {
+        if (!yyjson_is_obj(row))
+            throw InvalidInput("A path anchor is an object");
+        document::PathAnchor anchor;
+        bool hasPoint = false;
+        yyjson_obj_iter fields = yyjson_obj_iter_with(row);
+        while (auto* key = yyjson_obj_iter_next(&fields)) {
+            const std::string_view name(yyjson_get_str(key), yyjson_get_len(key));
+            auto* field = yyjson_obj_iter_get_val(key);
+            if (name == "point") {
+                anchor.point = pathPoint(field);
+                hasPoint = true;
+            } else if (name == "inHandle" || name == "outHandle") {
+                if (!yyjson_is_null(field))
+                    (name == "inHandle" ? anchor.inHandle : anchor.outHandle) = pathPoint(field);
+            } else {
+                throw InvalidInput("A path anchor has point, inHandle and outHandle");
+            }
+        }
+        if (!hasPoint)
+            throw InvalidInput("A path anchor needs a point");
+        path.anchors.push_back(anchor);
+    }
+    return path;
+}
+
 scripting::Value value(yyjson_val* item, const std::size_t depth = 0) {
     if (depth > 16)
         throw InvalidInput("Argument exceeds nesting limit");
@@ -79,7 +127,9 @@ scripting::Value value(yyjson_val* item, const std::size_t depth = 0) {
             values.push_back(value(child, depth + 1));
         return scripting::Value(std::move(values));
     }
-    throw InvalidInput("Operation arguments require scalars or arrays");
+    if (yyjson_is_obj(item))
+        return scripting::Value(pathValue(item));
+    throw InvalidInput("Operation arguments require scalars, arrays or paths");
 }
 
 bool matches(yyjson_val* value, const scripting::ValueKind kind) {
@@ -97,6 +147,8 @@ bool matches(yyjson_val* value, const scripting::ValueKind kind) {
         return yyjson_is_uint(value) && yyjson_get_uint(value) != 0;
     case Kind::Array:
         return yyjson_is_arr(value);
+    case Kind::Path:
+        return yyjson_is_obj(value);
     case Kind::Time:
         return yyjson_is_int(value) || (yyjson_is_arr(value) && yyjson_arr_size(value) == 2 &&
                                         yyjson_is_int(yyjson_arr_get_first(value)));

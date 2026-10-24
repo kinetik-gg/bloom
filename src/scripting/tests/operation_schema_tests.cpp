@@ -58,6 +58,8 @@ void expect(const bool condition, const std::string& what) {
                std::holds_alternative<ValueArray>(value.storage);
     case ValueKind::Value:
         return !std::holds_alternative<std::string>(value.storage);
+    case ValueKind::Path:
+        return std::holds_alternative<bloom::document::PathValue>(value.storage);
     }
     return false;
 }

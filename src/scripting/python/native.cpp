@@ -167,6 +167,62 @@ nb::list NativeHost::schemas() const {
     return result;
 }
 
+document::Vec2d pathPoint(const nb::handle value) {
+    if (!nb::isinstance<nb::tuple>(value) && !nb::isinstance<nb::list>(value)) {
+        throw nb::type_error("A path point is (x, y)");
+    }
+    const auto sequence = nb::borrow<nb::sequence>(value);
+    if (nb::len(sequence) != 2) {
+        throw nb::type_error("A path point is (x, y)");
+    }
+    const document::Vec2d point{nb::cast<double>(sequence[0]), nb::cast<double>(sequence[1])};
+    if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+        throw nb::value_error("Path points must be finite");
+    }
+    return point;
+}
+
+// ADR 0028: a path argument is the mapping bloom.data projects for a path value: {"closed": bool,
+// "anchors": [{"point": (x, y), "in_handle": (x, y) or None, "out_handle": (x, y) or None}]}.
+Value pathValue(const nb::dict& mapping) {
+    if (nb::len(mapping) != 2 || !mapping.contains("closed") || !mapping.contains("anchors") ||
+        !nb::isinstance<nb::bool_>(mapping["closed"])) {
+        throw nb::type_error("A path is {'closed': bool, 'anchors': [...]}");
+    }
+    const auto anchors = nb::borrow<nb::sequence>(mapping["anchors"]);
+    if (nb::len(anchors) > document::kMaximumPathAnchors) {
+        throw nb::value_error("A path has at most 4096 anchors");
+    }
+    document::PathValue path;
+    path.closed = nb::cast<bool>(mapping["closed"]);
+    for (const auto item : anchors) {
+        if (!nb::isinstance<nb::dict>(item)) {
+            throw nb::type_error("A path anchor is a mapping with a point");
+        }
+        const auto row = nb::borrow<nb::dict>(item);
+        if (!row.contains("point")) {
+            throw nb::type_error("A path anchor needs a point");
+        }
+        document::PathAnchor anchor;
+        anchor.point = pathPoint(row["point"]);
+        for (const auto [key, handle] : row) {
+            const auto name = nb::cast<std::string>(key);
+            if (name == "point") {
+                continue;
+            }
+            const bool incoming = name == "in_handle" || name == "inHandle";
+            if (!incoming && name != "out_handle" && name != "outHandle") {
+                throw nb::type_error("A path anchor has point, in_handle and out_handle");
+            }
+            if (!handle.is_none()) {
+                (incoming ? anchor.inHandle : anchor.outHandle) = pathPoint(handle);
+            }
+        }
+        path.anchors.push_back(anchor);
+    }
+    return Value(std::move(path));
+}
+
 Value scriptValue(const nb::handle value, const std::size_t depth) {
     if (depth > 16) {
         throw nb::value_error("Argument nesting exceeds 16 levels");
@@ -202,7 +258,10 @@ Value scriptValue(const nb::handle value, const std::size_t depth) {
         }
         return Value(std::move(array));
     }
-    throw nb::type_error("Expected a scalar or an array of Bloom argument values");
+    if (nb::isinstance<nb::dict>(value)) {
+        return pathValue(nb::borrow<nb::dict>(value));
+    }
+    throw nb::type_error("Expected a scalar, an array or a path of Bloom argument values");
 }
 
 nb::dict NativeHost::transact(const nb::list& operations, const std::string& label,

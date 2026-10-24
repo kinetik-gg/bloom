@@ -22,7 +22,7 @@ STUB_TYPES = {"bool": "bool", "int": "int", "float": "float", "str": "str",
               "id": "int | Proxy", "vec2": "tuple[float, float]",
               "vec3": "tuple[float, float, float]",
               "color4": "tuple[float, float, float, float]", "array": "tuple",
-              "time": "Time", "value": "Value"}
+              "time": "Time", "value": "Value", "path": "Path"}
 
 
 def operation_stub(schemas):
@@ -36,6 +36,7 @@ def operation_stub(schemas):
              "",
              "Time = int | tuple[int, int] | Fraction | float",
              "Value = float | tuple[float, ...]",
+             "Path = Mapping[str, Any]",
              "",
              "class Operation:",
              "    id: str",
@@ -240,6 +241,58 @@ class PythonApi(unittest.TestCase):
                 {'op': 'bloom.layer.add-solid',
                  'args': {'name': 'Red', 'color': [1, 0, 0, 1]}},
                 {'op': 'bloom.composition.set-name', 'args': {'name': 'From context'}}]))
+            command = subprocess.run([CLI, 'run', str(script)], capture_output=True, timeout=60)
+            self.assertEqual(command.returncode, 0, command.stderr.decode())
+            self.assertIn(b'executed 2 transaction(s)', command.stdout)
+
+    def test_layer_masks_take_path_values(self):
+        """ADR 0028: a path is a value kind; masks are added, edited and keyed from Python and the CLI."""
+        composition = bloom.context.composition
+        added = bloom.ops.layer.add_solid('Plate', (1, 1, 1, 1))
+        layer = next(o['id'] for o in added['outputs'] if o['name'] == 'layer')
+        square = {'closed': True, 'anchors': [
+            {'point': (0, 0)}, {'point': (10, 0), 'out_handle': (12, 2)},
+            {'point': (10, 10), 'in_handle': None}, {'point': (0, 10)}]}
+        result = bloom.ops.layer.add_mask(square, layer=layer)
+        self.assertTrue(result['succeeded'])
+        outputs = {o['name']: o['id'] for o in result['outputs']}
+        mask, path = outputs['mask'], outputs['path']
+        masks = bloom.data.layers(composition).get(layer).masks
+        self.assertEqual([m['id'] for m in masks], [mask])
+        self.assertEqual(masks[0]['path'], path)
+        self.assertEqual(masks[0]['mode'], 1)
+        value = bloom.data.parameters(composition).get(path).value
+        self.assertTrue(value['closed'])
+        self.assertEqual(value['anchors'][1]['out_handle'], (12.0, 2.0))
+        self.assertIsNone(value['anchors'][1]['in_handle'])
+        # A path read back from the snapshot passes straight back in.
+        moved = {'closed': value['closed'],
+                 'anchors': [dict(anchor, point=(anchor['point'][0] + 5, anchor['point'][1]))
+                             for anchor in value['anchors']]}
+        self.assertTrue(bloom.ops.layer.set_mask_path(mask, moved, layer=layer)['succeeded'])
+        self.assertEqual(bloom.data.parameters(composition).get(path).value['anchors'][0]['point'],
+                         (5.0, 0.0))
+        self.assertTrue(bloom.ops.layer.animate_mask_path(mask, layer=layer, time=0)['succeeded'])
+        self.assertTrue(
+            bloom.ops.layer.set_mask_path(mask, square, layer=layer, time=12)['succeeded'])
+        self.assertEqual(bloom.data.parameters(composition).get(path).source, 'curve')
+        self.assertTrue(
+            bloom.ops.layer.stop_animating_mask_path(mask, square, layer=layer)['succeeded'])
+        self.assertEqual(bloom.data.parameters(composition).get(path).source, 'constant')
+        with self.assertRaises(bloom.OperationError) as error:
+            bloom.ops.layer.add_mask({'closed': True, 'anchors': [{'point': (0, float('nan'))}]},
+                                     layer=layer)
+        self.assertIn("argument 'path' expects a path", str(error.exception))
+        self.assertIn("bloom.ops.layer.add_mask(path={\"closed\": True", str(error.exception))
+        # The CLI takes the same path as a JSON object; a fresh project allocates the same ids.
+        with tempfile.TemporaryDirectory(prefix='bloom-cli-mask-') as directory:
+            script = pathlib.Path(directory) / 'script.json'
+            script.write_text(json.dumps([
+                {'op': 'bloom.layer.add-solid', 'args': {'name': 'Plate', 'color': [1, 1, 1, 1]}},
+                {'op': 'bloom.layer.add-mask', 'args': {'layer': layer, 'path': {
+                    'closed': True, 'anchors': [
+                        {'point': [0, 0], 'inHandle': None, 'outHandle': [2, 0]},
+                        {'point': [8, 0]}, {'point': [8, 8]}]}}}]))
             command = subprocess.run([CLI, 'run', str(script)], capture_output=True, timeout=60)
             self.assertEqual(command.returncode, 0, command.stderr.decode())
             self.assertIn(b'executed 2 transaction(s)', command.stdout)
