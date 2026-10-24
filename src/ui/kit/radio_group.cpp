@@ -61,6 +61,13 @@ int KRadioGroup::currentIndex() const noexcept { return currentIndex_; }
 
 void KRadioGroup::setCurrentIndex(const int index) { commitIndex(index); }
 
+void KRadioGroup::setMixed() {
+    if (currentIndex_ == -1)
+        return;
+    currentIndex_ = -1;
+    update();
+}
+
 void KRadioGroup::commitIndex(const int index) {
     // A disabled option is refused on every path, click and programmatic alike.
     if (index < 0 || index >= count() || !options_.at(index).enabled || currentIndex_ == index) {

@@ -196,12 +196,28 @@ struct Vec2d {
 
 // Handles are absolute author-space coordinates. Empty and open paths are valid.
 inline constexpr std::size_t kMaximumPathAnchors = 4096;
+// How an anchor's handles respond to editing (document schema 1.24). It is authoring intent only:
+// the rendered curve is always the stored point and handles, so the mode never changes a frame.
+//   Corner    no handles; a sharp point.
+//   Mirrored  collinear handles of equal length; dragging one moves the other symmetrically.
+//   Aligned   collinear handles of independent length; dragging one rotates the other.
+//   Free      fully independent handles.
+//   Auto      handles derived from the neighbouring anchors (Catmull-Rom), recomputed by every
+//             edit that moves a neighbour; dragging a handle turns the anchor Aligned.
+enum class PathAnchorMode : std::uint8_t { Corner, Mirrored, Aligned, Free, Auto };
 struct PathAnchor {
     Vec2d point;
     std::optional<Vec2d> inHandle;
     std::optional<Vec2d> outHandle;
+    PathAnchorMode mode = PathAnchorMode::Corner;
     friend bool operator==(const PathAnchor&, const PathAnchor&) = default;
 };
+// The mode a stored anchor's geometry implies, for paths that carry none (documents before the
+// mode existed, data blocks and script values that omit it): no handle is Corner; two collinear
+// handles of equal length are Mirrored; two collinear handles are Aligned; anything else is Free.
+[[nodiscard]] PathAnchorMode inferPathAnchorMode(const PathAnchor& anchor) noexcept;
+[[nodiscard]] std::string_view pathAnchorModeName(PathAnchorMode mode) noexcept;
+[[nodiscard]] std::optional<PathAnchorMode> pathAnchorModeFromName(std::string_view name) noexcept;
 struct PathValue {
     std::vector<PathAnchor> anchors;
     bool closed = false;

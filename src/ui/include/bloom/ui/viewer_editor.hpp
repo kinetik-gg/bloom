@@ -4,6 +4,7 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_native_surface.hpp>
+#include <bloom/ui/path_editing.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/preferences_aware.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
@@ -24,6 +25,7 @@
 #include <QWidget>
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -43,6 +45,7 @@ class ImageExtent;
 namespace bloom::ui::kit {
 class KDropdown;
 class KIconToggle;
+class KRadioGroup;
 class KValueField;
 } // namespace bloom::ui::kit
 
@@ -256,6 +259,12 @@ class ViewerEditor final : public QWidget,
     [[nodiscard]] ViewTransform viewTransformForTest() const noexcept;
     [[nodiscard]] QRectF canvasRectForTest() const { return canvasRect(); }
     [[nodiscard]] QRectF contentRectForTest() const { return contentRect(); }
+    // The path anchor editing would act on (its own space and the map to composition space), the
+    // selected anchors, and the anchor context menu, without exec.
+    [[nodiscard]] std::optional<std::pair<document::PathValue, QTransform>>
+    anchorEditTargetForTest() const;
+    [[nodiscard]] path_editing::AnchorSet selectedAnchorsForTest() const;
+    [[nodiscard]] std::unique_ptr<QMenu> anchorContextMenuForTest();
     [[nodiscard]] std::optional<ViewerMapping> mappingForTest() const { return currentMapping(); }
     [[nodiscard]] const std::optional<ViewerDisplayDescriptor>& cpuCoverDescriptorForTest() const {
         return cpuCoverDisplay_;
@@ -609,65 +618,94 @@ class ViewerEditor final : public QWidget,
         document::PathValue path;
         QTransform toWorld;
     };
-    struct PathDrag {
-        CreationGesture gesture;
-        PathSelection selection;
-        QPointF origin;
-        std::size_t index;
-        int part; // 0 anchor, 1 incoming handle, 2 outgoing handle
-    };
-    std::optional<PathDrag> pathDrag_;
-    std::optional<std::pair<document::ParameterId, std::size_t>> selectedAnchor_;
     [[nodiscard]] std::optional<PathSelection> selectedPath() const;
+    // A confirmed path the Viewer edits: a Pen shape layer's path or a layer mask, in its own
+    // space (toWorld maps it to composition space). One editing implementation serves both.
+    struct EditablePath {
+        enum class Owner : std::uint8_t { Shape, Mask };
+        Owner owner = Owner::Shape;
+        document::ParameterId parameter;
+        document::PathValue path;
+        QTransform toWorld;
+        std::optional<document::LayerId> layer;    // Mask only
+        std::optional<document::LayerMaskId> mask; // Mask only
+        double feather = 0.0;
+        double expansion = 0.0;
+    };
+    // The drag's copy while a gesture runs, else the selected mask, else the selected shape path.
+    [[nodiscard]] std::optional<EditablePath> editablePath() const;
+    struct AnchorHit {
+        std::size_t index = 0;
+        int part = 0; // 0 anchor, 1 incoming handle, 2 outgoing handle
+    };
+    struct AnchorGesture {
+        enum class Kind : std::uint8_t { Move, Handle, AltPoint, Marquee };
+        Kind kind = Kind::Move;
+        CreationGesture gesture;
+        EditablePath target; // its path is the live result
+        document::PathValue base;
+        path_editing::AnchorSet anchors;
+        std::size_t index = 0;
+        path_editing::HandleSide side = path_editing::HandleSide::Out;
+        bool free = false;
+        bool moved = false;
+        bool previewing = false;
+        bool additive = false;
+    };
+    std::optional<AnchorGesture> anchorGesture_;
+    path_editing::AnchorSet selectedAnchors_;
+    document::ParameterId selectedAnchorsParameter_;
+    // Session-only: the curved mode an Alt-click returns a Corner to.
+    std::map<std::pair<std::uint64_t, std::size_t>, document::PathAnchorMode> curvedModeMemory_;
+    kit::KRadioGroup* anchorModeSwitcher_ = nullptr;
+    [[nodiscard]] path_editing::AnchorSet anchorSelectionFor(const EditablePath& target) const;
+    void setAnchorSelection(const EditablePath& target, path_editing::AnchorSet anchors);
+    [[nodiscard]] std::optional<AnchorHit>
+    hitAnchor(const EditablePath& target, const QTransform& screen, QPointF position) const;
+    void previewPathEdit(AnchorGesture& gesture, const document::PathValue& next);
+    void endPathPreview(AnchorGesture& gesture);
+    // One command: a path value edit for a shape layer, SetLayerMaskPath for a mask (keyed at the
+    // playhead when the path is animated). False when nothing changed or the edit was refused.
+    bool commitPathEdit(const EditablePath& target, document::PathValue next);
+    void cancelAnchorGesture();
+    // Release and Escape alike: keeps the gesture's edit as one command.
+    void commitAnchorGesture();
+    bool anchorPress(QMouseEvent* event);
+    bool anchorMove(QMouseEvent* event);
+    bool anchorRelease(QMouseEvent* event);
+    bool anchorKey(QKeyEvent* event);
+    bool anchorContextMenuEvent(QContextMenuEvent* event);
+    bool setAnchorMode(document::PathAnchorMode mode);
+    bool deleteSelectedAnchors();
+    bool setSelectedPathClosed(bool closed);
+    [[nodiscard]] std::unique_ptr<QMenu> anchorContextMenu();
+    void buildAnchorModeSwitcher();
+    void refreshAnchorModeSwitcher();
+    void paintAnchorEditing(QPainter& painter) const;
+    // The Pen continuing an open shape path from one of its ends; penPath_ is then in path space.
+    std::optional<EditablePath> penContinuation_;
+    bool beginPenContinuation(const EditablePath& target, std::size_t endpoint,
+                              const ViewerMapping& mapping, QPointF screen);
+    [[nodiscard]] document::Vec2d penPoint(const ViewerMapping& mapping, QPointF screen) const;
+    [[nodiscard]] QTransform penScreenTransform(const ViewerMapping& mapping) const;
     bool pathPress(QMouseEvent* event);
     bool pathMove(QMouseEvent* event);
     bool pathRelease(QMouseEvent* event);
     bool pathKey(QKeyEvent* event);
-    void cancelPathDrag();
-    // Escape keeps work: commits the active path anchor drag as one command.
-    void commitPathDrag();
     // Finishes the Pen draft with the anchors placed so far; true when an object was created. A
     // mask needs an outline, so a mask path always closes and needs at least three anchors.
     bool finishPen(bool closed);
-    // Escape keeps work: commits the active mask anchor drag as it stands.
-    void commitMaskDrag();
     void paintPathTools(QPainter& painter) const;
-    // ADR 0028 layer masks. A mask path lives in the layer's content space; toWorld maps it to
-    // composition space. The drag edits a copy and commits one SetLayerMaskPath on release.
-    struct MaskTarget {
-        document::LayerId layer;
-        document::LayerMaskId mask;
-        document::ParameterId pathParameter;
-        document::PathValue path;
-        QTransform toWorld;
-        double feather = 0.0;
-        double expansion = 0.0;
-    };
-    struct MaskDrag {
-        CreationGesture gesture;
-        MaskTarget target;
-        document::PathValue base;
-        QPointF origin;
-        std::size_t index;
-        int part; // 0 anchor, 1 incoming handle, 2 outgoing handle
-    };
+    // ADR 0028 layer masks. A mask path lives in the layer's content space.
     struct MaskCreationTarget {
         document::LayerId layer;
         std::optional<QTransform> toContent; // empty when the layer has no evaluated bounds now
     };
-    std::optional<MaskDrag> maskDrag_;
-    std::optional<std::size_t> selectedMaskAnchor_;
-    [[nodiscard]] std::optional<MaskTarget> selectedMaskTarget() const;
+    [[nodiscard]] std::optional<EditablePath> selectedMaskTarget() const;
     [[nodiscard]] std::optional<MaskCreationTarget> maskCreationTarget() const;
     // Adds `compositionPath` (composition space) as a mask of the target layer.
     bool addMaskFromPath(const MaskCreationTarget& target, const document::PathValue& path);
-    bool maskPress(QMouseEvent* event);
-    bool maskMove(QMouseEvent* event);
-    bool maskRelease(QMouseEvent* event);
-    void cancelMaskDrag();
-    // Ends the drag's live session-only preview override, without touching the document.
-    void endMaskPreview(const MaskDrag& drag);
-    void paintMaskTools(QPainter& painter) const;
+    bool maskOutlinePress(QMouseEvent* event, const ViewerMapping& mapping);
     Tool tool_ = Tool::Select;
     QWidget* toolColumn_ = nullptr;
     bool panActive_ = false;

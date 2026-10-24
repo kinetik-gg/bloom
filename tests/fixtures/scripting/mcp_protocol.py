@@ -181,7 +181,11 @@ class Protocol(unittest.TestCase):
         path_id = next(o['id'] for o in added['outputs'] if o['name'] == 'path')
         record = next(r for r in responses[2]['result']['structuredContent']['records']
                       if r['id'] == path_id)
-        self.assertEqual(record['value'], path)
+        # The projection names each anchor's mode; an omitted mode was inferred from the handles.
+        expected = {'closed': True, 'anchors': [
+            dict(anchor, mode=mode) for anchor, mode in zip(path['anchors'],
+                                                            ('free', 'corner', 'corner'))]}
+        self.assertEqual(record['value'], expected)
         self.assertIn('error', responses[3])
 
     def test_handshake_transactions_and_events(self):

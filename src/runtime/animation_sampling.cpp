@@ -478,12 +478,11 @@ std::optional<document::PathValue> samplePathCurve(const CompiledPathCurve& curv
         return from.value;
     // The factor is the scalar curve 0 -> 1 over the segment, so every ease and handle rule is the
     // scalar sampler's own.
-    const CompiledScalarCurve progress{
-        curve.id,
-        {{from.id, from.time, 0.0, from.outgoingInterpolation, from.outgoingHandle,
-          from.incomingHandle},
-         {to.id, to.time, 1.0, CompiledKeyframeInterpolation::Linear, to.outgoingHandle,
-          to.incomingHandle}}};
+    const CompiledScalarCurve progress{curve.id,
+                                       {{from.id, from.time, 0.0, from.outgoingInterpolation,
+                                         from.outgoingHandle, from.incomingHandle},
+                                        {to.id, to.time, 1.0, CompiledKeyframeInterpolation::Linear,
+                                         to.outgoingHandle, to.incomingHandle}}};
     const auto sampled = sampleAnimationCurve(progress, time);
     if (!sampled || !sampled.value)
         return std::nullopt;
@@ -503,6 +502,8 @@ std::optional<document::PathValue> samplePathCurve(const CompiledPathCurve& curv
             out.inHandle = mix(a.inHandle.value_or(a.point), b.inHandle.value_or(b.point));
         if (a.outHandle || b.outHandle)
             out.outHandle = mix(a.outHandle.value_or(a.point), b.outHandle.value_or(b.point));
+        // The editing mode follows the earlier key, like the closed flag.
+        out.mode = a.mode;
         result.anchors.push_back(out);
     }
     return result;

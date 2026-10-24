@@ -699,3 +699,406 @@ void testMaskTools(Expectations& expectations) {
                         "with no layer selected a rectangle still creates a shape layer");
     toolShutdown(fixture, expectations);
 }
+
+// Post-confirmation anchor editing: the same gestures, switcher, menu and keys on a Pen shape path
+// and on a layer mask. Every edit is one undo step; the document never changes mid-drag.
+namespace anchor_test {
+using bloom::document::PathAnchorMode;
+using bloom::document::PathValue;
+using bloom::document::Vec2d;
+namespace pe = bloom::ui::path_editing;
+
+struct Target {
+    PathValue path;
+    QTransform world;
+};
+std::optional<Target> target(ViewerFixture& fixture) {
+    const auto value = fixture.viewer.anchorEditTargetForTest();
+    if (!value)
+        return std::nullopt;
+    return Target{value->first, value->second};
+}
+// Composition-space position of a path-space point.
+QPointF at(const Target& t, const Vec2d point) { return t.world.map(QPointF(point.x, point.y)); }
+QPointF anchorAt(const Target& t, const std::size_t index) {
+    return at(t, t.path.anchors[index].point);
+}
+bool collinear(const bloom::document::PathAnchor& anchor) {
+    if (!anchor.inHandle || !anchor.outHandle)
+        return false;
+    const auto& p = anchor.point;
+    const double ix = anchor.inHandle->x - p.x, iy = anchor.inHandle->y - p.y;
+    const double ox = anchor.outHandle->x - p.x, oy = anchor.outHandle->y - p.y;
+    return std::abs(ix * oy - iy * ox) <
+               1e-6 * std::max(1.0, std::hypot(ix, iy) * std::hypot(ox, oy)) &&
+           ix * ox + iy * oy < 0.0;
+}
+double handleLength(const bloom::document::PathAnchor& anchor, const bool out) {
+    const auto& handle = out ? *anchor.outHandle : *anchor.inHandle;
+    return std::hypot(handle.x - anchor.point.x, handle.y - anchor.point.y);
+}
+void clickSwitcher(ViewerFixture& fixture, const int option) {
+    auto* switcher =
+        fixture.viewer.findChild<bloom::ui::kit::KRadioGroup*>("viewerAnchorModeSwitcher");
+    if (switcher == nullptr)
+        return;
+    const QPointF point = switcher->optionRect(option).center();
+    QMouseEvent press(QEvent::MouseButtonPress, point, switcher->mapToGlobal(point), Qt::LeftButton,
+                      Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(switcher, &press);
+    QMouseEvent release(QEvent::MouseButtonRelease, point, switcher->mapToGlobal(point),
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(switcher, &release);
+}
+int switcherIndex(ViewerFixture& fixture) {
+    auto* switcher =
+        fixture.viewer.findChild<bloom::ui::kit::KRadioGroup*>("viewerAnchorModeSwitcher");
+    return switcher != nullptr && switcher->isVisible() ? switcher->currentIndex() : -2;
+}
+void triggerMenu(ViewerFixture& fixture, const char* name) {
+    auto menu = fixture.viewer.anchorContextMenuForTest();
+    if (!menu)
+        return;
+    if (auto* action = menu->findChild<QAction*>(name))
+        action->trigger();
+}
+void click(ViewerFixture& fixture, const QPointF point,
+           const Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    toolDrag(fixture, point, point, modifiers);
+}
+
+// The shared checks, run against whichever path the fixture leaves selected. `mask` decides the
+// deletion minimum (a closed mask keeps three anchors; an open shape path two).
+void exercise(ViewerFixture& fixture, Expectations& expectations, const std::string& label,
+              const bool mask) {
+    const auto name = [&](const char* text) { return label + ": " + text; };
+    toolReady(fixture, expectations);
+    auto t = target(fixture);
+    expectations.expect(t && t->path.anchors.size() == 4, name("a four-anchor path is editable"));
+    if (!t || t->path.anchors.size() != 4)
+        return;
+
+    // Selection: click, Shift-click, and the switcher reflects it.
+    click(fixture, anchorAt(*t, 1));
+    expectations.expect(fixture.viewer.selectedAnchorsForTest() == pe::AnchorSet{1},
+                        name("clicking an anchor selects it"));
+    expectations.expect(switcherIndex(fixture) == 0, name("the switcher shows Corner"));
+    click(fixture, anchorAt(*t, 2), Qt::ShiftModifier);
+    expectations.expect(fixture.viewer.selectedAnchorsForTest() == pe::AnchorSet{1, 2},
+                        name("Shift-click adds an anchor"));
+
+    // Switching modes on a multi-selection: one undo step.
+    const auto beforeMode = target(fixture)->path;
+    const auto revision = fixture.session.snapshot().revision();
+    clickSwitcher(fixture, 1);
+    t = target(fixture);
+    expectations.expect(t->path.anchors[1].mode == PathAnchorMode::Mirrored &&
+                            t->path.anchors[2].mode == PathAnchorMode::Mirrored &&
+                            collinear(t->path.anchors[1]) && collinear(t->path.anchors[2]),
+                        name("the switcher converts the selection to Mirrored"));
+    expectations.expect(switcherIndex(fixture) == 1, name("the switcher shows Mirrored"));
+    expectations.expect(fixture.session.snapshot().revision() != revision &&
+                            fixture.session.undo() && target(fixture)->path == beforeMode,
+                        name("one undo restores the mode switch"));
+    toolReady(fixture, expectations);
+    clickSwitcher(fixture, 1);
+
+    // Mixed state: anchor 2 Free through the context menu, then both selected.
+    toolReady(fixture, expectations);
+    t = target(fixture);
+    click(fixture, anchorAt(*t, 2));
+    triggerMenu(fixture, "viewerAnchorModeFree");
+    t = target(fixture);
+    expectations.expect(t->path.anchors[2].mode == PathAnchorMode::Free,
+                        name("the context menu sets Free"));
+    toolReady(fixture, expectations);
+    click(fixture, anchorAt(*t, 1), Qt::ShiftModifier);
+    expectations.expect(switcherIndex(fixture) == -1,
+                        name("a Mirrored and a Free anchor show the mixed state"));
+
+    // Mirrored drag: the opposite handle mirrors.
+    toolReady(fixture, expectations);
+    t = target(fixture);
+    const auto out1 = at(*t, *t->path.anchors[1].outHandle);
+    const auto historyBeforeDrag = fixture.session.snapshot().revision();
+    toolMouse(fixture, QEvent::MouseButtonPress, out1);
+    toolMouse(fixture, QEvent::MouseMove, out1 + QPointF(12, 18));
+    expectations.expect(fixture.session.snapshot().revision() == historyBeforeDrag &&
+                            fixture.session.valueEditActive(),
+                        name("a handle drag previews without changing the document"));
+    toolMouse(fixture, QEvent::MouseButtonRelease, out1 + QPointF(12, 18));
+    t = target(fixture);
+    {
+        const auto& a = t->path.anchors[1];
+        expectations.expect(collinear(a) &&
+                                std::abs(handleLength(a, true) - handleLength(a, false)) < 1e-6,
+                            name("a Mirrored handle drag mirrors the opposite handle"));
+    }
+
+    // Aligned drag: the opposite handle rotates and keeps its length.
+    toolReady(fixture, expectations);
+    click(fixture, anchorAt(*t, 1));
+    clickSwitcher(fixture, 2);
+    toolReady(fixture, expectations);
+    t = target(fixture);
+    {
+        const auto inLength = handleLength(t->path.anchors[1], false);
+        const auto out = at(*t, *t->path.anchors[1].outHandle);
+        toolDrag(fixture, out, out + QPointF(-15, 25));
+        t = target(fixture);
+        const auto& a = t->path.anchors[1];
+        expectations.expect(
+            a.mode == PathAnchorMode::Aligned && collinear(a) &&
+                std::abs(handleLength(a, false) - inLength) < 1e-6,
+            name("an Aligned handle drag rotates the opposite handle, same length"));
+    }
+
+    // Free drag: the opposite handle stays.
+    toolReady(fixture, expectations);
+    t = target(fixture);
+    {
+        const auto in = *t->path.anchors[2].inHandle;
+        const auto out = at(*t, *t->path.anchors[2].outHandle);
+        toolDrag(fixture, out, out + QPointF(20, -10));
+        t = target(fixture);
+        expectations.expect(*t->path.anchors[2].inHandle == in,
+                            name("a Free handle drag leaves the opposite handle"));
+    }
+
+    // Alt-drag a handle: Free for that drag's result.
+    toolReady(fixture, expectations);
+    t = target(fixture);
+    {
+        const auto in = *t->path.anchors[1].inHandle;
+        const auto out = at(*t, *t->path.anchors[1].outHandle);
+        toolDrag(fixture, out, out + QPointF(10, 30), Qt::AltModifier);
+        t = target(fixture);
+        expectations.expect(t->path.anchors[1].mode == PathAnchorMode::Free &&
+                                *t->path.anchors[1].inHandle == in,
+                            name("an Alt handle drag makes the anchor Free"));
+    }
+
+    // Auto recomputes when a neighbour moves.
+    toolReady(fixture, expectations);
+    click(fixture, anchorAt(*t, 1));
+    clickSwitcher(fixture, 4);
+    toolReady(fixture, expectations);
+    t = target(fixture);
+    {
+        const auto point = anchorAt(*t, 2);
+        toolDrag(fixture, point, point + QPointF(0, 30));
+        t = target(fixture);
+        const auto expected = pe::autoHandles(t->path, 1);
+        expectations.expect(t->path.anchors[1].mode == PathAnchorMode::Auto && expected &&
+                                *t->path.anchors[1].outHandle == expected->second,
+                            name("moving a neighbour recomputes the Auto anchor"));
+    }
+
+    // Alt-click: curved -> Corner -> the previous curved mode.
+    toolReady(fixture, expectations);
+    t = target(fixture);
+    click(fixture, anchorAt(*t, 1), Qt::AltModifier);
+    t = target(fixture);
+    expectations.expect(t->path.anchors[1].mode == PathAnchorMode::Corner &&
+                            !t->path.anchors[1].outHandle,
+                        name("Alt-click makes a curved anchor a Corner"));
+    toolReady(fixture, expectations);
+    click(fixture, anchorAt(*t, 1), Qt::AltModifier);
+    t = target(fixture);
+    expectations.expect(t->path.anchors[1].mode == PathAnchorMode::Auto,
+                        name("Alt-click returns the Corner to its previous curved mode"));
+
+    // Pen on a segment adds a point without changing the shape, then returns to Select.
+    toolReady(fixture, expectations);
+    t = target(fixture);
+    {
+        const auto before = t->path;
+        const auto controls = pe::segmentControls(before, 0);
+        const auto middle = pe::segmentPoint(controls, 0.5);
+        toolKey(fixture, Qt::Key_P);
+        click(fixture, at(*t, middle));
+        t = target(fixture);
+        bool onShape = t && t->path.anchors.size() == 5;
+        if (onShape) {
+            const auto first = pe::segmentControls(t->path, 0);
+            const auto second = pe::segmentControls(t->path, 1);
+            for (int step = 0; step <= 8 && onShape; ++step) {
+                const double u = step / 8.0;
+                const auto a = pe::segmentPoint(first, u);
+                const auto b = pe::segmentPoint(second, u);
+                double nearestA = 1e300, nearestB = 1e300;
+                for (int k = 0; k <= 2000; ++k) {
+                    const auto o = pe::segmentPoint(controls, k / 2000.0);
+                    nearestA = std::min(nearestA, std::hypot(o.x - a.x, o.y - a.y));
+                    nearestB = std::min(nearestB, std::hypot(o.x - b.x, o.y - b.y));
+                }
+                onShape = nearestA < 0.05 && nearestB < 0.05;
+            }
+        }
+        expectations.expect(onShape, name("the Pen adds a point on a segment, shape unchanged"));
+        expectations.expect(selectToolActive(fixture) &&
+                                fixture.viewer.selectedAnchorsForTest() == pe::AnchorSet{1},
+                            name("adding a point selects it and returns to Select"));
+        expectations.expect(fixture.session.undo() && target(fixture)->path == before,
+                            name("one undo removes the added point"));
+    }
+
+    // Delete and Backspace remove selected anchors; the Pen on an anchor removes it; the minimum
+    // refuses.
+    toolReady(fixture, expectations);
+    t = target(fixture);
+    click(fixture, anchorAt(*t, 1));
+    toolKey(fixture, Qt::Key_Delete);
+    t = target(fixture);
+    expectations.expect(t && t->path.anchors.size() == 3 &&
+                            !fixture.session.selectedNodes().empty(),
+                        name("Delete removes the anchor, not the layer"));
+    if (mask) {
+        toolReady(fixture, expectations);
+        click(fixture, anchorAt(*t, 0));
+        toolKey(fixture, Qt::Key_Backspace);
+        t = target(fixture);
+        expectations.expect(t && t->path.anchors.size() == 3,
+                            name("a mask keeps three anchors: Backspace is refused"));
+        toolReady(fixture, expectations);
+        toolKey(fixture, Qt::Key_P);
+        click(fixture, anchorAt(*t, 2));
+        t = target(fixture);
+        expectations.expect(t && t->path.anchors.size() == 3,
+                            name("the Pen on a three-anchor mask's point is refused"));
+        toolKey(fixture, Qt::Key_V);
+    } else {
+        toolReady(fixture, expectations);
+        click(fixture, anchorAt(*t, 1));
+        toolKey(fixture, Qt::Key_Backspace);
+        t = target(fixture);
+        expectations.expect(t && t->path.anchors.size() == 2, name("Backspace removes an anchor"));
+        toolReady(fixture, expectations);
+        click(fixture, anchorAt(*t, 0));
+        toolKey(fixture, Qt::Key_Delete);
+        t = target(fixture);
+        expectations.expect(t && t->path.anchors.size() == 2,
+                            name("a shape path keeps two anchors: Delete is refused"));
+    }
+
+    // Marquee from empty canvas selects the anchors inside it.
+    toolReady(fixture, expectations);
+    t = target(fixture);
+    {
+        double minX = 1e300, minY = 1e300, maxX = -1e300, maxY = -1e300;
+        for (std::size_t index = 0; index < t->path.anchors.size(); ++index) {
+            const auto point = anchorAt(*t, index);
+            minX = std::min(minX, point.x());
+            minY = std::min(minY, point.y());
+            maxX = std::max(maxX, point.x());
+            maxY = std::max(maxY, point.y());
+        }
+        toolDrag(fixture, {minX - 5, -10}, {maxX + 5, maxY + 5});
+        expectations.expect(fixture.viewer.selectedAnchorsForTest().size() ==
+                                t->path.anchors.size(),
+                            name("a marquee from empty canvas selects every anchor inside it"));
+    }
+}
+} // namespace anchor_test
+
+void testAnchorEditing(Expectations& expectations) {
+    using namespace bloom;
+    using anchor_test::target;
+    // A Pen shape path: four corners, open.
+    {
+        ViewerFixture fixture(toolProject());
+        fixture.viewer.resize(800, 650);
+        fixture.viewer.show();
+        toolReady(fixture, expectations);
+        toolKey(fixture, Qt::Key_P);
+        for (const QPointF point :
+             {QPointF(60, 60), QPointF(200, 60), QPointF(200, 200), QPointF(60, 200)})
+            anchor_test::click(fixture, point);
+        toolKey(fixture, Qt::Key_Return);
+        anchor_test::exercise(fixture, expectations, "shape path", false);
+
+        // Continue drawing from an open end, close through the first point, open from the menu.
+        toolReady(fixture, expectations);
+        auto t = target(fixture);
+        if (t) {
+            const auto count = t->path.anchors.size();
+            toolKey(fixture, Qt::Key_P);
+            anchor_test::click(fixture, anchor_test::anchorAt(*t, count - 1));
+            anchor_test::click(fixture, {320, 240});
+            toolKey(fixture, Qt::Key_Return);
+            t = target(fixture);
+            expectations.expect(t && t->path.anchors.size() == count + 1 && !t->path.closed &&
+                                    selectToolActive(fixture),
+                                "shape path: the Pen continues from an open end, one edit");
+            expectations.expect(fixture.session.undo() && target(fixture) &&
+                                    target(fixture)->path.anchors.size() == count,
+                                "shape path: one undo removes the continued segment");
+            toolReady(fixture, expectations);
+            t = target(fixture);
+            toolKey(fixture, Qt::Key_P);
+            anchor_test::click(fixture, anchor_test::anchorAt(*t, count - 1));
+            anchor_test::click(fixture, {320, 240});
+            anchor_test::click(fixture, anchor_test::anchorAt(*t, 0));
+            t = target(fixture);
+            expectations.expect(t && t->path.closed && t->path.anchors.size() == count + 1,
+                                "shape path: clicking the first point closes the continued path");
+            toolReady(fixture, expectations);
+            anchor_test::click(fixture, anchor_test::anchorAt(*t, 0));
+            anchor_test::triggerMenu(fixture, "viewerPathClosedToggle");
+            t = target(fixture);
+            expectations.expect(t && !t->path.closed, "shape path: the menu opens the path");
+        }
+        toolShutdown(fixture, expectations);
+    }
+    // A layer mask: a rectangle on a selected solid.
+    {
+        ViewerFixture fixture(toolProject());
+        fixture.viewer.resize(800, 650);
+        fixture.viewer.show();
+        toolReady(fixture, expectations);
+        expectations.expect(fixture.session.addSolidLayer("Plate", {0.2, 0.3, 0.4, 1}),
+                            "anchor fixture adds a solid layer");
+        toolReady(fixture, expectations);
+        toolKey(fixture, Qt::Key_R);
+        toolDrag(fixture, {60, 60}, {200, 200});
+        anchor_test::exercise(fixture, expectations, "mask", true);
+
+        // Keyed: an edit at the playhead keys there, and one undo removes it.
+        const auto* selected = std::get_if<document::LayerId>(&fixture.session.selection().primary);
+        const auto* layer =
+            selected ? fixture.session.composition()->graph().findLayer(*selected) : nullptr;
+        if (layer != nullptr && !layer->masks.empty()) {
+            const auto mask = layer->masks.front();
+            toolReady(fixture, expectations);
+            expectations.expect(fixture.session.toggleMaskPathKey(mask.path),
+                                "mask: animate the path");
+            expectations.expect(fixture.session.setCurrentTime(core::RationalTime::fromInteger(1)),
+                                "mask: move the playhead");
+            toolReady(fixture, expectations);
+            fixture.session.selectMask(layer->layerId, mask.id);
+            toolReady(fixture, expectations);
+            auto t = target(fixture);
+            const auto keysOf = [&] {
+                const auto* record = fixture.session.composition()->parameters().find(mask.path);
+                const auto* source =
+                    record ? std::get_if<document::AnimationCurveSource>(&record->source) : nullptr;
+                const auto* curve =
+                    source ? fixture.session.composition()->animationCurves().find(source->curveId)
+                           : nullptr;
+                const auto* path =
+                    curve ? std::get_if<document::PathAnimationCurve>(curve) : nullptr;
+                return path ? path->keyframes.size() : std::size_t{0};
+            };
+            const auto keys = keysOf();
+            if (t) {
+                const auto point = anchor_test::anchorAt(*t, 0);
+                toolDrag(fixture, point, point + QPointF(10, 10));
+            }
+            expectations.expect(keys == 1 && keysOf() == 2,
+                                "mask: an anchor edit on a keyed path keys at the playhead");
+            expectations.expect(fixture.session.undo() && keysOf() == 1,
+                                "mask: one undo removes the keyed edit");
+        }
+        toolShutdown(fixture, expectations);
+    }
+}

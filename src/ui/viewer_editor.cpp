@@ -20,6 +20,7 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
@@ -1575,10 +1576,12 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
             tr("Line: drag; Shift snaps to 45 degrees; Alt draws from centre"), "viewerLineTool");
     addTool(Tool::Pen, kit::IconId::Pen,
             tr("Pen: click anchors; drag handles; click first to close; Enter or Escape "
-               "finishes (P)"),
+               "finishes. On a selected path: click a segment to add a point, an anchor to "
+               "remove it, an open end to continue (P)"),
             "viewerPenTool");
     tools->adjustSize();
     tools->move(0, 0);
+    buildAnchorModeSwitcher();
 
     setMinimumSize(kit::px(kit::Size::ViewerMinWidth),
                    std::max(kit::px(kit::Size::ViewerMinHeight),
@@ -1605,16 +1608,24 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     });
     connect(&session_, &CompositionSession::currentTimeChanged, this, [this] { cancelCreation(); });
     connect(&session_, &CompositionSession::selectionChanged, this, [this] {
-        cancelPathDrag();
-        cancelMaskDrag();
-        selectedAnchor_.reset();
+        cancelAnchorGesture();
+        selectedAnchors_.clear();
+        refreshAnchorModeSwitcher();
         update();
     });
     connect(&session_, &CompositionSession::maskSelectionChanged, this, [this] {
-        cancelMaskDrag();
-        selectedMaskAnchor_.reset();
+        cancelAnchorGesture();
+        selectedAnchors_.clear();
+        refreshAnchorModeSwitcher();
         update();
     });
+    // The anchor mode strip follows the edited path: edits, keyed time and late layer bounds.
+    connect(&session_, &CompositionSession::snapshotChanged, this,
+            [this] { refreshAnchorModeSwitcher(); });
+    connect(&session_, &CompositionSession::currentTimeChanged, this,
+            [this] { refreshAnchorModeSwitcher(); });
+    connect(&previewController_, &CompositionPreviewController::stateChanged, this,
+            [this] { refreshAnchorModeSwitcher(); });
     connect(&session_, &CompositionSession::liveValueChanged, this, [this] {
         if (textEdit_ && !session_.isValueEditing(textEdit_->parameter))
             finishTextEditing(false);
@@ -2481,7 +2492,7 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
     paintRoi(painter);
     paintCreation(painter);
     paintPathTools(painter);
-    paintMaskTools(painter);
+    paintAnchorEditing(painter);
     paintTextEditing(painter);
 
     if (coverSnapshotInProgress_)
@@ -2695,7 +2706,7 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
         return;
     if (textPress(event))
         return;
-    if (maskPress(event))
+    if (anchorPress(event))
         return;
     if (pathPress(event))
         return;
@@ -2816,7 +2827,7 @@ void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
-    if (maskMove(event))
+    if (anchorMove(event))
         return;
     if (pathMove(event))
         return;
@@ -2890,7 +2901,7 @@ void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
-    if (maskRelease(event))
+    if (anchorRelease(event))
         return;
     if (pathRelease(event))
         return;
@@ -3078,6 +3089,8 @@ void ViewerEditor::contextMenuEvent(QContextMenuEvent* event) {
     // composition_editor_support.cpp) -- no per-menu styling code needed here. Honest,
     // placeholder-free set only (decision 4): no RAM-preview/channel/quality slots, which do not
     // exist yet.
+    if (anchorContextMenuEvent(event))
+        return;
     std::unique_ptr<QMenu> menuOwner(kit::makeMenu(this));
     auto& menu = *menuOwner;
     QAction* fitAction = menu.addAction(tr("Fit"));
@@ -3112,6 +3125,7 @@ void ViewerEditor::contextMenuEvent(QContextMenuEvent* event) {
 }
 
 #include "viewer_tools.ipp"
+#include "viewer_tools_anchors.ipp"
 #include "viewer_tools_mask.ipp"
 #include "viewer_tools_path.ipp"
 

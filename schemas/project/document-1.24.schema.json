@@ -2389,6 +2389,15 @@
         },
         "outHandle": {
           "$ref": "#/$defs/pathPoint-1.14"
+        },
+        "mode": {
+          "enum": [
+            "corner",
+            "mirrored",
+            "aligned",
+            "free",
+            "auto"
+          ]
         }
       },
       "unevaluatedProperties": false

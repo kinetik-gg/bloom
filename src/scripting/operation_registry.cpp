@@ -331,8 +331,8 @@ path(const Arguments& arguments, const std::string& operationId, const std::stri
      OperationCreateResult& error, const bool required = true) {
     return read(arguments, operationId, name, error, required,
                 "expects a path: {\"closed\": bool, \"anchors\": [{\"point\": (x, y), "
-                "\"in_handle\": (x, y) or None, \"out_handle\": (x, y) or None}, ...]} with "
-                "finite coordinates",
+                "\"in_handle\": (x, y) or None, \"out_handle\": (x, y) or None, optional "
+                "\"mode\": corner, mirrored, aligned, free or auto}, ...]} with finite coordinates",
                 [](const Value& value) -> std::optional<document::PathValue> {
                     const auto* result = std::get_if<document::PathValue>(&value.storage);
                     return result != nullptr && result->isValid() ? std::optional(*result)
@@ -1003,7 +1003,12 @@ std::string pythonLiteral(const Value& value) {
                     text += (index == 0 ? std::string() : std::string(", ")) +
                             "{\"point\": " + pythonLiteral(Value(anchor.point)) +
                             ", \"in_handle\": " + handle(anchor.inHandle) +
-                            ", \"out_handle\": " + handle(anchor.outHandle) + "}";
+                            ", \"out_handle\": " + handle(anchor.outHandle) +
+                            (anchor.mode != document::inferPathAnchorMode(anchor)
+                                 ? ", \"mode\": \"" +
+                                       std::string(document::pathAnchorModeName(anchor.mode)) + "\""
+                                 : std::string()) +
+                            "}";
                 }
                 return text + "]}";
             } else {

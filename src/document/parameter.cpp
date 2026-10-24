@@ -424,6 +424,54 @@ constantMatchesSchema(const std::string_view schemaKey,
 
 namespace bloom::document {
 
+PathAnchorMode inferPathAnchorMode(const PathAnchor& anchor) noexcept {
+    if (!anchor.inHandle && !anchor.outHandle)
+        return PathAnchorMode::Corner;
+    if (!anchor.inHandle || !anchor.outHandle)
+        return PathAnchorMode::Free;
+    const double ix = anchor.inHandle->x - anchor.point.x;
+    const double iy = anchor.inHandle->y - anchor.point.y;
+    const double ox = anchor.outHandle->x - anchor.point.x;
+    const double oy = anchor.outHandle->y - anchor.point.y;
+    const double inLength = std::hypot(ix, iy);
+    const double outLength = std::hypot(ox, oy);
+    if (inLength == 0.0 || outLength == 0.0)
+        return PathAnchorMode::Free;
+    // Collinear and opposed, within a relative tolerance that absorbs the rounding of edits.
+    constexpr double kTolerance = 1e-9;
+    const double cross = ix * oy - iy * ox;
+    const double dot = ix * ox + iy * oy;
+    if (std::fabs(cross) > kTolerance * inLength * outLength || dot >= 0.0)
+        return PathAnchorMode::Free;
+    return std::fabs(inLength - outLength) <= kTolerance * std::max(inLength, outLength)
+               ? PathAnchorMode::Mirrored
+               : PathAnchorMode::Aligned;
+}
+
+std::string_view pathAnchorModeName(const PathAnchorMode mode) noexcept {
+    switch (mode) {
+    case PathAnchorMode::Corner:
+        return "corner";
+    case PathAnchorMode::Mirrored:
+        return "mirrored";
+    case PathAnchorMode::Aligned:
+        return "aligned";
+    case PathAnchorMode::Free:
+        return "free";
+    case PathAnchorMode::Auto:
+        return "auto";
+    }
+    return "corner";
+}
+
+std::optional<PathAnchorMode> pathAnchorModeFromName(const std::string_view name) noexcept {
+    for (const auto mode : {PathAnchorMode::Corner, PathAnchorMode::Mirrored,
+                            PathAnchorMode::Aligned, PathAnchorMode::Free, PathAnchorMode::Auto})
+        if (pathAnchorModeName(mode) == name)
+            return mode;
+    return std::nullopt;
+}
+
 bool PathValue::isValid() const noexcept {
     const auto finite = [](const Vec2d point) {
         return std::isfinite(point.x) && std::isfinite(point.y);

@@ -78,6 +78,7 @@ document::PathValue pathValue(yyjson_val* item) {
             throw InvalidInput("A path anchor is an object");
         document::PathAnchor anchor;
         bool hasPoint = false;
+        std::optional<document::PathAnchorMode> mode;
         yyjson_obj_iter fields = yyjson_obj_iter_with(row);
         while (auto* key = yyjson_obj_iter_next(&fields)) {
             const std::string_view name(yyjson_get_str(key), yyjson_get_len(key));
@@ -88,12 +89,20 @@ document::PathValue pathValue(yyjson_val* item) {
             } else if (name == "inHandle" || name == "outHandle") {
                 if (!yyjson_is_null(field))
                     (name == "inHandle" ? anchor.inHandle : anchor.outHandle) = pathPoint(field);
+            } else if (name == "mode") {
+                mode = yyjson_is_str(field) ? document::pathAnchorModeFromName(std::string_view(
+                                                  yyjson_get_str(field), yyjson_get_len(field)))
+                                            : std::nullopt;
+                if (!mode)
+                    throw InvalidInput("A path anchor mode is corner, mirrored, aligned, free or "
+                                       "auto");
             } else {
-                throw InvalidInput("A path anchor has point, inHandle and outHandle");
+                throw InvalidInput("A path anchor has point, inHandle, outHandle and mode");
             }
         }
         if (!hasPoint)
             throw InvalidInput("A path anchor needs a point");
+        anchor.mode = mode.value_or(document::inferPathAnchorMode(anchor));
         path.anchors.push_back(anchor);
     }
     return path;

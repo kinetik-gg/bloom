@@ -144,11 +144,47 @@ rectangles and ellipses to equal sides, keeps polygons and stars regular, or sna
 as centre. Polygon and Star start with five points. Release creates and selects the layer
 with one undo entry. The selection gizmo appears with the evaluated frame.
 
-Pen clicks append straight anchors; dragging an anchor during creation sets symmetric cubic
-handles. Clicking the first anchor closes a path with at least three anchors; Enter or Escape
-finishes an open path with at least two. Selected Path layers display screen-sized
-anchor squares and handle circles. Dragging edits the live path, Alt moves a handle independently,
-and Delete removes the selected anchor. Text clicks create a layer and enter canvas text editing
+Pen clicks append straight anchors; dragging an anchor during creation pulls Mirrored handles.
+Clicking the first anchor closes a path with at least three anchors; Enter or Escape finishes an
+open path with at least two.
+
+**Editing a confirmed path.** A selected Pen shape path and a selected mask are edited by the same
+implementation, with the same gestures, and draw the same screen-sized anchor squares (Accent when
+selected) and handle circles. Every action previews live in the Viewer through a session-only
+override, changes the document once, on release, as one undo step (a mask path that is keyed gets
+a key at the playhead), and follows the Escape-confirms rule above.
+
+- Select: click an anchor to select it (a click on one anchor of a multi-selection selects just
+  that one); Shift-click adds or removes it; a marquee dragged from empty canvas selects the
+  anchors inside it (Shift adds); a plain click on empty canvas still deselects. Dragging a
+  selected anchor moves every selected anchor with its handles.
+- Handles follow the anchor's mode. Corner has none; Mirrored keeps them collinear and equal, so
+  dragging one moves the other symmetrically; Aligned keeps them collinear, so dragging one
+  rotates the other at its own length; Free leaves the other alone; Auto derives both from the
+  neighbouring anchors (Catmull-Rom) and recomputes them whenever a neighbour moves, and dragging an
+  Auto handle turns the anchor Aligned.
+- Alt-click an anchor toggles Corner and its previous curved mode (Mirrored the first time).
+  Alt-drag from an anchor pulls out new Mirrored handles. Alt-drag a handle moves it alone and
+  leaves the anchor Free.
+- The anchor mode strip -- a kit segmented control with Corner, Mirrored, Aligned, Free and Auto --
+  appears at the top of the canvas beside the tool column (the Viewer's tool-options position)
+  while anchors are selected. It shows the selection's mode, or no option for a mixed selection,
+  and choosing one converts every selected anchor. A curved mode on a Corner pulls handles sized
+  from its neighbours; Mirrored and Aligned straighten existing handles onto their common tangent.
+- Right-click on an anchor or the selection offers the same five modes, Delete Point(s) and, for a
+  shape path, Open Path / Close Path.
+- With the Pen, clicking a segment adds an anchor there by splitting the curve, so the shape is
+  unchanged; clicking an anchor removes it; clicking an end of an open shape path continues drawing
+  from that end (clicking the first anchor then closes it, Enter or Escape finishes it as one edit).
+  A Pen edit selects its result and returns the Viewer to Select.
+- Delete or Backspace removes the selected anchors. A path keeps a valid minimum: a mask (always
+  closed) keeps three anchors, a shape path two (a closed shape path left with two opens); a
+  removal below it is refused and leaves the path unchanged.
+
+There is no separate Convert Point tool: Alt on the Select tool and the Pen does that job (Alt-click
+converts, Alt-drag pulls or breaks handles), the mode strip and the context menu cover explicit
+conversion, and one fewer tool keeps the column at its ten. The anchor mode is document state;
+anchor selection is Viewer gesture state, so Properties shows no per-anchor row. Text clicks create a layer and enter canvas text editing
 with the placeholder selected; the typed text folds into that creation, so a new text layer is one
 undo entry. Properties mirrors the live text.
 

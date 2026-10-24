@@ -205,19 +205,31 @@ Value pathValue(const nb::dict& mapping) {
         }
         document::PathAnchor anchor;
         anchor.point = pathPoint(row["point"]);
+        std::optional<document::PathAnchorMode> mode;
         for (const auto [key, handle] : row) {
             const auto name = nb::cast<std::string>(key);
             if (name == "point") {
                 continue;
             }
+            if (name == "mode") {
+                mode = nb::isinstance<nb::str>(handle)
+                           ? document::pathAnchorModeFromName(nb::cast<std::string>(handle))
+                           : std::nullopt;
+                if (!mode) {
+                    throw nb::value_error("A path anchor mode is corner, mirrored, aligned, free "
+                                          "or auto");
+                }
+                continue;
+            }
             const bool incoming = name == "in_handle" || name == "inHandle";
             if (!incoming && name != "out_handle" && name != "outHandle") {
-                throw nb::type_error("A path anchor has point, in_handle and out_handle");
+                throw nb::type_error("A path anchor has point, in_handle, out_handle and mode");
             }
             if (!handle.is_none()) {
                 (incoming ? anchor.inHandle : anchor.outHandle) = pathPoint(handle);
             }
         }
+        anchor.mode = mode.value_or(document::inferPathAnchorMode(anchor));
         path.anchors.push_back(anchor);
     }
     return Value(std::move(path));

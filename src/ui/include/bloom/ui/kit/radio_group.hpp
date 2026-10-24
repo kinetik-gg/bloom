@@ -38,6 +38,9 @@ class KRadioGroup final : public QWidget {
 
     [[nodiscard]] int currentIndex() const noexcept;
     void setCurrentIndex(int index);
+    // No option current: the mixed state of a control that reflects several objects which do not
+    // agree. Emits nothing; choosing an option leaves it.
+    void setMixed();
 
     void setIconsOnly(bool enabled);
     void setPresentation(Presentation presentation);

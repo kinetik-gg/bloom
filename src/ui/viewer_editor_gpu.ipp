@@ -133,6 +133,7 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
         paintRoi(painter);
         paintCreation(painter);
         paintPathTools(painter);
+        paintAnchorEditing(painter);
         paintTextEditing(painter);
         // The empty-state invitation is drawn by paintEvent() on the CPU path, which resident
         // presentation skips entirely; record it here so an active composition with no layers still

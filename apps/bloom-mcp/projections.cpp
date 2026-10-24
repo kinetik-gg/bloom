@@ -49,6 +49,7 @@ yyjson_mut_val* parameterValue(Json& out, const document::ParameterValue& value)
                             anchor.outHandle
                                 ? vector(out, {anchor.outHandle->x, anchor.outHandle->y})
                                 : out.null());
+                    out.set(row, "mode", out.text(document::pathAnchorModeName(anchor.mode)));
                     out.append(anchors, row);
                 }
                 out.set(path, "anchors", anchors);

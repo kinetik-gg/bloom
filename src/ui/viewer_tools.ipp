@@ -7,7 +7,8 @@ using viewer_tool_geometry::toolValue;
 
 void ViewerEditor::cancelCreation() {
     roiGesture_.reset();
-    cancelPathDrag();
+    cancelAnchorGesture();
+    penContinuation_.reset();
     penPath_ = {};
     penDown_ = false;
     creation_.reset();

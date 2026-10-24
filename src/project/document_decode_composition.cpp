@@ -258,6 +258,9 @@ using document::Vec3d;
                 anchorKeys.push_back("inHandle");
             if (anchor.findMember("outHandle"))
                 anchorKeys.push_back("outHandle");
+            // The anchor mode is a 1.24 member: an older file carrying one is malformed.
+            if (anchor.findMember("mode") && state.documentMinor >= 24)
+                anchorKeys.push_back("mode");
             std::vector<const JsonValue*> parts;
             const auto where =
                 joinPath(path, "anchors") + "/" + std::to_string(value.anchors.size());
@@ -272,12 +275,28 @@ using document::Vec3d;
             document::PathAnchor decoded;
             if (!point(*parts[0], joinPath(where, "point"), decoded.point))
                 return false;
+            bool explicitMode = false;
             for (std::size_t index = 1; index < parts.size(); ++index) {
+                if (anchorKeys[index] == "mode") {
+                    const auto text = parts[index]->asString();
+                    const auto mode = text ? document::pathAnchorModeFromName(*text) : std::nullopt;
+                    if (!mode) {
+                        state.fail(DocumentDecodeError::DomainViolation, joinPath(where, "mode"));
+                        return false;
+                    }
+                    decoded.mode = *mode;
+                    explicitMode = true;
+                    continue;
+                }
                 Vec2d handle;
                 if (!point(*parts[index], joinPath(where, anchorKeys[index]), handle))
                     return false;
                 (anchorKeys[index] == "inHandle" ? decoded.inHandle : decoded.outHandle) = handle;
             }
+            // An omitted mode is the one the geometry implies: documents written before schema
+            // 1.24 migrate as Corner, Mirrored, Aligned or Free.
+            if (!explicitMode)
+                decoded.mode = document::inferPathAnchorMode(decoded);
             value.anchors.push_back(decoded);
         }
         if (!decodeBooleanMember(*members[2], state, joinPath(path, "closed"), value.closed))
@@ -1513,8 +1532,8 @@ template <typename Keyframe, typename DecodeOne>
                         {"subtract", document::LayerMaskMode::Subtract},
                         {"intersect", document::LayerMaskMode::Intersect},
                         {"difference", document::LayerMaskMode::Difference}}};
-            const auto found = std::ranges::find(kModes, mode, &std::pair<std::string_view,
-                                                                          document::LayerMaskMode>::first);
+            const auto found = std::ranges::find(
+                kModes, mode, &std::pair<std::string_view, document::LayerMaskMode>::first);
             if (found == kModes.end()) {
                 state.fail(DocumentDecodeError::DomainViolation, joinPath(elementPath, "mode"));
                 return false;
@@ -1531,8 +1550,7 @@ template <typename Keyframe, typename DecodeOne>
                                 mask.feather) ||
                 !decodeObjectId(*members[6], state, joinPath(elementPath, "expansion"),
                                 mask.expansion) ||
-                !decodeObjectId(*members[7], state, joinPath(elementPath, "opacity"),
-                                mask.opacity))
+                !decodeObjectId(*members[7], state, joinPath(elementPath, "opacity"), mask.opacity))
                 return false;
             out.masks.push_back(std::move(mask));
         }

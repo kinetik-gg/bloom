@@ -1,4 +1,6 @@
-// Included inside bloom::ui. Paths stay document values; the canvas owns only gesture state.
+// Included inside bloom::ui. Paths stay document values; the canvas owns only gesture state. This
+// file is the Pen: drawing a new path, and continuing an open shape path from one of its ends.
+// Editing a confirmed path (masks and shape paths alike) lives in viewer_tools_anchors.ipp.
 using viewer_tool_geometry::toolOutline;
 using viewer_tool_geometry::toolPoint;
 using viewer_tool_geometry::toolRenderPath;
@@ -15,9 +17,6 @@ std::optional<ViewerEditor::PathSelection> ViewerEditor::selectedPath() const {
     const auto value = session_.liveValue(parameter->id);
     if (!value || !std::holds_alternative<document::PathValue>(*value))
         return {};
-    if (pathDrag_ && pathDrag_->selection.parameter == parameter->id)
-        return PathSelection{parameter->id, std::get<document::PathValue>(*value),
-                             pathDrag_->selection.toWorld};
     const auto selected = previewController_.selectedLayerBounds();
     const auto layer = session_.selection().contextualLayer;
     const auto bounds = std::ranges::find(selected, layer.value_or(document::LayerId{}),
@@ -36,64 +35,45 @@ std::optional<ViewerEditor::PathSelection> ViewerEditor::selectedPath() const {
     return PathSelection{parameter->id, std::get<document::PathValue>(*value), world};
 }
 
-void ViewerEditor::cancelPathDrag() {
-    if (!pathDrag_)
-        return;
-    pathDrag_.reset();
-    session_.cancelValueEdit();
-    previewController_.notifyScrubEnded();
+document::Vec2d ViewerEditor::penPoint(const ViewerMapping& mapping, const QPointF screen) const {
+    const auto composition = mapping.toComposition(screen);
+    if (!penContinuation_)
+        return composition;
+    return toolValue(penContinuation_->toWorld.inverted().map(toolPoint(composition)));
+}
+
+QTransform ViewerEditor::penScreenTransform(const ViewerMapping& mapping) const {
+    return penContinuation_ ? penContinuation_->toWorld * toolScreenTransform(mapping)
+                            : toolScreenTransform(mapping);
+}
+
+bool ViewerEditor::beginPenContinuation(const EditablePath& target, const std::size_t endpoint,
+                                        const ViewerMapping& mapping, const QPointF screen) {
+    if (target.owner != EditablePath::Owner::Shape || target.path.closed ||
+        target.path.anchors.size() < 2 ||
+        (endpoint != 0 && endpoint + 1 != target.path.anchors.size()))
+        return false;
+    playback_->pause();
+    penContinuation_ = target;
+    penPath_ = target.path;
+    // Drawing always appends; continuing from the first anchor reverses the path first.
+    if (endpoint == 0)
+        path_editing::reverse(penPath_);
+    creation_.emplace(CreationGesture{mapping, session_.snapshot().revision(),
+                                      session_.currentTime(), session_.compositionId(), screen,
+                                      screen, Qt::NoModifier});
+    penDown_ = false;
+    selectedAnchors_.clear();
     update();
+    return true;
 }
 
 bool ViewerEditor::pathPress(QMouseEvent* event) {
-    if (pathDrag_ && event->button() != Qt::LeftButton) {
-        cancelPathDrag();
-        event->accept();
-        return true;
-    }
-    if (event->button() != Qt::LeftButton || (tool_ != Tool::Pen && tool_ != Tool::Select))
+    if (event->button() != Qt::LeftButton || tool_ != Tool::Pen)
         return false;
     const auto mapping = currentMapping();
     if (!mapping || !contentRect().contains(event->position()))
-        return tool_ == Tool::Pen;
-    if (!creation_) {
-        if (const auto path = selectedPath()) {
-            const auto transform = path->toWorld * toolScreenTransform(*mapping);
-            const double radius = kit::px(kit::Size::GizmoHandle);
-            for (std::size_t i = 0; i < path->path.anchors.size(); ++i) {
-                const auto& anchor = path->path.anchors[i];
-                const std::array<std::optional<document::Vec2d>, 3> points{
-                    anchor.point, anchor.inHandle, anchor.outHandle};
-                for (int part = 0; part < 3; ++part) {
-                    const auto& point = points[static_cast<std::size_t>(part)];
-                    if (!point ||
-                        QLineF(transform.map(toolPoint(*point)), event->position()).length() >
-                            radius)
-                        continue;
-                    selectedAnchor_ = std::pair(path->parameter, i);
-                    playback_->pause();
-                    if (!session_.beginPathEdit(path->parameter))
-                        return true;
-                    pathDrag_.emplace(
-                        PathDrag{{*mapping, session_.snapshot().revision(), session_.currentTime(),
-                                  session_.compositionId(), event->position(), event->position(),
-                                  event->modifiers()},
-                                 *path,
-                                 event->position(),
-                                 i,
-                                 part});
-                    previewController_.beginInteractiveScrub();
-                    setFocus(Qt::MouseFocusReason);
-                    update();
-                    event->accept();
-                    return true;
-                }
-            }
-        }
-        selectedAnchor_.reset();
-    }
-    if (tool_ != Tool::Pen)
-        return false;
+        return true;
     if (creation_ && !creationValid())
         cancelCreation();
     if (!creation_) {
@@ -102,13 +82,14 @@ bool ViewerEditor::pathPress(QMouseEvent* event) {
             *mapping, session_.snapshot().revision(), session_.currentTime(),
             session_.compositionId(), event->position(), event->position(), event->modifiers()});
     }
+    const auto screen = penScreenTransform(*mapping);
     if (penPath_.anchors.size() >= 3 &&
-        QLineF(mapping->toScreen(penPath_.anchors.front().point), event->position()).length() <=
+        QLineF(screen.map(toolPoint(penPath_.anchors.front().point)), event->position()).length() <=
             kit::px(kit::Size::GizmoHandle)) {
         if (finishPen(true))
             selectTool(Tool::Select);
     } else if (penPath_.anchors.size() < document::kMaximumPathAnchors) {
-        penPath_.anchors.push_back({mapping->toComposition(event->position()), {}, {}});
+        penPath_.anchors.push_back({penPoint(*mapping, event->position()), {}, {}});
         creation_->origin = event->position();
         creation_->pointer = event->position();
         penDown_ = true;
@@ -120,45 +101,6 @@ bool ViewerEditor::pathPress(QMouseEvent* event) {
 }
 
 bool ViewerEditor::pathMove(QMouseEvent* event) {
-    if (pathDrag_) {
-        const auto mapping = currentMapping();
-        const auto& drag = *pathDrag_;
-        const auto* parameter = session_.parameterForSelection("path");
-        if (!mapping || *mapping != drag.gesture.mapping ||
-            session_.snapshot().revision() != drag.gesture.revision ||
-            session_.currentTime() != drag.gesture.time || !parameter ||
-            parameter->id != drag.selection.parameter || !session_.isValueEditing(parameter->id)) {
-            cancelPathDrag();
-            return true;
-        }
-        auto path = drag.selection.path;
-        auto& anchor = path.anchors[drag.index];
-        const auto inverse = drag.selection.toWorld.inverted();
-        const auto delta = inverse.map(toolPoint(mapping->toComposition(event->position()))) -
-                           inverse.map(toolPoint(mapping->toComposition(drag.origin)));
-        if (drag.part == 0) {
-            anchor.point = toolValue(toolPoint(anchor.point) + delta);
-            if (anchor.inHandle)
-                anchor.inHandle = toolValue(toolPoint(*anchor.inHandle) + delta);
-            if (anchor.outHandle)
-                anchor.outHandle = toolValue(toolPoint(*anchor.outHandle) + delta);
-        } else {
-            auto& handle = drag.part == 1 ? anchor.inHandle : anchor.outHandle;
-            auto& opposite = drag.part == 1 ? anchor.outHandle : anchor.inHandle;
-            if (!handle)
-                return true;
-            handle = toolValue(toolPoint(*handle) + delta);
-            if (!event->modifiers().testFlag(Qt::AltModifier))
-                opposite = toolValue(2 * toolPoint(anchor.point) - toolPoint(*handle));
-        }
-        const auto centreDelta =
-            toolOutline(toolRenderPath(path)).boundingRect().center() -
-            toolOutline(toolRenderPath(drag.selection.path)).boundingRect().center();
-        (void)session_.updatePathEdit(std::move(path), toolValue(centreDelta));
-        update();
-        event->accept();
-        return true;
-    }
     if (tool_ != Tool::Pen || !creation_)
         return false;
     if (!creationValid()) {
@@ -169,9 +111,9 @@ bool ViewerEditor::pathMove(QMouseEvent* event) {
     if (penDown_ && !penPath_.anchors.empty() &&
         QLineF(creation_->origin, event->position()).length() >=
             QApplication::startDragDistance()) {
-        auto& anchor = penPath_.anchors.back();
-        anchor.outHandle = creation_->mapping.toComposition(event->position());
-        anchor.inHandle = toolValue(2 * toolPoint(anchor.point) - toolPoint(*anchor.outHandle));
+        // Dragging while placing an anchor pulls symmetric handles: a Mirrored anchor.
+        path_editing::pullHandles(penPath_, penPath_.anchors.size() - 1,
+                                  penPoint(creation_->mapping, event->position()));
     }
     update();
     event->accept();
@@ -179,15 +121,7 @@ bool ViewerEditor::pathMove(QMouseEvent* event) {
 }
 
 bool ViewerEditor::pathRelease(QMouseEvent* event) {
-    if (event->button() != Qt::LeftButton)
-        return false;
-    if (pathDrag_) {
-        (void)pathMove(event);
-        commitPathDrag();
-        event->accept();
-        return true;
-    }
-    if (tool_ != Tool::Pen || !creation_)
+    if (event->button() != Qt::LeftButton || tool_ != Tool::Pen || !creation_)
         return false;
     (void)pathMove(event);
     penDown_ = false;
@@ -199,6 +133,14 @@ bool ViewerEditor::finishPen(bool closed) {
     if (!creationValid() || penPath_.anchors.size() < 2) {
         cancelCreation();
         return false;
+    }
+    // Continuing an existing open shape path: the extended path is one edit of that path.
+    if (penContinuation_) {
+        const auto target = *penContinuation_;
+        auto drawn = penPath_;
+        drawn.closed = closed && drawn.anchors.size() >= 3;
+        cancelCreation();
+        return commitPathEdit(target, std::move(drawn));
     }
     // ADR 0028: with a layer selected, the Pen draws a mask on it instead of a shape layer. A mask
     // is an area, so its path always closes; with fewer than three anchors there is no area and
@@ -219,22 +161,12 @@ bool ViewerEditor::finishPen(bool closed) {
     return session_.addShapeLayer(document::ShapeKind::Path, std::move(geometry));
 }
 
-void ViewerEditor::commitPathDrag() {
-    if (!pathDrag_)
-        return;
-    pathDrag_.reset();
-    (void)session_.commitValueEdit();
-    previewController_.notifyScrubEnded();
-    update();
-}
-
 bool ViewerEditor::pathKey(QKeyEvent* event) {
     // Escape confirms what already exists and returns to Select; discarding is Undo. A drag in
     // progress commits at its current size, the Pen finishes open with the anchors placed so far,
-    // and an anchor drag keeps its edit as one command. Empty or zero-size work creates nothing.
-    if (event->key() == Qt::Key_Escape && (creation_ || pathDrag_ || maskDrag_)) {
-        commitPathDrag();
-        commitMaskDrag();
+    // and an anchor gesture keeps its edit as one command. Empty or zero-size work creates nothing.
+    if (event->key() == Qt::Key_Escape && (creation_ || anchorGesture_)) {
+        commitAnchorGesture();
         if (creation_) {
             if (tool_ == Tool::Pen)
                 (void)finishPen(false);
@@ -252,42 +184,14 @@ bool ViewerEditor::pathKey(QKeyEvent* event) {
         event->accept();
         return true;
     }
-    if (event->key() == Qt::Key_Delete && selectedAnchor_ && !pathDrag_) {
-        auto path = selectedPath();
-        if (path && path->parameter == selectedAnchor_->first &&
-            selectedAnchor_->second < path->path.anchors.size()) {
-            const auto baseCentre = toolOutline(toolRenderPath(path->path)).boundingRect().center();
-            path->path.anchors.erase(path->path.anchors.begin() +
-                                     static_cast<std::ptrdiff_t>(selectedAnchor_->second));
-            if (path->path.anchors.size() < 3)
-                path->path.closed = false;
-            if (session_.beginPathEdit(path->parameter)) {
-                const auto centreDelta =
-                    toolOutline(toolRenderPath(path->path)).boundingRect().center() - baseCentre;
-                (void)session_.updatePathEdit(path->path, toolValue(centreDelta));
-                (void)session_.commitValueEdit();
-            }
-            selectedAnchor_.reset();
-            update();
-            event->accept();
-            return true;
-        }
-        selectedAnchor_.reset();
-    }
-    return false;
+    return anchorKey(event);
 }
 
 void ViewerEditor::paintPathTools(QPainter& painter) const {
     const auto mapping = currentMapping();
-    if (!mapping)
+    if (!mapping || tool_ != Tool::Pen || !creation_ || !creationValid())
         return;
-    std::optional<PathSelection> selected = selectedPath();
-    const bool drawing = tool_ == Tool::Pen && creation_ && creationValid();
-    if (drawing)
-        selected = PathSelection{{}, penPath_, {}};
-    if (!selected)
-        return;
-    const auto transform = selected->toWorld * toolScreenTransform(*mapping);
+    const auto transform = penScreenTransform(*mapping);
     painter.save();
     painter.setClipRect(contentRect());
     painter.setRenderHint(QPainter::Antialiasing);
@@ -295,10 +199,9 @@ void ViewerEditor::paintPathTools(QPainter& painter) const {
     pen.setCosmetic(true);
     painter.setPen(pen);
     painter.setBrush(Qt::NoBrush);
-    painter.drawPath(transform.map(toolOutline(toolRenderPath(selected->path))));
+    painter.drawPath(transform.map(toolOutline(toolRenderPath(penPath_))));
     const auto half = kit::px(kit::Size::GizmoHandle) / 2.0;
-    for (std::size_t i = 0; i < selected->path.anchors.size(); ++i) {
-        const auto& anchor = selected->path.anchors[i];
+    for (const auto& anchor : penPath_.anchors) {
         const auto point = transform.map(toolPoint(anchor.point));
         for (const auto& handle : {anchor.inHandle, anchor.outHandle}) {
             if (!handle)
@@ -308,17 +211,14 @@ void ViewerEditor::paintPathTools(QPainter& painter) const {
             painter.setBrush(kit::color(kit::Color::Surface));
             painter.drawEllipse(end, half, half);
         }
-        painter.setBrush(kit::color(selectedAnchor_ &&
-                                            selectedAnchor_->first == selected->parameter &&
-                                            selectedAnchor_->second == i
-                                        ? kit::Color::Accent
-                                        : kit::Color::Surface));
+        painter.setBrush(kit::color(kit::Color::Surface));
         painter.drawRect(QRectF(point.x() - half, point.y() - half, 2 * half, 2 * half));
     }
-    if (drawing && !penDown_ && !penPath_.anchors.empty()) {
+    if (!penDown_ && !penPath_.anchors.empty()) {
         pen.setStyle(Qt::DashLine);
         painter.setPen(pen);
-        painter.drawLine(mapping->toScreen(penPath_.anchors.back().point), creation_->pointer);
+        painter.drawLine(transform.map(toolPoint(penPath_.anchors.back().point)),
+                         creation_->pointer);
     }
     painter.restore();
 }

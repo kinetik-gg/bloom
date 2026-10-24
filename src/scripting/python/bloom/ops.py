@@ -30,7 +30,8 @@ _EXPECTED = {
     "time": "a whole frame, a Fraction, or an exact (numerator, denominator) time",
     "value": "a number, (x, y), (x, y, z) or (r, g, b, a)",
     "path": "a path {'closed': bool, 'anchors': [{'point': (x, y), 'in_handle': (x, y) or None, "
-            "'out_handle': (x, y) or None}, ...]}",
+            "'out_handle': (x, y) or None, 'mode': 'corner' | 'mirrored' | 'aligned' | 'free' | "
+            "'auto'}, ...]} (mode optional)",
 }
 
 _HANDLES = ("in_handle", "out_handle", "inHandle", "outHandle")
@@ -93,10 +94,14 @@ def _valid(value, kind):
     return True
 
 
+_MODES = ("corner", "mirrored", "aligned", "free", "auto")
+
+
 def _anchor(anchor):
     return (isinstance(anchor, dict) and "point" in anchor
-            and set(anchor) <= {"point", *_HANDLES} and _sequence(anchor["point"], 2)
-            and all(anchor.get(name) is None or _sequence(anchor[name], 2) for name in _HANDLES))
+            and set(anchor) <= {"point", "mode", *_HANDLES} and _sequence(anchor["point"], 2)
+            and all(anchor.get(name) is None or _sequence(anchor[name], 2) for name in _HANDLES)
+            and anchor.get("mode", "corner") in _MODES)
 
 
 class Operation:

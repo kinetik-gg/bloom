@@ -265,6 +265,18 @@ class PythonApi(unittest.TestCase):
         self.assertTrue(value['closed'])
         self.assertEqual(value['anchors'][1]['out_handle'], (12.0, 2.0))
         self.assertIsNone(value['anchors'][1]['in_handle'])
+        # Each anchor names its handle mode; an omitted mode is the one its handles imply.
+        self.assertEqual([anchor['mode'] for anchor in value['anchors']],
+                         ['corner', 'free', 'corner', 'corner'])
+        auto = {'closed': True, 'anchors': [dict(anchor, mode='auto') if index == 1 else anchor
+                                            for index, anchor in enumerate(value['anchors'])]}
+        self.assertTrue(bloom.ops.layer.set_mask_path(mask, auto, layer=layer)['succeeded'])
+        self.assertEqual(
+            bloom.data.parameters(composition).get(path).value['anchors'][1]['mode'], 'auto')
+        with self.assertRaises(bloom.OperationError):
+            bloom.ops.layer.set_mask_path(
+                mask, {'closed': True, 'anchors': [{'point': (0, 0), 'mode': 'smooth'}]},
+                layer=layer)
         # A path read back from the snapshot passes straight back in.
         moved = {'closed': value['closed'],
                  'anchors': [dict(anchor, point=(anchor['point'][0] + 5, anchor['point'][1]))

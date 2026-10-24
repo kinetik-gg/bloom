@@ -94,7 +94,8 @@ struct SortWindows final {
                            std::get_if<bloom::document::Color4AnimationCurve>(&record)) {
                 for (const auto& component : color->components)
                     plan.window2 = maximumOf(plan.window2, component.keyframes.size());
-            } else if (const auto* path = std::get_if<bloom::document::PathAnimationCurve>(&record)) {
+            } else if (const auto* path =
+                           std::get_if<bloom::document::PathAnimationCurve>(&record)) {
                 plan.window2 = maximumOf(plan.window2, path->keyframes.size());
             }
         }
@@ -686,9 +687,15 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
                    state.ok(writer.endObject());
         };
         for (const auto& anchor : path->anchors) {
+            // Schema 1.24: the editing mode, written only when it differs from the mode the
+            // geometry implies, so the decoder's inference reproduces every omitted value.
+            const bool explicitMode = anchor.mode != bloom::document::inferPathAnchorMode(anchor);
             if (!state.ok(writer.beginObject()) || !point("point", anchor.point) ||
                 (anchor.inHandle && !point("inHandle", *anchor.inHandle)) ||
                 (anchor.outHandle && !point("outHandle", *anchor.outHandle)) ||
+                (explicitMode && (!state.ok(writer.memberName("mode")) ||
+                                  !state.ok(writer.stringValue(
+                                      bloom::document::pathAnchorModeName(anchor.mode))))) ||
                 !state.ok(writer.endObject()))
                 return false;
         }
@@ -1115,7 +1122,8 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
     return state.ok(writer.endArray());
 }
 
-[[nodiscard]] std::string_view layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
+[[nodiscard]] std::string_view
+layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
     using bloom::document::LayerMaskMode;
     switch (mode) {
     case LayerMaskMode::None:
@@ -1167,8 +1175,8 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
         if (!state.ok(writer.memberName("trackMatte")) || !state.ok(writer.beginObject()) ||
             !emitNamedId(state, "source", matte.source.value()) ||
             !state.ok(writer.memberName("channel")) ||
-            !state.ok(writer.stringValue(matte.channel == TrackMatteChannel::Luma ? "luma"
-                                                                                   : "alpha")) ||
+            !state.ok(
+                writer.stringValue(matte.channel == TrackMatteChannel::Luma ? "luma" : "alpha")) ||
             !state.ok(writer.memberName("inverted")) ||
             !state.ok(writer.booleanValue(matte.inverted)) || !emitRetainedTrailing(state) ||
             !state.ok(writer.endObject()))

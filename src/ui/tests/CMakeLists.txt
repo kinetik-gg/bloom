@@ -1834,3 +1834,10 @@ target_include_directories(bloom_layer_mask_support_test PRIVATE ..)
 target_link_libraries(bloom_layer_mask_support_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_layer_mask_support_test)
 bloom_add_test(NAME bloom.ui.layer-mask-support COMMAND bloom_layer_mask_support_test LABELS ui unit TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Shared post-confirmation path editing for masks and Pen shape paths: handle modes, conversions,
+# Auto recomputation, the shape-preserving split, deletion minimums, closing and reversing.
+add_executable(bloom_path_editing_test path_editing_tests.cpp)
+target_link_libraries(bloom_path_editing_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_path_editing_test)
+bloom_add_test(NAME bloom.ui.path-editing COMMAND bloom_path_editing_test LABELS ui unit TIMEOUT 60)

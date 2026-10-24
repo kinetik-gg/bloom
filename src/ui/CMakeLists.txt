@@ -403,6 +403,7 @@ target_sources(
         properties_layer_time.cpp
         properties_layer_masks.cpp
         layer_mask_support.cpp
+        path_editing.cpp
         timeline_layer_timing_gesture.cpp
         timeline_key_time.cpp
         timeline_key_time.hpp
@@ -511,6 +512,7 @@ target_sources(
             include/bloom/ui/timeline_graph_view.hpp
             include/bloom/ui/timeline_ruler.hpp
             include/bloom/ui/composition_commands.hpp
+            include/bloom/ui/path_editing.hpp
             include/bloom/ui/viewer_overlays.hpp
             include/bloom/ui/viewer_editor.hpp
             include/bloom/ui/viewer_channel_display.hpp

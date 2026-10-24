@@ -195,6 +195,15 @@ matte command declares its composition `renderScope()`.
   the Viewer from a session-only parameter override of the path (`beginMaskPathEdit`, accepted by
   the snapshot compiler for a reachable layer's mask path, feather, expansion and opacity) and
   commits one `SetLayerMaskPath` on release. The document never changes mid-drag. Dashed feather bounds are drawn at `expansion +/- feather / 2`.
+- **Anchor editing.** A confirmed path -- a mask or a Pen shape path, through one shared
+  implementation (`ui::path_editing`) -- is edited after the fact: move anchors, drag handles, add a
+  point on a segment (a De Casteljau split that keeps the shape), delete points (a mask keeps
+  three, a shape path two), multi-select, and switch each anchor's handle mode. The mode is a
+  document field on every path anchor (`PathAnchorMode`: Corner, Mirrored, Aligned, Free, Auto),
+  persisted in 1.24, carried by Path keys and by scripting path values (`mode`). It is editing
+  intent only: the curve is the stored points and handles. Older paths infer it from their
+  handles. Auto handles are Catmull-Rom from the neighbouring anchors and are recomputed by any
+  edit that moves a neighbour. `docs/ux/ui-grammar.md` owns the gestures.
 - **Scripting.** Python, the CLI and MCP add and edit masks through `bloom.layer.add-mask`,
   `set-mask-path`, `animate-mask-path`, `stop-animating-mask-path`, `remove-mask`, `move-mask`,
   `set-mask-mode`, `set-mask-inverted` and `rename-mask`, and set mattes through

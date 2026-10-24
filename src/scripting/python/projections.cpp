@@ -33,6 +33,7 @@ nb::object parameterValue(const document::ParameterValue& value) {
                     row["out_handle"] =
                         anchor.outHandle ? nb::make_tuple(anchor.outHandle->x, anchor.outHandle->y)
                                          : nb::object(nb::none());
+                    row["mode"] = std::string(document::pathAnchorModeName(anchor.mode));
                     anchors.append(row);
                 }
                 path["anchors"] = anchors;

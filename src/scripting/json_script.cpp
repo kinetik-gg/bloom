@@ -324,8 +324,9 @@ class Parser final {
 }
 
 // ADR 0028: a path object, the same shape the MCP projection publishes: {"closed": bool,
-// "anchors": [{"point": [x, y], "inHandle": [x, y] | null, "outHandle": [x, y] | null}]}. The
-// Python spelling (in_handle / out_handle) is accepted too.
+// "anchors": [{"point": [x, y], "inHandle": [x, y] | null, "outHandle": [x, y] | null,
+// "mode": "corner" | "mirrored" | "aligned" | "free" | "auto"}]}; an omitted mode is inferred from
+// the handles. The Python spelling (in_handle / out_handle) is accepted too.
 [[nodiscard]] std::optional<Value> pathOf(const JsonObject& object) {
     const auto closed = object.find("closed");
     const auto anchors = object.find("anchors");
@@ -343,6 +344,7 @@ class Parser final {
             return std::nullopt;
         document::PathAnchor anchor;
         bool hasPoint = false;
+        std::optional<document::PathAnchorMode> mode;
         for (const auto& [key, value] : *fields) {
             const bool none = std::holds_alternative<std::nullptr_t>(value.storage);
             if (key == "point") {
@@ -360,12 +362,18 @@ class Parser final {
                 if (!point)
                     return std::nullopt;
                 handle = *point;
+            } else if (key == "mode") {
+                const auto* text = std::get_if<std::string>(&value.storage);
+                mode = text ? document::pathAnchorModeFromName(*text) : std::nullopt;
+                if (!mode)
+                    return std::nullopt;
             } else {
                 return std::nullopt;
             }
         }
         if (!hasPoint)
             return std::nullopt;
+        anchor.mode = mode.value_or(document::inferPathAnchorMode(anchor));
         path.anchors.push_back(anchor);
     }
     return Value{std::move(path)};

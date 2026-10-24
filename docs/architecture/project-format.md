@@ -1494,6 +1494,15 @@ A mask is a collection element identified by its id (round-trip kind `LayerMask`
 trailing members of a mask object are preserved like those of any other element. Mask parameters
 are ordinary parameter records owned by exactly one mask and never bound by a node.
 
+A path anchor gains an optional trailing `mode` member: `"corner"`, `"mirrored"`, `"aligned"`,
+`"free"` or `"auto"`, the editing intent of its handles (it never changes a pixel). It is written
+only when it differs from the mode the anchor's geometry implies, and an omitted mode is that
+inferred mode: no handle is Corner, two collinear handles of equal length are Mirrored, two collinear
+handles are Aligned, anything else is Free (relative tolerance 1e-9). Paths written before 1.24,
+and 1.24 paths saved before the member existed, therefore migrate without rewriting, and the
+canonical form round-trips exactly. The decoder accepts `mode` only at `1.24` or later. Data-block
+path payloads carry no mode. Path keys carry the mode on each anchor of their value.
+
 An animation curve may be `{"id", "kind": "path", "keyframes"}`. Each key is `{"id", "time",
 "value", "outgoingInterpolation"}` plus the optional ease handles, where `value` is a constant-value
 object of kind `"path"`. Only a `bloom.mask.path` parameter may own a Path curve.

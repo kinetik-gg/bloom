@@ -109,4 +109,6 @@ shapes the registry already accepted ad hoc; they add no document schema and no 
 ADR 0028 adds `path`: a whole `document::PathValue` (`Value` holds it directly). Each client reads it
 from its own projection of a path value -- a mapping with `closed` and `anchors`, each anchor a
 `point` with optional in/out handles (`in_handle`/`out_handle` in Python, `inHandle`/`outHandle` in
-MCP and the JSON/CLI path) -- so a path read from a query passes straight back.
+MCP and the JSON/CLI path) and an optional `mode` (`corner`, `mirrored`, `aligned`, `free` or
+`auto`; an omitted mode is inferred from the handles) -- so a path read from a query passes
+straight back.

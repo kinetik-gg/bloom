@@ -100,6 +100,8 @@ document::PathValue ellipsePath(const QRectF& rect) {
                     {{centre.x() - rx, centre.y()},
                      Vec2d{centre.x() - rx, centre.y() + ky},
                      Vec2d{centre.x() - rx, centre.y() - ky}}};
+    for (auto& anchor : path.anchors)
+        anchor.mode = document::PathAnchorMode::Mirrored;
     return path;
 }
 

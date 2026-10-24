@@ -57,7 +57,9 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWheelEvent>
+#include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/section.hpp>
+#include <bloom/ui/path_editing.hpp>
 #include <bloom/ui/properties_editor.hpp>
 
 #include <algorithm>
@@ -2134,6 +2136,7 @@ int main(int argc, char** argv) {
         testCreationTools(expectations);
         testPenTools(expectations);
         testMaskTools(expectations);
+        testAnchorEditing(expectations);
         testTextTool(expectations);
     } catch (const std::exception& error) {
         expectations.expect(false, error.what());
