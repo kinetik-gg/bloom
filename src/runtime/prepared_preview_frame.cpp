@@ -13,7 +13,8 @@ namespace bloom::runtime {
 std::optional<PreparedPreviewFrame>
 PreparedPreviewFrame::create(const std::uint64_t requestGeneration,
                              std::shared_ptr<const ReferenceDisplayFrame> displayFrame,
-                             const PreviewResolutionPolicy resolutionPolicy) noexcept {
+                             const PreviewResolutionPolicy resolutionPolicy,
+    std::optional<ChannelInspection> channelInspection) noexcept {
     if (requestGeneration == 0 || displayFrame == nullptr ||
         displayFrame->processFrame() == nullptr ||
         displayFrame->identity().processFrame.plan == nullptr) {
@@ -43,6 +44,7 @@ PreparedPreviewFrame::create(const std::uint64_t requestGeneration,
         .displayName = displayFrame->identity().displayName,
         .viewName = displayFrame->identity().viewName,
         .showLook = displayFrame->identity().showLook,
+        .channelInspection = std::move(channelInspection),
     };
     return PreparedPreviewFrame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
 }
@@ -50,7 +52,8 @@ PreparedPreviewFrame::create(const std::uint64_t requestGeneration,
 std::optional<PreparedPreviewFrame>
 PreparedPreviewFrame::createQualified(const std::uint64_t requestGeneration,
                                       std::shared_ptr<const QualifiedDisplayFrame> displayFrame,
-                                      const PreviewResolutionPolicy resolutionPolicy) noexcept {
+                                      const PreviewResolutionPolicy resolutionPolicy,
+    std::optional<ChannelInspection> channelInspection) noexcept {
     if (requestGeneration == 0 || displayFrame == nullptr ||
         displayFrame->processFrame() == nullptr ||
         displayFrame->identity().processFrame.plan == nullptr) {
@@ -80,6 +83,7 @@ PreparedPreviewFrame::createQualified(const std::uint64_t requestGeneration,
         .displayName = displayFrame->identity().displayName,
         .viewName = displayFrame->identity().viewName,
         .showLook = displayFrame->identity().showLook,
+        .channelInspection = std::move(channelInspection),
     };
     return PreparedPreviewFrame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
 }

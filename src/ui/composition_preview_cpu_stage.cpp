@@ -353,7 +353,7 @@ runtime::PreviewCpuDisplayFallback makeCompositionPreviewCpuDisplayFallback(
             }
             prepared = runtime::PreparedPreviewFrame::createQualified(
                 desiredIdentity.requestGeneration, qualifiedResult.frame(),
-                desiredIdentity.resolutionPolicy);
+                desiredIdentity.resolutionPolicy, desiredIdentity.channelInspection);
         } else {
             const runtime::ReferenceDisplayPreparationRequest displayRequest{
                 .intent = runtime::ReferenceDisplayIntent::LinearRec709SceneToSrgb,
@@ -391,9 +391,9 @@ runtime::PreviewCpuDisplayFallback makeCompositionPreviewCpuDisplayFallback(
                     missingResultDiagnostic("Display preparation returned no immutable frame"));
                 return Result::failed(std::move(diagnostics));
             }
-            prepared = runtime::PreparedPreviewFrame::create(desiredIdentity.requestGeneration,
-                                                             displayResult.frame(),
-                                                             desiredIdentity.resolutionPolicy);
+            prepared = runtime::PreparedPreviewFrame::create(
+                desiredIdentity.requestGeneration, displayResult.frame(),
+                desiredIdentity.resolutionPolicy, desiredIdentity.channelInspection);
         }
         if (!prepared.has_value() || prepared->desiredIdentity() != desiredIdentity) {
             diagnostics.push_back(

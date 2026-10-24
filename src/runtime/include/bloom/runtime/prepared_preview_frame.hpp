@@ -338,12 +338,16 @@ class PreviewResidentDisplayFrame final {
 class PreparedPreviewFrame final {
   public:
     [[nodiscard]] static std::optional<PreparedPreviewFrame>
+    // `channelInspection` is the Viewer inspection the frame's plan was compiled for (ADR 0026,
+    // #364): the plan does not record it, so the stage that compiled it supplies it.
     create(std::uint64_t requestGeneration,
            std::shared_ptr<const ReferenceDisplayFrame> displayFrame,
-           PreviewResolutionPolicy resolutionPolicy = PreviewResolutionPolicy::Auto) noexcept;
+           PreviewResolutionPolicy resolutionPolicy = PreviewResolutionPolicy::Auto,
+           std::optional<ChannelInspection> channelInspection = std::nullopt) noexcept;
     [[nodiscard]] static std::optional<PreparedPreviewFrame> createQualified(
         std::uint64_t requestGeneration, std::shared_ptr<const QualifiedDisplayFrame> displayFrame,
-        PreviewResolutionPolicy resolutionPolicy = PreviewResolutionPolicy::Auto) noexcept;
+        PreviewResolutionPolicy resolutionPolicy = PreviewResolutionPolicy::Auto,
+        std::optional<ChannelInspection> channelInspection = std::nullopt) noexcept;
     // Re-stamps a retained display-only frame with the generation of the request it now answers.
     [[nodiscard]] static std::optional<PreparedPreviewFrame>
     createDisplayOnly(std::uint64_t requestGeneration,
