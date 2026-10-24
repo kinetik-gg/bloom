@@ -13,6 +13,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <memory>
 #include <optional>
@@ -63,6 +64,12 @@ class AssetController final : public QObject {
         return importFolder_;
     }
     void relink(document::AssetId id, QWidget* parent = nullptr);
+    // Reload Footage (#378): probes the asset's own file again on the import worker, as a relink to
+    // the same path, so changed bytes update the record and unchanged ones leave it alone.
+    void reload(document::AssetId id);
+    // Where the asset's file (a sequence's first member) is, worked out from its locator and the
+    // project folder without touching the filesystem. Empty when the locator names no file.
+    [[nodiscard]] std::filesystem::path sourcePath(document::AssetId id) const;
     void remove(document::AssetId id);
     [[nodiscard]] bool busy() const noexcept { return busy_; }
     [[nodiscard]] bool missing(document::AssetId id) const;
@@ -169,6 +176,8 @@ class AssetController final : public QObject {
     void emitImportFailures(const std::vector<runtime::TaskDiagnostic>& issues);
     CompositionSession& session_;
     std::optional<document::AssetFolderId> importFolder_;
+    // Reload Footage requests waiting for the import worker, run one after another.
+    std::deque<document::AssetId> pendingReloads_;
     ProjectHost& host_;
     runtime::TaskScheduler& scheduler_;
     TaskUiBridge& bridge_;

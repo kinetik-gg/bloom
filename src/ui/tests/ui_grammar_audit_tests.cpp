@@ -12,6 +12,7 @@
 #include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/theme.hpp>
+#include <bloom/ui/kit/thumbnail.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/timeline_editor.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
@@ -92,6 +93,12 @@ int run(int argc, char** argv) {
                                        ? kit::Size::ToggleCell
                                        : kit::Size::Control),
                        widget, "kit control token");
+                ++controls;
+            }
+            if (qobject_cast<kit::KThumbnail*>(widget)) {
+                expect(widget->height() == kit::px(kit::Size::ImageThumbnail) &&
+                           widget->width() == kit::px(kit::Size::ImageThumbnail),
+                       widget, "thumbnail cell token");
                 ++controls;
             }
             if (const auto* button = qobject_cast<kit::KButton*>(widget)) {

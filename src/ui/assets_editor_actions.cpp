@@ -1,31 +1,47 @@
 #include "asset_input_picker_guard.hpp"
 #include "assets_editor_internal.hpp"
+#include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QHBoxLayout>
-#include <QLabel>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QTreeWidgetItemIterator>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <bloom/commands/asset_operations.hpp>
+#include <bloom/commands/composition_settings_operations.hpp>
+#include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/document/project.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <filesystem>
 #include <set>
 #include <tuple>
 
 namespace bloom::ui {
+std::optional<document::AssetFolderId> AssetsEditor::selectedFolder() const {
+    return assets::targetFolder(tree_->currentItem() && tree_->currentItem()->isSelected()
+                                    ? tree_->currentItem()
+                                    : nullptr);
+}
+std::vector<document::AssetId> AssetsEditor::selectedAssets() const {
+    std::vector<document::AssetId> ids;
+    for (QTreeWidgetItemIterator it(tree_, QTreeWidgetItemIterator::Selected); *it; ++it)
+        if (const auto id = assets::assetId(*it); id.isValid())
+            ids.push_back(id);
+    return ids;
+}
 void AssetsEditor::createFolder() {
-    auto parent = assets::folderId(tree_->currentItem());
-    if (const auto* asset =
-            session_.snapshot().project().findAsset(assets::assetId(tree_->currentItem())))
-        parent = asset->folder;
+    const auto parent = selectedFolder();
     std::set<std::string> names;
     for (const auto& folder : session_.snapshot().project().assetFolders())
         if (folder.parent == parent)
@@ -46,7 +62,6 @@ void AssetsEditor::createFolder() {
         if (assets::folderId(*it) == id) {
             tree_->clearSelection();
             tree_->setCurrentItem(*it);
-            tree_->scrollToItem(*it);
             beginRename(*it);
             break;
         }
@@ -171,7 +186,7 @@ void AssetsEditor::editInputColor(const document::AssetId id) {
     dialog.setObjectName(QStringLiteral("assetsInputColorDialog"));
     dialog.setWindowTitle(tr("Input Colour — %1").arg(QString::fromStdString(asset->name)));
     auto* layout = new QVBoxLayout(&dialog);
-    auto* explanation = new QLabel(
+    auto* explanation = new kit::KLabel(
         tr("Choose how this asset's pixels are interpreted. A source node can override this "
            "choice in Properties."),
         &dialog);
@@ -182,7 +197,7 @@ void AssetsEditor::editInputColor(const document::AssetId id) {
     selector->setSearchable(true);
     selector->setWidthFloor(kit::px(kit::Size::DropdownWidth) * 2);
     layout->addWidget(selector);
-    auto* status = new QLabel(&dialog);
+    auto* status = new kit::KLabel(&dialog);
     status->setObjectName(QStringLiteral("assetsInputColorStatus"));
     status->setWordWrap(true);
     layout->addWidget(status);
@@ -279,22 +294,192 @@ void AssetsEditor::editInputColor(const document::AssetId id) {
     transaction.emplace<commands::SetAssetInputColor>(id, legacy, std::move(inputId));
     (void)session_.executeTransaction(std::move(transaction));
 }
+namespace {
+// Everything a folder holds, deepest folders first so they can be removed bottom-up.
+struct FolderContents final {
+    std::vector<document::AssetFolderId> folders;
+    std::vector<document::AssetId> assets;
+    std::vector<document::CompositionId> compositions;
+};
+void collect(const document::Project& project, const document::AssetFolderId folder,
+             FolderContents& contents) {
+    for (const auto& child : project.assetFolders())
+        if (child.parent == folder)
+            collect(project, child.id, contents);
+    for (const auto& asset : project.assets())
+        if (asset.folder == folder)
+            contents.assets.push_back(asset.id);
+    for (const auto& composition : project.compositions())
+        if (composition.folder() == folder)
+            contents.compositions.push_back(composition.id());
+    contents.folders.push_back(folder);
+}
+} // namespace
 void AssetsEditor::removeSelected() {
-    commands::Transaction transaction("Remove Assets", session_.snapshot().revision());
-    bool any = false;
-    for (const auto* item : tree_->selectedItems()) {
-        const auto asset = assets::assetId(item);
-        if (asset.isValid()) {
-            transaction.emplace<commands::RemoveAsset>(asset);
-            any = true;
-        } else if (const auto folder = assets::folderId(item)) {
-            transaction.emplace<commands::RemoveAssetFolder>(*folder);
-            any = true;
+    const auto snapshot = session_.snapshot();
+    const auto& project = snapshot.project();
+    std::vector<document::AssetId> assets;
+    std::vector<document::CompositionId> compositions;
+    std::vector<document::AssetFolderId> folders;
+    for (QTreeWidgetItemIterator it(tree_, QTreeWidgetItemIterator::Selected); *it; ++it) {
+        // A selected folder already accounts for what it holds.
+        bool insideSelectedFolder = false;
+        for (auto* parent = (*it)->parent(); parent; parent = parent->parent())
+            insideSelectedFolder = insideSelectedFolder || parent->isSelected();
+        if (insideSelectedFolder)
+            continue;
+        if (const auto asset = assets::assetId(*it); asset.isValid())
+            assets.push_back(asset);
+        else if (const auto composition = assets::compositionId(*it); composition.isValid())
+            compositions.push_back(composition);
+        else if (const auto folder = assets::folderId(*it))
+            folders.push_back(*folder);
+    }
+    if (assets.empty() && compositions.empty() && folders.empty())
+        return;
+    FolderContents contents;
+    for (const auto folder : folders)
+        collect(project, folder, contents);
+    const bool holdsItems = contents.folders.size() > folders.size() || !contents.assets.empty() ||
+                            !contents.compositions.empty();
+    // Used items among those that would be deleted, with or without the folders' contents.
+    std::size_t usedDirect = 0, usedInside = 0;
+    for (const auto asset : assets)
+        usedDirect += assets::assetUsage(project, asset).uses > 0 ? 1 : 0;
+    for (const auto composition : compositions)
+        usedDirect += assets::compositionUsage(project, composition).uses > 0 ? 1 : 0;
+    for (const auto asset : contents.assets)
+        usedInside += assets::assetUsage(project, asset).uses > 0 ? 1 : 0;
+    for (const auto composition : contents.compositions)
+        usedInside += assets::compositionUsage(project, composition).uses > 0 ? 1 : 0;
+    bool withContents = false;
+    if (usedDirect > 0 || holdsItems) {
+        // As After Effects does, a used item is never deleted without saying so first.
+        QMessageBox box(this);
+        box.setObjectName(QStringLiteral("assetsDeleteConfirmation"));
+        box.setIcon(QMessageBox::Warning);
+        box.setWindowTitle(tr("Delete"));
+        QString text;
+        if (assets.size() + compositions.size() == 1 && folders.empty() && usedDirect == 1) {
+            const auto usage = assets.empty()
+                                   ? assets::compositionUsage(project, compositions.front())
+                                   : assets::assetUsage(project, assets.front());
+            const auto name = assets.empty() ? project.findComposition(compositions.front())->name()
+                                             : project.findAsset(assets.front())->name;
+            text =
+                tr("\u201c%1\u201d is used %2 in %3.")
+                    .arg(QString::fromStdString(name),
+                         usage.uses == 1 ? tr("once") : tr("%1 times").arg(usage.uses),
+                         usage.compositions == 1 ? tr("1 composition")
+                                                 : tr("%1 compositions").arg(usage.compositions));
+        } else if (usedDirect > 0)
+            text = tr("%n of the selected items are used in compositions.", nullptr,
+                      static_cast<int>(usedDirect));
+        if (holdsItems) {
+            const auto count = contents.assets.size() + contents.compositions.size() +
+                               contents.folders.size() - folders.size();
+            if (!text.isEmpty())
+                text += QStringLiteral("\n");
+            text += folders.size() == 1 ? tr("The folder holds %1 items.").arg(count)
+                                        : tr("The folders hold %1 items.").arg(count);
+            if (usedInside > 0)
+                text += QStringLiteral(" ") +
+                        tr("%1 of them are used in compositions.").arg(usedInside);
+        }
+        box.setText(text);
+        box.setInformativeText(
+            holdsItems ? tr("Delete only the folders and move their contents up, or delete the "
+                            "contents too? Undo restores either.")
+                       : tr("Layers that use it will show it as missing. Undo restores it."));
+        QAbstractButton* keep =
+            holdsItems ? box.addButton(tr("Delete Folders Only"), QMessageBox::AcceptRole)
+                       : nullptr;
+        QAbstractButton* everything = box.addButton(
+            holdsItems ? tr("Delete with Contents") : tr("Delete"), QMessageBox::DestructiveRole);
+        box.addButton(QMessageBox::Cancel);
+        if (keep)
+            keep->setObjectName(QStringLiteral("assetsDeleteFoldersOnlyButton"));
+        everything->setObjectName(QStringLiteral("assetsDeleteConfirmButton"));
+        box.setDefaultButton(QMessageBox::Cancel);
+        box.exec();
+        const auto* clicked = box.clickedButton();
+        if (clicked == nullptr || (clicked != keep && clicked != everything))
+            return;
+        withContents = clicked == everything;
+        if (&snapshot.project() != &session_.snapshot().project()) {
+            emit session_.commandRejected(tr("Assets changed while confirming. Delete again."));
+            return;
         }
     }
-    if (any)
-        (void)session_.executeTransaction(std::move(transaction));
-    else if (const auto id = assets::compositionId(tree_->currentItem()); id.isValid())
-        deleteComposition(id);
+    const bool wasActive = [&] {
+        const auto active = session_.compositionId();
+        return std::ranges::find(compositions, active) != compositions.end() ||
+               (withContents &&
+                std::ranges::find(contents.compositions, active) != contents.compositions.end());
+    }();
+    commands::Transaction transaction("Delete", snapshot.revision());
+    for (const auto asset : assets)
+        transaction.emplace<commands::RemoveAsset>(asset);
+    for (const auto composition : compositions)
+        transaction.emplace<commands::DeleteComposition>(composition);
+    if (withContents) {
+        for (const auto asset : contents.assets)
+            transaction.emplace<commands::RemoveAsset>(asset);
+        for (const auto composition : contents.compositions)
+            transaction.emplace<commands::DeleteComposition>(composition);
+        for (const auto folder : contents.folders)
+            transaction.emplace<commands::RemoveAssetFolder>(folder);
+    } else
+        for (const auto folder : folders)
+            transaction.emplace<commands::RemoveAssetFolder>(folder);
+    if (!session_.executeTransaction(std::move(transaction)).succeeded())
+        return;
+    const auto remaining = session_.snapshot().project().compositions();
+    if (wasActive && !remaining.empty())
+        (void)session_.setComposition(std::ranges::min(remaining, {}, [](const auto& composition) {
+                                          return composition.id().value();
+                                      }).id());
+}
+void AssetsEditor::revealInFileManager(const document::AssetId id) {
+    const auto* controller = session_.assetController();
+    const auto path = controller ? controller->sourcePath(id) : std::filesystem::path{};
+    if (path.empty())
+        return;
+    // Opening the containing folder is the behaviour every platform's file manager supports.
+    QDesktopServices::openUrl(
+        QUrl::fromLocalFile(QString::fromStdU16String(path.parent_path().u16string())));
+}
+void AssetsEditor::newCompositionFromSelection() {
+    const auto snapshot = session_.snapshot();
+    const auto& project = snapshot.project();
+    std::vector<document::AssetId> footage;
+    for (const auto id : selectedAssets())
+        if (const auto* asset = project.findAsset(id); asset &&
+                                                       asset->kind != document::AssetKind::Lut &&
+                                                       asset->kind != document::AssetKind::Font)
+            footage.push_back(id);
+    if (footage.empty())
+        return;
+    // Sized from the first visual footage item, like After Effects; the active composition (or
+    // the defaults) supplies what the footage does not state.
+    commands::CompositionSettings base;
+    base.name = tr("Composition %1").arg(project.compositions().size() + 1).toStdString();
+    base.duration = core::RationalTime::fromInteger(10);
+    if (const auto* current = session_.composition())
+        base = commands::compositionSettingsOf(*current);
+    const auto* first = project.findAsset(footage.front());
+    for (const auto id : footage)
+        if (const auto* asset = project.findAsset(id); asset->kind != document::AssetKind::Audio) {
+            first = asset;
+            break;
+        }
+    auto settings = commands::compositionSettingsForAsset(*first, base);
+    settings.timecode = {};
+    commands::Transaction transaction("New Composition from Selection", snapshot.revision());
+    transaction.emplace<commands::AddCompositionFromAssets>(
+        std::move(settings), footage, assets::targetFolder(tree_->currentItem()));
+    const auto result = session_.executeTransaction(std::move(transaction));
+    if (const auto id = result.outputId<document::CompositionId>(commands::kAddCompositionOutput))
+        openComposition(*id);
 }
 } // namespace bloom::ui

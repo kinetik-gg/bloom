@@ -12,8 +12,10 @@ class CompositionSession;
 
 // Shared composition authoring entry points. Every function executes at most one command
 // transaction; callers only own the surrounding affordance and selection behavior.
+// `folder` is the Assets folder the new composition is filed in (#378); nullopt is the root.
 [[nodiscard]] std::optional<document::CompositionId>
-showNewCompositionDialog(CompositionSession& session, QWidget* parent = nullptr);
+showNewCompositionDialog(CompositionSession& session, QWidget* parent = nullptr,
+                         std::optional<document::AssetFolderId> folder = std::nullopt);
 
 // The shared New Composition / Composition Settings modal (#376) in settings mode: edits every
 // setting of `id` and commits one SetCompositionSettings. True when a change was committed.

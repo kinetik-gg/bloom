@@ -13,6 +13,7 @@
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/core/file_uri.hpp>
 #include <bloom/media/audio/audio.hpp>
 #include <bloom/media/cache/media_disk_cache_decode.hpp>
 #include <bloom/media/image.hpp>
@@ -492,6 +493,7 @@ AssetController::~AssetController() {
 bool AssetController::acceptsEdits() const { return host_.canSave(); }
 void AssetController::cancel() {
     freshnessTimer_.stop();
+    pendingReloads_.clear();
     previewDirty_ = false;
     if (busy_)
         import_.cancel();
@@ -807,6 +809,32 @@ void AssetController::relink(document::AssetId id, QWidget* parent) {
     configureFileDialogSidebar(dialog);
     if (dialog.exec() == QDialog::Accepted && !dialog.selectedFiles().isEmpty())
         prepare({dialog.selectedFiles().front()}, id);
+}
+std::filesystem::path AssetController::sourcePath(const document::AssetId id) const {
+    const auto* asset = session_.snapshot().project().findAsset(id);
+    if (asset == nullptr || asset->locator.path.empty() || asset->kind == document::AssetKind::Font)
+        return {};
+    const auto& path = asset->locator.path;
+    // An external locator stores its absolute file URI; a project-relative one is lexical.
+    if (path.find(':') != std::string::npos)
+        return core::absolutePathFromFileUri(path).value_or(std::filesystem::path{});
+    if (path.front() == '/' || path.find('\\') != std::string::npos)
+        return {};
+    return baseDirectory() / std::filesystem::path(std::u8string(
+                                 reinterpret_cast<const char8_t*>(path.data()), path.size()));
+}
+void AssetController::reload(const document::AssetId id) {
+    const auto path = sourcePath(id);
+    if (path.empty())
+        return;
+    // One worker job at a time: a selection reloads its assets in turn.
+    if (busy_) {
+        if (std::ranges::find(pendingReloads_, id) == pendingReloads_.end())
+            pendingReloads_.push_back(id);
+        return;
+    }
+    refresh();
+    prepare({QString::fromStdU16String(path.u16string())}, id);
 }
 void AssetController::remove(document::AssetId id) {
     if (!host_.canSave())
@@ -1740,6 +1768,11 @@ void AssetController::poll() {
             if (result->state() == runtime::TaskState::Failed)
                 emitImportFailures(result->diagnostics());
             base_.reset();
+            if (!pendingReloads_.empty()) {
+                const auto next = pendingReloads_.front();
+                pendingReloads_.pop_front();
+                reload(next);
+            }
         }
     }
     if (previewPending_) {

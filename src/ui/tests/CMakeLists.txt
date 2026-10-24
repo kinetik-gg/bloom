@@ -412,6 +412,7 @@ bloom_enable_warnings(bloom_timeline_editor_style_test)
 bloom_enable_warnings(bloom_node_editor_test)
 
 add_executable(bloom_assets_editor_test assets_editor_tests.cpp)
+target_include_directories(bloom_assets_editor_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_assets_editor_test PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_assets_editor_test)
 

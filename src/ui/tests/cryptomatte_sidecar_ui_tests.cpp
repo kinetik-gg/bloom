@@ -258,18 +258,19 @@ int main(int argc, char** argv) {
         window.show();
         QApplication::processEvents();
 
-        // Assets row: "Sequence [2]" for both, no warning tooltip.
+        // Assets row: a two-frame Sequence for both, no warning glyph or tooltip (#378 columns).
         auto* tree = assetsPanel->findChild<QTreeWidget*>("assetsTree");
         bool rowsOk = tree != nullptr;
         if (tree != nullptr)
             for (int index = 0; index < tree->topLevelItemCount(); ++index) {
                 const auto* item = tree->topLevelItem(index);
                 if (item->text(0).contains("SC_"))
-                    rowsOk = rowsOk && item->text(1) == "Sequence [2]" &&
+                    rowsOk = rowsOk && item->text(1) == "Sequence" && item->text(3) == "2 frames" &&
+                             item->data(0, Qt::UserRole + 8).toString().isEmpty() &&
                              !item->toolTip(0).contains("Missing") &&
-                             !item->toolTip(0).contains("Relink");
+                             !item->toolTip(0).contains("Replace Footage");
             }
-        expect(rowsOk, "Assets lists both as Sequence [2] without a Relink warning");
+        expect(rowsOk, "Assets lists both as two-frame Sequences without a missing warning");
 
         // 2. Part and Layer are dropdowns of what the file has, on the card and in Properties.
         auto* sourceCard = card(*nodes, source);

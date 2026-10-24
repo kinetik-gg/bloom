@@ -56,8 +56,9 @@ namespace {
 
 } // namespace
 
-std::optional<document::CompositionId> showNewCompositionDialog(CompositionSession& session,
-                                                                QWidget* parent) {
+std::optional<document::CompositionId>
+showNewCompositionDialog(CompositionSession& session, QWidget* parent,
+                         const std::optional<document::AssetFolderId> folder) {
     // A new composition starts from the current one's frame, rate and duration, or the defaults.
     const auto* current = session.composition();
     commands::CompositionSettings initial;
@@ -76,7 +77,11 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
         return std::nullopt;
     commands::Transaction transaction(QStringLiteral("Add Composition").toStdString(),
                                       session.snapshot().revision());
-    transaction.emplace<commands::AddCompositionWithSettings>(*settings);
+    if (folder)
+        transaction.emplace<commands::AddCompositionFromAssets>(
+            *settings, std::vector<document::AssetId>{}, folder);
+    else
+        transaction.emplace<commands::AddCompositionWithSettings>(*settings);
     const auto result = session.executeTransaction(std::move(transaction));
     return result.succeeded()
                ? result.outputId<document::CompositionId>(commands::kAddCompositionOutput)

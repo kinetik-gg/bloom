@@ -177,8 +177,8 @@ void testEmptyWorkspaceEditorsAndFirstComposition(Expectations& expectations) {
     expectations.expect(session.composition() == nullptr,
                         "empty UI: the session has no active composition");
 
-    // Assets editor shows the empty project without an invalid control: the Compositions root
-    // exists with zero children, and the existing New Composition action is present.
+    // Assets editor shows the empty project without an invalid control: one tree with no rows
+    // (#378 retired the separate Compositions root), and the New Composition action is present.
     ui::AssetsEditor assets(session);
     assets.resize(500, 400);
     assets.show();
@@ -186,11 +186,8 @@ void testEmptyWorkspaceEditorsAndFirstComposition(Expectations& expectations) {
     auto* assetsTree = assets.findChild<QTreeWidget*>(QStringLiteral("assetsTree"));
     expectations.expect(assetsTree != nullptr, "empty UI: assets tree exists");
     if (assetsTree != nullptr) {
-        expectations.expect(assetsTree->topLevelItemCount() >= 1 &&
-                                assetsTree->topLevelItem(0)->text(0) ==
-                                    QStringLiteral("Compositions") &&
-                                assetsTree->topLevelItem(0)->childCount() == 0,
-                            "empty UI: the Compositions root is empty, not stale or invalid");
+        expectations.expect(assetsTree->topLevelItemCount() == 0,
+                            "empty UI: the Assets tree is empty, not stale or invalid");
     }
     expectations.expect(assets.findChild<ui::kit::KIconButton*>(
                             QStringLiteral("assetsNewCompositionButton")) != nullptr,
@@ -285,7 +282,7 @@ void testEmptyWorkspaceEditorsAndFirstComposition(Expectations& expectations) {
         "first composition: Rename/Duplicate/Delete enable once a composition "
         "exists");
     if (assetsTree != nullptr) {
-        expectations.expect(assetsTree->topLevelItem(0)->childCount() == 1,
+        expectations.expect(assetsTree->topLevelItemCount() == 1,
                             "first composition: Assets lists the new composition");
     }
 
@@ -303,8 +300,8 @@ void testEmptyWorkspaceEditorsAndFirstComposition(Expectations& expectations) {
                                 !duplicateCompositionAction->isEnabled(),
                             "final delete: composition actions disable with no active composition");
         if (assetsTree != nullptr) {
-            expectations.expect(assetsTree->topLevelItem(0)->childCount() == 0,
-                                "final delete: Assets returns to an empty Compositions root");
+            expectations.expect(assetsTree->topLevelItemCount() == 0,
+                                "final delete: Assets returns to an empty tree");
         }
         undoAction->trigger();
         QApplication::processEvents();
