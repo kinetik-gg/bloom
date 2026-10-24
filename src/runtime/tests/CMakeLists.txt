@@ -1757,6 +1757,29 @@ bloom_add_test(
 )
 set_tests_properties(bloom.runtime.gpu_roi_media_color_native PROPERTIES SKIP_RETURN_CODE 77)
 
+# #364 Cryptomatte: a real multi-rank Cryptomatte EXR (manifest and no manifest) prepared by the
+# production builder (stacked rank upload, CryptomatteCoverageV1, proxy PointResampleV1) and run by the
+# production executor on a real device, compared bit for bit with the CPU oracle; selection-edit cache
+# identity, preparation and native cancellation, and the pixel budget. Without a device it skips unless
+# --require-device.
+add_executable(bloom_runtime_gpu_cryptomatte_native_test gpu_cryptomatte_native_tests.cpp)
+target_include_directories(bloom_runtime_gpu_cryptomatte_native_test
+    PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS}
+            "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_gpu_cryptomatte_native_test
+    PRIVATE bloom_runtime_evaluator bloom_render bloom_media_image bloom_media_video
+            bloom_media_cache bloom_color OpenEXR::OpenEXR)
+bloom_enable_warnings(bloom_runtime_gpu_cryptomatte_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_cryptomatte_native_test)
+target_compile_options(bloom_runtime_gpu_cryptomatte_native_test PRIVATE -Wno-unused-function)
+bloom_add_test(
+    NAME bloom.runtime.gpu_cryptomatte_native
+    COMMAND bloom_runtime_gpu_cryptomatte_native_test
+    LABELS runtime native gpu render media
+    TIMEOUT 600
+)
+set_tests_properties(bloom.runtime.gpu_cryptomatte_native PROPERTIES SKIP_RETURN_CODE 77)
+
 # Runtime GPU output-colour stage: one prepared OCIO command dispatched, then the exact process
 # RGBA32F payload plus the encoded output read back in ONE combined submission and compared against
 # the unchanged CPU OCIO oracle (2e-6 / one RGBA8 code, exact alpha and process bits). The identity

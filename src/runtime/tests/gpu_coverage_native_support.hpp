@@ -37,6 +37,7 @@ enum class NativeOperationFamily : std::uint8_t {
     Blend,
     Affine,
     Upload,
+    Cryptomatte,
     None,
 };
 
@@ -237,7 +238,10 @@ requiredFamily(const bloom::runtime::PreparedGpuScene& scene) {
     bool hasMerge = false;
     bool hasBlend = false;
     bool hasAffine = false;
+    bool hasCryptomatte = false;
     for (const auto& command : scene.commands()) {
+        hasCryptomatte = hasCryptomatte ||
+                         std::holds_alternative<bloom::runtime::GpuSceneCryptomatteCommand>(command);
         hasSolid =
             hasSolid || std::holds_alternative<bloom::runtime::GpuSceneSolidCommand>(command);
         hasCoverage = hasCoverage ||
@@ -253,7 +257,11 @@ requiredFamily(const bloom::runtime::PreparedGpuScene& scene) {
             hasAffine || std::holds_alternative<bloom::runtime::GpuSceneAffineCommand>(command);
     }
     // The distinguishing family first: an explicit BlendV1 fold or a GpuAffine placement is what a
-    // blend/affine fixture must actually dispatch, even when its inputs also emit coverage.
+    // blend/affine fixture must actually dispatch, even when its inputs also emit coverage. A
+    // Cryptomatte scene must run its CryptomatteCoverageV1 pass (#364).
+    if (hasCryptomatte) {
+        return NativeOperationFamily::Cryptomatte;
+    }
     if (hasBlend) {
         return NativeOperationFamily::Blend;
     }
@@ -293,6 +301,8 @@ familyCount(const bloom::runtime::GpuSceneExecutorCounters& counters,
         return counters.affineDispatches;
     case NativeOperationFamily::Upload:
         return counters.uploads;
+    case NativeOperationFamily::Cryptomatte:
+        return counters.cryptomatteDispatches;
     case NativeOperationFamily::None:
         return counters.dispatches;
     }
