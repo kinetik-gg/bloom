@@ -584,7 +584,8 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
         const auto* asset = session_->snapshot().project().findAsset(imageAsset_);
         const auto* controller = session_->assetController();
         if (!asset || asset->manifest.hasGaps() ||
-            (controller && controller->missing(imageAsset_))) {
+            (controller && (controller->missing(imageAsset_) ||
+                            !controller->problem(imageAsset_).isEmpty()))) {
             const auto warning =
                 kit::iconPixmap(kit::IconId::Warning, kit::Size::IconSmall, kit::Color::Warn);
             painter->drawPixmap(

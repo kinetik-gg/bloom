@@ -53,6 +53,10 @@ class AssetController final : public QObject {
     void remove(document::AssetId id);
     [[nodiscard]] bool busy() const noexcept { return busy_; }
     [[nodiscard]] bool missing(document::AssetId id) const;
+    // Present but not displayable as it is (empty when fine or missing); see Preview::problem.
+    [[nodiscard]] QString problem(document::AssetId id) const;
+    // A data-only image (no colour layer) -- valid, used through its channels.
+    [[nodiscard]] bool dataOnly(document::AssetId id) const;
     [[nodiscard]] QString audioDiagnostic(document::AssetId id) const;
     [[nodiscard]] QImage thumbnail(document::AssetId id) const;
     [[nodiscard]] QImage nodeThumbnail(document::NodeId id) const;
@@ -103,7 +107,14 @@ class AssetController final : public QObject {
         std::string inputColorSpaceWarning;
         std::string audioDiagnostic;
         bool inputColorSpaceAutomatic = false;
+        // The source file is absent or no longer the imported bytes (Relink fixes it).
         bool missing = false;
+        // The source is present but cannot be shown as it is (an uninterpretable colour tag, an
+        // undecodable frame); the text says what to do. Never a Relink prompt.
+        std::string problem;
+        // The image has no colour layer: its pixels are data channels (Cryptomatte, AOVs). A
+        // valid asset whose thumbnail is the Cryptomatte ID colours or its first data channel.
+        bool dataOnly = false;
     };
     using Previews = std::map<document::AssetId, Preview>;
     using Waveforms =

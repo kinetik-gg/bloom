@@ -137,6 +137,8 @@ QString AssetsEditor::rowSignature() const {
             field(videoContainerTags(asset));
         if (controller) {
             number(controller->missing(asset.id) ? 1 : 0);
+            number(controller->dataOnly(asset.id) ? 1 : 0);
+            field(controller->problem(asset.id));
             field(controller->audioDiagnostic(asset.id));
             field(controller->inputColorSpaceDisplay(asset.id));
             field(controller->inputColorSpaceWarning(asset.id));
@@ -324,9 +326,7 @@ void AssetsEditor::rebuild() {
         item->setText(1, lut     ? tr("LUT")
                          : font  ? tr("Font · %1").arg(QString::fromStdString(asset.fontStyle))
                          : video ? tr("Video · %1").arg(duration)
-                         : sequence
-                             ? (exr ? tr("EXR · %1 frames").arg(asset.manifest.members.size())
-                                    : tr("Sequence [%1]").arg(asset.manifest.members.size()))
+                         : sequence ? tr("Sequence [%1]").arg(asset.manifest.members.size())
                          : audio ? tr("Audio · %1 s").arg(asset.duration.toSeconds(), 0, 'f', 2)
                          : exr   ? tr("EXR")
                                  : tr("Image"));
@@ -339,6 +339,9 @@ void AssetsEditor::rebuild() {
         item->setData(0, assets::kTagsRole, tags);
         const auto* controller = session_.assetController();
         const bool missing = controller && controller->missing(asset.id);
+        // A present source that cannot be shown as it is states its own fix; it is never a
+        // Relink prompt. A data-only image (no colour layer) is valid and carries no mark.
+        const auto problem = controller ? controller->problem(asset.id) : QString{};
         const auto audioError =
             (audio || video) && controller ? controller->audioDiagnostic(asset.id) : QString{};
         QString tooltip;
@@ -350,8 +353,12 @@ void AssetsEditor::rebuild() {
                       : audio ? tr("Missing audio — Relink in Assets")
                       : video ? tr("Missing video — Relink in Assets")
                               : tr("Missing image — Relink in Assets");
+        else if (!problem.isEmpty())
+            tooltip = problem;
         else
             tooltip = QString::fromStdString(asset.locator.path);
+        if (controller && controller->dataOnly(asset.id))
+            tooltip += QStringLiteral("\n") + tr("Data channels only — use its Channels output");
         if (video) {
             const auto containerTags = videoContainerTags(asset);
             if (!containerTags.isEmpty())
@@ -381,7 +388,7 @@ void AssetsEditor::rebuild() {
                : sequence ? kit::IconId::Images
                : audio    ? kit::IconId::Audio
                           : kit::IconId::Image,
-               false, tags, missing);
+               false, tags, missing || !problem.isEmpty());
     }
     const bool hasDataBlocks =
         std::ranges::any_of(project.typedDataBlocks(), [](const auto& block) {

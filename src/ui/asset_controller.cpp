@@ -1,3 +1,4 @@
+#include "asset_data_thumbnail.hpp"
 #include "asset_thumbnail_display.hpp"
 #include "network_share_paths.hpp"
 #include <QDir>
@@ -237,6 +238,12 @@ struct ThumbnailSelection {
     // full evaluator decode of the same source share one disk entry.
     std::string diskCacheKey;
     bool available = false;
+    // The verified source bytes are present (a false `available` beside it is a colour or
+    // configuration refusal, not a missing file).
+    bool sourcePresent = false;
+    // The selected part/layer carries no colour channels (a data-only image).
+    bool dataOnly = false;
+    std::string part;
 };
 
 [[nodiscard]] bool fontFileMatches(const document::AssetRecord& asset) {
@@ -325,7 +332,14 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
     const auto probe =
         media::probeImage(selected.path, [&] { return cancel.isCancellationRequested(); });
     selected.available = probe.value && probe.value->contentDigest == selected.digest;
+    selected.sourcePresent = selected.available;
+    selected.part = source.part;
     if (selected.available) {
+        const auto* part = probe.value->findPart(source.part);
+        selected.dataOnly = part != nullptr && std::ranges::find(part->colourLayers, source.layer) ==
+                                                   part->colourLayers.end();
+    }
+    if (selected.available && !selected.dataOnly) {
         const auto config = runtime::detail::resolveInputColorConfig(colorIntent);
         if (!config) {
             selected.available = false;
@@ -637,6 +651,16 @@ std::filesystem::path AssetController::baseDirectory() const {
 bool AssetController::missing(document::AssetId id) const {
     const auto found = previews_.find(id);
     return found != previews_.end() && found->second.missing;
+}
+QString AssetController::problem(document::AssetId id) const {
+    const auto found = previews_.find(id);
+    return found == previews_.end() || found->second.missing
+               ? QString{}
+               : QString::fromStdString(found->second.problem);
+}
+bool AssetController::dataOnly(document::AssetId id) const {
+    const auto found = previews_.find(id);
+    return found != previews_.end() && found->second.dataOnly;
 }
 QString AssetController::audioDiagnostic(document::AssetId id) const {
     const auto found = previews_.find(id);
@@ -1062,13 +1086,35 @@ void AssetController::startThumbnails() {
                 preview.inputColorSpaceName = selected.inputColorSpaceName;
                 preview.inputColorSpaceWarning = selected.inputColorSpaceWarning;
                 preview.inputColorSpaceAutomatic = selected.inputColorSpaceAutomatic;
-                preview.missing = !selected.available;
+                // Missing means the verified bytes are gone; everything else is a present source
+                // with a stated problem, or a data-only image shown through its channels.
+                preview.missing = !selected.sourcePresent;
                 if (preview.missing)
                     return preview;
+                if (selected.dataOnly) {
+                    preview.dataOnly = true;
+                    preview.inputColorSpaceWarning.clear();
+                    preview.key = selected.cacheKey + ":data";
+                    if (const auto found = results->cache.find(preview.key);
+                        found != results->cache.end()) {
+                        preview.image = found->second;
+                        return preview;
+                    }
+                    preview.image = detail::dataChannelThumbnail(
+                        selected.path, selected.digest, selected.part,
+                        [&] { return context.isCancellationRequested(); });
+                    if (!preview.image.isNull())
+                        keepProxy(preview.key, preview.image);
+                    return preview;
+                }
+                if (!selected.available) {
+                    preview.problem = selected.inputColorSpaceWarning.empty()
+                                          ? "The image's colour cannot be interpreted"
+                                          : selected.inputColorSpaceWarning;
+                    return preview;
+                }
                 if (!thumbnailDisplay) {
-                    preview.missing = true;
-                    preview.inputColorSpaceWarning =
-                        "The selected OCIO thumbnail display processor is unavailable";
+                    preview.problem = "The selected OCIO thumbnail display processor is unavailable";
                     return preview;
                 }
                 const auto found = results->cache.find(preview.key);
@@ -1085,7 +1131,9 @@ void AssetController::startThumbnails() {
                     diskCache, /*writeAsync=*/false,
                     [&] { return context.isCancellationRequested(); }, {},
                     media::kMaxImageStorageBytes, selected.inputProcessor);
-                preview.missing = !decoded.value.has_value();
+                if (!decoded.value.has_value())
+                    preview.problem = decoded.diagnostic.empty() ? "The image could not be decoded"
+                                                                 : decoded.diagnostic;
                 if (decoded.value.has_value()) {
                     const auto& image = **decoded.value;
                     const auto extent = image.descriptor()->dataWindow().extent();
@@ -1121,8 +1169,7 @@ void AssetController::startThumbnails() {
                     }
                     if (!displayValid) {
                         preview.image = {};
-                        preview.missing = true;
-                        preview.inputColorSpaceWarning =
+                        preview.problem =
                             "The thumbnail display transform could not process this image";
                     }
                 }
@@ -1304,6 +1351,13 @@ void AssetController::startThumbnails() {
                         if (!thumbnailDisplay && preview.inputColorSpaceWarning.empty())
                             preview.inputColorSpaceWarning =
                                 "The selected OCIO thumbnail display processor is unavailable";
+                        // A present, verified video is never "missing": a colour refusal or an
+                        // undecodable first frame is a stated problem, and its audio still plays.
+                        preview.missing = !available;
+                        if (available && preview.image.isNull())
+                            preview.problem = !preview.inputColorSpaceWarning.empty()
+                                                  ? preview.inputColorSpaceWarning
+                                                  : "The first video frame could not be decoded";
                         if (!preview.image.isNull()) {
                             keepProxy(preview.key, preview.image);
                         }

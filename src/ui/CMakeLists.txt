@@ -379,6 +379,8 @@ target_sources(
         assets_editor_actions.cpp
         assets_editor_internal.hpp
         asset_controller.cpp
+        asset_data_thumbnail.cpp
+        asset_data_thumbnail.hpp
         cryptomatte_controller.cpp
         asset_drop.cpp
         asset_drop.hpp

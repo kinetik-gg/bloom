@@ -6,6 +6,7 @@
 // Nuke syntax: comma-separated entries, `\,` for a literal comma, surrounding spaces ignored, and
 // `<float>` or `<0xHEX>` for a raw ID.
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -21,5 +22,22 @@ namespace bloom::runtime {
 [[nodiscard]] std::optional<std::uint32_t> parseCryptomatteRawId(std::string_view entry) noexcept;
 // A raw-ID entry written so that it parses back to exactly `id`.
 [[nodiscard]] std::string formatCryptomatteRawId(std::uint32_t id);
+
+// The first rank pair of one Cryptomatte type found among channel names: `<layer>00.R` (ID) and
+// `<layer>00.G` (coverage), with R/G, r/g or red/green suffixes.
+struct CryptomatteRankChannels final {
+    std::string layer;
+    std::string id;
+    std::string coverage;
+    friend bool operator==(const CryptomatteRankChannels&,
+                           const CryptomatteRankChannels&) = default;
+};
+// Every Cryptomatte type among `channels` (full channel names), in first-appearance order.
+[[nodiscard]] std::vector<CryptomatteRankChannels>
+cryptomatteTypes(std::span<const std::string> channels);
+
+// The ID-colour preview colour of `id` (linear RGB in [0.15, 1]): three bytes of the ID's bits,
+// so every object keeps one distinct, stable colour (the Cryptomatte preview convention).
+[[nodiscard]] std::array<float, 3> cryptomatteIdColour(std::uint32_t id) noexcept;
 
 } // namespace bloom::runtime

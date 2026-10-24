@@ -142,4 +142,40 @@ std::string formatCryptomatteRawId(const std::uint32_t id) {
     return std::string(buffer.data(), static_cast<std::size_t>(std::max(written, 0)));
 }
 
+std::vector<CryptomatteRankChannels>
+cryptomatteTypes(const std::span<const std::string> channels) {
+    std::vector<CryptomatteRankChannels> types;
+    const auto has = [&](const std::string& name) {
+        return std::ranges::find(channels, name) != channels.end();
+    };
+    for (const auto& channel : channels) {
+        const auto dot = channel.rfind('.');
+        if (dot == std::string::npos || dot < 3)
+            continue;
+        const std::string_view layer(channel.data(), dot);
+        if (layer.substr(layer.size() - 2) != "00")
+            continue;
+        const std::string base(layer.substr(0, layer.size() - 2));
+        if (std::ranges::any_of(types, [&](const auto& type) { return type.layer == base; }))
+            continue;
+        for (const auto& [idSuffix, coverageSuffix] :
+             {std::pair{"R", "G"}, std::pair{"r", "g"}, std::pair{"red", "green"}}) {
+            const auto id = std::string(layer) + "." + idSuffix;
+            const auto coverage = std::string(layer) + "." + coverageSuffix;
+            if (has(id) && has(coverage)) {
+                types.push_back({base, id, coverage});
+                break;
+            }
+        }
+    }
+    return types;
+}
+
+std::array<float, 3> cryptomatteIdColour(const std::uint32_t id) noexcept {
+    const auto channel = [id](const unsigned shift) {
+        return 0.15F + 0.85F * static_cast<float>((id >> shift) & 0xFFU) / 255.0F;
+    };
+    return {channel(16), channel(8), channel(0)};
+}
+
 } // namespace bloom::runtime
