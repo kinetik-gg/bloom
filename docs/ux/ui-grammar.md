@@ -122,8 +122,8 @@ away from new text) the Viewer returns to Select, for a new layer and for a new 
 layer alike. The next click outside therefore selects or deselects and never creates another
 object; drawing again means choosing the tool again. Each created object is exactly one undo entry.
 
-Escape confirms what already exists, never throws work away, and then returns to Select. Discarding
-is Undo, one step per created or edited object.
+Escape confirms everywhere in the Viewer: it keeps what already exists, never throws work away,
+and then returns to Select. Discarding is Undo, one step per created or edited object.
 
 - A shape or mask mid-drag commits at its current size.
 - The Pen finishes with the anchors placed so far as an open path (two or more anchors). A mask is
@@ -136,8 +136,10 @@ is Undo, one step per created or edited object.
 
 A press-release inside the drag distance with a primitive tool is a zero-size gesture: it creates
 nothing and leaves the tool active, so a slip of the mouse never authors an object. Escape at that
-point also creates nothing and returns to Select. Gizmo transform drags keep their Escape-cancels
-rule (direct manipulation, below).
+point also creates nothing and returns to Select. A move, rotate, scale or anchor-point gizmo drag
+keeps the change made so far as one command, and a region-of-interest drag keeps the region drawn so
+far. Only a drag whose frozen mapping was invalidated (a format, viewport or time change) is
+cancelled, because there is nothing valid left to confirm.
 
 Rectangle, Ellipse, Polygon, Star and Line draw a live Accent outline on press-drag. Shift constrains
 rectangles and ellipses to equal sides, keeps polygons and stars regular, or snaps a line to 45-degree steps; Alt draws from the press point
@@ -221,8 +223,9 @@ fields without changing time. It uses nominal-rate timecode and exact rational f
 
 With Select active, Ctrl-drag defines a composition-space ROI without selecting or moving a layer.
 The ROI toggle suspends and restores the rectangle; Clear ROI forgets it. The viewer dims outside
-it and draws an Accent hairline. Escape, capture loss, mapping changes, and session changes cancel
-an unfinished drag; switching compositions clears the rectangle. These bindings use the same Qt
+it and draws an Accent hairline. Escape keeps the region drawn so far; capture loss, mapping
+changes, and session changes cancel an unfinished drag; switching compositions clears the
+rectangle. These bindings use the same Qt
 input and mapping path on Linux, macOS, and Windows.
 
 Exposure and gamma use compact `KValueField` controls named `viewerExposure` and `viewerGamma`,

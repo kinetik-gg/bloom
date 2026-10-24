@@ -65,7 +65,9 @@ Passive picking uses the actual published image, destination and evaluated bound
 pending selection outline or a different project/composition/time has no passive hit geometry.
 Once a gesture begins, its mapping stays frozen through preparation/presentation lag and admission
 lease expiry. Actual time, composition format, viewport/transform, selection, domain or lifecycle
-changes cancel it; Escape, mouse-ungrab and window deactivation keep their cancellation behavior.
+changes, mouse-ungrab and window deactivation cancel it. Escape confirms everywhere in the Viewer:
+a move, rotate, scale or anchor-point gizmo drag keeps the change made so far as one undoable
+command, a region-of-interest drag keeps its region, and the Viewer returns to Select.
 Creation tools are one-shot and Escape confirms rather than discards: committing a shape, a mask on
 the selected layer, a Pen path or text returns the Viewer to Select, so the next click outside
 selects or deselects instead of creating another object. Escape commits a mid-drag shape or mask at
@@ -91,7 +93,7 @@ visible Viewer, the window makes no displayed qualification claim.
 | `Ctrl+1` | Actual size (100%) |
 | Middle drag | Pan |
 | Wheel | Zoom about the pointer |
-| `Esc` | Cancel a gizmo transform drag in flight. With a creation tool, or while editing text, Path anchors or mask anchors, confirm what exists and return to Select (see below) |
+| `Esc` | Confirm whatever is in flight and return to Select: a gizmo move/rotate/scale/anchor drag, a region of interest, a creation, a text edit or a path/mask anchor edit (see below); Undo discards |
 | `Left` / `Right` | Step one frame |
 | `Home` / `End` | Go to start / end |
 

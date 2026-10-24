@@ -32,6 +32,9 @@
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_editor.hpp>
+#include <bloom/ui/viewer_overlays.hpp>
+
+#include <QToolButton>
 
 #include <QApplication>
 #include <QElapsedTimer>
@@ -1029,33 +1032,104 @@ void testMidDragResizeCancelsWithNoCommitAndNoOverrideLeft(Expectations& expecta
                         "the resize-cancel fixture reaches asynchronous scheduler quiescence");
 }
 
-void testEscapeCancelsMidDrag(Expectations& expectations) {
+// Escape confirms a gizmo drag everywhere in the Viewer: the move, rotate, scale or anchor-point
+// change made so far is kept as one command, the Viewer returns to Select, and one undo discards
+// it.
+void testEscapeConfirmsMidDrag(Expectations& expectations) {
     using namespace bloom;
-    GestureFixture fixture(makeTestProject("Viewer Drag Escape Test"));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the initial frame becomes ready before dragging");
-    expectations.expect(
-        fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
-        "the fixture layer is added and selected");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the frame becomes ready again for the post-add revision");
-    const auto revisionBeforeDrag = fixture.session.snapshot().revision();
+    enum class Grip { Move, Rotate, Scale, Anchor };
+    for (const auto grip : {Grip::Move, Grip::Rotate, Grip::Scale, Grip::Anchor}) {
+        const std::string label = grip == Grip::Move     ? "move"
+                                  : grip == Grip::Rotate ? "rotate"
+                                  : grip == Grip::Scale  ? "scale"
+                                                         : "anchor";
+        GestureFixture fixture(makeTestProject("Viewer Drag Escape Test"));
+        expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                            "the initial frame becomes ready before dragging");
+        expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Solid"),
+                                                          core::Color4d{0.2, 0.3, 0.4, 1.0}),
+                            "the fixture layer is added and selected");
+        expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                            "the frame becomes ready again for the post-add revision");
+        fixture.viewer.show();
+        (void)waitUntil([&] { return fixture.viewer.mappingForTest().has_value(); });
+        const auto mapping = fixture.viewer.mappingForTest();
+        const auto bounds =
+            fixture.controller.selectedLayerBounds(fixture.controller.state().frame);
+        expectations.expect(mapping.has_value() && !bounds.empty(), label + ": a gizmo is shown");
+        if (!mapping || bounds.empty())
+            continue;
+        const auto handles = ui::viewerHandlePoints(*mapping, bounds.front());
+        QPointF press =
+            mapping->toScreen({bounds.front().anchor.x + 30, bounds.front().anchor.y + 20});
+        QPointF drag = press + QPointF(20, 10);
+        std::string role(document::kPositionParameterRole);
+        auto region = ui::ViewerHitRegion::Move;
+        switch (grip) {
+        case Grip::Move:
+            break;
+        case Grip::Rotate:
+            press = handles[0] - QPointF(10, 10);
+            drag = press + QPointF(40, -10);
+            role = document::kRotationParameterRole;
+            region = ui::ViewerHitRegion::Rotate;
+            break;
+        case Grip::Scale:
+            press = handles[0];
+            drag = press + QPointF(25, 15);
+            role = document::kScaleParameterRole;
+            region = ui::ViewerHitRegion::Scale;
+            break;
+        case Grip::Anchor:
+            press = mapping->toScreen(bounds.front().anchor);
+            drag = press + QPointF(15, 12);
+            role = document::kAnchorParameterRole;
+            region = ui::ViewerHitRegion::Anchor;
+            break;
+        }
+        expectations.expect(ui::hitTestViewer(*mapping, press, bounds, bounds).region == region,
+                            label + ": the press lands on its gizmo region");
+        const auto* parameter = fixture.session.parameterForSelection(role);
+        expectations.expect(parameter != nullptr, label + ": the edited parameter exists");
+        if (parameter == nullptr)
+            continue;
+        const auto before = fixture.session.liveValue(parameter->id);
+        const auto revisionBeforeDrag = fixture.session.snapshot().revision();
 
-    sendPress(fixture.viewer, QPointF(200.0, 150.0));
-    sendMove(fixture.viewer, QPointF(220.0, 160.0));
-    expectations.expect(fixture.session.transformInteractionActive(), "the interaction is live");
+        sendPress(fixture.viewer, press);
+        sendMove(fixture.viewer, drag);
+        expectations.expect(fixture.session.transformInteractionActive(),
+                            label + ": the interaction is live");
+        expectations.expect(fixture.session.snapshot().revision() == revisionBeforeDrag,
+                            label + ": the drag changes nothing before Escape");
+        // A corner drag on a solid resizes its native size; compare every parameter it touches.
+        std::vector<document::ParameterId> touched;
+        for (const auto& value : fixture.session.transformInteractionOverrides())
+            touched.push_back(value.parameterId);
+        const auto values = [&] {
+            std::vector<std::optional<document::ParameterValue>> result;
+            for (const auto id : touched)
+                result.push_back(fixture.session.liveValue(id));
+            return result;
+        };
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QCoreApplication::sendEvent(&fixture.viewer, &escape);
+        const auto kept = values();
+        expectations.expect(!fixture.session.transformInteractionActive() &&
+                                fixture.session.snapshot().revision() != revisionBeforeDrag,
+                            label + ": Escape keeps the change made so far as a command");
+        sendRelease(fixture.viewer, drag);
+        expectations.expect(fixture.session.undo(), label + ": the confirmed drag undoes");
+        expectations.expect(values() != kept && fixture.session.liveValue(parameter->id) == before,
+                            label + ": one undo discards the confirmed drag");
+        expectations.expect(fixture.viewer.findChild<QToolButton*>("viewerSelectTool")->isChecked(),
+                            label + ": Escape returns to Select");
 
-    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
-    QCoreApplication::sendEvent(&fixture.viewer, &escape);
-    expectations.expect(!fixture.session.transformInteractionActive(),
-                        "Escape cancels the live interaction");
-    expectations.expect(fixture.session.snapshot().revision() == revisionBeforeDrag,
-                        "Escape commits nothing");
-
-    fixture.controller.beginShutdown();
-    fixture.bridge.beginShutdown();
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
-                        "the escape-cancel fixture reaches asynchronous scheduler quiescence");
+        fixture.controller.beginShutdown();
+        fixture.bridge.beginShutdown();
+        expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+                            "the escape fixture reaches asynchronous scheduler quiescence");
+    }
 }
 
 // LAYOUT-2: a gesture begun after a layout-only edit still maps and previews correctly. The
@@ -1219,7 +1293,7 @@ int main(int argc, char** argv) {
     testDragOnEmptyOrUnselectedDoesNothing(expectations);
     testSelectionCallbackInvalidatesPress(expectations);
     testMidDragResizeCancelsWithNoCommitAndNoOverrideLeft(expectations);
-    testEscapeCancelsMidDrag(expectations);
+    testEscapeConfirmsMidDrag(expectations);
     testGestureAfterLayoutEditUsesLiveRevision(expectations);
     testPointerDragAfterSplitTargetsNewTail(expectations);
     return expectations.failures() == 0 ? 0 : 1;

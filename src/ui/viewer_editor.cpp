@@ -1,8 +1,8 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/ui/composition_authoring.hpp>
+#include <bloom/ui/cryptomatte_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/viewer_editor.hpp>
-#include <bloom/ui/cryptomatte_controller.hpp>
 #include <bloom/ui/viewer_gpu_resident.hpp>
 #include <bloom/ui/viewer_gpu_resident_overlay.hpp>
 #include <memory>
@@ -781,9 +781,8 @@ void ViewerEditor::buildHeader() {
         channelGroup->addAction(action);
     }
     channelGroup->actions().front()->setChecked(true);
-    connect(channelGroup, &QActionGroup::triggered, this, [this](QAction* action) {
-        chooseChannelDropdownIndex(action->data().toInt());
-    });
+    connect(channelGroup, &QActionGroup::triggered, this,
+            [this](QAction* action) { chooseChannelDropdownIndex(action->data().toInt()); });
 
     auto* backgroundMenu = viewerViewMenu_->addMenu(tr("Background"));
     backgroundMenu->setObjectName(QStringLiteral("viewerBackgroundMenu"));
@@ -1588,7 +1587,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
                    std::max(kit::px(kit::Size::ViewerMinHeight),
                             tools->sizeHint().height() + kit::px(kit::Size::Control)));
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    // StrongFocus lets a press-to-drag gesture also receive the Escape key that cancels it, and
+    // StrongFocus lets a press-to-drag gesture also receive the Escape key that confirms it, and
     // lets the widget receive Space/Z/F without a prior click.
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
@@ -2967,9 +2966,11 @@ void ViewerEditor::wheelEvent(QWheelEvent* event) {
 }
 
 void ViewerEditor::keyPressEvent(QKeyEvent* event) {
+    // Escape confirms every Viewer drag as it stands and returns to Select; Undo discards a
+    // document edit. A region-of-interest drag keeps the region drawn so far.
     if (roiGesture_ && event->key() == Qt::Key_Escape) {
-        roiGesture_.reset();
-        update();
+        commitRoiGesture(roiGesture_->pointer);
+        selectTool(Tool::Select);
         event->accept();
         return;
     }
@@ -3017,7 +3018,10 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
         }
     }
     if (dragActive_ && event->key() == Qt::Key_Escape) {
-        endDrag(false);
+        // A move, rotate, scale or anchor-point gizmo drag keeps its change as one command; a
+        // drag whose frozen mapping no longer holds cannot be confirmed and is cancelled.
+        endDrag(mappingStillValid());
+        selectTool(Tool::Select);
         event->accept();
         return;
     }

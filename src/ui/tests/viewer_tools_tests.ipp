@@ -430,6 +430,15 @@ void testViewerRoi(Expectations& expectations) {
     toolReady(fixture, expectations);
     expectations.expect(!fixture.controller.regionOfInterest() && !toggle->isChecked(),
                         "clear forgets ROI and disables it");
+    // Escape confirms a region drag too: the region drawn so far is kept.
+    toolMouse(fixture, QEvent::MouseButtonPress, {60, 50}, Qt::ControlModifier);
+    toolMouse(fixture, QEvent::MouseMove, {150, 110}, Qt::ControlModifier);
+    toolKey(fixture, Qt::Key_Escape);
+    toolMouse(fixture, QEvent::MouseButtonRelease, {150, 110});
+    toolReady(fixture, expectations);
+    expectations.expect(fixture.controller.regionOfInterest().has_value() && toggle->isChecked() &&
+                            selectToolActive(fixture),
+                        "Escape keeps a region of interest drawn so far");
     toolShutdown(fixture, expectations);
 }
 

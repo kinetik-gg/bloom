@@ -295,10 +295,19 @@ bool ViewerEditor::roiMove(QMouseEvent* event) {
 bool ViewerEditor::roiRelease(QMouseEvent* event) {
     if (!roiGesture_ || event->button() != Qt::LeftButton)
         return false;
+    commitRoiGesture(event->position());
+    event->accept();
+    return true;
+}
+
+// Release and Escape alike keep the region drawn so far.
+void ViewerEditor::commitRoiGesture(const QPointF pointer) {
+    if (!roiGesture_)
+        return;
     const auto mapping = currentMapping();
     if (mapping && *mapping == roiGesture_->mapping) {
         const auto first = mapping->toComposition(roiGesture_->origin);
-        const auto last = mapping->toComposition(event->position());
+        const auto last = mapping->toComposition(pointer);
         const auto region = QRectF(QPointF(first.x, first.y), QPointF(last.x, last.y))
                                 .normalized()
                                 .intersected(QRectF(0, 0, mapping->compositionFormat.width(),
@@ -311,8 +320,6 @@ bool ViewerEditor::roiRelease(QMouseEvent* event) {
     }
     roiGesture_.reset();
     update();
-    event->accept();
-    return true;
 }
 
 void ViewerEditor::paintRoi(QPainter& painter) const {

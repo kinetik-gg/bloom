@@ -1,7 +1,7 @@
 #pragma once
 
-#include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/runtime/channel_inspection_listing.hpp>
+#include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_native_surface.hpp>
@@ -594,6 +594,7 @@ class ViewerEditor final : public QWidget,
     bool roiPress(QMouseEvent* event);
     bool roiMove(QMouseEvent* event);
     bool roiRelease(QMouseEvent* event);
+    void commitRoiGesture(QPointF pointer);
     void paintRoi(QPainter& painter) const;
     void publishRoi();
     [[nodiscard]] QString analysisSettingsPrefix() const;
