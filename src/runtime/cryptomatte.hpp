@@ -116,6 +116,14 @@ struct CryptomatteGather final {
                                                   std::size_t budget,
                                                   const CancellationToken& cancel);
 
+// GPU host preparation: the gathered ranks stacked vertically into ONE upload image (rank r
+// occupies rows [origin + r * height, origin + (r + 1) * height)) on the gather's data window
+// origin and display window, exactly the CryptomatteCoverageV1 source layout. Bits are copied
+// verbatim.
+[[nodiscard]] media::ImageResult<render::Rgba32fImage>
+stackCryptomatteRanks(const CryptomatteGather& gather, std::size_t budget,
+                      const CancellationToken& cancel);
+
 // CPU reference: the full-resolution matte (premultiplied white x coverage) from the gather.
 [[nodiscard]] media::ImageResult<render::Rgba32fImage>
 cryptomatteCoverageImage(const CryptomatteGather& gather, std::size_t budget,

@@ -58,6 +58,8 @@ struct GpuSceneUploadLeafResult final {
     // A PointResampleV1 gather from the full-resolution upload to the proxy output when the source
     // is under a fractional proxy (only set alongside a non-null program). Null at unit scale.
     std::optional<MediaResamplePlan> resample;
+    // #364: a CryptomatteCoverageV1 pass over the stacked rank upload, emitted before any resample.
+    std::optional<MediaCryptomattePlan> cryptomatte;
     std::optional<render::ImageWindow> outputWindow;
     EvaluatedOperationBounds bounds;
 };
@@ -105,6 +107,31 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
                                  .semanticKey = uploadKey};
     GpuSceneCommandIndex current = emit(std::move(upload));
     std::string currentKey = uploadKey;
+    // The window the resample reads: the matte for a Cryptomatte leaf, else the upload.
+    auto currentWindow = leaf.descriptor->dataWindow();
+    if (leaf.cryptomatte.has_value()) {
+        const auto& matte = leaf.cryptomatte->output;
+        const auto extent = matte.dataWindow().extent();
+        if (const auto error = charge(extent.width(), extent.height(), sizeof(render::Rgba32f))) {
+            return error;
+        }
+        GpuSceneCryptomatteCommand coverage{.index = kInvalidGpuSceneCommand,
+                                            .sourceOperation = operationIndex,
+                                            .input = current,
+                                            .inputKey = currentKey,
+                                            .rankCount = leaf.cryptomatte->rankCount,
+                                            .ids = leaf.cryptomatte->ids,
+                                            .outputWindow = matte.dataWindow(),
+                                            .displayWindow = matte.displayWindow(),
+                                            .pixelAspect = matte.pixelAspect(),
+                                            .semanticKey = {}};
+        coverage.semanticKey = makeGpuSceneCryptomatteSemanticKey(
+            coverage.inputKey, coverage.rankCount, coverage.ids, coverage.outputWindow,
+            coverage.displayWindow, coverage.pixelAspect, "cryptomatte-coverage-v1");
+        currentKey = coverage.semanticKey;
+        currentWindow = coverage.outputWindow;
+        current = emit(std::move(coverage));
+    }
     // A proxied leaf (identity or non-identity) keeps the full-resolution upload and gathers the
     // proxy on the GPU; a non-identity transform then runs the OCIO CST over that proxy geometry.
     // The resample is emitted independently of whether an OCIO program is present. The resample
@@ -119,7 +146,7 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
                                               .sourceOperation = operationIndex,
                                               .input = current,
                                               .inputKey = currentKey,
-                                              .sourceWindow = leaf.descriptor->dataWindow(),
+                                              .sourceWindow = currentWindow,
                                               .outputWindow = leaf.resample->output.dataWindow(),
                                               .displayWindow =
                                                   leaf.resample->output.displayWindow(),
@@ -178,6 +205,15 @@ buildChannelShuffleColorLeaf(const CompiledChannelShuffle& shuffle, const Evalua
                              const CancellationToken& cancellation,
                              GpuSceneMediaStatistics& statistics, GpuSceneUploadLeafResult& result);
 
+// #364: the Cryptomatte leaf (prepareCryptomatteLeaf).
+[[nodiscard]] std::optional<GpuSceneLeafFailure>
+buildCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationRequest& request,
+                     const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
+                     const GpuSceneMediaContext& context, std::uint64_t pixelBudget, double hScale,
+                     double vScale, const GpuSceneMediaChargeBytes& chargeBytes,
+                     const CancellationToken& cancellation, GpuSceneMediaStatistics& statistics,
+                     GpuSceneUploadLeafResult& result);
+
 // Build one ImageSource or VideoSource colour leaf and emit its scene commands, filling the
 // builder's per-operation outputs. Defined here so the builder orchestrator's image and video
 // blocks share one call site. The remaining media bytes are charged by the leaf helpers through
@@ -209,6 +245,10 @@ template <typename Emit, typename ChargeRetained, typename ChargeTransient>
         built = buildChannelShuffleColorLeaf(*shuffle, request, plan, resolved, context,
                                              ocioContext, pixelBudget, hScale, vScale,
                                              chargeRetained, cancellation, statistics, leaf);
+    } else if (const auto* cryptomatte = std::get_if<CompiledCryptomatte>(&operation)) {
+        built = buildCryptomatteLeaf(*cryptomatte, request, plan, resolved, context, pixelBudget,
+                                     hScale, vScale, chargeRetained, cancellation, statistics,
+                                     leaf);
     } else {
         return GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::InternalInvariant,
                                    "a media leaf was requested for a non-media operation"};

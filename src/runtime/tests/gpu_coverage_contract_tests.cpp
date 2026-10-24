@@ -586,6 +586,41 @@ displayProofRunner(const bool customView) {
         "src/runtime channel shuffle production scene preparation", [runChannels] {
             return runChannels(bloom::gpu_coverage_media::ChannelFixture::Copy, 113600);
         });
+    // #364: Cryptomatte through the production rank gather, stacked upload, CryptomatteCoverageV1
+    // and proxy resample: names resolved through the manifest, names resolved by hash without one,
+    // a raw ID, and the Image output (beauty x matte through the MultiplyAlpha combine).
+    const auto runCryptomatte = [](const bool manifest, std::vector<std::string> mattes,
+                                   const bool imageOutput, const std::uint64_t idBase) {
+        const bloom::runtime::CpuCompositionEvaluator evaluator;
+        const auto& image = bloom::gpu_coverage_media::cryptomatteImage(manifest);
+        const auto plan = bloom::gpu_coverage_media::cryptomattePlan(
+            image.asset, LayerValues{.position = {4.3, 3.1}, .opacity = 1.0}, idBase,
+            std::move(mattes), imageOutput);
+        return runMediaBuilder(plan, evaluator, bloom::gpu_coverage_media::gateDirectory());
+    };
+    const auto runAllCryptomatte = [runCryptomatte](const std::uint64_t idBase) {
+        FixtureRun combined;
+        combined.prepared = true;
+        const auto sky = bloom::runtime::formatCryptomatteRawId(
+            bloom::runtime::cryptomatteNameId("sky"));
+        std::vector<FixtureRun> runs;
+        runs.push_back(runCryptomatte(true, {"cube", "floor"}, false, idBase));
+        runs.push_back(runCryptomatte(false, {"cube", "floor", sky}, false, idBase + 100));
+        runs.push_back(runCryptomatte(true, {"sphere"}, true, idBase + 200));
+        for (auto& frame : runs) {
+            combined.prepared = combined.prepared && frame.prepared;
+            combined.evidence += frame.evidence + "; ";
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+        }
+        return combined;
+    };
+    add("operation.CompiledCryptomatte", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Cryptomatte production scene preparation",
+        [runAllCryptomatte] { return runAllCryptomatte(113700); });
+    add("node.bloom.cryptomatte", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Cryptomatte production scene preparation",
+        [runAllCryptomatte] { return runAllCryptomatte(114100); });
     add("node.bloom.image-source", GpuCoverageFixtureCriterion::Prepared,
         "src/media image source tests", [] {
             const bloom::runtime::CpuCompositionEvaluator evaluator;

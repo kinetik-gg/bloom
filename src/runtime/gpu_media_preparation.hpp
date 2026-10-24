@@ -30,6 +30,9 @@
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
 #include <cstdint>
+#include <vector>
+
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -63,6 +66,15 @@ struct MediaResamplePlan final {
     double verticalScale = 1.0;
 };
 
+// #364: a CryptomatteCoverageV1 pass over the stacked rank upload. `output` is the full-resolution
+// matte descriptor (the upload's data window origin and width, one rank's height, the composition
+// display window and pixel aspect); any proxy resample then reads the matte, not the upload.
+struct MediaCryptomattePlan final {
+    render::Rgba32fImageDescriptor output;
+    std::uint32_t rankCount = 0;
+    std::vector<std::uint32_t> ids;
+};
+
 struct MediaUploadOutcome final {
     std::shared_ptr<const render::Rgba32fImage> image;
     // Request geometry for the upload command. Raw source storage keeps its native descriptor;
@@ -72,6 +84,7 @@ struct MediaUploadOutcome final {
     std::string uploadSemanticKey;
     std::shared_ptr<const PreparedGpuOcioCommand> program;
     std::optional<MediaResamplePlan> resample;
+    std::optional<MediaCryptomattePlan> cryptomatte;
     // Image-source frame bounds when the data window differs from the frame (see
     // imageSourceFrameBounds); otherwise the leaf bounds follow its output window.
     std::optional<ContentBounds> frameBounds;
@@ -125,6 +138,17 @@ prepareChannelShuffleColorLeaf(const CompiledChannelShuffle& shuffle,
                                bool explicitBypass, bool planBypass,
                                const CancellationToken& cancellation,
                                GpuSceneMediaStatistics& statistics);
+
+// #364: the Cryptomatte leaf. Host preparation gathers the layer's rank pairs (decode layout: the
+// ID's exact bits and its coverage, zero outside a channel's window) into one stacked upload and
+// resolves the selected IDs through the manifest; the coverage accumulation (CryptomatteCoverageV1)
+// and the proxy PointResampleV1 are GPU commands. There is no colour conversion: a matte is data.
+[[nodiscard]] MediaUploadOutcome
+prepareCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationRequest& request,
+                       const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
+                       const GpuSceneMediaContext& context, std::uint64_t pixelBudget,
+                       bool explicitBypass, bool planBypass, const CancellationToken& cancellation,
+                       GpuSceneMediaStatistics& statistics);
 
 // The VideoSource twin of prepareImageColorLeaf. Video's YUV->RGB transfer/primaries conversion is
 // codec-side plane conversion and stays host preparation; the resolved config OCIO processor is the

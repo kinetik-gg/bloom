@@ -34,7 +34,9 @@ finishUploadLeaf(const MediaUploadOutcome& outcome, GpuSceneUploadLeafResult& re
     // evaluator does: under a fractional proxy the leaf's output window is the point-resample
     // output, not the full-resolution raw upload. At unit scale the two are identical.
     const auto leafWindow = outcome.resample.has_value() ? outcome.resample->output.dataWindow()
-                                                         : descriptor.dataWindow();
+                            : outcome.cryptomatte.has_value()
+                                ? outcome.cryptomatte->output.dataWindow()
+                                : descriptor.dataWindow();
     result.bounds.local = outcome.frameBounds.value_or(boundsForWindow(leafWindow, hScale, vScale));
     result.bounds.output = result.bounds.local;
     result.outputWindow = leafWindow;
@@ -49,6 +51,7 @@ finishUploadLeaf(const MediaUploadOutcome& outcome, GpuSceneUploadLeafResult& re
         outcome.uploadSemanticKey.empty() ? outcome.semanticKey : outcome.uploadSemanticKey;
     result.program = outcome.program;
     result.resample = outcome.resample;
+    result.cryptomatte = outcome.cryptomatte;
     return std::nullopt;
 }
 
@@ -170,6 +173,20 @@ std::optional<GpuSceneLeafFailure> buildChannelShuffleColorLeaf(
     const auto outcome = prepareChannelShuffleColorLeaf(
         shuffle, request, plan, resolved, context, ocioContext, pixelBudget,
         request.bypassOperationCache, plan.bypassOperationCache(), cancellation, statistics);
+    return finishUploadLeaf(outcome, result, hScale, vScale, chargeBytes);
+}
+
+std::optional<GpuSceneLeafFailure>
+buildCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationRequest& request,
+                     const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
+                     const GpuSceneMediaContext& context, const std::uint64_t pixelBudget,
+                     const double hScale, const double vScale,
+                     const GpuSceneMediaChargeBytes& chargeBytes,
+                     const CancellationToken& cancellation, GpuSceneMediaStatistics& statistics,
+                     GpuSceneUploadLeafResult& result) {
+    const auto outcome = prepareCryptomatteLeaf(
+        cryptomatte, request, plan, resolved, context, pixelBudget, request.bypassOperationCache,
+        plan.bypassOperationCache(), cancellation, statistics);
     return finishUploadLeaf(outcome, result, hScale, vScale, chargeBytes);
 }
 

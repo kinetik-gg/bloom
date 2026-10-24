@@ -1,4 +1,5 @@
 #include "channel_shuffle.hpp"
+#include "cryptomatte.hpp"
 #include "gpu_media_preparation.hpp"
 
 #include "image_source.hpp"
@@ -735,6 +736,168 @@ MediaUploadOutcome prepareChannelShuffleColorLeaf(
         if (!outcome.cancelled)
             outcome.image.reset();
         return outcome;
+    }
+    return outcome;
+}
+
+MediaUploadOutcome prepareCryptomatteLeaf(
+    const CompiledCryptomatte& cryptomatte, const EvaluationRequest& request,
+    const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
+    const GpuSceneMediaContext& context, const std::uint64_t pixelBudget, const bool explicitBypass,
+    const bool planBypass, const CancellationToken& cancellation,
+    GpuSceneMediaStatistics& statistics) {
+    ++statistics.imageSources;
+    MediaUploadOutcome outcome;
+    if (context.operationCache == nullptr) {
+        outcome.failure = "Channel source context is unavailable";
+        return outcome;
+    }
+    const auto selection = selectCryptomatte(
+        cryptomatte, request.time, plan.format().frameRate(), context.assetBaseDirectory,
+        cancellation, request.colorIntent, explicitBypass ? nullptr : context.operationCache.get(),
+        (explicitBypass || request.requireVerifiedMediaSources)
+            ? MediaSourceRevisionPolicy::Revalidate
+            : request.mediaSourceRevisionPolicy,
+        byteBudget(request.pixelStorageByteLimit), !planBypass);
+    for (const auto& source : selection.channels.sources)
+        recordSourceRevisionWork(source, statistics);
+    if (selection.cancelled) {
+        outcome.cancelled = true;
+        return outcome;
+    }
+    if (!selection.available) {
+        if (pixelBudget == 0 || selection.budgetExceeded)
+            outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
+        outcome.failure =
+            selection.warning.empty() ? "Cryptomatte source is unavailable" : selection.warning;
+        return outcome;
+    }
+    outcome.frameBounds = cryptomatteFrameBounds(selection);
+    // The stacked ranks depend only on the sources and rank channels; the selected IDs (resolved
+    // through the manifest the decode carries) are kept beside them under the selection identity,
+    // which covers the sources' content, the layer and the matte list.
+    const auto backingKey = rawDecodeUploadKey("cryptomatte-raw", selection.gatherKey);
+    OperationKey idsKeyBuilder;
+    idsKeyBuilder.add(std::string{"cryptomatte-ids-v1"});
+    idsKeyBuilder.add(selection.cacheKey);
+    const auto idsKey = idsKeyBuilder.digest();
+    ++statistics.uploadKeyConstructions;
+    std::optional<std::vector<std::uint32_t>> ids;
+    const bool cacheable = !explicitBypass && context.preparedUploadCache != nullptr;
+    if (cacheable) {
+        if (auto cached = context.preparedUploadCache->find(backingKey)) {
+            if (const auto stored = context.operationCache->find(idsKey, document::Revision{})) {
+                std::vector<std::uint32_t> resolvedIds;
+                bool valid = true;
+                for (const auto& value : stored->values) {
+                    const auto* id = std::get_if<std::int64_t>(&value);
+                    valid = valid && id != nullptr && *id >= 0 &&
+                            *id <= std::numeric_limits<std::uint32_t>::max();
+                    if (valid)
+                        resolvedIds.push_back(static_cast<std::uint32_t>(*id));
+                }
+                if (valid) {
+                    ids = std::move(resolvedIds);
+                    outcome.image = std::move(cached);
+                    outcome.cacheHit = true;
+                }
+            }
+        }
+        if (outcome.cacheHit)
+            ++statistics.uploadCacheHits;
+        else
+            ++statistics.uploadCacheMisses;
+    }
+    if (outcome.image == nullptr) {
+        if (pixelBudget == 0) {
+            outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
+            outcome.failure = "A new Cryptomatte backing exceeds the remaining source allowance";
+            return outcome;
+        }
+        const auto gather = gatherCryptomatte(selection, byteBudget(pixelBudget), cancellation);
+        addMediaWork(statistics.imageRepairedPixels, gather.repairedPixels);
+        ++statistics.imageConversions;
+        if (gather.cancelled) {
+            outcome.cancelled = true;
+            return outcome;
+        }
+        if (gather.ranks.empty()) {
+            if (gather.code == media::ImageDiagnosticCode::PixelBudgetExceeded)
+                outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
+            outcome.failure = gather.diagnostic.empty() ? "Cryptomatte ranks could not be decoded"
+                                                        : gather.diagnostic;
+            return outcome;
+        }
+        auto stacked = stackCryptomatteRanks(gather, byteBudget(pixelBudget), cancellation);
+        if (stacked.cancelled) {
+            outcome.cancelled = true;
+            return outcome;
+        }
+        if (!stacked.value.has_value()) {
+            if (stacked.code == media::ImageDiagnosticCode::PixelBudgetExceeded)
+                outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
+            outcome.failure = stacked.diagnostic.empty() ? "Cryptomatte ranks could not be stacked"
+                                                         : stacked.diagnostic;
+            return outcome;
+        }
+        outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(*stacked.value));
+        outcome.converted = true;
+        ids = gather.ids;
+        if (cacheable && !planBypass) {
+            context.preparedUploadCache->store(backingKey, outcome.image);
+            std::vector<CompiledValue> values;
+            values.reserve(gather.ids.size());
+            for (const auto id : gather.ids)
+                values.emplace_back(static_cast<std::int64_t>(id));
+            context.operationCache->store(idsKey, document::Revision{},
+                                          {.image = {}, .values = std::move(values), .bounds = {}});
+        }
+    }
+    const auto rankCount = static_cast<std::uint32_t>(selection.ranks.size());
+    const auto* stackedDescriptor = outcome.image->descriptor();
+    if (stackedDescriptor == nullptr || rankCount == 0 ||
+        stackedDescriptor->dataWindow().extent().height() % rankCount != 0) {
+        outcome.failure = "Cryptomatte rank upload has an invalid descriptor";
+        outcome.image.reset();
+        return outcome;
+    }
+    const auto uploadDescriptor =
+        rawUploadDescriptor(*outcome.image, resolved.imageDescriptor, true);
+    if (!uploadDescriptor) {
+        outcome.failure = "Cryptomatte rank upload descriptor is invalid";
+        outcome.image.reset();
+        return outcome;
+    }
+    const auto uploadWindow = uploadDescriptor->dataWindow();
+    const auto matteWindow = render::ImageWindow::create(
+        uploadWindow.originX(), uploadWindow.originY(), uploadWindow.extent().width(),
+        uploadWindow.extent().height() / rankCount);
+    if (!matteWindow) {
+        outcome.failure = "Cryptomatte matte window is invalid";
+        outcome.image.reset();
+        return outcome;
+    }
+    const auto matteDescriptor = render::Rgba32fImageDescriptor::create(
+        *matteWindow.value(), uploadDescriptor->displayWindow(), uploadDescriptor->pixelAspect());
+    if (!matteDescriptor) {
+        outcome.failure = "Cryptomatte matte descriptor is invalid";
+        outcome.image.reset();
+        return outcome;
+    }
+    outcome.uploadDescriptor = *uploadDescriptor;
+    outcome.uploadSemanticKey = rawUploadCommandKey(backingKey, *uploadDescriptor);
+    outcome.semanticKey = outcome.uploadSemanticKey;
+    outcome.cryptomatte =
+        MediaCryptomattePlan{*matteDescriptor.value(), rankCount, std::move(*ids)};
+    if (!resolvedProxyIsUnit(resolved)) {
+        const auto proxyDescriptor = proxyOutputDescriptor(*matteDescriptor.value(), resolved);
+        if (!proxyDescriptor.has_value()) {
+            outcome.failure = "Cryptomatte proxy output descriptor is invalid";
+            outcome.image.reset();
+            return outcome;
+        }
+        outcome.resample =
+            MediaResamplePlan{*proxyDescriptor, resolved.horizontalScale, resolved.verticalScale};
     }
     return outcome;
 }

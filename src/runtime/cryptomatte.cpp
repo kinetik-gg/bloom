@@ -494,6 +494,48 @@ CryptomatteGather gatherCryptomatte(const CryptomatteSelection& selection, const
 }
 
 media::ImageResult<render::Rgba32fImage>
+stackCryptomatteRanks(const CryptomatteGather& gather, const std::size_t budget,
+                      const CancellationToken& cancel) {
+    if (gather.ranks.empty())
+        return {{}, gather.diagnostic.empty() ? "The Cryptomatte has no ranks" : gather.diagnostic};
+    const auto* first = gather.ranks.front()->descriptor();
+    const auto window = first->dataWindow();
+    const auto height = static_cast<std::uint64_t>(window.extent().height());
+    const auto rankCount = static_cast<std::uint64_t>(gather.ranks.size());
+    const auto stackedWindow = render::ImageWindow::create(
+        window.originX(), window.originY(), window.extent().width(), height * rankCount);
+    if (!stackedWindow)
+        return {{}, "The Cryptomatte rank stack is too large"};
+    const auto descriptor = render::Rgba32fImageDescriptor::create(
+        *stackedWindow.value(), first->displayWindow(), first->pixelAspect());
+    if (!descriptor)
+        return {{}, "The Cryptomatte rank stack is too large"};
+    auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), budget);
+    if (!builder)
+        return {{}, "The Cryptomatte ranks exceed the pixel storage budget", false,
+                media::ImageDiagnosticCode::PixelBudgetExceeded};
+    const auto width = static_cast<std::size_t>(window.extent().width());
+    for (std::uint64_t rank = 0; rank < rankCount; ++rank) {
+        const auto& source = *gather.ranks[rank];
+        for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
+            if (cancel.isCancellationRequested())
+                return {{}, {}, true, media::ImageDiagnosticCode::Cancelled};
+            const auto target = y + static_cast<std::int64_t>(rank * height);
+            auto row = builder.value()->row(target);
+            const auto pixels = source.pixels();
+            const auto offset = static_cast<std::size_t>(y - window.originY()) * width;
+            if (!row || pixels.size() < offset + width)
+                return {{}, "Cryptomatte rank stack validation failed"};
+            std::ranges::copy(pixels.subspan(offset, width), row.value()->begin());
+        }
+    }
+    auto frozen = std::move(*builder.value()).freeze();
+    if (!frozen)
+        return {{}, "Cryptomatte rank stack validation failed"};
+    return {std::move(*frozen.value()), {}};
+}
+
+media::ImageResult<render::Rgba32fImage>
 cryptomatteCoverageImage(const CryptomatteGather& gather, const std::size_t budget,
                          const CancellationToken& cancel) {
     if (gather.ranks.empty())

@@ -6,6 +6,7 @@
 // oracle and the preparer read the same bytes, time, and interpretation; there is no fake
 // admission and no InvalidMediaAccepted path.
 
+#include "cryptomatte_fixture_support.hpp"
 #include "gpu_coverage_fixture_support.hpp"
 
 #include <ImathBox.h>
@@ -328,6 +329,91 @@ channelShufflePlan(const bloom::document::AssetRecord& asset, const LayerValues 
         bloom::document::Revision::fromRaw(7), bloom::document::ProjectId::fromRaw(1),
         bloom::document::CompositionId::fromRaw(2), format(8, 8), std::move(operations),
         OperationIndex::fromRaw(3)});
+}
+
+// #364: a real multi-rank Cryptomatte EXR (two CryptoObject rank layers and a premultiplied
+// beauty), with or without the `cryptomatte/<key>/manifest` metadata.
+[[nodiscard]] inline const ImageFixture& cryptomatteImage(const bool manifest) {
+    const auto make = [](const bool withManifest) {
+        std::filesystem::create_directories(gateDirectory());
+        ImageFixture value;
+        value.path = gateDirectory() /
+                     (withManifest ? "cryptomatte_manifest.exr" : "cryptomatte_plain.exr");
+        bloom::cryptomatte_fixture::writeCryptomatteExr(value.path, withManifest);
+        const auto probe = bloom::media::probeImage(value.path);
+        if (!probe.value.has_value())
+            throw std::logic_error("Cryptomatte EXR could not be probed: " + probe.diagnostic);
+        value.asset.id = bloom::document::AssetId::fromRaw(withManifest ? 902 : 903);
+        value.asset.kind = bloom::document::AssetKind::Image;
+        value.asset.locator.kind = "file";
+        value.asset.locator.portability = "project-relative";
+        value.asset.locator.path = value.path.filename().string();
+        value.asset.locator.relinkHint = "file:" + value.path.string();
+        value.asset.contentDigest = probe.value->contentDigest;
+        value.asset.interpretation.colorSpace = bloom::document::AssetColorSpace::Auto;
+        value.asset.width = probe.value->width;
+        value.asset.height = probe.value->height;
+        value.asset.name = withManifest ? "cryptomatte_manifest" : "cryptomatte_plain";
+        return value;
+    };
+    static const ImageFixture withManifest = make(true);
+    static const ImageFixture plain = make(false);
+    return manifest ? withManifest : plain;
+}
+
+// Source -> Cryptomatte (CryptoObject, `mattes`) -> Layer Output. With `imageOutput` the layer reads
+// the node's Image output: the beauty (an Image source of the same file) x the matte through the
+// MultiplyAlpha combine the compiler emits; otherwise it reads the Mask output.
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+cryptomattePlan(const bloom::document::AssetRecord& asset, const LayerValues layer,
+                const std::uint64_t idBase, std::vector<std::string> mattes,
+                const bool imageOutput) {
+    using bloom::document::NodeId;
+    using bloom::document::ParameterId;
+    const LayerIds ids{ParameterId::fromRaw(idBase + 0), ParameterId::fromRaw(idBase + 1),
+                       ParameterId::fromRaw(idBase + 2), ParameterId::fromRaw(idBase + 3),
+                       ParameterId::fromRaw(idBase + 4), ParameterId::fromRaw(idBase + 5)};
+    bloom::runtime::CompiledCryptomatte cryptomatte;
+    cryptomatte.sourceNodeId = NodeId::fromRaw(idBase + 20);
+    cryptomatte.channels.sources.push_back(
+        bloom::runtime::CompiledChannelSource{NodeId::fromRaw(idBase + 10), asset, 0, 0, 0, {}, {}});
+    bloom::runtime::CompiledChannelStep source;
+    source.kind = bloom::runtime::CompiledChannelStepKind::Source;
+    source.nodeId = NodeId::fromRaw(idBase + 10);
+    cryptomatte.channels.steps.push_back(source);
+    cryptomatte.layer = "CryptoObject";
+    cryptomatte.mattes = std::move(mattes);
+    std::vector<CompiledOperation> operations;
+    operations.emplace_back(std::move(cryptomatte));
+    auto layerInput = OperationIndex::fromRaw(0);
+    if (imageOutput) {
+        operations.emplace_back(bloom::runtime::CompiledImageSource{
+            NodeId::fromRaw(idBase + 10), asset, 0, 0, 0, std::string{}, false});
+        operations.emplace_back(bloom::runtime::CompiledImageEffect{
+            NodeId::fromRaw(idBase + 20), OperationIndex::fromRaw(1),
+            bloom::runtime::ImageCombineKernel{
+                bloom::runtime::ImageCombineMode::MultiplyAlpha,
+                bloom::runtime::CompiledScalarParameter{ParameterId{}, 1.0},
+                bloom::render::ImageCoverageChannel::Alpha, std::nullopt, false},
+            false, false, OperationIndex::fromRaw(0)});
+        layerInput = OperationIndex::fromRaw(2);
+    }
+    const auto layerIndex = OperationIndex::fromRaw(operations.size());
+    operations.emplace_back(layerOutput(NodeId::fromRaw(idBase + 11),
+                                        bloom::document::LayerId::fromRaw(idBase + 12), layerInput,
+                                        ids, layer));
+    const auto mergeIndex = OperationIndex::fromRaw(operations.size());
+    operations.emplace_back(CompiledMerge{
+        NodeId::fromRaw(idBase + 13),
+        std::vector<CompiledMergeInput>{
+            CompiledMergeInput{bloom::document::LayerSlotId::fromRaw(idBase + 14),
+                               bloom::document::LayerId::fromRaw(idBase + 12), layerIndex}}});
+    const auto outputIndex = OperationIndex::fromRaw(operations.size());
+    operations.emplace_back(CompiledCompositionOutput{NodeId::fromRaw(idBase + 15), mergeIndex});
+    return publish(CompiledCompositionPlanDefinition{
+        bloom::document::Revision::fromRaw(7), bloom::document::ProjectId::fromRaw(1),
+        bloom::document::CompositionId::fromRaw(2), format(8, 8), std::move(operations),
+        outputIndex});
 }
 
 } // namespace bloom::gpu_coverage_media
