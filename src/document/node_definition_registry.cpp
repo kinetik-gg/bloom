@@ -679,7 +679,7 @@ template <typename Definition>
          {"bypass", "bloom.resize-fit.bypass", ParameterValueKind::Boolean, true, false, false}},
         std::nullopt,
         NodeCardinality::Many,
-        NodeCategory::Compositing};
+        NodeCategory::Transform};
     if (fit)
         definition.parameters.push_back({"policy", "bloom.resize-fit.policy",
                                          ParameterValueKind::Integer, true, false,
@@ -752,7 +752,7 @@ template <typename Definition>
                               {},
                               std::nullopt,
                               NodeCardinality::Many,
-                              NodeCategory::Compositing};
+                              NodeCategory::Transform};
     for (const char* side : {"left", "top", "right", "bottom"}) {
         definition.parameters.push_back(
             {side, std::string(typeId) + "." + side, ParameterValueKind::Float64, true, true, 0.0});

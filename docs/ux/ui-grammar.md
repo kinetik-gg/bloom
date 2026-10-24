@@ -495,7 +495,7 @@ section menu. KSection headers carry only the chevron, title, and Reset.
 
 Node Add menu and search order is Sources, Layers, Compositing, Transform, Filters, Colour, Values,
 Math, Convert, String, Logic, Time, Color, Vector, Utilities, Output. Transform holds geometric image
-operations (Flip, Rotate 90); Filters holds the blurs. The UI category projection owns normalization;
+operations (Resize, Fit, Crop, Pad, Flip, Rotate 90); Filters holds the blurs. The UI category projection owns normalization;
 the Colour image-effect section projects `NodeCategory::Color`, while Color holds value nodes.
 Categories are not persisted, so no migration is needed. Utilities contains only reroute and
 Separate/Combine plumbing (reroutes remain link gestures). Time includes Time, frame readouts and
