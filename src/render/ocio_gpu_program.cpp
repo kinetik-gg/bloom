@@ -155,6 +155,10 @@ core::Sha256Digest computeOcioGpuResourceDigest(const OcioGpuProgramDesc& progra
     }
     feedU32(hasher, program.dynamicPropertyCount);
     feedU64(hasher, program.uniformBufferSize);
+    // Appended only for a storage-backed buffer, so every uniform-block digest is unchanged.
+    if (program.uniformBufferStorage) {
+        feedText(hasher, "storage");
+    }
     return finalize(hasher);
 }
 
@@ -174,7 +178,8 @@ OcioGpuProgramError validateOcioGpuProgram(const OcioGpuProgramDesc& program,
     if (program.textures.size() > limits.maxTextures ||
         program.uniforms.size() > limits.maxUniforms ||
         program.dynamicPropertyCount > limits.maxDynamicPropertyCount ||
-        program.uniformBufferSize > limits.maxUniformBufferBytes) {
+        program.uniformBufferSize > (program.uniformBufferStorage ? limits.maxStorageBufferBytes
+                                                                  : limits.maxUniformBufferBytes)) {
         return OcioGpuProgramError::ResourceLimitExceeded;
     }
     std::unordered_set<std::string> names;

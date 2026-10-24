@@ -121,7 +121,8 @@ struct GpuOcioProgramExecutor::Impl final {
             return nullptr;
         }
         const auto root = phase ? phase->rootIdentity() : render::GpuProcessingRootIdentity{};
-        const auto& identity = command.identity();
+        // Keyed by everything but the per-request data bytes; begin uploads the command's own.
+        const auto& identity = command.nativeProgramKey();
         const auto found = programs.find(identity);
         if (found != programs.end()) {
             if (found->second.root != root || found->second.epoch != device->ownershipEpoch() ||
@@ -355,8 +356,12 @@ GpuOcioProgramExecutor::begin(std::shared_ptr<const PreparedGpuOcioCommand> comm
         return impl.jobDiagnostic;
     }
     const bool display = command->encoding() == GpuOcioOutputEncoding::DisplayRgba8;
-    const auto nativeDiagnostic = display ? native->beginDisplay(input, uniformOverride, byteBudget)
-                                          : native->beginEffect(input, uniformOverride, byteBudget);
+    const auto uniformBytes = uniformOverride.empty()
+                                  ? std::span<const std::byte>(program.uniformBufferData.data(),
+                                                               program.uniformBufferData.size())
+                                  : uniformOverride;
+    const auto nativeDiagnostic = display ? native->beginDisplay(input, uniformBytes, byteBudget)
+                                          : native->beginEffect(input, uniformBytes, byteBudget);
     if (nativeDiagnostic.code != render::GpuOcioProgramDiagnosticCode::None) {
         static_cast<void>(native->discardRetiredFailure(*impl.device));
         const auto code = mapProgramCode(nativeDiagnostic.code);

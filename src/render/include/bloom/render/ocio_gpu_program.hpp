@@ -10,7 +10,8 @@
 //  * Process effect arm reads finite premultiplied RGBA32F. It reproduces the CPU image-effect
 //    flow exactly: un-premultiply RGB with one binary32 divide (alpha == 0 => straight +0 RGB and
 //    the input pixel is copied unchanged), apply the OCIO function to straight RGB only, keep the
-//    original alpha, re-premultiply, validate the stored RGB, and publish finite premultiplied RGBA32F.
+//    original alpha, re-premultiply, validate the stored RGB, and publish finite premultiplied
+//    RGBA32F.
 //  * Display arm reads finite premultiplied RGBA32F, un-premultiplies the same way, calls the OCIO
 //    function with the alpha lane 1.0 and discards the returned alpha, keeps the original alpha,
 //    applies the caller's declared display clamp and packing to straight RGBA8
@@ -129,6 +130,7 @@ struct OcioGpuProgramLimits final {
     std::uint32_t maxUniforms = 256;
     std::uint32_t maxDynamicPropertyCount = 32;
     std::uint64_t maxUniformBufferBytes = 64ULL * 1024U;
+    std::uint64_t maxStorageBufferBytes = 4ULL * 1024U * 1024U;
 };
 
 // The immutable extracted program. `shaderText` is the exact OCIO GLSL_VK_4_6 program, including
@@ -148,6 +150,11 @@ struct OcioGpuProgramDesc final {
     // bytes. The native executor uploads these bytes without recompiling; a caller may override
     // them per request with the same size (e.g. a viewer exposure change).
     std::vector<std::byte> uniformBufferData;
+    // False: binding 0 is a uniform block (every OCIO-extracted program). True: binding 0 is a
+    // read-only std430 storage buffer of the same per-request bytes, for a Bloom-generated program
+    // whose bulk data (e.g. layer-mask geometry) changes per request while its shader stays fixed;
+    // it is bounded by maxStorageBufferBytes instead of maxUniformBufferBytes.
+    bool uniformBufferStorage = false;
     // Device-independent content digests, folded into `contentIdentity` by the producer.
     core::Sha256Digest shaderTextDigest;
     core::Sha256Digest resourceDigest;

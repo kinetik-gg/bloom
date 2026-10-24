@@ -410,6 +410,37 @@ struct Module final {
     return offset != module.memberOffsets.end() && offset->second == 0;
 }
 
+// A read-only runtime-array<vec4> storage buffer with exact std430 layout: one member at offset 0
+// whose element array has stride 16 and four 32-bit float components (a storage-backed data
+// buffer at set 0 binding 0).
+[[nodiscard]] inline bool isRuntimeVec4StorageBuffer(const Module& module,
+                                                     const Variable& variable) noexcept {
+    if (variable.storageClass != kStorageClassStorageBuffer) {
+        return false;
+    }
+    const StructType* const structure = pointeeStruct(module, variable);
+    if (structure == nullptr || structure->members.size() != 1 ||
+        module.blockTypes.count(structure->id) == 0) {
+        return false;
+    }
+    const std::uint32_t arrayId = structure->members.front();
+    const auto array = module.runtimeArrays.find(arrayId);
+    if (array == module.runtimeArrays.end()) {
+        return false;
+    }
+    const auto vector = module.vectors.find(array->second.element);
+    if (vector == module.vectors.end() || vector->second.count != 4 ||
+        !isFloat32(module, vector->second.component)) {
+        return false;
+    }
+    const auto stride = module.arrayStrides.find(arrayId);
+    if (stride == module.arrayStrides.end() || stride->second != 16) {
+        return false;
+    }
+    const auto offset = module.memberOffsets.find(memberKey(structure->id, 0));
+    return offset != module.memberOffsets.end() && offset->second == 0;
+}
+
 // A 2D rgba32f storage image (Bloom input/output on the effect arm).
 [[nodiscard]] inline bool isRgba32fStorageImage2D(const Module& module,
                                                   const Variable& variable) noexcept {

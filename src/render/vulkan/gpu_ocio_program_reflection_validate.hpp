@@ -73,8 +73,17 @@ validateOcioShaderInterface(const OcioGpuProgramDesc& program,
             }
         }
 
+        // Set 0 binding 0, storage form: a read-only vec4 runtime array of the declared bytes.
+        if (program.uniformBufferSize > 0 && program.uniformBufferStorage) {
+            const Variable* const data = descriptor(module, ocioSet, 0);
+            if (data == nullptr || !program.uniforms.empty() ||
+                program.uniformBufferSize % 16U != 0 ||
+                !isRuntimeVec4StorageBuffer(module, *data)) {
+                return {OcioShaderInterfaceError::DescriptorMismatch, 0};
+            }
+        }
         // Set 0 binding 0: exact reflected UBO block layout and byte extent.
-        if (program.uniformBufferSize > 0) {
+        if (program.uniformBufferSize > 0 && !program.uniformBufferStorage) {
             const Variable* const uniform = descriptor(module, ocioSet, 0);
             if (uniform == nullptr || uniform->storageClass != kStorageClassUniform) {
                 return {OcioShaderInterfaceError::DescriptorMismatch, 0};

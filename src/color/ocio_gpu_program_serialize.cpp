@@ -131,6 +131,11 @@ serializeOcioGpuProgram(const render::OcioGpuProgramDesc& program, const std::ui
         program.uniforms.size() > std::numeric_limits<std::uint32_t>::max()) {
         return std::nullopt;
     }
+    // The worker transport carries OCIO-extracted programs only; a storage-backed data buffer is a
+    // Bloom-generated form this format does not encode.
+    if (program.uniformBufferStorage) {
+        return std::nullopt;
+    }
     Bytes out;
     appendU32(out, kOcioGpuProgramSerializationMagic);
     appendU32(out, kOcioGpuProgramSerializationVersion);

@@ -142,13 +142,15 @@ computeGpuOcioCommandIdentity(const GpuOcioCommandIdentityParts& parts) noexcept
 PreparedGpuOcioCommand::PreparedGpuOcioCommand(
     render::OcioGpuProgramDesc program, render::CompiledGpuShader artifact,
     const GpuOcioOutputEncoding encoding, const GpuOcioCommandGeometry geometry,
-    std::vector<std::uint32_t> spirvWords, core::Sha256Digest identity, std::string wrapperVersion,
+    std::vector<std::uint32_t> spirvWords, core::Sha256Digest identity,
+    core::Sha256Digest nativeProgramKey, std::string wrapperVersion,
     core::Sha256Digest wrapperSourceDigest, ViewAdjust viewAdjust,
     const std::uint64_t retainedBytes) noexcept
     : program_(std::move(program)), artifact_(std::move(artifact)), encoding_(encoding),
       geometry_(geometry), spirvWords_(std::move(spirvWords)), identity_(identity),
-      wrapperVersion_(std::move(wrapperVersion)), wrapperSourceDigest_(wrapperSourceDigest),
-      viewAdjust_(viewAdjust), retainedBytes_(retainedBytes) {}
+      nativeProgramKey_(nativeProgramKey), wrapperVersion_(std::move(wrapperVersion)),
+      wrapperSourceDigest_(wrapperSourceDigest), viewAdjust_(viewAdjust),
+      retainedBytes_(retainedBytes) {}
 
 GpuOcioCommandResult PreparedGpuOcioCommand::prepare(render::OcioGpuProgramDesc program,
                                                      render::CompiledGpuShader artifact,
@@ -244,13 +246,18 @@ GpuOcioCommandResult PreparedGpuOcioCommand::prepare(render::OcioGpuProgramDesc 
         .viewAdjust = binding.viewAdjust,
     };
     const auto identity = computeGpuOcioCommandIdentity(parts);
-    if (identity == core::Sha256Digest{}) {
+    // The native program is everything but the per-request data bytes, which every dispatch
+    // uploads from its own command; commands that differ only in those bytes share one pipeline.
+    auto programParts = parts;
+    programParts.uniformSnapshot = {};
+    const auto nativeProgramKey = computeGpuOcioCommandIdentity(programParts);
+    if (identity == core::Sha256Digest{} || nativeProgramKey == core::Sha256Digest{}) {
         return failure(GpuOcioCommandError::InvalidArtifact);
     }
     const std::uint64_t retainedBytes = retainedResourceBytes(program, artifact.spirv.size());
     auto command = std::shared_ptr<const PreparedGpuOcioCommand>(new PreparedGpuOcioCommand(
         std::move(program), std::move(artifact), encoding, geometry, std::move(spirvWords),
-        identity, std::move(binding.wrapperVersion), binding.wrapperSourceDigest,
+        identity, nativeProgramKey, std::move(binding.wrapperVersion), binding.wrapperSourceDigest,
         binding.viewAdjust, retainedBytes));
     GpuOcioCommandResult result;
     result.command = std::move(command);

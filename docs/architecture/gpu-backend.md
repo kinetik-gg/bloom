@@ -1170,11 +1170,16 @@ latching startup values. The rooted service request and preparation executor use
 ceiling independently; a host source ceiling does not cap GPU intermediates. Each request remains subject to real phase and device admission; a snapshot is neither
 allocation ownership nor a new independent allowance.
 
-Layer masks and mattes (ADR 0028). A `LayerMaskKernel` effect prepares as one generated
-neighbourhood program (`GpuOcioTransformKind::LayerMask`, semantics `bloom.render.layer-mask.v1`)
+Layer masks and mattes (ADR 0028). A `LayerMaskKernel` effect prepares as one fixed
+neighbourhood program (`GpuOcioTransformKind::LayerMask`, semantics `bloom.render.layer-mask.v2`)
 through the same preparer, compile cache and executor as the separable blur. The host samples and
-flattens the masks once (`sampleLayerMasks`, `layerMaskProgramText`) and bakes segments, reciprocal
-factors and per-mask controls into the program text, so the content identity covers the geometry.
+flattens the masks once (`sampleLayerMasks`, `layerMaskProgramData`) and packs segments, reciprocal
+factors and per-mask controls into a read-only std430 storage buffer at set 0 binding 0
+(`OcioGpuProgramDesc::uniformBufferStorage`). The bytes are in the prepare key and the command
+identity; the retained native program is keyed by `PreparedGpuOcioCommand::nativeProgramKey()`,
+which omits them, and each dispatch uploads its own command's bytes. A keyed path therefore reuses
+one compiled SPIR-V module (the shader compiler's source cache) and one pipeline per buffer
+capacity.
 The per-pixel math uses no division and a multiply-only square root, so coverage is bit-identical to
 the CPU reference. More than 8192 segments fail GPU preparation closed. Image Mix's Mask is binding 4
 of `ImageCombineV1` (push mask extent, offset and mode; an absent mask is zero coverage), carried as

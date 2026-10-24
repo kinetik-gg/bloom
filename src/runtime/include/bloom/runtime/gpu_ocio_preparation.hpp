@@ -47,8 +47,9 @@ enum class GpuOcioTransformKind : std::uint8_t {
     PointwiseAffine = 5,
     // Normalized host coefficients; native execution reads and writes resident premultiplied RGBA.
     SeparableBlur = 6,
-    // ADR 0028: layer-mask coverage. `maskProgram` is the generated neighbourhood program text
-    // (layerMaskProgramText); its bytes are the whole content identity.
+    // ADR 0028: layer-mask coverage. One fixed neighbourhood program; `maskData` is the prepared
+    // geometry (layerMaskProgramData) uploaded per dispatch, so keyed paths never recompile. The
+    // data bytes are part of the prepare key and the command identity.
     LayerMask = 7,
 };
 
@@ -66,7 +67,7 @@ struct GpuOcioTransformSpec final {
     bool blurVertical = false;
     std::uint8_t blurEdge = 0;
     // LayerMask only.
-    std::string maskProgram;
+    std::vector<std::byte> maskData;
     // FileTransform only. The shared, immutable LUT resource handle; the reservation keeps the
     // exact opened bytes alive for the whole extraction. Null is an InvalidRequest refusal.
     std::shared_ptr<const color::LutFile> lutFile;
@@ -124,8 +125,13 @@ struct GpuOcioPreparerCounters final {
     std::uint64_t cacheHits = 0;
     std::uint64_t cacheMisses = 0;
     std::uint64_t extractions = 0;
+    // Compile requests issued after a prepare-cache miss. A request whose exact wrapper source was
+    // already compiled is served by the shader compiler's own cache: `shaderCompilerRuns` counts
+    // only the requests that actually ran the shader tools.
     std::uint64_t compiles = 0;
     std::uint64_t compileFailures = 0;
+    std::uint64_t shaderCompilerRuns = 0;
+    std::uint64_t shaderCompilerCacheHits = 0;
     std::uint64_t evictions = 0;
     std::uint64_t cacheEntries = 0;
     std::uint64_t cacheBytes = 0;

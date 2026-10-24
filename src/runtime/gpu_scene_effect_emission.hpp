@@ -30,11 +30,11 @@
 #include "resize_fit_geometry.hpp"
 #include "separable_image_effect.hpp"
 
+#include "layer_mask_sampling.hpp"
 #include <bloom/media/image.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
-#include "layer_mask_sampling.hpp"
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
@@ -244,11 +244,11 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                 return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                             "Discrete image input cannot be materialized");
             if (const auto error = emitVectorLeafLayer(
-                    plan.operations()[chain->source], plan, leafResolution(chain->source), chain->matrix, *inputWindow,
-                    ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale,
-                    chain->opacity, false, ctx.allowance, operationIndex, nullptr,
-                    ctx.coverageCache, cancellation, emit, charge, chargeCoverage, inputCommand,
-                    inputKey, result.consumedText, result.consumedShape))
+                    plan.operations()[chain->source], plan, leafResolution(chain->source),
+                    chain->matrix, *inputWindow, ctx.fullDisplayWindow, ctx.fullPixelAspect,
+                    ctx.hScale, ctx.vScale, chain->opacity, false, ctx.allowance, operationIndex,
+                    nullptr, ctx.coverageCache, cancellation, emit, charge, chargeCoverage,
+                    inputCommand, inputKey, result.consumedText, result.consumedShape))
                 return error;
             result.consumedLeaf = chain->source;
         }
@@ -341,11 +341,11 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                 return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                             "Image combine vector input is not materializable");
             const auto error = emitVectorLeafLayer(
-                plan.operations()[chain->source], plan, leafResolution(chain->source), chain->matrix,
-                *outputWindowOf[value], ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale,
-                ctx.vScale, chain->opacity, false, ctx.allowance, operationIndex, nullptr,
-                ctx.coverageCache, cancellation, emit, charge, chargeCoverage, command, key,
-                consumedText, consumedShape);
+                plan.operations()[chain->source], plan, leafResolution(chain->source),
+                chain->matrix, *outputWindowOf[value], ctx.fullDisplayWindow, ctx.fullPixelAspect,
+                ctx.hScale, ctx.vScale, chain->opacity, false, ctx.allowance, operationIndex,
+                nullptr, ctx.coverageCache, cancellation, emit, charge, chargeCoverage, command,
+                key, consumedText, consumedShape);
             if (!error)
                 consumedLeaf = chain->source;
             return error;
@@ -360,10 +360,9 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         if (matteAbsent) {
             secondCommand = baseCommand;
             secondKey = baseKey;
-        } else if (const auto error = residentInput(secondValue, secondCommand, secondKey,
-                                                    result.consumedSecondLeaf,
-                                                    result.consumedSecondText,
-                                                    result.consumedSecondShape)) {
+        } else if (const auto error = residentInput(
+                       secondValue, secondCommand, secondKey, result.consumedSecondLeaf,
+                       result.consumedSecondText, result.consumedSecondShape)) {
             return error;
         }
         // ADR 0028: Image Mix's Mask is a third resident input (the Mask node's masked canvas); an
@@ -404,8 +403,12 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                                       sizeof(render::Rgba32f)))
             return error;
         const render::GpuImageCombineParameters parameters{
-            static_cast<render::GpuImageCombineKind>(combine->mode), factor, selection->channel,
-            selection->invert, matteAbsent, maskMode};
+            static_cast<render::GpuImageCombineKind>(combine->mode),
+            factor,
+            selection->channel,
+            selection->invert,
+            matteAbsent,
+            maskMode};
         GpuSceneBlendCommand command{.sourceOperation = operationIndex,
                                      .source = secondCommand,
                                      .destination = baseCommand,
@@ -474,11 +477,11 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                 return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                             "Canvas input vector chain is not materializable");
             if (const auto error = emitVectorLeafLayer(
-                    plan.operations()[chain->source], plan, leafResolution(chain->source), chain->matrix, sourceWindow,
-                    ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale,
-                    chain->opacity, false, ctx.allowance, operationIndex, nullptr,
-                    ctx.coverageCache, cancellation, emit, charge, chargeCoverage, inputCommand,
-                    inputKey, result.consumedText, result.consumedShape))
+                    plan.operations()[chain->source], plan, leafResolution(chain->source),
+                    chain->matrix, sourceWindow, ctx.fullDisplayWindow, ctx.fullPixelAspect,
+                    ctx.hScale, ctx.vScale, chain->opacity, false, ctx.allowance, operationIndex,
+                    nullptr, ctx.coverageCache, cancellation, emit, charge, chargeCoverage,
+                    inputCommand, inputKey, result.consumedText, result.consumedShape))
                 return error;
             result.consumedLeaf = chain->source;
         }
@@ -550,8 +553,9 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
             legs.push_back(std::move(leg));
         }
     } else if (masksKernel != nullptr) {
-        // ADR 0028: the CPU reference's prepared geometry, baked into one generated neighbourhood
-        // program that runs the same per-pixel coverage math on the resident input.
+        // ADR 0028: the CPU reference's prepared geometry, uploaded as data to the one fixed
+        // neighbourhood program that runs the same per-pixel coverage math on the resident input.
+        // A keyed path changes only these bytes, so playback never recompiles.
         const auto time = timeForClock(ctx.frameResolved != nullptr ? *ctx.frameResolved : resolved,
                                        request.time, plan.operationClock(operationIndex));
         const auto prepared =
@@ -561,14 +565,14 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                         "Layer mask parameters are not evaluable");
         if (prepared->masks.empty() || !outputWindowOf[inputValue])
             return identity();
-        auto text = layerMaskProgramText(*prepared, outputWindowOf[inputValue]->originX(),
+        auto data = layerMaskProgramData(*prepared, outputWindowOf[inputValue]->originX(),
                                          outputWindowOf[inputValue]->originY());
-        if (!text)
+        if (!data)
             return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                         "Layer mask geometry exceeds the GPU program limits");
         GpuOcioTransformSpec leg;
         leg.kind = GpuOcioTransformKind::LayerMask;
-        leg.maskProgram = std::move(*text);
+        leg.maskData = std::move(*data);
         legs.push_back(std::move(leg));
     } else if (pointwise != nullptr) {
         std::optional<double> amount;
@@ -727,11 +731,11 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         GpuSceneCommandIndex materialized = kInvalidGpuSceneCommand;
         std::string materializedKey;
         if (const auto error = emitVectorLeafLayer(
-                plan.operations()[chain.source], plan, leafResolution(chain.source), chain.matrix, *inputWindow,
-                ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale, chain.opacity,
-                false, ctx.allowance, operationIndex, nullptr, ctx.coverageCache, cancellation,
-                emit, charge, chargeCoverage, materialized, materializedKey, result.consumedText,
-                result.consumedShape)) {
+                plan.operations()[chain.source], plan, leafResolution(chain.source), chain.matrix,
+                *inputWindow, ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale,
+                chain.opacity, false, ctx.allowance, operationIndex, nullptr, ctx.coverageCache,
+                cancellation, emit, charge, chargeCoverage, materialized, materializedKey,
+                result.consumedText, result.consumedShape)) {
             return error;
         }
         result.consumedLeaf = chain.source;

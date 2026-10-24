@@ -138,6 +138,13 @@ class PreparedGpuOcioCommand final {
     [[nodiscard]] const GpuOcioCommandGeometry& geometry() const&& = delete;
     [[nodiscard]] const core::Sha256Digest& identity() const& noexcept { return identity_; }
     [[nodiscard]] const core::Sha256Digest& identity() const&& = delete;
+    // The identity with an empty uniform snapshot: the key of the retained native program. The
+    // command's own snapshot (program().uniformBufferData) is uploaded by every dispatch, so
+    // commands that differ only in their per-request data bytes share one native pipeline.
+    [[nodiscard]] const core::Sha256Digest& nativeProgramKey() const& noexcept {
+        return nativeProgramKey_;
+    }
+    [[nodiscard]] const core::Sha256Digest& nativeProgramKey() const&& = delete;
     [[nodiscard]] std::string_view wrapperVersion() const& noexcept { return wrapperVersion_; }
     [[nodiscard]] std::string_view wrapperVersion() const&& = delete;
     [[nodiscard]] const core::Sha256Digest& wrapperSourceDigest() const& noexcept {
@@ -161,8 +168,9 @@ class PreparedGpuOcioCommand final {
     PreparedGpuOcioCommand(render::OcioGpuProgramDesc program, render::CompiledGpuShader artifact,
                            GpuOcioOutputEncoding encoding, GpuOcioCommandGeometry geometry,
                            std::vector<std::uint32_t> spirvWords, core::Sha256Digest identity,
-                           std::string wrapperVersion, core::Sha256Digest wrapperSourceDigest,
-                           ViewAdjust viewAdjust, std::uint64_t retainedBytes) noexcept;
+                           core::Sha256Digest nativeProgramKey, std::string wrapperVersion,
+                           core::Sha256Digest wrapperSourceDigest, ViewAdjust viewAdjust,
+                           std::uint64_t retainedBytes) noexcept;
 
     render::OcioGpuProgramDesc program_;
     render::CompiledGpuShader artifact_;
@@ -170,6 +178,7 @@ class PreparedGpuOcioCommand final {
     GpuOcioCommandGeometry geometry_;
     std::vector<std::uint32_t> spirvWords_;
     core::Sha256Digest identity_{};
+    core::Sha256Digest nativeProgramKey_{};
     std::string wrapperVersion_;
     core::Sha256Digest wrapperSourceDigest_{};
     ViewAdjust viewAdjust_{};

@@ -21,7 +21,7 @@ Bloom has no layer mask, track matte or Mask value type:
 The pieces a matte needs already exist. Set Alpha and Multiply Alpha (`ImageCombineKernel`, fixed by
 #361) read a second image as coverage through an Alpha/Red/Green/Blue/Luma selector with an invert
 bit, with GPU parity on every required route. Separable blur and other neighbourhood effects run on
-the GPU as generated, content-identified programs.
+the GPU as generated neighbourhood programs.
 
 ## Decision
 
@@ -135,15 +135,18 @@ TrackMatte = { source: LayerId, channel: Alpha|Luma, inverted }
   fields, and a Merge entry naming a track-matte effect are additive: no existing plan value changes
   meaning, and an older evaluator refuses the new shapes rather than misreading them.
 
-The CPU evaluator is the reference. The GPU runs the mask kernel as a generated neighbourhood
+The CPU evaluator is the reference. The GPU runs the mask kernel as one fixed neighbourhood
 program through the same production preparation path as the separable blur. The host flattens
-each outline once and bakes the segments and their reciprocal factors into the program text as
-constants, so the program's content identity covers the geometry; an animated path is a new program
-per distinct sampled path, and a static mask compiles once. Both routes evaluate the same Float32
-operations in the same order with no division and a multiply-only square root, so mask coverage is
-bit-identical between the CPU reference and the GPU. Outlines are capped at 8192 segments for the
-GPU program; beyond that GPU preparation fails closed and the explicit CPU fallback renders the
-frame. The Image Mix mask is a fifth binding (binding 4) of the pinned `image_combine` shader.
+each outline once and packs the segments, their reciprocal factors and the per-mask controls into a
+read-only storage buffer that every dispatch uploads; the shader text never changes. The data bytes
+are part of the prepare key and the command identity, so every sampled path is its own cached
+result, while the compiled program and the native pipeline are shared: an animated path changes
+data, never the program, and playback never stalls on a compile. The buffer is padded to a
+power-of-two capacity so a path whose flattened segment count drifts while animated keeps one
+pipeline. Both routes evaluate the same Float32 operations in the same order with no division and
+a multiply-only square root, so mask coverage is bit-identical between the CPU reference and the
+GPU. Outlines are capped at 8192 segments for the GPU program; beyond that GPU preparation fails
+closed and the explicit CPU fallback renders the frame. The Image Mix mask is a fifth binding (binding 4) of the pinned `image_combine` shader.
 
 The coverage contract adds these Required axes, with CPU parity on every required preview and final
 route and no exemption:

@@ -51,7 +51,8 @@ GpuSceneExecutor::Impl::acquireOcioProgram(const PreparedGpuOcioCommand& command
         return nullptr;
     }
     const auto root = phase ? phase->rootIdentity() : render::GpuProcessingRootIdentity{};
-    const auto& identity = command.identity();
+    // Keyed by everything but the per-request data bytes; startOcioStep uploads the command's own.
+    const auto& identity = command.nativeProgramKey();
     const auto found = ocioPrograms.find(identity);
     if (found != ocioPrograms.end()) {
         if (found->second.root != root || found->second.epoch != device->ownershipEpoch() ||
@@ -143,7 +144,10 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startOcioStep(const GpuSceneE
     if (program == nullptr) {
         return ocioAcquireDiagnostic;
     }
-    const auto native = program->beginEffect(images[step.input], {}, remainingBudget());
+    const auto& data = step.ocioCommand->program().uniformBufferData;
+    const auto native = program->beginEffect(images[step.input],
+                                             std::span<const std::byte>(data.data(), data.size()),
+                                             remainingBudget());
     if (native.code != render::GpuOcioProgramDiagnosticCode::None) {
         return diagnosticFromOcio(native);
     }

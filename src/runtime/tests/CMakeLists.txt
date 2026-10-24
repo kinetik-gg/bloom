@@ -600,6 +600,30 @@ bloom_add_test(
 set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
     PROPERTIES SKIP_RETURN_CODE 77)
 
+# ADR 0028 animated masks: a path keyed on 24 frames is prepared by the production builder through
+# the shared preparer from THIS target's packaged shader tools and must compile at most one shader
+# module and one native program; the native half runs the range cold (CPU-oracle parity, exact
+# coverage) and warm (zero dispatch, output-cache hits). Skips (77) without tools or a device.
+add_executable(bloom_runtime_gpu_layer_mask_animation_native_test
+    gpu_layer_mask_animation_native_tests.cpp)
+target_link_libraries(bloom_runtime_gpu_layer_mask_animation_native_test
+    PRIVATE bloom_runtime_evaluator bloom_render)
+target_include_directories(bloom_runtime_gpu_layer_mask_animation_native_test
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/.." "${PROJECT_SOURCE_DIR}/tests/support")
+target_compile_definitions(bloom_runtime_gpu_layer_mask_animation_native_test PRIVATE
+    "BLOOM_GPU_COVERAGE_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_layer_mask_animation_native_test>\"")
+bloom_package_gpu_shader_tools(bloom_runtime_gpu_layer_mask_animation_native_test)
+bloom_enable_warnings(bloom_runtime_gpu_layer_mask_animation_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_layer_mask_animation_native_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_layer_mask_animation_native
+    COMMAND bloom_runtime_gpu_layer_mask_animation_native_test
+    LABELS runtime native gpu
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.gpu_layer_mask_animation_native
+    PROPERTIES SKIP_RETURN_CODE 77)
+
 # The generated video fixtures are owned by the media worker's `media3` setup, exactly like the
 # existing video-scene-preparation tests. The route-proof setup fixture is separate and always
 # required by the native gate; it publishes no proof, only a fresh nonce.

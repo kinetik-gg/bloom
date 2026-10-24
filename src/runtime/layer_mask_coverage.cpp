@@ -4,9 +4,9 @@
 
 #include <algorithm>
 #include <bit>
-#include <cstdint>
-#include <charconv>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <limits>
 
 namespace bloom::runtime::detail {
@@ -102,13 +102,6 @@ void feed(core::Sha256Hasher& hasher, const void* data, const std::size_t size) 
     (void)hasher.update(std::span(static_cast<const std::byte*>(data), size));
 }
 
-void appendFloat(std::string& out, const float value) {
-    char text[32];
-    const auto result =
-        std::to_chars(text, text + sizeof(text), value, std::chars_format::scientific, 9);
-    out.append(text, result.ptr);
-}
-
 } // namespace
 
 std::vector<std::array<float, 4>> flattenMaskPath(const document::PathValue& path,
@@ -168,8 +161,8 @@ std::optional<PreparedLayerMasks> prepareLayerMasks(const std::span<const Sample
             const float dx = segment[2] - segment[0];
             const float dy = segment[3] - segment[1];
             const float length2 = dx * dx + dy * dy;
-            item.factors.push_back({dy != 0.0F ? dx / dy : 0.0F,
-                                    length2 > 0.0F ? 1.0F / length2 : 0.0F});
+            item.factors.push_back(
+                {dy != 0.0F ? dx / dy : 0.0F, length2 > 0.0F ? 1.0F / length2 : 0.0F});
         }
         item.bounds = {
             std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(),
@@ -227,51 +220,21 @@ float layerMaskCoverage(const PreparedLayerMasks& masks, const float x, const fl
     return std::clamp(accumulated, 0.0F, 1.0F);
 }
 
-std::optional<std::string> layerMaskProgramText(const PreparedLayerMasks& masks,
-                                                const std::int64_t originX,
-                                                const std::int64_t originY) {
-    if (masks.masks.empty() || masks.segmentCount > kMaximumGpuMaskSegments)
-        return std::nullopt;
-    std::string text;
-    // Every segment of every mask in one array; each mask names its range. The per-pixel math is
-    // the CPU reference (layerMaskCoverage) operation for operation, in float32.
-    text += "const vec4 bloom_mask_segments[" +
-            std::to_string(std::max<std::size_t>(masks.segmentCount, 1)) + "] = vec4[](";
-    bool firstValue = true;
-    for (const auto& mask : masks.masks)
-        for (const auto& segment : mask.segments) {
-            if (!firstValue)
-                text += ',';
-            firstValue = false;
-            text += "vec4(";
-            for (std::size_t i = 0; i < 4; ++i) {
-                if (i)
-                    text += ',';
-                appendFloat(text, segment[i]);
-            }
-            text += ')';
-        }
-    if (firstValue)
-        text += "vec4(0.0)";
-    text += ");\n";
-    text += "const vec2 bloom_mask_factors[" +
-            std::to_string(std::max<std::size_t>(masks.segmentCount, 1)) + "] = vec2[](";
-    firstValue = true;
-    for (const auto& mask : masks.masks)
-        for (const auto& factor : mask.factors) {
-            if (!firstValue)
-                text += ',';
-            firstValue = false;
-            text += "vec2(";
-            appendFloat(text, factor[0]);
-            text += ',';
-            appendFloat(text, factor[1]);
-            text += ')';
-        }
-    if (firstValue)
-        text += "vec2(0.0)";
-    text += ");\n";
-    text += "float bloom_mask_sqrt(float value) {\n"
+const std::string& layerMaskProgramText() {
+    // The CPU reference (layerMaskCoverage) operation for operation, in Float32, over the geometry
+    // in the storage buffer: values[0] is (mask count, accumulation start, origin x, origin y);
+    // mask k is values[1 + 3k] (first segment, segment count, mode, inverted), values[2 + 3k]
+    // (width, 1/width, expansion, opacity) and values[3 + 3k] (bounds); segment i of the stack is
+    // values[1 + 3n + 2i] (x0, y0, x1, y1) and values[2 + 3n + 2i] (slope, 1/length^2). Every
+    // integer is exact in Float32 (the generator refuses an origin beyond 2^24).
+    static const std::string text = [] {
+        const auto mode = [](const document::LayerMaskMode value) {
+            return std::to_string(static_cast<std::int64_t>(value));
+        };
+        std::string glsl =
+            "layout(set = 0, binding = 0, std430) readonly buffer BloomLayerMaskData { vec4 "
+            "values[]; } bloom_mask_data;\n"
+            "float bloom_mask_sqrt(float value) {\n"
             " if (!(value > 0.0)) return 0.0;\n"
             " precise float root = uintBitsToFloat(0x5f3759dfu - (floatBitsToUint(value) >> 1u));\n"
             " precise float half_ = 0.5 * value;\n"
@@ -283,93 +246,126 @@ std::optional<std::string> layerMaskProgramText(const PreparedLayerMasks& masks,
             " }\n"
             " precise float result = value * root;\n"
             " return result;\n"
-            "}\n";
-    text +=
-        "float bloom_mask_one(int first, int count, vec4 box, float width, float inverseWidth, "
-        "float expansion, bool inverted, float opacity, vec2 p) {\n"
-        " precise float coverage = 0.0;\n"
-        " float reach = abs(expansion) + width * 0.5 + 1.0;\n"
-        " if (count > 0 && p.x >= box.x - reach && p.x <= box.z + reach && p.y >= box.y - reach "
-        "&& p.y <= box.w + reach) {\n"
-        "  int winding = 0;\n"
-        "  precise float nearest = 3.4e38;\n"
-        "  for (int i = first; i < first + count; ++i) {\n"
-        "   vec4 s = bloom_mask_segments[i];\n"
-            "   vec2 f = bloom_mask_factors[i];\n"
-        "   if ((s.y <= p.y) != (s.w <= p.y)) {\n"
-        "    precise float crossing = s.x + (p.y - s.y) * f.x;\n"
-        "    if (crossing > p.x) winding += s.w > s.y ? 1 : -1;\n"
-        "   }\n"
-        "   precise float dx = s.z - s.x;\n"
-        "   precise float dy = s.w - s.y;\n"
-        "   precise float t = ((p.x - s.x) * dx + (p.y - s.y) * dy) * f.y;\n"
-        "   t = clamp(t, 0.0, 1.0);\n"
-        "   precise float qx = s.x + t * dx - p.x;\n"
-        "   precise float qy = s.y + t * dy - p.y;\n"
-        "   nearest = min(nearest, qx * qx + qy * qy);\n"
-        "  }\n"
-        "  precise float unsignedDistance = bloom_mask_sqrt(nearest);\n"
-        "  precise float signedDistance = winding != 0 ? -unsignedDistance : unsignedDistance;\n"
-        "  coverage = clamp(0.5 - (signedDistance - expansion) * inverseWidth, 0.0, 1.0);\n"
-        " }\n"
-        " if (inverted) coverage = 1.0 - coverage;\n"
-        " return coverage * opacity;\n"
-        "}\n";
-    text += "vec4 bloom_layer_mask(ivec2 c) {\n vec4 pixel = imageLoad(bloom_ocio_input, c);\n";
-    text += " vec2 p = vec2(float(c.x + (" + std::to_string(originX) + ")) + 0.5, float(c.y + (" +
-            std::to_string(originY) + ")) + 0.5);\n";
-    text += " precise float a = ";
-    appendFloat(text, masks.start);
-    text += ";\n precise float m = 0.0;\n";
-    std::size_t first = 0;
-    for (const auto& mask : masks.masks) {
-        text += " m = bloom_mask_one(" + std::to_string(first) + ", " +
-                std::to_string(mask.segments.size()) + ", vec4(";
-        for (std::size_t i = 0; i < 4; ++i) {
-            if (i)
-                text += ',';
-            appendFloat(text, mask.segments.empty() ? 0.0F : mask.bounds[i]);
-        }
-        text += "), ";
-        appendFloat(text, mask.width);
-        text += ", ";
-        appendFloat(text, mask.inverseWidth);
-        text += ", ";
-        appendFloat(text, mask.expansion);
-        text += mask.inverted ? ", true, " : ", false, ";
-        appendFloat(text, mask.opacity);
-        text += ", p);\n";
-        switch (mask.mode) {
-        case document::LayerMaskMode::Add:
-            text += " a = a + m - a * m;\n";
-            break;
-        case document::LayerMaskMode::Subtract:
-            text += " a = a * (1.0 - m);\n";
-            break;
-        case document::LayerMaskMode::Intersect:
-            text += " a = a * m;\n";
-            break;
-        case document::LayerMaskMode::Difference:
-            text += " a = a + m - 2.0 * a * m;\n";
-            break;
-        case document::LayerMaskMode::None:
-            break;
-        }
-        first += mask.segments.size();
-    }
-    text += " a = clamp(a, 0.0, 1.0);\n return pixel * a;\n}\n";
+            "}\n"
+            "float bloom_mask_one(int segments, int count, vec4 box, vec4 shape, bool inverted, "
+            "vec2 p) {\n"
+            " float width = shape.x;\n"
+            " float inverseWidth = shape.y;\n"
+            " float expansion = shape.z;\n"
+            " float opacity = shape.w;\n"
+            " precise float coverage = 0.0;\n"
+            " precise float reach = abs(expansion) + width * 0.5 + 1.0;\n"
+            " if (count > 0 && p.x >= box.x - reach && p.x <= box.z + reach && p.y >= box.y - "
+            "reach && p.y <= box.w + reach) {\n"
+            "  int winding = 0;\n"
+            "  precise float nearest = uintBitsToFloat(0x7f800000u);\n"
+            "  for (int i = 0; i < count; ++i) {\n"
+            "   vec4 s = bloom_mask_data.values[segments + 2 * i];\n"
+            "   vec2 f = bloom_mask_data.values[segments + 2 * i + 1].xy;\n"
+            "   if ((s.y <= p.y) != (s.w <= p.y)) {\n"
+            "    precise float crossing = s.x + (p.y - s.y) * f.x;\n"
+            "    if (crossing > p.x) winding += s.w > s.y ? 1 : -1;\n"
+            "   }\n"
+            "   precise float dx = s.z - s.x;\n"
+            "   precise float dy = s.w - s.y;\n"
+            "   precise float t = ((p.x - s.x) * dx + (p.y - s.y) * dy) * f.y;\n"
+            "   t = clamp(t, 0.0, 1.0);\n"
+            "   precise float qx = s.x + t * dx - p.x;\n"
+            "   precise float qy = s.y + t * dy - p.y;\n"
+            "   nearest = min(nearest, qx * qx + qy * qy);\n"
+            "  }\n"
+            "  precise float unsignedDistance = bloom_mask_sqrt(nearest);\n"
+            "  precise float signedDistance = winding != 0 ? -unsignedDistance : "
+            "unsignedDistance;\n"
+            "  coverage = clamp(0.5 - (signedDistance - expansion) * inverseWidth, 0.0, 1.0);\n"
+            " }\n"
+            " if (inverted) coverage = 1.0 - coverage;\n"
+            " precise float result = coverage * opacity;\n"
+            " return result;\n"
+            "}\n"
+            "vec4 bloom_layer_mask(ivec2 c) {\n"
+            " vec4 pixel = imageLoad(bloom_ocio_input, c);\n"
+            " vec4 header = bloom_mask_data.values[0];\n"
+            " int maskCount = int(header.x);\n"
+            " vec2 p = vec2(float(c.x + int(header.z)) + 0.5, float(c.y + int(header.w)) + 0.5);\n"
+            " precise float a = header.y;\n"
+            " int segments = 1 + 3 * maskCount;\n"
+            " for (int k = 0; k < maskCount; ++k) {\n"
+            "  vec4 range = bloom_mask_data.values[1 + 3 * k];\n"
+            "  int mode = int(range.z);\n"
+            "  precise float m = bloom_mask_one(segments + 2 * int(range.x), int(range.y), "
+            "bloom_mask_data.values[3 + 3 * k], bloom_mask_data.values[2 + 3 * k], range.w != 0.0, "
+            "p);\n";
+        glsl += "  if (mode == " + mode(document::LayerMaskMode::Add) + ") a = a + m - a * m;\n";
+        glsl += "  else if (mode == " + mode(document::LayerMaskMode::Subtract) +
+                ") a = a * (1.0 - m);\n";
+        glsl += "  else if (mode == " + mode(document::LayerMaskMode::Intersect) + ") a = a * m;\n";
+        glsl += "  else if (mode == " + mode(document::LayerMaskMode::Difference) +
+                ") a = a + m - 2.0 * a * m;\n";
+        glsl += " }\n"
+                " a = clamp(a, 0.0, 1.0);\n"
+                " return pixel * a;\n"
+                "}\n";
+        return glsl;
+    }();
     return text;
 }
 
-render::OcioGpuProgramResult buildLayerMaskProgram(const std::string& shaderText) {
-    if (shaderText.empty())
+std::optional<std::vector<std::byte>> layerMaskProgramData(const PreparedLayerMasks& masks,
+                                                           const std::int64_t originX,
+                                                           const std::int64_t originY) {
+    constexpr std::int64_t kExactInteger = std::int64_t{1} << 24;
+    if (masks.masks.empty() || masks.masks.size() > kMaximumGpuMasks ||
+        masks.segmentCount > kMaximumGpuMaskSegments || originX <= -kExactInteger ||
+        originX >= kExactInteger || originY <= -kExactInteger || originY >= kExactInteger)
+        return std::nullopt;
+    const std::size_t maskCount = masks.masks.size();
+    const std::size_t used = 1 + 3 * maskCount + 2 * masks.segmentCount;
+    const std::size_t capacity = std::max<std::size_t>(64, std::bit_ceil(used));
+    std::vector<float> values(capacity * 4, 0.0F);
+    const auto put = [&values](const std::size_t index, const float x, const float y, const float z,
+                               const float w) {
+        values[index * 4] = x;
+        values[index * 4 + 1] = y;
+        values[index * 4 + 2] = z;
+        values[index * 4 + 3] = w;
+    };
+    put(0, static_cast<float>(maskCount), masks.start, static_cast<float>(originX),
+        static_cast<float>(originY));
+    const std::size_t segmentBase = 1 + 3 * maskCount;
+    std::size_t first = 0;
+    for (std::size_t k = 0; k < maskCount; ++k) {
+        const auto& mask = masks.masks[k];
+        put(1 + 3 * k, static_cast<float>(first), static_cast<float>(mask.segments.size()),
+            static_cast<float>(static_cast<std::int64_t>(mask.mode)), mask.inverted ? 1.0F : 0.0F);
+        put(2 + 3 * k, mask.width, mask.inverseWidth, mask.expansion, mask.opacity);
+        if (!mask.segments.empty())
+            put(3 + 3 * k, mask.bounds[0], mask.bounds[1], mask.bounds[2], mask.bounds[3]);
+        for (std::size_t i = 0; i < mask.segments.size(); ++i) {
+            const auto& segment = mask.segments[i];
+            const auto index = segmentBase + 2 * (first + i);
+            put(index, segment[0], segment[1], segment[2], segment[3]);
+            put(index + 1, mask.factors[i][0], mask.factors[i][1], 0.0F, 0.0F);
+        }
+        first += mask.segments.size();
+    }
+    std::vector<std::byte> bytes(values.size() * sizeof(float));
+    std::memcpy(bytes.data(), values.data(), bytes.size());
+    return bytes;
+}
+
+render::OcioGpuProgramResult buildLayerMaskProgram(const std::span<const std::byte> data) {
+    if (data.empty() || data.size() % (4 * sizeof(float)) != 0)
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
     render::OcioGpuProgramDesc program;
     program.stage = render::OcioGpuProgramStage::ProcessNeighborhood;
     program.functionName = "bloom_layer_mask";
     program.resourcePrefix = "bloom_mask_";
-    program.shaderText = shaderText;
-    program.semanticsId = "bloom.render.layer-mask.v1";
+    program.shaderText = layerMaskProgramText();
+    program.semanticsId = "bloom.render.layer-mask.v2";
+    program.uniformBufferStorage = true;
+    program.uniformBufferSize = data.size();
+    program.uniformBufferData.assign(data.begin(), data.end());
     program.shaderTextDigest = render::computeOcioGpuShaderTextDigest(program.shaderText);
     program.resourceDigest = render::computeOcioGpuResourceDigest(program);
     program.contentIdentity = render::computeOcioGpuContentIdentity(

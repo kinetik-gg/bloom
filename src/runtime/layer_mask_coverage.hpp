@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
@@ -63,14 +64,22 @@ prepareLayerMasks(std::span<const SampledLayerMask> masks, double horizontalScal
 // The accumulated coverage at a pixel centre (x, y) in scaled global pixel space. No allocation.
 [[nodiscard]] float layerMaskCoverage(const PreparedLayerMasks& masks, float x, float y) noexcept;
 
-// GLSL of the same math for a generated neighbourhood program: defines
-// `vec4 bloom_layer_mask(ivec2 c)` reading `bloom_ocio_input` at the image-relative pixel c, whose
-// global origin is (originX, originY). nullopt when the geometry exceeds the program limits.
+// The GPU route runs one fixed neighbourhood program for every mask stack: the same per-pixel math
+// in the same Float32 operation order, defining `vec4 bloom_layer_mask(ivec2 c)` over
+// `bloom_ocio_input`. It reads the prepared geometry from a read-only storage buffer (descriptor
+// set 0, binding 0) uploaded per dispatch, so animated paths change data, never the program.
 inline constexpr std::size_t kMaximumGpuMaskSegments = 8192;
-[[nodiscard]] std::optional<std::string>
-layerMaskProgramText(const PreparedLayerMasks& masks, std::int64_t originX, std::int64_t originY);
+inline constexpr std::size_t kMaximumGpuMasks = document::kMaximumLayerMasks;
+[[nodiscard]] const std::string& layerMaskProgramText();
 
-// The production neighbourhood program for a layerMaskProgramText() body.
-[[nodiscard]] render::OcioGpuProgramResult buildLayerMaskProgram(const std::string& shaderText);
+// The storage-buffer bytes for one prepared stack whose image-relative pixel c has the global
+// origin (originX, originY): a header, three vec4 per mask and two vec4 per segment, zero-padded to
+// a power-of-two capacity so a path whose segment count drifts while animated keeps one buffer
+// size. nullopt when the stack exceeds the program limits.
+[[nodiscard]] std::optional<std::vector<std::byte>>
+layerMaskProgramData(const PreparedLayerMasks& masks, std::int64_t originX, std::int64_t originY);
+
+// The production neighbourhood program for layerMaskProgramData() bytes.
+[[nodiscard]] render::OcioGpuProgramResult buildLayerMaskProgram(std::span<const std::byte> data);
 
 } // namespace bloom::runtime::detail

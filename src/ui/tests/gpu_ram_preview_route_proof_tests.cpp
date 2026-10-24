@@ -11,12 +11,21 @@
 // The proof is the real executed provenance: the positive cold native dispatch delta, the actual
 // device ownership epoch, the ordered per-frame ProcessFrameIdentity digest, and the CPU-oracle
 // sparse-sample evidence digest. Preview routes carry no readback fields.
+//
+// `--animated-mask` (ADR 0028) is a separate, non-writing run of the same harness: a 24-frame
+// composition whose layer mask path is keyed on every frame is RAM-previewed through the scene
+// builder carrying the shared OCIO preparer resolved from this target's packaged shader tools.
+// The cold fill must dispatch genuine GPU frames that match the CPU oracle while running the
+// shader compiler at most once for the whole run (the mask geometry is per-dispatch data), and the
+// warm replay must perform zero preparation, dispatch or compile. It publishes no route proof.
 
 #include "gpu_route_proof_harness_support.hpp"
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/runtime/gpu_ocio_context.hpp>
+#include <bloom/runtime/gpu_ocio_preparation.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_cpu_stage.hpp>
@@ -63,6 +72,7 @@ struct HarnessOptions final {
     bool half = false;
     bool expectPartial = false;
     bool expireBeforeAdmission = false;
+    bool animatedMask = false;
     std::uint64_t poolBytes = 1ULL << 30;
 };
 
@@ -85,6 +95,8 @@ struct HarnessOptions final {
             options.poolBytes = 3ULL << 30;
         } else if (argument == "--expire-before-admission") {
             options.expireBeforeAdmission = true;
+        } else if (argument == "--animated-mask") {
+            options.animatedMask = true;
         } else if (argument == "--expect-partial") {
             options.expectPartial = true;
         } else if (argument == "--require-device") {
@@ -118,6 +130,54 @@ struct HarnessOptions final {
     return *format;
 }
 
+// The shared preparer resolved from the packaged shader tools staged beside this executable, or
+// null when the build staged none.
+[[nodiscard]] std::shared_ptr<const runtime::GpuSceneOcioContext> packagedOcioContext() {
+#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
+    runtime::GpuOcioContextRequest request;
+    request.applicationExecutable = std::filesystem::path{BLOOM_GPU_RAM_TEST_EXECUTABLE};
+    request.toolPackage.toolsDirectory = BLOOM_GPU_TOOLS_DIR;
+    request.toolPackage.inventoryName = BLOOM_GPU_TOOLS_INVENTORY_NAME;
+    request.toolPackage.glslangValidatorName = BLOOM_GPU_TOOLS_GLSLANG_NAME;
+    request.toolPackage.spirvValName = BLOOM_GPU_TOOLS_SPIRV_VAL_NAME;
+    request.toolPackage.relocated = static_cast<bool>(BLOOM_GPU_TOOLS_RELOCATED);
+#if defined(BLOOM_GPU_TOOLS_BUNDLE_RELATIVE)
+    request.toolPackage.bundleRelative = true;
+#endif
+#if defined(BLOOM_GPU_TOOLS_GLSLANG_STAGED_SHA256)
+    request.toolPackage.glslangStagedDigest = core::Sha256Digest::fromLowercaseHex(
+        std::string_view{BLOOM_GPU_TOOLS_GLSLANG_STAGED_SHA256}.substr(7));
+#endif
+#if defined(BLOOM_GPU_TOOLS_SPIRV_VAL_STAGED_SHA256)
+    request.toolPackage.spirvValStagedDigest = core::Sha256Digest::fromLowercaseHex(
+        std::string_view{BLOOM_GPU_TOOLS_SPIRV_VAL_STAGED_SHA256}.substr(7));
+#endif
+    runtime::GpuOcioContextResolver resolver(std::move(request));
+    const auto resolved = resolver.resolve();
+    return resolved.hasValue() ? resolved.context : nullptr;
+#else
+    return nullptr;
+#endif
+}
+
+// A closed outline in the solid's content space whose position and curved handle move with the
+// frame, so every keyed frame samples a different path.
+[[nodiscard]] document::PathValue maskPathForFrame(const std::int64_t frame) {
+    const double shift = 6.0 * static_cast<double>(frame);
+    const double left = 820.0 + shift;
+    const double top = 420.0 + shift * 0.5;
+    document::PathValue path;
+    path.closed = true;
+    path.anchors = {
+        document::PathAnchor{document::Vec2d{left, top}, std::nullopt, std::nullopt},
+        document::PathAnchor{document::Vec2d{left + 240.0, top}, std::nullopt,
+                             document::Vec2d{left + 300.0 + shift, top + 60.0}},
+        document::PathAnchor{document::Vec2d{left + 240.0, top + 180.0}, std::nullopt,
+                             std::nullopt},
+        document::PathAnchor{document::Vec2d{left, top + 180.0}, std::nullopt, std::nullopt}};
+    return path;
+}
+
 } // namespace
 
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
@@ -133,7 +193,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                   << platformName.toStdString() << ")\n";
         return options.requireDevice ? 1 : 0;
     }
-    if (options.loader.empty() || options.proofDirectory.empty()) {
+    if (options.loader.empty() || (options.proofDirectory.empty() && !options.animatedMask)) {
         std::cout << "SKIP: RAM route proof needs --loader and --proof-dir\n";
         return options.requireDevice ? 1 : 0;
     }
@@ -150,7 +210,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     QCoreApplication::setApplicationName(QStringLiteral("RamRouteProof"));
 
     std::string nonce;
-    if (!routeproof::readProofNonce(options.proofDirectory, nonce)) {
+    if (!options.animatedMask && !routeproof::readProofNonce(options.proofDirectory, nonce)) {
         std::cout << "SKIP: no fresh run nonce in " << options.proofDirectory.string() << '\n';
         return options.requireDevice ? 1 : 0;
     }
@@ -166,7 +226,21 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         return options.requireDevice ? 1 : 0;
     }
 
-    const auto frameCount = options.sequence100 ? std::int64_t{100} : kFrameCount;
+    std::shared_ptr<const runtime::GpuSceneOcioContext> ocioContext;
+    if (options.animatedMask) {
+        ocioContext = packagedOcioContext();
+        if (ocioContext == nullptr || ocioContext->preparer == nullptr) {
+            std::cout << "SKIP: the animated-mask RAM run needs the packaged shader tools\n";
+            return options.requireDevice ? 1 : 0;
+        }
+        auto mediaContext = runtime::GpuSceneMediaContext::fromEvaluator(fixture.evaluator);
+        mediaContext.assetBaseDirectory = mediaDirectory;
+        fixture.sceneBuilder =
+            std::make_shared<CpuGpuSceneBuilder>(nullptr, std::move(mediaContext), *ocioContext);
+    }
+    const auto frameCount = options.sequence100    ? std::int64_t{100}
+                            : options.animatedMask ? std::int64_t{24}
+                                                   : kFrameCount;
     auto sequenceAsset = fixture.mediaAsset;
     if (options.sequence100) {
         sequenceAsset.kind = document::AssetKind::Sequence;
@@ -207,6 +281,33 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         addImage.emplace<commands::AddImageLayer>(compositionId, sequenceAsset.id);
         checks.expect(commands.execute(std::move(addImage)).succeeded(),
                       "the genuine sequence layer is added");
+    } else if (options.animatedMask) {
+        checks.expect(session.addSolidLayer(QStringLiteral("Masked Solid"),
+                                            core::Color4d{0.2, 0.4, 0.8, 1.0}),
+                      "the masked RAM solid layer is created");
+        const auto layers = session.composition()->graph().layerOutputs();
+        checks.expect(layers.size() == 1, "the composition has the one masked layer");
+        const auto layerId = layers.empty() ? document::LayerId{} : layers.front().layerId;
+        checks.expect(session.setCurrentTime(frameTime(0)) || session.currentTime() == frameTime(0),
+                      "the RAM session is at frame 0");
+        checks.expect(session.addLayerMask(layerId, maskPathForFrame(0)),
+                      "the layer mask is added");
+        const auto* layer = session.composition()->graph().findLayer(layerId);
+        const bool masked = layer != nullptr && layer->masks.size() == 1;
+        checks.expect(masked, "the layer carries the mask");
+        if (masked) {
+            const auto maskId = layer->masks.front().id;
+            checks.expect(session.toggleMaskPathKey(layer->masks.front().path),
+                          "the mask path is animated");
+            for (std::int64_t index = 0; index < frameCount; ++index) {
+                checks.expect(session.setCurrentTime(frameTime(index)) ||
+                                  session.currentTime() == frameTime(index),
+                              "the RAM session moves to a keyed frame");
+                checks.expect(session.commitMaskPath(layerId, maskId, maskPathForFrame(index)),
+                              "the mask path is keyed on every frame");
+            }
+        }
+        checks.expect(session.setCurrentTime(frameTime(0)), "the RAM session returns to frame 0");
     } else {
         checks.expect(session.addSolidLayer(QStringLiteral("Moving Solid"),
                                             core::Color4d{0.2, 0.4, 0.8, 1.0}),
@@ -349,7 +450,13 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         frameCache->clear();
     }
 
+    const auto preparerCounters = [&ocioContext] {
+        return ocioContext != nullptr ? ocioContext->preparer->counters()
+                                      : runtime::GpuOcioPreparerCounters{};
+    };
+    const auto beforeColdPreparer = preparerCounters();
     const auto beforeCold = service.status().counters;
+    const auto coldStart = std::chrono::steady_clock::now();
     ram.start();
     if (options.expireBeforeAdmission) {
         // Hold UI delivery while genuine production tasks finish, then invalidate their real
@@ -397,8 +504,28 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         }
     }
     const bool coldComplete = waitUntil([&] { return !ram.isCaching(); }, 120s);
+    const auto coldMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - coldStart)
+                            .count();
     const auto afterCold = service.status().counters;
+    const auto afterColdPreparer = preparerCounters();
     const auto coldDispatches = afterCold.nativeDispatches - beforeCold.nativeDispatches;
+    if (options.animatedMask) {
+        checks.expect(afterCold.cpuFallbacks == beforeCold.cpuFallbacks,
+                      "every animated-mask frame rendered on the GPU (no CPU fallback)");
+        checks.expect(afterColdPreparer.shaderCompilerRuns <= 1,
+                      "the whole animated-mask run compiled at most one shader module");
+        std::cout << "PHASE mask-cold frames=" << ram.cachedFrameCount()
+                  << " coldDispatches=" << coldDispatches << " prepareRequests="
+                  << (afterColdPreparer.preparations - beforeColdPreparer.preparations)
+                  << " shaderCompilerRunsCold="
+                  << (afterColdPreparer.shaderCompilerRuns - beforeColdPreparer.shaderCompilerRuns)
+                  << " shaderCompilerRunsTotal=" << afterColdPreparer.shaderCompilerRuns
+                  << " compilerCacheHits="
+                  << (afterColdPreparer.shaderCompilerCacheHits -
+                      beforeColdPreparer.shaderCompilerCacheHits)
+                  << " ms=" << coldMs << '\n';
+    }
     checks.expect(coldComplete && ram.totalFrameCount() == static_cast<std::uint64_t>(frameCount),
                   "the requested RAM range terminates");
     const auto expectedCompletion =
@@ -506,6 +633,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     // native work, and every cached resident frame must actually replay through the real presenter
     // (taking it back out of the controller cache and presenting it), not merely still be held.
     const auto beforeWarm = service.status().counters;
+    const auto beforeWarmPreparer = preparerCounters();
+    const auto warmStart = std::chrono::steady_clock::now();
     if (!options.expectPartial && !options.expireBeforeAdmission)
         ram.start();
     const bool warmComplete = waitUntil(
@@ -516,6 +645,23 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         },
         30s);
     const auto afterWarm = service.status().counters;
+    if (options.animatedMask) {
+        const auto afterWarmPreparer = preparerCounters();
+        checks.expect(afterWarmPreparer.shaderCompilerRuns == beforeWarmPreparer.shaderCompilerRuns,
+                      "the warm animated-mask replay compiled nothing");
+        std::cout << "PHASE mask-warm cached=" << ram.cachedFrameCount() << " warmDispatches="
+                  << (afterWarm.nativeDispatches - beforeWarm.nativeDispatches) << " warmGraphJobs="
+                  << (afterWarm.residentGraphJobs - beforeWarm.residentGraphJobs)
+                  << " prepareRequests="
+                  << (afterWarmPreparer.preparations - beforeWarmPreparer.preparations)
+                  << " shaderCompilerRuns="
+                  << (afterWarmPreparer.shaderCompilerRuns - beforeWarmPreparer.shaderCompilerRuns)
+                  << " ms="
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now() - warmStart)
+                         .count()
+                  << '\n';
+    }
     checks.expect(warmComplete, "the warm RAM replay completed from the cache");
     checks.expect(afterWarm.residentGraphJobs == beforeWarm.residentGraphJobs &&
                       afterWarm.cpuFallbacks == beforeWarm.cpuFallbacks &&
@@ -621,6 +767,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         std::cerr << "RAM route proof: " << checks.failures()
                   << " verification failure(s); no proof written\n";
         return 1;
+    }
+    if (options.animatedMask) {
+        std::cout << "PASS: animated-mask RAM preview (frames=" << frames.size()
+                  << ", coldDispatches=" << coldDispatches
+                  << ", shader compiles=" << preparerCounters().shaderCompilerRuns << ")\n";
+        return 0;
     }
     if (options.expireBeforeAdmission) {
         checks.expect(ram.cachedFrameCount() == 0 && !ram.canAutoPlay(),

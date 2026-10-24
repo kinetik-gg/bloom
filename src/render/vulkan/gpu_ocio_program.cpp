@@ -177,10 +177,12 @@ bool GpuOcioProgram::Impl::createOcioResources() {
                                               "the uniform buffer exceeds the owned-byte budget");
             return false;
         }
-        if (!createResidentBuffer(
-                *control, desc.uniformBufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
-                true, uniformBuffer) ||
+        if (!createResidentBuffer(*control, desc.uniformBufferSize,
+                                  desc.uniformBufferStorage ? VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+                                                            : VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                  VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                                      VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                                  true, uniformBuffer) ||
             uniformBuffer.info.pMappedData == nullptr) {
             createDiagnostic = makeDiagnostic(control->bufferStorageRefusal
                                                   ? GpuOcioProgramDiagnosticCode::OverBudget
@@ -254,7 +256,8 @@ bool GpuOcioProgram::Impl::createPipeline() {
     if (desc.uniformBufferSize > 0) {
         vk::DescriptorSetLayoutBinding binding;
         binding.binding = 0;
-        binding.descriptorType = vk::DescriptorType::eUniformBuffer;
+        binding.descriptorType = desc.uniformBufferStorage ? vk::DescriptorType::eStorageBuffer
+                                                           : vk::DescriptorType::eUniformBuffer;
         binding.descriptorCount = 1;
         binding.stageFlags = vk::ShaderStageFlagBits::eCompute;
         ocioBindings.push_back(binding);
@@ -347,10 +350,12 @@ bool GpuOcioProgram::Impl::createPipeline() {
             ++poolCount;
         }
     };
-    addPool(vk::DescriptorType::eUniformBuffer, desc.uniformBufferSize > 0 ? 1U : 0U);
+    const bool dataBuffer = desc.uniformBufferSize > 0;
+    addPool(vk::DescriptorType::eUniformBuffer, dataBuffer && !desc.uniformBufferStorage ? 1U : 0U);
     addPool(vk::DescriptorType::eCombinedImageSampler, static_cast<std::uint32_t>(textures.size()));
     addPool(vk::DescriptorType::eStorageImage, displayArm ? 1U : 2U);
-    addPool(vk::DescriptorType::eStorageBuffer, displayArm ? 2U : 1U);
+    addPool(vk::DescriptorType::eStorageBuffer,
+            (displayArm ? 2U : 1U) + (dataBuffer && desc.uniformBufferStorage ? 1U : 0U));
     vk::DescriptorPoolCreateInfo poolInfo{};
     poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
     poolInfo.maxSets = 2;
@@ -421,8 +426,13 @@ bool GpuOcioProgram::Impl::createPipeline() {
 
 void GpuOcioProgram::Impl::writeStaticDescriptors() {
     if (desc.uniformBufferSize > 0) {
-        ocio_program_detail::writeUniformDescriptor(ocioSet, *control, 0, uniformBuffer.buffer,
-                                                    uniformBuffer.bytes);
+        if (desc.uniformBufferStorage) {
+            ocio_program_detail::writeBufferDescriptor(ocioSet, *control, 0, uniformBuffer.buffer,
+                                                       uniformBuffer.bytes);
+        } else {
+            ocio_program_detail::writeUniformDescriptor(ocioSet, *control, 0, uniformBuffer.buffer,
+                                                        uniformBuffer.bytes);
+        }
     }
     for (const auto& texture : textures) {
         ocio_program_detail::writeCombinedDescriptor(ocioSet, *control, texture.binding,

@@ -1666,6 +1666,20 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     )
     set_tests_properties(bloom.ui.gpu_ram_preview_route_proof
         PROPERTIES FIXTURES_REQUIRED gpu_route_proofs FIXTURES_SETUP gpu_route_proof_ram)
+    # ADR 0028 animated masks through the same real RAM preview chain: a mask path keyed on 24
+    # frames, the scene builder carrying the shared preparer from this target's packaged shader
+    # tools, cold GPU frames against the CPU oracle with at most one shader compile, and a warm
+    # replay with zero preparation, dispatch or compile. It writes no route proof.
+    target_compile_definitions(bloom_ui_gpu_ram_preview_route_proof_test PRIVATE
+        "BLOOM_GPU_RAM_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_ui_gpu_ram_preview_route_proof_test>\"")
+    bloom_package_gpu_shader_tools(bloom_ui_gpu_ram_preview_route_proof_test)
+    bloom_add_test(
+        NAME bloom.ui.gpu_ram_preview_animated_mask
+        COMMAND bloom_ui_gpu_ram_preview_route_proof_test --animated-mask
+                ${bloom_ui_gpu_viewer_service_chain_loader_args}
+        LABELS ui gpu ram
+        TIMEOUT 300
+    )
 
     # Independent native acceptance for direct manipulation ON the genuine GPU-resident viewer
     # route: real blank project -> real first-composition/Solid commands -> real service resident
