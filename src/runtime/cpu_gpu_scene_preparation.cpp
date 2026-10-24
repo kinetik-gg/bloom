@@ -529,7 +529,21 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 mediaStatistics, emit, outputWindowOf[index], commandForOperation[index],
                 keyOf[index], leaf);
             if (error) {
-                return fail(error->code, error->message, mediaStatistics);
+                // PixelStorageBudgetExceeded names the request's own byte budget. When the
+                // admitted phase source envelope, not the request, bounded this leaf, the refusal
+                // stays MediaUnavailable: the request could not have been raised to admit it.
+                const auto envelopeBytes =
+                    remainingSource > std::numeric_limits<std::uint64_t>::max() / 3
+                        ? std::numeric_limits<std::uint64_t>::max()
+                        : 3 * remainingSource;
+                const bool requestBound =
+                    !phaseLease || request.pixelStorageByteLimit <= envelopeBytes;
+                const auto code =
+                    error->code == PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded &&
+                            !requestBound
+                        ? PreparedGpuSceneDiagnosticCode::MediaUnavailable
+                        : error->code;
+                return fail(code, error->message, mediaStatistics);
             }
             bounds[index] = leaf.bounds;
             continue;
