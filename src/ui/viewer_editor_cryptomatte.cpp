@@ -33,7 +33,15 @@ bool ViewerEditor::cryptomattePress(QMouseEvent* event) {
         showMessage(tr("Cryptomatte picking is unavailable"));
         return true;
     }
-    const auto mapping = currentMapping();
+    // The pick reads the channel set, not the displayed pixels, so a frame still on screen from an
+    // earlier revision (a matte edit re-renders it) maps the cursor as long as the composition
+    // geometry and the capture are unchanged.
+    auto mapping = currentMapping();
+    if (const auto actual = actualDisplayDescriptor();
+        !mapping && actual && actual->mapping && session_.composition() != nullptr &&
+        actual->mapping->compositionFormat == session_.composition()->format() &&
+        actual->captureRect == contentRect() && actual->devicePixelRatio == devicePixelRatioF())
+        mapping = actual->mapping;
     if (!mapping || !contentRect().contains(event->position()) ||
         !mapping->displayRect.contains(event->position()))
         return true;
