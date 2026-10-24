@@ -171,7 +171,7 @@ panel menus or the composition context menu.
 | Add > New Composition… | Opens the Composition dialog in create mode, then adds one composition through the command path (see "Composition Dialog" below) |
 | Add > New Folder | Disabled; tooltip: `Folders arrive with asset organisation` |
 | Select > All / None | Selects all visible rows or clears the selection |
-| Double-click a composition | Switches the shared `CompositionSession` to that composition, then opens its Composition Settings |
+| Double-click a composition | Switches the shared `CompositionSession` to that composition, as in After Effects; it opens no dialog |
 | Right-click a composition | Open, Composition Settings…, Rename (inline), Duplicate, or Delete |
 | Footer: New Composition | Opens the same dialog in create mode |
 | Footer: New Folder / Import | Disabled; Import tooltip: `Image and sequence import arrives with the media pipeline` |
@@ -179,31 +179,32 @@ panel menus or the composition context menu.
 
 ### Composition Dialog
 
-New Composition and Composition Settings are one modal (#376) with a Basic section and a collapsed
-Advanced section. Create mode starts from the active composition's settings and commits
+New Composition and Composition Settings are one modal (#376), titled after its mode, with a Basic
+section and a collapsed Advanced section. Create mode starts from the active composition's settings and commits
 `AddCompositionWithSettings` ("Add Composition"); settings mode edits one composition and commits
 `SetCompositionSettings` ("Composition Settings"). Each is exactly one undoable command, and
 unchanged settings commit nothing. Entry points: Composition menu (`Ctrl+Alt+N`, `Ctrl+Alt+K`), the
-Viewer composition menu, the Assets Add menu, footer and composition context menu, and double-click
-in Assets.
+Viewer composition menu, and the Assets Add menu, footer and composition context menu.
 
 | Control | Behaviour |
 | --- | --- |
-| Name | Required; an empty name disables OK with an inline reason |
-| Preset | Custom, the user's presets, then HD 1080p (1920 × 1080), HD 720p (1280 × 720), UHD 4K (3840 × 2160), DCI 2K (2048 × 1080), DCI 4K (4096 × 2160), Vertical 1080 × 1920 and Square 1080, all square pixels. Choosing a built-in sets size and pixel aspect only; choosing a user preset sets every value it holds. The field shows the first preset whose values equal the current ones (user presets first) and Custom otherwise, including while a value is invalid |
-| Save / Rename / Delete preset | Save names the current values as a user preset; Rename and Delete act on the selected user preset and are disabled on Custom and built-ins. Names are trimmed, at most 128 UTF-8 bytes and unique ignoring case. User presets are a per-user application setting, never project data |
+| Name | Required |
+| Preset | Custom, the user's presets, then HD 1080p (1920 × 1080), HD 720p (1280 × 720), UHD 4K (3840 × 2160), DCI 2K (2048 × 1080), DCI 4K (4096 × 2160), Vertical 1080 × 1920 and Square 1080, all square pixels. Under the preset a muted summary reads the current values, for example `1920 × 1080 · 16:9 · Square pixels · 24 fps · 10 s (240 frames)`: the frame aspect (size times pixel aspect, reduced, or a ratio to one at two decimals such as `1.9:1` when its terms exceed 32), the pixel aspect, the rate (with `drop-frame` when labels are drop-frame) and the duration; a part whose value is invalid is left out. Choosing a built-in sets size and pixel aspect only; choosing a user preset sets every value it holds. The field shows the first preset whose values equal the current ones (user presets first) and Custom otherwise, including while a value is invalid |
+| Save as preset… / Rename preset… / Delete preset | The three buttons beside the preset (plus, pencil, trash). Save names the current values as a user preset; Rename and Delete act on the selected user preset and are disabled on Custom and built-ins. Names are trimmed, at most 128 UTF-8 bytes and unique ignoring case. User presets are a per-user application setting, never project data. A refused name is reported under the preset |
 | Size and lock | Width and height in pixels; the link toggle keeps the aspect ratio while one is edited |
 | Pixel Aspect Ratio | Square, D1/DV NTSC (10/11) and widescreen (40/33), D1/DV PAL (59/54) and widescreen (118/81), HDV 1080 / DVCPRO HD 720 (4/3), DVCPRO HD 1080 (3/2), and Anamorphic 2:1; a stored ratio outside the list is shown as its own entry |
-| Frame Rate | A positive integer, exact decimal (`29.97` is `2997/100`), or `numerator/denominator`; entered components must fit signed 64-bit integers and the reduced rate's components 32 bits. Presets: Custom, 23.976 (24000/1001), 24, 25, 29.97 (30000/1001), 30, 48, 50, 59.94 (60000/1001), 60 |
+| Frame Rate | One dropdown: 23.976 (24000/1001), 24, 25, 29.97 (30000/1001), 30, 48, 50, 59.94 (60000/1001) and 60 fps, then Custom. Only Custom shows the exact rate field beside it, which takes a positive integer, exact decimal (`29.97` is `2997/100`), or `numerator/denominator`; entered components must fit signed 64-bit integers and the reduced rate's components 32 bits. Typing in the Custom field stays Custom; a rate that equals a preset shows that preset whenever it is set any other way |
 | Timecode: drop-frame labels | Enabled only at 30000/1001 and 60000/1001. It changes timecode labels to SMPTE drop-frame (`;` before the frames, two or four labels skipped each minute except every tenth) and never changes frames or time |
 | Start | The timecode of frame 0, entered in the duration unit; stored as an exact time and labelled at the nearest frame |
 | Duration and unit | Frames, Seconds (decimal or rational) or Timecode. Switching units re-displays the same exact duration; changing rate in Frames or Timecode keeps the frame count, in Seconds keeps the exact time |
-| Background Colour | The composition background `KColorChip` |
+| Background Colour | The composition background as a `KColorChip` at its own size with its `#RRGGBB` value beside it; the chip opens the colour picker |
 | Advanced: Working Colour Space | Inherit (the project space) or a scene-linear space of the project's OCIO config |
-| Advanced: Resize Anchor | Settings mode only: a 3 × 3 grid choosing where existing layers sit when the size changes (default centre) |
+| Advanced: Resize Anchor | Settings mode only: the Properties Anchor Point grid (`KAnchorGrid`), choosing where existing layers sit when the size changes (default centre). Click a dot or use the arrow keys |
 | Advanced: Action / Title Safe | The stored safe-area percentages; title safe may not exceed action safe |
 
-Invalid values disable OK and show one plain reason under the sections.
+An invalid value disables OK and shows one plain reason directly under its own field (name, size,
+frame rate, start, duration or title safe). A reason under Title Safe opens Advanced so it is never
+hidden.
 
 ## Nodes
 

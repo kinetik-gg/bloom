@@ -1,7 +1,5 @@
 #include "properties_anchor_grid.hpp"
 
-#include <QKeyEvent>
-#include <QMouseEvent>
 #include <QPainter>
 #include <QTimer>
 #include <bloom/document/project.hpp>
@@ -163,48 +161,13 @@ void PropertiesAnchorGrid::poll() {
         update();
     }
 }
-void PropertiesAnchorGrid::choose(const int index) {
+void PropertiesAnchorGrid::choosePoint(const int index) {
     if (!isEnabled() || !bounds_ || index < 0 || index > 8)
         return;
     const double x = (index % 3 - 1) * (bounds_->right - bounds_->left) / 2.0;
     const int row = index / 3;
     const double y = static_cast<double>(row - 1) * (bounds_->bottom - bounds_->top) / 2.0;
     (void)session_.setSelectedAnchor(x, y);
-}
-void PropertiesAnchorGrid::mousePressEvent(QMouseEvent* event) {
-    if (event->button() == Qt::LeftButton) {
-        for (int index = 0; index < 9; ++index)
-            if (pointRect(index)
-                    .adjusted(-kit::px(kit::Spacing::XXS), -kit::px(kit::Spacing::XXS),
-                              kit::px(kit::Spacing::XXS), kit::px(kit::Spacing::XXS))
-                    .contains(event->pos())) {
-                choose(index);
-                event->accept();
-                return;
-            }
-    }
-    QWidget::mousePressEvent(event);
-}
-void PropertiesAnchorGrid::keyPressEvent(QKeyEvent* event) {
-    const int current = selectedPoint() < 0 ? 4 : selectedPoint();
-    switch (event->key()) {
-    case Qt::Key_Left:
-        choose(current % 3 > 0 ? current - 1 : current);
-        break;
-    case Qt::Key_Right:
-        choose(current % 3 < 2 ? current + 1 : current);
-        break;
-    case Qt::Key_Up:
-        choose(current >= 3 ? current - 3 : current);
-        break;
-    case Qt::Key_Down:
-        choose(current < 6 ? current + 3 : current);
-        break;
-    default:
-        QWidget::keyPressEvent(event);
-        return;
-    }
-    event->accept();
 }
 
 } // namespace bloom::ui

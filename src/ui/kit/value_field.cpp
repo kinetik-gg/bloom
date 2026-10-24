@@ -12,6 +12,7 @@
 #include <QEvent>
 #include <QFocusEvent>
 #include <QFontMetrics>
+#include <QHelpEvent>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMouseEvent>
@@ -19,6 +20,7 @@
 #include <QPalette>
 #include <QResizeEvent>
 #include <QSignalBlocker>
+#include <QToolTip>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -224,6 +226,36 @@ QString KValueField::displayedValue() const {
     if (!specialValueText_.isEmpty() && value_ == minimum_)
         return specialValueText_;
     return valueFieldNumber(value_, compact_ ? std::min(decimals_, 2) : decimals_, compact_);
+}
+
+KValueField::RestingText KValueField::restingText() const {
+    const auto full = displayedValue();
+    const bool special = !specialValueText_.isEmpty() && value_ == minimum_;
+    const bool wantsUnit = !unit_.isEmpty() && !special;
+    const QFontMetrics metrics(kit::font(TypeRole::Value));
+    const auto column = cellTextRect().width();
+    const auto unitColumn = wantsUnit ? metrics.horizontalAdvance(unit_) + px(Spacing::XS) : 0;
+    const auto fits = [&](const QString& text, const int reserved) {
+        return metrics.horizontalAdvance(text) + reserved <= column;
+    };
+    if (fits(full, unitColumn) || special)
+        return {full, wantsUnit};
+    if (fits(full, 0))
+        return {full, false};
+    // Fewer places, rounded, until the number fits; the whole number is the last resort and is
+    // painted even when it cannot fit, since a number cut by its column would misstate the value.
+    const int decimals = compact_ ? std::min(decimals_, 2) : decimals_;
+    for (int places = decimals - 1; places >= 0; --places) {
+        const auto shorter = valueFieldNumber(value_, places, compact_);
+        if (fits(shorter, 0) || places == 0)
+            return {shorter, false};
+    }
+    return {full, false};
+}
+
+QString KValueField::paintedText() const {
+    const auto text = restingText();
+    return text.unit ? text.value + QLatin1Char(' ') + unit_ : text.value;
 }
 
 int KValueField::labelColumnWidth() const {
@@ -501,6 +533,17 @@ bool KValueField::event(QEvent* event) {
             break;
         }
     }
+    if (event->type() == QEvent::ToolTip && toolTip().isEmpty() && !editing_ &&
+        paintedText() != (unit_.isEmpty() || (!specialValueText_.isEmpty() && value_ == minimum_)
+                              ? displayedValue()
+                              : displayedValue() + QLatin1Char(' ') + unit_)) {
+        // A fitted resting value shows the exact one on hover.
+        const auto* help = static_cast<QHelpEvent*>(event);
+        QToolTip::showText(
+            help->globalPos(),
+            unit_.isEmpty() ? displayedValue() : displayedValue() + QLatin1Char(' ') + unit_, this);
+        return true;
+    }
     return QWidget::event(event);
 }
 
@@ -669,8 +712,8 @@ void KValueField::paintEvent(QPaintEvent* event) {
     const QFontMetrics valueMetrics(painter.font());
     const QRectF text = cellTextRect();
     QRectF unitRect;
-    const bool showUnit =
-        !unit_.isEmpty() && (editing_ || specialValueText_.isEmpty() || value_ != minimum_);
+    const auto resting = restingText();
+    const bool showUnit = !unit_.isEmpty() && (editing_ || resting.unit);
     if (showUnit) {
         const auto unitWidth = static_cast<qreal>(valueMetrics.horizontalAdvance(unit_));
         unitRect = QRectF(text.right() - unitWidth, text.top(), unitWidth, text.height());
@@ -685,8 +728,10 @@ void KValueField::paintEvent(QPaintEvent* event) {
     }
     painter.setPen(inkForState(Color::Foreground, state));
     const qreal valueRight = showUnit ? unitRect.left() - px(Spacing::XS) : text.right();
+    // Clipped to the cell so nothing can paint over the sub-label or the border.
+    painter.setClipRect(cell);
     painter.drawText(QRectF(text.left(), text.top(), valueRight - text.left(), text.height()),
-                     Qt::AlignVCenter | Qt::AlignRight, displayedValue());
+                     Qt::AlignVCenter | Qt::AlignRight, resting.value);
 }
 
 } // namespace bloom::ui::kit

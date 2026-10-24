@@ -68,8 +68,13 @@ class KValueField final : public QWidget {
 
     void stepBy(int steps);
 
-    // The number exactly as painted, at the configured precision, without the unit.
+    // The number at the configured precision, without the unit.
     [[nodiscard]] QString displayedValue() const;
+    // What the resting cell actually paints at its current width: the number, then a space and the
+    // unit when the unit is shown. A value too wide for its column drops the unit first and then
+    // decimal places, so it never runs into the sub-label or past the cell edge; the exact value
+    // stays in the editor and in the tooltip.
+    [[nodiscard]] QString paintedText() const;
 
     [[nodiscard]] QRectF labelRect() const;
     // The cell is the WHOLE height of the control and the whole width left of the label column: it
@@ -144,6 +149,11 @@ class KValueField final : public QWidget {
     void resizeEvent(QResizeEvent* event) override;
 
   private:
+    struct RestingText {
+        QString value;
+        bool unit = false;
+    };
+    [[nodiscard]] RestingText restingText() const;
     [[nodiscard]] int labelColumnWidth() const;
     void commitValue(double value);
     void beginEdit();

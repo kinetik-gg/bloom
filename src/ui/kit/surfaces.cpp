@@ -1,4 +1,6 @@
 #include <QEvent>
+#include <QKeyEvent>
+#include <QMouseEvent>
 #include <QPen>
 #include <bloom/ui/kit/surfaces.hpp>
 #include <cmath>
@@ -46,6 +48,41 @@ void KAnchorGrid::paintEvent(QPaintEvent*) {
                            color(index == selectedPoint() ? Color::Keyframe : Color::BorderHover),
                            hasFocus() && index == selectedPoint() ? color(Color::Accent) : QColor{},
                            Radius::Small);
+}
+void KAnchorGrid::mousePressEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        for (int index = 0; index < 9; ++index)
+            if (pointRect(index)
+                    .adjusted(-px(Spacing::XXS), -px(Spacing::XXS), px(Spacing::XXS),
+                              px(Spacing::XXS))
+                    .contains(event->pos())) {
+                choosePoint(index);
+                event->accept();
+                return;
+            }
+    }
+    QWidget::mousePressEvent(event);
+}
+void KAnchorGrid::keyPressEvent(QKeyEvent* event) {
+    const int current = selectedPoint() < 0 ? 4 : selectedPoint();
+    switch (event->key()) {
+    case Qt::Key_Left:
+        choosePoint(current % 3 > 0 ? current - 1 : current);
+        break;
+    case Qt::Key_Right:
+        choosePoint(current % 3 < 2 ? current + 1 : current);
+        break;
+    case Qt::Key_Up:
+        choosePoint(current >= 3 ? current - 3 : current);
+        break;
+    case Qt::Key_Down:
+        choosePoint(current < 6 ? current + 3 : current);
+        break;
+    default:
+        QWidget::keyPressEvent(event);
+        return;
+    }
+    event->accept();
 }
 void KListSurface::paintEvent(QPaintEvent*) {
     QPainter painter(this);

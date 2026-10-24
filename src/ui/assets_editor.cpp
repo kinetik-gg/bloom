@@ -104,15 +104,12 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     layout->addWidget(tree_, 1);
 
     connect(search_, &QLineEdit::textChanged, this, &AssetsEditor::applyFilter);
-    // #376: double-clicking a composition opens it and its Composition Settings.
+    // Double-click opens the composition only, as in After Effects; Composition Settings is the
+    // context menu, the Composition menu and Ctrl+Alt+K (#376).
     connect(tree_, &QTreeWidget::itemDoubleClicked, this,
             [this](QTreeWidgetItem* item, const int column) {
                 if (column == 0) {
-                    const auto id = assets::compositionId(item);
-                    if (!id.isValid())
-                        return;
-                    openComposition(id);
-                    (void)bloom::ui::showCompositionSettingsDialog(session_, id, this);
+                    openComposition(assets::compositionId(item));
                 }
             });
     connect(tree_, &QTreeWidget::itemChanged, this,

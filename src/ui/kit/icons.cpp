@@ -59,6 +59,7 @@ const auto& iconAssets() {
         {IconId::Select, QLatin1StringView("cursor")},
         {IconId::Settings, QLatin1StringView("gear")},
         {IconId::Delete, QLatin1StringView("trash")},
+        {IconId::Rename, QLatin1StringView("pencil-simple")},
         {IconId::Check, QLatin1StringView("check")},
         {IconId::Warning, QLatin1StringView("warning")},
         {IconId::Error, QLatin1StringView("warning-circle")},

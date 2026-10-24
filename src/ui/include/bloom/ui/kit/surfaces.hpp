@@ -47,14 +47,21 @@ class KDiamond : public QWidget {
     bool animated_ = false;
     Fill fill_ = Fill::None;
 };
+// The 3 x 3 anchor-point grid: nine round dots, the selected one filled. A click on a dot or the
+// arrow keys choose a point (0..8, row by row from top left); a subclass says which point is
+// selected and what choosing one does. Properties' Anchor Point and the Composition dialog's
+// resize anchor are the two users.
 class KAnchorGrid : public QWidget {
   public:
     explicit KAnchorGrid(QWidget* parent = nullptr);
     virtual int selectedPoint() const = 0;
+    virtual void choosePoint(int index) = 0;
     QRect pointRect(int index) const;
 
   protected:
     void paintEvent(QPaintEvent*) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
 };
 class KListSurface : public QWidget {
   public:

@@ -8,13 +8,13 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/section.hpp>
+#include <bloom/ui/kit/surfaces.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
 
 #include <QAbstractButton>
-#include <QButtonGroup>
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QGridLayout>
@@ -22,6 +22,7 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPalette>
 #include <QPushButton>
 #include <QSettings>
 #include <QSignalBlocker>
@@ -256,6 +257,55 @@ constexpr std::array<RateChoice, 9> kRates{{{"23.976", "24000/1001"},
     return holder;
 }
 
+[[nodiscard]] QFormLayout* sectionForm(kit::KSection& section) {
+    auto* body = new QWidget(section.body());
+    auto* form = new QFormLayout(body);
+    form->setContentsMargins(0, 0, 0, 0);
+    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    form->setLabelAlignment(Qt::AlignLeft | Qt::AlignTop);
+    section.bodyLayout()->addWidget(body);
+    return form;
+}
+
+// The resize anchor is the Properties Anchor Point grid itself: the dialog only owns which of the
+// nine points is chosen.
+class ResizeAnchorGrid final : public kit::KAnchorGrid {
+  public:
+    explicit ResizeAnchorGrid(QWidget* parent) : kit::KAnchorGrid(parent) {
+        setObjectName(QStringLiteral("compositionSettingsAnchor"));
+        setFocusPolicy(Qt::StrongFocus);
+    }
+    [[nodiscard]] int selectedPoint() const override { return selected_; }
+    void choosePoint(const int index) override {
+        if (!isEnabled() || index < 0 || index > 8)
+            return;
+        selected_ = index;
+        setToolTip(anchorName(index));
+        update();
+    }
+    [[nodiscard]] static QString anchorName(const int index) {
+        static constexpr std::array<const char*, 9> kNames{"Top Left",    "Top",    "Top Right",
+                                                           "Left",        "Centre", "Right",
+                                                           "Bottom Left", "Bottom", "Bottom Right"};
+        return QDialog::tr("Existing layers keep their place relative to: %1")
+            .arg(QDialog::tr(kNames[static_cast<std::size_t>(index)]));
+    }
+
+  private:
+    int selected_ = 4;
+};
+
+[[nodiscard]] QString trimmedNumber(const double value, const int decimals) {
+    auto text = QString::number(value, 'f', decimals);
+    if (text.contains(QLatin1Char('.'))) {
+        while (text.endsWith(QLatin1Char('0')))
+            text.chop(1);
+        if (text.endsWith(QLatin1Char('.')))
+            text.chop(1);
+    }
+    return text;
+}
+
 } // namespace
 
 CompositionSettingsDialog::CompositionSettingsDialog(
@@ -267,7 +317,7 @@ CompositionSettingsDialog::CompositionSettingsDialog(
     setObjectName(mode == Mode::Create ? QStringLiteral("newCompositionDialog")
                                        : QStringLiteral("compositionSettingsDialog"));
     setWindowTitle(mode == Mode::Create ? tr("New Composition") : tr("Composition Settings"));
-    setMinimumWidth(kit::px(kit::Size::DialogTextWidth));
+    setMinimumWidth(kit::px(kit::Size::DialogWideWidth));
     {
         QSettings store;
         userPresets_ = loadUserCompositionPresets(store);
@@ -296,6 +346,12 @@ CompositionSettingsDialog::CompositionSettingsDialog(
             resize(width(), sizeHint().height());
         });
     });
+    // Both sections share one label column, so their fields start at the same x.
+    int labelWidth = 0;
+    for (const auto* label : formLabels_)
+        labelWidth = std::max(labelWidth, label->sizeHint().width());
+    for (auto* label : formLabels_)
+        label->setFixedWidth(labelWidth);
 
     if (workingSpace_ != nullptr) {
         for (const auto& choice : workingSpaces)
@@ -316,11 +372,6 @@ CompositionSettingsDialog::CompositionSettingsDialog(
                 [this](int) { refresh(); });
     }
 
-    error_ = new kit::KLabel(this);
-    error_->setObjectName(QStringLiteral("newCompositionErrorLabel"));
-    error_->setWordWrap(true);
-    error_->hide();
-    layout->addWidget(error_);
     buttons_ = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     buttons_->setObjectName(QStringLiteral("assetsDialogButtons"));
     buttons_->button(QDialogButtonBox::Ok)->setObjectName(QStringLiteral("assetsDialogOk"));
@@ -336,66 +387,102 @@ CompositionSettingsDialog::CompositionSettingsDialog(
     applySettings(initial_);
 }
 
+QLabel* CompositionSettingsDialog::formLabel(const QString& text, QWidget* parent) {
+    auto* label = new kit::KLabel(text, parent);
+    // Top-aligned with the control row even when an inline reason grows the field below it.
+    label->setMinimumHeight(kit::px(kit::Size::Control));
+    label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    formLabels_.push_back(label);
+    return label;
+}
+
+QWidget* CompositionSettingsDialog::withError(QWidget* field, QLabel*& error,
+                                              const QString& objectName) {
+    auto* holder = new QWidget(field->parentWidget());
+    auto* column = new QVBoxLayout(holder);
+    column->setContentsMargins(0, 0, 0, 0);
+    column->setSpacing(kit::px(kit::Spacing::XXS));
+    column->addWidget(field);
+    error = new kit::KLabel(QString{}, holder, kit::TypeRole::UiSmall);
+    error->setObjectName(objectName);
+    error->setWordWrap(true);
+    QPalette palette = error->palette();
+    palette.setColor(QPalette::WindowText, kit::color(kit::Color::Error));
+    error->setPalette(palette);
+    error->hide();
+    column->addWidget(error);
+    return holder;
+}
+
+void CompositionSettingsDialog::showPresetRefusal(const QString& reason) {
+    presetError_->setText(reason);
+    presetError_->setVisible(!reason.isEmpty());
+}
+
 void CompositionSettingsDialog::buildBasic(kit::KSection& section) {
-    auto* body = new QWidget(section.body());
-    auto* form = new QFormLayout(body);
-    form->setContentsMargins(0, 0, 0, 0);
-    section.bodyLayout()->addWidget(body);
+    auto* form = sectionForm(section);
+    auto* body = form->parentWidget();
 
     name_ = new kit::KLineEdit(body);
     name_->setObjectName(QStringLiteral("assetsNameField"));
-    form->addRow(tr("Name"), name_);
+    name_->setAccessibleName(tr("Name"));
+    form->addRow(formLabel(tr("Name"), body),
+                 withError(name_, nameError_, QStringLiteral("compositionSettingsNameError")));
     connect(name_, &QLineEdit::textChanged, this, [this](const QString&) { refresh(); });
 
     preset_ = new kit::KDropdown(body);
     preset_->setObjectName(QStringLiteral("compositionSettingsPreset"));
     preset_->setAccessibleName(tr("Preset"));
-    savePreset_ = new kit::KIconButton(body);
-    savePreset_->setObjectName(QStringLiteral("compositionSettingsSavePreset"));
-    savePreset_->setIcon(kit::icon(kit::IconId::Add, kit::IconRole::Chrome));
-    savePreset_->setToolTip(tr("Save these settings as a preset"));
-    savePreset_->setAccessibleName(tr("Save Preset"));
-    renamePreset_ = new kit::KIconButton(body);
-    renamePreset_->setObjectName(QStringLiteral("compositionSettingsRenamePreset"));
-    renamePreset_->setIcon(kit::icon(kit::IconId::Settings, kit::IconRole::Chrome));
-    renamePreset_->setToolTip(tr("Rename the selected preset"));
-    renamePreset_->setAccessibleName(tr("Rename Preset"));
-    deletePreset_ = new kit::KIconButton(body);
-    deletePreset_->setObjectName(QStringLiteral("compositionSettingsDeletePreset"));
-    deletePreset_->setIcon(kit::icon(kit::IconId::Delete, kit::IconRole::Chrome));
-    deletePreset_->setToolTip(tr("Delete the selected preset"));
-    deletePreset_->setAccessibleName(tr("Delete Preset"));
-    form->addRow(tr("Preset"),
-                 row(body, {preset_, savePreset_, renamePreset_, deletePreset_}, preset_));
+    const auto presetButton = [body](const char* objectName, const kit::IconId icon,
+                                     const QString& tip) {
+        auto* button = new kit::KIconButton(body);
+        button->setObjectName(QString::fromLatin1(objectName));
+        button->setIcon(kit::icon(icon, kit::IconRole::Chrome));
+        button->setToolTip(tip);
+        button->setAccessibleName(tip);
+        return button;
+    };
+    savePreset_ =
+        presetButton("compositionSettingsSavePreset", kit::IconId::Add, tr("Save as preset…"));
+    renamePreset_ =
+        presetButton("compositionSettingsRenamePreset", kit::IconId::Rename, tr("Rename preset…"));
+    deletePreset_ =
+        presetButton("compositionSettingsDeletePreset", kit::IconId::Delete, tr("Delete preset"));
+    form->addRow(formLabel(tr("Preset"), body),
+                 withError(row(body, {preset_, savePreset_, renamePreset_, deletePreset_}, preset_),
+                           presetError_, QStringLiteral("compositionSettingsPresetError")));
+    summary_ = new kit::KLabel(QString{}, body, kit::TypeRole::UiSmall);
+    summary_->setObjectName(QStringLiteral("compositionSettingsSummary"));
+    {
+        QPalette palette = summary_->palette();
+        palette.setColor(QPalette::WindowText, kit::color(kit::Color::Muted));
+        summary_->setPalette(palette);
+    }
+    auto* summarySpacer = formLabel(QString{}, body);
+    summarySpacer->setMinimumHeight(0);
+    form->addRow(summarySpacer, summary_);
     connect(preset_, &kit::KDropdown::currentIndexChanged, this, [this](int) {
+        showPresetRefusal({});
         if (!updating_)
             applySelectedPreset();
     });
     connect(savePreset_, &QAbstractButton::clicked, this, [this] {
         bool accepted = false;
-        const auto name = QInputDialog::getText(this, tr("Save Preset"), tr("Preset name"),
+        const auto name = QInputDialog::getText(this, tr("Save as Preset"), tr("Preset name"),
                                                 QLineEdit::Normal, name_->text(), &accepted);
-        if (!accepted)
-            return;
-        if (const auto refused = savePreset(name)) {
-            error_->setText(*refused);
-            error_->show();
-        }
+        if (accepted)
+            showPresetRefusal(savePreset(name).value_or(QString{}));
     });
     connect(renamePreset_, &QAbstractButton::clicked, this, [this] {
         bool accepted = false;
         const auto name =
             QInputDialog::getText(this, tr("Rename Preset"), tr("Preset name"), QLineEdit::Normal,
                                   preset_->currentText(), &accepted);
-        if (!accepted)
-            return;
-        if (const auto refused = renameSelectedPreset(name)) {
-            error_->setText(*refused);
-            error_->show();
-        }
+        if (accepted)
+            showPresetRefusal(renameSelectedPreset(name).value_or(QString{}));
     });
     connect(deletePreset_, &QAbstractButton::clicked, this,
-            [this] { (void)deleteSelectedPreset(); });
+            [this] { showPresetRefusal(deleteSelectedPreset().value_or(QString{})); });
 
     const auto dimension = [body](const QString& name, const QString& accessible) {
         auto* field = new kit::KValueField(body);
@@ -415,7 +502,9 @@ void CompositionSettingsDialog::buildBasic(kit::KSection& section) {
     lockAspect_->setToolTip(tr("Lock the frame aspect ratio"));
     lockAspect_->setAccessibleName(tr("Lock Aspect Ratio"));
     auto* times = new kit::KLabel(QStringLiteral("×"), body);
-    form->addRow(tr("Size"), row(body, {width_, times, height_, lockAspect_}));
+    form->addRow(formLabel(tr("Size"), body),
+                 withError(row(body, {width_, times, height_, lockAspect_}), sizeError_,
+                           QStringLiteral("compositionSettingsSizeError")));
     connect(lockAspect_, &QAbstractButton::toggled, this, [this](const bool locked) {
         if (locked && width_->value() > 0.0)
             aspectLockRatio_ = height_->value() / width_->value();
@@ -442,31 +531,36 @@ void CompositionSettingsDialog::buildBasic(kit::KSection& section) {
         pixelAspect_->addItem(
             tr(choice.label),
             QStringLiteral("%1:%2").arg(choice.numerator).arg(choice.denominator));
-    form->addRow(tr("Pixel Aspect Ratio"), pixelAspect_);
+    form->addRow(formLabel(tr("Pixel Aspect Ratio"), body), pixelAspect_);
     connect(pixelAspect_, &kit::KDropdown::currentIndexChanged, this, [this](int) { refresh(); });
 
-    frameRate_ = new kit::KLineEdit(body);
-    frameRate_->setObjectName(QStringLiteral("assetsFrameRateField"));
-    frameRate_->setPlaceholderText(tr("24, 29.97 or 30000/1001"));
+    // One frame-rate dropdown; the exact N/D field appears only for Custom.
     ratePresets_ = new kit::KDropdown(body);
     ratePresets_->setObjectName(QStringLiteral("assetsFrameRatePresetDropdown"));
-    ratePresets_->addItem(tr("Custom"), QString{});
+    ratePresets_->setAccessibleName(tr("Frame Rate"));
     for (const auto& choice : kRates)
-        ratePresets_->addItem(QString::fromLatin1(choice.label), QString::fromLatin1(choice.rate));
+        ratePresets_->addItem(tr("%1 fps").arg(QString::fromLatin1(choice.label)),
+                              QString::fromLatin1(choice.rate));
+    ratePresets_->addItem(tr("Custom"), QString{});
+    frameRate_ = new kit::KLineEdit(body);
+    frameRate_->setObjectName(QStringLiteral("assetsFrameRateField"));
+    frameRate_->setAccessibleName(tr("Custom frame rate"));
+    frameRate_->setPlaceholderText(tr("Exact rate: 24, 29.97 or 30000/1001"));
+    frameRate_->hide();
+    form->addRow(formLabel(tr("Frame Rate"), body),
+                 withError(row(body, {ratePresets_, frameRate_}, frameRate_), rateError_,
+                           QStringLiteral("compositionSettingsRateError")));
     dropFrame_ = new kit::KCheckBox(body);
     dropFrame_->setObjectName(QStringLiteral("compositionSettingsDropFrame"));
     auto* dropFrameLabel = new kit::KLabel(tr("Drop-frame labels (29.97 and 59.94 fps)"), body);
     dropFrame_->setAccessibleName(dropFrameLabel->text());
     dropFrame_->setToolTip(tr("Label time with SMPTE drop-frame timecode; frames are unchanged"));
     dropFrameLabel->setToolTip(dropFrame_->toolTip());
-    form->addRow(tr("Frame Rate"), row(body, {frameRate_, ratePresets_}, frameRate_));
-    form->addRow(tr("Timecode"), row(body, {dropFrame_, dropFrameLabel}));
-    connect(frameRate_, &QLineEdit::textChanged, this, [this](const QString& text) {
-        {
-            const QSignalBlocker blocker(ratePresets_);
-            const auto selected = ratePresets_->findData(text);
-            ratePresets_->setCurrentIndex(selected < 0 ? 0 : selected);
-        }
+    form->addRow(formLabel(tr("Timecode"), body), row(body, {dropFrame_, dropFrameLabel}));
+    connect(frameRate_, &QLineEdit::textChanged, this, [this](const QString&) {
+        // Typing in the Custom field stays Custom; a rate set any other way shows its preset.
+        if (!frameRate_->hasFocus())
+            syncRatePreset();
         if (!updating_) {
             // Frames and timecode keep the frame count shown; seconds keep the exact time.
             if (unit() != TimeUnit::Seconds) {
@@ -483,8 +577,11 @@ void CompositionSettingsDialog::buildBasic(kit::KSection& section) {
     });
     connect(ratePresets_, &kit::KDropdown::currentIndexChanged, this, [this](int) {
         const auto preset = ratePresets_->currentData().toString();
+        frameRate_->setVisible(preset.isEmpty());
         if (!preset.isEmpty())
             frameRate_->setText(preset);
+        else
+            frameRate_->setFocus();
     });
     connect(dropFrame_, &QAbstractButton::toggled, this, [this](bool) {
         if (!updating_ && unit() == TimeUnit::Timecode) {
@@ -503,10 +600,15 @@ void CompositionSettingsDialog::buildBasic(kit::KSection& section) {
     startField_ = new kit::KLineEdit(body);
     startField_->setObjectName(QStringLiteral("compositionSettingsStart"));
     startField_->setAccessibleName(tr("Start timecode"));
-    form->addRow(tr("Start"), row(body, {startField_}, startField_));
+    form->addRow(
+        formLabel(tr("Start"), body),
+        withError(startField_, startError_, QStringLiteral("compositionSettingsStartError")));
     durationField_ = new kit::KLineEdit(body);
     durationField_->setObjectName(QStringLiteral("assetsDurationField"));
-    form->addRow(tr("Duration"), row(body, {durationField_, unit_}, durationField_));
+    durationField_->setAccessibleName(tr("Duration"));
+    form->addRow(formLabel(tr("Duration"), body),
+                 withError(row(body, {durationField_, unit_}, durationField_), durationError_,
+                           QStringLiteral("compositionSettingsDurationError")));
     connect(unit_, &kit::KDropdown::currentIndexChanged, this, [this](int) {
         const auto placeholder = unit() == TimeUnit::Frames    ? tr("Whole frames")
                                  : unit() == TimeUnit::Seconds ? tr("Seconds or an exact fraction")
@@ -538,8 +640,13 @@ void CompositionSettingsDialog::buildBasic(kit::KSection& section) {
     background_ = new kit::KColorChip(body);
     background_->setObjectName(QStringLiteral("newCompositionBackgroundColor"));
     background_->setAccessibleName(tr("Background Colour"));
-    form->addRow(tr("Background Colour"), background_);
+    backgroundHex_ = new kit::KLabel(QString{}, body, kit::TypeRole::Value);
+    backgroundHex_->setObjectName(QStringLiteral("compositionSettingsBackgroundHex"));
+    backgroundHex_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    form->addRow(formLabel(tr("Background Colour"), body),
+                 row(body, {background_, backgroundHex_}));
     connect(background_, &kit::KColorChip::colorChanged, this, [this](const kit::KColor& color) {
+        backgroundHex_->setText(color.toHex(false).toUpper());
         if (updating_)
             return;
         initial_.background = {static_cast<double>(color.red), static_cast<double>(color.green),
@@ -549,42 +656,21 @@ void CompositionSettingsDialog::buildBasic(kit::KSection& section) {
 }
 
 void CompositionSettingsDialog::buildAdvanced(kit::KSection& section) {
-    auto* body = new QWidget(section.body());
-    auto* form = new QFormLayout(body);
-    form->setContentsMargins(0, 0, 0, 0);
-    section.bodyLayout()->addWidget(body);
+    auto* form = sectionForm(section);
+    auto* body = form->parentWidget();
 
     workingSpace_ = new kit::KDropdown(body);
     workingSpace_->setObjectName(QStringLiteral("compositionSettingsWorkingSpace"));
     workingSpace_->setAccessibleName(tr("Working colour space"));
-    form->addRow(tr("Working Colour Space"), workingSpace_);
+    form->addRow(formLabel(tr("Working Colour Space"), body), workingSpace_);
 
-    // The 3 x 3 resize anchor: where existing layers stay when the size changes.
-    auto* grid = new QWidget(body);
-    auto* gridLayout = new QGridLayout(grid);
-    gridLayout->setContentsMargins(0, 0, 0, 0);
-    gridLayout->setSpacing(kit::px(kit::Spacing::XXS));
-    anchorGroup_ = new QButtonGroup(this);
-    anchorGroup_->setExclusive(true);
-    const std::array<const char*, 9> names{"Top Left",    "Top",    "Top Right",
-                                           "Left",        "Centre", "Right",
-                                           "Bottom Left", "Bottom", "Bottom Right"};
-    for (int cell = 0; cell < 9; ++cell) {
-        auto* toggle = new kit::KIconToggle(kit::IconId::Handle, grid);
-        toggle->setObjectName(QStringLiteral("compositionSettingsAnchor%1").arg(cell));
-        toggle->setCheckable(true);
-        toggle->setToolTip(
-            tr("Keep existing layers anchored: %1").arg(tr(names[static_cast<std::size_t>(cell)])));
-        toggle->setAccessibleName(tr(names[static_cast<std::size_t>(cell)]));
-        anchorGroup_->addButton(toggle, cell);
-        gridLayout->addWidget(toggle, cell / 3, cell % 3);
-    }
-    anchorGroup_->button(4)->setChecked(true);
-    if (mode_ == Mode::Create) {
-        grid->setEnabled(false);
-        grid->setToolTip(tr("A new composition has no layers to anchor"));
-    }
-    form->addRow(tr("Resize Anchor"), row(body, {grid}));
+    anchorGrid_ = new ResizeAnchorGrid(body);
+    anchorGrid_->setAccessibleName(tr("Resize Anchor"));
+    anchorGrid_->setToolTip(ResizeAnchorGrid::anchorName(4));
+    auto* anchorLabel = formLabel(tr("Resize Anchor"), body);
+    form->addRow(anchorLabel, row(body, {anchorGrid_}));
+    // A new composition has no layers to anchor, so the row exists only in settings mode.
+    form->setRowVisible(anchorLabel, mode_ == Mode::Edit);
 
     const auto percent = [body](const QString& name, const QString& accessible) {
         auto* field = new kit::KValueField(body);
@@ -598,10 +684,21 @@ void CompositionSettingsDialog::buildAdvanced(kit::KSection& section) {
     };
     actionSafe_ = percent(QStringLiteral("compositionSettingsActionSafe"), tr("Action safe"));
     titleSafe_ = percent(QStringLiteral("compositionSettingsTitleSafe"), tr("Title safe"));
-    form->addRow(tr("Action Safe"), row(body, {actionSafe_}));
-    form->addRow(tr("Title Safe"), row(body, {titleSafe_}));
+    form->addRow(formLabel(tr("Action Safe"), body), row(body, {actionSafe_}));
+    form->addRow(formLabel(tr("Title Safe"), body),
+                 withError(row(body, {titleSafe_}), safeError_,
+                           QStringLiteral("compositionSettingsSafeError")));
     connect(actionSafe_, &kit::KValueField::valueChanged, this, [this](double) { refresh(); });
     connect(titleSafe_, &kit::KValueField::valueChanged, this, [this](double) { refresh(); });
+}
+
+void CompositionSettingsDialog::syncRatePreset() {
+    const auto index = ratePresets_->findData(frameRate_->text());
+    {
+        const QSignalBlocker blocker(ratePresets_);
+        ratePresets_->setCurrentIndex(index < 0 ? ratePresets_->count() - 1 : index);
+    }
+    frameRate_->setVisible(index < 0);
 }
 
 std::optional<document::FrameRate> CompositionSettingsDialog::rate() const {
@@ -749,42 +846,92 @@ std::optional<commands::CompositionSettings> CompositionSettingsDialog::settings
 }
 
 commands::ResizeAnchor CompositionSettingsDialog::anchor() const {
-    const auto cell = std::max(0, anchorGroup_->checkedId());
+    const auto cell = std::clamp(anchorGrid_->selectedPoint(), 0, 8);
     return {static_cast<std::uint8_t>(cell % 3), static_cast<std::uint8_t>(cell / 3)};
 }
 
-QString CompositionSettingsDialog::issue() const {
+QString CompositionSettingsDialog::issue() const { return currentIssue().reason; }
+
+CompositionSettingsDialog::Issue CompositionSettingsDialog::currentIssue() const {
     if (!document::isValidHumanFacingName(name_->text().toUtf8().toStdString()))
-        return tr("Enter a non-empty name up to 128 UTF-8 bytes.");
+        return {Field::Name, tr("Enter a non-empty name up to 128 UTF-8 bytes.")};
     const auto frameRate = rate();
     if (!frameRate)
-        return positiveSecondsSyntax(frameRate_->text())
-                   ? tr("Frame rate exceeds the representable rational range.")
-                   : tr("Enter a positive frame rate as an integer, decimal, or N/D.");
+        return {Field::Rate,
+                positiveSecondsSyntax(frameRate_->text())
+                    ? tr("Frame rate exceeds the representable rational range.")
+                    : tr("Enter a positive frame rate as an integer, decimal, or N/D.")};
     const auto aspect = pixelAspect();
     if (!aspect || !document::CompositionFormat::create(
                        static_cast<std::uint32_t>(width_->value()),
                        static_cast<std::uint32_t>(height_->value()), *aspect, *frameRate))
-        return tr("Width × height must be at most 4294967296 pixels.");
+        return {Field::Size, tr("Width × height must be at most 4294967296 pixels.")};
+    if (!start_)
+        return {Field::Start, unit() == TimeUnit::Timecode
+                                  ? tr("Enter the start as HH:MM:SS:FF at this frame rate.")
+                                  : tr("Enter a start of zero or more in the selected unit.")};
     if (unit() != TimeUnit::Seconds && duration_ && durationField_->text().isEmpty())
-        return tr("Duration cannot be shown as a whole frame count; switch to Seconds.");
+        return {Field::Duration,
+                tr("Duration cannot be shown as a whole frame count; switch to Seconds.")};
     if (!duration_) {
         const bool overflow = unit() == TimeUnit::Frames
                                   ? positiveDigitText(durationField_->text().toUtf8().toStdString())
                                   : positiveSecondsSyntax(durationField_->text());
-        return overflow && unit() != TimeUnit::Timecode
-                   ? tr("Duration exceeds the signed rational-time range at this rate.")
-               : unit() == TimeUnit::Timecode
-                   ? tr("Enter the duration as HH:MM:SS:FF at this frame rate.")
-                   : tr("Enter a positive duration in the selected unit.");
+        return {Field::Duration,
+                overflow && unit() != TimeUnit::Timecode
+                    ? tr("Duration exceeds the signed rational-time range at this rate.")
+                : unit() == TimeUnit::Timecode
+                    ? tr("Enter the duration as HH:MM:SS:FF at this frame rate.")
+                    : tr("Enter a positive duration in the selected unit.")};
     }
-    if (!start_)
-        return unit() == TimeUnit::Timecode
-                   ? tr("Enter the start as HH:MM:SS:FF at this frame rate.")
-                   : tr("Enter a start of zero or more in the selected unit.");
     if (titleSafe_->value() > actionSafe_->value())
-        return tr("Title safe must be inside action safe.");
+        return {Field::Safe, tr("Title safe must be inside action safe.")};
     return {};
+}
+
+QString CompositionSettingsDialog::summary() const {
+    QStringList parts;
+    const auto width = static_cast<std::uint64_t>(width_->value());
+    const auto height = static_cast<std::uint64_t>(height_->value());
+    parts << QStringLiteral("%1 × %2").arg(width).arg(height);
+    const auto aspect = pixelAspect();
+    if (aspect && width > 0 && height > 0) {
+        // The frame aspect as displayed: storage size times the pixel aspect, reduced.
+        const auto across = width * aspect->numerator();
+        const auto down = height * aspect->denominator();
+        const auto divisor = std::gcd(across, down);
+        const auto a = across / divisor;
+        const auto b = down / divisor;
+        parts << (a <= 32 && b <= 32
+                      ? QStringLiteral("%1:%2").arg(a).arg(b)
+                      : QStringLiteral("%1:1").arg(trimmedNumber(
+                            static_cast<double>(across) / static_cast<double>(down), 2)));
+        parts << (aspect->numerator() == aspect->denominator()
+                      ? tr("Square pixels")
+                      : tr("%1 pixel aspect")
+                            .arg(trimmedNumber(static_cast<double>(aspect->numerator()) /
+                                                   static_cast<double>(aspect->denominator()),
+                                               2)));
+    }
+    const auto frameRate = rate();
+    if (frameRate) {
+        const auto fps = static_cast<double>(frameRate->numerator()) /
+                         static_cast<double>(frameRate->denominator());
+        parts << tr("%1 fps").arg(trimmedNumber(fps, 3)) +
+                     (dropFrame_->isChecked() && document::hasDropFrameTimecode(*frameRate)
+                          ? tr(" drop-frame")
+                          : QString{});
+        if (duration_) {
+            const auto seconds = static_cast<double>(duration_->numerator()) /
+                                 static_cast<double>(duration_->denominator());
+            const auto frames = frameCountForDuration(*duration_, *frameRate);
+            parts << (frames ? tr("%1 s (%2 frames)")
+                                   .arg(trimmedNumber(seconds, 3))
+                                   .arg(static_cast<qlonglong>(*frames))
+                             : tr("%1 s").arg(trimmedNumber(seconds, 3)));
+        }
+    }
+    return parts.join(QStringLiteral(" · "));
 }
 
 void CompositionSettingsDialog::refresh() {
@@ -792,10 +939,24 @@ void CompositionSettingsDialog::refresh() {
         return;
     const auto rateValue = rate();
     dropFrame_->setEnabled(rateValue && document::hasDropFrameTimecode(*rateValue));
-    const auto reason = issue();
-    error_->setText(reason);
-    error_->setVisible(!reason.isEmpty());
-    buttons_->button(QDialogButtonBox::Ok)->setEnabled(reason.isEmpty());
+    const auto found = currentIssue();
+    const std::array<std::pair<Field, QLabel*>, 6> errors{{{Field::Name, nameError_},
+                                                           {Field::Size, sizeError_},
+                                                           {Field::Rate, rateError_},
+                                                           {Field::Start, startError_},
+                                                           {Field::Duration, durationError_},
+                                                           {Field::Safe, safeError_}}};
+    for (const auto& [field, label] : errors) {
+        label->setText(field == found.field ? found.reason : QString{});
+        label->setVisible(field == found.field);
+    }
+    // A reason inside the closed Advanced section opens it, so the reason is never out of sight.
+    if (found.field == Field::Safe && advanced_ != nullptr && advanced_->isCollapsed())
+        advanced_->setCollapsed(false);
+    if (found.field == Field::Rate && frameRate_->isHidden())
+        syncRatePreset();
+    buttons_->button(QDialogButtonBox::Ok)->setEnabled(found.reason.isEmpty());
+    summary_->setText(summary());
     selectMatchingPreset();
 }
 
@@ -859,10 +1020,12 @@ void CompositionSettingsDialog::applySettings(const commands::CompositionSetting
     duration_ = settings.duration;
     start_ = settings.timecode.start;
     initial_.background = settings.background;
-    background_->setColor({static_cast<float>(settings.background.red),
-                           static_cast<float>(settings.background.green),
-                           static_cast<float>(settings.background.blue),
-                           static_cast<float>(settings.background.alpha)});
+    const kit::KColor background{static_cast<float>(settings.background.red),
+                                 static_cast<float>(settings.background.green),
+                                 static_cast<float>(settings.background.blue),
+                                 static_cast<float>(settings.background.alpha)};
+    background_->setColor(background);
+    backgroundHex_->setText(background.toHex(false).toUpper());
     actionSafe_->setValue(settings.safeAreas.action * 100.0);
     titleSafe_->setValue(settings.safeAreas.title * 100.0);
     initial_.safeAreas = settings.safeAreas;

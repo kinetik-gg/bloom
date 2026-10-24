@@ -59,6 +59,7 @@ enum class IconId : std::uint8_t {
     Select,
     Settings,
     Delete,
+    Rename,
     // Status.
     Check,
     Warning,

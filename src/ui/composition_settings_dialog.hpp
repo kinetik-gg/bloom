@@ -16,13 +16,14 @@
 #include <optional>
 #include <vector>
 
-class QButtonGroup;
 class QDialogButtonBox;
+class QFormLayout;
 class QLabel;
 class QLineEdit;
 
 namespace bloom::ui {
 namespace kit {
+class KAnchorGrid;
 class KCheckBox;
 class KColorChip;
 class KDropdown;
@@ -48,6 +49,9 @@ class CompositionSettingsDialog final : public QDialog {
     [[nodiscard]] commands::ResizeAnchor anchor() const;
     // The inline reason the dialog cannot be accepted, empty when it can.
     [[nodiscard]] QString issue() const;
+    // The one-line summary under the preset, e.g. "1920 × 1080 · 16:9 · Square pixels · 24 fps ·
+    // 10 s (240 frames)"; parts that are currently invalid are left out.
+    [[nodiscard]] QString summary() const;
 
     // Preset management, the seams the preset buttons use (and tests drive without a prompt).
     // Each returns a plain reason when refused.
@@ -59,6 +63,17 @@ class CompositionSettingsDialog final : public QDialog {
     }
 
   private:
+    // The field an inline reason belongs under.
+    enum class Field : std::uint8_t { None, Name, Size, Rate, Start, Duration, Safe };
+    struct Issue final {
+        Field field = Field::None;
+        QString reason;
+    };
+    [[nodiscard]] Issue currentIssue() const;
+    [[nodiscard]] QLabel* formLabel(const QString& text, QWidget* parent);
+    [[nodiscard]] QWidget* withError(QWidget* field, QLabel*& error, const QString& objectName);
+    void syncRatePreset();
+    void showPresetRefusal(const QString& reason);
     void buildBasic(kit::KSection& section);
     void buildAdvanced(kit::KSection& section);
     void rebuildPresetItems();
@@ -102,10 +117,19 @@ class CompositionSettingsDialog final : public QDialog {
     kit::KColorChip* background_ = nullptr;
     kit::KSection* advanced_ = nullptr;
     kit::KDropdown* workingSpace_ = nullptr;
-    QButtonGroup* anchorGroup_ = nullptr;
+    kit::KAnchorGrid* anchorGrid_ = nullptr;
     kit::KValueField* actionSafe_ = nullptr;
     kit::KValueField* titleSafe_ = nullptr;
-    QLabel* error_ = nullptr;
+    QLabel* summary_ = nullptr;
+    QLabel* backgroundHex_ = nullptr;
+    std::vector<QLabel*> formLabels_;
+    QLabel* nameError_ = nullptr;
+    QLabel* presetError_ = nullptr;
+    QLabel* sizeError_ = nullptr;
+    QLabel* rateError_ = nullptr;
+    QLabel* startError_ = nullptr;
+    QLabel* durationError_ = nullptr;
+    QLabel* safeError_ = nullptr;
     QDialogButtonBox* buttons_ = nullptr;
 };
 

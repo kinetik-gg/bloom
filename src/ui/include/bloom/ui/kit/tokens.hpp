@@ -188,6 +188,7 @@ enum class Size : int {
     MultilineHeight = 78,
     PropertyLabelCompact = 64,
     DialogTextWidth = 520,
+    DialogWideWidth = 700,
     DiagnosticHeight = 140,
     HeaderRow = 32,
     FooterRow = 32,

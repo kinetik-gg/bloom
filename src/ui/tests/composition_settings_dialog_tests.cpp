@@ -15,11 +15,15 @@
 #include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/composition_presets.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/editor_area.hpp>
+#include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/dropdown_popup.hpp>
 #include <bloom/ui/kit/section.hpp>
+#include <bloom/ui/kit/surfaces.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
 
 #include <QAbstractButton>
@@ -27,11 +31,13 @@
 #include <QDialog>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
 #include <QPainter>
+#include <QProcess>
 #include <QPushButton>
 #include <QSettings>
 #include <QTemporaryDir>
@@ -80,6 +86,12 @@ void expect(const bool condition, const std::string& message,
 
 template <typename T> T* child(QWidget& parent, const char* name) {
     return parent.findChild<T*>(QString::fromLatin1(name));
+}
+
+// KAnchorGrid has no Q_OBJECT, so it is found as a widget and cast.
+[[nodiscard]] ui::kit::KAnchorGrid* anchorGrid(QWidget& parent) {
+    return dynamic_cast<ui::kit::KAnchorGrid*>(
+        parent.findChild<QWidget*>(QStringLiteral("compositionSettingsAnchor")));
 }
 
 [[nodiscard]] int findText(const ui::kit::KDropdown& dropdown, const QString& text) {
@@ -180,9 +192,12 @@ void testDialogPresetsAndValidation() {
     auto* width = child<ui::kit::KValueField>(dialog, "assetsWidthField");
     auto* height = child<ui::kit::KValueField>(dialog, "assetsHeightField");
     auto* ok = child<QPushButton>(dialog, "assetsDialogOk");
-    auto* error = child<QLabel>(dialog, "newCompositionErrorLabel");
-    expect(preset && width && height && ok && error, "the dialog controls exist");
-    if (!preset || !width || !height || !ok || !error)
+    auto* nameError = child<QLabel>(dialog, "compositionSettingsNameError");
+    auto* rateError = child<QLabel>(dialog, "compositionSettingsRateError");
+    auto* safeError = child<QLabel>(dialog, "compositionSettingsSafeError");
+    expect(preset && width && height && ok && nameError && rateError && safeError,
+           "the dialog controls exist");
+    if (!preset || !width || !height || !ok || !nameError || !rateError || !safeError)
         return;
     expect(preset->currentText() == QStringLiteral("HD 1080p"), "the preset shows HD 1080p");
     preset->setCurrentIndex(findText(*preset, QStringLiteral("UHD 4K")));
@@ -201,14 +216,23 @@ void testDialogPresetsAndValidation() {
 
     auto* name = child<QLineEdit>(dialog, "assetsNameField");
     name->setText(QString{});
-    expect(!ok->isEnabled() && !error->isHidden() && error->text().contains(QStringLiteral("name")),
-           "an empty name is refused inline");
+    expect(!ok->isEnabled() && !nameError->isHidden() &&
+               nameError->text().contains(QStringLiteral("name")) && rateError->isHidden(),
+           "an empty name is refused under the name field only");
     name->setText(QStringLiteral("Main"));
     auto* rateField = child<QLineEdit>(dialog, "assetsFrameRateField");
+    auto* ratePresets = child<ui::kit::KDropdown>(dialog, "assetsFrameRatePresetDropdown");
+    expect(ratePresets->currentText() == QStringLiteral("24 fps") && rateField->isHidden(),
+           "a preset rate shows one dropdown and no custom field");
     rateField->setText(QStringLiteral("abc"));
-    expect(!ok->isEnabled() && error->text().contains(QStringLiteral("frame rate")),
-           "an invalid frame rate is refused inline");
+    expect(!ok->isEnabled() && !rateError->isHidden() &&
+               rateError->text().contains(QStringLiteral("frame rate")) && nameError->isHidden(),
+           "an invalid frame rate is refused under the frame rate");
+    expect(ratePresets->currentText() == QStringLiteral("Custom") && !rateField->isHidden(),
+           "a non-preset rate shows Custom with the exact field");
     rateField->setText(QStringLiteral("30000/1001"));
+    expect(ratePresets->currentText() == QStringLiteral("29.97 fps") && rateField->isHidden(),
+           "30000/1001 shows the 29.97 preset");
     auto* drop = child<QAbstractButton>(dialog, "compositionSettingsDropFrame");
     expect(drop && drop->isEnabled(), "drop-frame is offered at 29.97");
     drop->setChecked(true);
@@ -231,8 +255,9 @@ void testDialogPresetsAndValidation() {
            "at 25 fps drop-frame is unavailable and not authored");
     auto* titleSafe = child<ui::kit::KValueField>(dialog, "compositionSettingsTitleSafe");
     titleSafe->setValue(95);
-    expect(!ok->isEnabled() && error->text().contains(QStringLiteral("Title safe")),
-           "title safe outside action safe is refused inline");
+    expect(!ok->isEnabled() && safeError->text().contains(QStringLiteral("Title safe")) &&
+               !child<ui::kit::KSection>(dialog, "compositionSettingsAdvanced")->isCollapsed(),
+           "title safe outside action safe is refused under it, opening Advanced");
     titleSafe->setValue(80);
     expect(ok->isEnabled(), "valid settings enable Add");
 
@@ -299,7 +324,7 @@ void testCreateAndSettingsCommands() {
             if (auto* dialog = dynamic_cast<CompositionSettingsDialog*>(widget);
                 dialog && dialog->isVisible()) {
                 child<ui::kit::KValueField>(*dialog, "assetsWidthField")->setValue(1200);
-                child<QAbstractButton>(*dialog, "compositionSettingsAnchor0")->setChecked(true);
+                anchorGrid(*dialog)->choosePoint(0);
                 child<QLineEdit>(*dialog, "assetsFrameRateField")->setText(QStringLiteral("30"));
                 child<QPushButton>(*dialog, "assetsDialogOk")->click();
             }
@@ -315,18 +340,94 @@ void testCreateAndSettingsCommands() {
            "one undo restores the settings");
 }
 
-// Grabs the dialog and any open dropdown popup into one review image.
-void screenshot(QDialog& dialog, const QString& path, ui::kit::KDropdown* open = nullptr) {
-    settle(400);
-    QImage image = dialog.grab().toImage();
-    // A headless Weston has no input seat, so it dismisses an xdg_popup at once; the popup widget
-    // is laid out by showPopup() all the same and is rendered here at its placed geometry.
+void testDialogPresentation() {
+    CompositionSettingsDialog create(CompositionSettingsDialog::Mode::Create, baseSettings(),
+                                     spaces());
+    CompositionSettingsDialog edit(CompositionSettingsDialog::Mode::Edit, baseSettings(), spaces());
+    expect(create.windowTitle() == QStringLiteral("New Composition") &&
+               edit.windowTitle() == QStringLiteral("Composition Settings"),
+           "the window title names the mode");
+    expect(create.minimumWidth() == ui::kit::px(ui::kit::Size::DialogWideWidth),
+           "the dialog is the wide dialog width");
+    expect(create.summary() ==
+               QStringLiteral("1920 × 1080 · 16:9 · Square pixels · 24 fps · 10 s (240 frames)"),
+           "the summary reads like After Effects'");
+    expect(child<QLabel>(create, "compositionSettingsSummary")->text() == create.summary(),
+           "the summary is shown under the preset");
+    expect(child<QLabel>(create, "compositionSettingsBackgroundHex")->text() ==
+               QStringLiteral("#000000"),
+           "the background shows its hex value beside the chip");
+    expect(child<QWidget>(create, "compositionSettingsSavePreset")->toolTip() ==
+                   QStringLiteral("Save as preset…") &&
+               child<QWidget>(create, "compositionSettingsRenamePreset")->toolTip() ==
+                   QStringLiteral("Rename preset…") &&
+               child<QWidget>(create, "compositionSettingsDeletePreset")->toolTip() ==
+                   QStringLiteral("Delete preset"),
+           "the preset buttons say what they do");
+    auto* grid = anchorGrid(edit);
+    expect(grid != nullptr && grid->selectedPoint() == 4, "the resize anchor is the kit grid");
+    edit.show();
+    child<ui::kit::KSection>(edit, "compositionSettingsAdvanced")->setCollapsed(false);
+    settle(50);
+    expect(child<QWidget>(edit, "assetsNameField")->mapTo(&edit, QPoint{}).x() ==
+               child<QWidget>(edit, "compositionSettingsWorkingSpace")->mapTo(&edit, QPoint{}).x(),
+           "Basic and Advanced share one label column");
+    expect(grid->isVisible(), "settings mode shows the resize anchor");
+    edit.hide();
+    create.show();
+    child<ui::kit::KSection>(create, "compositionSettingsAdvanced")->setCollapsed(false);
+    settle(50);
+    expect(!child<QWidget>(create, "compositionSettingsAnchor")->isVisible(),
+           "create mode has no layers to anchor");
+    create.hide();
+}
+
+// The whole window, title bar included: BLOOM_SCREENSHOT_COMMAND captures the compositor output to
+// the path it is given, and the window is cropped out of the plain background. Without it the
+// client area is grabbed. A headless Weston has no input seat, so it dismisses an xdg_popup at
+// once; an open dropdown's popup is laid out all the same and is drawn at its placed geometry.
+void screenshot(QWidget& window, const QString& path, ui::kit::KDropdown* open = nullptr) {
+    settle(600);
+    const auto client = window.grab().toImage();
+    QImage image = client;
+    QPoint clientOrigin;
+    const auto command = qEnvironmentVariable("BLOOM_SCREENSHOT_COMMAND");
+    if (!command.isEmpty()) {
+        const auto full = path + QStringLiteral(".output.png");
+        QImage output;
+        // A just-resized window may reach the compositor a frame late: capture until it has.
+        for (int attempt = 0; attempt < 5; ++attempt) {
+            if (attempt > 0)
+                settle(300);
+            if (QProcess::execute(command, {full}) != 0 || !output.load(full))
+                break;
+            const auto background = output.pixel(0, 0);
+            QRect box;
+            for (int y = 0; y < output.height(); ++y) {
+                const auto* line = reinterpret_cast<const QRgb*>(output.constScanLine(y));
+                for (int x = 0; x < output.width(); ++x)
+                    if ((line[x] & 0xFFFFFFU) != (background & 0xFFFFFFU))
+                        box |= QRect(x, y, 1, 1);
+            }
+            if (box.width() >= client.width() && box.height() >= client.height() &&
+                box.height() - client.height() < client.height() / 4) {
+                image = output.copy(box);
+                // Side and bottom decoration margins are equal; the title takes the rest.
+                const int side = (box.width() - client.width()) / 2;
+                clientOrigin = QPoint(side, box.height() - client.height() - side);
+                break;
+            }
+        }
+        const bool captured = image.size() != client.size();
+        expect(captured, "the window was captured with its title bar: " + path.toStdString());
+        if (captured)
+            QFile::remove(full); // a failed capture keeps the compositor output for diagnosis
+    }
     if (open != nullptr && open->popup() != nullptr) {
         const auto popup = open->popup()->grab().toImage();
-        // The popup sits under the field, offset by its shadow gutter; keep that offset.
         const auto below = QPoint(0, open->height());
-        const auto at =
-            open->mapTo(&dialog, below) + (open->popup()->pos() - open->mapToGlobal(below));
+        const auto at = clientOrigin + open->mapTo(&window, below) +
+                        (open->popup()->pos() - open->mapToGlobal(below));
         QImage combined(std::max(image.width(), at.x() + popup.width()),
                         std::max(image.height(), at.y() + popup.height()), QImage::Format_ARGB32);
         combined.fill(Qt::transparent);
@@ -342,7 +443,6 @@ void screenshot(QDialog& dialog, const QString& path, ui::kit::KDropdown* open =
 void writeScreenshots(const QString& directory) {
     QDir().mkpath(directory);
     auto settings = baseSettings();
-    settings.name = "Main";
     {
         CompositionSettingsDialog dialog(CompositionSettingsDialog::Mode::Create, settings,
                                          spaces());
@@ -356,21 +456,61 @@ void writeScreenshots(const QString& directory) {
         screenshot(dialog, directory + QStringLiteral("/composition-preset-dropdown.png"), preset);
         preset->hidePopup();
     }
+    settle(200);
     {
         auto edit = settings;
         edit.timecode = {core::RationalTime::fromInteger(3600), true};
         edit.format = document::CompositionFormat::create(
                           3840, 2160, core::PixelAspectRatio::square(), rate(30000, 1001))
                           .value_or(edit.format);
+        edit.background = {0.08, 0.1, 0.14, 1.0};
         CompositionSettingsDialog dialog(CompositionSettingsDialog::Mode::Edit, edit, spaces());
         dialog.show();
         child<ui::kit::KDropdown>(dialog, "assetsDurationUnitDropdown")->setCurrentIndex(2);
         screenshot(dialog, directory + QStringLiteral("/composition-settings.png"));
         child<ui::kit::KSection>(dialog, "compositionSettingsAdvanced")->setCollapsed(false);
+        anchorGrid(dialog)->choosePoint(0);
         screenshot(dialog, directory + QStringLiteral("/composition-advanced.png"));
         child<ui::kit::KSection>(dialog, "compositionSettingsAdvanced")->setCollapsed(true);
+        auto* rates = child<ui::kit::KDropdown>(dialog, "assetsFrameRatePresetDropdown");
+        rates->setCurrentIndex(rates->count() - 1);
         child<QLineEdit>(dialog, "assetsFrameRateField")->setText(QStringLiteral("0"));
         screenshot(dialog, directory + QStringLiteral("/composition-validation-error.png"));
+    }
+    settle(200);
+    {
+        // The wider dialog with Advanced open, resized past its minimum.
+        CompositionSettingsDialog dialog(CompositionSettingsDialog::Mode::Edit, settings, spaces());
+        dialog.show();
+        child<ui::kit::KSection>(dialog, "compositionSettingsAdvanced")->setCollapsed(false);
+        settle(200);
+        dialog.resize(ui::kit::px(ui::kit::Size::DialogWideWidth) + 200, dialog.height());
+        screenshot(dialog, directory + QStringLiteral("/composition-advanced-wide.png"));
+    }
+    settle(200);
+    {
+        // Properties > Transform with a Position Y longer than its compact cell (owner report).
+        auto project = document::makeNewProject("Properties", "Composition",
+                                                core::RationalTime::fromInteger(10));
+        const auto compositionId = project.initialCompositionId;
+        document::Document document(std::move(project.project));
+        commands::CommandStack stack(document);
+        ui::CompositionSession session(document, stack, compositionId);
+        expect(session.addSolidLayer(QStringLiteral("Solid"), {0.65, 0.06, 0.03, 1}),
+               "a solid to inspect");
+        expect(session.setSelectedPosition(960.0, 540.22), "position set");
+        ui::EditorRegistry registry;
+        (void)registry.registerEditor(
+            {"bloom.properties", "Properties",
+             [&session](QWidget* parent) { return new ui::PropertiesEditor(session, parent); }});
+        ui::EditorArea area(registry, "bloom.properties");
+        area.resize(360, 520);
+        area.show();
+        settle(400);
+        auto* y = area.findChild<ui::kit::KValueField*>(QStringLiteral("positionYEditor"));
+        expect(y != nullptr && y->paintedText().startsWith(QStringLiteral("540")),
+               "Position Y paints its leading digits");
+        screenshot(area, directory + QStringLiteral("/properties-transform-position.png"));
     }
 }
 
@@ -390,6 +530,7 @@ int main(int argc, char** argv) {
     testPresets();
     testDialogPresetsAndValidation();
     testCreateAndSettingsCommands();
+    testDialogPresentation();
     if (!screenshots.isEmpty())
         writeScreenshots(screenshots);
     if (failures == 0)

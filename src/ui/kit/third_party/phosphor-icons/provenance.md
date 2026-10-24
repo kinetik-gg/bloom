@@ -14,7 +14,7 @@ Reviewed: 2026-09-15
 | License | MIT |
 | License file | `LICENSE` (upstream `core-2.0.8/LICENSE`, byte-identical) |
 | License file SHA-256 | `b5b1f1da112d18ea2147decfd48ddc1bf2b5aeb6c265381579340e95b15a2bb2` |
-| Modified | Six pre-existing circle/magnet SVGs differ from the pinned archive; retained unchanged by this intake. All new MEDIA-1 and #364 glyphs are byte-identical. |
+| Modified | Six pre-existing circle/magnet SVGs differ from the pinned archive; retained unchanged by this intake. All new MEDIA-1, #364 and #376 glyphs are byte-identical. |
 
 MEDIA-1 downloaded the pinned codeload release archive on 2026-09-15 and computed its digest
 from the downloaded bytes. All twelve new files (folder-simple-plus, download-simple,
@@ -24,6 +24,9 @@ pre-existing exceptions are `bold/circle-bold.svg`, `bold/magnet-bold.svg`, `fil
 Issue #364 (Cryptomatte eyedropper) downloaded the same pinned archive on 2026-10-24, verified its
 SHA-256 above from the downloaded bytes, and extracted `eyedropper` in regular, fill and bold
 without modification.
+Issue #376 (Composition Settings preset rename) downloaded the same pinned archive on 2026-10-25,
+verified its SHA-256 above from the downloaded bytes, and extracted `pencil-simple` in regular,
+fill and bold from `assets/` without modification.
 The table and manifest below cover the actual complete checked-in subset, including those
 pre-existing exceptions; they do not claim that those exceptions are upstream-identical.
 
@@ -105,6 +108,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `regular/music-notes.svg` | `e40b3381d49b45275c8875d7e85f2332a11eb467f7ad9e7c9b4656c29a97e9e1` |
 | `regular/pause.svg` | `7a9a8fe311234262b85c6e332f77db4ba9a59b6ca4292c41d327977cf61a2fc9` |
 | `regular/pen-nib.svg` | `c13ebf51ee9d5abab7bd1fa4f8b1a6080e56720616d1d47b6e3d335fa135212f` |
+| `regular/pencil-simple.svg` | `999530da442f44d8cf0054364373d16150f3e082c2ac294a4988a9c3a4295c28` |
 | `regular/play.svg` | `885b3ed2095889c4ff063dac35dc424cb9f6c00273ab44e2f90dc9dadbee661a` |
 | `regular/plus.svg` | `d688feb9dd2e41c1721d6906a05a2a42e18cd774762fe706d72b2bdfd91cddc4` |
 | `regular/rectangle.svg` | `0c0d719ced81064b5a466d2dcf39a09077d39309773504d0bdd02b2fdc9a4590` |
@@ -173,6 +177,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `fill/music-notes-fill.svg` | `d8b530db5c510539e8235a5e80d7f984504f7b5ae24408d080a8468ae12e29dc` |
 | `fill/pause-fill.svg` | `156d3cdfa5cea803caec50b35f49bc635070c8bd84e7fe78df94b025017ccee1` |
 | `fill/pen-nib-fill.svg` | `2f8afef215a9d8148f3197d5a703f0f42aa536dccb395b95b4c7fe5b62873b15` |
+| `fill/pencil-simple-fill.svg` | `b78e7b71cb19d43e235983a883d50ab78cf9227f9864106e1aa4f366ee317aa8` |
 | `fill/play-fill.svg` | `6d2a75bc5700a68dec50516ebae121c307807e4e6fcca5c863e5b4af006df880` |
 | `fill/plus-fill.svg` | `64ef1a2c9f693a531ddb970a6c6e7c9dcd9bf36a58afec66ecb57355449ce3d2` |
 | `fill/rectangle-fill.svg` | `d3eb6bd71a23298000c270589d998bd4c32e2ea345cbf9046aff904b30d41c40` |
@@ -241,6 +246,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `bold/music-notes-bold.svg` | `4d906075f68fae7c6380011cdc5303a322e4f6f9ec402e4c725e08e4c7e2e3f6` |
 | `bold/pause-bold.svg` | `0aa900d04cc01d716ecfb668cdc3e3f2bca7fe21a1faa80a11dc342440e22a47` |
 | `bold/pen-nib-bold.svg` | `a70d66873266f1ec6de530e2b31f9b1c9abd87b762a7f76512283f6b6e0896b5` |
+| `bold/pencil-simple-bold.svg` | `163a4e787655de6b5b50bfb0dc0e6818c015ba32106eb14fe12c3daf033a892b` |
 | `bold/play-bold.svg` | `f54e774d80d2b4d134a4babd3c03ee2a217aa4856566ed0a288e48e1a2f29d16` |
 | `bold/plus-bold.svg` | `3d20a4b2e00657baeb922bed94f13fbfa288968b738991d047dd252cb64005d8` |
 | `bold/rectangle-bold.svg` | `145ee233dcc88fd083bc3fb19d4d2c3435143b4afe72ef900f41dc2877f7dcab` |

@@ -6,6 +6,7 @@
 #include <QApplication>
 #include <QColor>
 #include <QFontInfo>
+#include <QFontMetrics>
 #include <QImage>
 #include <QKeyEvent>
 #include <QLineEdit>
@@ -132,6 +133,34 @@ void testSpecialMinimumTextKeepsNumericEditing(Expectations& expectations) {
     field.setSpecialValueText({});
     expectations.expect(field.displayedValue() == QStringLiteral("0.00"),
                         "clearing special text restores the existing numeric presentation");
+}
+
+// Owner report (Properties > Transform): Position Y painted "Y <.22 px", its number cut at the
+// cell's left edge while X's shorter "960 px" fit. A resting value must fit its column.
+void testANarrowCompactCellFitsItsValue(Expectations& expectations) {
+    kit::KValueField field;
+    field.setCompact(true);
+    field.setLabel(QStringLiteral("Y"));
+    field.setUnit(QStringLiteral("px"));
+    field.setRange(-1.0e9, 1.0e9);
+    field.setDecimals(2);
+    field.resize(kit::px(kit::Size::PropertiesFieldWidth), kit::px(kit::Size::ControlCompact));
+    const QFontMetrics metrics(kit::font(kit::TypeRole::Value));
+    const auto fitsColumn = [&] {
+        const auto text = field.paintedText();
+        return metrics.horizontalAdvance(text) <= field.width();
+    };
+    field.setValue(960.0);
+    expectations.expect(field.paintedText() == QStringLiteral("960 px"),
+                        "a short value keeps its unit");
+    field.setValue(1540.22);
+    expectations.expect(fitsColumn() && field.paintedText().startsWith(QStringLiteral("154")),
+                        "a long value drops the unit, then decimals, and keeps its leading digits");
+    expectations.expect(field.displayedValue() == QStringLiteral("1540.22"),
+                        "the exact value is still the field's value text");
+    field.setValue(42.5);
+    expectations.expect(field.paintedText() == QStringLiteral("42.5 px"),
+                        "a value that fits shows its unit again");
 }
 
 void testFiniteExtremesStayExactAndBounded(Expectations& expectations) {
@@ -552,6 +581,7 @@ int main(int argc, char** argv) {
     testFiniteExtremesStayExactAndBounded(expectations);
     testTheFieldDoesNotResizeAsDigitsChange(expectations);
     testGeometryPlacesTheLabelAndCell(expectations);
+    testANarrowCompactCellFitsItsValue(expectations);
     testTheCellIsTheWholeControlAndEnteringEditDoesNotMoveTheValue(expectations);
     testKeysStepTheValue(expectations);
     testTheWheelIsIgnoredUntilTheFieldIsFocused(expectations);

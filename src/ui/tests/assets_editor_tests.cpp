@@ -173,7 +173,7 @@ int main(int argc, char** argv) {
         // The offscreen QPA plugin does not synthesize QTreeWidget's double-click signal
         // reliably. Invoke the same signal path used by the production itemDoubleClicked
         // connection so this test remains deterministic in the required headless gate.
-        // #376: double-click also opens that composition's Composition Settings modal.
+        // #376: double-click opens the composition only; no Composition Settings modal appears.
         bool settingsShown = false;
         QTimer::singleShot(0, [&settingsShown] {
             for (auto* widget : QApplication::topLevelWidgets())
@@ -190,7 +190,7 @@ int main(int argc, char** argv) {
         QApplication::processEvents();
         context.expect(session.compositionId() == expected,
                        "double-click opens the selected composition");
-        context.expect(settingsShown, "double-click opens its Composition Settings");
+        context.expect(!settingsShown, "double-click opens no Composition Settings modal");
     }
 
     videoAssetRows(context);

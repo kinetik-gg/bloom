@@ -123,6 +123,14 @@ runDialog(ui::CompositionSession& session,
 [[nodiscard]] QLineEdit* frameRateControl(QDialog& dialog) {
     return dialog.findChild<QLineEdit*>(QStringLiteral("assetsFrameRateField"));
 }
+// #376: each reason sits under its own field; this is the one currently shown.
+[[nodiscard]] QString inlineError(QDialog& dialog) {
+    for (auto* label : dialog.findChildren<QLabel*>())
+        if (label->objectName().endsWith(QStringLiteral("Error")) && !label->isHidden())
+            return label->text();
+    return {};
+}
+
 [[nodiscard]] ui::kit::KDropdown* ratePresets(QDialog& dialog) {
     return dialog.findChild<ui::kit::KDropdown*>(QStringLiteral("assetsFrameRatePresetDropdown"));
 }
@@ -584,25 +592,24 @@ void testOverflowValidation(Expectations& expectations) {
             auto* rate = frameRateControl(dialog);
             auto* unit = unitControl(dialog);
             auto* ok = okControl(dialog);
-            auto* error = dialog.findChild<QLabel*>(QStringLiteral("newCompositionErrorLabel"));
-            if (!duration || !rate || !unit || !ok || !error) {
+            if (!duration || !rate || !unit || !ok) {
                 expect.expect(false, "overflow validation controls exist");
                 dialog.reject();
                 return;
             }
             rate->setText(QStringLiteral("4294967296/1"));
-            expect.expect(!ok->isEnabled() && error->isVisible() &&
-                              error->text().contains(QStringLiteral("Frame rate")),
+            expect.expect(!ok->isEnabled() &&
+                              inlineError(dialog).contains(QStringLiteral("Frame rate")),
                           "out-of-range uint32 rate is diagnosed");
             rate->setText(QStringLiteral("1/4294967295"));
             duration->setText(QStringLiteral("9223372036854775807"));
-            expect.expect(!ok->isEnabled() && error->isVisible() &&
-                              error->text().contains(QStringLiteral("Duration")),
+            expect.expect(!ok->isEnabled() &&
+                              inlineError(dialog).contains(QStringLiteral("Duration")),
                           "unrepresentable frame duration is diagnosed");
             unit->setCurrentIndex(1);
             duration->setText(QString::fromStdString("0." + std::string(63, '0') + "1"));
-            expect.expect(!ok->isEnabled() && error->isVisible() &&
-                              error->text().contains(QStringLiteral("Duration")),
+            expect.expect(!ok->isEnabled() &&
+                              inlineError(dialog).contains(QStringLiteral("Duration")),
                           "unrepresentable decimal seconds are diagnosed");
             dialog.reject();
         },

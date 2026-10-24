@@ -296,8 +296,15 @@ The timeline and Properties Parent dropdowns list None and eligible layer names,
 parent command, and restore the authored choice on refusal.
 
 `KDiamond` owns the keyframe indicator's rendering; command dispatch stays in its session
-adapter. `KAnchorGrid` owns the nine-point visual grid, while its Properties adapter resolves
-bounds off the UI thread. `KListSurface` paints the common flat empty-row backdrop;
+adapter. `KAnchorGrid` owns the nine-point visual grid and its input (a click on a dot,
+or the arrow keys), while each adapter says which point is selected and what choosing one does:
+the Properties adapter resolves bounds off the UI thread and sets the layer's anchor, and the
+Composition dialog's resize anchor only records the chosen point.
+
+A `KValueField` at rest paints a value that fits its cell. When the number and unit are wider than
+the cell, it drops the unit first and then decimal places, rounding, so a number is never cut by
+the cell edge or painted over its axis prefix; the hover tooltip and the editor keep the exact
+value. `KListSurface` paints the common flat empty-row backdrop;
 `KRow` owns populated rows and column headings. A heading explicitly identifies its shorter
 `Control` pitch through `headerRow`.
 
@@ -352,6 +359,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `MultilineHeight` | 78 | Expanded text editors |
 | `PropertyLabelCompact` | 64 | Timeline property label |
 | `DialogTextWidth / DiagnosticHeight` | 520 / 140 | Read-only explanation / job diagnostics |
+| `DialogWideWidth` | 700 | Minimum width of a settings dialog with Basic and Advanced sections (Composition dialog) |
 | `SplitHandle` | 6 | Draggable divider hit zone (`KSplitHandle`); paints a `TimelineSeparator`-width hairline centered in it |
 
 `kKeyDiamondRadius` is 4.5 and `kNodeCanvasHalfExtent` is 262144 logical pixels. Ratios,
@@ -625,15 +633,24 @@ Solo and range remain the same Layer semantics as other rows. An unavailable aud
 file shows the warning glyph and remains relinkable from Assets.
 
 The Composition dialog (New Composition and Composition Settings, #376) is one `QDialog` at least
-`DialogTextWidth` wide, built only from kit controls: a **Basic** `KSection` and an **Advanced**
-`KSection` that starts collapsed, each with a two-column form of right-hand fields. Text entry uses
-`KLineEdit`, pixel and percentage values `KValueField`, choices `KDropdown`, the aspect lock a
-`KIconToggle` (`IconId::Link`), preset Save / Rename / Delete `KIconButton`s (`IconId::Add`,
-`Settings`, `Delete`), drop-frame a `KCheckBox` with its `KLabel`, and the resize anchor nine exclusive
-`KIconToggle`s (`IconId::Handle`) in a 3 × 3 grid. Opening Advanced grows the dialog to fit and
-closing it returns the height; spare height sits below the sections. One inline reason, in body
-text above the buttons, explains why OK is disabled. The interaction contract is in
+`DialogWideWidth` wide, titled `New Composition` or `Composition Settings`, built only from kit
+controls: a **Basic** `KSection` and an **Advanced** `KSection` that starts collapsed. Both sections
+are two-column forms that share ONE label column, sized to the widest label of either, so every
+field starts at the same x. Text entry uses `KLineEdit`, pixel and percentage values `KValueField`,
+choices `KDropdown` (frame rate is one dropdown; its exact `KLineEdit` appears only for Custom), the
+aspect lock a `KIconToggle` (`IconId::Link`), and the preset buttons `KIconButton`s with tooltips
+`Save as preset…` (`IconId::Add`), `Rename preset…` (`IconId::Rename`, Phosphor `pencil-simple`) and
+`Delete preset` (`IconId::Delete`). A muted `UiSmall` summary line sits under the preset. Drop-frame
+is a `KCheckBox` with its `KLabel`; Background Colour is a `KColorChip` at its own size with the
+`#RRGGBB` value beside it in the Value role; the resize anchor is the Properties Anchor Point
+`KAnchorGrid` itself. Opening Advanced grows the dialog to fit and closing it returns the height;
+spare height sits below the sections. The interaction contract is in
 [interaction-model.md](interaction-model.md#composition-dialog).
+
+**Inline field reasons.** A form that refuses a value keeps its accept button disabled and shows one
+plain reason directly under the offending field: a word-wrapped `KLabel` in `UiSmall` with
+`Color::Error` ink, `Spacing::XXS` below the control and hidden while the field is valid. Only the
+first invalid field shows a reason, so the reason always names what to fix next.
 
 The Composition dialog and the composition Properties section expose a `KColorChip` Background
 Colour for the composition itself. The Viewer surround is chosen separately in the Viewer footer: Solid paints

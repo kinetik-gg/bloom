@@ -20,10 +20,7 @@ class PropertiesAnchorGrid final : public kit::KAnchorGrid {
     ~PropertiesAnchorGrid() override;
     void refresh();
     [[nodiscard]] int selectedPoint() const override;
-
-  protected:
-    void mousePressEvent(QMouseEvent* event) override;
-    void keyPressEvent(QKeyEvent* event) override;
+    void choosePoint(int index) override;
 
   private:
     struct Result {
@@ -32,7 +29,6 @@ class PropertiesAnchorGrid final : public kit::KAnchorGrid {
     };
     void start();
     void poll();
-    void choose(int index);
     CompositionSession& session_;
     std::optional<document::LayerId> layer_;
     std::optional<runtime::ContentBounds> bounds_;
