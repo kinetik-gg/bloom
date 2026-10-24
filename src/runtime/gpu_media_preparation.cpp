@@ -888,7 +888,8 @@ prepareCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationR
     outcome.uploadSemanticKey = rawUploadCommandKey(backingKey, *uploadDescriptor);
     outcome.semanticKey = outcome.uploadSemanticKey;
     outcome.cryptomatte =
-        MediaCryptomattePlan{*matteDescriptor.value(), rankCount, std::move(*ids)};
+        MediaCryptomattePlan{*matteDescriptor.value(), rankCount, std::move(*ids),
+                             cryptomatte.preview};
     if (!resolvedProxyIsUnit(resolved)) {
         const auto proxyDescriptor = proxyOutputDescriptor(*matteDescriptor.value(), resolved);
         if (!proxyDescriptor.has_value()) {

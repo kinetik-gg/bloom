@@ -137,6 +137,7 @@ struct GpuSceneExecutorStep final {
     std::optional<render::Rgba32fImageDescriptor> cryptomatteOutput;
     std::uint32_t cryptomatteRankCount = 0;
     std::vector<std::uint32_t> cryptomatteIds;
+    bool cryptomattePreview = false;
 };
 
 namespace gpu_scene_executor_detail {
@@ -257,7 +258,7 @@ pointResampleFieldsValid(const GpuScenePointResampleCommand& resample) noexcept 
         return makeGpuSceneCryptomatteSemanticKey(
             cryptomatte->inputKey, cryptomatte->rankCount, cryptomatte->ids,
             cryptomatte->outputWindow, cryptomatte->displayWindow, cryptomatte->pixelAspect,
-            std::string{kCryptomatteCoverageArtifactToken});
+            std::string{kCryptomatteCoverageArtifactToken}, cryptomatte->preview);
     }
     if (std::get_if<GpuSceneBlendCommand>(&command) != nullptr) {
         return {};

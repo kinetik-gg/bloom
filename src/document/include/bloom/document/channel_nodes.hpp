@@ -47,6 +47,9 @@ inline constexpr std::uint32_t kCryptomatteNodeSchemaVersion = 1;
 inline constexpr std::string_view kCryptomatteImageInputPort = "image";
 inline constexpr std::string_view kCryptomatteMaskOutputPort = "mask";
 inline constexpr std::string_view kCryptomatteImageOutputPort = "image";
+// #364: not a socket. A Viewer inspection of this port shows the ID-colour preview (every object
+// in its own colour, the selected mattes brightened) over the input image.
+inline constexpr std::string_view kCryptomattePreviewInspectionPort = "preview";
 inline constexpr std::string_view kCryptomatteLayerParameterRole = "layer";
 inline constexpr std::string_view kCryptomatteLayerParameterSchemaKey = "bloom.cryptomatte.layer";
 inline constexpr std::string_view kCryptomatteMattesParameterRole = "mattes";

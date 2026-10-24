@@ -10,6 +10,7 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/media/image.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/cryptomatte_matte_list.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
@@ -213,6 +214,51 @@ void withoutManifest() {
            "without an input image the Image output is the white matte");
 }
 
+// The Viewer's ID-colour preview: every object in its own colour, the selected one brightened
+// (the node has no image input here, so the preview is shown on its own).
+void preview() {
+    Fixture f("preview", true);
+    f.setMattes({"cube"});
+    const auto shown = f.frame(runtime::ChannelInspection{
+        f.cryptomatte, std::string(document::kCryptomattePreviewInspectionPort), {}});
+    const auto expected = [](const std::size_t pixel, const std::size_t channel) {
+        float colour = 0.0F;
+        float alpha = 0.0F;
+        for (const auto& [object, coverage] : fixture::kPixels[pixel]) {
+            auto tint = runtime::cryptomatteIdColour(
+                runtime::cryptomatteNameId(fixture::kObjects[static_cast<std::size_t>(object)]));
+            if (object == 1)
+                for (auto& value : tint)
+                    value = value * 0.5F + 0.5F;
+            colour += tint[channel] * coverage;
+            alpha = std::min(1.0F, alpha + coverage);
+        }
+        return std::pair{std::min(colour, alpha), alpha};
+    };
+    bool ok = shown.pixels.size() == fixture::kPixels.size();
+    for (std::size_t pixel = 0; ok && pixel < shown.pixels.size(); ++pixel) {
+        const auto [red, alpha] = expected(pixel, 0);
+        ok = std::abs(shown.pixels[pixel].red() - red) < 1e-6F &&
+             std::abs(shown.pixels[pixel].alpha() - alpha) < 1e-6F;
+    }
+    expect(ok, "the preview shows each object's ID colour, the selected one brightened");
+}
+
+// Cryptomatte rank layers carry IDs and coverage in R/G/B/A: they are data, never offered as a
+// colour layer; a sidecar with only ranks has no colour layer at all.
+void rankLayersAreData() {
+    Fixture f("probe", true);
+    const auto withBeauty = media::probeImage(f.folder / "crypto.exr");
+    expect(withBeauty.value && withBeauty.value->parts.size() == 1 &&
+               withBeauty.value->parts.front().colourLayers == std::vector<std::string>{""},
+           "a beauty with Cryptomatte ranks offers only its root colour layer");
+    fixture::writeCryptomatteExr(f.folder / "sidecar.exr", true, "CryptoAsset", {}, 0, false);
+    const auto sidecar = media::probeImage(f.folder / "sidecar.exr");
+    expect(sidecar.value && sidecar.value->parts.size() == 1 &&
+               sidecar.value->parts.front().colourLayers.empty(),
+           "a Cryptomatte-only sidecar has no colour layer");
+}
+
 void malformedManifest() {
     Fixture f("malformed", true, "{\"cube\": 12");
     f.setMattes({"cube"});
@@ -256,6 +302,8 @@ int main() {
         withoutManifest();
         imageInputAndMute();
         malformedManifest();
+        preview();
+        rankLayersAreData();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

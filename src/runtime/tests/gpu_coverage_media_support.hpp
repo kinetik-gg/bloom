@@ -367,7 +367,7 @@ channelShufflePlan(const bloom::document::AssetRecord& asset, const LayerValues 
 [[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
 cryptomattePlan(const bloom::document::AssetRecord& asset, const LayerValues layer,
                 const std::uint64_t idBase, std::vector<std::string> mattes,
-                const bool imageOutput) {
+                const bool imageOutput, const bool preview = false) {
     using bloom::document::NodeId;
     using bloom::document::ParameterId;
     const LayerIds ids{ParameterId::fromRaw(idBase + 0), ParameterId::fromRaw(idBase + 1),
@@ -383,6 +383,7 @@ cryptomattePlan(const bloom::document::AssetRecord& asset, const LayerValues lay
     cryptomatte.channels.steps.push_back(source);
     cryptomatte.layer = "CryptoObject";
     cryptomatte.mattes = std::move(mattes);
+    cryptomatte.preview = preview;
     std::vector<CompiledOperation> operations;
     operations.emplace_back(std::move(cryptomatte));
     auto layerInput = OperationIndex::fromRaw(0);

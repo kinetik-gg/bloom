@@ -7,8 +7,8 @@
   "shader": {
     "language": "GLSL_460",
     "stage": "compute",
-    "sha256": "975fe9283fa50131f6426c45c2f7b2a8321c1abc5259ce0e0bba3f0ac313023f",
-    "spirvSha256": "9615f46f2d6bf232eed47584c8bf7366a35c8044f8dd30c591302c26362d652a",
+    "sha256": "afaaf885c1d92593aefed72185a4939c7c259fd5b5486469bb8adf1e8724a7ee",
+    "spirvSha256": "f6db585a82aa0c54aeee5de1c4f023622384af4c33488fe2ba28123a105e5668",
     "localSizeX": 256,
     "localSizeY": 1,
     "localSizeZ": 1
@@ -17,21 +17,23 @@
     {"set": 0, "binding": 0, "kind": "storage-image", "access": "readonly", "format": "rgba32f",
      "role": "stacked-cryptomatte-rank-pairs (R = ID bits, G = coverage)"},
     {"set": 0, "binding": 1, "kind": "storage-image", "access": "writeonly", "format": "rgba32f",
-     "role": "premultiplied-white-coverage-mask"},
+     "role": "premultiplied-white-coverage-mask (mode 0) or premultiplied ID-colour preview (mode 1)"},
     {"set": 0, "binding": 2, "kind": "storage-buffer", "access": "readonly", "element": "uint",
      "role": "selected-cryptomatte-ids", "layout": "ids[max(1, idCount)]"}
   ],
   "pushConstant": {
-    "byteCount": 16,
+    "byteCount": 20,
     "fields": [
       {"name": "outputWidth", "type": "uint32"},
       {"name": "outputHeight", "type": "uint32"},
       {"name": "rankCount", "type": "uint32"},
-      {"name": "idCount", "type": "uint32"}
+      {"name": "idCount", "type": "uint32"},
+      {"name": "mode", "type": "uint32", "values": "0 = premultiplied white matte, 1 = ID-colour preview"}
     ]
   },
   "contracts": {
     "numeric": "bit-exact against the Cryptomatte CPU reference (src/runtime/cryptomatte.cpp): in rank order c = clamp(c + (ID bits selected ? coverage : 0), 0, 1) in binary32, then (c, c, c, c)",
+    "preview": "mode 1 matches the CPU cryptomattePreviewImage: per rank colour += tint x coverage with tint_k = 0.15 + byte_k * 0x3B5A740E (the binary32 bits of 0.85 / 255) (0.5 * tint + 0.5 when selected), alpha = clamp(alpha + coverage, 0, 1), colour clamped to alpha",
     "idIdentity": "IDs are compared as exact uint32 bits (floatBitsToUint); the host upload carries the source float bits unchanged",
     "cpuFallback": "an invalid geometry, a device-limit or budget refusal, a foreign device, or a wrong thread fails closed with an explicit diagnostic; no silent CPU substitution"
   }

@@ -120,7 +120,7 @@ template <typename Command> [[nodiscard]] const Command* first(const PreparedGpu
 // the matte's exact bits. With `imageOutput` the layer reads beauty x matte (MultiplyAlpha).
 [[nodiscard]] std::shared_ptr<const CompiledCompositionPlan>
 cryptomattePlan(const bloom::document::AssetRecord& asset, std::vector<std::string> mattes,
-                const bool imageOutput, const std::uint64_t idBase) {
+                const bool imageOutput, const std::uint64_t idBase, const bool preview = false) {
     using bloom::document::NodeId;
     using bloom::document::ParameterId;
     const LayerIds ids{ParameterId::fromRaw(idBase + 0), ParameterId::fromRaw(idBase + 1),
@@ -136,6 +136,7 @@ cryptomattePlan(const bloom::document::AssetRecord& asset, std::vector<std::stri
     cryptomatte.channels.steps.push_back(source);
     cryptomatte.layer = "CryptoObject";
     cryptomatte.mattes = std::move(mattes);
+    cryptomatte.preview = preview;
     std::vector<CompiledOperation> operations;
     operations.emplace_back(std::move(cryptomatte));
     auto layerInput = OperationIndex::fromRaw(0);
@@ -189,11 +190,11 @@ struct Harness final {
 void testParity(Expectations& expectations, Harness& harness,
                 const bloom::document::AssetRecord& asset, std::vector<std::string> mattes,
                 const bool imageOutput, const bool proxy, const std::uint64_t idBase,
-                const std::string& label) {
+                const std::string& label, const bool preview = false) {
     auto context = GpuSceneMediaContext::fromEvaluator(harness.evaluator);
     context.assetBaseDirectory = harness.directory;
     const CpuGpuSceneBuilder builder(nullptr, context);
-    const auto plan = cryptomattePlan(asset, std::move(mattes), imageOutput, idBase);
+    const auto plan = cryptomattePlan(asset, std::move(mattes), imageOutput, idBase, preview);
     const auto evaluation = request(*plan, proxy);
     const auto prepared = builder.build(plan, evaluation);
     expectations.expect(prepared.hasValue(), label + ": prepares");
@@ -401,6 +402,10 @@ int main(const int argc, char** argv) {
                    93200, "every object under a proxy");
         testParity(expectations, harness, manifest, {}, false, false, 93300, "empty selection");
         testParity(expectations, harness, manifest, {"sphere"}, true, false, 93400, "Image output");
+        testParity(expectations, harness, manifest, {"cube"}, false, false, 93500,
+                   "ID-colour preview", true);
+        testParity(expectations, harness, plain, {"floor"}, false, true, 93600,
+                   "ID-colour preview under a proxy", true);
         testSelectionEdit(expectations, harness, manifest);
         testCancellationAndBudget(expectations, harness, manifest);
         if (!expectations.ok()) {

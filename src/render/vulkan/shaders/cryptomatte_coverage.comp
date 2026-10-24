@@ -12,6 +12,13 @@
 // comparisons, one binary32 add per rank and a clamp occur, so no contraction or rounding differs
 // from the CPU.
 //
+// Mode 1 is the ID-colour preview (the Viewer's Cryptomatte preview, src/runtime/cryptomatte.cpp
+// cryptomattePreviewImage): every rank adds coverage x its ID's colour, where the colour channel k
+// is 0.15 + byte_k * s of the ID bits (bits 16..23, 8..15, 0..7), s being the binary32 constant
+// 0x3B5A740E (0.85 / 255, written as bits so no division or decimal rounding can differ), and a
+// selected ID is brightened to 0.5 * colour + 0.5; alpha accumulates as the matte does over every
+// ID, and the colour is clamped to alpha so the pixel stays premultiplied.
+//
 // 2D FLATTENED DISPATCH, as PointResampleV1: the output pixel space is flattened row-major into
 // 256-wide workgroups; invocations past the pixel count return immediately.
 //
@@ -29,7 +36,15 @@ layout(push_constant) uniform BloomCryptoPushConstants {
     uint outputHeight;
     uint rankCount;
     uint idCount;
+    uint mode;
 } bloom_crypto_push;
+
+float bloom_crypto_channel(uint id, uint shift)
+{
+    precise float scaled = float((id >> shift) & 0xFFu) * uintBitsToFloat(0x3B5A740Eu);
+    precise float value = 0.15 + scaled;
+    return value;
+}
 
 void main()
 {
@@ -41,6 +56,32 @@ void main()
     }
     uint column = linear % bloom_crypto_push.outputWidth;
     uint row = linear / bloom_crypto_push.outputWidth;
+    if (bloom_crypto_push.mode == 1u) {
+        precise vec3 colour = vec3(0.0);
+        precise float alpha = 0.0;
+        for (uint rank = 0u; rank < bloom_crypto_push.rankCount; ++rank) {
+            vec4 pair = imageLoad(bloom_crypto_ranks,
+                                  ivec2(column, row + rank * bloom_crypto_push.outputHeight));
+            uint id = floatBitsToUint(pair.r);
+            bool selected = false;
+            for (uint index = 0u; index < bloom_crypto_push.idCount; ++index) {
+                if (bloom_crypto_ids.ids[index] == id) {
+                    selected = true;
+                }
+            }
+            precise vec3 tint = vec3(bloom_crypto_channel(id, 16u), bloom_crypto_channel(id, 8u),
+                                     bloom_crypto_channel(id, 0u));
+            if (selected) {
+                tint = tint * 0.5 + vec3(0.5);
+            }
+            precise vec3 term = tint * pair.g;
+            colour = colour + term;
+            precise float sum = alpha + pair.g;
+            alpha = clamp(sum, 0.0, 1.0);
+        }
+        imageStore(bloom_crypto_output, ivec2(column, row), vec4(min(colour, vec3(alpha)), alpha));
+        return;
+    }
     precise float coverage = 0.0;
     for (uint rank = 0u; rank < bloom_crypto_push.rankCount; ++rank) {
         vec4 pair = imageLoad(bloom_crypto_ranks,

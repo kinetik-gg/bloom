@@ -353,7 +353,7 @@ bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImag
                                              const core::PixelAspectRatio pixelAspect,
                                              const std::uint32_t rankCount,
                                              const std::span<const std::uint32_t> ids,
-                                             const std::uint64_t byteBudget) {
+                                             const bool preview, const std::uint64_t byteBudget) {
     const std::uint32_t outputWidth = outputWindow.extent().width();
     const std::uint32_t outputHeight = outputWindow.extent().height();
     const cryptomatte_coverage_detail::CryptomatteCoverageFault fault =
@@ -555,7 +555,7 @@ bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImag
                                                *resources.pipeline.pipelineLayout, 0,
                                                {*resources.descriptorSet}, {});
     const CryptomatteCoveragePush push{outputWidth, outputHeight, rankCount,
-                                       static_cast<std::uint32_t>(ids.size())};
+                                       static_cast<std::uint32_t>(ids.size()), preview ? 1U : 0U};
     resources.commandBuffer.pushConstants(*resources.pipeline.pipelineLayout,
                                           vk::ShaderStageFlagBits::eCompute, 0,
                                           sizeof(CryptomatteCoveragePush), &push);

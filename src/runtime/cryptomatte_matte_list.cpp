@@ -172,8 +172,11 @@ cryptomatteTypes(const std::span<const std::string> channels) {
 }
 
 std::array<float, 3> cryptomatteIdColour(const std::uint32_t id) noexcept {
+    // 0.85 / 255 as exact binary32 bits, shared with the CryptomatteCoverageV1 preview mode.
+    constexpr auto scale = std::bit_cast<float>(0x3B5A740EU);
     const auto channel = [id](const unsigned shift) {
-        return 0.15F + 0.85F * static_cast<float>((id >> shift) & 0xFFU) / 255.0F;
+        const float scaled = static_cast<float>((id >> shift) & 0xFFU) * scale;
+        return 0.15F + scaled;
     };
     return {channel(16), channel(8), channel(0)};
 }

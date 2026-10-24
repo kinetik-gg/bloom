@@ -36,6 +36,7 @@ GpuSceneExecutor::Impl::startCryptomatteCoverageStep(const GpuSceneExecutorStep&
         .output = *step.cryptomatteOutput,
         .rankCount = step.cryptomatteRankCount,
         .ids = step.cryptomatteIds,
+        .preview = step.cryptomattePreview,
     };
     const auto native = cryptomatteCoverage->begin(parameters, remainingBudget());
     if (native.code != render::GpuCryptomatteCoverageDiagnosticCode::None) {

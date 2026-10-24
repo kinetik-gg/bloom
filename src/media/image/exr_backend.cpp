@@ -25,6 +25,7 @@
 #include <stdexcept>
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -381,7 +382,25 @@ struct ExrLayout final {
         if (std::ranges::find(part.layers, layer) == part.layers.end())
             part.layers.push_back(layer);
     }
+    // A Cryptomatte rank layer (`<type>NN`, named by a `cryptomatte/<key>/name` attribute) carries
+    // ID bits and coverage in its R/G/B/A channels: data, never a colour layer (#364).
+    std::vector<std::string> cryptomatteTypes;
+    for (auto attribute = header.begin(); attribute != header.end(); ++attribute) {
+        const std::string_view name = attribute.name();
+        if (!name.starts_with("cryptomatte/") || !name.ends_with("/name"))
+            continue;
+        if (const auto* text = dynamic_cast<const Imf::StringAttribute*>(&attribute.attribute()))
+            cryptomatteTypes.push_back(text->value());
+    }
+    const auto isCryptomatteRank = [&](const std::string_view layer) {
+        return layer.size() > 2 && std::isdigit(static_cast<unsigned char>(layer.back())) &&
+               std::isdigit(static_cast<unsigned char>(layer[layer.size() - 2])) &&
+               std::ranges::find(cryptomatteTypes, layer.substr(0, layer.size() - 2)) !=
+                   cryptomatteTypes.end();
+    };
     for (const auto& layer : part.layers) {
+        if (isCryptomatteRank(layer))
+            continue;
         ImageDiagnosticCode ignored = ImageDiagnosticCode::None;
         if (const auto selected = inspectHeader(header, layer, ignored); selected && selected->colour)
             part.colourLayers.push_back(layer);
@@ -748,8 +767,7 @@ decodeExrParts(Imf::MultiPartInputFile& input, const ImageInterpretation& interp
                                 "The selected OpenEXR layer is not present");
     if (!layout->colour)
         return failure<Decoded>(ImageDiagnosticCode::NoColourChannels,
-                                "The selected OpenEXR layer has no colour channels; use its "
-                                "channel set");
+                                "No colour layer — use Channels");
     Imf::InputPart part(input, *index);
     return decodeExrInput(part, *layout, interpretation, std::move(processor), cancel, progress,
                           pixelBudget);

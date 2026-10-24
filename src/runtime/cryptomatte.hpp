@@ -28,6 +28,7 @@
 
 namespace bloom::runtime::detail {
 
+using runtime::cryptomatteIdColour;
 using runtime::cryptomatteNameId;
 using runtime::formatCryptomatteRawId;
 using runtime::joinCryptomatteMatteList;
@@ -91,6 +92,7 @@ struct CryptomatteSelection final {
     bool available = false;
     bool cancelled = false;
     bool budgetExceeded = false;
+    bool preview = false;
 };
 
 [[nodiscard]] CryptomatteSelection
@@ -128,6 +130,12 @@ stackCryptomatteRanks(const CryptomatteGather& gather, std::size_t budget,
 [[nodiscard]] media::ImageResult<render::Rgba32fImage>
 cryptomatteCoverageImage(const CryptomatteGather& gather, std::size_t budget,
                          const CancellationToken& cancel);
+// CPU reference of the Viewer's ID-colour preview (CryptomatteCoverageV1 mode 1): per rank, in
+// rank order, colour += tint x coverage with tint = cryptomatteIdColour(id) (0.5 * tint + 0.5 for a
+// selected ID) and alpha = clamp(alpha + coverage, 0, 1); colour is clamped to alpha.
+[[nodiscard]] media::ImageResult<render::Rgba32fImage>
+cryptomattePreviewImage(const CryptomatteGather& gather, std::size_t budget,
+                        const CancellationToken& cancel);
 // CPU reference resampled to the request geometry (PointResampleV1).
 [[nodiscard]] media::ImageResult<render::Rgba32fImage>
 evaluateCryptomatte(const CryptomatteSelection& selection,

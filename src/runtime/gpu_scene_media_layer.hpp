@@ -124,10 +124,12 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
                                             .outputWindow = matte.dataWindow(),
                                             .displayWindow = matte.displayWindow(),
                                             .pixelAspect = matte.pixelAspect(),
-                                            .semanticKey = {}};
+                                            .semanticKey = {},
+                                            .preview = leaf.cryptomatte->preview};
         coverage.semanticKey = makeGpuSceneCryptomatteSemanticKey(
             coverage.inputKey, coverage.rankCount, coverage.ids, coverage.outputWindow,
-            coverage.displayWindow, coverage.pixelAspect, "cryptomatte-coverage-v1");
+            coverage.displayWindow, coverage.pixelAspect, "cryptomatte-coverage-v1",
+            coverage.preview);
         currentKey = coverage.semanticKey;
         currentWindow = coverage.outputWindow;
         current = emit(std::move(coverage));

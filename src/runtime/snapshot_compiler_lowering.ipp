@@ -323,9 +323,14 @@ lower(const std::vector<document::NodeId>& order) {
         // #364 Cryptomatte: the matte (Mask) and, with an input image, the image multiplied by
         // the matte (MultiplyAlpha, matte in alpha); without one the Image output is the matte.
         if (definition->second->lowering == runtime::NodeLoweringKind::Cryptomatte) {
+            const bool inspected =
+                request_.channelInspection && request_.channelInspection->node == nodeId;
+            const bool previewInspected =
+                inspected &&
+                request_.channelInspection->port == document::kCryptomattePreviewInspectionPort;
             const bool maskUsed =
                 hasReachableOutput(nodeId, document::kCryptomatteMaskOutputPort) ||
-                (request_.channelInspection && request_.channelInspection->node == nodeId);
+                (inspected && !previewInspected);
             const bool imageUsed = hasReachableOutput(nodeId, document::kCryptomatteImageOutputPort);
             const bool imageConnected =
                 fixedInputEdge(nodeId, document::kCryptomatteImageInputPort) != nullptr;
@@ -336,6 +341,38 @@ lower(const std::vector<document::NodeId>& order) {
                 operations.emplace_back(runtime::CompiledMerge{nodeId, {}});
                 return empty;
             };
+            if (previewInspected) {
+                // #364 Viewer preview: the ID colours mixed halfway with the input image (Image
+                // Mix with the preview as its base, so a data-only or absent image -- a
+                // transparent second input -- still shows the colours).
+                const auto previewPort =
+                    std::string(document::kCryptomattePreviewInspectionPort);
+                if (isMuted(nodeId)) {
+                    portOperations_.insert_or_assign({nodeId, previewPort},
+                                                     imageInput ? *imageInput : emptyImage());
+                    continue;
+                }
+                auto lowered = lowerCryptomatte(*node);
+                if (!lowered)
+                    return {};
+                std::get<runtime::CompiledCryptomatte>(*lowered).preview = true;
+                const auto preview = runtime::OperationIndex::fromRaw(operations.size());
+                operations.emplace_back(std::move(*lowered));
+                indices.emplace(nodeId, preview);
+                auto shown = preview;
+                if (imageInput) {
+                    shown = runtime::OperationIndex::fromRaw(operations.size());
+                    operations.emplace_back(runtime::CompiledImageEffect{
+                        nodeId, preview,
+                        runtime::ImageCombineKernel{
+                            runtime::ImageCombineMode::Mix,
+                            runtime::CompiledScalarParameter{document::ParameterId{}, 0.5},
+                            render::ImageCoverageChannel::Alpha},
+                        false, false, *imageInput});
+                }
+                portOperations_.insert_or_assign({nodeId, previewPort}, shown);
+                continue;
+            }
             if (isMuted(nodeId)) {
                 // A muted Cryptomatte isolates nothing: no matte, and the image passes through.
                 if (maskUsed)

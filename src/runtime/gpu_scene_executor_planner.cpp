@@ -501,6 +501,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.cryptomatteOutput = *outputDescriptor.value();
         step.cryptomatteRankCount = cryptomatte->rankCount;
         step.cryptomatteIds = cryptomatte->ids;
+        step.cryptomattePreview = cryptomatte->preview;
         steps.push_back(std::move(step));
         color[index] = 2;
         return {};

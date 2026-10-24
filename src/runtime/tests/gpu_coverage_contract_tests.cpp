@@ -590,12 +590,13 @@ displayProofRunner(const bool customView) {
     // and proxy resample: names resolved through the manifest, names resolved by hash without one,
     // a raw ID, and the Image output (beauty x matte through the MultiplyAlpha combine).
     const auto runCryptomatte = [](const bool manifest, std::vector<std::string> mattes,
-                                   const bool imageOutput, const std::uint64_t idBase) {
+                                   const bool imageOutput, const std::uint64_t idBase,
+                                   const bool preview = false) {
         const bloom::runtime::CpuCompositionEvaluator evaluator;
         const auto& image = bloom::gpu_coverage_media::cryptomatteImage(manifest);
         const auto plan = bloom::gpu_coverage_media::cryptomattePlan(
             image.asset, LayerValues{.position = {4.3, 3.1}, .opacity = 1.0}, idBase,
-            std::move(mattes), imageOutput);
+            std::move(mattes), imageOutput, preview);
         return runMediaBuilder(plan, evaluator, bloom::gpu_coverage_media::gateDirectory());
     };
     const auto runAllCryptomatte = [runCryptomatte](const std::uint64_t idBase) {
@@ -607,6 +608,8 @@ displayProofRunner(const bool customView) {
         runs.push_back(runCryptomatte(true, {"cube", "floor"}, false, idBase));
         runs.push_back(runCryptomatte(false, {"cube", "floor", sky}, false, idBase + 100));
         runs.push_back(runCryptomatte(true, {"sphere"}, true, idBase + 200));
+        // The Viewer's ID-colour preview (the same kernel in its preview mode).
+        runs.push_back(runCryptomatte(true, {"cube"}, false, idBase + 300, true));
         for (auto& frame : runs) {
             combined.prepared = combined.prepared && frame.prepared;
             combined.evidence += frame.evidence + "; ";

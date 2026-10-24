@@ -347,7 +347,10 @@ class CompilePass final {
                     if (!consumesEdge(*node, *edge))
                         continue;
                     // A Viewer inspection plan needs only the inspected node's channel sets.
+                    // The Cryptomatte preview also shows the node's input image.
                     if (request_.channelInspection && nodeId == request_.channelInspection->node &&
+                        request_.channelInspection->port !=
+                            document::kCryptomattePreviewInspectionPort &&
                         !isChannelSetInput(*node, *edge))
                         continue;
                     reachableEdges.emplace(edge->id, edge);

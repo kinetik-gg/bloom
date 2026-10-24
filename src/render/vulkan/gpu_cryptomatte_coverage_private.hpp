@@ -33,14 +33,15 @@ namespace bloom::render {
 
 // 3 bindings: stacked rank source image, output image, selected-ID buffer.
 inline constexpr std::uint32_t kCryptomatteCoverageBindingCount = 3;
-// Four tightly packed uint32 push constants: output width/height, rank count, ID count.
-inline constexpr std::uint32_t kCryptomatteCoveragePushBytes = 16;
+// Five tightly packed uint32 push constants: output width/height, rank count, ID count, mode.
+inline constexpr std::uint32_t kCryptomatteCoveragePushBytes = 20;
 
 struct CryptomatteCoveragePush final {
     std::uint32_t outputWidth;
     std::uint32_t outputHeight;
     std::uint32_t rankCount;
     std::uint32_t idCount;
+    std::uint32_t mode;
 };
 static_assert(sizeof(CryptomatteCoveragePush) == kCryptomatteCoveragePushBytes);
 
@@ -211,7 +212,8 @@ struct GpuCryptomatteCoverage::Impl final {
     [[nodiscard]] bool launchJob(const std::shared_ptr<const GpuImage>& source,
                                  ImageWindow outputWindow, ImageWindow displayWindow,
                                  core::PixelAspectRatio pixelAspect, std::uint32_t rankCount,
-                                 std::span<const std::uint32_t> ids, std::uint64_t byteBudget);
+                                 std::span<const std::uint32_t> ids, bool preview,
+                                 std::uint64_t byteBudget);
 
     std::thread::id owner;
     std::shared_ptr<cryptomatte_coverage_detail::DeviceAllocatorState> control;

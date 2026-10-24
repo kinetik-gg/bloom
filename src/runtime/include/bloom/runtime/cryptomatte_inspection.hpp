@@ -24,6 +24,11 @@ class SnapshotCompiler;
 struct CryptomatteLayerListing final {
     // The Cryptomatte types (`CryptoObject`, `CryptoMaterial`, ...) of the node's channel set.
     std::vector<std::string> layers;
+    // The manifest's object names for the node's selected layer, sorted (empty without a manifest
+    // or when the layer is absent).
+    std::vector<std::string> names;
+    // Whether the selected layer carries a manifest.
+    bool manifest = false;
     // Why the channel set could not be listed (empty on success).
     std::string diagnostic;
 };

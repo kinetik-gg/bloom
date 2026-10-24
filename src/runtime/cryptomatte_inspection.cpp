@@ -7,6 +7,7 @@
 #include <bloom/runtime/channel_inspection.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 
+#include <algorithm>
 #include <bit>
 #include <limits>
 #include <variant>
@@ -79,6 +80,35 @@ listCryptomatteLayers(const SnapshotCompiler& compiler, const document::Snapshot
         return listing;
     }
     listing.layers = detail::cryptomatteLayers(sources.resolution.channels);
+    // The manifest travels in the metadata of the part holding the ranks: decode one rank channel
+    // to read it.
+    const auto ranks =
+        detail::cryptomatteRanks(sources.resolution.channels, compiled.cryptomatte->layer);
+    if (ranks.empty())
+        return listing;
+    const auto channel = std::ranges::find(sources.resolution.channels, ranks.front().id,
+                                           &detail::ResolvedChannel::name);
+    if (channel == sources.resolution.channels.end() || !channel->source ||
+        *channel->source >= sources.sources.size() ||
+        !sources.sources[*channel->source].sourceRevision)
+        return listing;
+    const auto& source = sources.sources[*channel->source];
+    media::ImageChannelSelection request;
+    request.part = source.interpretation.part;
+    request.channels = {channel->sourceChannel};
+    const auto decoded = media::decodeImageChannels(
+        *source.sourceRevision, request, [&] { return cancellation.isCancellationRequested(); },
+        {}, media::kMaxImageStorageBytes);
+    if (!decoded.value || !*decoded.value)
+        return listing;
+    const auto manifest =
+        detail::cryptomatteManifest((*decoded.value)->metadata(), compiled.cryptomatte->layer);
+    listing.manifest = manifest.present;
+    for (const auto& [name, id] : manifest.entries)
+        listing.names.push_back(name);
+    std::ranges::sort(listing.names);
+    listing.names.erase(std::unique(listing.names.begin(), listing.names.end()),
+                        listing.names.end());
     return listing;
 }
 

@@ -370,6 +370,9 @@ struct CompiledCryptomatte {
     CompiledChannelExpression channels;
     std::string layer{};
     std::vector<std::string> mattes{};
+    // #364 Viewer-only plans: the ID-colour preview (every object in its own colour, the selected
+    // ones brightened) instead of the matte. Never set by an ordinary composition plan.
+    bool preview = false;
     friend bool operator==(const CompiledCryptomatte&, const CompiledCryptomatte&) = default;
 };
 

@@ -308,6 +308,7 @@ selectCryptomatte(const CompiledCryptomatte& cryptomatte, const core::RationalTi
     CryptomatteSelection result;
     result.layer = cryptomatte.layer;
     result.mattes = cryptomatte.mattes;
+    result.preview = cryptomatte.preview;
     result.channels = selectChannelSetSources(cryptomatte.channels, time, rate, base, cancel,
                                               colorIntent, revisionCache, revisionPolicy,
                                               hostByteBudget, allowRevisionInsertion);
@@ -318,6 +319,8 @@ selectCryptomatte(const CompiledCryptomatte& cryptomatte, const core::RationalTi
     for (const auto& source : result.channels.sources)
         key.add(source.cacheKey);
     key.add(cryptomatte.layer);
+    if (cryptomatte.preview)
+        key.add(std::string{"preview-v1"});
     key.add(cryptomatte.mattes.size());
     for (const auto& matte : cryptomatte.mattes)
         key.add(matte);
@@ -572,6 +575,53 @@ media::ImageResult<render::Rgba32fImage> cryptomatteCoverageImage(const Cryptoma
 }
 
 media::ImageResult<render::Rgba32fImage>
+cryptomattePreviewImage(const CryptomatteGather& gather, const std::size_t budget,
+                        const CancellationToken& cancel) {
+    if (gather.ranks.empty())
+        return {{}, gather.diagnostic.empty() ? "The Cryptomatte has no ranks" : gather.diagnostic};
+    const auto* descriptor = gather.ranks.front()->descriptor();
+    auto builder = render::Rgba32fImageBuilder::create(*descriptor, budget);
+    if (!builder)
+        return {{}, "The Cryptomatte preview exceeds the pixel storage budget", false,
+                media::ImageDiagnosticCode::PixelBudgetExceeded};
+    const auto window = descriptor->dataWindow();
+    const auto width = static_cast<std::size_t>(window.extent().width());
+    for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
+        if (cancel.isCancellationRequested())
+            return {{}, {}, true, media::ImageDiagnosticCode::Cancelled};
+        auto row = builder.value()->row(y);
+        for (std::size_t column = 0; column < width; ++column) {
+            const auto x = window.originX() + static_cast<std::int64_t>(column);
+            std::array<float, 3> colour{};
+            float alpha = 0.0F;
+            for (const auto& rank : gather.ranks) {
+                const auto pixel = rank->read(x, y);
+                const auto bits = std::bit_cast<std::uint32_t>(pixel.value()->red());
+                const float coverage = pixel.value()->green();
+                auto tint = cryptomatteIdColour(bits);
+                if (std::ranges::find(gather.ids, bits) != gather.ids.end())
+                    for (auto& channel : tint)
+                        channel = channel * 0.5F + 0.5F;
+                for (std::size_t k = 0; k < 3; ++k) {
+                    const float term = tint[k] * coverage;
+                    colour[k] = colour[k] + term;
+                }
+                const float sum = alpha + coverage;
+                alpha = std::clamp(sum, 0.0F, 1.0F);
+            }
+            const auto pixel = render::Rgba32f::fromPremultiplied(
+                std::min(colour[0], alpha), std::min(colour[1], alpha), std::min(colour[2], alpha),
+                alpha);
+            (*row.value())[column] = *pixel.value();
+        }
+    }
+    auto frozen = std::move(*builder.value()).freeze();
+    if (!frozen)
+        return {{}, "Cryptomatte preview validation failed"};
+    return {std::move(*frozen.value()), {}};
+}
+
+media::ImageResult<render::Rgba32fImage>
 evaluateCryptomatte(const CryptomatteSelection& selection,
                     const render::Rgba32fImageDescriptor composition, const double horizontalScale,
                     const double verticalScale, const std::size_t budget,
@@ -581,7 +631,8 @@ evaluateCryptomatte(const CryptomatteSelection& selection,
         return {{}, {}, true, media::ImageDiagnosticCode::Cancelled};
     if (gather.ranks.empty())
         return {{}, gather.diagnostic, false, gather.code};
-    auto coverage = cryptomatteCoverageImage(gather, budget, cancel);
+    auto coverage = selection.preview ? cryptomattePreviewImage(gather, budget, cancel)
+                                      : cryptomatteCoverageImage(gather, budget, cancel);
     if (!coverage.value.has_value())
         return coverage;
     auto resampled = resampleDecodedImage(*coverage.value, composition, horizontalScale,

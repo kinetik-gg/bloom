@@ -380,6 +380,8 @@ struct GpuSceneCryptomatteCommand final {
     render::ImageWindow displayWindow;
     core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
     std::string semanticKey;
+    // #364 Viewer preview: the ID-colour preview instead of the matte (same kernel, mode 1).
+    bool preview = false;
 };
 
 using GpuSceneCommand =
@@ -545,8 +547,8 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
     const std::string& inputKey, const std::uint32_t rankCount,
     const std::vector<std::uint32_t>& ids, const render::ImageWindow& outputWindow,
     const render::ImageWindow& displayWindow, const core::PixelAspectRatio& pixelAspect,
-    const std::string& artifactDigest) {
-    std::string key = "cryptomatte-coverage-v1|in=";
+    const std::string& artifactDigest, const bool preview = false) {
+    std::string key = preview ? "cryptomatte-preview-v1|in=" : "cryptomatte-coverage-v1|in=";
     key.append(inputKey);
     key.append("|ranks=");
     key.append(std::to_string(rankCount));

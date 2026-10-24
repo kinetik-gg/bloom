@@ -3075,6 +3075,19 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 operationCancelled = true;
                                 return;
                             }
+                            // ADR 0026 Q1: a data-only source has no colour image. Its Image output
+                            // is unavailable (empty) by design, in preview and final render alike;
+                            // that is information, not a failure.
+                            if (!image.value.has_value() &&
+                                image.code == media::ImageDiagnosticCode::NoColourChannels) {
+                                imageWarnings.push_back({EvaluationDiagnosticCode::InvalidParameter,
+                                                         DiagnosticSeverity::Information,
+                                                         operationSubject,
+                                                         image.diagnostic,
+                                                         {}});
+                                contentHashes[index] += ":no-colour-layer";
+                                return;
+                            }
                             if (!image.value.has_value()) {
                                 if (request.requireVerifiedMediaSources) {
                                     operationFailure =

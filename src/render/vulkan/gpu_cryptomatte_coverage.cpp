@@ -328,7 +328,7 @@ GpuCryptomatteCoverage::begin(const GpuCryptomatteCoverageRequest& parameters,
     }
     if (!impl.launchJob(parameters.source, outputWindow, parameters.output.displayWindow(),
                         parameters.output.pixelAspect(), parameters.rankCount, parameters.ids,
-                        byteBudget)) {
+                        parameters.preview, byteBudget)) {
         const auto diagnostic = impl.jobDiagnostic;
         impl.freeJobResources();
         impl.releaseClaim();

@@ -41,6 +41,10 @@ struct GpuCryptomatteCoverageRequest final {
     Rgba32fImageDescriptor output;
     std::uint32_t rankCount = 0;
     std::vector<std::uint32_t> ids;
+    // The ID-colour preview (the Viewer's Cryptomatte preview) instead of the matte: every rank
+    // adds coverage x its ID's colour (a selected ID brightened halfway to white), alpha is the
+    // coverage of every ID, colour clamped to alpha.
+    bool preview = false;
 };
 
 // Per-call ceilings. Defaults are effectively unbounded so the real bounds are the live device

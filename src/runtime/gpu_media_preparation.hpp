@@ -73,6 +73,7 @@ struct MediaCryptomattePlan final {
     render::Rgba32fImageDescriptor output;
     std::uint32_t rankCount = 0;
     std::vector<std::uint32_t> ids;
+    bool preview = false;
 };
 
 struct MediaUploadOutcome final {
