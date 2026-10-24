@@ -1158,7 +1158,25 @@ evaluates differently.
   the source decode identities and rank channels only, so a selection edit reuses it; the resolved
   IDs are kept beside it under the selection key, and the coverage command key carries the IDs.
 - *Viewer.* A Viewer inspection with no channels shows a pixel output port directly; the channel
-  menu offers "Cryptomatte matte" for a selected Cryptomatte. The eyedropper reads, on a worker, the
-  object with the largest coverage at the composition pixel under the cursor in the channel set's
-  frame (exact in the matte preview and under an untransformed layer) and stores its manifest name,
-  or its raw ID without one.
+  menu offers "Cryptomatte matte" for a selected Cryptomatte.
+- *ID-colour preview.* Selecting a Cryptomatte with Preview on (Properties, a session display
+  choice, on by default) shows a viewer-only plan of the node's `preview` inspection port: a
+  `CompiledCryptomatte` with `preview` set, whose pixel is, per rank in rank order, `colour += tint x
+  coverage` with `tint_k = 0.15 + byte_k x s` of the ID bits (bits 16-23, 8-15, 0-7; `s` the
+  binary32 constant `0x3B5A740E`, 0.85/255, so no division can differ) brightened to `0.5 tint +
+  0.5` for a selected ID, `alpha = clamp(alpha + coverage, 0, 1)` and the colour clamped to alpha.
+  With an image input it is an Image Mix (factor 0.5) whose base is the preview and whose second
+  input is the image, so a data-only or absent image still shows the colours. The same
+  CryptomatteCoverageV1 kernel runs it (mode 1); CPU and GPU agree bit for bit and the coverage
+  contract carries a preview fixture. It never enters a render or export.
+- *Eyedropper.* The Viewer point is mapped into the channel set's frame through the evaluated
+  content-to-composition transform of the layer that displays the node (moves, scales, rotations,
+  parents and the proxy included; the same mapping mask editing inverts), or taken as is in the
+  node's preview or matte inspection. The worker reads the source frame at the node's own layer
+  clock, resolved exactly as the evaluator resolves it (`detail::resolveClockTimes`), so a retimed
+  or offset layer reads the frame it shows. It stores the dominant object's manifest name, or its
+  raw ID without one; a point outside the source reports "No object under the cursor".
+- *Data-only sources.* An Image source whose selected part and layer have no colour channels has no
+  Image output (ADR 0026 Q1): the evaluator records the information "No colour layer — use
+  Channels" and produces nothing, in preview and final render alike. Cryptomatte rank layers are
+  never classified as colour layers.

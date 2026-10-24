@@ -61,7 +61,15 @@ EXR decode runs on a worker and uses the same disk-cache key and thumbnail path 
   `cryptomatte/<key>/name`, `hash`, `conversion` and `manifest` arrive as metadata, where `<key>` is
   any metadata key whose `name` is the layer. Half rank channels widen exactly, so IDs survive only
   when the renderer wrote them as Float32, as the specification requires. Only the rank channels of
-  the selected layer are decoded (#364).
+  the selected layer are decoded (#364). A `<type>NN` layer named by a `cryptomatte/<key>/name`
+  attribute is a rank layer: the probe never lists it among a part's colour layers, so a
+  Cryptomatte-only sidecar EXR has no colour layer and is a data-only asset.
+- *Asset state in Assets.* "Missing — Relink" means only that the imported bytes are gone or
+  changed. A present source that cannot be shown as it is (for example an untagged video awaiting
+  an input colour space) states that problem and its fix instead, and its audio still decodes. A
+  data-only image is valid: it is labelled like any image or sequence ("Sequence [N]") and its
+  thumbnail is the Cryptomatte ID colours of its first type, or its first data channel as grey. The
+  Image source's Part and Layer pickers read a sequence's parts from its first member.
 - *Sequences.* An unreadable member never aborts a scan: it is reported (up to 32 frames by name,
   then a count) and its frame becomes a gap that holds the preceding frame, as for the #373 batch
   import policy.

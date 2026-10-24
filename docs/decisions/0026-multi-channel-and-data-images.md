@@ -240,7 +240,11 @@ open to owner review; none changes a rendered or exported pixel the decision def
   pass (`CryptomatteCoverageV1`) followed by the proxy PointResampleV1. The matte is bit-identical
   to the CPU reference.
 - **Viewer.** An inspection with no channels shows a pixel output port directly; it previews the
-  matte. The eyedropper samples in the channel set's own frame.
+  matte. A selected Cryptomatte shows the ID-colour preview (a viewer-only `preview` inspection
+  port, the same GPU kernel in a second mode). The eyedropper maps the Viewer point through the
+  displaying layer's evaluated transform and reads the frame at the node's layer clock.
+- **Rank layers are data.** Cryptomatte `<type>NN` layers are never colour layers, and a data-only
+  source's absent Image output is information, not a failure, in preview and render (Q1).
 
 ## Related
 

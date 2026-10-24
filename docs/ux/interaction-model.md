@@ -132,6 +132,15 @@ The guide toggles use `Ctrl+Alt+S` for Safe Areas and `Ctrl+Shift+C`, `Ctrl+Shif
 is suppressed below 400% even when enabled. Guides follow the viewer's active zoom/pan transform;
 they are not part of the display buffer or any export.
 
+Cryptomatte (#364). Selecting a Cryptomatte shows its ID-colour preview in the Viewer: every object
+in its own colour, the selected mattes brightened (Properties "Preview", on by default, turns it
+off). The Viewer's eyedropper tool, or "Pick in Viewer" in Properties, picks objects: a click or
+Shift-click adds the object under the cursor, Alt- or Ctrl-click removes it, each pick one undoable
+edit. The point is mapped through the displaying layer's transform and time, so a moved, scaled,
+rotated, parented or retimed layer picks what is shown; a point outside the source reports "No
+object under the cursor". Properties also lists the manifest names as a searchable checklist, the
+selected names with remove buttons, and a field for a name or a raw `<ID>`.
+
 Masks (ADR 0028). With a layer selected, the Rectangle, Ellipse and Pen tools add a mask to that
 layer instead of creating a shape layer: Rectangle draws four corner anchors, Ellipse four anchors
 with circular handles, and Pen the clicked path, all mapped into the layer's content space through
