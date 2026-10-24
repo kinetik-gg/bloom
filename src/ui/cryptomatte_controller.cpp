@@ -84,19 +84,45 @@ void CryptomatteController::requestLayers(const document::NodeId node) {
     }
 }
 
+// The latest listing for the node, kept while a newer revision is re-read so a matte edit does
+// not blank the layer picker or the name list (requestLayers() starts the re-read).
 const std::vector<std::string>* CryptomatteController::layers(const document::NodeId node) const {
     const auto found = listings_.find(node);
-    return found != listings_.end() && found->second.revision == session_.snapshot().revision()
-               ? &found->second.value.layers
-               : nullptr;
+    return found != listings_.end() ? &found->second.value.layers : nullptr;
 }
 
 QString CryptomatteController::layerDiagnostic(const document::NodeId node) const {
     const auto found = listings_.find(node);
-    return found != listings_.end() && found->second.revision == session_.snapshot().revision()
-               ? QString::fromStdString(found->second.value.diagnostic)
-               : QString{};
+    return found != listings_.end() ? QString::fromStdString(found->second.value.diagnostic)
+                                    : QString{};
 }
+
+const runtime::CryptomatteLayerListing*
+CryptomatteController::listing(const document::NodeId node) const {
+    const auto found = listings_.find(node);
+    return found != listings_.end() ? &found->second.value : nullptr;
+}
+
+bool CryptomatteController::listingCurrent(const document::NodeId node) const {
+    const auto found = listings_.find(node);
+    return found != listings_.end() && found->second.revision == session_.snapshot().revision();
+}
+
+bool CryptomatteController::preview(const document::NodeId node) const {
+    return !previewOff_.contains(node);
+}
+
+void CryptomatteController::setPreview(const document::NodeId node, const bool on) {
+    if (preview(node) == on)
+        return;
+    if (on)
+        previewOff_.erase(node);
+    else
+        previewOff_.insert(node);
+    emit changed();
+}
+
+void CryptomatteController::requestPick() { emit pickRequested(); }
 
 std::vector<std::string> CryptomatteController::mattes(const document::NodeId node) const {
     const auto* composition = session_.composition();

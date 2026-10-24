@@ -611,8 +611,16 @@ void AssetController::requestImageParts(const document::AssetId id) {
             "Read image parts",
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Visible, runtime::TaskExecutor::Cpu),
-        [locator = asset->locator, digest = asset->contentDigest,
-         base = baseDirectory()](runtime::TaskContext& context) {
+        // A sequence is read through its first member (its own verified bytes); the asset digest
+        // is a manifest digest that no single file carries.
+        [locator = asset->kind == document::AssetKind::Sequence && !asset->manifest.members.empty()
+                       ? asset->manifest.members.front().locator
+                       : asset->locator,
+         fileDigest = asset->kind == document::AssetKind::Sequence &&
+                              !asset->manifest.members.empty()
+                          ? asset->manifest.members.front().contentDigest
+                          : asset->contentDigest,
+         digest = asset->contentDigest, base = baseDirectory()](runtime::TaskContext& context) {
             using Result = runtime::TaskResult<std::shared_ptr<ImageParts>>;
             if (context.isCancellationRequested())
                 return Result::cancelled();
@@ -625,7 +633,7 @@ void AssetController::requestImageParts(const document::AssetId id) {
             auto result = std::make_shared<ImageParts>();
             result->digest = digest;
             // A changed file is not listed: the pickers show the parts of the verified bytes.
-            if (probe.value && probe.value->contentDigest == digest)
+            if (probe.value && probe.value->contentDigest == fileDigest)
                 result->parts = std::move(probe.value->parts);
 
             return Result::succeeded(std::move(result));

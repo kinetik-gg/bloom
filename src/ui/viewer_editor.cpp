@@ -2,6 +2,7 @@
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/viewer_editor.hpp>
+#include <bloom/ui/cryptomatte_controller.hpp>
 #include <bloom/ui/viewer_gpu_resident.hpp>
 #include <bloom/ui/viewer_gpu_resident_overlay.hpp>
 #include <memory>
@@ -1742,6 +1743,15 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
             &ViewerEditor::consumeChannelListing);
     connect(&session_, &CompositionSession::selectionChanged, this,
             &ViewerEditor::refreshChannelInspectionChoices);
+    connect(&session_, &CompositionSession::selectionChanged, this,
+            &ViewerEditor::refreshCryptomattePreview);
+    if (auto* cryptomatte = session_.cryptomatteController()) {
+        connect(cryptomatte, &CryptomatteController::changed, this,
+                &ViewerEditor::refreshCryptomattePreview);
+        connect(cryptomatte, &CryptomatteController::pickRequested, this,
+                [this] { selectTool(Tool::Cryptomatte); });
+    }
+    refreshCryptomattePreview();
     connect(&session_, &CompositionSession::snapshotChanged, this,
             &ViewerEditor::refreshChannelInspectionChoices);
     connect(&previewController_, &CompositionPreviewController::viewerResultsAvailable, this,

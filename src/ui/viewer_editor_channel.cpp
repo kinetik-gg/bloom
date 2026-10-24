@@ -218,7 +218,8 @@ void ViewerEditor::rebuildChannelDropdown() {
         channelDropdown_->addItem(tr("Inspect %1").arg(QString::fromStdString(choice.label)));
     int current = static_cast<int>(channel_);
     if (const auto& inspection = previewController_.viewerChannelInspection();
-        inspection && choicesTarget_ && inspection->node == choicesTarget_->node) {
+        inspection && choicesTarget_ && inspection->node == choicesTarget_->node &&
+        inspection->port == choicesTarget_->port) {
         for (std::size_t index = 0; index < inspectionChoices_.size(); ++index)
             if (inspectionChoices_[index].channels == inspection->channels)
                 current = kStandardChannelCount + static_cast<int>(index);

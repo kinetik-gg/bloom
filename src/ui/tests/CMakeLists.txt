@@ -1224,6 +1224,19 @@ set_tests_properties(bloom.ui.asset_validity PROPERTIES
     FIXTURES_REQUIRED media3
     LABELS "ui;media;integration" TIMEOUT 180)
 
+# #364 the owner's Cryptomatte setup end to end: a beauty and a sidecar Cryptomatte-only EXR
+# sequence through Assets, node cards, Properties and the Viewer preview.
+add_executable(bloom_cryptomatte_sidecar_ui_test cryptomatte_sidecar_ui_tests.cpp)
+target_include_directories(bloom_cryptomatte_sidecar_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS} "${PROJECT_SOURCE_DIR}/src/runtime/tests")
+target_link_libraries(bloom_cryptomatte_sidecar_ui_test PRIVATE bloom_ui bloom_runtime_compiler
+    bloom_runtime_evaluator bloom_commands OpenEXR::OpenEXR Qt6::Test)
+bloom_enable_warnings(bloom_cryptomatte_sidecar_ui_test)
+add_test(NAME bloom.ui.cryptomatte_sidecar COMMAND bloom_cryptomatte_sidecar_ui_test)
+set_tests_properties(bloom.ui.cryptomatte_sidecar PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+    LABELS "ui;media;integration" TIMEOUT 180)
+
 add_executable(bloom_media_window_capture media_window_capture.cpp)
 target_include_directories(bloom_media_window_capture PRIVATE ..)
 target_link_libraries(bloom_media_window_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)

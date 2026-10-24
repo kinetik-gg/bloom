@@ -1,6 +1,7 @@
 #include "asset_drop.hpp"
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/node_editor.hpp>
+#include <bloom/ui/cryptomatte_controller.hpp>
 
 #include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -421,10 +422,18 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
     view_->setScene(scene_);
     installAssetDropTarget(*view_->viewport(), session_, view_);
     if (auto* controller = session_.assetController()) {
-        connect(controller, &AssetController::changed, this, [this] { scene_->update(); });
+        // A worker result (a thumbnail, an image's probed parts) also refills the cards' probe
+        // selectors.
+        connect(controller, &AssetController::changed, this, [this] {
+            scene_->refreshValues();
+            scene_->update();
+        });
         connect(controller, &AssetController::nodeThumbnailsChanged, this,
                 [this] { scene_->update(); });
     }
+    if (auto* cryptomatte = session_.cryptomatteController())
+        connect(cryptomatte, &CryptomatteController::changed, scene_,
+                &NodeGraphicsScene::refreshValues);
     layout->addWidget(view_);
 
     connect(&session_, &CompositionSession::snapshotChanged, this, &NodeGraphEditor::rebuild);

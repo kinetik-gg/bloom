@@ -1,6 +1,7 @@
 #include "asset_drop.hpp"
 #include "numeric_field_projection.hpp"
 #include "properties_registry_row.hpp"
+#include <bloom/document/channel_nodes.hpp>
 #include "properties_sections.hpp"
 #include "properties_value_edits.hpp"
 #include <bloom/ui/kit/controls.hpp>
@@ -790,6 +791,10 @@ class NodeItem final : public QGraphicsObject {
             if (node.typeId == document::kCompositionSourceNodeType &&
                 binding.role == "composition")
                 continue;
+            // #364: the matte list is edited by name in Properties and by picking in the Viewer.
+            if (node.typeId == document::kCryptomatteNodeType &&
+                binding.role == document::kCryptomatteMattesParameterRole)
+                continue;
             if (!shapeSource_ || document::shapeRoleVisible(shapeKind_, binding.role))
                 roles.push_back(binding.role);
         }
@@ -1070,14 +1075,23 @@ class NodeItem final : public QGraphicsObject {
         const bool animatable = document::isAnimatableSchemaKey(declared->schemaKey);
 
         const bool fontSelector = declared->schemaKey == document::kTextFontParameterSchemaKey;
+        // ADR 0026 / #364: values the file's probe lists, filled on refresh.
+        const bool probeSelector =
+            declared->schemaKey == document::kImagePartParameterSchemaKey ||
+            declared->schemaKey == document::kImageLayerParameterSchemaKey ||
+            declared->schemaKey == document::kCryptomatteLayerParameterSchemaKey;
         if (const auto items = selectorItems(declared->schemaKey);
-            fontSelector || !items.isEmpty() ||
+            fontSelector || probeSelector || !items.isEmpty() ||
             (declared->schemaKey == "bloom.image.asset" ||
              declared->schemaKey == "bloom.video.asset")) {
             row.selector = new kit::KDropdown;
-            row.selector->setObjectName(declared->schemaKey == "bloom.image.asset"
-                                            ? "nodeImageAsset"
-                                            : "nodeOperandSelector");
+            row.selector->setObjectName(
+                declared->schemaKey == "bloom.image.asset" ? "nodeImageAsset"
+                : declared->schemaKey == document::kImagePartParameterSchemaKey ? "nodeImagePart"
+                : declared->schemaKey == document::kImageLayerParameterSchemaKey ? "nodeImageLayer"
+                : declared->schemaKey == document::kCryptomatteLayerParameterSchemaKey
+                    ? "nodeCryptomatteLayer"
+                    : "nodeOperandSelector");
             row.selector->setAccessibleName(label);
             row.selector->setControlSize(kit::KDropdown::ControlSize::Compact);
             if (fontSelector) {
@@ -1437,6 +1451,23 @@ class NodeItem final : public QGraphicsObject {
                             const auto selected = row.selector->findData(current);
                             if (selected >= 0)
                                 row.selector->setCurrentIndex(selected);
+                        } else if (parameter != nullptr &&
+                                   (parameter->schemaKey ==
+                                        document::kImagePartParameterSchemaKey ||
+                                    parameter->schemaKey ==
+                                        document::kImageLayerParameterSchemaKey ||
+                                    parameter->schemaKey ==
+                                        document::kCryptomatteLayerParameterSchemaKey)) {
+                            if (const auto* node = composition.graph().findNode(id_)) {
+                                if (parameter->schemaKey == document::kImagePartParameterSchemaKey)
+                                    refreshImagePartSelector(*row.selector, *session_, *node);
+                                else if (parameter->schemaKey ==
+                                         document::kImageLayerParameterSchemaKey)
+                                    refreshImageLayerSelector(*row.selector, *session_, *node);
+                                else
+                                    refreshCryptomatteLayerSelector(*row.selector, *session_,
+                                                                    *node);
+                            }
                         } else {
                             (videoSource_ ? refreshVideoAssetSelector : refreshImageAssetSelector)(
                                 *row.selector, *session_, QString::fromStdString(*stored));

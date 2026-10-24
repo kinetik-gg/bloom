@@ -17,6 +17,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -48,6 +49,18 @@ class CryptomatteController final : public QObject {
     void requestLayers(document::NodeId node);
     [[nodiscard]] const std::vector<std::string>* layers(document::NodeId node) const;
     [[nodiscard]] QString layerDiagnostic(document::NodeId node) const;
+    // The whole listing: layers plus the manifest names of the node's selected layer.
+    [[nodiscard]] const runtime::CryptomatteLayerListing* listing(document::NodeId node) const;
+    // Whether the listing above was read for the current snapshot (else it is the latest one,
+    // shown while requestLayers() re-reads).
+    [[nodiscard]] bool listingCurrent(document::NodeId node) const;
+
+    // The Viewer's ID-colour preview while the node is selected (session display state; on unless
+    // turned off for that node).
+    [[nodiscard]] bool preview(document::NodeId node) const;
+    void setPreview(document::NodeId node, bool on);
+    // Asks the Viewer to switch to the Cryptomatte eyedropper (Properties "Pick in Viewer").
+    void requestPick();
 
     // Reads the object under frame pixel (x, y) of `node`'s channel set on a worker and adds it to
     // (or removes it from) the node's matte list as one undoable edit. `inspection` is the plan
@@ -69,6 +82,7 @@ class CryptomatteController final : public QObject {
 
   signals:
     void changed();
+    void pickRequested();
 
   private:
     void poll();
@@ -95,6 +109,7 @@ class CryptomatteController final : public QObject {
     std::map<document::NodeId, Listing> listings_;
     std::map<document::NodeId, PendingListing> listingTasks_;
     std::optional<PendingPick> pickTask_;
+    std::set<document::NodeId> previewOff_;
     QString lastPickMessage_;
 };
 

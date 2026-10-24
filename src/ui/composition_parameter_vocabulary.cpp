@@ -2,6 +2,11 @@
 #include "node_editor_items.hpp"
 #include "properties_registry_row.hpp"
 #include <QSignalBlocker>
+#include <bloom/document/channel_nodes.hpp>
+#include <bloom/ui/asset_controller.hpp>
+#include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/cryptomatte_controller.hpp>
+#include <algorithm>
 #include <bloom/core/scalar_primitives.hpp>
 #include <bloom/ui/kit/icons.hpp>
 namespace bloom::ui {
@@ -100,6 +105,137 @@ void refreshVideoAssetSelector(kit::KDropdown& selector, const CompositionSessio
 void refreshAudioAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
                                const QString& stored) {
     refreshAssetSelector(selector, session, stored, true);
+}
+
+namespace {
+[[nodiscard]] QString boundNodeText(const CompositionSession& session,
+                                    const document::NodeRecord& node, const std::string_view role) {
+    for (const auto& binding : node.parameters)
+        if (binding.role == role)
+            return session.constantStringValue(binding.parameterId).value_or(QString{});
+    return {};
+}
+// The probed parts of the node's asset, requesting them when unknown.
+[[nodiscard]] const std::vector<media::ImagePartInfo>* probedParts(const CompositionSession& session,
+                                                                   const document::NodeRecord& node) {
+    auto* controller = session.assetController();
+    const auto text = boundNodeText(session, node, "asset");
+    if (controller == nullptr || text.isEmpty())
+        return nullptr;
+    const auto asset = document::AssetId::fromRaw(text.toULongLong());
+    const auto* parts = controller->imageParts(asset);
+    if (parts == nullptr)
+        controller->requestImageParts(asset);
+    return parts;
+}
+[[nodiscard]] const media::ImagePartInfo* selectedPart(const std::vector<media::ImagePartInfo>& parts,
+                                                       const QString& name) {
+    if (name.isEmpty())
+        return parts.empty() ? nullptr : &parts.front();
+    const auto found = std::ranges::find(parts, name.toStdString(), &media::ImagePartInfo::name);
+    return found == parts.end() ? nullptr : &*found;
+}
+// Fills `selector` with (label, value) items and selects `current`, adding "(missing)" for a
+// value the probe does not list.
+bool fillProbeSelector(kit::KDropdown& selector, const QList<std::pair<QString, QString>>& items,
+                       const QString& current, const bool known, const QString& pending) {
+    const QSignalBlocker blocker(selector);
+    selector.clearItems();
+    int index = -1;
+    for (const auto& [label, value] : items) {
+        selector.addItem(label, value);
+        if (value == current)
+            index = selector.count() - 1;
+    }
+    const bool listed = index >= 0;
+    if (!listed) {
+        selector.addItem(known ? QObject::tr("%1 (missing)").arg(current)
+                               : (current.isEmpty() ? pending : current),
+                         current);
+        index = selector.count() - 1;
+    }
+    selector.setCurrentIndex(index);
+    selector.setEnabled(known && (items.size() > 1 || !listed));
+    selector.setMutedValue(known && !listed);
+    selector.setToolTip(known ? QString{} : QObject::tr("Reading the file…"));
+    return listed;
+}
+} // namespace
+
+bool refreshImagePartSelector(kit::KDropdown& selector, const CompositionSession& session,
+                              const document::NodeRecord& node) {
+    const auto* parts = probedParts(session, node);
+    QList<std::pair<QString, QString>> items{{QObject::tr("First part"), QString{}}};
+    if (parts != nullptr)
+        for (std::size_t index = 1; index < parts->size(); ++index)
+            if (!(*parts)[index].name.empty())
+                items.push_back({QString::fromStdString((*parts)[index].name),
+                                 QString::fromStdString((*parts)[index].name)});
+    return fillProbeSelector(selector, items,
+                             boundNodeText(session, node, document::kImagePartParameterRole),
+                             parts != nullptr, QObject::tr("First part"));
+}
+
+bool refreshImageLayerSelector(kit::KDropdown& selector, const CompositionSession& session,
+                               const document::NodeRecord& node) {
+    const auto* parts = probedParts(session, node);
+    const auto* part =
+        parts == nullptr
+            ? nullptr
+            : selectedPart(*parts, boundNodeText(session, node, document::kImagePartParameterRole));
+    QList<std::pair<QString, QString>> items;
+    if (part != nullptr)
+        for (const auto& layer : part->colourLayers)
+            items.push_back({layer.empty() ? QObject::tr("Colour (root)")
+                                           : QString::fromStdString(layer),
+                             QString::fromStdString(layer)});
+    const auto current = boundNodeText(session, node, document::kImageLayerParameterRole);
+    if (part != nullptr && items.empty()) {
+        // A data-only part: nothing to choose; the note says what to use instead.
+        const QSignalBlocker blocker(selector);
+        selector.clearItems();
+        selector.addItem(QObject::tr("No colour layer"), current);
+        selector.setCurrentIndex(0);
+        selector.setEnabled(false);
+        selector.setMutedValue(true);
+        selector.setToolTip(QObject::tr("No colour layer — use Channels"));
+        return true;
+    }
+    return fillProbeSelector(selector, items, current, part != nullptr,
+                             QObject::tr("Colour (root)"));
+}
+
+bool refreshCryptomatteLayerSelector(kit::KDropdown& selector, const CompositionSession& session,
+                                     const document::NodeRecord& node) {
+    auto* controller = session.cryptomatteController();
+    const auto* layers = controller != nullptr ? controller->layers(node.id) : nullptr;
+    if (controller != nullptr && !controller->listingCurrent(node.id))
+        controller->requestLayers(node.id);
+    QList<std::pair<QString, QString>> items;
+    if (layers != nullptr)
+        for (const auto& layer : *layers)
+            items.push_back({QString::fromStdString(layer), QString::fromStdString(layer)});
+    const auto current = boundNodeText(session, node, document::kCryptomatteLayerParameterRole);
+    const bool listed = fillProbeSelector(selector, items, current, layers != nullptr, current);
+    if (layers != nullptr && layers->empty())
+        selector.setToolTip(QObject::tr("The channel set has no Cryptomatte layer"));
+    return listed;
+}
+
+QString imageSourceColourNote(const CompositionSession& session, const document::NodeRecord& node) {
+    auto* controller = session.assetController();
+    const auto text = boundNodeText(session, node, "asset");
+    if (controller == nullptr || text.isEmpty())
+        return {};
+    const auto* parts = controller->imageParts(document::AssetId::fromRaw(text.toULongLong()));
+    const auto* part =
+        parts == nullptr
+            ? nullptr
+            : selectedPart(*parts, boundNodeText(session, node, document::kImagePartParameterRole));
+    const auto layer = boundNodeText(session, node, document::kImageLayerParameterRole).toStdString();
+    return part != nullptr && std::ranges::find(part->colourLayers, layer) == part->colourLayers.end()
+               ? QObject::tr("No colour layer — use Channels")
+               : QString{};
 }
 
 PropertiesRowControl propertiesRowControl(std::string_view schemaKey) {

@@ -23,6 +23,19 @@ void refreshImageAssetSelector(kit::KDropdown& selector, const CompositionSessio
                                const QString& stored);
 void refreshAudioAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
                                const QString& stored);
+// ADR 0026 / #364: the Image source's Part and Layer and the Cryptomatte's Layer, offered only as
+// the values the probe actually found (requested on a worker when not yet known; the selector
+// stays disabled and says so until they arrive). Shared by node cards and Properties. Each
+// answers whether the current value is one the probe lists.
+bool refreshImagePartSelector(kit::KDropdown& selector, const CompositionSession& session,
+                              const document::NodeRecord& node);
+bool refreshImageLayerSelector(kit::KDropdown& selector, const CompositionSession& session,
+                               const document::NodeRecord& node);
+bool refreshCryptomatteLayerSelector(kit::KDropdown& selector, const CompositionSession& session,
+                                     const document::NodeRecord& node);
+// The plain note an Image source shows when its selected part and layer have no colour channels
+// ("No colour layer — use Channels"); empty when it has colour or the probe is not known yet.
+QString imageSourceColourNote(const CompositionSession& session, const document::NodeRecord& node);
 void resetPropertiesParameter(CompositionSession& session, document::ParameterId parameter);
 void jumpToPropertiesNode(CompositionSession& session, document::NodeId node, QWidget* panel);
 [[nodiscard]] document::ShapeKind nodeShapeKind(const document::Composition& composition,

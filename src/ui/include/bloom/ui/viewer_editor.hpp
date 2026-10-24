@@ -581,6 +581,9 @@ class ViewerEditor final : public QWidget,
     // selected Cryptomatte's matte list, Alt- or Ctrl-click removes it (a worker read).
     bool cryptomattePress(QMouseEvent* event);
     void cryptomattePickFinished();
+    // #364: while a Cryptomatte with Preview on is selected, the Viewer shows its ID-colour preview
+    // (a session display choice); an explicit inspection the artist chose is left alone.
+    void refreshCryptomattePreview();
     bool cryptomattePickOutstanding_ = false;
     QPointF cryptomattePickPosition_;
     bool textPress(QMouseEvent* event);

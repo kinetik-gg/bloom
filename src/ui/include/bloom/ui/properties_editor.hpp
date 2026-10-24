@@ -32,6 +32,7 @@ namespace kit {
 class KButton;
 class KColorChip;
 class KDropdown;
+class KLabel;
 class KLineEdit;
 class KSection;
 class KSlider;
@@ -68,6 +69,8 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     bool awaitingImageParts_ = false;
     QPointer<kit::KDropdown> imagePartPicker_;
     QPointer<kit::KDropdown> imageLayerPicker_;
+    QPointer<QLabel> imageColourNote_;
+    QPointer<QWidget> imageColourNoteRow_;
     QPointer<kit::KLineEdit> outputLayersField_;
     // #364 Cryptomatte: the layer picker, the selected matte list and a name field.
     void addCryptomatteRows(const document::NodeRecord& node, kit::KSection* section);
@@ -77,6 +80,12 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     QPointer<kit::KDropdown> cryptomatteLayerPicker_;
     QPointer<QWidget> cryptomatteMatteList_;
     QPointer<kit::KLineEdit> cryptomatteAddField_;
+    QPointer<kit::KSwitch> cryptomattePreview_;
+    QPointer<kit::KLineEdit> cryptomatteSearch_;
+    QPointer<QWidget> cryptomatteNames_;
+    QPointer<kit::KLabel> cryptomatteNamesNote_;
+    std::vector<std::string> cryptomatteListedNames_;
+    void filterCryptomatteNames();
     void configureUpstream();
     void configureDrivenRows();
     // Task DRIVE-1: this panel reads the session's resolved driven values rather than

@@ -109,4 +109,19 @@ void ViewerEditor::cryptomattePickFinished() {
                            controller->lastPickMessage(), this);
 }
 
+void ViewerEditor::refreshCryptomattePreview() {
+    auto* controller = session_.cryptomatteController();
+    std::optional<runtime::ChannelInspection> desired;
+    if (const auto* node = session_.selectedNode();
+        node != nullptr && node->typeId == document::kCryptomatteNodeType && controller != nullptr &&
+        controller->preview(node->id))
+        desired = runtime::ChannelInspection{
+            node->id, std::string(document::kCryptomattePreviewInspectionPort), {}};
+    const auto& current = previewController_.viewerChannelInspection();
+    const bool currentIsPreview =
+        current && current->port == document::kCryptomattePreviewInspectionPort;
+    if ((currentIsPreview && current != desired) || (!current && desired))
+        previewController_.setViewerChannelInspection(desired);
+}
+
 } // namespace bloom::ui

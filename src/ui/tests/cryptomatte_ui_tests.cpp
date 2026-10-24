@@ -212,9 +212,9 @@ void testPropertiesAndViewer() {
     ui::kit::KDropdown* picker = nullptr;
     expect(waitUntil([&] {
                picker = properties->findChild<ui::kit::KDropdown*>("propertiesCryptomatteLayer");
-               return picker != nullptr && picker->isEnabled();
+               return picker != nullptr && picker->toolTip().isEmpty() && picker->count() == 1;
            }),
-           "the layer picker enables once the worker listing arrives");
+           "the layer picker fills once the worker listing arrives");
     expect(picker != nullptr && picker->count() == 1 && picker->itemText(0) == "CryptoObject",
            "the layer picker lists exactly CryptoObject");
 
@@ -408,6 +408,9 @@ void testLayerMapping() {
                label + ": the Viewer shows the edited composition");
         lastMapping = viewer->mappingForTest();
     };
+    // Picking through the composition (the ID-colour preview, which shows the node in its own
+    // frame, is off here).
+    controller.setPreview(scene.cryptomatte, false);
     scene.session.selectNode(scene.cryptomatte);
     if (auto* tool = viewer->findChild<QToolButton*>("viewerCryptomatteTool"))
         tool->click();

@@ -16,6 +16,7 @@
 #include <bloom/ui/cryptomatte_controller.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <limits>
@@ -79,6 +80,19 @@ void PropertiesEditor::configureRegistryRows() {
             registryPanel_->setParent(nullptr);
             registryPanel_->deleteLater();
             registryPanel_ = nullptr;
+            // The purpose-built rows go with the panel.
+            imagePartPicker_ = nullptr;
+            imageLayerPicker_ = nullptr;
+            imageColourNote_ = nullptr;
+            imageColourNoteRow_ = nullptr;
+            outputLayersField_ = nullptr;
+            cryptomatteLayerPicker_ = nullptr;
+            cryptomatteMatteList_ = nullptr;
+            cryptomatteAddField_ = nullptr;
+            cryptomattePreview_ = nullptr;
+            cryptomatteSearch_ = nullptr;
+            cryptomatteNames_ = nullptr;
+            cryptomatteNamesNote_ = nullptr;
         }
         registrySignature_ = signature;
         const auto* definition =
@@ -182,8 +196,12 @@ void PropertiesEditor::configureRegistryRows() {
             }
             bool hasValueOutputs = false;
             for (const auto& output : definition->outputs) {
+                // Pixel and sound outputs carry no value to read out (a Mask or a channel set
+                // never resolves to text, which left "Resolving…" on screen for good).
                 if (output.valueKind == document::SocketValueKind::Image ||
-                    output.valueKind == document::SocketValueKind::Audio)
+                    output.valueKind == document::SocketValueKind::Audio ||
+                    output.valueKind == document::SocketValueKind::Mask ||
+                    output.valueKind == document::SocketValueKind::ChannelSet)
                     continue;
                 hasValueOutputs = true;
                 const auto label = node_editor::displayTypeName(output.name);
@@ -243,8 +261,12 @@ void PropertiesEditor::configureRegistryRows() {
         }
     }
     if (registryPanel_)
+        // Purpose-built rows (Image part/layer, the Cryptomatte, the output layers) count too: a
+        // node whose every parameter has a purpose-built row still shows its section.
         registryPanel_->setVisible(!registryRows_.empty() ||
-                                   registryPanel_->property("hasValueOutputs").toBool());
+                                   registryPanel_->property("hasValueOutputs").toBool() ||
+                                   imagePartPicker_ != nullptr || cryptomatteLayerPicker_ != nullptr ||
+                                   outputLayersField_ != nullptr);
     for (auto* row : registryRows_)
         row->refresh();
     if (node != nullptr && node->typeId == document::kImageSourceNodeType)
@@ -319,6 +341,19 @@ void PropertiesEditor::addImageSelectionRows(const document::NodeRecord& node,
     };
     imagePartPicker_ = addPicker(tr("Part"), "propertiesImagePart");
     imageLayerPicker_ = addPicker(tr("Layer"), "propertiesImageLayer");
+    {
+        // ADR 0026 Q1: a data-only file has no Image output; say so plainly, as a note.
+        const auto name = tr("Image");
+        auto* label = kit::makePropertyRowLabel(name, section->body());
+        auto* note = new kit::KLabel(section->body());
+        note->setObjectName("propertiesImageColourNote");
+        auto* row = new kit::KPropertyRow(label, nullptr, {note}, section->body());
+        row->setProperty("rowLabel", name);
+        row->setVisible(false);
+        section->bodyLayout()->addWidget(row);
+        imageColourNote_ = note;
+        imageColourNoteRow_ = row;
+    }
     const auto nodeId = node.id;
     connect(imagePartPicker_, &kit::KDropdown::currentIndexChanged, this,
             [this, nodeId](const int index) {
@@ -353,68 +388,20 @@ void PropertiesEditor::populateImageSelectionRows(const document::NodeRecord& no
         return;
     auto* controller = session_.assetController();
     const auto assetText = boundText(session_, node, "asset");
-    const auto assetId = document::AssetId::fromRaw(assetText.toULongLong());
-    const std::vector<media::ImagePartInfo>* parts =
-        controller != nullptr ? controller->imageParts(assetId) : nullptr;
-    awaitingImageParts_ = controller != nullptr && parts == nullptr && !assetText.isEmpty();
-    if (awaitingImageParts_) {
-        controller->requestImageParts(assetId);
+    awaitingImageParts_ =
+        controller != nullptr && !assetText.isEmpty() &&
+        controller->imageParts(document::AssetId::fromRaw(assetText.toULongLong())) == nullptr;
+    if (awaitingImageParts_)
         // Repopulate once the Assets worker has read the parts.
         connect(controller, &AssetController::changed, this,
                 &PropertiesEditor::imagePartsMayHaveArrived, Qt::UniqueConnection);
+    refreshImagePartSelector(*imagePartPicker_, session_, node);
+    refreshImageLayerSelector(*imageLayerPicker_, session_, node);
+    if (imageColourNote_ != nullptr) {
+        const auto note = imageSourceColourNote(session_, node);
+        imageColourNote_->setText(note);
+        imageColourNoteRow_->setVisible(!note.isEmpty());
     }
-    const auto currentPart = boundText(session_, node, document::kImagePartParameterRole);
-    const auto currentLayer = boundText(session_, node, document::kImageLayerParameterRole);
-    auto* partPicker = imagePartPicker_.data();
-    auto* layerPicker = imageLayerPicker_.data();
-    const QSignalBlocker partBlocker(partPicker);
-    const QSignalBlocker layerBlocker(layerPicker);
-    partPicker->clearItems();
-    layerPicker->clearItems();
-    partPicker->setToolTip({});
-    const media::ImagePartInfo* selectedPart = nullptr;
-    if (parts == nullptr || parts->empty()) {
-        partPicker->addItem(currentPart.isEmpty() ? tr("First part") : currentPart, currentPart);
-        layerPicker->addItem(currentLayer.isEmpty() ? tr("Root") : currentLayer, currentLayer);
-        partPicker->setToolTip(parts == nullptr ? tr("Reading the image parts…")
-                                                : tr("This image has no named parts"));
-        partPicker->setEnabled(false);
-        layerPicker->setEnabled(false);
-        return;
-    }
-    int partIndex = -1;
-    for (std::size_t index = 0; index < parts->size(); ++index) {
-        const auto& part = (*parts)[index];
-        const auto name = QString::fromStdString(part.name);
-        // The first unnamed part (every still and single-part EXR) is stored as "".
-        partPicker->addItem(name.isEmpty() ? tr("Image") : name, name);
-        if (name == currentPart || (currentPart.isEmpty() && index == 0)) {
-            partIndex = static_cast<int>(index);
-            selectedPart = &part;
-        }
-    }
-    if (partIndex < 0) {
-        partPicker->addItem(tr("%1 (missing)").arg(currentPart), currentPart);
-        partIndex = partPicker->count() - 1;
-    }
-    partPicker->setCurrentIndex(partIndex);
-    partPicker->setEnabled(parts->size() > 1 || partIndex >= static_cast<int>(parts->size()));
-    int layerIndex = -1;
-    if (selectedPart != nullptr)
-        for (const auto& layer : selectedPart->colourLayers) {
-            const auto name = QString::fromStdString(layer);
-            layerPicker->addItem(name.isEmpty() ? tr("Root") : name, name);
-            if (name == currentLayer)
-                layerIndex = layerPicker->count() - 1;
-        }
-    if (layerIndex < 0) {
-        layerPicker->addItem(currentLayer.isEmpty() ? tr("Root (no colour)")
-                                                    : tr("%1 (missing)").arg(currentLayer),
-                             currentLayer);
-        layerIndex = layerPicker->count() - 1;
-    }
-    layerPicker->setCurrentIndex(layerIndex);
-    layerPicker->setEnabled(true);
 }
 
 // ADR 0026 §7: the layers a layered OpenEXR writes from the Composition Output's channel set.
@@ -474,6 +461,44 @@ void PropertiesEditor::addCryptomatteRows(const document::NodeRecord& node,
                         configureRegistryRows();
                 });
     }
+    {
+        // The Viewer's ID-colour preview while this node is selected (a display choice).
+        const auto name = tr("Preview");
+        auto* label = kit::makePropertyRowLabel(name, section->body());
+        auto* toggle = new kit::KSwitch(section->body());
+        toggle->setObjectName("propertiesCryptomattePreview");
+        toggle->setCheckable(true);
+        toggle->setAccessibleName(name);
+        toggle->setToolTip(tr("Show every object in its own colour in the Viewer"));
+        auto* row = new kit::KPropertyRow(label, nullptr, {toggle}, section->body());
+        row->setProperty("rowLabel", name);
+        section->bodyLayout()->addWidget(row);
+        cryptomattePreview_ = toggle;
+        connect(toggle, &kit::KSwitch::toggled, this, [this, nodeId](const bool on) {
+            if (auto* controller = session_.cryptomatteController())
+                controller->setPreview(nodeId, on);
+        });
+    }
+    {
+        // One obvious step to the eyedropper, and one plain line saying what it does.
+        const auto name = tr("Pick");
+        auto* label = kit::makePropertyRowLabel(name, section->body());
+        auto* pick = new kit::KButton(kit::IconId::Eyedropper, tr("Pick in Viewer"), section->body());
+        pick->setObjectName("propertiesCryptomattePick");
+        pick->setVariant(kit::KButton::Variant::Secondary);
+        pick->setToolTip(tr("Click adds, Shift-click adds, Alt- or Ctrl-click removes"));
+        auto* row = new kit::KPropertyRow(label, nullptr, {pick}, section->body());
+        row->setProperty("rowLabel", name);
+        section->bodyLayout()->addWidget(row);
+        connect(pick, &QAbstractButton::clicked, this, [this] {
+            if (auto* controller = session_.cryptomatteController())
+                controller->requestPick();
+        });
+        auto* hint = new kit::KLabel(tr("Click objects in the Viewer to add them"), section->body(),
+                                     kit::TypeRole::UiSmall);
+        hint->setObjectName("propertiesCryptomatteHint");
+        section->bodyLayout()->addWidget(hint);
+    }
     auto* list = new QWidget(section->body());
     list->setObjectName("propertiesCryptomatteMattes");
     auto* listLayout = new QVBoxLayout(list);
@@ -509,44 +534,115 @@ void PropertiesEditor::addCryptomatteRows(const document::NodeRecord& node,
                 configureRegistryRows();
         });
     }
+    {
+        // The manifest's names for the chosen layer, as a searchable checklist.
+        const auto name = tr("Names");
+        auto* label = kit::makePropertyRowLabel(name, section->body());
+        auto* search = new kit::KSearchField(section->body());
+        search->setObjectName("propertiesCryptomatteSearch");
+        search->setPlaceholderText(tr("Search names"));
+        auto* row = new kit::KPropertyRow(label, nullptr, {search}, section->body());
+        row->setProperty("rowLabel", name);
+        section->bodyLayout()->addWidget(row);
+        cryptomatteSearch_ = search;
+        connect(search, &QLineEdit::textChanged, this, [this] { filterCryptomatteNames(); });
+        auto* note = new kit::KLabel(QString{}, section->body(), kit::TypeRole::UiSmall);
+        note->setObjectName("propertiesCryptomatteNamesNote");
+        section->bodyLayout()->addWidget(note);
+        cryptomatteNamesNote_ = note;
+        auto* names = new QWidget(section->body());
+        names->setObjectName("propertiesCryptomatteNames");
+        auto* namesLayout = new QVBoxLayout(names);
+        namesLayout->setContentsMargins(0, 0, 0, 0);
+        namesLayout->setSpacing(0);
+        section->bodyLayout()->addWidget(names);
+        cryptomatteNames_ = names;
+        cryptomatteListedNames_.clear();
+    }
+}
+
+void PropertiesEditor::filterCryptomatteNames() {
+    if (cryptomatteNames_ == nullptr)
+        return;
+    const auto filter = cryptomatteSearch_ ? cryptomatteSearch_->text().trimmed() : QString{};
+    for (auto* row : cryptomatteNames_->findChildren<QWidget*>(Qt::FindDirectChildrenOnly))
+        row->setVisible(filter.isEmpty() ||
+                        row->property("rowLabel").toString().contains(filter, Qt::CaseInsensitive));
 }
 
 void PropertiesEditor::populateCryptomatteRows(const document::NodeRecord& node) {
     auto* controller = session_.cryptomatteController();
-    const auto currentLayer = boundText(session_, node, document::kCryptomatteLayerParameterRole);
     if (cryptomatteLayerPicker_ != nullptr) {
-        const std::vector<std::string>* layers =
-            controller != nullptr ? controller->layers(node.id) : nullptr;
-        awaitingCryptomatteLayers_ = controller != nullptr && layers == nullptr;
-        if (awaitingCryptomatteLayers_) {
-            controller->requestLayers(node.id);
+        awaitingCryptomatteLayers_ = controller != nullptr && !controller->listingCurrent(node.id);
+        if (awaitingCryptomatteLayers_)
             connect(controller, &CryptomatteController::changed, this,
                     &PropertiesEditor::cryptomatteLayersMayHaveArrived, Qt::UniqueConnection);
-        }
-        auto* picker = cryptomatteLayerPicker_.data();
-        const QSignalBlocker blocker(picker);
-        picker->clearItems();
-        int current = -1;
-        if (layers != nullptr)
-            for (const auto& layer : *layers) {
-                const auto name = QString::fromStdString(layer);
-                picker->addItem(name, name);
-                if (name == currentLayer)
-                    current = picker->count() - 1;
+        refreshCryptomatteLayerSelector(*cryptomatteLayerPicker_, session_, node);
+    }
+    if (cryptomattePreview_ != nullptr) {
+        const QSignalBlocker blocker(cryptomattePreview_.data());
+        cryptomattePreview_->setChecked(controller == nullptr || controller->preview(node.id));
+    }
+    if (cryptomatteNames_ != nullptr) {
+        const auto* listing = controller != nullptr ? controller->listing(node.id) : nullptr;
+        const auto selected = controller != nullptr ? controller->mattes(node.id)
+                                                    : std::vector<std::string>{};
+        const auto names = listing != nullptr ? listing->names : std::vector<std::string>{};
+        auto* container = cryptomatteNames_.data();
+        if (names != cryptomatteListedNames_) {
+            for (auto* child : container->findChildren<QWidget*>(Qt::FindDirectChildrenOnly)) {
+                // Detached first, so the search filter can never show a retiring row again.
+                child->hide();
+                child->setParent(nullptr);
+                child->deleteLater();
             }
-        if (current < 0) {
-            picker->addItem(layers == nullptr ? currentLayer : tr("%1 (missing)").arg(currentLayer),
-                            currentLayer);
-            current = picker->count() - 1;
+            cryptomatteListedNames_ = names;
+            const auto nodeId = node.id;
+            for (const auto& entry : names) {
+                const auto text = QString::fromStdString(entry);
+                auto* label = kit::makePropertyRowLabel(text, container);
+                auto* check = new kit::KCheckBox(container);
+                check->setObjectName("propertiesCryptomatteName");
+                check->setCheckable(true);
+                check->setAccessibleName(text);
+                check->setProperty("matteName", text);
+                auto* row = new kit::KPropertyRow(label, nullptr, {check}, container);
+                row->setProperty("rowLabel", text);
+                container->layout()->addWidget(row);
+                connect(check, &kit::KSwitch::toggled, this,
+                        [this, nodeId, entry](const bool on) {
+                            auto* current = session_.cryptomatteController();
+                            if (current == nullptr)
+                                return;
+                            auto list = current->mattes(nodeId);
+                            const auto found = std::ranges::find(list, entry);
+                            if (on && found == list.end())
+                                list.push_back(entry);
+                            else if (!on && found != list.end())
+                                list.erase(found);
+                            else
+                                return;
+                            if (!current->setMattes(nodeId, list,
+                                                    on ? tr("Add Cryptomatte Matte")
+                                                       : tr("Remove Cryptomatte Matte")))
+                                configureRegistryRows();
+                        });
+            }
         }
-        picker->setCurrentIndex(current);
-        picker->setEnabled(layers != nullptr && !layers->empty());
-        const auto diagnostic =
-            controller != nullptr ? controller->layerDiagnostic(node.id) : QString{};
-        picker->setToolTip(layers == nullptr       ? tr("Reading the Cryptomatte layers…")
-                           : !diagnostic.isEmpty() ? diagnostic
-                           : layers->empty()       ? tr("The channel set has no Cryptomatte layer")
-                                                   : QString{});
+        for (auto* check : container->findChildren<kit::KCheckBox*>("propertiesCryptomatteName")) {
+            const QSignalBlocker blocker(check);
+            check->setChecked(std::ranges::find(selected,
+                                                check->property("matteName").toString().toStdString()) !=
+                              selected.end());
+        }
+        filterCryptomatteNames();
+        if (cryptomatteNamesNote_ != nullptr)
+            cryptomatteNamesNote_->setText(
+                listing == nullptr  ? tr("Reading the names…")
+                : !listing->manifest ? tr("This layer has no name list — pick in the Viewer or type a name")
+                                     : QString{});
+        if (cryptomatteSearch_ != nullptr)
+            cryptomatteSearch_->setEnabled(!names.empty());
     }
     if (cryptomatteMatteList_ == nullptr)
         return;

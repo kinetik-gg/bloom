@@ -365,16 +365,16 @@ void run() {
     while (partsTimer.elapsed() < 15000) {
         QApplication::processEvents();
         layerPicker = properties.findChild<ui::kit::KDropdown*>("propertiesImageLayer");
-        if (layerPicker != nullptr && layerPicker->isEnabled())
+        if (layerPicker != nullptr && layerPicker->toolTip().isEmpty() && layerPicker->count() > 0)
             break;
         QTest::qWait(10);
     }
-    require(layerPicker && layerPicker->isEnabled() && layerPicker->count() == 1 &&
-                layerPicker->itemText(0) == "Root",
-            "the layer picker lists the still's root colour layer");
+    require(layerPicker && layerPicker->count() == 1 &&
+                layerPicker->itemText(0) == "Colour (root)",
+            "the layer picker lists exactly the still's root colour layer");
     auto* partPicker = properties.findChild<ui::kit::KDropdown*>("propertiesImagePart");
     require(partPicker && !partPicker->isEnabled() &&
-                partPicker->itemText(partPicker->currentIndex()) == "Image",
+                partPicker->itemText(partPicker->currentIndex()) == "First part",
             "a still has one part");
     ui::node_editor::NodeItem* card = nullptr;
     for (auto* item : view->scene()->items())
