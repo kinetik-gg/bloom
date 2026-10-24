@@ -92,6 +92,7 @@ BLOOM_GPU_REQUIRED_OPERATION(CompiledShape, "shape source");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledCompositionSource, "nested composition source");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledImageEffect, "image effect");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledChannelShuffle, "channel shuffle (ADR 0026)");
+BLOOM_GPU_REQUIRED_OPERATION(CompiledCryptomatte, "Cryptomatte matte (#364)");
 
 #define BLOOM_GPU_REQUIRED_EFFECT(Alternative, Label)                                              \
     template <> struct GpuImageEffectCoverageTraits<Alternative> final {                           \
@@ -419,6 +420,7 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     case NodeLoweringKind::CompositionOutput:
     case NodeLoweringKind::Mask:
     case NodeLoweringKind::Channel:
+    case NodeLoweringKind::Cryptomatte:
         return true;
     case NodeLoweringKind::AudioSource:
     case NodeLoweringKind::Unsupported:
@@ -465,6 +467,8 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
         return "operation.CompiledImageEffect";
     case NodeLoweringKind::Channel: // channel algebra reaches pixels only through the gather
         return "operation.CompiledChannelShuffle";
+    case NodeLoweringKind::Cryptomatte:
+        return "operation.CompiledCryptomatte";
     case NodeLoweringKind::VideoSource:
         return "operation.CompiledVideoSource";
     case NodeLoweringKind::CompositionSource:

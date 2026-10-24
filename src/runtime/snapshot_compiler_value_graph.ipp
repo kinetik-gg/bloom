@@ -568,6 +568,7 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     case runtime::NodeLoweringKind::Unsupported:
     case runtime::NodeLoweringKind::Mask:
     case runtime::NodeLoweringKind::Channel:
+    case runtime::NodeLoweringKind::Cryptomatte:
         break;
     }
     return std::nullopt;

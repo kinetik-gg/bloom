@@ -233,6 +233,8 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Channel Copy");
     if (typeId == document::kChannelRemoveNodeType)
         return QCoreApplication::translate("node_editor", "Select Channels");
+    if (typeId == document::kCryptomatteNodeType)
+        return QCoreApplication::translate("node_editor", "Cryptomatte");
     if (typeId == "bloom.audio-source")
         return QCoreApplication::translate("node_editor", "Audio");
     if (typeId == document::kSolidSourceNodeType)

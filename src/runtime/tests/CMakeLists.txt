@@ -241,6 +241,12 @@ target_link_libraries(bloom_runtime_channel_shuffle_test PRIVATE bloom_runtime_c
 bloom_enable_warnings(bloom_runtime_channel_shuffle_test)
 bloom_add_test(NAME bloom.runtime.channel-shuffle COMMAND bloom_runtime_channel_shuffle_test LABELS unit runtime TIMEOUT 120)
 
+add_executable(bloom_runtime_cryptomatte_test ${PROJECT_SOURCE_DIR}/tests/integration/cryptomatte_tests.cpp)
+target_include_directories(bloom_runtime_cryptomatte_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(bloom_runtime_cryptomatte_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands OpenEXR::OpenEXR)
+bloom_enable_warnings(bloom_runtime_cryptomatte_test)
+bloom_add_test(NAME bloom.runtime.cryptomatte COMMAND bloom_runtime_cryptomatte_test LABELS unit runtime TIMEOUT 120)
+
 add_executable(bloom_runtime_audio_timing_test ${PROJECT_SOURCE_DIR}/tests/integration/audio_timing_tests.cpp)
 target_link_libraries(bloom_runtime_audio_timing_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_media_audio)
 bloom_enable_warnings(bloom_runtime_audio_timing_test)

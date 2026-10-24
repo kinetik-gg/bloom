@@ -286,6 +286,8 @@ template <typename Definition>
                hasParameter(definition, 7, kImageLayerParameterRole,
                             kImageLayerParameterSchemaKey, ParameterValueKind::String, false,
                             false);
+    case NodeLoweringKind::Cryptomatte:
+        return definition == cryptomatteDefinition();
     case NodeLoweringKind::Channel:
         return definition == channelShuffleDefinition() ||
                definition == channelCopyDefinition() || definition == channelRemoveDefinition();
@@ -1071,7 +1073,8 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         compositionSourceDefinition(),
         channelShuffleDefinition(),
         channelCopyDefinition(),
-        channelRemoveDefinition()};
+        channelRemoveDefinition(),
+        cryptomatteDefinition()};
     // The value library is appended, not interleaved: the five above are the structural node types
     // a composition is built out of, and reading them first in one place is what makes the
     // registry's own contract legible.

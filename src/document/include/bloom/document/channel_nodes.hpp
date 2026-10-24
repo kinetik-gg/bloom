@@ -39,6 +39,22 @@ inline constexpr std::string_view kCompositionOutputLayersParameterSchemaKey =
 inline constexpr std::size_t kMaximumChannelNameBytes = 256;
 inline constexpr std::size_t kMaximumChannelPatternBytes = 4096;
 
+// #364 Cryptomatte (Nuke-compatible): mattes picked by name from a Cryptomatte layer of the
+// connected channel set. `mask` is the ADR 0028 Mask (premultiplied white x coverage); `image` is
+// the optional input image multiplied by coverage (matte in alpha), or the matte as a white image.
+inline constexpr std::string_view kCryptomatteNodeType = "bloom.cryptomatte";
+inline constexpr std::uint32_t kCryptomatteNodeSchemaVersion = 1;
+inline constexpr std::string_view kCryptomatteImageInputPort = "image";
+inline constexpr std::string_view kCryptomatteMaskOutputPort = "mask";
+inline constexpr std::string_view kCryptomatteImageOutputPort = "image";
+inline constexpr std::string_view kCryptomatteLayerParameterRole = "layer";
+inline constexpr std::string_view kCryptomatteLayerParameterSchemaKey = "bloom.cryptomatte.layer";
+inline constexpr std::string_view kCryptomatteMattesParameterRole = "mattes";
+inline constexpr std::string_view kCryptomatteMattesParameterSchemaKey = "bloom.cryptomatte.mattes";
+inline constexpr std::size_t kMaximumCryptomatteMatteListBytes = 65536;
+
+[[nodiscard]] NodeDefinition cryptomatteDefinition();
+
 [[nodiscard]] NodeDefinition channelShuffleDefinition();
 [[nodiscard]] NodeDefinition channelCopyDefinition();
 [[nodiscard]] NodeDefinition channelRemoveDefinition();

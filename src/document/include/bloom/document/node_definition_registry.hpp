@@ -252,6 +252,8 @@ enum class NodeLoweringKind {
     // ADR 0026: Shuffle, Channel Copy and Remove. Channel algebra compiles away; the pixel work is
     // the Shuffle gather (runtime::CompiledChannelShuffle).
     Channel,
+    // #364: the Cryptomatte node (runtime::CompiledCryptomatte).
+    Cryptomatte,
 };
 
 // Whether this lowering belongs to the value graph rather than the image chain. The compiler reads
@@ -293,6 +295,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::Unsupported:
     case NodeLoweringKind::Mask:
     case NodeLoweringKind::Channel:
+    case NodeLoweringKind::Cryptomatte:
         return false;
     }
     return false;

@@ -27,6 +27,43 @@ struct SlotSource final {
 
 } // namespace
 
+ChannelSetSourceSelection
+selectChannelSetSources(const CompiledChannelExpression& expression, const core::RationalTime time,
+                        const document::FrameRate rate, const std::filesystem::path& base,
+                        const CancellationToken& cancel, const EvaluationColorIntent& colorIntent,
+                        OperationCache* revisionCache,
+                        const MediaSourceRevisionPolicy revisionPolicy,
+                        const std::size_t hostByteBudget, const bool allowRevisionInsertion) {
+    ChannelSetSourceSelection result;
+    for (const auto& source : expression.sources) {
+        const CompiledImageSource image{source.sourceNodeId, source.asset,     source.startFrame,
+                                        source.loopMode,     source.colorSpace, source.inputColorSpaceId,
+                                        false,               source.part,       {}};
+        auto selected = selectImageSource(image, time, rate, base, cancel, colorIntent,
+                                          revisionCache, revisionPolicy, hostByteBudget,
+                                          allowRevisionInsertion);
+        if (selected.cancelled) {
+            result.cancelled = true;
+            return result;
+        }
+        result.budgetExceeded = result.budgetExceeded || selected.budgetExceeded;
+        if (!selected.available && result.warning.empty())
+            result.warning = selected.warning.empty() ? "A channel source is unavailable"
+                                                      : selected.warning;
+        const auto* part = partOf(selected, source.part);
+        if (selected.available && part == nullptr && result.warning.empty())
+            result.warning = "The selected OpenEXR part is not present: " + source.part;
+        result.parts.push_back(part);
+        result.sources.push_back(std::move(selected));
+    }
+    if (!result.warning.empty())
+        return result;
+    result.resolution = resolveChannelExpression(expression, result.parts);
+    if (!result.resolution.ok())
+        result.warning = result.resolution.error;
+    return result;
+}
+
 ChannelShuffleSelection
 selectChannelShuffle(const CompiledChannelShuffle& shuffle, const core::RationalTime time,
                      const document::FrameRate rate, const std::filesystem::path& base,

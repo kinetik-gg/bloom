@@ -23,6 +23,28 @@ namespace {
 
 } // namespace
 
+NodeDefinition cryptomatteDefinition() {
+    NodeDefinition node{{std::string(kCryptomatteNodeType), kCryptomatteNodeSchemaVersion},
+                        NodeLoweringKind::Cryptomatte,
+                        {{std::string(kChannelSetPort), SocketValueKind::ChannelSet, true},
+                         {std::string(kCryptomatteImageInputPort), SocketValueKind::Image, false}},
+                        {{std::string(kCryptomatteMaskOutputPort), SocketValueKind::Mask},
+                         {std::string(kCryptomatteImageOutputPort), SocketValueKind::Image}},
+                        {},
+                        std::nullopt,
+                        NodeCardinality::Many,
+                        NodeCategory::Compositing};
+    // The Cryptomatte layer type name (`CryptoObject`, `CryptoMaterial`, `CryptoAsset`, ...).
+    node.parameters.push_back({std::string(kCryptomatteLayerParameterRole),
+                               std::string(kCryptomatteLayerParameterSchemaKey),
+                               ParameterValueKind::String, true, false, std::string("CryptoObject")});
+    // The matte list: comma-separated names (a literal comma is written `\,`), or `<hex>` raw IDs.
+    node.parameters.push_back({std::string(kCryptomatteMattesParameterRole),
+                               std::string(kCryptomatteMattesParameterSchemaKey),
+                               ParameterValueKind::String, true, false, std::string{}});
+    return node;
+}
+
 NodeDefinition channelShuffleDefinition() {
     const auto type = kChannelShuffleNodeType;
     NodeDefinition node{{std::string(type), kChannelNodeSchemaVersion},
@@ -89,7 +111,9 @@ bool isChannelParameterSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kCompositionOutputLayersParameterSchemaKey ||
            schemaKey.starts_with("bloom.channel-shuffle.") ||
            schemaKey == "bloom.channel-copy.select" || schemaKey == "bloom.channel-remove.select" ||
-           schemaKey == "bloom.channel-remove.keep";
+           schemaKey == "bloom.channel-remove.keep" ||
+           schemaKey == kCryptomatteLayerParameterSchemaKey ||
+           schemaKey == kCryptomatteMattesParameterSchemaKey;
 }
 
 bool isChannelParameterValueValid(const std::string_view schemaKey,
@@ -107,6 +131,10 @@ bool isChannelParameterValueValid(const std::string_view schemaKey,
     }
     if (schemaKey == "bloom.channel-shuffle.associated" || schemaKey == "bloom.channel-remove.keep")
         return std::holds_alternative<bool>(value);
+    if (schemaKey == kCryptomatteLayerParameterSchemaKey)
+        return boundedText(value, kMaximumChannelNameBytes);
+    if (schemaKey == kCryptomatteMattesParameterSchemaKey)
+        return boundedText(value, kMaximumCryptomatteMatteListBytes);
     if (schemaKey == "bloom.channel-copy.select" || schemaKey == "bloom.channel-remove.select" ||
         schemaKey == kCompositionOutputLayersParameterSchemaKey)
         return boundedText(value, kMaximumChannelPatternBytes);

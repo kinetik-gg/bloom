@@ -43,6 +43,25 @@ struct ChannelShuffleSelection final {
     }
 };
 
+// The expression's sources selected like Image sources (identity-verified revisions, input colour
+// resolution) and the expression resolved against their probed parts. Shared by Shuffle and
+// Cryptomatte.
+struct ChannelSetSourceSelection final {
+    std::vector<ImageSourceSelection> sources;
+    std::vector<const media::ImagePartInfo*> parts;
+    ChannelResolution resolution;
+    std::string warning;
+    bool cancelled = false;
+    bool budgetExceeded = false;
+    [[nodiscard]] bool available() const noexcept { return warning.empty() && !cancelled; }
+};
+[[nodiscard]] ChannelSetSourceSelection
+selectChannelSetSources(const CompiledChannelExpression& expression, core::RationalTime time,
+                        document::FrameRate rate, const std::filesystem::path& base,
+                        const CancellationToken& cancel, const EvaluationColorIntent& colorIntent,
+                        OperationCache* revisionCache, MediaSourceRevisionPolicy revisionPolicy,
+                        std::size_t hostByteBudget, bool allowRevisionInsertion);
+
 [[nodiscard]] ChannelShuffleSelection
 selectChannelShuffle(const CompiledChannelShuffle& shuffle, core::RationalTime time,
                      document::FrameRate rate, const std::filesystem::path& base,

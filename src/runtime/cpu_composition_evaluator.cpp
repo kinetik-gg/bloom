@@ -5,6 +5,7 @@
 #include "layer_mask_sampling.hpp"
 #include "gradient_source.hpp"
 #include "channel_shuffle.hpp"
+#include "cryptomatte.hpp"
 #include "image_source.hpp"
 #include "layer_parent_transform.hpp"
 #include "operation_key.hpp"
@@ -74,6 +75,9 @@ static_assert(document::kMaximumTextSizePixels == render::kMaximumTextPixelSize,
             [&subject](const CompiledImageSource& image) { subject.nodeId = image.sourceNodeId; },
             [&subject](const CompiledChannelShuffle& shuffle) {
                 subject.nodeId = shuffle.sourceNodeId;
+            },
+            [&subject](const CompiledCryptomatte& cryptomatte) {
+                subject.nodeId = cryptomatte.sourceNodeId;
             },
             [&subject](const CompiledVideoSource& video) { subject.nodeId = video.sourceNodeId; },
             [&subject](const CompiledText& text) { subject.nodeId = text.sourceNodeId; },
@@ -511,6 +515,25 @@ enum class ScalarDomain : std::uint8_t {
                 return image.loopMode >= 0 && image.loopMode <= 2 && image.colorSpace >= 0 &&
                        image.colorSpace <= 3 && (!image.asset || image.asset->validate().ok());
             },
+            [](const CompiledCryptomatte& cryptomatte) {
+                const auto& steps = cryptomatte.channels.steps;
+                for (std::size_t step = 0; step < steps.size(); ++step) {
+                    const auto& item = steps[step];
+                    const bool valid =
+                        item.kind == CompiledChannelStepKind::Source
+                            ? item.source < cryptomatte.channels.sources.size()
+                            : item.input < step &&
+                                  (item.kind != CompiledChannelStepKind::Copy || item.from < step);
+                    if (!valid)
+                        return false;
+                }
+                return !steps.empty() && !cryptomatte.layer.empty() &&
+                       std::ranges::all_of(cryptomatte.channels.sources, [](const auto& source) {
+                           return source.loopMode >= 0 && source.loopMode <= 2 &&
+                                  source.colorSpace >= 0 && source.colorSpace <= 3 &&
+                                  (!source.asset || source.asset->validate().ok());
+                       });
+            },
             [](const CompiledChannelShuffle& shuffle) {
                 const auto& steps = shuffle.channels.steps;
                 const bool stepsValid = !steps.empty() && [&] {
@@ -590,6 +613,7 @@ enum class ScalarDomain : std::uint8_t {
                            std::holds_alternative<CompiledImageEffect>(input) ||
                            std::holds_alternative<CompiledImageSource>(input) ||
                            std::holds_alternative<CompiledChannelShuffle>(input) ||
+                           std::holds_alternative<CompiledCryptomatte>(input) ||
                            std::holds_alternative<CompiledVideoSource>(input) ||
                            std::holds_alternative<CompiledCompositionSource>(input) ||
                            std::holds_alternative<CompiledLayerOutput>(input) ||
@@ -1201,6 +1225,7 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                 },
                 [](const CompiledImageSource&) {},
                 [](const CompiledChannelShuffle&) {},
+                [](const CompiledCryptomatte&) {},
                 [](const CompiledVideoSource&) {},
                 [](const CompiledMerge&) {},
                 [](const CompiledCompositionOutput&) {},
@@ -2287,6 +2312,31 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                              selectedShuffle->warning,
                                              {}});
             }
+            std::optional<detail::CryptomatteSelection> selectedCryptomatte;
+            if (const auto* cryptomatte =
+                    std::get_if<CompiledCryptomatte>(&plan->operations()[index])) {
+                selectedCryptomatte = detail::selectCryptomatte(
+                    *cryptomatte, *operandTime, plan->format().frameRate(), mediaBase, cancellation,
+                    request.colorIntent, imageMemoryCache,
+                    (explicitBypass || request.requireVerifiedMediaSources)
+                        ? MediaSourceRevisionPolicy::Revalidate
+                        : request.mediaSourceRevisionPolicy,
+                    remainingPixelBudget(), !planBypass);
+                if (selectedCryptomatte->cancelled)
+                    return EvaluationResult::cancelled();
+                if (request.requireVerifiedMediaSources && !selectedCryptomatte->available)
+                    return EvaluationResult::failed(diagnostic(
+                        EvaluationDiagnosticCode::InvalidParameter,
+                        selectedCryptomatte->warning.empty() ? "Final Cryptomatte is unavailable"
+                                                             : selectedCryptomatte->warning,
+                        {}, operationSubject));
+                if (!selectedCryptomatte->warning.empty())
+                    imageWarnings.push_back({EvaluationDiagnosticCode::InvalidParameter,
+                                             DiagnosticSeverity::Warning,
+                                             operationSubject,
+                                             selectedCryptomatte->warning,
+                                             {}});
+            }
             std::optional<detail::VideoSourceSelection> selectedVideo;
             if (const auto* source = std::get_if<CompiledVideoSource>(&plan->operations()[index])) {
                 selectedVideo = detail::selectVideoSource(
@@ -2510,6 +2560,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             key.add(selectedImage->cacheKey);
                         } else if constexpr (std::is_same_v<Step, CompiledChannelShuffle>) {
                             key.add(selectedShuffle->cacheKey);
+                        } else if constexpr (std::is_same_v<Step, CompiledCryptomatte>) {
+                            key.add(selectedCryptomatte->cacheKey);
                         } else if constexpr (std::is_same_v<Step, CompiledText>) {
                             authored(step.contentParameterId, step.content, step.drivenContent);
 
@@ -3052,6 +3104,48 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                      {}});
                             bounds[index].local =
                                 detail::imageSourceFrameBounds(*selectedImage)
+                                    .value_or(detail::boundsForWindow(
+                                        image.value->descriptor()->dataWindow(),
+                                        resolved.horizontalScale, resolved.verticalScale));
+                            bounds[index].output = bounds[index].local;
+                            produced.emplace(std::move(*image.value));
+                        },
+                        [&](const CompiledCryptomatte&) {
+                            if (!selectedCryptomatte || !selectedCryptomatte->available)
+                                return;
+                            auto image = detail::evaluateCryptomatte(
+                                *selectedCryptomatte, resolved.imageDescriptor,
+                                resolved.horizontalScale, resolved.verticalScale,
+                                remainingPixelBudget(), cancellation);
+                            if (image.cancelled) {
+                                operationCancelled = true;
+                                return;
+                            }
+                            if (!image.value.has_value()) {
+                                if (request.requireVerifiedMediaSources) {
+                                    operationFailure =
+                                        diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                                   image.diagnostic, {}, operationSubject);
+                                    return;
+                                }
+                                imageWarnings.push_back({EvaluationDiagnosticCode::InvalidParameter,
+                                                         DiagnosticSeverity::Warning,
+                                                         operationSubject,
+                                                         image.diagnostic,
+                                                         {}});
+                                contentHashes[index] += ":cryptomatte-failed";
+                                return;
+                            }
+                            if (image.repairedPixels != 0)
+                                imageWarnings.push_back(
+                                    {EvaluationDiagnosticCode::InvalidParameter,
+                                     DiagnosticSeverity::Warning,
+                                     operationSubject,
+                                     std::to_string(image.repairedPixels) +
+                                         " Cryptomatte samples were non-finite and treated as 0",
+                                     {}});
+                            bounds[index].local =
+                                detail::cryptomatteFrameBounds(*selectedCryptomatte)
                                     .value_or(detail::boundsForWindow(
                                         image.value->descriptor()->dataWindow(),
                                         resolved.horizontalScale, resolved.verticalScale));
@@ -3966,7 +4060,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         std::make_shared<const render::Rgba32fImage>(std::move(*produced));
                 }
                 if (cache && !effectApplicationFailed && (!selectedVideo || slots[index]) &&
-                    (!selectedImage || slots[index]) && (!selectedShuffle || slots[index]))
+                    (!selectedImage || slots[index]) && (!selectedShuffle || slots[index]) &&
+                    (!selectedCryptomatte || slots[index]))
                     cache->store(
                         key.bytes(), plan->sourceRevision(),
                         {.image = index == request.output.value() ? processImage : slots[index],

@@ -7,6 +7,7 @@
 
 #include <bloom/document/animation.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/runtime/cryptomatte_matte_list.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/parameter.hpp>
@@ -345,6 +346,11 @@ class CompilePass final {
                     }
                     if (!consumesEdge(*node, *edge))
                         continue;
+                    // A Viewer inspection plan needs only the inspected node's channel sets.
+                    if (request_.channelInspection &&
+                        nodeId == request_.channelInspection->node &&
+                        !isChannelSetInput(*node, *edge))
+                        continue;
                     reachableEdges.emplace(edge->id, edge);
                     pending.push_back(edge->source.nodeId);
                 }
@@ -402,6 +408,18 @@ class CompilePass final {
                 edge->destination);
         }
         return true;
+    }
+
+    [[nodiscard]] bool isChannelSetInput(const document::NodeRecord& node,
+                                         const document::EdgeRecord& edge) const {
+        const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
+        const auto* definition = registry_.find(node.typeId, node.schemaVersion);
+        if (input == nullptr || definition == nullptr)
+            return false;
+        return std::ranges::any_of(definition->inputs, [&](const auto& declared) {
+            return declared.name == input->port &&
+                   declared.valueKind == document::SocketValueKind::ChannelSet;
+        });
     }
 
     [[nodiscard]] const document::EdgeRecord* fixedInputEdge(const document::NodeId nodeId,
@@ -1006,6 +1024,9 @@ class CompilePass final {
     // Set Alpha / Multiply Alpha nodes whose optional matte is unconnected, mapped to the empty
     // transparent operation that stands in for it.
     std::unordered_map<document::NodeId, runtime::OperationIndex> unconnectedMattes_;
+    // #364: operations of a node with several pixel outputs, by output port (a Cryptomatte's Mask
+    // and Image). A port listed here wins over the node's entry in the lowering index.
+    std::map<std::pair<document::NodeId, std::string>, runtime::OperationIndex> portOperations_;
     // ADR 0028: the track-matte effect a Merge entry composites in place of its Layer Output.
     std::unordered_map<document::NodeId, runtime::OperationIndex> trackMatteEntries_;
     std::unordered_set<document::NodeId> transformParents_;

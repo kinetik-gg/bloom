@@ -179,7 +179,8 @@ propertiesRowVisibility(const std::string_view role, const std::string_view sche
         schemaKey == "bloom.color.alpha-association" || schemaKey == "bloom.color.encoding" ||
         schemaKey == "bloom.solid.alpha-association" || schemaKey == "bloom.solid.encoding" ||
         schemaKey == "bloom.image.part" || schemaKey == "bloom.image.layer" ||
-        schemaKey == "bloom.composition-output.layers";
+        schemaKey == "bloom.composition-output.layers" || schemaKey == "bloom.cryptomatte.layer" ||
+        schemaKey == "bloom.cryptomatte.mattes";
     return technicalRole || technicalSchema ? PropertiesRowVisibility::Hidden
                                             : PropertiesRowVisibility::Visible;
 }

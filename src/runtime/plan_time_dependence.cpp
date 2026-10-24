@@ -65,7 +65,8 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                     return true;
                 else if constexpr (std::is_same_v<Step, CompiledImageSource>)
                     return step.asset && step.asset->kind == document::AssetKind::Sequence;
-                else if constexpr (std::is_same_v<Step, CompiledChannelShuffle>)
+                else if constexpr (std::is_same_v<Step, CompiledChannelShuffle> ||
+                                   std::is_same_v<Step, CompiledCryptomatte>)
                     return std::ranges::any_of(step.channels.sources, [](const auto& source) {
                         return source.asset && source.asset->kind == document::AssetKind::Sequence;
                     });

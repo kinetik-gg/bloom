@@ -320,19 +320,69 @@ lower(const std::vector<document::NodeId>& order) {
             operations.emplace_back(std::move(*shuffle));
             continue;
         }
+        // #364 Cryptomatte: the matte (Mask) and, with an input image, the image multiplied by
+        // the matte (MultiplyAlpha, matte in alpha); without one the Image output is the matte.
+        if (definition->second->lowering == runtime::NodeLoweringKind::Cryptomatte) {
+            const bool maskUsed =
+                hasReachableOutput(nodeId, document::kCryptomatteMaskOutputPort) ||
+                (request_.channelInspection && request_.channelInspection->node == nodeId);
+            const bool imageUsed = hasReachableOutput(nodeId, document::kCryptomatteImageOutputPort);
+            const bool imageConnected =
+                fixedInputEdge(nodeId, document::kCryptomatteImageInputPort) != nullptr;
+            const auto imageInput =
+                findInputOperation(nodeId, document::kCryptomatteImageInputPort, indices);
+            const auto emptyImage = [&] {
+                const auto empty = runtime::OperationIndex::fromRaw(operations.size());
+                operations.emplace_back(runtime::CompiledMerge{nodeId, {}});
+                return empty;
+            };
+            if (isMuted(nodeId)) {
+                // A muted Cryptomatte isolates nothing: no matte, and the image passes through.
+                if (maskUsed)
+                    portOperations_.insert_or_assign({nodeId, std::string(document::kCryptomatteMaskOutputPort)}, emptyImage());
+                if (imageUsed)
+                    portOperations_.insert_or_assign({nodeId, std::string(document::kCryptomatteImageOutputPort)}, imageInput ? *imageInput : emptyImage());
+                continue;
+            }
+            auto cryptomatte = lowerCryptomatte(*node);
+            if (!cryptomatte)
+                return {};
+            const auto matte = runtime::OperationIndex::fromRaw(operations.size());
+            operations.emplace_back(std::move(*cryptomatte));
+            indices.emplace(nodeId, matte);
+            portOperations_.insert_or_assign({nodeId, std::string(document::kCryptomatteMaskOutputPort)}, matte);
+            if (imageUsed) {
+                auto image = matte;
+                if (imageInput) {
+                    image = runtime::OperationIndex::fromRaw(operations.size());
+                    operations.emplace_back(runtime::CompiledImageEffect{
+                        nodeId, *imageInput,
+                        runtime::ImageCombineKernel{
+                            runtime::ImageCombineMode::MultiplyAlpha,
+                            runtime::CompiledScalarParameter{document::ParameterId{}, 1.0},
+                            render::ImageCoverageChannel::Alpha, std::nullopt, false},
+                        false, false, matte});
+                } else if (imageConnected) {
+                    image = emptyImage(); // an empty input image stays empty
+                }
+                portOperations_.insert_or_assign({nodeId, std::string(document::kCryptomatteImageOutputPort)}, image);
+            }
+            continue;
+        }
         // An Image Reroute is ELIDED rather than compiled: its consumers read its input's operation
         // directly, so it costs nothing at evaluation -- the same treatment a muted node's bypass
         // already gets, and the generalisation of DissolveNode's single Image pair to a node that
         // exists only to tidy a wire.
         if (isImageReroute(nodeId)) {
             const auto* rerouteEdge = fixedInputEdge(nodeId, document::kValuePortName);
-            const auto source =
-                rerouteEdge == nullptr ? indices.end() : indices.find(rerouteEdge->source.nodeId);
-            if (source == indices.end()) {
+            const auto source = rerouteEdge == nullptr
+                                    ? std::optional<runtime::OperationIndex>{}
+                                    : sourceOperation(rerouteEdge->source, indices);
+            if (!source) {
                 addTopologyFailure(nodeId, "Image Reroute input was not lowered.");
                 return {};
             }
-            indices.emplace(nodeId, source->second);
+            indices.emplace(nodeId, *source);
             continue;
         }
         if (isMuted(nodeId) && !transformParents_.contains(nodeId) &&
@@ -345,12 +395,12 @@ lower(const std::vector<document::NodeId>& order) {
                             [&](const auto* candidate) { return candidate->destination == *input; })
                       : reachableEdges_.end();
             if (edge != reachableEdges_.end()) {
-                const auto source = indices.find((*edge)->source.nodeId);
-                if (source == indices.end()) {
+                const auto source = sourceOperation((*edge)->source, indices);
+                if (!source) {
                     addTopologyFailure(nodeId, "Muted node input was not lowered.");
                     return {};
                 }
-                indices.emplace(nodeId, source->second);
+                indices.emplace(nodeId, *source);
             } else {
                 addTopologyFailure(nodeId, "Muted empty image was not classified.");
                 return {};
@@ -517,7 +567,20 @@ lower(const std::vector<document::NodeId>& order) {
         return {};
     }
     auto planOutput = output == indices.end() ? runtime::OperationIndex::fromRaw(0) : output->second;
-    if (request_.channelInspection) {
+    if (request_.channelInspection && request_.channelInspection->channels.empty()) {
+        // #364 Viewer matte preview: an inspection with no channels shows a pixel output port
+        // (a Cryptomatte's Mask) directly.
+        const auto& inspection = *request_.channelInspection;
+        const auto port = portOperations_.find({inspection.node, inspection.port});
+        if (port == portOperations_.end()) {
+            addTopologyFailure(inspection.node, "The inspected output has no pixels.");
+            return {};
+        }
+        const auto mergeIndex = runtime::OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(runtime::CompiledMerge{outputNodeId, {{{}, {}, port->second}}});
+        planOutput = runtime::OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(runtime::CompiledCompositionOutput{outputNodeId, mergeIndex});
+    } else if (request_.channelInspection) {
         // ADR 0026 Viewer inspection: a Raw Shuffle of the chosen channels (one as grey, three as
         // RGB, alpha 1) becomes this viewer-only plan's output.
         const auto& inspection = *request_.channelInspection;
@@ -762,6 +825,7 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     // ADR 0026: channel nodes are lowered in the main loop (a Shuffle's image output is a
     // CompiledChannelShuffle; channel algebra compiles into its expression).
     case NodeLoweringKind::Channel:
+    case NodeLoweringKind::Cryptomatte:
     case NodeLoweringKind::Unsupported:
     // A value lowering never reaches here: compileValueGraph() compiled it into the plan's value
     // operations, and lower()'s own loop skips it. Reaching this arm means the two passes disagree
@@ -1225,6 +1289,32 @@ lowerChannelStep(const document::OutputPortRef& output, runtime::CompiledChannel
     const auto index = static_cast<std::uint32_t>(expression.steps.size() - 1);
     memo.emplace(memoKey, index);
     return index;
+}
+
+[[nodiscard]] std::optional<runtime::CompiledOperation>
+lowerCryptomatte(const document::NodeRecord& node) {
+    runtime::CompiledCryptomatte cryptomatte;
+    cryptomatte.sourceNodeId = node.id;
+    const auto* edge = fixedInputEdge(node.id, document::kChannelSetPort);
+    if (edge == nullptr) {
+        addTopologyFailure(node.id, "Cryptomatte has no channel set.");
+        return std::nullopt;
+    }
+    std::map<std::pair<document::NodeId, std::string>, std::uint32_t> memo;
+    const auto root = lowerChannelStep(edge->source, cryptomatte.channels, memo, 0);
+    if (!root)
+        return std::nullopt;
+    if (*root + 1 != cryptomatte.channels.steps.size()) {
+        auto copy = cryptomatte.channels.steps[*root];
+        cryptomatte.channels.steps.push_back(std::move(copy));
+    }
+    const auto* layer = channelText(node, document::kCryptomatteLayerParameterRole);
+    const auto* mattes = channelText(node, document::kCryptomatteMattesParameterRole);
+    if (!layer || !mattes)
+        return std::nullopt;
+    cryptomatte.layer = *layer;
+    cryptomatte.mattes = runtime::splitCryptomatteMatteList(*mattes);
+    return runtime::CompiledOperation{std::move(cryptomatte)};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -1886,6 +1976,16 @@ compiledColorParameter(const document::ParameterBinding* binding) {
     if (edge == nullptr) {
         return std::nullopt;
     }
-    const auto source = indices.find(edge->source.nodeId);
-    return source == indices.end() ? std::nullopt : std::optional(source->second);
+    return sourceOperation(edge->source, indices);
+}
+
+// The operation behind an output port: a per-port operation (#364) or the node's own.
+[[nodiscard]] std::optional<runtime::OperationIndex> sourceOperation(
+    const document::OutputPortRef& source,
+    const std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) const {
+    if (const auto port = portOperations_.find({source.nodeId, source.port});
+        port != portOperations_.end())
+        return port->second;
+    const auto found = indices.find(source.nodeId);
+    return found == indices.end() ? std::nullopt : std::optional(found->second);
 }

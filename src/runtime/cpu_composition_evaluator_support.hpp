@@ -120,6 +120,7 @@ void forEachInput(const CompiledOperation& operation, Function&& function) {
                    [](const CompiledVideoSource&) {},
                    [](const CompiledCompositionSource&) {},
                    [](const CompiledChannelShuffle&) {},
+                   [](const CompiledCryptomatte&) {},
                    [&function](const CompiledLayerOutput& layer) {
                        function(layer.input);
                        if (layer.parent)

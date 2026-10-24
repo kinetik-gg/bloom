@@ -362,6 +362,17 @@ struct CompiledChannelShuffle {
     friend bool operator==(const CompiledChannelShuffle&, const CompiledChannelShuffle&) = default;
 };
 
+// #364: a Cryptomatte matte. The selected IDs' coverage from the rank pairs of `layer` in the
+// channel expression, as the premultiplied white Mask (ADR 0028) in the anchor source's frame. The
+// node's Image output with an input image is a MultiplyAlpha effect reading this operation.
+struct CompiledCryptomatte {
+    document::NodeId sourceNodeId;
+    CompiledChannelExpression channels;
+    std::string layer{};
+    std::vector<std::string> mattes{};
+    friend bool operator==(const CompiledCryptomatte&, const CompiledCryptomatte&) = default;
+};
+
 struct CompiledVideoSource {
     document::NodeId sourceNodeId;
     std::optional<document::AssetRecord> asset;
@@ -572,7 +583,8 @@ struct CompiledCompositionOutput {
 using CompiledOperation =
     std::variant<CompiledSolid, CompiledChecker, CompiledText, CompiledImageSource, CompiledVideoSource,
                  CompiledLayerOutput, CompiledMerge, CompiledCompositionOutput, CompiledShape,
-                 CompiledCompositionSource, CompiledImageEffect, CompiledChannelShuffle>;
+                 CompiledCompositionSource, CompiledImageEffect, CompiledChannelShuffle,
+                 CompiledCryptomatte>;
 
 // ADR 0024 time clocks. Clock 0 is the plan's own clock (the request time). A Layer clock maps its
 // parent clock through a layer's start time and speed; a Content clock (whose parent is that Layer
