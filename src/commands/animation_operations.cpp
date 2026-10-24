@@ -834,9 +834,9 @@ OperationResult SetKeyframeInterpolation::apply(document::Draft& draft) const {
     return std::visit(
         [&](const auto& curve) -> OperationResult {
             using Curve = std::decay_t<decltype(curve)>;
-            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
-                const auto key =
-                    std::ranges::find(curve.keyframes, keyframeId_, &document::ScalarKeyframe::id);
+            if constexpr (document::kWholeValueAnimationCurve<Curve>) {
+                const auto key = std::ranges::find_if(
+                    curve.keyframes, [&](const auto& item) { return item.id == keyframeId_; });
                 if (key == curve.keyframes.end())
                     return invalidKeyframe(keyframeId_);
                 if (key->outgoingInterpolation == interpolation_)
