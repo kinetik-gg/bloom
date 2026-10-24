@@ -366,7 +366,7 @@ kind takes its own role here on the day it ships.
 
 Sockets and the links leaving them identify a *transport* kind, which is a different question from
 what an item in a project is, so they have their own palette rather than borrowing the `Data*` roles.
-Seven separated hues for eight kinds, none of them `Accent` or `AccentHover`:
+Nine separated hues for ten kinds, none of them `Accent` or `AccentHover`:
 
 | Socket kind | Palette token | Value | Hue |
 | --- | --- | --- | --- |
@@ -378,6 +378,8 @@ Seven separated hues for eight kinds, none of them `Accent` or `AccentHover`:
 | Vector3 | `SocketVector` | `#C87AF0` | violet |
 | Boolean | `SocketBoolean` | `#E0567B` | rose |
 | String | `SocketString` | `#F0C93C` | gold |
+| Audio | `SocketAudio` | `#7C5CFF` | blue-violet |
+| Channel Set | `SocketChannelSet` | `#4CD964` | green |
 
 The two vector widths share one token deliberately: they are one family, and giving them adjacent
 violets would have said "these connect" when a cross-width link is refused. What distinguishes them is

@@ -33,6 +33,8 @@ kit::Color socketColorToken(const runtime::SocketValueKind kind) noexcept {
         return kit::Color::SocketBoolean;
     case runtime::SocketValueKind::Mask:
         return kit::Color::SocketImage; // coverage, drawn as a pixel socket; named "Mask"
+    case runtime::SocketValueKind::ChannelSet:
+        return kit::Color::SocketChannelSet;
     }
     return kit::Color::SocketImage;
 }
@@ -665,6 +667,8 @@ QString socketKindName(const document::SocketValueKind kind) {
         return QStringLiteral("Vector3");
     case document::SocketValueKind::Mask:
         return QStringLiteral("Mask");
+    case document::SocketValueKind::ChannelSet:
+        return QStringLiteral("Channel Set");
     }
     return {};
 }

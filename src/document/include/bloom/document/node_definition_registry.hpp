@@ -32,6 +32,8 @@ enum class SocketValueKind {
     Vector3,
     // ADR 0028: single-channel coverage. Never interchangeable with Image in either direction.
     Mask,
+    // ADR 0026: a multi-channel image (render::ChannelSetImage). Never converts to or from Image.
+    ChannelSet,
 };
 
 enum class ParameterValueKind {
@@ -114,6 +116,7 @@ isPromotedSocketConnection(const SocketValueKind source,
     case SocketValueKind::String:
     case SocketValueKind::Vector3:
     case SocketValueKind::Mask:
+    case SocketValueKind::ChannelSet:
         return false;
     }
     return false;

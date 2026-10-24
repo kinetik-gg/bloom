@@ -74,6 +74,7 @@ constexpr auto kColors = std::to_array<ColorEntry>({
     {Color::SocketVector, 0xC87AF0U},
     {Color::SocketString, 0xF0C93CU},
     {Color::SocketBoolean, 0xE0567BU},
+    {Color::SocketChannelSet, 0x4CD964U},
     // GRAPH-1 component curves: red, green, a light sky blue clearly lighter than Accent
     // (0x0C8CE9) and AccentHover (0x3AA5F0), and a neutral for the fourth channel.
     {Color::ComponentX, 0xE06C75U},

@@ -83,6 +83,9 @@ enum class Color : std::uint8_t {
     // Task S7. Integer reuses the existing SocketInteger token; the two vector widths share
     // SocketVector so they read as one family, and a Boolean needed its own.
     SocketBoolean,
+    // ADR 0026: the multi-channel ChannelSet transport. A green beside Image's teal: related, but a
+    // ChannelSet never connects to an Image socket.
+    SocketChannelSet,
     // GRAPH-1: the graph editor's per-component curve strokes. X/Y/Z/W is the axis vocabulary and
     // R/G/B/A borrows it unchanged, so one colour always means "the first component" whatever the
     // parameter is. A scalar curve takes Keyframe; selection takes Accent; none of these four is

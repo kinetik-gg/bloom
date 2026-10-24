@@ -454,6 +454,7 @@ struct KindVocabulary final {
     case SocketValueKind::Image:
     case SocketValueKind::Audio:
     case SocketValueKind::Mask:
+    case SocketValueKind::ChannelSet:
     case SocketValueKind::Scalar:
         break;
     }
@@ -482,6 +483,7 @@ struct KindVocabulary final {
     case SocketValueKind::Image:
     case SocketValueKind::Audio:
     case SocketValueKind::Mask:
+    case SocketValueKind::ChannelSet:
     case SocketValueKind::Scalar:
         break;
     }
@@ -507,6 +509,7 @@ descriptorDefaultValue(const bloom::document::ValueUtilityOperand& operand) {
     case SocketValueKind::Image:
     case SocketValueKind::Audio:
     case SocketValueKind::Mask:
+    case SocketValueKind::ChannelSet:
     case SocketValueKind::Scalar:
         break;
     }
