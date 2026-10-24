@@ -1,6 +1,10 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
+#include <bloom/document/node_definition_registry.hpp>
+#include <QSignalBlocker>
+#include <bloom/ui/kit/dropdown.hpp>
+
 #include <limits>
 
 namespace bloom::ui {
@@ -124,4 +128,106 @@ ViewerEditor::choosePackedPaintDisplay(PreparedPreviewFrameHandle frame) {
         return {channelView_->frame, channelView_->pixels, channelView_->channel};
     return {std::move(frame), view->pixels, ViewerChannel::Rgba};
 }
+} // namespace bloom::ui
+
+namespace bloom::ui {
+namespace {
+constexpr int kStandardChannelCount = 6;
+} // namespace
+
+void ViewerEditor::refreshChannelInspectionChoices() {
+    std::optional<ChannelSetTarget> target;
+    if (const auto* node = session_.selectedNode()) {
+        if (const auto* definition =
+                document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion)) {
+            for (const auto& output : definition->outputs)
+                if (output.valueKind == document::SocketValueKind::ChannelSet) {
+                    target = ChannelSetTarget{node->id, output.name,
+                                              session_.snapshot().revision()};
+                    break;
+                }
+        }
+    }
+    if (target == listingTarget_)
+        return;
+    listingTarget_ = target;
+    if (listingTask_) {
+        listingTask_->cancel();
+        listingTask_.reset();
+        listingTaskTarget_.reset();
+    }
+    if (!target) {
+        // Keep the choices of an active inspection so its entry stays visible after deselection.
+        if (!previewController_.viewerChannelInspection()) {
+            inspectionChoices_.clear();
+            choicesTarget_.reset();
+            rebuildChannelDropdown();
+        }
+        return;
+    }
+    const auto submission = previewController_.submitChannelListing(target->node, target->port);
+    if (submission.accepted()) {
+        listingTask_ = submission.handle;
+        listingTaskTarget_ = target;
+    }
+}
+
+void ViewerEditor::consumeChannelListing() {
+    if (!listingTask_)
+        return;
+    auto result = listingTask_->tryTakeResult();
+    if (!result)
+        return;
+    const auto target = listingTaskTarget_;
+    listingTask_.reset();
+    listingTaskTarget_.reset();
+    if (target != listingTarget_ || result->state() != runtime::TaskState::Succeeded ||
+        !result->value() || !*result->value())
+        return;
+    inspectionChoices_ = (*result->value())->choices;
+    choicesTarget_ = target;
+    rebuildChannelDropdown();
+}
+
+void ViewerEditor::rebuildChannelDropdown() {
+    if (channelDropdown_ == nullptr)
+        return;
+    const QSignalBlocker blocker(channelDropdown_);
+    while (channelDropdown_->count() > kStandardChannelCount) {
+        // KDropdown has no single-item removal; rebuild the whole list.
+        channelDropdown_->clearItems();
+        for (const auto* name : {"RGBA", "RGB", "R", "G", "B", "Alpha"})
+            channelDropdown_->addItem(tr(name));
+    }
+    for (const auto& choice : inspectionChoices_)
+        channelDropdown_->addItem(tr("Inspect %1").arg(QString::fromStdString(choice.label)));
+    int current = static_cast<int>(channel_);
+    if (const auto& inspection = previewController_.viewerChannelInspection();
+        inspection && choicesTarget_ && inspection->node == choicesTarget_->node) {
+        for (std::size_t index = 0; index < inspectionChoices_.size(); ++index)
+            if (inspectionChoices_[index].channels == inspection->channels)
+                current = kStandardChannelCount + static_cast<int>(index);
+    }
+    channelDropdown_->setCurrentIndex(current);
+}
+
+void ViewerEditor::chooseChannelDropdownIndex(const int index) {
+    if (index < 0)
+        return;
+    if (index < kStandardChannelCount) {
+        previewController_.setViewerChannelInspection(std::nullopt);
+        setChannel(static_cast<ViewerChannel>(index));
+        return;
+    }
+    const auto choice = static_cast<std::size_t>(index - kStandardChannelCount);
+    if (!choicesTarget_ || choice >= inspectionChoices_.size())
+        return;
+    // A session display choice: a viewer-only plan shows the channels raw; the project, its
+    // compiled plan and every render or export are untouched.
+    previewController_.setViewerChannelInspection(runtime::ChannelInspection{
+        choicesTarget_->node, choicesTarget_->port, inspectionChoices_[choice].channels});
+    setChannel(ViewerChannel::Rgba);
+    rebuildChannelDropdown();
+}
+
 } // namespace bloom::ui

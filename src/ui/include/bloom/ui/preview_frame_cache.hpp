@@ -65,6 +65,7 @@ struct PreviewFrameCacheKey final {
     std::string displayName;
     std::string viewName;
     bool showLook = true;
+    std::optional<runtime::ChannelInspection> channelInspection = std::nullopt;
 
     friend bool operator==(const PreviewFrameCacheKey&, const PreviewFrameCacheKey&) = default;
 };

@@ -382,6 +382,19 @@ int main(int argc, char* argv[]) try {
     QObject::connect(&memoryBudgetController, &bloom::ui::MemoryBudgetController::sampleApplied,
                      &previewController,
                      &bloom::ui::CompositionPreviewController::notifyProcessingCapacityChanged);
+    // ADR 0026 Viewer channel inspection: the channel menu's worker listing reads the same
+    // compiler and media base directory as evaluation.
+    previewController.setChannelListingProvider(
+        [&snapshotCompiler, &cpuEvaluator](
+            const bloom::document::Snapshot& snapshot,
+            const bloom::document::CompositionId composition, const bloom::document::NodeId node,
+            const std::string& port, const bloom::core::RationalTime time,
+            const bloom::runtime::EvaluationColorIntent& colorIntent,
+            const bloom::runtime::CancellationToken& cancellation) {
+            return bloom::runtime::listChannelInspectionChoices(
+                snapshotCompiler, snapshot, composition, node, port,
+                cpuEvaluator.assetBaseDirectory(), time, colorIntent, cancellation);
+        });
     bloom::ui::BackgroundPreviewController backgroundPreviewController(
         compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline,
         nullptr, gpuPreviewDisplaySubmitter);

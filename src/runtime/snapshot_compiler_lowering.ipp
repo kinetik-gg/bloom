@@ -508,7 +508,7 @@ lower(const std::vector<document::NodeId>& order) {
     }
     const auto outputNodeId = compositionOutput->nodeId;
     const auto output = indices.find(outputNodeId);
-    if (output == indices.end()) {
+    if (output == indices.end() && !request_.channelInspection) {
         addTopologyFailure(outputNodeId, "Composition output was not lowered.");
         return {};
     }
@@ -516,9 +516,42 @@ lower(const std::vector<document::NodeId>& order) {
     if (!audioMix.has_value()) {
         return {};
     }
+    auto planOutput = output == indices.end() ? runtime::OperationIndex::fromRaw(0) : output->second;
+    if (request_.channelInspection) {
+        // ADR 0026 Viewer inspection: a Raw Shuffle of the chosen channels (one as grey, three as
+        // RGB, alpha 1) becomes this viewer-only plan's output.
+        const auto& inspection = *request_.channelInspection;
+        if (inspection.channels.size() != 1 && inspection.channels.size() != 3) {
+            addTopologyFailure(inspection.node, "Viewer inspection shows one or three channels.");
+            return {};
+        }
+        runtime::CompiledChannelShuffle shuffle;
+        shuffle.sourceNodeId = inspection.node;
+        std::map<std::pair<document::NodeId, std::string>, std::uint32_t> memo;
+        const auto root = lowerChannelStep(document::OutputPortRef{inspection.node, inspection.port},
+                                           shuffle.channels, memo, 0);
+        if (!root)
+            return {};
+        if (*root + 1 != shuffle.channels.steps.size()) {
+            auto copy = shuffle.channels.steps[*root];
+            shuffle.channels.steps.push_back(std::move(copy));
+        }
+        const auto& names = inspection.channels;
+        shuffle.mapping = {names[0], names.size() == 3 ? names[1] : names[0],
+                           names.size() == 3 ? names[2] : names[0], "1"};
+        shuffle.mode = document::kChannelShuffleRawMode;
+        shuffle.associated = true;
+        const auto shuffleIndex = runtime::OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(std::move(shuffle));
+        // The Composition Output reads a Merge, as for any directly connected image.
+        const auto mergeIndex = runtime::OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(runtime::CompiledMerge{outputNodeId, {{{}, {}, shuffleIndex}}});
+        planOutput = runtime::OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(runtime::CompiledCompositionOutput{outputNodeId, mergeIndex});
+    }
     runtime::CompiledCompositionPlanDefinition definition{
         request_.snapshot.revision(), request_.snapshot.project().id(), request_.compositionId,
-        composition_->format(), std::move(operations), output->second,
+        composition_->format(), std::move(operations), planOutput,
         std::move(curveTables->scalar), std::move(curveTables->vec2),
         std::move(curveTables->vec3), std::move(curveTables->color4),
         std::move(valueOperations_), valueOutputCount_,

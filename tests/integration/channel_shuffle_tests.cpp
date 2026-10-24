@@ -8,6 +8,7 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/runtime/channel_inspection_listing.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 
@@ -167,9 +168,11 @@ struct Fixture {
         run<commands::ConnectPorts>(composition, document::OutputPortRef{from, std::string(output)},
                                     document::NodeInputRef{to, std::string(input)});
     }
-    std::shared_ptr<const runtime::CompiledCompositionPlan> compile() {
+    std::shared_ptr<const runtime::CompiledCompositionPlan>
+    compile(std::optional<runtime::ChannelInspection> inspection = std::nullopt) {
         runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
-        const auto compiled = compiler.compile({document.snapshot(), composition}, {});
+        const auto compiled =
+            compiler.compile({document.snapshot(), composition, {}, std::move(inspection)}, {});
         if (!compiled.plan) {
             for (const auto& diagnostic : compiled.diagnostics)
                 std::cerr << diagnostic.summary << ": " << diagnostic.detail << '\n';
@@ -186,8 +189,8 @@ struct Fixture {
             });
         }
     };
-    Frame frame() {
-        const auto plan = compile();
+    Frame frame(std::optional<runtime::ChannelInspection> inspection = std::nullopt) {
+        const auto plan = compile(std::move(inspection));
         runtime::CpuCompositionEvaluator evaluator;
         evaluator.setAssetBaseDirectory(folder);
         const auto result = evaluator.evaluate(
@@ -315,12 +318,49 @@ void shuffleChain() {
            "a Shuffle channel output renames mapped channels into a layer");
 }
 
+void viewerInspection() {
+    Fixture fixture("inspect");
+    runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    const auto listing = runtime::listChannelInspectionChoices(
+        compiler, fixture.document.snapshot(), fixture.composition, fixture.source,
+        std::string(document::kImageSourceChannelsOutputPort), fixture.folder, {},
+        runtime::EvaluationColorIntent::LinearRec709Scene, {});
+    const auto has = [&](const std::string& label) {
+        return std::ranges::any_of(listing.choices,
+                                   [&](const auto& choice) { return choice.label == label; });
+    };
+    expect(listing.diagnostic.empty() && has("RGB (RGB)") && has("diffuse (RGB)") &&
+               has("depth.Z") && has("A"),
+           "the Viewer lists every channel and each RGB layer of a channel set");
+
+    const auto inspection = runtime::ChannelInspection{
+        fixture.source, std::string(document::kImageSourceChannelsOutputPort), {"depth.Z"}};
+    const auto inspected = fixture.frame(inspection);
+    expect(near(inspected.pixels[0].red(), -0.5F) && near(inspected.pixels[0].green(), -0.5F) &&
+               near(inspected.pixels[0].blue(), -0.5F) && near(inspected.pixels[0].alpha(), 1.0F),
+           "one inspected channel shows raw as grey, alpha 1");
+    const auto layer = fixture.frame(runtime::ChannelInspection{
+        fixture.source, std::string(document::kImageSourceChannelsOutputPort),
+        {"diffuse.R", "diffuse.G", "diffuse.B"}});
+    expect(near(layer.pixels[1].red(), 0.1F) && near(layer.pixels[1].blue(), 2.0F),
+           "an inspected layer shows its three channels as RGB");
+    const auto plan = fixture.compile();
+    expect(std::ranges::none_of(plan->operations(),
+                                [](const auto& operation) {
+                                    return std::holds_alternative<runtime::CompiledChannelShuffle>(
+                                        operation);
+                                }) &&
+               near(fixture.frame().pixels[0].red(), 0.25F),
+           "inspection never changes the composition's own plan or pixels");
+}
+
 } // namespace
 
 int main() {
     try {
         imageLayerSelection();
         shuffleChain();
+        viewerInspection();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

@@ -781,7 +781,7 @@ void ViewerEditor::buildHeader() {
     }
     channelGroup->actions().front()->setChecked(true);
     connect(channelGroup, &QActionGroup::triggered, this, [this](QAction* action) {
-        setChannel(static_cast<ViewerChannel>(action->data().toInt()));
+        chooseChannelDropdownIndex(action->data().toInt());
     });
 
     auto* backgroundMenu = viewerViewMenu_->addMenu(tr("Background"));
@@ -1275,12 +1275,8 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     for (const auto* name : kChannelNames) {
         channelDropdown_->addItem(tr(name));
     }
-    connect(channelDropdown_, &kit::KDropdown::currentIndexChanged, this, [this](const int index) {
-        if (index < 0 || index >= static_cast<int>(kChannelNames.size())) {
-            return;
-        }
-        setChannel(static_cast<ViewerChannel>(index));
-    });
+    connect(channelDropdown_, &kit::KDropdown::currentIndexChanged, this,
+            [this](const int index) { chooseChannelDropdownIndex(index); });
 
     roiButton_ = new kit::KIconButton(footer);
     roiButton_->setToolTip(tr("Region of interest: Ctrl-drag with Select"));
@@ -1738,6 +1734,12 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
             &ViewerEditor::refreshViewAdjustment);
     connect(&previewController_, &CompositionPreviewController::viewerResultsAvailable, this,
             &ViewerEditor::consumeChannelDisplay);
+    connect(&previewController_, &CompositionPreviewController::viewerResultsAvailable, this,
+            &ViewerEditor::consumeChannelListing);
+    connect(&session_, &CompositionSession::selectionChanged, this,
+            &ViewerEditor::refreshChannelInspectionChoices);
+    connect(&session_, &CompositionSession::snapshotChanged, this,
+            &ViewerEditor::refreshChannelInspectionChoices);
     connect(&previewController_, &CompositionPreviewController::viewerResultsAvailable, this,
             &ViewerEditor::consumeViewAdjustment);
     connect(&previewController_, &CompositionPreviewController::viewerResultsAvailable, this,

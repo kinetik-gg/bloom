@@ -266,6 +266,7 @@ CompositionPreviewController::cacheKeyForTime(const core::RationalTime time) con
         .displayName = settings_.displayName,
         .viewName = settings_.viewName,
         .showLook = settings_.showLook,
+        .channelInspection = settings_.channelInspection,
     };
 }
 
@@ -379,6 +380,15 @@ void CompositionPreviewController::setViewerLookEnabled(const bool enabled) {
         return;
     }
     settings_.showLook = enabled;
+    requestPreview(false, PreviewRequestKind::Visible);
+}
+
+void CompositionPreviewController::setViewerChannelInspection(
+    std::optional<runtime::ChannelInspection> inspection) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (shuttingDown_ || settings_.channelInspection == inspection)
+        return;
+    settings_.channelInspection = std::move(inspection);
     requestPreview(false, PreviewRequestKind::Visible);
 }
 
@@ -894,6 +904,7 @@ void CompositionPreviewController::requestPreview(
         .displayName = settings_.displayName,
         .viewName = settings_.viewName,
         .showLook = settings_.showLook,
+        .channelInspection = settings_.channelInspection,
     };
 
     if (trace_)

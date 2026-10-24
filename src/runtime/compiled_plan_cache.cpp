@@ -35,7 +35,8 @@ SnapshotCompileResult CompiledPlanCache::compile(const SnapshotCompiler& compile
     // `project()` distinguishes two documents while still letting copies of one snapshot hit.
     const auto sameInput = [&request, revision](const Entry& entry) {
         return entry.compositionId == request.compositionId && entry.revision == revision &&
-               &entry.snapshot.project() == &request.snapshot.project();
+               &entry.snapshot.project() == &request.snapshot.project() &&
+               entry.channelInspection == request.channelInspection;
     };
     if (!request.parameterOverrides.empty()) {
         // An overridden request's plan is not the revision's plan; it is this one gesture frame's.
@@ -75,7 +76,8 @@ SnapshotCompileResult CompiledPlanCache::compile(const SnapshotCompiler& compile
     entries_.insert(entries_.begin(), Entry{.snapshot = request.snapshot,
                                             .compositionId = request.compositionId,
                                             .revision = revision,
-                                            .result = result});
+                                            .result = result,
+                                            .channelInspection = request.channelInspection});
     if (entries_.size() > capacity_) {
         // Erase rather than resize: Snapshot is not default-constructible.
         entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(capacity_), entries_.end());

@@ -57,6 +57,8 @@ target_sources(
         FILES
             include/bloom/runtime/compiled_plan.hpp
             include/bloom/runtime/channel_expression.hpp
+            include/bloom/runtime/channel_inspection.hpp
+            include/bloom/runtime/channel_inspection_listing.hpp
             include/bloom/runtime/compiled_plan_cache.hpp
             include/bloom/runtime/composition_time.hpp
             include/bloom/runtime/layer_time_projection.hpp
@@ -83,6 +85,7 @@ target_sources(
         image_source.cpp
         channel_resolution.cpp
         channel_shuffle.cpp
+        channel_inspection_listing.cpp
         image_source.hpp
         input_color_context.cpp
         input_color_context.hpp

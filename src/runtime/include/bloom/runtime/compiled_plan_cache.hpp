@@ -77,6 +77,7 @@ class CompiledPlanCache final {
         document::CompositionId compositionId;
         document::Revision revision;
         SnapshotCompileResult result;
+        std::optional<ChannelInspection> channelInspection{};
     };
 
     mutable std::mutex mutex_;

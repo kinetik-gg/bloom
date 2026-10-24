@@ -52,7 +52,7 @@ namespace bloom::runtime {
 // COLOR-3 freezes the reusable image-effect input/kernel grammar as plan semantics 8.
 // ADR 0024 advances 8 -> 9: operand sampling and media selection are relative to an operation's
 // time clock, and Layer Output ranges are in placement-clock time.
-inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 9;
+inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 10;
 // Task S5 bumped this 1 -> 2: KeyframeInterpolation gained EaseInOut, so sampling can now produce a
 // value no version-1 sampler could, and the Color4 curve table added a third sampled value kind.
 inline constexpr std::uint32_t kAnimationSamplingSemanticsVersion = 2;

@@ -206,6 +206,7 @@ void BackgroundPreviewController::fillNextFrame() {
             .displayName = key->displayName,
             .viewName = key->viewName,
             .showLook = key->showLook,
+            .channelInspection = key->channelInspection,
         };
         if (cache.contains(*key)) {
             // Protect nearer existing entries from eviction by this pass's farther entries.

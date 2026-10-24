@@ -4,6 +4,7 @@
 #include <bloom/runtime/gpu_memory_budget.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
+#include <bloom/runtime/channel_inspection_listing.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
@@ -49,6 +50,8 @@ struct CompositionPreviewSettings final {
     std::string displayName;
     std::string viewName;
     bool showLook = true;
+    // ADR 0026 Viewer channel inspection: a session display choice, never project state.
+    std::optional<runtime::ChannelInspection> channelInspection = std::nullopt;
     // Capacity-aware: sized from the RAM-preview allocation (gpuPreviewRequestByteAllowance()),
     // so the request allowance follows the machine and the operator's memory overrides instead of a
     // fixed constant. A constrained injected budget still refuses cleanly and takes the honest CPU
@@ -205,6 +208,23 @@ class CompositionPreviewController final : public QObject {
     void setResolutionPolicy(runtime::PreviewResolutionPolicy policy);
     void setViewerDisplayView(std::string displayName, std::string viewName);
     void setViewerLookEnabled(bool enabled);
+    // ADR 0026: show channels of a ChannelSet output raw, or the composition again (nullopt).
+    void setViewerChannelInspection(std::optional<runtime::ChannelInspection> inspection);
+    // ADR 0026: the worker listing behind the Viewer's channel menu (injected by the composition
+    // root, which owns the compiler and the asset base directory).
+    using ChannelListingProvider = std::function<runtime::ChannelInspectionListing(
+        const document::Snapshot&, document::CompositionId, document::NodeId, const std::string&,
+        core::RationalTime, const runtime::EvaluationColorIntent&,
+        const runtime::CancellationToken&)>;
+    void setChannelListingProvider(ChannelListingProvider provider) {
+        channelListingProvider_ = std::move(provider);
+    }
+    [[nodiscard]] runtime::TaskSubmission<std::shared_ptr<const runtime::ChannelInspectionListing>>
+    submitChannelListing(document::NodeId node, std::string port);
+    [[nodiscard]] const std::optional<runtime::ChannelInspection>&
+    viewerChannelInspection() const noexcept {
+        return settings_.channelInspection;
+    }
     void setRegionOfInterest(std::optional<QRectF> region);
     [[nodiscard]] runtime::TaskSubmission<PreviewPreparationResultHandle>
     submitViewerAnalysis(const runtime::PreviewRequestIdentity& identity);
@@ -349,6 +369,7 @@ class CompositionPreviewController final : public QObject {
     PreviewPreparationFunction preparation_;
     PreviewPreparationSubmitter submitter_;
     CompositionPreviewSettings settings_;
+    ChannelListingProvider channelListingProvider_;
     bool colorIntentCaptured_ = false;
     const std::size_t legacyPixelStorageByteLimit_ = runtime::gpuPreviewRequestByteAllowance();
     PreviewFrameCacheHandle frameCache_;

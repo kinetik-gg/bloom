@@ -193,7 +193,8 @@ compilePreviewPlan(const runtime::SnapshotCompiler& compiler,
     return planCache->compile(compiler,
                               {.snapshot = snapshot,
                                .compositionId = desiredIdentity.compositionId,
-                               .parameterOverrides = overrides},
+                               .parameterOverrides = overrides,
+                               .channelInspection = desiredIdentity.channelInspection},
                               cancellation);
 }
 

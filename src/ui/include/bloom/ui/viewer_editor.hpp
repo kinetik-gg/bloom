@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/runtime/channel_inspection_listing.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_native_surface.hpp>
@@ -445,6 +446,12 @@ class ViewerEditor final : public QWidget,
     void startChannelDisplay();
     void consumeChannelDisplay();
     void resetChannelDisplay();
+    // ADR 0026 Viewer channel inspection: the selected node's ChannelSet channels and RGB layers
+    // join the channel dropdown; choosing one shows it raw through a viewer-only plan.
+    void refreshChannelInspectionChoices();
+    void consumeChannelListing();
+    void rebuildChannelDropdown();
+    void chooseChannelDropdownIndex(int index);
     void setBackground(ViewerBackground background);
     void buildHeader();
     void rebuildCompositionSelector();
@@ -766,6 +773,18 @@ class ViewerEditor final : public QWidget,
     std::uint64_t channelEpoch_ = 0, channelTaskEpoch_ = 0;
     bool channelTaskCancelled_ = false;
     QString channelFailure_;
+    struct ChannelSetTarget final {
+        document::NodeId node;
+        std::string port;
+        document::Revision revision;
+        friend bool operator==(const ChannelSetTarget&, const ChannelSetTarget&) = default;
+    };
+    std::optional<ChannelSetTarget> listingTarget_;
+    std::optional<runtime::TaskHandle<std::shared_ptr<const runtime::ChannelInspectionListing>>>
+        listingTask_;
+    std::optional<ChannelSetTarget> listingTaskTarget_;
+    std::optional<ChannelSetTarget> choicesTarget_;
+    std::vector<runtime::ChannelInspectionChoice> inspectionChoices_;
     // FORMAL AMENDMENT 1, as of task VIEW-1: non-null for this ViewerEditor's whole life. Until
 
     // widget's own bottom strip; after it, the caller owns it and this stays the surviving

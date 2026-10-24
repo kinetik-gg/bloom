@@ -39,6 +39,41 @@ CompositionPreviewController::submitViewerChannelDisplay(PreparedPreviewFrameHan
     return submission;
 }
 
+runtime::TaskSubmission<std::shared_ptr<const runtime::ChannelInspectionListing>>
+CompositionPreviewController::submitChannelListing(const document::NodeId node, std::string port) {
+    if (shuttingDown_ || !channelListingProvider_)
+        return {};
+    const auto time = session_.currentTime();
+    auto snapshot = session_.evaluationSnapshotForTime(time);
+    const auto composition = session_.compositionId();
+    if (snapshot.project().findComposition(composition) == nullptr)
+        return {};
+    runtime::TaskRequest request(
+        "List Viewer channels",
+        {.kind = runtime::TaskOwnerKind::PanelRequest,
+         .id = runtime::TaskOwnerId::fromRaw(composition.value())},
+        runtime::TaskPriority::Visible);
+    auto submission = scheduler_.submit<std::shared_ptr<const runtime::ChannelInspectionListing>>(
+        std::move(request),
+        [provider = channelListingProvider_, snapshot = std::move(snapshot), composition, node,
+         port = std::move(port), time,
+         colorIntent = settings_.colorIntent](runtime::TaskContext& context) {
+            using Result =
+                runtime::TaskResult<std::shared_ptr<const runtime::ChannelInspectionListing>>;
+            if (context.isCancellationRequested())
+                return Result::cancelled();
+            auto listing = provider(snapshot, composition, node, port, time, colorIntent,
+                                    context.cancellation());
+            if (context.isCancellationRequested())
+                return Result::cancelled();
+            return Result::succeeded(
+                std::make_shared<const runtime::ChannelInspectionListing>(std::move(listing)));
+        });
+    if (submission.accepted())
+        taskUiBridge_.wake();
+    return submission;
+}
+
 runtime::TaskSubmission<PreviewPreparationResultHandle>
 CompositionPreviewController::submitViewerPreparation(
     const runtime::PreviewRequestIdentity& identity, const bool displayRoute) {

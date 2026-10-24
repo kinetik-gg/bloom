@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/runtime/channel_inspection.hpp>
 #include <bloom/runtime/gpu_resident_frame_lease.hpp>
 #include <bloom/runtime/qualified_display_preparation.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
@@ -47,6 +48,8 @@ struct PreviewRequestIdentity final {
     std::string displayName;
     std::string viewName;
     bool showLook = true;
+    // ADR 0026 Viewer channel inspection (a session display choice; absent for the composition).
+    std::optional<ChannelInspection> channelInspection = std::nullopt;
 
     friend bool operator==(const PreviewRequestIdentity&, const PreviewRequestIdentity&) = default;
 };
