@@ -1,10 +1,12 @@
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/window_status_bar.hpp>
+#include <algorithm>
 #include <cmath>
 #include <memory>
 
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/operation_cache.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/painting.hpp>
@@ -234,6 +236,10 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
                              kit::Color::Muted, this);
     droppedFrames_ = makeCell(QStringLiteral("windowStatusBarDroppedFrames"),
                               kit::TypeRole::UiSmall, kit::Color::Warn, this);
+    video_ = makeCell(QStringLiteral("windowStatusBarVideo"), kit::TypeRole::UiSmall,
+                      kit::Color::Muted, this);
+    video_->setAccessibleName(tr("Video decode"));
+    video_->hide();
     cache_ = makeCell(QStringLiteral("windowStatusBarCache"), kit::TypeRole::UiSmall,
                       kit::Color::Muted, this);
     // CACHE-2: the on-disk decoded-frame cache's own cell, kept as its own makeCell() call rather
@@ -257,6 +263,7 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     layout->addWidget(colorChip_);
     layout->addWidget(previewState_);
     layout->addWidget(droppedFrames_);
+    layout->addWidget(video_);
     layout->addWidget(cache_);
     // CACHE-2: placed right beside the RAM preview cache cell it complements.
     layout->addWidget(mediaDiskCacheCell_);
@@ -417,8 +424,73 @@ void WindowStatusBar::refreshMemoryToolTip() {
 
 QString WindowStatusBar::cacheToolTipForTest() const { return cache_->toolTip(); }
 
+QString WindowStatusBar::videoTextForTest() const { return video_->text(); }
+QString WindowStatusBar::videoToolTipForTest() const { return video_->toolTip(); }
+
+void WindowStatusBar::refreshVideoCell() {
+    const auto* composition = session_.composition();
+    std::vector<runtime::VideoSourceReport> reports;
+    if (operationCache_ != nullptr && composition != nullptr)
+        reports = operationCache_->videoSourceReports();
+    // Only the sources the active composition's Video nodes read.
+    const auto& project = session_.snapshot().project();
+    std::vector<std::pair<std::string, QString>> sources;
+    if (composition != nullptr) {
+        for (const auto& node : composition->graph().nodes()) {
+            if (node.typeId != "bloom.video-source")
+                continue;
+            for (const auto& binding : node.parameters) {
+                if (binding.role != "asset")
+                    continue;
+                const auto stored = session_.constantStringValue(binding.parameterId);
+                bool numeric = false;
+                const auto raw = stored ? stored->toULongLong(&numeric) : 0;
+                if (!numeric)
+                    continue;
+                const auto* asset = project.findAsset(
+                    document::AssetId::fromRaw(static_cast<std::uint64_t>(raw)));
+                if (asset == nullptr)
+                    continue;
+                const auto digest = asset->contentDigest.toLowercaseHex();
+                sources.emplace_back(std::string(digest.begin(), digest.end()),
+                                     QString::fromStdString(asset->name));
+            }
+        }
+    }
+    QString text;
+    QString note;
+    QStringList lines;
+    for (const auto& report : reports) {
+        const auto found = std::ranges::find(sources, report.assetDigest,
+                                             &std::pair<std::string, QString>::first);
+        if (found == sources.end())
+            continue;
+        const auto decode = QString::fromStdString(report.decode);
+        if (text.isEmpty())
+            text = tr("Video: %1").arg(decode);
+        auto line = tr("%1: %2 decode").arg(found->second, decode);
+        if (!report.colourNote.empty()) {
+            const auto colour = QString::fromStdString(report.colourNote);
+            if (note.isEmpty())
+                note = colour;
+            line += tr(" · ") + colour;
+        }
+        lines.push_back(line);
+    }
+    if (!note.isEmpty())
+        text += tr(" · ") + note;
+    video_->setText(text);
+    video_->setToolTip(lines.join(QLatin1Char('\n')));
+    QPalette palette = video_->palette();
+    palette.setColor(QPalette::WindowText,
+                     kit::color(note.isEmpty() ? kit::Color::Muted : kit::Color::Warn));
+    video_->setPalette(palette);
+    video_->setVisible(!text.isEmpty());
+}
+
 void WindowStatusBar::refreshPreviewCells() {
     refreshMemoryToolTip();
+    refreshVideoCell();
     if (!displayedViewer_)
         refreshProbeCell({});
     if (previewController_ == nullptr) {

@@ -1,4 +1,5 @@
 #include <array>
+#include <atomic>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/media/video/audio.hpp>
 #include <bloom/media/video/colour.hpp>
@@ -9,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <thread>
 namespace {
@@ -221,8 +223,22 @@ void retainedRouting(const std::filesystem::path& directory) {
           "automatic decoded-video cache share");
     check(video::estimatedDecodeWorkerBytes(1920, 1080) <
                   video::estimatedDecodeWorkerBytes(3840, 2160) &&
-              video::estimatedDecodeWorkerBytes(16384, 16384) == std::size_t{2} << 30U,
+              video::estimatedDecodeWorkerBytes(16384, 16384) ==
+                  provider::workerAddressSpaceBytes(16384, 16384),
           "worker estimate scales with extent and is bounded by the worker address space");
+    // Issue #352: the worker address space follows the stream instead of a fixed 2 GiB.
+    check(provider::workerAddressSpaceBytes(1, 1) == provider::kWorkerAddressSpaceFloor &&
+              provider::workerAddressSpaceBytes(3840, 2160) == provider::kWorkerAddressSpaceFloor &&
+              provider::workerAddressSpaceBytes(7680, 4320) == std::uint64_t{4} << 30U &&
+              provider::workerAddressSpaceBytes(8192, 8192) == std::uint64_t{7} << 30U &&
+              provider::workerAddressSpaceBytes(16384, 16384) <=
+                  provider::kWorkerAddressSpaceCeiling,
+          "worker address space: UHD keeps the floor, 8K grows, bounded by the ceiling");
+    check(video::sourceSnapshotQuotaBytes(0) == std::uint64_t{32} << 30U &&
+              video::sourceSnapshotQuotaBytes(std::uint64_t{1} << 40U) == std::uint64_t{768} << 30U &&
+              video::sourceSnapshotQuotaBytes(std::uint64_t{64} << 40U) ==
+                  4U * provider::Limits::sourceBytes,
+          "source snapshot quota follows free space between 32 GiB and four maximal sources");
 }
 // Issue #365: matrix selection, explicit interpretation of untagged streams, filtered 4:2:0
 // chroma, and tag plumbing from the generated colour fixtures.
@@ -361,6 +377,80 @@ void colourInterpretation(const std::filesystem::path& directory) {
               "the untagged HD fixture renders under the assumed interpretation");
     }
 }
+// Issue #352: a container that declares a constant cadence is addressed from its demuxer index;
+// the first decode does not read every packet of the file.
+std::uint64_t readBytes(std::int64_t pid) {
+    std::ifstream io("/proc/" + std::to_string(pid) + "/io");
+    std::string key;
+    std::uint64_t value = 0;
+    while (io >> key >> value)
+        if (key == "rchar:")
+            return value;
+    return 0;
+}
+void lazyIndex(const std::filesystem::path& directory) {
+    using namespace bloom::media;
+    const auto path = directory / "long-h264.mp4";
+    std::atomic<std::int64_t> worker{0};
+    video::VideoDecodeSession session(path, video::VideoDecodeSession::defaultWorker(), nullptr,
+                                      {}, nullptr, [&](std::int64_t pid) { worker = pid; });
+    const auto probe = std::get<provider::ProbeResult>(session.probe());
+    check(probe.streams[0].frameCount == 1200, "the long fixture has 1,200 frames");
+    const video::SourceRevisionAccess preview{video::SourceRevisionPolicy::Retained, true};
+    const auto before = worker.load() > 0 ? readBytes(worker.load()) : 0;
+    const auto pid = worker.load();
+    for (const auto n : {600U, 601U, 1199U, 37U}) {
+        const auto result = session.frame(probe, 0, n, 0, nullptr, {}, {}, {}, {}, preview);
+        check(std::holds_alternative<Frame>(result) &&
+                  frameLuma(std::get<Frame>(result)) == 16 + (n % 48U) * 3,
+              "lazily indexed frames are the exact numbered frames");
+    }
+    if (pid > 0 && pid == worker.load() && std::filesystem::exists("/proc/self/io")) {
+        const auto read = readBytes(pid) - before;
+        const auto size = std::filesystem::file_size(path);
+        std::cout << "lazy index: worker read " << read << " of " << size << " bytes\n";
+        check(read < size / 2, "random access does not scan the whole file");
+    } else {
+        std::cout << "NOTE: worker read accounting unavailable; lazy read bound not measured\n";
+    }
+}
+// Issue #352: an 8K UHD stream (over the former 16,777,216-pixel limit) probes and decodes, and
+// its worker runs with the address space sized for the stream.
+std::uint64_t addressSpaceLimit(std::int64_t pid) {
+    std::ifstream limits("/proc/" + std::to_string(pid) + "/limits");
+    std::string line;
+    while (std::getline(limits, line))
+        if (line.starts_with("Max address space")) {
+            std::istringstream fields(line.substr(17));
+            std::uint64_t soft = 0;
+            fields >> soft;
+            return soft;
+        }
+    return 0;
+}
+void eightK(const std::filesystem::path& directory) {
+    using namespace bloom::media;
+    std::atomic<std::int64_t> worker{0};
+    video::VideoDecodeSession session(directory / "uhd8k-prores.mov",
+                                      video::VideoDecodeSession::defaultWorker(), nullptr, {},
+                                      nullptr, [&](std::int64_t pid) { worker = pid; });
+    const auto probe = std::get<provider::ProbeResult>(session.probe());
+    check(probe.streams[0].width == 7680 && probe.streams[0].height == 4320 &&
+              probe.streams[0].frameCount == 2,
+          "an 8K UHD stream probes");
+    const video::SourceRevisionAccess preview{video::SourceRevisionPolicy::Retained, true};
+    const auto decoded = session.frame(probe, 0, 1, 0, nullptr, {}, {}, {}, {}, preview);
+    check(std::holds_alternative<Frame>(decoded) &&
+              std::get<Frame>(decoded)->planes[0].width == 7680 &&
+              std::get<Frame>(decoded)->planes[0].height == 4320,
+          "an 8K UHD frame decodes at full resolution");
+    if (worker.load() > 0 && std::filesystem::exists("/proc/self/limits")) {
+        const auto limit = addressSpaceLimit(worker.load());
+        std::cout << "8K worker address space: " << limit << " bytes\n";
+        check(limit == provider::workerAddressSpaceBytes(7680, 4320),
+              "the 8K decode worker runs with its stream-sized address space");
+    }
+}
 // Issue #367: variable cadence, display orientation, interlace and RGB-coded streams.
 unsigned high(const bloom::media::provider::CpuPlane& plane, std::uint32_t x, std::uint32_t y) {
     return std::to_integer<unsigned>(
@@ -461,6 +551,8 @@ int main(int argc, char** argv) {
         retainedRouting(argv[1]);
         colourInterpretation(argv[1]);
         timingAndLayout(argv[1]);
+        lazyIndex(argv[1]);
+        eightK(argv[1]);
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;

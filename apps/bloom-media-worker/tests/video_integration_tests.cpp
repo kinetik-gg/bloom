@@ -130,7 +130,8 @@ void hlgInterpretationRoundTrip(const std::filesystem::path& directory) {
 }
 // Owner decision (2026-10-24): an untagged video renders in Auto under the assumed size
 // convention, with no evaluation diagnostic (so the frame stays RAM-cacheable), and an explicit
-// Rec.709 choice of an untagged HD stream renders identically to the Rec.709 assumption.
+// Rec.709 choice of an untagged HD stream renders identically to the Rec.709 assumption. The same
+// import-and-render path proves an 8K UHD source (issue #352).
 void untaggedAssumedRender(const std::filesystem::path& directory, const std::filesystem::path& clip,
                            const std::uint32_t width, const std::uint32_t height,
                            const bool expectExplicitMatch) {
@@ -374,6 +375,8 @@ int main(int argc, char** argv) {
         const std::filesystem::path fixtures(argv[1]);
         untaggedAssumedRender(fixtures, fixtures / "untagged-hd-prores.mov", 1280, 720, true);
         untaggedAssumedRender(fixtures, fixtures / "untagged-h264.mp4", 64, 48, false);
+        // Issue #352: an 8K UHD source imports and renders through the evaluator.
+        untaggedAssumedRender(fixtures, fixtures / "uhd8k-prores.mov", 7680, 4320, false);
         // A local untagged HD clip (never committed), e.g. an owner's 720p camera file.
         if (const char* local = std::getenv("BLOOM_LOCAL_UNTAGGED_HD_CLIP"); local && *local)
             untaggedAssumedRender(std::filesystem::path(local).parent_path(), local, 1280, 720,

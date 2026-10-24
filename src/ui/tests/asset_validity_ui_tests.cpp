@@ -17,12 +17,16 @@
 #include <bloom/document/asset.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/commands/asset_operations.hpp>
+#include <bloom/document/node_definition_registry.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/input_color_context.hpp>
+#include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/window_status_bar.hpp>
 
 #include <filesystem>
 #include <iostream>
@@ -152,6 +156,50 @@ Outcome importAndInspect(const std::filesystem::path& path, const bool chooseRec
     return outcome;
 }
 
+// The status bar's video cell (owner decision 2026-10-24, issue #352): after the evaluator decodes
+// an untagged video, the bar names the decode route and the assumed-colour note, without the note
+// becoming an evaluation diagnostic.
+void statusBarVideoNote(const std::filesystem::path& clip, const std::string& family) {
+    Harness harness;
+    harness.controller->importFiles({QString::fromStdString(clip.string())});
+    waitUntil([&] { return !harness.controller->busy(); });
+    const auto& assets = harness.session.snapshot().project().assets();
+    expect(!assets.empty(), "status bar: the clip imports");
+    if (assets.empty())
+        return;
+    const auto composition = harness.session.compositionId();
+    commands::Transaction layer("Video layer", harness.session.snapshot().revision());
+    layer.emplace<commands::AddImageLayer>(composition, assets.front().id);
+    expect(harness.session.executeTransaction(std::move(layer)).succeeded(),
+           "status bar: a Video layer is added");
+    runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    const auto compiled = compiler.compile({harness.session.snapshot(), composition}, {});
+    expect(compiled.plan != nullptr, "status bar: the plan compiles");
+    if (!compiled.plan)
+        return;
+    runtime::CpuCompositionEvaluator evaluator;
+    ui::WindowStatusBar bar(harness.session, nullptr, nullptr, evaluator.operationCache().get());
+    bar.refreshVideoCellForTest();
+    expect(bar.videoTextForTest().isEmpty(), "status bar: no video cell before a decode");
+    const auto result = evaluator.evaluate(compiled.plan,
+                                           {.time = core::RationalTime{},
+                                            .output = compiled.plan->output(),
+                                            .resolution = {},
+                                            .pixelStorageByteLimit = std::size_t{64} << 20U},
+                                           {});
+    expect(result.frame() && result.diagnostics().empty(),
+           "status bar: the untagged video renders with no evaluation diagnostic");
+    bar.refreshVideoCellForTest();
+    const auto text = bar.videoTextForTest().toStdString();
+    std::cout << "status bar video cell: " << text << '\n';
+    expect(text.starts_with("Video: software") &&
+               text.ends_with("Colour tags missing — assumed " + family +
+                              ". Change in Assets → Input Colour"),
+           "status bar: the decode route and the assumed-colour note are shown");
+    expect(bar.videoToolTipForTest().contains(QString::fromStdString(assets.front().name)),
+           "status bar: the tooltip names the source");
+}
+
 void report(const std::string& label, const Outcome& outcome) {
     std::cout << label << ": imported=" << outcome.imported << " kind=" << outcome.kind
               << " missing=" << outcome.missing << " thumbnail=" << outcome.thumbnail
@@ -214,6 +262,8 @@ int main(int argc, char** argv) {
             expect(video.thumbnailAfterChoice,
                    label + ": choosing Rec.709 as its input colour space gives a thumbnail");
         };
+        if (!fixtures.empty())
+            statusBarVideoNote(fixtures / "untagged-hd-prores.mov", "Rec.709");
         if (!fixtures.empty()) {
             const auto video = importAndInspect(fixtures / "untagged-h264.mp4", true);
             report("untagged h264 video (SD)", video);

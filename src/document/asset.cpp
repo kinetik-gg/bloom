@@ -98,7 +98,7 @@ ValidationResult AssetRecord::validate() const {
             result.add(ValidationCode::InvalidValue, "audio", "Invalid audio descriptor");
     } else if (kind == AssetKind::Video &&
                (width == 0 || height == 0 || width > 16384 || height > 16384 ||
-                static_cast<std::uint64_t>(width) * height > 16777216))
+                static_cast<std::uint64_t>(width) * height > 67108864))
         result.add(ValidationCode::InvalidValue, "dimensions", "Invalid video dimensions");
     else if ((kind == AssetKind::Image || kind == AssetKind::Sequence) &&
              !representableImageExtent(width, height))
@@ -111,7 +111,7 @@ ValidationResult AssetRecord::validate() const {
         result.add(ValidationCode::InvalidValue, "interpretation", "Invalid image interpretation");
     if (kind == AssetKind::Video) {
         if (videoStreams.empty() || videoStreams.size() > 256 || duration <= core::RationalTime{} ||
-            frames == 0 || frames > 1000000 || !manifest.members.empty() ||
+            frames == 0 || frames > 16777216 || !manifest.members.empty() ||
             !manifest.pattern.empty())
             result.add(ValidationCode::InvalidValue, "video", "Invalid video descriptor");
         bool hasVideo = false;
@@ -127,7 +127,7 @@ ValidationResult AssetRecord::validate() const {
                 stream.framePeriod <= core::RationalTime{} ||
                 stream.duration < core::RationalTime{} || stream.width == 0 || stream.height == 0 ||
                 stream.width > 16384 || stream.height > 16384 ||
-                static_cast<std::uint64_t>(stream.width) * stream.height > 16777216 ||
+                static_cast<std::uint64_t>(stream.width) * stream.height > 67108864 ||
                 stream.channelLayout.size() > 64 || stream.sampleRate > 384000 ||
                 stream.primaries < -1 || stream.primaries > 255 || stream.transfer < -1 ||
                 stream.transfer > 255 || stream.matrix < -1 || stream.matrix > 255 ||

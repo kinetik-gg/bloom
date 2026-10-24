@@ -12,7 +12,7 @@ struct EncodeSettingsV1 {
     std::uint64_t frames = 1, audioSamples = 0;
     std::uint32_t sampleRate = 48000, channels = 2;
     std::string bwfDescription;
-    std::uint64_t byteLimit = Limits::sourceBytes;
+    std::uint64_t byteLimit = Limits::exportBytes;
     friend bool operator==(const EncodeSettingsV1&, const EncodeSettingsV1&) = default;
 };
 struct EncodedChunkV1 {

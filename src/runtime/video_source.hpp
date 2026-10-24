@@ -4,6 +4,7 @@
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/evaluation.hpp>
+#include <bloom/runtime/video_source_report.hpp>
 #include <list>
 namespace bloom::runtime::detail {
 struct VideoSourceSelection {
@@ -50,11 +51,19 @@ class VideoSourceContext final {
     // sources can alternate, and never more than the source-snapshot file quota can retain.
     void setSessionByteBudget(std::size_t bytes);
     [[nodiscard]] std::size_t retainedSessionCount();
+    // Decode route and colour note of the most recently selected sources (most recent first, at
+    // most kReportedSources). Status surfaces read this; it is not evaluation output.
+    void report(VideoSourceReport value);
+    [[nodiscard]] std::vector<VideoSourceReport> reports() const;
+    static constexpr std::size_t kReportedSources = 32;
     static constexpr std::size_t kSnapshotFiles = 8;
     static constexpr std::size_t kMinimumRetainedSessions = 2;
 
   private:
     std::mutex mutex_;
+    mutable std::mutex reportMutex_;
+    std::vector<VideoSourceReport> reports_;
+    std::uint64_t reportSequence_ = 0;
     struct SessionEntry {
         std::string key;
         std::filesystem::path path;
@@ -66,7 +75,8 @@ class VideoSourceContext final {
     std::size_t sessionByteBudget_ = 0;
     std::list<SessionEntry> sessions_;
     std::shared_ptr<platform::FileSnapshotQuota> quota_ =
-        std::make_shared<platform::FileSnapshotQuota>(32ULL * 1024 * 1024 * 1024, kSnapshotFiles);
+        std::make_shared<platform::FileSnapshotQuota>(
+            media::video::defaultSourceSnapshotQuotaBytes(), kSnapshotFiles);
     std::shared_ptr<render::detail::PackedHostRetirementState> retirement_;
     std::uint64_t generation_ = 0;
     bool closed_ = false;

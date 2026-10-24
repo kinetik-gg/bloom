@@ -288,6 +288,12 @@ int main(int argc, char** argv) {
     try {
         test::check(argc == 2, "test output directory");
         tests(argv[1]);
+        // Issue #352: one 8K UHD ProRes frame exports and passes reopen QC.
+        EncodeSettingsV1 eightK;
+        eightK.width = 7680;
+        eightK.height = 4320;
+        eightK.frames = 1;
+        (void)run(eightK, std::filesystem::path(argv[1]) / "export-8k-prores.mov");
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;

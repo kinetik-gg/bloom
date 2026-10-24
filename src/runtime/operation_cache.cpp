@@ -466,6 +466,14 @@ void OperationCache::bindVideoSources(const std::shared_ptr<detail::VideoSourceC
     if (closed && sources)
         sources->beginShutdown();
 }
+std::vector<VideoSourceReport> OperationCache::videoSourceReports() const {
+    std::shared_ptr<detail::VideoSourceContext> sources;
+    {
+        const std::lock_guard lock(accounting_->mutex);
+        sources = accounting_->videoSources.lock();
+    }
+    return sources ? sources->reports() : std::vector<VideoSourceReport>{};
+}
 std::shared_ptr<const render::Rgba32fImage>
 OperationCache::findPreparedUpload(const std::string& content) {
     const std::lock_guard lock(accounting_->mutex);

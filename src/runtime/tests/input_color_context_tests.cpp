@@ -146,8 +146,25 @@ void testImageRules(Expectations& expectations) {
         ImageColorSpace::Auto, {});
     expectations.expect(
         ap0.id == "ACES2065-1" && ap1.id == "ACEScg" &&
-            rec709.id == aces->rec709VideoColorSpaceId() && other.id.empty(),
+            rec709.id == "Linear Rec.709 (sRGB)" && other.id.empty(),
         "EXR AP0/AP1/Rec.709 map to the pinned config ids and other chromaticities refuse");
+    // The ACES CG config has no Rec.709 camera space: Bloom synthesizes one so tagged and assumed
+    // Rec.709 video resolves in Auto, and linear Rec.709 EXR data never uses it.
+    expectations.expect(aces->rec709VideoColorSpaceId() ==
+                                bloom::color::kBloomRec709CameraColorSpaceId &&
+                            !bloom::color::synthesizedColorSpaceIdentity(
+                                 bloom::color::kBloomRec709CameraColorSpaceId)
+                                 .empty(),
+                        "the ACES CG config gains the synthesized Rec.709 camera input");
+    const auto acesVideo = bloom::media::video::resolveVideoInputColorSpace(
+        *aces, bloom::media::provider::ColourTags{2, 2, 2, 0}, 0, {}, {1280, 720, 24.0});
+    std::string acesDiagnostic;
+    expectations.expect(
+        acesVideo.id == bloom::color::kBloomRec709CameraColorSpaceId &&
+            acesVideo.warning.find("assumed Rec.709") != std::string::npos &&
+            static_cast<bool>(bloom::runtime::detail::prepareInputColorProcessor(
+                *aces, {acesVideo.id, acesVideo.name, {}, false, true}, acesDiagnostic)),
+        "untagged HD under ACES CG resolves to the synthesized Rec.709 camera input");
 }
 
 void testVideoRules(Expectations& expectations) {

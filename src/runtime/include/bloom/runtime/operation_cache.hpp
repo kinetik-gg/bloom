@@ -4,6 +4,7 @@
 #include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/video_source_report.hpp>
 
 #include <cstdint>
 #include <list>
@@ -123,6 +124,8 @@ class OperationCache final {
     sourceRetirementState() const;
     // Typed weak producer attachment: this pool's source close also detaches video sessions.
     void bindVideoSources(const std::shared_ptr<detail::VideoSourceContext>& sources);
+    // The bound video sources' decode route and colour-note reports (most recent first).
+    [[nodiscard]] std::vector<VideoSourceReport> videoSourceReports() const;
     [[nodiscard]] PreparedUploadRetentionPolicy preparedRetentionPolicy() const;
     [[nodiscard]] std::uint64_t preparedPayloadBytes() const;
     [[nodiscard]] std::size_t preparedEntryCount() const;

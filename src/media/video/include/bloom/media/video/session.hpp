@@ -43,9 +43,17 @@ struct FrameKey {
 [[nodiscard]] std::size_t automaticDecodedVideoCacheBytes(std::size_t physicalBytes) noexcept;
 // Conservative resident estimate for one retained decode worker of a stream: decoder base plus
 // 24 frames of 16-bit 4:4:4 planes (reference set, frame threads and the product), capped at the
-// 2 GiB media-v1 worker address space. Used to admit retained sessions by memory.
+// stream's media-v1 worker address space (provider::workerAddressSpaceBytes, issue #352). Used to
+// admit retained sessions by memory.
 [[nodiscard]] std::size_t estimatedDecodeWorkerBytes(std::uint32_t width,
                                                      std::uint32_t height) noexcept;
+// Issue #352: the resident byte quota for source snapshots, derived from the free space of the
+// snapshot spool volume instead of a fixed 32 GiB: three quarters of the space available there,
+// never below 32 GiB (a capture beyond the real free space still fails with its I/O error) and
+// never above four 1 TiB sources. `available` is the spool volume's free bytes.
+[[nodiscard]] std::uint64_t sourceSnapshotQuotaBytes(std::uint64_t available) noexcept;
+// The same for the default spool directory (the user cache), measured now.
+[[nodiscard]] std::uint64_t defaultSourceSnapshotQuotaBytes();
 // Which decoder produced a frame. Software is the reference; hardware is preview-only.
 struct FrameDecodeProvenance final {
     provider::Implementation implementation = provider::Implementation::Software;

@@ -79,15 +79,23 @@ struct Unavailable {
 };
 template <typename T> using Result = std::variant<T, Unavailable>;
 
+// Protocol/representation ceilings, not memory policy: actual frames are admitted by the caller's
+// pixel budget and the worker's address space is sized per stream (issue #352).
 struct Limits final {
     static constexpr std::uint32_t stringBytes = 4096;
     static constexpr std::uint32_t entries = 256;
-    static constexpr std::uint32_t indexEntries = 1000000;
-    static constexpr std::uint64_t sourceBytes = 16ULL * 1024U * 1024U * 1024U;
+    // 2^24 presentations: over 77 hours at 60 frames per second.
+    static constexpr std::uint32_t indexEntries = 16777216;
+    // 1 TiB per source file (several hours of 8K camera RAW-class bit rates).
+    static constexpr std::uint64_t sourceBytes = 1ULL << 40U;
+    // A single export may exceed any source.
+    static constexpr std::uint64_t exportBytes = 4ULL << 40U;
     static constexpr std::uint32_t planes = 4;
     static constexpr std::uint32_t dimension = 16384;
-    static constexpr std::uint64_t pixels = 16777216;
-    static constexpr std::uint32_t productBytes = 256U * 1024U * 1024U;
+    // 8192 x 8192: 8K full aperture and 16K x 4K panoramas.
+    static constexpr std::uint64_t pixels = 67108864;
+    // One 8192 x 8192 frame of 16-bit 4:4:4:4 or RGBA16 planes.
+    static constexpr std::uint32_t productBytes = 512U * 1024U * 1024U;
     static constexpr std::uint32_t frameBytes = productBytes + 1024U * 1024U;
     static constexpr std::uint32_t channels = 64;
     static constexpr std::uint32_t audioSamples = 65536;
@@ -240,6 +248,14 @@ void assignPlaneDigests(std::vector<CpuPlane>& planes);
 [[nodiscard]] bool valid(const AudioBlock& value);
 [[nodiscard]] bool valid(const DemuxIndex& value);
 [[nodiscard]] Digest digestBytes(std::span<const std::byte> bytes);
+// Issue #352: the media-v1 worker address space is sized per decoded stream instead of a fixed
+// 2 GiB. It covers decoder reference and thread frames, the 16-bit 4:4:4:4 product and its wire
+// copy: 1 GiB plus twelve 16-bit 4:4:4:4 frames, rounded up to 256 MiB, never below the profile's
+// 2 GiB floor and never above 16 GiB. UHD keeps the floor; 8K UHD gets 4 GiB.
+inline constexpr std::uint64_t kWorkerAddressSpaceFloor = 2ULL << 30U;
+inline constexpr std::uint64_t kWorkerAddressSpaceCeiling = 16ULL << 30U;
+[[nodiscard]] std::uint64_t workerAddressSpaceBytes(std::uint32_t width,
+                                                    std::uint32_t height) noexcept;
 // Domain string (u32 length + bytes), u16 schema=1, then declaration-order fields.
 // Integers are little-endian; enums/bools u8, counts/string lengths u32, digests 32 raw bytes.
 #define BLOOM_MEDIA_RECORD(Type)                                                                   \

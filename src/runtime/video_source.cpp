@@ -149,6 +149,18 @@ void VideoSourceContext::bindRetirement(
         }
     }
 }
+void VideoSourceContext::report(VideoSourceReport value) {
+    const std::lock_guard lock(reportMutex_);
+    value.sequence = ++reportSequence_;
+    std::erase_if(reports_, [&](const auto& entry) { return entry.assetDigest == value.assetDigest; });
+    reports_.insert(reports_.begin(), std::move(value));
+    if (reports_.size() > kReportedSources)
+        reports_.resize(kReportedSources);
+}
+std::vector<VideoSourceReport> VideoSourceContext::reports() const {
+    const std::lock_guard lock(reportMutex_);
+    return reports_;
+}
 void VideoSourceContext::clear() {
     invalidateSources();
     cache.clear(); // Explicit refresh is off-UI; signal-only shutdown does not free decoded planes.
@@ -354,6 +366,12 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
     key.add(hardwareDecoded);
     selection.decodeProvenance = decodeProvenance.description;
     selection.cacheKey = key.bytes();
+    if (selection.frame)
+        context.report({std::string(digest.begin(), digest.end()), decodeProvenance.description,
+                        assumedColour.assumed && selection.inputColorSpaceAutomatic
+                            ? selection.inputColorSpaceWarning
+                            : std::string{},
+                        0});
     // Decode-only identity for the raw codec-side preparation. It deliberately omits the input and
     // working colour spaces, config revision, display and proxy so a changed working space reuses
     // the decoded frame.

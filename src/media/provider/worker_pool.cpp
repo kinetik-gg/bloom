@@ -128,6 +128,8 @@ WorkerReply execute(const WorkerPoolOptions& options, const CallRequest& request
     const auto deadline = Clock::now() + options.timeout;
     auto processOptions = options.process;
     processOptions.inputSnapshot = snapshot;
+    processOptions.addressSpaceBytes = std::max(
+        options.process.addressSpaceBytes, workerAddressSpaceBytes(request.width, request.height));
     auto launched = platform::ProcessSupervisor::launch(processOptions);
     auto* process = std::get_if<std::unique_ptr<platform::ProcessSupervisor>>(&launched);
     if (!process)
@@ -207,6 +209,7 @@ struct MediaWorkerPool::State {
         Clock::time_point started;
         Clock::time_point lastUsed;
         std::size_t calls = 0;
+        std::uint64_t addressSpace = 0;
     };
     WorkerPoolOptions options;
     std::atomic<bool> stopping{false};
@@ -243,7 +246,7 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
         state_->options.timeout > std::chrono::minutes(5))
         return Unavailable{Error::InvalidValue, "Invalid direct worker pool limits"};
     if (state_->options.expected.execution.resourceProfile != "media-v1" ||
-        state_->options.process.addressSpaceBytes != 2ULL * 1024 * 1024 * 1024 ||
+        state_->options.process.addressSpaceBytes != kWorkerAddressSpaceFloor ||
         state_->options.process.openFiles != 64)
         return Unavailable{Error::IdentityMismatch,
                            "Process limits do not match the execution profile"};
@@ -288,7 +291,13 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
         // The inherited immutable source handle is fixed at process launch. A newly captured
         // generation, even with the same digest, must get a fresh worker and decoder state.
         const auto now = Clock::now();
+        // A retained worker launched for a smaller stream (or a probe) is relaunched with the
+        // address space this stream needs.
+        const auto addressSpace =
+            std::max(state_->options.process.addressSpaceBytes,
+                     workerAddressSpaceBytes(request.width, request.height));
         if (state_->retained && (state_->retained->snapshot != snapshot ||
+                                 state_->retained->addressSpace < addressSpace ||
                                  now - state_->retained->started >= std::chrono::minutes(5) ||
                                  now - state_->retained->lastUsed >= std::chrono::seconds(30) ||
                                  state_->retained->calls >= kRetainedCallLimit))
@@ -296,6 +305,7 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
         if (!state_->retained) {
             auto options = state_->options.process;
             options.inputSnapshot = snapshot;
+            options.addressSpaceBytes = addressSpace;
             options.arguments.emplace_back("--retained-video");
             auto launched = platform::ProcessSupervisor::launch(options);
             auto* process = std::get_if<std::unique_ptr<platform::ProcessSupervisor>>(&launched);
@@ -306,6 +316,7 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
             const auto id = newSessionId();
             state_->retained = std::make_unique<State::Retained>(std::move(*process), snapshot, id,
                                                                  state_->options.expected);
+            state_->retained->addressSpace = addressSpace;
             Connection connection(*state_->retained->process, now + state_->options.timeout,
                                   cancelled);
             auto hello =
@@ -385,7 +396,7 @@ MediaWorkerPool::submit(runtime::TaskScheduler& scheduler, runtime::TaskOwner ow
         return ticket;
     }
     if (state_->options.expected.execution.resourceProfile != "media-v1" ||
-        state_->options.process.addressSpaceBytes != 2ULL * 1024 * 1024 * 1024 ||
+        state_->options.process.addressSpaceBytes != kWorkerAddressSpaceFloor ||
         state_->options.process.openFiles != 64) {
         reject({Error::IdentityMismatch, "Process limits do not match the execution profile"});
         return ticket;

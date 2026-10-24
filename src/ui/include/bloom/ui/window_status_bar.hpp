@@ -120,6 +120,10 @@ class WindowStatusBar final : public kit::KSurface {
     [[nodiscard]] QString droppedFrameTextForTest() const;
     [[nodiscard]] QString cacheTextForTest() const;
     [[nodiscard]] QString mediaDiskCacheTextForTest() const;
+    [[nodiscard]] QString videoTextForTest() const;
+    [[nodiscard]] QString videoToolTipForTest() const;
+    // Re-reads the video decode reports now (the bar otherwise follows its 250 ms cadence).
+    void refreshVideoCellForTest() { refreshVideoCell(); }
     [[nodiscard]] QString messageTextForTest() const;
     [[nodiscard]] QString versionTextForTest() const;
     [[nodiscard]] ViewerEditor* displayedViewerForTest() const noexcept;
@@ -138,6 +142,10 @@ class WindowStatusBar final : public kit::KSurface {
     void applyMemoryPressure(runtime::MachineMemorySample sample,
                              runtime::MemoryBudgetLedger::Clock::time_point now);
     void refreshMemoryToolTip();
+    // The active composition's video sources: the latest decode route (software, VA-API or the
+    // software fallback and its reason) and any assumed-colour note, from the runtime's decode
+    // reports. It is status, not an evaluation diagnostic, so cached frames stay cacheable.
+    void refreshVideoCell();
 
     runtime::MemoryBudgetLedger& memoryLedger_;
     CompositionSession& session_;
@@ -151,6 +159,7 @@ class WindowStatusBar final : public kit::KSurface {
     QWidget* colorChip_ = nullptr;
     QLabel* previewState_ = nullptr;
     QLabel* droppedFrames_ = nullptr;
+    QLabel* video_ = nullptr;
     QLabel* cache_ = nullptr;
     QLabel* mediaDiskCacheCell_ = nullptr;
     QLabel* message_ = nullptr;

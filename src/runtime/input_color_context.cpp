@@ -2,6 +2,8 @@
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <string_view>
 #include <utility>
@@ -98,12 +100,29 @@ resolveImageInputColorSpace(const color::ResolvedBloomNeutralConfig& config,
         return InputColorSpaceResolution{"ACES2065-1", "ACES2065-1", {}, false, true};
     if (probe.colorSpaceTag == "ACEScg")
         return InputColorSpaceResolution{"ACEScg", "ACEScg", {}, false, true};
-    if (probe.colorSpaceTag == "lin_rec709_scene")
-        return InputColorSpaceResolution{std::string(config.rec709VideoColorSpaceId()),
-                                         std::string(config.rec709VideoColorSpaceId()),
-                                         {},
-                                         false,
-                                         true};
+    if (probe.colorSpaceTag == "lin_rec709_scene") {
+        // Linear Rec.709/D65 data maps to the config's scene-linear Rec.709 space, never to a
+        // camera/video space (that carries the BT.709 OETF): Bloom Neutral's lin_rec709_scene,
+        // the ACES CG config's "Linear Rec.709 (sRGB)".
+        const auto contains = [](std::string_view text, std::string_view part) {
+            return std::search(text.begin(), text.end(), part.begin(), part.end(),
+                               [](char a, char b) {
+                                   return std::tolower(static_cast<unsigned char>(a)) ==
+                                          std::tolower(static_cast<unsigned char>(b));
+                               }) != text.end();
+        };
+        std::string linear;
+        for (const auto& space : config.colorSpaces())
+            if (space.id == "lin_rec709_scene" ||
+                (linear.empty() && space.sceneLinear && contains(space.id, "rec.709") &&
+                 !contains(space.id, "camera")))
+                linear = space.id;
+        if (!linear.empty())
+            return InputColorSpaceResolution{linear, linear, {}, false, true};
+        return InputColorSpaceResolution{
+            "", "", "The OCIO config has no scene-linear Rec.709 colour space; choose one",
+            false, true};
+    }
     return InputColorSpaceResolution{
         "", "", "EXR chromaticities are not recognized; choose an explicit OCIO colour space",
         false, true};

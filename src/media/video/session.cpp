@@ -32,9 +32,32 @@ std::size_t automaticDecodedVideoCacheBytes(const std::size_t physicalBytes) noe
 }
 std::size_t estimatedDecodeWorkerBytes(const std::uint32_t width,
                                        const std::uint32_t height) noexcept {
-    constexpr std::uint64_t base = 64ULL << 20U, ceiling = 2ULL << 30U;
+    constexpr std::uint64_t base = 64ULL << 20U;
     const auto frame = static_cast<std::uint64_t>(width) * height * 3U * 2U;
-    return static_cast<std::size_t>(std::min(ceiling, base + frame * 24U));
+    return static_cast<std::size_t>(
+        std::min(provider::workerAddressSpaceBytes(width, height), base + frame * 24U));
+}
+std::uint64_t sourceSnapshotQuotaBytes(const std::uint64_t available) noexcept {
+    constexpr std::uint64_t floor = 32ULL << 30U, ceiling = 4U * provider::Limits::sourceBytes;
+    return std::clamp<std::uint64_t>(available / 4U * 3U, floor, ceiling);
+}
+std::uint64_t defaultSourceSnapshotQuotaBytes() {
+    std::uint64_t available = 0;
+    if (const auto cache = platform::userCacheDirectory("bloom")) {
+        // The spool directory may not exist yet: measure its nearest existing ancestor.
+        std::error_code error;
+        auto directory = *cache / "video-source-snapshots";
+        while (!directory.empty() && !std::filesystem::exists(directory, error)) {
+            const auto parent = directory.parent_path();
+            if (parent == directory)
+                break;
+            directory = parent;
+        }
+        const auto space = std::filesystem::space(directory, error);
+        if (!error)
+            available = space.available;
+    }
+    return sourceSnapshotQuotaBytes(available);
 }
 bool VideoDecodeSession::hardwareDecodePossible() {
 #if defined(__linux__)
@@ -148,7 +171,8 @@ struct VideoDecodeSession::State {
           workerLaunched(launched), quota(std::move(limits)), spoolDirectory(std::move(directory)),
           retirement(std::move(owner)) {
         if (!quota)
-            quota = std::make_shared<platform::FileSnapshotQuota>(32ULL * 1024 * 1024 * 1024, 8);
+            quota = std::make_shared<platform::FileSnapshotQuota>(
+                defaultSourceSnapshotQuotaBytes(), 8);
         if (spoolDirectory.empty()) {
             if (const auto cache = platform::userCacheDirectory("bloom"))
                 spoolDirectory = *cache / "video-source-snapshots";

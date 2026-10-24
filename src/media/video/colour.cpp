@@ -27,7 +27,7 @@ selected(const bloom::color::ResolvedBloomNeutralConfig& config, std::string id,
 }
 
 // H.273 code points. Unspecified (2 for primaries/transfer/matrix, 0 for range) and any value a
-// stream did not carry are "missing"; Bloom never infers them from resolution or codec.
+// stream did not carry are "missing"; assumeMissingVideoColour fills them by picture size and rate.
 constexpr std::int32_t kMatrixBt709 = 1, kMatrixBt470bg = 5, kMatrixSmpte170m = 6,
                        kMatrixBt2020Ncl = 9, kMatrixBt2020Cl = 10;
 constexpr std::int32_t kTransferPq = 16, kTransferHlg = 18;

@@ -149,7 +149,8 @@ std::vector<std::uint8_t> h264Frame(unsigned frame, bool forceKey = false) {
         s.align();
         for (unsigned y = 0; y < 16; ++y)
             for (unsigned x = 0; x < 16; ++x)
-                s.number(luma(frame, (mb % 4) * 16 + x, (mb / 4) * 16 + y), 8);
+                // The pattern repeats every 48 frames (the long fixture keeps 8-bit samples).
+                s.number(luma(frame % 48U, (mb % 4) * 16 + x, (mb / 4) * 16 + y), 8);
         for (unsigned i = 0; i < 128; ++i)
             s.number(128, 8);
     }
@@ -298,10 +299,15 @@ void fixture(const std::filesystem::path& path, bool prores, bool alpha = false,
 }
 // Issue #367 timing/metadata fixtures, 64x48 with the numbered luma pattern, and a 1280x720
 // ProRes stream with no colour tags (the HD case of the untagged-colour convention).
-enum class Special { Vfr, Rotated, Interlaced, Rgb, Anamorphic, UntaggedHd };
+enum class Special { Vfr, Rotated, Interlaced, Rgb, Anamorphic, UntaggedHd, EightK };
 void special(const std::filesystem::path& path, const Special kind) {
-    const bool hd = kind == Special::UntaggedHd;
-    const unsigned width = hd ? 1280U : 64U, height = hd ? 720U : 48U;
+    // The 8K UHD fixture (issue #352) is a tagged Rec.709 ProRes 422 stream laid out like the HD
+    // one; it exceeds the former 16,777,216-pixel provider limit.
+    const bool eightK = kind == Special::EightK;
+    const bool hd = kind == Special::UntaggedHd || eightK;
+    const bool untagged = kind == Special::UntaggedHd;
+    const unsigned width = eightK ? 7680U : hd ? 1280U : 64U;
+    const unsigned height = eightK ? 4320U : hd ? 720U : 48U;
     Output out;
     require(out.frame && out.packet, "Fixture allocation");
     require(avformat_alloc_output_context2(&out.format, nullptr, "mov", path.c_str()) >= 0,
@@ -314,13 +320,13 @@ void special(const std::filesystem::path& path, const Special kind) {
     vp.codec_type = AVMEDIA_TYPE_VIDEO;
     vp.width = static_cast<int>(width);
     vp.height = static_cast<int>(height);
-    vp.color_primaries = hd ? AVCOL_PRI_UNSPECIFIED : AVCOL_PRI_BT709;
-    vp.color_trc = hd ? AVCOL_TRC_UNSPECIFIED : AVCOL_TRC_BT709;
+    vp.color_primaries = untagged ? AVCOL_PRI_UNSPECIFIED : AVCOL_PRI_BT709;
+    vp.color_trc = untagged ? AVCOL_TRC_UNSPECIFIED : AVCOL_TRC_BT709;
     vp.color_space = kind == Special::Rgb ? AVCOL_SPC_RGB
-                     : hd                 ? AVCOL_SPC_UNSPECIFIED
+                     : untagged           ? AVCOL_SPC_UNSPECIFIED
                                           : AVCOL_SPC_BT709;
     vp.color_range = kind == Special::Rgb ? AVCOL_RANGE_JPEG
-                     : hd                 ? AVCOL_RANGE_UNSPECIFIED
+                     : untagged           ? AVCOL_RANGE_UNSPECIFIED
                                           : AVCOL_RANGE_MPEG;
     const bool encoded = kind == Special::Interlaced || kind == Special::Rgb || hd;
     if (encoded) {
@@ -386,7 +392,7 @@ void special(const std::filesystem::path& path, const Special kind) {
     // Variable cadence: frames at 0,1,2,4,5,8,9,10,14,15,16,20 (24/1 timebase), each one frame
     // number n showing its own presentation slot; every frame is an IDR so any cadence decodes.
     constexpr std::array<unsigned, 12> vfr{0, 1, 2, 4, 5, 8, 9, 10, 14, 15, 16, 20};
-    for (unsigned n = 0; n < 12; ++n) {
+    for (unsigned n = 0; n < (eightK ? 2U : 12U); ++n) {
         av_packet_unref(out.packet);
         const auto pts = kind == Special::Vfr ? vfr[n] : n;
         if (encoded) {
@@ -469,6 +475,9 @@ bool generateFixtures(const std::string& directory) {
         special(path / "rgb-tiff.mov", Special::Rgb);
         special(path / "anamorphic-h264.mp4", Special::Anamorphic);
         special(path / "untagged-hd-prores.mov", Special::UntaggedHd);
+        special(path / "uhd8k-prores.mov", Special::EightK);
+        // Issue #352: a 1,200-frame (50 s) constant-cadence H.264 stream for the lazy index.
+        fixture(path / "long-h264.mp4", false, false, {}, 1200);
         std::ofstream provenance(path / "provenance.txt");
         provenance
             << "MEDIA-3 generated-read-v1\nFFmpeg 8.1.2 qualified intake mux/ProRes encode\n"
@@ -479,6 +488,8 @@ bool generateFixtures(const std::string& directory) {
                "12-frame timing fixtures: VFR and 90-degree display-matrix H.264 (all IDR),\n"
                "top-field-first interlaced ProRes 422, RGB48 TIFF in MOV, 2:1 SAR H.264\n"
                "12-frame untagged 1280x720 ProRes 422 (tiled numbered pattern)\n"
+               "1200-frame H.264 (pattern repeats every 48 frames) for lazy indexing\n"
+               "2-frame 7680x4320 Rec.709 ProRes 422 (tiled numbered pattern)\n"
                "PCM mono 48000 Hz: sample[n]=((n%997)-498)/1024\n"
                "Original synthetic content; generated at test time; no external media\n";
         const auto specification =
@@ -489,7 +500,7 @@ bool generateFixtures(const std::string& directory) {
              {"numbered-h264.mp4", "numbered-prores.mov", "alpha-prores.mov", "untagged-h264.mp4",
               "pq2020-h264.mp4", "hlg2020-h264.mp4", "vfr-h264.mp4", "rotated-h264.mp4",
               "interlaced-prores.mov", "rgb-tiff.mov", "anamorphic-h264.mp4",
-              "untagged-hd-prores.mov"}) {
+              "untagged-hd-prores.mov", "long-h264.mp4", "uhd8k-prores.mov"}) {
             const auto identity = sourceIdentity((path / name).string()).first.toLowercaseHex();
             provenance << name << " SHA-256: " << std::string(identity.begin(), identity.end())
                        << '\n';

@@ -195,13 +195,15 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
     // space, an untagged stream is interpreted through an explicit Rec.2100 PQ choice, and a
     // tagged Rec.709 stream uses filtered 4:2:0 chroma. All keep GPU/CPU input-to-working parity;
     // the PQ cases exercise the exact half-domain LUT lookup.
-    const std::array<std::tuple<std::string_view, std::string_view, std::string_view>, 3>
-        interpretations{std::tuple<std::string_view, std::string_view, std::string_view>{
-                            "pq2020-h264.mp4", "pq auto", ""},
-                        std::tuple<std::string_view, std::string_view, std::string_view>{
-                            "untagged-h264.mp4", "untagged pq", "Rec.2100-PQ - Display"},
-                        std::tuple<std::string_view, std::string_view, std::string_view>{
-                            "numbered-h264.mp4", "rec709 h264", "ACES2065-1"}};
+    // Owner decision (2026-10-24): untagged HD in Auto renders under the assumed Rec.709 on both
+    // routes. Issue #352: an 8K UHD source keeps the same parity on the GPU preview route.
+    using Interpretation = std::tuple<std::string_view, std::string_view, std::string_view>;
+    const std::array<Interpretation, 5> interpretations{
+        Interpretation{"pq2020-h264.mp4", "pq auto", ""},
+        Interpretation{"untagged-h264.mp4", "untagged pq", "Rec.2100-PQ - Display"},
+        Interpretation{"numbered-h264.mp4", "rec709 h264", "ACES2065-1"},
+        Interpretation{"untagged-hd-prores.mov", "untagged hd auto", ""},
+        Interpretation{"uhd8k-prores.mov", "8k uhd prores", ""}};
     for (const auto& [file, label, explicitSpace] : interpretations) {
         const std::string tag{label};
         const auto path = fixtures / std::string{file};
@@ -218,9 +220,33 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
                       LayerValues{.position = {static_cast<double>(asset.width) * 0.5,
                                                static_cast<double>(asset.height) * 0.5}},
                       idBase);
-        expectations.expect(expectMediaParity(expectations, *executor.executor, evaluator, builder,
-                                              plan, acesRequest(*plan, kAcesWorking), asset.width,
-                                              asset.height, tag + " video interpretation"),
+        // An 8K frame (530 MB as float RGBA) exceeds this test process's default pixel allowance
+        // and the executor's per-image ceiling, which follow the process memory ledger; size both
+        // for the frame, as a host with an 8K-capable budget does.
+        const auto frameBytes =
+            static_cast<std::size_t>(asset.width) * asset.height * sizeof(float) * 4U;
+        auto request = acesRequest(*plan, kAcesWorking);
+        request.pixelStorageByteLimit =
+            std::max<std::size_t>(request.pixelStorageByteLimit, frameBytes * 4U);
+        auto* run = &*executor.executor;
+        // Its own cache, declared first so it outlives the executor bound to it.
+        decltype(GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget})) largeCache;
+        decltype(GpuSceneExecutor::create(device, *cache.cache, GpuSceneExecutorBudgets{})) large;
+        if (frameBytes > GpuSceneExecutorBudgets{}.maxImageBytes) {
+            largeCache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+            GpuSceneExecutorBudgets budgets;
+            budgets.maxImageBytes = frameBytes * 4U;
+            if (largeCache)
+                large = GpuSceneExecutor::create(device, *largeCache.cache, budgets);
+            expectations.expect(largeCache.hasValue() && large.hasValue(),
+                                tag + ": an 8K-sized executor hosts");
+            if (!large.hasValue())
+                continue;
+            run = &*large.executor;
+        }
+        expectations.expect(expectMediaParity(expectations, *run, evaluator, builder, plan, request,
+                                              asset.width, asset.height,
+                                              tag + " video interpretation"),
                             tag + ": interpreted video input-to-working parity");
         idBase += 10;
     }

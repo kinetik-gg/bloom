@@ -45,15 +45,35 @@ Auto resolution is format-specific and never uses an ambient `$OCIO` or a decode
 | 8/16-bit PNG, JPEG, TIFF | Config sRGB-texture space: `color_picking`, `texture_paint`, or the config's named sRGB-texture id; Bloom Neutral uses `srgb_rec709_display` |
 | EXR with AP0 chromaticities | `ACES2065-1` |
 | EXR with AP1 chromaticities | `ACEScg` |
-| EXR with Rec.709/D65 chromaticities | `lin_rec709_scene` or the config's Rec.709 camera/video mapping |
+| EXR with Rec.709/D65 chromaticities | The config's scene-linear Rec.709 space: `lin_rec709_scene` (Bloom Neutral), `Linear Rec.709 (sRGB)` (ACES CG); never a camera/video space |
 | EXR with other chromaticities | Refuse with a typed reason; choose an explicit config id |
 | EXR without chromaticities | Working space, with a visible warning |
-| Video: Rec.709 primaries/matrix + BT.709 transfer | Config Rec.709 camera/video space |
+| Video: Rec.709 or Rec.601 primaries/matrix + BT.709/SMPTE 170M transfer | Config Rec.709 camera/video space, otherwise the synthesized `Rec.709 Camera (Bloom)` space |
 | Video: sRGB transfer | Config sRGB-texture space |
 | Video: linear transfer | Working space |
 | Video: BT.2020 + PQ tags | The config's Rec.2100 PQ space (active or inactive); refused by name when the config has none |
 | Video: BT.2020 + HLG tags | The config's Rec.2100 HLG space, otherwise the synthesized `Rec.2100-HLG (Bloom)` space |
-| Video: other Rec.2020 tags, or any missing tag | Typed refusal naming each missing tag and the input-colour override |
+| Video: missing tags | Filled by the size convention (Rec.709 for HD, Rec.601 for SD, limited range; [media I/O](media-io.md)) and resolved as above, with a visible "Colour tags missing — assumed …" note |
+| Video: other Rec.2020 tags | Typed refusal naming the input-colour override |
+
+### Synthesized Rec.709 camera input space
+
+The OCIO ACES 1.3 CG config has no Rec.709 camera/video space, so tagged and assumed Rec.709 or
+Rec.601 video would have no Auto interpretation there. A resolved non-Neutral pinned config without
+a space named like "Rec.709 … Camera" gains `Rec.709 Camera (Bloom)` in memory, defined from the
+encoded signal to the config reference as:
+
+1. OCIO `ExponentWithLinearTransform` forward (decode) with gamma 1/0.45 and offset 0.099, the
+   BT.709 inverse OETF (OCIO derives the linear toe for continuity: a 4.51 slope below 0.081,
+   against BT.709's rounded 4.5 and 0.081);
+2. the BT.709 (D65) RGB to CIE XYZ matrix; then
+3. the inverse OCIO built-in `UTILITY - ACES-AP0_to_CIE-XYZ-D65_BFD` (ACES2065-1 reference).
+
+Like the HLG space it is added without changing the config version, the copy passes
+`Config::validate()`, and its identity (`bloom-rec709-camera-v1` plus the linked OCIO version) is
+part of video transform identity. Bloom Neutral keeps resolving Rec.709 video through its own
+scene-linear space with the stream's BT.709 transfer decoded by the YUV step. Linear Rec.709 EXR
+data maps to the scene-linear Rec.709 space, never to a camera space.
 
 ### Synthesized Rec.2100 HLG input space
 

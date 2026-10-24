@@ -13,6 +13,9 @@
 #include <numeric>
 #include <optional>
 #include <thread>
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/resource.h>
+#endif
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavfilter/avfilter.h>
@@ -299,11 +302,21 @@ AVPixelFormat hardwareFormat(AVCodecContext*, const AVPixelFormat* formats) {
     }
     return AV_PIX_FMT_NONE;
 }
+// The address-space limit the host launched this worker with (the media-v1 floor if unreadable).
+std::uint64_t workerAddressSpace() {
+#if defined(__unix__) || defined(__APPLE__)
+    rlimit limit{};
+    if (::getrlimit(RLIMIT_AS, &limit) == 0 && limit.rlim_cur != RLIM_INFINITY &&
+        limit.rlim_cur >= kWorkerAddressSpaceFloor)
+        return std::min<std::uint64_t>(limit.rlim_cur, kWorkerAddressSpaceCeiling);
+#endif
+    return kWorkerAddressSpaceFloor;
+}
 // Thrown when a VA-API decoder silently produced software frames for this device.
 struct HardwareMiss final {};
 // Bounded software decoder parallelism. Frame threads keep extra reference and output frames in
-// flight, so the count is sized against half of the 2 GiB media-v1 worker address space as well
-// as the machine. Intra-only codecs use slice threads: a random-access request then waits for one
+// flight, so the count is sized against half of this worker's address space (sized per stream by
+// the host, issue #352) as well as the machine. Intra-only codecs use slice threads: a random-access request then waits for one
 // frame rather than for a pipeline of following frames.
 void configureThreads(AVCodecContext& codec, const AVCodecParameters& p) {
     const auto* desc = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(p.format));
@@ -311,7 +324,7 @@ void configureThreads(AVCodecContext& codec, const AVCodecParameters& p) {
     const auto frameBytes = std::max<std::uint64_t>(
         1, static_cast<std::uint64_t>(std::max(p.width, 1)) *
                static_cast<std::uint64_t>(std::max(p.height, 1)) * 3U * sampleBytes);
-    constexpr std::uint64_t budget = 1ULL << 30U;
+    const auto budget = workerAddressSpace() / 2U;
     const auto byMemory = budget / (frameBytes * 4U);
     const auto cores = std::max(1U, std::thread::hardware_concurrency());
     codec.thread_count = static_cast<int>(std::clamp<std::uint64_t>(
@@ -640,14 +653,57 @@ struct VideoCursor final {
     // recordings). Requests then name a slot on the nominal grid instead of a packet ordinal.
     bool variable = false;
     bool eof = false;
+    // Issue #352: a container that declares a constant cadence (its sample count equals its
+    // duration in frame periods) and carries an in-memory demuxer index is addressed without the
+    // whole-file packet scan. Frame N is then assumed at start + N / rate; any decode that
+    // contradicts it (a missing presentation, an end before the frame) falls back to the scan.
+    bool provisional = false;
+    std::uint64_t provisionalFrames = 0;
+    // Every indexed sample is a random-access point (intra-only codecs): seek straight to it.
+    bool allKeys = false;
 };
+// The provisional constant-cadence assumption did not hold for this request.
+struct ProvisionalMiss final {};
+// Admits the lazy constant-cadence path from container metadata and the demuxer's index alone.
+bool admitProvisional(AVStream& stream, const AVRational rate, VideoCursor& cursor) {
+    if (stream.nb_frames <= 0 || stream.duration == AV_NOPTS_VALUE || stream.duration <= 0 ||
+        static_cast<std::uint64_t>(stream.nb_frames) > Limits::indexEntries)
+        return false;
+    const auto slots = av_rescale_q(stream.duration, stream.time_base, av_inv_q(rate));
+    if (slots != stream.nb_frames ||
+        av_rescale_q(slots, av_inv_q(rate), stream.time_base) != stream.duration)
+        return false;
+    const auto entries = avformat_index_get_entries_count(&stream);
+    if (entries <= 0)
+        return false;
+    std::vector<std::pair<std::int64_t, std::int64_t>> keyframes;
+    for (int i = 0; i < entries; ++i) {
+        const auto* entry = avformat_index_get_entry(&stream, i);
+        if (entry == nullptr || entry->timestamp == AV_NOPTS_VALUE)
+            return false;
+        if ((entry->flags & AVINDEX_KEYFRAME) != 0)
+            keyframes.emplace_back(entry->timestamp, entry->timestamp);
+    }
+    if (keyframes.empty())
+        return false;
+    cursor.allKeys = keyframes.size() == static_cast<std::size_t>(entries);
+    // Index timestamps are decode times; they never follow the presentation they key, so a seek
+    // by one can land late only on a reordered stream, which the decode loop corrects.
+    if (!cursor.allKeys) {
+        std::ranges::sort(keyframes);
+        cursor.keyframes = std::move(keyframes);
+    }
+    cursor.provisional = true;
+    cursor.provisionalFrames = static_cast<std::uint64_t>(slots);
+    return true;
+}
 
 // A forward request decodes on from the current position when no later random-access point
 // precedes the target: seeking would restart from a keyframe at or before where the decoder
 // already is, so continuing is never more work. Backward requests and requests past a later
 // keyframe seek to the keyframe at or before the target.
 bool continueForward(const VideoCursor& cursor, const std::int64_t target) {
-    if (!cursor.position || *cursor.position >= target)
+    if (!cursor.position || *cursor.position >= target || cursor.allKeys)
         return false;
     const auto after = std::ranges::upper_bound(cursor.keyframes, target, {},
                                                 &std::pair<std::int64_t, std::int64_t>::first);
@@ -658,6 +714,8 @@ bool continueForward(const VideoCursor& cursor, const std::int64_t target) {
 // time can land on a keyframe presented after the target. Seek by the decode time of the last
 // key packet presented at or before the target instead; an earlier landing only costs decoding.
 std::int64_t seekTimestamp(const VideoCursor& cursor, const std::int64_t target) {
+    if (cursor.allKeys)
+        return target;
     const auto after = std::ranges::upper_bound(cursor.keyframes, target, {},
                                                 &std::pair<std::int64_t, std::int64_t>::first);
     if (after == cursor.keyframes.begin())
@@ -681,8 +739,27 @@ FrameProduct video(Input& input, const CallRequest& request, AVBufferRef* device
     // this check a VFR stream could coincidentally contain the requested timestamp
     // while assigning it a different frame number. The admitted codecs/demuxers
     // produce one access unit per packet; missing or duplicate PTS are unavailable.
-    if (!cursor.indexed) {
-        decoder(input, stream, device);
+    const auto scan = [&] {
+        cursor.provisional = false;
+        cursor.allKeys = false;
+        cursor.timestamps.clear();
+        cursor.keyframes.clear();
+        cursor.position.reset();
+        cursor.previous.reset();
+        cursor.lookahead.reset();
+        cursor.variable = false;
+        if (cursor.indexed) {
+            // A provisional request moved the demuxer: rewind to its first indexed sample (the
+            // provisional path is only admitted with a demuxer index).
+            const auto* first = avformat_index_get_entry(input.format->streams[request.stream], 0);
+            require(first != nullptr &&
+                        av_seek_frame(input.format, static_cast<int>(request.stream),
+                                      std::min(start, first->timestamp),
+                                      AVSEEK_FLAG_BACKWARD) >= 0,
+                    "Cannot seek video", Error::Unavailable);
+            avcodec_flush_buffers(input.codec);
+            cursor.eof = false;
+        }
         int read = 0;
         while ((read = av_read_frame(input.format, input.packet)) >= 0) {
             if (input.packet->stream_index == static_cast<int>(request.stream)) {
@@ -712,77 +789,127 @@ FrameProduct video(Input& input, const CallRequest& request, AVBufferRef* device
             cursor.variable = cursor.timestamps[i] != start + expected;
         }
         cursor.indexed = true;
-    }
-    // Constant cadence: frame N is the Nth presentation. Variable cadence: frame N is the
-    // presentation shown at nominal time start + N / rate (the last packet presented at or before
-    // it), so composition time maps to source time by timestamp, not by packet count.
-    std::int64_t target = 0;
-    if (!cursor.variable) {
-        require(request.frame < cursor.timestamps.size(), "Frame is outside the video duration",
-                Error::Unavailable);
-        target = cursor.timestamps[request.frame];
-    } else {
-        const auto slot = av_rescale_q(static_cast<std::int64_t>(request.frame), av_inv_q(rate),
-                                       stream.time_base);
-        require(slot >= 0 && start <= std::numeric_limits<std::int64_t>::max() - slot,
-                "Frame timestamp overflow", Error::Oversized);
-        const auto time = start + slot;
-        const auto end = stream.duration != AV_NOPTS_VALUE && stream.duration > 0
-                             ? start + stream.duration
-                             : cursor.timestamps.back() + 1;
-        require(time < end, "Frame is outside the video duration", Error::Unavailable);
-        const auto shown = std::ranges::upper_bound(cursor.timestamps, time);
-        target = shown == cursor.timestamps.begin() ? cursor.timestamps.front() : *std::prev(shown);
-    }
-    av_frame_unref(input.frame);
-    if (!continueForward(cursor, target)) {
-        cursor.position.reset();
-        cursor.previous.reset();
-        cursor.lookahead.reset();
-        require(av_seek_frame(input.format, static_cast<int>(request.stream),
-                              seekTimestamp(cursor, target), AVSEEK_FLAG_BACKWARD) >= 0,
-                "Cannot seek video", Error::Unavailable);
-        avcodec_flush_buffers(input.codec);
-        cursor.eof = false;
-    }
-    const auto pull = [&] {
-        if (cursor.lookahead) {
-            av_frame_unref(input.frame);
-            av_frame_move_ref(input.frame, cursor.lookahead.get());
-            cursor.lookahead.reset();
-            return true;
-        }
-        return next(input, request.stream, cursor.eof);
     };
-    while (pull()) {
-        const auto pts = input.frame->best_effort_timestamp;
-        require(pts != AV_NOPTS_VALUE, "Frame timestamp unavailable", Error::Unavailable);
-        if (device && input.frame->format != AV_PIX_FMT_VAAPI)
-            throw HardwareMiss{};
-        if (pts == target) {
-            auto current = cloneFrame(input.frame);
-            cursor.position = pts;
-            if ((current->flags & AV_FRAME_FLAG_INTERLACED) == 0) {
-                cursor.previous = current;
-                return frame(input, stream, current.get());
-            }
-            require(!device, "Interlaced video is deinterlaced by the software decoder",
-                    Error::Unavailable);
-            FrameHandle following;
-            if (pull())
-                following = cloneFrame(input.frame);
-            const auto deinterlaced = bwdif(stream, cursor.previous, current, following);
-            cursor.previous = current;
-            cursor.lookahead = following;
-            return frame(input, stream, deinterlaced.get());
-        }
-        require(pts < target, "Exact frame timestamp unavailable (variable frame rate)",
-                Error::Unavailable);
-        cursor.position = pts;
-        cursor.previous = cloneFrame(input.frame);
-        av_frame_unref(input.frame);
+    if (!cursor.indexed) {
+        decoder(input, stream, device);
+        if (admitProvisional(*input.format->streams[request.stream], rate, cursor))
+            cursor.indexed = true;
+        else
+            scan();
     }
-    throw Unavailable{Error::Unavailable, "Frame is outside the video duration"};
+    const auto decodeAt = [&]() -> FrameProduct {
+        // Constant cadence: frame N is the Nth presentation. Variable cadence: frame N is the
+        // presentation shown at nominal time start + N / rate (the last packet presented at or
+        // before it), so composition time maps to source time by timestamp, not packet count.
+        std::int64_t target = 0;
+        if (cursor.provisional) {
+            require(request.frame < cursor.provisionalFrames,
+                    "Frame is outside the video duration", Error::Unavailable);
+            const auto offset = av_rescale_q(static_cast<std::int64_t>(request.frame),
+                                             av_inv_q(rate), stream.time_base);
+            require(offset >= 0 && start <= std::numeric_limits<std::int64_t>::max() - offset,
+                    "Frame timestamp overflow", Error::Oversized);
+            target = start + offset;
+        } else if (!cursor.variable) {
+            require(request.frame < cursor.timestamps.size(),
+                    "Frame is outside the video duration", Error::Unavailable);
+            target = cursor.timestamps[request.frame];
+        } else {
+            const auto slot = av_rescale_q(static_cast<std::int64_t>(request.frame),
+                                           av_inv_q(rate), stream.time_base);
+            require(slot >= 0 && start <= std::numeric_limits<std::int64_t>::max() - slot,
+                    "Frame timestamp overflow", Error::Oversized);
+            const auto time = start + slot;
+            const auto end = stream.duration != AV_NOPTS_VALUE && stream.duration > 0
+                                 ? start + stream.duration
+                                 : cursor.timestamps.back() + 1;
+            require(time < end, "Frame is outside the video duration", Error::Unavailable);
+            const auto shown = std::ranges::upper_bound(cursor.timestamps, time);
+            target =
+                shown == cursor.timestamps.begin() ? cursor.timestamps.front() : *std::prev(shown);
+        }
+        av_frame_unref(input.frame);
+        // A provisional seek by decode time can land after the target on a reordered stream:
+        // seek again earlier by a doubling distance before giving up on the assumption.
+        bool seeked = false;
+        std::int64_t backoff = std::max<std::int64_t>(
+            1, av_rescale_q(16, av_inv_q(rate), stream.time_base));
+        unsigned attempts = 0;
+        const auto seekTo = [&](const std::int64_t timestamp) {
+            cursor.position.reset();
+            cursor.previous.reset();
+            cursor.lookahead.reset();
+            require(av_seek_frame(input.format, static_cast<int>(request.stream), timestamp,
+                                  AVSEEK_FLAG_BACKWARD) >= 0,
+                    "Cannot seek video", Error::Unavailable);
+            avcodec_flush_buffers(input.codec);
+            cursor.eof = false;
+            seeked = true;
+        };
+        if (!continueForward(cursor, target))
+            seekTo(seekTimestamp(cursor, target));
+        const auto pull = [&] {
+            if (cursor.lookahead) {
+                av_frame_unref(input.frame);
+                av_frame_move_ref(input.frame, cursor.lookahead.get());
+                cursor.lookahead.reset();
+                return true;
+            }
+            return next(input, request.stream, cursor.eof);
+        };
+        while (pull()) {
+            const auto pts = input.frame->best_effort_timestamp;
+            require(pts != AV_NOPTS_VALUE, "Frame timestamp unavailable", Error::Unavailable);
+            if (device && input.frame->format != AV_PIX_FMT_VAAPI)
+                throw HardwareMiss{};
+            const bool firstAfterSeek = seeked;
+            seeked = false;
+            if (pts == target) {
+                auto current = cloneFrame(input.frame);
+                cursor.position = pts;
+                if ((current->flags & AV_FRAME_FLAG_INTERLACED) == 0) {
+                    cursor.previous = current;
+                    return frame(input, stream, current.get());
+                }
+                require(!device, "Interlaced video is deinterlaced by the software decoder",
+                        Error::Unavailable);
+                FrameHandle following;
+                if (pull())
+                    following = cloneFrame(input.frame);
+                const auto deinterlaced = bwdif(stream, cursor.previous, current, following);
+                cursor.previous = current;
+                cursor.lookahead = following;
+                return frame(input, stream, deinterlaced.get());
+            }
+            if (pts > target && cursor.provisional) {
+                if (firstAfterSeek && attempts < 10 && target - start > 0) {
+                    ++attempts;
+                    av_frame_unref(input.frame);
+                    seekTo(std::max(start, target - backoff));
+                    backoff = backoff > std::numeric_limits<std::int64_t>::max() / 2
+                                  ? backoff
+                                  : backoff * 2;
+                    continue;
+                }
+                throw ProvisionalMiss{};
+            }
+            require(pts < target, "Exact frame timestamp unavailable (variable frame rate)",
+                    Error::Unavailable);
+            cursor.position = pts;
+            cursor.previous = cloneFrame(input.frame);
+            av_frame_unref(input.frame);
+        }
+        if (cursor.provisional)
+            throw ProvisionalMiss{};
+        throw Unavailable{Error::Unavailable, "Frame is outside the video duration"};
+    };
+    try {
+        return decodeAt();
+    } catch (const ProvisionalMiss&) {
+        // The container's constant-cadence claim did not hold: index every packet and retry.
+        scan();
+        return decodeAt();
+    }
 }
 // Resumable audio decode position. A retained worker keeps one so consecutive blocks continue
 // from the previous block's end: N sequential blocks decode the stream once, not N times.

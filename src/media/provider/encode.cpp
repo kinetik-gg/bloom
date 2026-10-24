@@ -10,7 +10,7 @@ bool valid(const EncodeSettingsV1& v) {
            v.rate.numerator > 0 && v.rate.numerator <= 1000000 && v.rate.denominator <= 1000000 &&
            v.frames <= Limits::indexEntries && v.audioSamples <= 86400ULL * Limits::sampleRate &&
            v.sampleRate > 0 && v.sampleRate <= Limits::sampleRate && v.channels > 0 &&
-           v.channels <= 8 && v.byteLimit > 0 && v.byteLimit <= Limits::sourceBytes &&
+           v.channels <= 8 && v.byteLimit > 0 && v.byteLimit <= Limits::exportBytes &&
            v.bwfDescription.size() <= 256 && wire::validText(v.bwfDescription) &&
            !v.container.empty() && v.container.size() <= Limits::stringBytes &&
            wire::validText(v.container) && v.videoCodec.size() <= Limits::stringBytes &&

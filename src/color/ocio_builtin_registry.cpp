@@ -185,6 +185,52 @@ struct InputColorSpaceMappings final {
     return editable;
 }
 
+// Synthesizes kBloomRec709CameraColorSpaceId into a non-Neutral pinned config that has no
+// Rec.709 camera space. Neutral maps Rec.709 video through its own scene-linear space.
+[[nodiscard]] OCIO::ConstConfigRcPtr withBloomRec709CameraInput(const OCIO::ConstConfigRcPtr& config,
+                                                                const bool isNeutral) {
+    if (isNeutral ||
+        config->getColorSpace(std::string(bloom::color::kBloomRec709CameraColorSpaceId).c_str()) !=
+            nullptr)
+        return config;
+    for (int index = 0;
+         index < config->getNumColorSpaces(OCIO::SEARCH_REFERENCE_SPACE_ALL, OCIO::COLORSPACE_ALL);
+         ++index) {
+        const char* const name = config->getColorSpaceNameByIndex(OCIO::SEARCH_REFERENCE_SPACE_ALL,
+                                                                  OCIO::COLORSPACE_ALL, index);
+        if (name != nullptr && containsInsensitive(name, "rec.709") &&
+            containsInsensitive(name, "camera"))
+            return config;
+    }
+    constexpr std::array<double, 8> bt709{0.64, 0.33, 0.30, 0.60, 0.15, 0.06, 0.3127, 0.3290};
+    auto toReference = OCIO::GroupTransform::Create();
+    // Forward ExponentWithLinear decodes (the pinned configs' sRGB spaces use it inverse to
+    // encode); gamma 1/0.45 and offset 0.099 are BT.709's, its linear toe derived for continuity.
+    auto curve = OCIO::ExponentWithLinearTransform::Create();
+    const double gamma[4] = {1.0 / 0.45, 1.0 / 0.45, 1.0 / 0.45, 1.0};
+    const double offset[4] = {0.099, 0.099, 0.099, 0.0};
+    curve->setGamma(gamma);
+    curve->setOffset(offset);
+    toReference->appendTransform(curve);
+    auto toXyz = OCIO::MatrixTransform::Create();
+    const auto rec709ToXyz = matrix44(rgbToXyz(bt709));
+    toXyz->setMatrix(rec709ToXyz.data());
+    toReference->appendTransform(toXyz);
+    auto toAp0 = OCIO::BuiltinTransform::Create();
+    toAp0->setStyle("UTILITY - ACES-AP0_to_CIE-XYZ-D65_BFD");
+    toAp0->setDirection(OCIO::TRANSFORM_DIR_INVERSE);
+    toReference->appendTransform(toAp0);
+    auto space = OCIO::ColorSpace::Create(OCIO::REFERENCE_SPACE_SCENE);
+    space->setName(std::string(bloom::color::kBloomRec709CameraColorSpaceId).c_str());
+    space->setFamily("Input");
+    space->setDescription("Bloom-synthesized Rec.709 camera/video input (BT.709 inverse OETF)");
+    space->setTransform(toReference, OCIO::COLORSPACE_DIR_TO_REFERENCE);
+    auto editable = config->createEditableCopy();
+    editable->addColorSpace(space);
+    editable->validate();
+    return editable;
+}
+
 [[nodiscard]] InputColorSpaceMappings inputColorSpaceMappings(const OCIO::ConstConfigRcPtr& config,
                                                               const bool isNeutral) {
     InputColorSpaceMappings result;
@@ -377,9 +423,11 @@ std::string_view ResolvedBloomNeutralConfig::rec709VideoColorSpaceId() const& no
     return rec709VideoColorSpaceId_;
 }
 std::string synthesizedColorSpaceIdentity(const std::string_view colorSpaceId) {
-    if (colorSpaceId != kBloomRec2100HlgColorSpaceId)
-        return {};
-    return std::string("bloom-hlg-scene-v1;ocio=") + OCIO::GetVersion();
+    if (colorSpaceId == kBloomRec2100HlgColorSpaceId)
+        return std::string("bloom-hlg-scene-v1;ocio=") + OCIO::GetVersion();
+    if (colorSpaceId == kBloomRec709CameraColorSpaceId)
+        return std::string("bloom-rec709-camera-v1;ocio=") + OCIO::GetVersion();
+    return {};
 }
 std::string_view ResolvedBloomNeutralConfig::rec2100PqColorSpaceId() const& noexcept {
     return rec2100PqColorSpaceId_;
@@ -585,6 +633,7 @@ resolveOcioBuiltIn(const OcioConfigLocatorKind locatorKind, const std::string_vi
 
     try {
         config = withBloomHlgInput(config, isNeutral);
+        config = withBloomRec709CameraInput(config, isNeutral);
     } catch (const OCIO::Exception&) {
         auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
         result.recomputedRevision_ = recomputed;

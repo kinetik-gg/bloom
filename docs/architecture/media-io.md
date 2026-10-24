@@ -119,8 +119,8 @@ call is cooperatively cancellable only after it returns. Import and relink prepa
 thumbnail work use the blocking-I/O task executor, with Jobs progress, diagnostics and Cancel.
 Image and sequence asset metadata retains positive, representable source dimensions without a
 second fixed 16,384-axis or 16,777,216-pixel limit. Actual decode and proxy work still enter the
-caller's checked pixel budget before allocation. Video assets retain the separate bounded media
-provider protocol's current extent and frame-index limits.
+caller's checked pixel budget before allocation. Video assets follow the media provider protocol's
+extent and frame-index limits (issue #352: 16,384 per axis, 67,108,864 pixels, 16,777,216 frames).
 Publication checks the originating project/revision and discards work after project replacement.
 Sequence scanning checks cancellation while enumerating files and hashes only matching image
 members. Missing intervals in sparse spans are derived from adjacent sorted member numbers, so
@@ -684,9 +684,12 @@ retain their existing source verification. Schema 4 carries bounded snapshot len
 alone cannot manufacture source authority. Standard FFmpeg demux/codec and colour boundaries remain
 unchanged, and this mechanism does not upgrade provider/delivery qualification.
 
-The evaluator retains at most four source-keyed decode sessions. A shared 32 GiB / eight-file disk
-quota bounds retained revisions, captures in flight and unlinked handles pending retirement; each
-source is also subject to the existing 16 GiB intake limit. These are separate from decoded-frame RAM
+The evaluator retains at most four source-keyed decode sessions. A shared eight-file disk quota
+bounds retained revisions, captures in flight and unlinked handles pending retirement. Its byte
+ceiling is derived from the snapshot spool volume when the context is created (issue #352): three
+quarters of the free space there, never below 32 GiB and never above four 1 TiB sources; a capture
+beyond the real free space still fails with its I/O error. Each source is also subject to the
+1 TiB intake limit. These are separate from decoded-frame RAM
 retention. Exhaustion returns typed `Oversized` rather than overcommitting or reusing stale bytes.
 Capture exposes chunk cancellation/progress and numeric read/hash stage costs. Source-key identity
 contains asset digest, locator/relink hint and base directory. `Retained` can reuse captured bytes for
@@ -820,9 +823,9 @@ before any large allocation. Codec/device constraints, not an absolute image cei
 | CPU planes | 4, with exact plane count/layout for each supported format |
 | Dimension / pixels | codec-representable window and sample-count limits; no fixed image ceiling |
 | CPU-plane storage including row padding | explicit caller `pixelBudget` for the in-process image decoder (default 256 MiB) |
-| Wire frame excluding its length prefix | 257 MiB |
+| Wire frame excluding its length prefix | 513 MiB (one 8192 x 8192 16-bit 4:4:4:4 product) |
 | Audio | 64 named channels, 65536 samples per channel, 384000 Hz |
-| Default worker address space / open descriptors | 2 GiB / 64; core dumps disabled |
+| Worker address space / open descriptors | per stream: 1 GiB + twelve 16-bit 4:4:4:4 frames, 2 GiB floor (UHD), 4 GiB at 8K UHD, 16 GiB ceiling / 64; core dumps disabled |
 | Default pool slots / call deadline | 2 / 5 seconds |
 | Default cancellation message / SIGTERM grace | 50 ms / 100 ms |
 
@@ -1485,8 +1488,25 @@ beginning again. A retained worker is relaunched after five minutes or 65,536 ca
 uses the first video presentation timestamp, including for containers with a nonzero origin.
 
 All four read roles run behind the existing process supervisor, cancellation, bounded queue and
-watchdog. Limits include 16 GiB source files, 256 streams, one million index entries, 16,384 per
-image dimension, 16,777,216 pixels, 256 MiB of CPU planes, and 65,536 audio samples per block.
+watchdog. Limits include 1 TiB source files (4 TiB per export), 256 streams, 16,777,216 index
+entries (over 77 hours at 60 fps), 16,384 per image dimension, 67,108,864 pixels (8192 x 8192: 8K
+full aperture and 16K x 4K panoramas), 512 MiB of CPU planes, and 65,536 audio samples per block.
+These are protocol and representation ceilings, not memory policy: frames are admitted by the
+caller's pixel budget, and each worker's address space is sized for its stream
+(`provider::workerAddressSpaceBytes`). A retained worker launched for a probe or a smaller stream
+is relaunched with the larger limit before it decodes a bigger one; export workers are sized from
+the export extent. An 8K UHD ProRes fixture probes, decodes, renders through the evaluator and
+exports with reopen QC.
+
+The decoder no longer reads every packet before the first frame (issue #352). A container that
+declares a constant cadence (its sample count equals its duration in frame periods) and carries an
+in-memory demuxer index (MOV/MP4) is addressed provisionally: frame N is start + N / rate, random
+access uses the index's keyframes (all-intra streams seek straight to the frame), and a seek by
+decode time that lands after the target on a reordered stream is retried earlier with a doubling
+distance. Any decode that contradicts the claim (a missing presentation or an early end) falls
+back to the whole-file packet scan, which also remains the path for containers without an index
+and for streams whose metadata does not declare a constant cadence. On a 1,200-frame fixture the
+worker reads about 6% of the file for four random-access frames.
 The preview audio buffer also obeys the existing audio sample budget. Malformed input, changed
 content, oversize products, worker crashes and timeouts remain typed failures. A failed worker
 request cannot publish a partial product; a later request starts a fresh worker.
@@ -1495,8 +1515,8 @@ Software decode declares `DecodedSemanticExact` for the intake's admitted codec 
 built with FFmpeg's x86 SIMD and is threaded: long-GOP codecs use frame threads and intra-only
 codecs (ProRes, DNxHD, MJPEG, TIFF) use slice threads so one random-access frame never waits on a
 pipeline of following frames. The thread count is the smaller of the machine's cores, eight, and
-what fits four in-flight 16-bit 4:4:4 frames per thread into half of the 2 GiB worker address
-space (one thread for 8K). glibc malloc arenas are limited to four for the same reason. Frame
+what fits four in-flight 16-bit 4:4:4 frames per thread into half of the worker's address space
+(read from its own limit; two threads at 8K UHD). glibc malloc arenas are limited to four for the same reason. Frame
 and slice threading are bit-exact for these decoders, so threading does not change the
 determinism claim.
 
@@ -1519,6 +1539,13 @@ threads, where it measured faster than threaded software decode; `BLOOM_VIDEO_HA
 prefers it on any host with a render node and `0` disables it. The older export-side
 VA-API execution key keeps its Development/Incomplete decode declarations, which are not
 selectable. Hardware provides acceleration only; it never changes project semantics.
+Each successful video source selection, on the CPU and GPU routes alike, publishes a
+`VideoSourceReport` (asset digest, decode route, assumed-colour note) on the video source context;
+`OperationCache::videoSourceReports()` reads the 32 most recent. The window status bar's video cell
+shows, for the active composition's Video sources, the latest route ("Video: software", "vaapi" or
+"software (fallback: <reason>)") followed by any assumed-colour note, with one line per source in
+its tooltip. The report is status beside evaluation, never an evaluation diagnostic, so frames
+that carry it stay cacheable in RAM preview.
 FFmpeg ProRes evidence explicitly records `apple_authorized=false` and no delivery qualification.
 Assets expose this exact note:
 
@@ -1529,7 +1556,7 @@ worker per route. Identical frame requests share one decode; other concurrent re
 cancellably, for the decoder rather than receiving `Busy`, and the 30 second watchdog bounds each
 worker exchange rather than the queue. The evaluator admits retained sessions by memory: each is
 charged a conservative worker estimate (64 MiB plus 24 frames of 16-bit 4:4:4 planes, capped at
-the 2 GiB worker address space) against a session budget of a quarter of physical memory, keeping
+the stream's worker address space) against a session budget of a quarter of physical memory, keeping
 at least two so two sources can alternate and at most the eight files the source-snapshot quota
 can retain. Least-recently-used sessions beyond that are retired. `DecodedVideoCache` has a
 separate LRU byte budget and keys frames by content digest, stream, frame index,

@@ -46,6 +46,15 @@ bool valid(const Rational& v) {
                                             : static_cast<std::uint64_t>(-(v.numerator + 1)) + 1;
     return v.denominator > 0 && std::gcd(magnitude, static_cast<std::uint64_t>(v.denominator)) == 1;
 }
+std::uint64_t workerAddressSpaceBytes(const std::uint32_t width,
+                                      const std::uint32_t height) noexcept {
+    constexpr std::uint64_t granule = 256ULL << 20U;
+    const auto pixels = static_cast<std::uint64_t>(std::min(width, Limits::dimension)) *
+                        std::min(height, Limits::dimension);
+    const auto wanted = (1ULL << 30U) + std::min(pixels, Limits::pixels) * 8U * 12U;
+    const auto rounded = (wanted + granule - 1) / granule * granule;
+    return std::clamp<std::uint64_t>(rounded, kWorkerAddressSpaceFloor, kWorkerAddressSpaceCeiling);
+}
 namespace {
 bool extent(std::uint32_t w, std::uint32_t h) {
     return w > 0 && h > 0 && w <= Limits::dimension && h <= Limits::dimension &&

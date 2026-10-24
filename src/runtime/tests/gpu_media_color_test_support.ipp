@@ -108,7 +108,10 @@ firstResample(const PreparedGpuScene& scene) {
                                      const std::uint64_t sourceWidth,
                                      const std::uint64_t sourceHeight, const std::string& label) {
     const auto prepared = builder.build(plan, request);
-    expectations.expect(prepared.hasValue(), label + ": prepares");
+    expectations.expect(prepared.hasValue(),
+                        label + ": prepares" +
+                            (prepared.hasValue() ? std::string{}
+                                                 : " (" + prepared.diagnostic.message + ")"));
     if (!prepared) {
         return false;
     }
