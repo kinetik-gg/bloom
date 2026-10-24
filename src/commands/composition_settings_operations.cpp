@@ -1,3 +1,4 @@
+#include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/operations.hpp>
 
@@ -7,6 +8,7 @@
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/project.hpp>
 
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -202,6 +204,82 @@ OperationResult UpdateCompositionSettings::apply(document::Draft& draft) const {
     if (change_.titleSafe)
         settings.safeAreas.title = *change_.titleSafe;
     return SetCompositionSettings(composition_, std::move(settings), anchor_).apply(draft);
+}
+
+CompositionSettings compositionSettingsForAsset(const document::AssetRecord& asset,
+                                                CompositionSettings base) {
+    base.name = asset.name.empty() ? base.name : asset.name;
+    auto rate = base.format.frameRate();
+    if (asset.kind == document::AssetKind::Video)
+        for (const auto& stream : asset.videoStreams)
+            if (stream.kind == 1 && stream.framePeriod.numerator() > 0 &&
+                stream.framePeriod.denominator() > 0 &&
+                stream.framePeriod.denominator() <= std::numeric_limits<std::uint32_t>::max() &&
+                stream.framePeriod.numerator() <= std::numeric_limits<std::uint32_t>::max()) {
+                // A frame period of n/d seconds is a rate of d/n frames per second.
+                if (const auto streamRate = document::FrameRate::create(
+                        static_cast<std::uint32_t>(stream.framePeriod.denominator()),
+                        static_cast<std::uint32_t>(stream.framePeriod.numerator())))
+                    rate = *streamRate;
+                break;
+            }
+    const bool visual = asset.kind == document::AssetKind::Image ||
+                        asset.kind == document::AssetKind::Sequence ||
+                        asset.kind == document::AssetKind::Video;
+    const auto width = visual && asset.width > 0 ? asset.width : base.format.width();
+    const auto height = visual && asset.height > 0 ? asset.height : base.format.height();
+    if (const auto format = document::CompositionFormat::create(
+            width, height, visual ? core::PixelAspectRatio::square() : base.format.pixelAspect(),
+            rate))
+        base.format = *format;
+    else if (const auto rated = document::CompositionFormat::create(
+                 base.format.width(), base.format.height(), base.format.pixelAspect(), rate))
+        base.format = *rated;
+    if ((asset.kind == document::AssetKind::Video || asset.kind == document::AssetKind::Audio) &&
+        asset.duration > core::RationalTime{})
+        base.duration = asset.duration;
+    else if (asset.kind == document::AssetKind::Sequence && !asset.manifest.members.empty())
+        if (const auto frames = core::RationalTime::create(
+                static_cast<std::int64_t>(asset.manifest.members.size()) *
+                    static_cast<std::int64_t>(base.format.frameRate().denominator()),
+                static_cast<std::int64_t>(base.format.frameRate().numerator())))
+            base.duration = *frames;
+    return base;
+}
+
+std::string_view AddCompositionFromAssets::typeId() const noexcept {
+    return "bloom.composition.add-from-assets";
+}
+
+OperationResult AddCompositionFromAssets::apply(document::Draft& draft) const {
+    if (folder_ && draft.project().findAssetFolder(*folder_) == nullptr)
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                         "The destination folder does not exist");
+    auto result = AddCompositionWithSettings(settings_).apply(draft);
+    if (result.status != OperationStatus::Applied)
+        return result;
+    document::CompositionId composition;
+    for (const auto& output : result.outputs)
+        if (const auto* id = std::get_if<document::CompositionId>(&output.id))
+            composition = *id;
+    if (auto* created = draft.project().findComposition(composition))
+        created->setFolder(folder_);
+    // Each layer lands on top, so adding in reverse leaves the first asset uppermost.
+    for (auto it = assets_.rbegin(); it != assets_.rend(); ++it) {
+        const auto* asset = draft.project().findAsset(*it);
+        if (asset == nullptr)
+            return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                             "Asset does not exist");
+        if (asset->kind == document::AssetKind::Lut || asset->kind == document::AssetKind::Font)
+            continue;
+        auto layer = asset->kind == document::AssetKind::Audio
+                         ? AddAudioLayer(composition, *it).apply(draft)
+                         : AddImageLayer(composition, *it).apply(draft);
+        if (layer.status != OperationStatus::Applied)
+            return layer;
+        result.outputs.insert(result.outputs.end(), layer.outputs.begin(), layer.outputs.end());
+    }
+    return result;
 }
 
 } // namespace bloom::commands

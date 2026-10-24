@@ -24,10 +24,12 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace bloom::document {
 class Composition;
-}
+struct AssetRecord;
+} // namespace bloom::document
 
 namespace bloom::commands {
 
@@ -119,6 +121,29 @@ class UpdateCompositionSettings final : public Operation {
     document::CompositionId composition_;
     CompositionSettingsChange change_;
     ResizeAnchor anchor_;
+};
+
+// New Composition from Selection (#378), as in After Effects: the composition takes the footage's
+// name and size, a video's frame rate and duration, a sequence's frame count at that rate and an
+// audio file's duration. Whatever the footage does not state comes from `base`.
+[[nodiscard]] CompositionSettings compositionSettingsForAsset(const document::AssetRecord& asset,
+                                                              CompositionSettings base);
+
+// Adds one composition with `settings`, files it in `folder` (nullopt is the Assets root) and adds
+// a layer for each image, sequence, video or audio asset, the first asset on top. One undoable
+// step. Output: kAddCompositionOutput, then each layer's outputs.
+class AddCompositionFromAssets final : public Operation {
+  public:
+    AddCompositionFromAssets(CompositionSettings settings, std::vector<document::AssetId> assets,
+                             std::optional<document::AssetFolderId> folder = {})
+        : settings_(std::move(settings)), assets_(std::move(assets)), folder_(folder) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    CompositionSettings settings_;
+    std::vector<document::AssetId> assets_;
+    std::optional<document::AssetFolderId> folder_;
 };
 
 } // namespace bloom::commands

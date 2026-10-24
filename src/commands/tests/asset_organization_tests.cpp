@@ -1,6 +1,8 @@
 #include "command_test_support.hpp"
 #include <algorithm>
 #include <bloom/commands/asset_operations.hpp>
+#include <bloom/commands/composition_settings_operations.hpp>
+#include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
 #include <filesystem>
 #include <fstream>
@@ -471,6 +473,73 @@ void testImportIntoFolder(TestContext& test) {
                     !document.snapshot().project().assets().front().folder,
                 "a vanished folder sends the import to the root");
 }
+// #378 New Composition from Selection: sized and timed from the footage, filed in a folder, one
+// layer per footage item with the first on top, and one undo removes it all.
+void testCompositionFromAssets(TestContext& test) {
+    auto initial =
+        document::makeNewProject("From footage", "Main", core::RationalTime::fromInteger(10));
+    document::AssetRecord clip;
+    clip.id = AssetId::fromRaw(1);
+    clip.name = "Clip";
+    clip.kind = document::AssetKind::Video;
+    clip.locator = {"file", "project-relative", "clip.mov", "file:///media/clip.mov"};
+    clip.width = 1280;
+    clip.height = 720;
+    clip.frames = 48;
+    clip.duration = core::RationalTime::fromInteger(2);
+    document::AssetVideoStream stream;
+    stream.codec = "h264";
+    stream.timebase = *core::RationalTime::create(1, 25);
+    stream.framePeriod = *core::RationalTime::create(1, 25);
+    stream.width = 1280;
+    stream.height = 720;
+    stream.duration = clip.duration;
+    clip.videoStreams.push_back(stream);
+    requireFixture(initial.project.addAsset(clip), "video fixture");
+    document::AssetRecord still;
+    still.id = AssetId::fromRaw(2);
+    still.name = "Still";
+    still.locator = {"file", "project-relative", "still.png", "file:///media/still.png"};
+    still.width = 640;
+    still.height = 480;
+    requireFixture(initial.project.addAsset(still), "image fixture");
+    Document document(std::move(initial.project));
+    CommandStack stack(document);
+    const auto base = compositionSettingsOf(
+        *document.snapshot().project().findComposition(initial.initialCompositionId));
+    const auto settings = compositionSettingsForAsset(clip, base);
+    test.expect(settings.name == "Clip" && settings.format.width() == 1280 &&
+                    settings.format.height() == 720 &&
+                    settings.format.frameRate().numerator() == 25 &&
+                    settings.format.frameRate().denominator() == 1 &&
+                    settings.duration == core::RationalTime::fromInteger(2),
+                "a video composition takes the clip's size, rate and duration");
+    const auto stillSettings = compositionSettingsForAsset(still, base);
+    test.expect(stillSettings.format.width() == 640 && stillSettings.duration == base.duration &&
+                    stillSettings.format.frameRate() == base.format.frameRate(),
+                "a still keeps the base rate and duration");
+    const auto folder = execute<CreateAssetFolder>(document, stack, "Comps")
+                            .outputId<AssetFolderId>(kCreateAssetFolderOutput)
+                            .value_or(AssetFolderId{});
+    const auto before = document.snapshot().project().compositions().size();
+    const auto result = execute<AddCompositionFromAssets>(document, stack, settings,
+                                                          Assets{clip.id, still.id}, folder);
+    const auto composition = result.outputId<document::CompositionId>(kAddCompositionOutput);
+    const auto snapshot = document.snapshot();
+    const auto* created = composition ? snapshot.project().findComposition(*composition) : nullptr;
+    test.expect(result.changed() && created && created->folder() == folder &&
+                    created->name() == "Clip" && created->format().width() == 1280,
+                "the composition is created in the folder with the derived settings");
+    test.expect(created && created->graph().layerOutputs().size() == 2,
+                "one layer per footage item");
+    test.expect(stack.undo().changed() &&
+                    document.snapshot().project().compositions().size() == before,
+                "one undo removes the composition and its layers");
+    test.expect(execute<AddCompositionFromAssets>(document, stack, settings, Assets{clip.id},
+                                                  AssetFolderId::fromRaw(999))
+                        .status == CommandStatus::Rejected,
+                "a missing folder refuses the new composition");
+}
 } // namespace
 } // namespace bloom::commands::test
 int main() {
@@ -480,6 +549,7 @@ int main() {
         bloom::commands::test::testOrganization(test);
         bloom::commands::test::testFolderStructure(test);
         bloom::commands::test::testImportIntoFolder(test);
+        bloom::commands::test::testCompositionFromAssets(test);
         bloom::commands::test::testWideImageAssetCommand(test);
         bloom::commands::test::testAssetInputColor(test);
         bloom::commands::test::testRelinkAndSaturatedOrder(test);
