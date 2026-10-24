@@ -227,7 +227,7 @@ void imageLayerSelection() {
     fixture.set(fixture.source, document::kImagePartParameterRole, std::string("data"));
     fixture.set(fixture.source, document::kImageLayerParameterRole, std::string("depth"));
     const auto data = fixture.frame();
-    expect(near(data.pixels[0].alpha(), 0.0F) && data.warned("no colour channels"),
+    expect(near(data.pixels[0].alpha(), 0.0F) && data.warned("No colour layer — use Channels"),
            "a data-only layer has no colour image and reports why");
 }
 
