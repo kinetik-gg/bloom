@@ -32,8 +32,10 @@ inline constexpr std::size_t kCanonicalDocumentMaximumBytes = 268'435'456;
 // Deepest canonical document emission is nine containers (root through a vec2 keyframe value
 // object, or through a scalar keyframe's 1.12 ease-handle object, which sits at the same depth).
 // The budget keeps manifest-style headroom over that fixed shape while still bounding every write
-// path.
-inline constexpr std::size_t kCanonicalDocumentMaximumDepth = 12;
+// path. Document 1.24's Path keyframe value (ADR 0028) is the deepest shape at twelve containers:
+// root, project, compositions, composition, animationCurves, curve, keyframes, key, value, anchors,
+// anchor, point.
+inline constexpr std::size_t kCanonicalDocumentMaximumDepth = 16;
 inline constexpr std::size_t kCanonicalDocumentNoIndex = static_cast<std::size_t>(-1);
 
 // One canonical encode request. The snapshot and color settings must outlive the call; Project

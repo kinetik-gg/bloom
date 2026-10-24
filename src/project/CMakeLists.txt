@@ -357,6 +357,14 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_project_layer_time_test)
     bloom_add_test(NAME bloom.project.layer-time COMMAND bloom_project_layer_time_test LABELS unit persistence)
 
+    # ADR 0028: built from commands, so it lives under tests/integration (project may not depend
+    # on commands).
+    add_executable(bloom_project_layer_mask_test
+        ${PROJECT_SOURCE_DIR}/tests/integration/layer_mask_persistence_tests.cpp)
+    target_link_libraries(bloom_project_layer_mask_test PRIVATE bloom_project bloom_commands ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_layer_mask_test)
+    bloom_add_test(NAME bloom.project.layer-masks COMMAND bloom_project_layer_mask_test LABELS unit persistence)
+
     add_executable(bloom_project_node_group_test tests/node_group_persistence_tests.cpp)
     target_link_libraries(bloom_project_node_group_test PRIVATE bloom_project ZLIB::ZLIB)
     bloom_enable_warnings(bloom_project_node_group_test)
