@@ -1,3 +1,6 @@
+// ADR 0026: plan semantics 9 -> 10 and evaluator 10 -> 11 (animation 2, primitives 7; pixel bits
+// and preimage lengths unchanged). The oracle in docs/architecture/color5-identity-oracle.md
+// reproduced the plan-9 / evaluator-10 pins, then derived the values below.
 // ADR 0024: plan semantics 8 -> 9 (animation 2, evaluator 10, primitives 7; pixel bits and preimage
 // lengths unchanged). The standalone oracle in docs/architecture/color5-identity-oracle.md first
 // reproduced the previous pins (which sat at plan 8, evaluator 9) and the process-frame golden, then
@@ -68,11 +71,11 @@ using namespace std::chrono_literals;
 // oracle was validated by reproducing every previously checked-in golden set byte for byte --
 // including both lanes' own pre-merge sets -- when fed their version numbers.
 constexpr std::string_view kExpectedPngAnalysisDigest =
-    "9b8de77e338a3aa04c94ac77d79a610a77cb7c5ff7e7eaca63af292a239c8cf9";
+    "91fb3c3f892827136f1264948ae800c0e21b0073b46855ec11e60f3960390342";
 constexpr std::string_view kExpectedPngOutputDigest =
-    "e125d85aa53c33b8914cd0bad4e7e315459b97d7c9cd472dfa88e6f3b4766481";
+    "89db168a70e56ba371602158cf66c189b30644ed09c357e87d6d97c7c58507fd";
 constexpr std::string_view kExpectedExrOutputDigest =
-    "fa7183ae43a21d602ddf9320b880b64d36b52a67984e8a9d9edeae22b8ed5331";
+    "3987dbcb0e3e1552e8b583dd3b31cc12a014c8795e0e2433aa3881292e8047a5";
 constexpr std::uint64_t kExpectedPngPreimageBytes = 669;
 constexpr std::uint64_t kExpectedExrPreimageBytes = 567;
 

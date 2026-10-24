@@ -114,6 +114,11 @@ Procedure and results for this change:
   PNG analysis `9b8de77e...` (1922 bytes), EXR analysis `2c124174...` (1485), PNG output
   `e125d85a...` (669) and EXR output `fa7183ae...` (567). Preimage lengths are unchanged.
 
+ADR 0026 later advances compiled-plan semantics 9 -> 10 and evaluator semantics 10 -> 11. With
+`9 2 10 7` the same oracle reproduces the pins above; with `10 2 11 7` it derives the replacements,
+which the C++ implementation matched: PNG analysis `91fb3c3f...` (1922 bytes), EXR analysis
+`7975de4c...` (1485), PNG output `89db168a...` (669) and EXR output `3987dbcb...` (567).
+
 ```python
 """Independent output-identity oracle (no Bloom code imported). Usage: oracle.py PLAN ANIM EVAL PRIM"""
 import hashlib, struct, sys
