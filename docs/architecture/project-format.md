@@ -1492,6 +1492,10 @@ Document `1.26` persists the multi-channel nodes of
   (patterns).
 - The Composition Output gains an optional `channels` input and an optional `layers` parameter
   (`bloom.composition-output.layers`) for layered OpenEXR output.
+- `bloom.cryptomatte` (node schema 1, #364) is a new node type: `channels` (ChannelSet) and `image`
+  inputs, `mask` (Mask) and `image` outputs, and the String parameters `layer`
+  (`bloom.cryptomatte.layer`, at most 256 bytes) and `mattes` (`bloom.cryptomatte.mattes`, the
+  Nuke-syntax matte list, at most 65536 bytes).
 
 The `1.24` → `1.26` DOM step rewrites only the node-record `schemaVersion` of `bloom.image-source`
 nodes from 1 to 2; the new parameters are optional, so no record is inserted and every edge and

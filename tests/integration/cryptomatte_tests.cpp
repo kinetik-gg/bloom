@@ -61,12 +61,13 @@ struct Fixture {
         }
         return result;
     }
-    Fixture(const std::string& name, const bool manifest) {
+    Fixture(const std::string& name, const bool manifest, const std::string& manifestText = {}) {
         std::mt19937_64 random{std::random_device{}()};
         folder = std::filesystem::temp_directory_path() /
                  ("bloom-cryptomatte-" + name + "-" + std::to_string(random()));
         std::filesystem::create_directories(folder);
-        fixture::writeCryptomatteExr(folder / "crypto.exr", manifest);
+        fixture::writeCryptomatteExr(folder / "crypto.exr", manifest, "CryptoObject",
+                                     manifestText);
         run<commands::ImportAssets>(std::vector{folder / "crypto.exr"}, folder);
         run<commands::AddImageLayer>(composition,
                                      document.snapshot().project().assets().front().id);
@@ -209,6 +210,15 @@ void withoutManifest() {
     expect(matches(f.frame(), {1, 3}), "without an input image the Image output is the white matte");
 }
 
+void malformedManifest() {
+    Fixture f("malformed", true, "{\"cube\": 12");
+    f.setMattes({"cube"});
+    const auto frame = f.matte();
+    expect(matches(frame, {1}), "with a malformed manifest names still resolve through their hash");
+    expect(frame.warned("manifest is not a valid JSON object"),
+           "a malformed manifest is reported");
+}
+
 void imageInputAndMute() {
     Fixture f("mute", true);
     f.connect(f.source, document::kImageSourceImageOutputPort, f.cryptomatte,
@@ -243,6 +253,7 @@ int main() {
         withManifest();
         withoutManifest();
         imageInputAndMute();
+        malformedManifest();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

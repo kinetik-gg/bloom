@@ -3144,6 +3144,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                      std::to_string(image.repairedPixels) +
                                          " Cryptomatte samples were non-finite and treated as 0",
                                      {}});
+                            if (!image.diagnostic.empty())
+                                imageWarnings.push_back({EvaluationDiagnosticCode::InvalidParameter,
+                                                         DiagnosticSeverity::Warning,
+                                                         operationSubject, image.diagnostic, {}});
                             bounds[index].local =
                                 detail::cryptomatteFrameBounds(*selectedCryptomatte)
                                     .value_or(detail::boundsForWindow(

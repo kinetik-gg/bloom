@@ -229,6 +229,19 @@ open to owner review; none changes a rendered or exported pixel the decision def
   2026-10-24).
 - **Migration.** The 1.26 step is chained from 1.24 until the video I/O 1.25 step is merged.
 
+## Implementation notes (#364, 2026-10-24)
+
+- **Cryptomatte** is `bloom.cryptomatte` (ChannelSet and optional Image in; ADR 0028 Mask and Image
+  out). It is one pixel operation, `CompiledCryptomatte`, reading the layer's rank pairs and the
+  part metadata through the §1 decode; the compiler lets one node publish different operations on
+  its two outputs.
+- **GPU representation.** As for the Shuffle, host preparation gathers only the rank channels into
+  one stacked raw upload (decode layout; ID bits verbatim); the coverage accumulation is a GPU
+  pass (`CryptomatteCoverageV1`) followed by the proxy PointResampleV1. The matte is bit-identical
+  to the CPU reference.
+- **Viewer.** An inspection with no channels shows a pixel output port directly; it previews the
+  matte. The eyedropper samples in the channel set's own frame.
+
 ## Related
 
 - [`../architecture/evaluation-primitives.md`](../architecture/evaluation-primitives.md)

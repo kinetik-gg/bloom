@@ -586,6 +586,9 @@ evaluateCryptomatte(const CryptomatteSelection& selection,
     auto resampled =
         resampleDecodedImage(*coverage.value, composition, horizontalScale, verticalScale, budget, cancel);
     resampled.repairedPixels = gather.repairedPixels;
+    // A successful matte carries the manifest's diagnostic (sidecar or malformed manifest).
+    if (resampled.value.has_value())
+        resampled.diagnostic = gather.manifest.diagnostic;
     return resampled;
 }
 

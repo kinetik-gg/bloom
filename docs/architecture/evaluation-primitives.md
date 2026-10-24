@@ -1115,3 +1115,50 @@ plans evaluate unchanged; only their version-bearing identities change.
 - *Viewer inspection.* A Viewer inspection compiles a viewer-only plan that reaches only the
   inspected ChannelSet and outputs a Raw, associated, alpha-1 Shuffle of one channel (grey) or three
   (RGB). It never enters the composition's own plan, cache entries or any render or export.
+
+## Cryptomatte
+
+Issue #364 adds `bloom.cryptomatte`, following the Cryptomatte specification (v1.2) as Nuke reads it
+so artists recognise it. Plan and evaluator semantics versions are unchanged: no existing plan
+evaluates differently.
+
+- *Node.* Inputs: `channels` (ChannelSet, required) and `image` (Image, optional). Outputs: `mask`,
+  the ADR 0028 Mask transport (premultiplied white with the coverage in all four channels), and
+  `image`, the input image times the coverage (matte in alpha) through the existing MultiplyAlpha
+  combine, or the white matte itself without an input image. There is no implicit Mask/Image
+  conversion. Parameters: `layer` (the Cryptomatte type, default `CryptoObject`) and `mattes` (the
+  selection, Nuke syntax: comma-separated, `\,` escapes a comma, `<1.23e-05>` or `<0xHEX>` is a
+  raw ID). A muted Cryptomatte isolates nothing: its Mask is empty and its Image passes through.
+- *IDs.* A name's ID is MurmurHash3_x86_32 (seed 0) of its UTF-8 bytes used as Float32 bits; an ID
+  whose exponent bits are all zero or all one has bit 23 flipped. The selection resolves each entry
+  as a raw ID, else through the part's `cryptomatte/<key>/manifest` (the key whose `name` is the
+  layer), else by hashing the name, so names work without a manifest. A manifest that is not a
+  JSON object of names to hexadecimal IDs is reported as a warning and ignored (an entry whose ID
+  is not hexadecimal is skipped), and a `manif_file` sidecar is reported; names then resolve by
+  hash.
+- *Ranks.* The layer's rank pairs are `<layer>NN` channels in rank order: `00` R/G, `00` B/A, `01`
+  R/G, ... (`R/G/B/A`, `r/g/b/a` and `red/green/blue/alpha` suffixes). A missing layer is the
+  warning "The channel set has no Cryptomatte layer named X" and an empty matte.
+- *Coverage.* For each pixel, in rank order, `c = clamp(c + (bits(id) is selected ? coverage : 0),
+  0, 1)` in Float32, published as `(c, c, c, c)`. The CPU reference and the GPU kernel apply exactly
+  this order, so they are bit-identical.
+- *Host gather.* Host preparation reads only the rank channels of the layer (decode layout): each
+  rank pair becomes one image on the union window of the rank channels in the anchor source's
+  frame, R = the ID's exact bits, G = its coverage, B = 0, A = 1, zero outside a channel's window. A
+  non-finite ID or coverage is repaired to 0 and counted.
+- *GPU.* The ranks are stacked vertically into one upload (rank r occupies rows `[r * h, (r + 1) *
+  h)`) and `CryptomatteCoverageV1` (`src/render/vulkan/shaders/cryptomatte_coverage.comp`) computes
+  the matte from it and a bounded buffer of the selected IDs; the proxy PointResampleV1 gather
+  follows. The coverage contract requires `operation.CompiledCryptomatte` and
+  `node.bloom.cryptomatte` with native parity; `bloom.runtime.gpu_cryptomatte_native` proves the
+  native matte bit for bit against the CPU reference (manifest, no manifest, raw IDs, proxy, empty
+  selection), the Image output, selection-edit reuse, cancellation and the budget.
+- *Cache identity.* The CPU result key is `cryptomatte-v1` with the sources' cache keys (their
+  content digests cover the manifest), the layer and the matte list. The GPU rank upload is keyed by
+  the source decode identities and rank channels only, so a selection edit reuses it; the resolved
+  IDs are kept beside it under the selection key, and the coverage command key carries the IDs.
+- *Viewer.* A Viewer inspection with no channels shows a pixel output port directly; the channel
+  menu offers "Cryptomatte matte" for a selected Cryptomatte. The eyedropper reads, on a worker, the
+  object with the largest coverage at the composition pixel under the cursor in the channel set's
+  frame (exact in the matte preview and under an untransformed layer) and stores its manifest name,
+  or its raw ID without one.

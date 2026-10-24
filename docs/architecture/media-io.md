@@ -56,6 +56,12 @@ EXR decode runs on a worker and uses the same disk-cache key and thumbnail path 
   ID hashes survive. Admission charges every plane plus one bounded band and the metadata. Stills
   expose their decoded R, G, B (and A) as straight Colour channels in [0, 1]; formats without an
   immutable revision decoder report `UnsupportedChannelSetFormat`.
+- *Cryptomatte.* A Cryptomatte type is read from a part's channels and string metadata only: the
+  `<layer>NN` rank channels keep their Float32 bit patterns through `decodeImageChannels()`, and
+  `cryptomatte/<key>/name`, `hash`, `conversion` and `manifest` arrive as metadata, where `<key>` is
+  any metadata key whose `name` is the layer. Half rank channels widen exactly, so IDs survive only
+  when the renderer wrote them as Float32, as the specification requires. Only the rank channels of
+  the selected layer are decoded (#364).
 - *Sequences.* An unreadable member never aborts a scan: it is reported (up to 32 frames by name,
   then a count) and its frame becomes a gap that holds the preceding frame, as for the #373 batch
   import policy.
