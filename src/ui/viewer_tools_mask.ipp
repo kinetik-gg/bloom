@@ -1,6 +1,12 @@
-// Included inside bloom::ui after viewer_tools_path.ipp. ADR 0028 layer masks: a mask path lives in
+// Included inside bloom::ui. ADR 0028 layer masks: a mask path lives in
 // the layer's CONTENT space, so every gesture maps through the inverse of the evaluated
 // content-to-composition affine (masks::contentToComposition).
+
+using viewer_tool_geometry::toolOutline;
+using viewer_tool_geometry::toolPoint;
+using viewer_tool_geometry::toolRenderPath;
+using viewer_tool_geometry::toolScreenTransform;
+using viewer_tool_geometry::toolValue;
 
 namespace {
 std::optional<document::LayerId> maskContextLayer(const CompositionSession& session) {

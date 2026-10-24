@@ -146,7 +146,9 @@ void ViewerEditor::finishTextEditing(const bool commit) {
         if (session_.isValueEditing(edit->parameter))
             session_.cancelValueEdit();
         const auto created = *edit->created;
-        if (session_.undo() && !edit->text.isEmpty())
+        if (edit->text.isEmpty())
+            (void)session_.withdrawLastChange();
+        else if (session_.undo())
             (void)session_.addTextLayer(created.name, edit->text, created.size, created.color,
                                         created.position);
     } else if (session_.isValueEditing(edit->parameter)) {

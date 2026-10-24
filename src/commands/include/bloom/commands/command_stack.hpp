@@ -71,6 +71,9 @@ class CommandStack final {
     [[nodiscard]] Work work() const noexcept { return work_; }
 
     void clear();
+    // Forgets every redo entry, as a new edit after Undo would. A withdrawn creation (for example
+    // new text the author emptied) undoes and then discards, so Redo can never bring it back.
+    void discardRedo();
 
     [[nodiscard]] CommandObserverId addObserver(CommandObserver observer);
     void removeObserver(CommandObserverId observerId) noexcept;

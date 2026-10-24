@@ -131,8 +131,8 @@ is Undo, one step per created or edited object.
 - Text keeps what was typed, exactly like a click-away.
 - Editing existing text, a Path layer's anchors or handles, or a mask's anchors keeps the edit made
   so far as one command.
-- Empty or zero-size work creates nothing: emptied new text, a Pen draft below its minimum, or a
-  press-release inside the drag distance.
+- Empty or zero-size work creates nothing: emptied new text (withdrawn, so neither Undo nor Redo
+  holds it), a Pen draft below its minimum, or a press-release inside the drag distance.
 
 A press-release inside the drag distance with a primitive tool is a zero-size gesture: it creates
 nothing and leaves the tool active, so a slip of the mouse never authors an object. Escape at that

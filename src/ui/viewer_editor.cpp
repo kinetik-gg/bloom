@@ -9,6 +9,7 @@
 #include "composition_editor_support.hpp"
 #include "layer_mask_support.hpp"
 #include "viewer_editor_text_layout.hpp"
+#include "viewer_tool_geometry.hpp"
 
 #include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/window_status_bar.hpp>

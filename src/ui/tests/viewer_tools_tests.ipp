@@ -396,6 +396,8 @@ void testTextTool(Expectations& expectations) {
                                 fixture.session.undoLabel() == undoLabel &&
                                 !fixture.viewer.textEditing() && selectToolActive(fixture),
                             "Escape on emptied new text leaves no layer and no undo step");
+        expectations.expect(!fixture.session.redo() && layerCount(fixture) == layers,
+                            "Redo never re-creates the emptied text layer");
     }
     toolShutdown(fixture, expectations);
     fixture.viewer.setParent(nullptr);

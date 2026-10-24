@@ -1,25 +1,9 @@
 // Included inside bloom::ui. Creation previews are bounded vector outlines, never raster work.
-namespace {
-QPointF toolPoint(document::Vec2d point) { return {point.x, point.y}; }
-document::Vec2d toolValue(QPointF point) { return {point.x(), point.y()}; }
-QPainterPath toolOutline(const render::Path& path) {
-    QPainterPath outline;
-    if (path.anchors.empty())
-        return outline;
-    const auto point = [](render::PathPoint p) { return QPointF(p.x, p.y); };
-    outline.moveTo(point(path.anchors.front().point));
-    const auto segments = path.closed ? path.anchors.size() : path.anchors.size() - 1;
-    for (std::size_t i = 0; i < segments; ++i) {
-        const auto& a = path.anchors[i];
-        const auto& b = path.anchors[(i + 1) % path.anchors.size()];
-        outline.cubicTo(point(a.outHandle.value_or(a.point)), point(b.inHandle.value_or(b.point)),
-                        point(b.point));
-    }
-    if (path.closed)
-        outline.closeSubpath();
-    return outline;
-}
-} // namespace
+using viewer_tool_geometry::toolOutline;
+using viewer_tool_geometry::toolPoint;
+using viewer_tool_geometry::toolRenderPath;
+using viewer_tool_geometry::toolScreenTransform;
+using viewer_tool_geometry::toolValue;
 
 void ViewerEditor::cancelCreation() {
     roiGesture_.reset();

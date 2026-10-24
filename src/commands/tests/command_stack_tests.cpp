@@ -709,6 +709,28 @@ void testLayerOrderNoChangeAndRedoInvalidation(TestContext& test) {
     test.expect(stack.size() == 1, "no-change transaction should not create history");
 }
 
+void testDiscardRedoForgetsWithdrawnEdits(TestContext& test) {
+    Document document(makeProject());
+    CommandStack stack(document);
+    const auto chargedBefore = stack.historyChargedBytes();
+    Transaction rename("Rename", document.snapshot().revision());
+    rename.emplace<SetProjectName>("Withdrawn");
+    test.expect(stack.execute(std::move(rename)).changed(), "the edit commits");
+    test.expect(stack.undo().changed(), "the edit undoes");
+    const auto undone = document.snapshot().revision();
+    stack.discardRedo();
+    test.expect(!stack.canRedo() && !stack.canUndo() && stack.size() == 0,
+                "discarding redo forgets the withdrawn edit");
+    test.expect(stack.historyChargedBytes() == chargedBefore,
+                "the withdrawn entry no longer charges history bytes");
+    test.expect(document.snapshot().revision() == undone,
+                "discarding redo does not change the document");
+    test.expect(stack.redo().status == CommandStatus::NothingToRedo,
+                "redo cannot bring the withdrawn edit back");
+    stack.discardRedo();
+    test.expect(stack.size() == 0, "discarding with no redo is a no-op");
+}
+
 void testExhaustionSurvivesUndoAndRedo(TestContext& test) {
     Document document(makeProject());
     CommandStack stack(document);
@@ -925,6 +947,7 @@ int main() {
         bloom::commands::test::testKnownParameterSchemaRejectionsAreAtomic(test);
         bloom::commands::test::testStaleExecuteUndoAndRedoAreNoOps(test);
         bloom::commands::test::testLayerOrderNoChangeAndRedoInvalidation(test);
+        bloom::commands::test::testDiscardRedoForgetsWithdrawnEdits(test);
         bloom::commands::test::testExhaustionSurvivesUndoAndRedo(test);
         bloom::commands::test::testBoundedUndoHistoryAndByteAccounting(test);
         bloom::commands::test::testSharedPayloadRetentionAndReplacementPressure(test);

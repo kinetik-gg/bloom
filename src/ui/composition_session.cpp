@@ -1022,13 +1022,14 @@ std::optional<MaskSelection> CompositionSession::selectedMask() const {
     if (!maskSelection_ || current == nullptr)
         return std::nullopt;
     const auto* layer = current->graph().findLayer(maskSelection_->layer);
-    if (layer == nullptr ||
-        std::ranges::none_of(layer->masks, [&](const auto& m) { return m.id == maskSelection_->mask; }))
+    if (layer == nullptr || std::ranges::none_of(layer->masks, [&](const auto& m) {
+            return m.id == maskSelection_->mask;
+        }))
         return std::nullopt;
-    const auto inContext = std::holds_alternative<document::LayerId>(selection_.primary)
-                               ? std::get<document::LayerId>(selection_.primary) ==
-                                     maskSelection_->layer
-                               : selection_.contextualLayer == maskSelection_->layer;
+    const auto inContext =
+        std::holds_alternative<document::LayerId>(selection_.primary)
+            ? std::get<document::LayerId>(selection_.primary) == maskSelection_->layer
+            : selection_.contextualLayer == maskSelection_->layer;
     return inContext ? maskSelection_ : std::nullopt;
 }
 
@@ -2017,6 +2018,14 @@ bool CompositionSession::undo() {
     return handleResult(commandStack_->undo());
 }
 
+bool CompositionSession::withdrawLastChange() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!handleResult(commandStack_->undo()))
+        return false;
+    commandStack_->discardRedo();
+    return true;
+}
+
 bool CompositionSession::redo() {
     Q_ASSERT(QThread::currentThread() == thread());
     return handleResult(commandStack_->redo());
@@ -2301,8 +2310,8 @@ CompositionSession::keyframeTimeForSelection(const document::AnimationCurveRecor
         [&](const auto& curve) -> std::optional<core::RationalTime> {
             using Curve = std::decay_t<decltype(curve)>;
             const auto timeOf = [&](const auto& keys) -> std::optional<core::RationalTime> {
-                const auto key =
-                    std::ranges::find_if(keys, [&](const auto& item) { return item.id == selection.keyframeId; });
+                const auto key = std::ranges::find_if(
+                    keys, [&](const auto& item) { return item.id == selection.keyframeId; });
                 return key == keys.end() ? std::nullopt : std::optional{key->time};
             };
             if constexpr (document::kWholeValueAnimationCurve<Curve>) {
@@ -2949,7 +2958,8 @@ CompositionSession::selectedKeyframeInterpolation() const {
             using Curve = std::decay_t<decltype(curve)>;
             const auto interpolationOf =
                 [keyframeId](const auto& keys) -> std::optional<document::KeyframeInterpolation> {
-                const auto key = std::ranges::find_if(keys, [&](const auto& item) { return item.id == keyframeId; });
+                const auto key = std::ranges::find_if(
+                    keys, [&](const auto& item) { return item.id == keyframeId; });
                 return key == keys.end() ? std::nullopt : std::optional{key->outgoingInterpolation};
             };
             if constexpr (document::kWholeValueAnimationCurve<Curve>) {

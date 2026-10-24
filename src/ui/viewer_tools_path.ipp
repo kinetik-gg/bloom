@@ -1,26 +1,9 @@
 // Included inside bloom::ui. Paths stay document values; the canvas owns only gesture state.
-namespace {
-render::Path toolRenderPath(const document::PathValue& path) {
-    render::Path result;
-    result.closed = path.closed;
-    for (const auto& anchor : path.anchors) {
-        render::PathAnchor next{{anchor.point.x, anchor.point.y}, {}, {}};
-        if (anchor.inHandle)
-            next.inHandle = {anchor.inHandle->x, anchor.inHandle->y};
-        if (anchor.outHandle)
-            next.outHandle = {anchor.outHandle->x, anchor.outHandle->y};
-        result.anchors.push_back(next);
-    }
-    return result;
-}
-QTransform toolScreenTransform(const ViewerMapping& mapping) {
-    QTransform result;
-    result.translate(mapping.displayRect.left(), mapping.displayRect.top());
-    result.scale(mapping.displayRect.width() / mapping.compositionFormat.width(),
-                 mapping.displayRect.height() / mapping.compositionFormat.height());
-    return result;
-}
-} // namespace
+using viewer_tool_geometry::toolOutline;
+using viewer_tool_geometry::toolPoint;
+using viewer_tool_geometry::toolRenderPath;
+using viewer_tool_geometry::toolScreenTransform;
+using viewer_tool_geometry::toolValue;
 
 std::optional<ViewerEditor::PathSelection> ViewerEditor::selectedPath() const {
     const auto* parameter = session_.parameterForSelection("path");

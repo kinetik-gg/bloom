@@ -588,6 +588,9 @@ class CompositionSession final : public QObject {
     [[nodiscard]] QString undoLabel() const;
     [[nodiscard]] QString redoLabel() const;
     [[nodiscard]] bool undo();
+    // Undoes the last change and forgets it: Redo cannot bring it back. For a creation the author
+    // withdrew before it held any content (emptied new text).
+    [[nodiscard]] bool withdrawLastChange();
     [[nodiscard]] bool redo();
 
     // Projection rebinding (task U1, issue #72): atomically swaps which document/command-stack

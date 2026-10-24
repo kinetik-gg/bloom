@@ -671,6 +671,22 @@ void CommandStack::clear() {
     notify(makeResult(CommandAction::Execute, CommandStatus::NoChange, snapshot));
 }
 
+void CommandStack::discardRedo() {
+    if (!canRedo()) {
+        return;
+    }
+    for (std::size_t index = cursor_; index < history_.size(); ++index) {
+        historyCharge_->remove(history_[index].before);
+        historyCharge_->remove(history_[index].after);
+        work_.chargedSnapshotsVisited += 2;
+    }
+    history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(cursor_), history_.end());
+    const auto snapshot = document_.snapshot();
+    // The active state is a restored root shell, as after Undo.
+    historyChargedBytes_ = historyCharge_->retainedBytes(snapshot, false);
+    notify(makeResult(CommandAction::Execute, CommandStatus::NoChange, snapshot));
+}
+
 std::optional<CommandResult> CommandStack::staleResult(CommandAction action, std::string label,
                                                        const document::Snapshot& current) const {
     if (trackedRevision_ == current.revision()) {
