@@ -65,8 +65,10 @@ EXR decode runs on a worker and uses the same disk-cache key and thumbnail path 
   attribute is a rank layer: the probe never lists it among a part's colour layers, so a
   Cryptomatte-only sidecar EXR has no colour layer and is a data-only asset.
 - *Asset state in Assets.* "Missing — Relink" means only that the imported bytes are gone or
-  changed. A present source that cannot be shown as it is (for example an untagged video awaiting
-  an input colour space) states that problem and its fix instead, and its audio still decodes. A
+  changed. A present source that cannot be shown as it is (for example a Rec.2020 video awaiting an input
+  colour space) states that problem and its fix instead, and its audio still decodes. An untagged
+  video is shown under the assumed Rec.709 or Rec.601 interpretation with an Info mark and its
+  colour note. A
   data-only image is valid: it is labelled like any image or sequence ("Sequence [N]") and its
   thumbnail is the Cryptomatte ID colours of its first type, or its first data channel as grey. The
   Image source's Part and Layer pickers read a sequence's parts from its first member.
@@ -1578,14 +1580,24 @@ and runs that transform as a GPU OCIO effect.
 
 Issue #365 interpretation rules:
 
-- Automatic resolution never infers a missing tag. An untagged or partly tagged stream is refused
-  with a diagnostic that names each missing tag (colour primaries, transfer characteristics, matrix
-  coefficients, range) and the override that resolves it: an input colour space for the asset
-  (Assets, Input Colour…) or its Video node.
+- Untagged SDR video is not refused (owner decision, 2026-10-24). Automatic resolution fills each
+  missing tag by the FFmpeg/NLE convention and leaves present tags unchanged: pictures 1280 pixels
+  wide or taller than 576 lines are Rec.709 (primaries 1, matrix 1); smaller pictures are Rec.601,
+  BT.470BG (5) at 25 or 50 fps and SMPTE 170M (6) otherwise, with the BT.709-curve transfer
+  (SMPTE 170M, 6). A missing transfer on HD is BT.709 (1), a missing range is limited (video), and
+  a missing matrix on a BT.2020-primaries or PQ/HLG stream is BT.2020 non-constant luminance. Rec.601
+  primaries resolve to the config's Rec.709 camera/video space; the Rec.601 matrix is applied by
+  the YUV conversion. The assumption is shown as the note "Colour tags missing — assumed Rec.709.
+  Change in Assets → Input Colour" (Rec.601 or Rec.2020 as applicable) in the asset's colour note,
+  an Info mark on its Assets row, and "Auto (assumed: …)" in the input colour display. The filled
+  tags and which of them were assumed (`assumed-colour-v1:<filled>:p,t,m,r`) are part of the video
+  transform and cache identity and of the thumbnail key. Streams the assumption cannot make SDR
+  Rec.709/601 (Rec.2020 without PQ/HLG, BT.2020 constant luminance) keep their named refusal.
 - An explicit input colour space is the artist's interpretation and overrides missing tags. The
   space supplies primaries and transfer; the stream supplies its YUV matrix and range. When those
   are untagged too, the matrix follows the chosen space's gamut family (BT.2020 non-constant
-  luminance for a Rec.2020/Rec.2100 space, otherwise BT.709) and the range is video (limited).
+  luminance for a Rec.2020/Rec.2100 space, otherwise the size convention's BT.709 or BT.601) and
+  the range is video (limited). An explicit choice carries no assumption note.
 - Supported YUV matrices are BT.709, BT.601 (470BG/SMPTE 170M) and BT.2020 non-constant luminance.
   BT.2020 constant luminance is refused by name.
 - PQ and HLG streams resolve automatically to the config's Rec.2100 PQ or HLG colour space,
@@ -1599,7 +1611,8 @@ Issue #365 interpretation rules:
   including under a legacy transfer override. Raw and linear compatibility overrides keep their
   transfer-only behaviour.
 
-Generated untagged, BT.2020/PQ and BT.2020/HLG H.264 fixtures check tag plumbing. GPU/CPU
+Generated untagged (64x48, the SD case), BT.2020/PQ and BT.2020/HLG H.264 fixtures and an untagged
+1280x720 ProRes 422 fixture (the HD case) check tag plumbing and the assumption. GPU/CPU
 input-to-working parity at the unchanged 2e-6 gate is tested for tagged Rec.709 H.264, a PQ-tagged
 stream, an untagged stream interpreted as Rec.2100 PQ, and a 16,384-sample still sweep across the
 PQ code range including negative and above-one values, plus the HLG fixture through the synthesized

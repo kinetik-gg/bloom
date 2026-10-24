@@ -67,7 +67,12 @@ unrecognized chromaticities require an explicit choice.
 
 For camera footage, Bloom reads the stream's container colour tags. Rec.709-tagged footage uses the
 config's Rec.709 camera/video space, sRGB-tagged footage uses the sRGB-texture space, and linear
-footage uses the working space. The video asset tooltip retains the numeric container tags. ARRI
+footage uses the working space. The video asset tooltip retains the numeric container tags.
+Footage with missing colour tags is not refused: Bloom follows the usual NLE convention and
+assumes Rec.709 for HD and larger pictures and Rec.601 for SD, with video (limited) range, and
+fills only the tags that are missing. The asset then shows an Info mark and the note "Colour tags
+missing — assumed Rec.709. Change in Assets → Input Colour"; choose an explicit input colour space
+to replace the assumption. ARRI
 LogC3 and RED Log3G10 are not reliable container tags, so choose their colour space explicitly in
 the searchable **Input colour space** picker. The picker lists every non-data colour space from the
 selected configuration grouped by family.

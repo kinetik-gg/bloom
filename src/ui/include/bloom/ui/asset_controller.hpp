@@ -63,6 +63,9 @@ class AssetController final : public QObject {
     [[nodiscard]] QImage nodeThumbnail(document::NodeId id) const;
     [[nodiscard]] QString inputColorSpaceDisplay(document::AssetId id) const;
     [[nodiscard]] QString inputColorSpaceWarning(document::AssetId id) const;
+    // True when Auto resolved an untagged or partly tagged video by the size convention; the
+    // warning is then the visible "Colour tags missing — assumed …" note.
+    [[nodiscard]] bool inputColorSpaceAssumed(document::AssetId id) const;
     void requestInputColorSpaces();
     // ADR 0026: the part and layer pickers read the image probe through this worker (identity
     // verified, header only). The asset record persists no part list; the result is session
@@ -109,6 +112,7 @@ class AssetController final : public QObject {
         std::string inputColorSpaceWarning;
         std::string audioDiagnostic;
         bool inputColorSpaceAutomatic = false;
+        bool inputColorSpaceAssumed = false;
         // The source file is absent or no longer the imported bytes (Relink fixes it).
         bool missing = false;
         // The source is present but cannot be shown as it is (an uninterpretable colour tag, an

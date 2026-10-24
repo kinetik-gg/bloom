@@ -186,7 +186,8 @@ void AssetsEditor::rebuild() {
     const QSignalBlocker blocker(tree_);
     tree_->clear();
     const auto addRow = [this](QTreeWidgetItem* item, kit::IconId icon, bool branch,
-                               const QStringList& tags = {}, bool missing = false) {
+                               const QStringList& tags = {}, bool missing = false,
+                               bool colourNote = false) {
         auto* row = new AssetRow(tree_);
         row->setObjectName(QStringLiteral("assetsRow"));
         row->setName(item->text(0), icon);
@@ -197,7 +198,9 @@ void AssetsEditor::rebuild() {
         int trailingWidth = 0;
         QWidget* fullTags = nullptr;
         QWidget* compactTags = nullptr;
-        if (!tags.empty() || missing) {
+        // A colour assumption (untagged video) is not a problem: an Info glyph carries its note.
+        colourNote = colourNote && !missing;
+        if (!tags.empty() || missing || colourNote) {
             trailing = new QWidget(row);
             auto* layout = new QHBoxLayout(trailing);
             layout->setContentsMargins(0, 0, 0, 0);
@@ -254,13 +257,23 @@ void AssetsEditor::rebuild() {
                 layout->addWidget(warning);
                 trailingWidth += kit::px(kit::Size::ToggleCell);
             }
+            if (colourNote) {
+                auto* note = new kit::KIconButton(trailing);
+                note->setObjectName(QStringLiteral("assetsColourNoteGlyph"));
+                note->setFixedSize(kit::px(kit::Size::ToggleCell), kit::px(kit::Size::ToggleCell));
+                note->setIcon(kit::icon(kit::IconId::Info, kit::IconRole::Chrome, kit::Color::Muted));
+                note->setToolTip(item->toolTip(0));
+                note->setAccessibleName(item->toolTip(0));
+                layout->addWidget(note);
+                trailingWidth += kit::px(kit::Size::ToggleCell);
+            }
         }
         row->setCells({}, nullptr, {kind}, trailing);
         if (trailing)
             trailing->setFixedWidth(trailingWidth);
         if (fullTags)
             row->setTagChips(trailing, fullTags, compactTags,
-                             missing ? kit::px(kit::Size::ToggleCell) : 0);
+                             missing || colourNote ? kit::px(kit::Size::ToggleCell) : 0);
         if (branch) {
             connect(row->disclosureButton(), &kit::KIconButton::clicked, this,
                     [item] { item->setExpanded(!item->isExpanded()); });
@@ -401,7 +414,9 @@ void AssetsEditor::rebuild() {
                : sequence ? kit::IconId::Images
                : audio    ? kit::IconId::Audio
                           : kit::IconId::Image,
-               false, tags, missing || !problem.isEmpty());
+               false, tags, missing || !problem.isEmpty(),
+               video && problem.isEmpty() && controller &&
+                   controller->inputColorSpaceAssumed(asset.id));
     }
     const bool hasDataBlocks =
         std::ranges::any_of(project.typedDataBlocks(), [](const auto& block) {

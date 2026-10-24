@@ -184,6 +184,29 @@ void testVideoRules(Expectations& expectations) {
                             untagged.warning.find("range") != std::string::npos &&
                             untagged.warning.find("Input Colour") != std::string::npos,
                         "an untagged stream names its missing tags and the override");
+    // Owner decision (2026-10-24): with the picture geometry, Auto assumes the size convention
+    // for the missing tags and carries the visible note instead of refusing.
+    const auto assumedHd = bloom::media::video::resolveVideoInputColorSpace(
+        *config, ColourTags{2, 2, 2, 0}, 0, {}, {1280, 720, 24.0});
+    const auto assumedSd = bloom::media::video::resolveVideoInputColorSpace(
+        *config, ColourTags{-1, -1, -1, -1}, 0, {}, {720, 576, 25.0});
+    expectations.expect(assumedHd.automatic && assumedHd.id == config->rec709VideoColorSpaceId() &&
+                            assumedHd.warning == "Colour tags missing — assumed Rec.709. Change "
+                                                 "in Assets → Input Colour",
+                        "untagged HD resolves to the Rec.709 video space with the note");
+    expectations.expect(assumedSd.automatic && assumedSd.id == config->rec709VideoColorSpaceId() &&
+                            assumedSd.warning.find("assumed Rec.601") != std::string::npos,
+                        "untagged SD resolves through the Rec.601 assumption with the note");
+    const auto taggedSd = bloom::media::video::resolveVideoInputColorSpace(
+        *config, ColourTags{6, 6, 6, 1}, 0, {}, {720, 480, 29.97});
+    expectations.expect(taggedSd.automatic && taggedSd.id == config->rec709VideoColorSpaceId() &&
+                            taggedSd.warning.empty(),
+                        "a tagged SMPTE 170M stream resolves without a note");
+    const auto explicitAssumed = bloom::media::video::resolveVideoInputColorSpace(
+        *config, ColourTags{2, 2, 2, 0}, 0, "lin_rec709_scene", {1920, 1080, 25.0});
+    expectations.expect(explicitAssumed.id == "lin_rec709_scene" &&
+                            explicitAssumed.warning.empty(),
+                        "an explicit choice replaces the assumption and its note");
     const auto explicitUntagged = bloom::media::video::resolveVideoInputColorSpace(
         *config, ColourTags{2, 2, 2, 0}, 0, "lin_rec709_scene");
     expectations.expect(explicitUntagged.id == "lin_rec709_scene" &&
@@ -233,6 +256,11 @@ void testVideoRules(Expectations& expectations) {
                                 pqUntaggedMatrix.warning.find("matrix coefficients") !=
                                     std::string::npos,
                             "PQ without a matrix tag needs an explicit interpretation");
+        const auto pqAssumedMatrix = bloom::media::video::resolveVideoInputColorSpace(
+            *aces, ColourTags{9, 16, 2, 0}, 0, {}, {3840, 2160, 24.0});
+        expectations.expect(pqAssumedMatrix.id == aces->rec2100PqColorSpaceId() &&
+                                !pqAssumedMatrix.warning.empty(),
+                            "with geometry, a PQ stream's missing matrix and range are assumed");
         std::string pqDiagnostic;
         expectations.expect(static_cast<bool>(bloom::runtime::detail::prepareInputColorProcessor(
                                 *aces, {pq.id, pq.name, {}, false, true}, pqDiagnostic)),

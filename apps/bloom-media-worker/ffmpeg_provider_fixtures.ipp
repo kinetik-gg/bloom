@@ -296,9 +296,12 @@ void fixture(const std::filesystem::path& path, bool prores, bool alpha = false,
     }
     require(av_write_trailer(out.format) >= 0, "Fixture mux trailer");
 }
-// Issue #367 timing/metadata fixtures, 64x48 with the numbered luma pattern.
-enum class Special { Vfr, Rotated, Interlaced, Rgb, Anamorphic };
+// Issue #367 timing/metadata fixtures, 64x48 with the numbered luma pattern, and a 1280x720
+// ProRes stream with no colour tags (the HD case of the untagged-colour convention).
+enum class Special { Vfr, Rotated, Interlaced, Rgb, Anamorphic, UntaggedHd };
 void special(const std::filesystem::path& path, const Special kind) {
+    const bool hd = kind == Special::UntaggedHd;
+    const unsigned width = hd ? 1280U : 64U, height = hd ? 720U : 48U;
     Output out;
     require(out.frame && out.packet, "Fixture allocation");
     require(avformat_alloc_output_context2(&out.format, nullptr, "mov", path.c_str()) >= 0,
@@ -309,21 +312,25 @@ void special(const std::filesystem::path& path, const Special kind) {
     stream->avg_frame_rate = {24, 1};
     auto& vp = *stream->codecpar;
     vp.codec_type = AVMEDIA_TYPE_VIDEO;
-    vp.width = 64;
-    vp.height = 48;
-    vp.color_primaries = AVCOL_PRI_BT709;
-    vp.color_trc = AVCOL_TRC_BT709;
-    vp.color_space = kind == Special::Rgb ? AVCOL_SPC_RGB : AVCOL_SPC_BT709;
-    vp.color_range = kind == Special::Rgb ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
-    const bool encoded = kind == Special::Interlaced || kind == Special::Rgb;
+    vp.width = static_cast<int>(width);
+    vp.height = static_cast<int>(height);
+    vp.color_primaries = hd ? AVCOL_PRI_UNSPECIFIED : AVCOL_PRI_BT709;
+    vp.color_trc = hd ? AVCOL_TRC_UNSPECIFIED : AVCOL_TRC_BT709;
+    vp.color_space = kind == Special::Rgb ? AVCOL_SPC_RGB
+                     : hd                 ? AVCOL_SPC_UNSPECIFIED
+                                          : AVCOL_SPC_BT709;
+    vp.color_range = kind == Special::Rgb ? AVCOL_RANGE_JPEG
+                     : hd                 ? AVCOL_RANGE_UNSPECIFIED
+                                          : AVCOL_RANGE_MPEG;
+    const bool encoded = kind == Special::Interlaced || kind == Special::Rgb || hd;
     if (encoded) {
         const auto* encoder =
             avcodec_find_encoder_by_name(kind == Special::Rgb ? "tiff" : "prores_ks");
         require(encoder, "Intake fixture encoder missing");
         out.codec = avcodec_alloc_context3(encoder);
         require(out.codec, "Fixture encoder allocation");
-        out.codec->width = 64;
-        out.codec->height = 48;
+        out.codec->width = static_cast<int>(width);
+        out.codec->height = static_cast<int>(height);
         out.codec->pix_fmt = kind == Special::Rgb ? AV_PIX_FMT_RGB48LE : AV_PIX_FMT_YUV422P10LE;
         out.codec->time_base = {1, 24};
         out.codec->framerate = {24, 1};
@@ -333,6 +340,8 @@ void special(const std::filesystem::path& path, const Special kind) {
         out.codec->colorspace = vp.color_space;
         out.codec->color_range = vp.color_range;
         out.codec->flags |= AV_CODEC_FLAG_GLOBAL_HEADER | AV_CODEC_FLAG_BITEXACT;
+        if (hd)
+            out.codec->profile = 2;
         if (kind == Special::Interlaced) {
             out.codec->profile = 2;
             out.codec->flags |= AV_CODEC_FLAG_INTERLACED_DCT;
@@ -340,8 +349,8 @@ void special(const std::filesystem::path& path, const Special kind) {
         }
         require(avcodec_open2(out.codec, encoder, nullptr) >= 0, "Fixture encoder open");
         require(avcodec_parameters_from_context(&vp, out.codec) >= 0, "Fixture encoder metadata");
-        out.frame->width = 64;
-        out.frame->height = 48;
+        out.frame->width = static_cast<int>(width);
+        out.frame->height = static_cast<int>(height);
         out.frame->format = out.codec->pix_fmt;
         require(av_frame_get_buffer(out.frame, 32) >= 0, "Fixture image buffer");
     } else {
@@ -382,10 +391,10 @@ void special(const std::filesystem::path& path, const Special kind) {
         const auto pts = kind == Special::Vfr ? vfr[n] : n;
         if (encoded) {
             require(av_frame_make_writable(out.frame) >= 0, "Fixture writable frame");
-            for (unsigned y = 0; y < 48; ++y) {
+            for (unsigned y = 0; y < height; ++y) {
                 auto* row =
                     out.frame->data[0] + static_cast<std::ptrdiff_t>(y) * out.frame->linesize[0];
-                for (unsigned x = 0; x < 64; ++x) {
+                for (unsigned x = 0; x < width; ++x) {
                     if (kind == Special::Rgb) {
                         // R carries the numbered luma pattern, G a horizontal ramp, B constant.
                         const std::array<unsigned, 3> rgb{luma(n, x, y) * 256U, x * 1024U, 32768U};
@@ -393,6 +402,11 @@ void special(const std::filesystem::path& path, const Special kind) {
                             row[x * 6 + c * 2] = static_cast<std::uint8_t>(rgb[c] & 255U);
                             row[x * 6 + c * 2 + 1] = static_cast<std::uint8_t>(rgb[c] >> 8U);
                         }
+                    } else if (hd) {
+                        // The numbered pattern tiled across the HD picture.
+                        const auto value = luma(n, x % 64U, y % 48U) * 4U;
+                        row[x * 2] = static_cast<std::uint8_t>(value & 255U);
+                        row[x * 2 + 1] = static_cast<std::uint8_t>(value >> 8U);
                     } else {
                         // Interlaced: the top field carries frame n; the bottom field is a
                         // later instant that flickers between 200 and 40 (field-rate motion).
@@ -402,10 +416,11 @@ void special(const std::filesystem::path& path, const Special kind) {
                     }
                 }
             }
-            if (kind == Special::Interlaced)
+            // Neutral 10-bit chroma (512) for the 4:2:2 ProRes fixtures.
+            if (kind == Special::Interlaced || hd)
                 for (unsigned plane = 1; plane < 3; ++plane)
-                    for (unsigned y = 0; y < 48; ++y)
-                        for (unsigned x = 0; x < 32; ++x) {
+                    for (unsigned y = 0; y < height; ++y)
+                        for (unsigned x = 0; x < width / 2U; ++x) {
                             auto* pixel =
                                 out.frame->data[plane] +
                                 static_cast<std::ptrdiff_t>(y) * out.frame->linesize[plane] +
@@ -453,6 +468,7 @@ bool generateFixtures(const std::string& directory) {
         special(path / "interlaced-prores.mov", Special::Interlaced);
         special(path / "rgb-tiff.mov", Special::Rgb);
         special(path / "anamorphic-h264.mp4", Special::Anamorphic);
+        special(path / "untagged-hd-prores.mov", Special::UntaggedHd);
         std::ofstream provenance(path / "provenance.txt");
         provenance
             << "MEDIA-3 generated-read-v1\nFFmpeg 8.1.2 qualified intake mux/ProRes encode\n"
@@ -462,6 +478,7 @@ bool generateFixtures(const std::string& directory) {
                "12-frame H.264 colour fixtures: untagged, BT.2020/PQ, BT.2020/HLG\n"
                "12-frame timing fixtures: VFR and 90-degree display-matrix H.264 (all IDR),\n"
                "top-field-first interlaced ProRes 422, RGB48 TIFF in MOV, 2:1 SAR H.264\n"
+               "12-frame untagged 1280x720 ProRes 422 (tiled numbered pattern)\n"
                "PCM mono 48000 Hz: sample[n]=((n%997)-498)/1024\n"
                "Original synthetic content; generated at test time; no external media\n";
         const auto specification =
@@ -471,7 +488,8 @@ bool generateFixtures(const std::string& directory) {
         for (const auto* name :
              {"numbered-h264.mp4", "numbered-prores.mov", "alpha-prores.mov", "untagged-h264.mp4",
               "pq2020-h264.mp4", "hlg2020-h264.mp4", "vfr-h264.mp4", "rotated-h264.mp4",
-              "interlaced-prores.mov", "rgb-tiff.mov", "anamorphic-h264.mp4"}) {
+              "interlaced-prores.mov", "rgb-tiff.mov", "anamorphic-h264.mp4",
+              "untagged-hd-prores.mov"}) {
             const auto identity = sourceIdentity((path / name).string()).first.toLowercaseHex();
             provenance << name << " SHA-256: " << std::string(identity.begin(), identity.end())
                        << '\n';

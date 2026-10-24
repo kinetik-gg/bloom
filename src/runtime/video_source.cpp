@@ -252,8 +252,17 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
     const media::provider::ColourTags tags{
         static_cast<std::int32_t>(stream->primaries), static_cast<std::int32_t>(stream->transfer),
         static_cast<std::int32_t>(stream->matrix), static_cast<std::int32_t>(stream->range)};
+    // Owner decision (2026-10-24): missing SDR tags are assumed by picture size and rate; the
+    // assumption is part of the transform identity below and its note is shown.
+    const media::video::VideoGeometry geometry{
+        stream->width, stream->height,
+        stream->framePeriod.numerator() > 0
+            ? static_cast<double>(stream->framePeriod.denominator()) /
+                  static_cast<double>(stream->framePeriod.numerator())
+            : 0.0};
+    const auto assumedColour = media::video::assumeMissingVideoColour(tags, geometry);
     const auto videoResolution = media::video::resolveVideoInputColorSpace(
-        *config, tags, selection.interpretation, selection.inputColorSpaceId);
+        *config, tags, selection.interpretation, selection.inputColorSpaceId, geometry);
     const InputColorSpaceResolution resolution{
         videoResolution.id, videoResolution.name, videoResolution.warning,
         videoResolution.noConversion, videoResolution.automatic};
@@ -335,6 +344,7 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
     // A Bloom-synthesized input space (Rec.2100 HLG) is defined by OCIO built-ins, so its
     // definition and the linked OCIO version are part of the transform identity.
     key.add(color::synthesizedColorSpaceIdentity(selection.inputColorSpaceId));
+    key.add(assumedColour.identity);
     const auto revision = selection.configRevision.toLowercaseHex();
     key.add(std::string(revision.begin(), revision.end()));
     key.add(selection.frame != nullptr);

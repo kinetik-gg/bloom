@@ -97,6 +97,9 @@ struct Outcome final {
     std::string problem;
     std::string audio;
     std::string note;
+    std::string colourNote;
+    std::string inputDisplay;
+    bool assumed = false;
     // After choosing the config's Rec.709 video space (the fix the problem names).
     bool thumbnailAfterChoice = false;
 };
@@ -122,6 +125,9 @@ Outcome importAndInspect(const std::filesystem::path& path, const bool chooseRec
     outcome.dataOnly = harness.controller->dataOnly(asset.id);
     outcome.problem = harness.controller->problem(asset.id).toStdString();
     outcome.audio = harness.controller->audioDiagnostic(asset.id).toStdString();
+    outcome.colourNote = harness.controller->inputColorSpaceWarning(asset.id).toStdString();
+    outcome.inputDisplay = harness.controller->inputColorSpaceDisplay(asset.id).toStdString();
+    outcome.assumed = harness.controller->inputColorSpaceAssumed(asset.id);
     if (chooseRec709) {
         const auto config = runtime::detail::resolveInputColorConfig(harness.session.colorIntent());
         if (config && !config->rec709VideoColorSpaceId().empty()) {
@@ -130,8 +136,14 @@ Outcome importAndInspect(const std::filesystem::path& path, const bool chooseRec
                 asset.id, asset.interpretation.colorSpace,
                 std::string(config->rec709VideoColorSpaceId()));
             if (harness.session.executeTransaction(std::move(choose)).succeeded())
+                // The explicit choice replaces the assumption (and its note) with a new thumbnail.
                 outcome.thumbnailAfterChoice = waitUntil(
-                    [&] { return !harness.controller->thumbnail(asset.id).isNull(); }, 30000);
+                    [&] {
+                        return !harness.controller->inputColorSpaceAssumed(asset.id) &&
+                               harness.controller->inputColorSpaceWarning(asset.id).isEmpty() &&
+                               !harness.controller->thumbnail(asset.id).isNull();
+                    },
+                    30000);
         }
     }
     outcome.note = (harness.controller->audioDiagnostic(asset.id) + " | " +
@@ -144,7 +156,8 @@ void report(const std::string& label, const Outcome& outcome) {
     std::cout << label << ": imported=" << outcome.imported << " kind=" << outcome.kind
               << " missing=" << outcome.missing << " thumbnail=" << outcome.thumbnail
               << " dataOnly=" << outcome.dataOnly << " problem=" << outcome.problem
-              << " audio=" << outcome.audio << '\n';
+              << " audio=" << outcome.audio << " colour=" << outcome.colourNote
+              << " input=" << outcome.inputDisplay << '\n';
 }
 
 } // namespace
@@ -154,10 +167,15 @@ int main(int argc, char** argv) {
     try {
         const auto arguments = QCoreApplication::arguments();
         std::vector<std::filesystem::path> extra;
+        // Local files (never committed) that must render in Auto with the Rec.709 note, such as an
+        // owner's untagged 720p camera clip.
+        std::vector<std::filesystem::path> assumedHd;
         std::filesystem::path fixtures;
         for (int index = 1; index < arguments.size(); ++index) {
             if (arguments[index] == "--media-fixtures" && index + 1 < arguments.size())
                 fixtures = arguments[++index].toStdString();
+            else if (arguments[index] == "--expect-assumed-hd" && index + 1 < arguments.size())
+                assumedHd.emplace_back(arguments[++index].toStdString());
             else
                 extra.emplace_back(arguments[index].toStdString());
         }
@@ -178,13 +196,19 @@ int main(int argc, char** argv) {
                "a Cryptomatte-only EXR sequence is data-only with an ID-colour thumbnail");
         expect(crypto.kind == std::to_string(static_cast<int>(document::AssetKind::Sequence)),
                "a Cryptomatte-only EXR sequence is classified as a sequence");
-        // An untagged H.264 stream is present: never "missing", the colour refusal is a stated
-        // problem naming its fix, and its audio still decodes.
+        // Untagged video (owner decision 2026-10-24): Auto no longer refuses. It assumes the size
+        // convention (Rec.709 for HD, Rec.601 for SD), shows a thumbnail and the visible note
+        // naming the fix, and its audio still decodes; choosing Rec.709 explicitly still works.
         const auto checkUntagged = [](const std::string& label, const Outcome& video,
-                                      const bool hasAudio) {
+                                      const bool hasAudio, const std::string& family) {
             expect(video.imported && !video.missing, label + ": a present video is not missing");
-            expect(video.problem.find("input colour space") != std::string::npos,
-                   label + ": the colour refusal names its fix");
+            expect(video.thumbnail && video.problem.empty(),
+                   label + ": Auto shows a thumbnail instead of a colour refusal");
+            expect(video.assumed && video.colourNote == "Colour tags missing — assumed " + family +
+                                                            ". Change in Assets → Input Colour",
+                   label + ": the assumption is a visible note naming its fix");
+            expect(video.inputDisplay.rfind("Auto (assumed: ", 0) == 0,
+                   label + ": the input colour display says the space was assumed");
             if (hasAudio)
                 expect(video.audio.empty(), label + ": its audio decodes");
             expect(video.thumbnailAfterChoice,
@@ -192,8 +216,11 @@ int main(int argc, char** argv) {
         };
         if (!fixtures.empty()) {
             const auto video = importAndInspect(fixtures / "untagged-h264.mp4", true);
-            report("untagged h264 video", video);
-            checkUntagged("untagged H.264", video, false);
+            report("untagged h264 video (SD)", video);
+            checkUntagged("untagged SD H.264", video, false, "Rec.601");
+            const auto hd = importAndInspect(fixtures / "untagged-hd-prores.mov", true);
+            report("untagged ProRes video (HD)", hd);
+            checkUntagged("untagged HD ProRes", hd, false, "Rec.709");
         }
         // A real H.264 High + AAC LC clip, as cameras and editors write them (no colour tags).
         // Encoded at test time when FFmpeg with libx264 and AAC is on the PATH.
@@ -210,12 +237,21 @@ int main(int argc, char** argv) {
                 std::filesystem::exists(clip)) {
                 const auto video = importAndInspect(clip, true);
                 report("h264 high + aac", video);
-                checkUntagged("H.264 High + AAC", video, true);
+                checkUntagged("H.264 High + AAC", video, true, "Rec.601");
             } else {
                 std::cout << "NOTE: FFmpeg could not encode the H.264 High + AAC clip\n";
             }
         } else {
             std::cout << "NOTE: no FFmpeg on PATH; the H.264 High + AAC clip is not exercised\n";
+        }
+        for (const auto& path : assumedHd) {
+            const auto video = importAndInspect(path);
+            report(path.filename().string(), video);
+            expect(video.imported && !video.missing && video.thumbnail && video.problem.empty() &&
+                       video.assumed &&
+                       video.colourNote == "Colour tags missing — assumed Rec.709. Change in "
+                                           "Assets → Input Colour",
+                   path.filename().string() + ": renders in Auto with the Rec.709 note");
         }
         for (const auto& path : extra)
             report(path.filename().string(), importAndInspect(path));

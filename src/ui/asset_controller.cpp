@@ -694,6 +694,8 @@ QString AssetController::inputColorSpaceDisplay(const document::AssetId id) cons
     const auto found = previews_.find(id);
     if (found != previews_.end() && !found->second.inputColorSpaceName.empty()) {
         const auto name = QString::fromStdString(found->second.inputColorSpaceName);
+        if (found->second.inputColorSpaceAutomatic && found->second.inputColorSpaceAssumed)
+            return tr("Auto (assumed: %1)").arg(name);
         return found->second.inputColorSpaceAutomatic ? tr("Auto (resolved: %1)").arg(name) : name;
     }
     const auto* asset = session_.snapshot().project().findAsset(id);
@@ -713,6 +715,11 @@ QString AssetController::inputColorSpaceDisplay(const document::AssetId id) cons
     }
     return {};
 }
+bool AssetController::inputColorSpaceAssumed(const document::AssetId id) const {
+    const auto found = previews_.find(id);
+    return found != previews_.end() && found->second.inputColorSpaceAssumed;
+}
+
 QString AssetController::inputColorSpaceWarning(const document::AssetId id) const {
     const auto found = previews_.find(id);
     return found == previews_.end() ? QString{}
@@ -1234,6 +1241,7 @@ void AssetController::startThumbnails() {
                         core::Sha256Digest configRevision;
                         bool automatic = false;
                         bool colorAvailable = false;
+                        std::string assumedColourIdentity;
                         if (stream != probe.streams.end()) {
                             const auto config =
                                 runtime::detail::resolveInputColorConfig(colorIntent);
@@ -1241,14 +1249,27 @@ void AssetController::startThumbnails() {
                                 const media::provider::ColourTags tags{
                                     stream->colour.primaries, stream->colour.transfer,
                                     stream->colour.matrix, stream->colour.range};
+                                const media::video::VideoGeometry geometry{
+                                    stream->width, stream->height,
+                                    stream->rate.denominator > 0
+                                        ? static_cast<double>(stream->rate.numerator) /
+                                              static_cast<double>(stream->rate.denominator)
+                                        : 0.0};
+                                // The assumed colour of an untagged stream is part of the
+                                // thumbnail's cache identity.
+                                assumedColourIdentity =
+                                    media::video::assumeMissingVideoColour(tags, geometry).identity;
                                 const auto resolution = media::video::resolveVideoInputColorSpace(
                                     *config, tags,
                                     static_cast<std::uint32_t>(asset.interpretation.colorSpace),
-                                    asset.interpretation.inputColorSpaceId);
+                                    asset.interpretation.inputColorSpaceId, geometry);
                                 inputId = resolution.id;
                                 workingId = std::string(config->processColorSpaceId());
                                 configRevision = config->expectedRevision();
                                 automatic = resolution.automatic;
+                                preview.inputColorSpaceAssumed = automatic &&
+                                                                 !assumedColourIdentity.empty() &&
+                                                                 !resolution.id.empty();
                                 preview.inputColorSpaceName = resolution.name;
                                 preview.inputColorSpaceWarning = resolution.warning;
                                 if (resolution.noConversion) {
@@ -1286,6 +1307,8 @@ void AssetController::startThumbnails() {
                         preview.key.append(revision.begin(), revision.end());
                         preview.key += ':';
                         preview.key += thumbnailDisplayIdentity;
+                        preview.key += ':';
+                        preview.key += assumedColourIdentity;
                         const auto cachedPreview = results->cache.find(preview.key);
                         if (available && colorAvailable && thumbnailDisplay &&
                             cachedPreview != results->cache.end()) {
@@ -1728,7 +1751,9 @@ void AssetController::poll() {
                                right.second.inputColorSpaceWarning &&
                            left.second.audioDiagnostic == right.second.audioDiagnostic &&
                            left.second.inputColorSpaceAutomatic ==
-                               right.second.inputColorSpaceAutomatic;
+                               right.second.inputColorSpaceAutomatic &&
+                           left.second.inputColorSpaceAssumed ==
+                               right.second.inputColorSpaceAssumed;
                 };
                 const auto& prepared = **result->value();
                 const bool assetsChanged =

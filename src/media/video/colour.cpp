@@ -62,13 +62,15 @@ constexpr std::string_view kOverride =
 }
 // Kr/Kb of the YUV matrix used for the conversion. A config-managed (explicit) interpretation of
 // a stream without a matrix tag takes the matrix of the chosen space's gamut family.
-[[nodiscard]] std::int32_t effectiveMatrix(const ColourTags& tags, const std::string_view inputId) {
+// Otherwise the size convention's matrix (`assumed`) applies.
+[[nodiscard]] std::int32_t effectiveMatrix(const ColourTags& tags, const std::string_view inputId,
+                                           const std::int32_t assumed) {
     if (knownMatrix(tags.matrix))
         return tags.matrix;
     if (tags.primaries == kPrimariesBt2020 || inputId.find("2020") != std::string_view::npos ||
         inputId.find("2100") != std::string_view::npos)
         return kMatrixBt2020Ncl;
-    return kMatrixBt709;
+    return knownMatrix(assumed) ? assumed : kMatrixBt709;
 }
 
 float component(const CpuPlane& plane, std::uint32_t x, std::uint32_t y, bool wide) {
@@ -116,7 +118,11 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
     if (configManaged && applyProcessor && processor == nullptr)
         return Unavailable{Error::InvalidValue,
                            "A config-managed video conversion needs a colour processor"};
-    auto tags = frame.colour;
+    // The same convention the resolver applies to the stream (owner decision 2026-10-24); a frame
+    // carries no rate, and the BT.470BG and SMPTE 170M matrices are identical.
+    auto tags = assumeMissingVideoColour(frame.colour,
+                                         {frame.planes[0].width, frame.planes[0].height, 0.0})
+                    .tags;
     if (tags.matrix == kMatrixBt2020Cl)
         return Unavailable{Error::Unavailable,
                            "BT.2020 constant-luminance video (matrix coefficients 10) is not "
@@ -132,7 +138,7 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
         if (inputColorSpaceId.empty())
             return Unavailable{Error::InvalidValue,
                                "A config-managed video input needs a colour-space id"};
-        tags.matrix = effectiveMatrix(tags, inputColorSpaceId);
+        tags.matrix = effectiveMatrix(frame.colour, inputColorSpaceId, tags.matrix);
         if (!knownRange(tags.range))
             tags.range = 1;
     } else if (tags.transfer == kTransferPq || tags.transfer == kTransferHlg ||
@@ -142,8 +148,12 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
                            "Rec.2020, PQ and HLG video is interpreted only through the colour "
                            "config" +
                                std::string(kOverride)};
-    } else if (tags.primaries != 1 || tags.matrix != kMatrixBt709 || !knownRange(tags.range) ||
-               (transfer != 1 && transfer != 13 && transfer != 8)) {
+    } else if ((tags.primaries != 1 && tags.primaries != kMatrixBt470bg &&
+                tags.primaries != kMatrixSmpte170m) ||
+               (tags.matrix != kMatrixBt709 && tags.matrix != kMatrixBt470bg &&
+                tags.matrix != kMatrixSmpte170m) ||
+               !knownRange(tags.range) ||
+               (transfer != 1 && transfer != 6 && transfer != 13 && transfer != 8)) {
         const auto missing = missingTags(tags, overrideTransfer == 0);
         return Unavailable{
             Error::Unavailable,
@@ -269,11 +279,21 @@ VideoInputColorSpaceResolution resolveVideoInputColorSpace(
     }
     if (const auto missing = missingTags(tags, true); !missing.empty())
         return refuse("Video stream has no " + missing + " tag" + std::string(kOverride));
+    // Rec.601 (BT.470BG / SMPTE 170M) SD shares the BT.709 transfer curve; its primaries map to
+    // the config's Rec.709 video space, the matrix is honoured by the YUV conversion.
+    const bool sd = (tags.primaries == kMatrixBt470bg || tags.primaries == kMatrixSmpte170m) &&
+                    (tags.matrix == kMatrixBt470bg || tags.matrix == kMatrixSmpte170m) &&
+                    (tags.transfer == 1 || tags.transfer == 6);
+    if (sd) {
+        if (config.rec709VideoColorSpaceId().empty())
+            return refuse("The OCIO config has no Rec.709 camera/video colour space");
+        return selected(config, std::string(config.rec709VideoColorSpaceId()), true);
+    }
     if (tags.primaries != 1 || (tags.matrix != kMatrixBt709 && tags.matrix != 0))
         return refuse("Rec.2020 or other non-Rec.709 video without a PQ or HLG transfer has no "
                       "automatic config space" +
                       std::string(kOverride));
-    if (tags.transfer == 1) {
+    if (tags.transfer == 1 || tags.transfer == 6) {
         if (config.rec709VideoColorSpaceId().empty())
             return VideoInputColorSpaceResolution{
                 "", "", "The OCIO config has no Rec.709 camera/video colour space", false, true};
@@ -286,6 +306,61 @@ VideoInputColorSpaceResolution resolveVideoInputColorSpace(
     return VideoInputColorSpaceResolution{
         "", "", "Video transfer tags are unsupported; choose an explicit config colour space",
         false, true};
+}
+
+AssumedVideoColour assumeMissingVideoColour(const ColourTags& source,
+                                            const VideoGeometry& geometry) {
+    AssumedVideoColour result{source, false, {}, {}};
+    auto& tags = result.tags;
+    const auto missing = [](std::int32_t value) { return value <= 0 || value == 2; };
+    // The mpv/FFmpeg-player size rule: 1280 wide or taller than 576 lines is HD.
+    const bool hd = geometry.width >= 1280 || geometry.height > 576;
+    const bool pal = !hd && (std::abs(geometry.frameRate - 25.0) < 0.6 ||
+                             std::abs(geometry.frameRate - 50.0) < 1.2);
+    const std::int32_t family = hd ? 1 : pal ? kMatrixBt470bg : kMatrixSmpte170m;
+    std::string filled;
+    if (missing(tags.primaries)) {
+        tags.primaries = family;
+        filled += "p";
+    }
+    if (missing(tags.transfer)) {
+        tags.transfer = hd ? 1 : 6;
+        filled += "t";
+    }
+    if (tags.matrix < 0 || tags.matrix == 2) {
+        tags.matrix = tags.primaries == kPrimariesBt2020 || tags.transfer == kTransferPq ||
+                              tags.transfer == kTransferHlg
+                          ? kMatrixBt2020Ncl
+                          : family;
+        filled += "m";
+    }
+    if (!knownRange(tags.range)) {
+        tags.range = 1;
+        filled += "r";
+    }
+    if (filled.empty())
+        return result;
+    result.assumed = true;
+    const bool wide = tags.primaries == kPrimariesBt2020 || tags.matrix == kMatrixBt2020Ncl;
+    result.note = std::string("Colour tags missing — assumed ") +
+                  (wide ? "Rec.2020" : hd ? "Rec.709" : "Rec.601") +
+                  ". Change in Assets → Input Colour";
+    result.identity = "assumed-colour-v1:" + filled + ":" + std::to_string(tags.primaries) + "," +
+                      std::to_string(tags.transfer) + "," + std::to_string(tags.matrix) + "," +
+                      std::to_string(tags.range);
+    return result;
+}
+
+VideoInputColorSpaceResolution resolveVideoInputColorSpace(
+    const bloom::color::ResolvedBloomNeutralConfig& config, const ColourTags& tags,
+    const std::uint32_t legacyColorSpace, const std::string_view explicitId,
+    const VideoGeometry& geometry) {
+    const auto assumed = assumeMissingVideoColour(tags, geometry);
+    auto resolution = resolveVideoInputColorSpace(config, assumed.tags, legacyColorSpace, explicitId);
+    if (assumed.assumed && explicitId.empty() && legacyColorSpace == 0 && !resolution.id.empty() &&
+        resolution.warning.empty())
+        resolution.warning = assumed.note;
+    return resolution;
 }
 
 media::provider::Result<render::Rgba32fImage>

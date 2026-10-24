@@ -10,8 +10,10 @@
 #include <bloom/project/open_archive.hpp>
 #include <bloom/project/save_archive.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/input_color_context.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/video_asset.hpp>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -125,6 +127,67 @@ void hlgInterpretationRoundTrip(const std::filesystem::path& directory) {
                   ->interpretation.inputColorSpaceId == color::kBloomRec2100HlgColorSpaceId,
           "the synthesized HLG space id round trips");
     check(render(*restored.document) == before, "reopened HLG project renders identically");
+}
+// Owner decision (2026-10-24): an untagged video renders in Auto under the assumed size
+// convention, with no evaluation diagnostic (so the frame stays RAM-cacheable), and an explicit
+// Rec.709 choice of an untagged HD stream renders identically to the Rec.709 assumption.
+void untaggedAssumedRender(const std::filesystem::path& directory, const std::filesystem::path& clip,
+                           const std::uint32_t width, const std::uint32_t height,
+                           const bool expectExplicitMatch) {
+    const auto render = [&](const std::string& explicitId) {
+        auto seed =
+            document::makeNewProject("Untagged", "Main", core::RationalTime::fromInteger(1));
+        const auto composition = seed.initialCompositionId;
+        const auto format = document::CompositionFormat::create(width, height);
+        if (!format)
+            throw std::runtime_error("test composition format");
+        seed.project.findComposition(composition)->setFormat(*format);
+        document::Document document(std::move(seed.project));
+        const auto snapshot = document.snapshot();
+        auto draft = document.draft(snapshot);
+        commands::ImportAssets imported({clip}, directory);
+        check(imported.apply(draft).status == commands::OperationStatus::Applied,
+              "untagged import");
+        const auto assetId = draft.project().assets().front().id;
+        if (!explicitId.empty())
+            check(commands::SetAssetInputColor(assetId, document::AssetColorSpace::Auto,
+                                               explicitId)
+                          .apply(draft)
+                          .status == commands::OperationStatus::Applied,
+                  "explicit Rec.709 interpretation");
+        check(commands::AddImageLayer(composition, assetId).apply(draft).status ==
+                  commands::OperationStatus::Applied,
+              "untagged video layer");
+        check(document.commit(snapshot.revision(), std::move(draft)).committed(),
+              "untagged document");
+        runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+        const auto compiled = compiler.compile({document.snapshot(), composition}, {});
+        check(compiled.plan != nullptr, "untagged plan compiles");
+        runtime::CpuCompositionEvaluator evaluator;
+        evaluator.setAssetBaseDirectory(directory);
+        const auto time = core::RationalTime::create(1, 24);
+        const auto result = evaluator.evaluate(
+            compiled.plan,
+            {.time = *time,
+             .output = compiled.plan->output(),
+             .resolution = {},
+             .pixelStorageByteLimit = std::size_t{width} * height * 16 * 8},
+            {});
+        for (const auto& d : result.diagnostics())
+            std::cerr << d.summary << '\n';
+        check(result.frame() && result.diagnostics().empty(),
+              "an untagged video renders in Auto without a diagnostic");
+        return result.frame() ? std::vector<std::byte>(
+                                    std::as_bytes(result.frame()->processImage().pixels()).begin(),
+                                    std::as_bytes(result.frame()->processImage().pixels()).end())
+                              : std::vector<std::byte>{};
+    };
+    const auto assumed = render({});
+    if (expectExplicitMatch) {
+        const auto config = runtime::detail::resolveInputColorConfig({});
+        check(config && render(std::string(config->rec709VideoColorSpaceId())) == assumed,
+              "the Rec.709 assumption renders exactly as the explicit Rec.709 choice");
+    }
 }
 void run(const std::filesystem::path& directory) {
     auto seed = document::makeNewProject("Video test", "Main", core::RationalTime::fromInteger(2));
@@ -308,6 +371,13 @@ int main(int argc, char** argv) {
         check(argc == 2, "fixture directory");
         sessionAdmission(argv[1]);
         hlgInterpretationRoundTrip(argv[1]);
+        const std::filesystem::path fixtures(argv[1]);
+        untaggedAssumedRender(fixtures, fixtures / "untagged-hd-prores.mov", 1280, 720, true);
+        untaggedAssumedRender(fixtures, fixtures / "untagged-h264.mp4", 64, 48, false);
+        // A local untagged HD clip (never committed), e.g. an owner's 720p camera file.
+        if (const char* local = std::getenv("BLOOM_LOCAL_UNTAGGED_HD_CLIP"); local && *local)
+            untaggedAssumedRender(std::filesystem::path(local).parent_path(), local, 1280, 720,
+                                  true);
         run(argv[1]);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

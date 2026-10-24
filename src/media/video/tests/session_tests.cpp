@@ -268,14 +268,47 @@ void colourInterpretation(const std::filesystem::path& directory) {
         (126.0F - 16.0F) / 219.0F + 2.0F * (1.0F - 0.2627F) * (-68.0F / 224.0F);
     check(std::abs(red2020 - expected2020) < 1e-5F && std::abs(red709 - red2020) > 1e-3F,
           "BT.2020 non-constant-luminance matrix reference value");
-    // Untagged: refused on the unmanaged path with named tags, accepted with an explicit space.
+    // Untagged (owner decision 2026-10-24): the unmanaged path assumes the SD convention for a
+    // small picture (SMPTE 170M, BT.709 curve, limited range) instead of refusing; an explicit
+    // space still picks its own matrix family.
     const auto untagged = yuv420({128, 128}, {128, 128}, {2, 2, 2, 0});
-    const auto refused =
+    const auto assumed =
         video::videoToSceneLinear(untagged, 0, *descriptor.value(), 1, 1, std::size_t{4} * 2 * 16);
-    check(std::holds_alternative<provider::Unavailable>(refused) &&
-              std::get<provider::Unavailable>(refused).detail.find("matrix coefficients") !=
-                  std::string::npos,
-          "an untagged frame names its missing tags");
+    const auto tagged601 = video::videoToSceneLinear(yuv420({128, 128}, {128, 128}, {6, 6, 6, 1}),
+                                                     0, *descriptor.value(), 1, 1,
+                                                     std::size_t{4} * 2 * 16);
+    check(std::holds_alternative<bloom::render::Rgba32fImage>(assumed) &&
+              std::holds_alternative<bloom::render::Rgba32fImage>(tagged601) &&
+              std::get<bloom::render::Rgba32fImage>(assumed).pixels()[0].red() ==
+                  std::get<bloom::render::Rgba32fImage>(tagged601).pixels()[0].red(),
+          "an untagged SD frame converts as tagged SMPTE 170M limited range");
+    {
+        const auto fill = [](provider::ColourTags tags, std::uint32_t w, std::uint32_t h,
+                             double rate) { return video::assumeMissingVideoColour(tags, {w, h, rate}); };
+        const auto hd = fill({2, 2, 2, 0}, 1280, 720, 24);
+        const auto pal = fill({2, 2, 2, 0}, 720, 576, 25);
+        const auto ntsc = fill({-1, -1, -1, -1}, 720, 480, 30000.0 / 1001.0);
+        const auto partial = fill({1, 1, 2, 0}, 1920, 1080, 25);
+        const auto pqMatrix = fill({9, 16, 2, 1}, 3840, 2160, 24);
+        const auto tagged = fill({1, 1, 1, 1}, 64, 48, 24);
+        check(hd.assumed && hd.tags == provider::ColourTags{1, 1, 1, 1} &&
+                  hd.note == "Colour tags missing — assumed Rec.709. Change in Assets → Input "
+                             "Colour",
+              "untagged HD assumes Rec.709 limited range with the visible note");
+        check(pal.tags == provider::ColourTags{5, 6, 5, 1} &&
+                  ntsc.tags == provider::ColourTags{6, 6, 6, 1} &&
+                  pal.note.find("Rec.601") != std::string::npos,
+              "untagged SD assumes Rec.601, BT.470BG at 25 fps and SMPTE 170M otherwise");
+        check(partial.tags == provider::ColourTags{1, 1, 1, 1} &&
+                  partial.identity == "assumed-colour-v1:mr:1,1,1,1",
+              "a partly tagged stream fills only its missing tags");
+        check(pqMatrix.tags == provider::ColourTags{9, 16, 9, 1},
+              "a missing matrix on a BT.2020/PQ stream follows BT.2020 non-constant luminance");
+        check(!tagged.assumed && tagged.identity.empty() && tagged.note.empty(),
+              "a fully tagged stream assumes nothing");
+        check(hd.identity != pal.identity && pal.identity != ntsc.identity,
+              "each assumption is a distinct transform identity");
+    }
     const auto interpreted = convert(untagged, "Rec.2100-PQ - Display");
     check(std::holds_alternative<bloom::render::Rgba32fImage>(interpreted) &&
               std::abs(std::get<bloom::render::Rgba32fImage>(interpreted).pixels()[0].red() -
@@ -300,6 +333,32 @@ void colourInterpretation(const std::filesystem::path& directory) {
         const auto decoded = session.frame(probe, 0, 3, 0, nullptr);
         check(std::holds_alternative<Frame>(decoded) && std::get<Frame>(decoded)->colour == tags,
               "colour fixtures carry their tags through decode");
+    }
+    // The untagged HD fixture: no primaries, transfer or matrix survive decode, and the frame
+    // converts under the assumed Rec.709 interpretation instead of being refused.
+    {
+        video::VideoDecodeSession session(directory / "untagged-hd-prores.mov");
+        const auto probe = std::get<provider::ProbeResult>(session.probe());
+        const auto& stream = probe.streams[0];
+        const auto assumedHd = video::assumeMissingVideoColour(
+            stream.colour, {stream.width, stream.height, 24.0});
+        check(stream.width == 1280 && stream.height == 720 && assumedHd.assumed &&
+                  assumedHd.identity.rfind("assumed-colour-v1:ptm", 0) == 0 &&
+                  assumedHd.tags.primaries == 1 && assumedHd.tags.matrix == 1 &&
+                  assumedHd.tags.transfer == 1 && assumedHd.note.find("Rec.709") != std::string::npos,
+              "the untagged HD fixture assumes Rec.709 for its missing tags");
+        const auto decoded = session.frame(probe, 0, 3, 0, nullptr);
+        const auto hdWindow = bloom::render::ImageWindow::create(0, 0, 1280, 720);
+        const auto hdDescriptor = bloom::render::Rgba32fImageDescriptor::create(
+            *hdWindow.value(), *hdWindow.value(), bloom::core::PixelAspectRatio::square());
+        const auto converted =
+            std::holds_alternative<Frame>(decoded)
+                ? video::videoToSceneLinear(*std::get<Frame>(decoded), 0, *hdDescriptor.value(), 1,
+                                            1, std::size_t{1280} * 720 * 16)
+                : provider::Result<bloom::render::Rgba32fImage>{
+                      provider::Unavailable{provider::Error::Unavailable, "decode failed"}};
+        check(std::holds_alternative<bloom::render::Rgba32fImage>(converted),
+              "the untagged HD fixture renders under the assumed interpretation");
     }
 }
 // Issue #367: variable cadence, display orientation, interlace and RGB-coded streams.
