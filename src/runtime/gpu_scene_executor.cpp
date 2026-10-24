@@ -90,6 +90,13 @@ GpuSceneExecutorCreateResult GpuSceneExecutor::create(render::GpuDevice& device,
         return {nullptr, makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
                                         pointResample.diagnostic.message)};
     }
+    auto cryptomatteCoverage = render::GpuCryptomatteCoverage::create(
+        device,
+        render::GpuCryptomatteCoverageBudgets{budgets.maxImageBytes, budgets.maxMetadataBytes});
+    if (!cryptomatteCoverage) {
+        return {nullptr, makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
+                                        cryptomatteCoverage.diagnostic.message)};
+    }
     auto impl = std::make_unique<Impl>();
     impl->device = &device;
     impl->deviceEpoch = device.ownershipEpoch();
@@ -103,6 +110,7 @@ GpuSceneExecutorCreateResult GpuSceneExecutor::create(render::GpuDevice& device,
     impl->affine = std::move(affine.affine);
     impl->blend = std::move(blend.blend);
     impl->pointResample = std::move(pointResample.resampler);
+    impl->cryptomatteCoverage = std::move(cryptomatteCoverage.resampler);
     return {std::unique_ptr<GpuSceneExecutor>(new GpuSceneExecutor(std::move(impl))), {}};
 }
 
@@ -258,6 +266,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::begin(std::shared_ptr<const Prepare
                     step.kind == GpuSceneExecutorStepKind::Affine ||
                     step.kind == GpuSceneExecutorStepKind::Blend ||
                     step.kind == GpuSceneExecutorStepKind::PointResample ||
+                    step.kind == GpuSceneExecutorStepKind::CryptomatteCoverage ||
                     step.kind == GpuSceneExecutorStepKind::OcioEffect
                 ? step.outputWindow
                 : step.solidDataWindow;
@@ -357,6 +366,8 @@ GpuSceneExecutorPollResult GpuSceneExecutor::pollOnce() {
                 impl.blend->cancel();
             } else if (impl.nativeKind == Impl::NativeKind::PointResample) {
                 impl.cancelPointResample();
+            } else if (impl.nativeKind == Impl::NativeKind::CryptomatteCoverage) {
+                impl.cancelCryptomatteCoverage();
             } else if (impl.nativeKind == Impl::NativeKind::PathCoverage) {
                 if (impl.pathCoverage != nullptr) {
                     impl.pathCoverage->cancel();
@@ -455,6 +466,8 @@ void GpuSceneExecutor::cancel() noexcept {
             impl_->blend->cancel();
         } else if (impl_->nativeKind == Impl::NativeKind::PointResample) {
             impl_->cancelPointResample();
+        } else if (impl_->nativeKind == Impl::NativeKind::CryptomatteCoverage) {
+            impl_->cancelCryptomatteCoverage();
         } else if (impl_->nativeKind == Impl::NativeKind::PathCoverage) {
             if (impl_->pathCoverage != nullptr) {
                 impl_->pathCoverage->cancel();
@@ -479,6 +492,7 @@ bool GpuSceneExecutor::teardownDrainIncomplete() noexcept {
            render::GpuAffine::teardownDrainIncomplete() ||
            render::GpuBlend::teardownDrainIncomplete() ||
            render::GpuPointResample::teardownDrainIncomplete() ||
+           render::GpuCryptomatteCoverage::teardownDrainIncomplete() ||
            render::GpuPathCoverage::teardownDrainIncomplete() ||
            render::GpuOperationBatch::teardownDrainIncomplete() ||
            render::GpuOcioProgram::teardownDrainIncomplete();

@@ -11,6 +11,7 @@
 #include <bloom/render/gpu_blend.hpp>
 #include <bloom/render/gpu_image_upload.hpp>
 #include <bloom/render/gpu_ocio_program.hpp>
+#include <bloom/render/gpu_cryptomatte_coverage.hpp>
 #include <bloom/render/gpu_point_resample.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 
@@ -144,6 +145,29 @@ diagnosticFromPointResample(const render::GpuPointResampleDiagnostic& diagnostic
 }
 
 [[nodiscard]] inline GpuSceneExecutorDiagnostic
+diagnosticFromCryptomatteCoverage(const render::GpuCryptomatteCoverageDiagnostic& diagnostic) {
+    switch (diagnostic.code) {
+    case render::GpuCryptomatteCoverageDiagnosticCode::OverBudget:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::OverBudget, diagnostic.message);
+    case render::GpuCryptomatteCoverageDiagnosticCode::DeviceLost:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceLost, diagnostic.message);
+    case render::GpuCryptomatteCoverageDiagnosticCode::WrongThread:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::WrongThread, diagnostic.message);
+    case render::GpuCryptomatteCoverageDiagnosticCode::DeviceUnavailable:
+    case render::GpuCryptomatteCoverageDiagnosticCode::AllocationFailed:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
+                              diagnostic.message);
+    case render::GpuCryptomatteCoverageDiagnosticCode::Unsupported:
+    case render::GpuCryptomatteCoverageDiagnosticCode::ShaderRejected:
+    case render::GpuCryptomatteCoverageDiagnosticCode::InvalidArgument:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::Unsupported, diagnostic.message);
+    default:
+        break;
+    }
+    return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DispatchRefused, diagnostic.message);
+}
+
+[[nodiscard]] inline GpuSceneExecutorDiagnostic
 diagnosticFromOcio(const render::GpuOcioProgramDiagnostic& diagnostic) {
     switch (diagnostic.code) {
     case render::GpuOcioProgramDiagnosticCode::OverBudget:
@@ -259,6 +283,21 @@ mapPointResample(const render::GpuPointResamplePollResult result) noexcept {
     case render::GpuPointResamplePollResult::WrongThread:
         return NativePoll::WrongThread;
     case render::GpuPointResamplePollResult::Failure:
+        break;
+    }
+    return NativePoll::Failure;
+}
+
+[[nodiscard]] inline NativePoll
+mapCryptomatteCoverage(const render::GpuCryptomatteCoveragePollResult result) noexcept {
+    switch (result) {
+    case render::GpuCryptomatteCoveragePollResult::Pending:
+        return NativePoll::Pending;
+    case render::GpuCryptomatteCoveragePollResult::Ready:
+        return NativePoll::Ready;
+    case render::GpuCryptomatteCoveragePollResult::WrongThread:
+        return NativePoll::WrongThread;
+    case render::GpuCryptomatteCoveragePollResult::Failure:
         break;
     }
     return NativePoll::Failure;

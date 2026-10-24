@@ -453,6 +453,59 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         return {};
     }
 
+    if (const auto* cryptomatte = std::get_if<GpuSceneCryptomatteCommand>(&command)) {
+        if (const auto plan = planCommand(cryptomatte->input, color);
+            plan.code != GpuSceneExecutorDiagnosticCode::None) {
+            return plan;
+        }
+        if (color[cryptomatte->input] != 2) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                  "a Cryptomatte input was not planned");
+        }
+        const auto inputDescriptor = expectedDescriptorOf(*scene, cryptomatte->input, 0);
+        std::uint64_t stacked = 0;
+        const bool geometryMatches =
+            inputDescriptor.has_value() && cryptomatte->rankCount != 0 &&
+            inputDescriptor->data.extent().width() == cryptomatte->outputWindow.extent().width() &&
+            !(cryptomatte->outputWindow.extent().height() >
+              std::numeric_limits<std::uint64_t>::max() / cryptomatte->rankCount) &&
+            (stacked = static_cast<std::uint64_t>(cryptomatte->outputWindow.extent().height()) *
+                       cryptomatte->rankCount,
+             inputDescriptor->data.extent().height() == stacked);
+        if (!geometryMatches) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "a Cryptomatte command does not stack its rank count");
+        }
+        std::uint64_t bytes = 0;
+        if (!checkedImageBytes(cryptomatte->outputWindow, bytes)) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "a Cryptomatte command has an empty output window");
+        }
+        const auto outputDescriptor = render::Rgba32fImageDescriptor::create(
+            cryptomatte->outputWindow, cryptomatte->displayWindow, cryptomatte->pixelAspect);
+        if (!outputDescriptor) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "a Cryptomatte descriptor is invalid");
+        }
+        GpuSceneExecutorStep step;
+        step.kind = GpuSceneExecutorStepKind::CryptomatteCoverage;
+        step.command = index;
+        step.input = cryptomatte->input;
+        step.cacheKey = key;
+        step.cacheOnComplete = true;
+        step.outputWindow = cryptomatte->outputWindow;
+        step.cryptomatteOutput = *outputDescriptor.value();
+        step.cryptomatteRankCount = cryptomatte->rankCount;
+        step.cryptomatteIds = cryptomatte->ids;
+        steps.push_back(std::move(step));
+        color[index] = 2;
+        return {};
+    }
+
     if (const auto* merge = std::get_if<GpuSceneMergeCommand>(&command)) {
         std::uint64_t bytes = 0;
         if (!checkedImageBytes(merge->outputWindow, bytes)) {

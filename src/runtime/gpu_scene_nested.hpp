@@ -145,7 +145,7 @@ struct GpuSceneNestedResult final {
 // fail the build rather than let a splice silently skip remapping or resident-byte accounting for a
 // new input-bearing command.
 template <typename> inline constexpr bool kNestedCommandUnhandled = false;
-static_assert(std::variant_size_v<GpuSceneCommand> == 10,
+static_assert(std::variant_size_v<GpuSceneCommand> == 11,
               "GpuSceneCommand gained an alternative; add its nested reference remapping and "
               "resident-byte accounting to gpu_scene_nested");
 
@@ -160,6 +160,7 @@ inline void offsetNestedCommandReferences(GpuSceneCommand& command,
                           std::is_same_v<T, GpuSceneAffineCommand> ||
                           std::is_same_v<T, GpuSceneOcioEffectCommand> ||
                           std::is_same_v<T, GpuScenePointResampleCommand> ||
+                          std::is_same_v<T, GpuSceneCryptomatteCommand> ||
                           std::is_same_v<T, GpuSceneCompositionOutputCommand>) {
                 // The OCIO ProcessEffect, the point-resample gather, and the composition output are
                 // input-bearing: their resident input is the upstream command, so the splice must
@@ -251,7 +252,8 @@ inline void addWindowBytes(std::uint64_t& total, const render::ImageWindow windo
                                      std::is_same_v<T, GpuSceneBlendCommand> ||
                                      std::is_same_v<T, GpuSceneCompositionOutputCommand> ||
                                      std::is_same_v<T, GpuSceneOcioEffectCommand> ||
-                                     std::is_same_v<T, GpuScenePointResampleCommand>) {
+                                     std::is_same_v<T, GpuScenePointResampleCommand> ||
+                                     std::is_same_v<T, GpuSceneCryptomatteCommand>) {
                     // GPU-transient output: allocated at executor time under the live-pin ledger,
                     // not retained by scene preparation. The OCIO effect's program resources and
                     // the point-resample axis metadata are accounted by the executor/cache ledger,

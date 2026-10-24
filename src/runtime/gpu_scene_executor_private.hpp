@@ -17,6 +17,7 @@
 #include <bloom/render/gpu_ocio_program.hpp>
 #include <bloom/render/gpu_operation_batch.hpp>
 #include <bloom/render/gpu_path_coverage.hpp>
+#include <bloom/render/gpu_cryptomatte_coverage.hpp>
 #include <bloom/render/gpu_point_resample.hpp>
 #include <bloom/render/path_raster.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
@@ -64,6 +65,9 @@ enum class GpuSceneExecutorStepKind : std::uint8_t {
     // into a proxy output. The host prepares only the O(width+height) axis maps; the pixels stay on
     // the device.
     PointResample,
+    // GpuCryptomatteCoverage::begin (#364): one CryptomatteCoverageV1 pass over a resident stack of
+    // rank pairs; the selected IDs are the only host metadata.
+    CryptomatteCoverage,
 };
 
 // One native step. `command` is the scene command this step completes (kInvalid for an intermediate
@@ -128,6 +132,11 @@ struct GpuSceneExecutorStep final {
     // display window and pixel aspect), held as an optional because ImageWindow and
     // Rgba32fImageDescriptor have no public default constructor.
     std::optional<render::Rgba32fImageDescriptor> pointResampleOutput;
+    // CryptomatteCoverageV1: `input` is the resident rank stack; the output descriptor, rank count
+    // and selected IDs come from the scene command.
+    std::optional<render::Rgba32fImageDescriptor> cryptomatteOutput;
+    std::uint32_t cryptomatteRankCount = 0;
+    std::vector<std::uint32_t> cryptomatteIds;
 };
 
 namespace gpu_scene_executor_detail {
@@ -188,6 +197,9 @@ inline const std::string kEmptyCommandKey;
     if (const auto* resample = std::get_if<GpuScenePointResampleCommand>(&command)) {
         return resample->semanticKey;
     }
+    if (const auto* cryptomatte = std::get_if<GpuSceneCryptomatteCommand>(&command)) {
+        return cryptomatte->semanticKey;
+    }
     return kEmptyCommandKey;
 }
 
@@ -197,6 +209,8 @@ inline constexpr std::string_view kAffineArtifactToken = "affine-bilinear-v1";
 // The single PointResampleV1 artifact token. PointResample has one shader, so its effective pin is
 // fixed.
 inline constexpr std::string_view kPointResampleArtifactToken = "point-resample-v1";
+// The single CryptomatteCoverageV1 artifact token.
+inline constexpr std::string_view kCryptomatteCoverageArtifactToken = "cryptomatte-coverage-v1";
 
 [[nodiscard]] inline bool affineFieldsFinite(const GpuSceneAffineCommand& affine) noexcept {
     return std::isfinite(affine.matrix.a) && std::isfinite(affine.matrix.b) &&
@@ -236,6 +250,14 @@ pointResampleFieldsValid(const GpuScenePointResampleCommand& resample) noexcept 
             resample->inputKey, resample->sourceWindow, resample->outputWindow,
             resample->displayWindow, resample->horizontalScale, resample->verticalScale,
             resample->pixelAspect, std::string{kPointResampleArtifactToken});
+    }
+    if (const auto* cryptomatte = std::get_if<GpuSceneCryptomatteCommand>(&command)) {
+        if (cryptomatte->rankCount == 0)
+            return {};
+        return makeGpuSceneCryptomatteSemanticKey(
+            cryptomatte->inputKey, cryptomatte->rankCount, cryptomatte->ids,
+            cryptomatte->outputWindow, cryptomatte->displayWindow, cryptomatte->pixelAspect,
+            std::string{kCryptomatteCoverageArtifactToken});
     }
     if (std::get_if<GpuSceneBlendCommand>(&command) != nullptr) {
         return {};
@@ -343,6 +365,11 @@ descriptorMatches(const GpuSceneCommand& command, const render::GpuImage& image,
                windowsEqual(image.displayWindow(), resample->displayWindow) &&
                image.pixelAspect() == resample->pixelAspect;
     }
+    if (const auto* cryptomatte = std::get_if<GpuSceneCryptomatteCommand>(&command)) {
+        return windowsEqual(image.dataWindow(), cryptomatte->outputWindow) &&
+               windowsEqual(image.displayWindow(), cryptomatte->displayWindow) &&
+               image.pixelAspect() == cryptomatte->pixelAspect;
+    }
     return false;
 }
 
@@ -397,7 +424,8 @@ expectedDescriptorOf(const PreparedGpuScene& scene, const GpuSceneCommandIndex i
                                            backdrop->pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuSceneOcioEffectCommand> ||
                                  std::is_same_v<T, GpuSceneMergeCommand> ||
-                                 std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
+                                 std::is_same_v<T, GpuSceneCoverageSolidCommand> ||
+                                 std::is_same_v<T, GpuSceneCryptomatteCommand>) {
                 return SceneDescriptorInfo{item.outputWindow, item.displayWindow, item.pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuScenePointResampleCommand>) {
                 const auto source = expectedDescriptorOf(scene, item.input, depth + 1);
@@ -450,6 +478,8 @@ struct GpuSceneExecutor::Impl final {
     std::unique_ptr<render::GpuAffine> affine;
     std::unique_ptr<render::GpuBlend> blend;
     std::unique_ptr<render::GpuPointResample> pointResample;
+    // #364: created lazily on the owner thread the first time a Cryptomatte step runs.
+    std::unique_ptr<render::GpuCryptomatteCoverage> cryptomatteCoverage;
     std::unique_ptr<render::GpuOperationBatch> operationBatch;
     bool batchAttempted = false;
     std::size_t batchStepCount = 0;
@@ -487,6 +517,7 @@ struct GpuSceneExecutor::Impl final {
         Blend,
         Ocio,
         PointResample,
+        CryptomatteCoverage,
         PathCoverage,
         Batch,
     };
@@ -547,6 +578,14 @@ struct GpuSceneExecutor::Impl final {
     [[nodiscard]] bool pointResampleCancelled() const noexcept;
     void cancelPointResample() noexcept;
     void discardPointResampleOutput() noexcept;
+    // CryptomatteCoverageV1 execution, kept in gpu_scene_executor_cryptomatte.cpp (#364).
+    [[nodiscard]] GpuSceneExecutorDiagnostic
+    startCryptomatteCoverageStep(const GpuSceneExecutorStep& step);
+    [[nodiscard]] std::optional<render::GpuImage> takeCryptomatteCoverageOutput();
+    [[nodiscard]] bool cryptomatteCoverageDeviceLost() const noexcept;
+    [[nodiscard]] bool cryptomatteCoverageCancelled() const noexcept;
+    void cancelCryptomatteCoverage() noexcept;
+    void discardCryptomatteCoverageOutput() noexcept;
 
     // OCIO-specific execution, kept in gpu_scene_executor_ocio.cpp so this translation unit stays
     // cohesive. `acquireOcioProgram` returns the retained native program for the command identity,

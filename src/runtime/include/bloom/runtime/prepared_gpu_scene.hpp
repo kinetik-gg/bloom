@@ -365,11 +365,28 @@ struct GpuScenePointResampleCommand final {
     std::string semanticKey;
 };
 
+// #364: one CryptomatteCoverageV1 pass. `input` is the uploaded stack of `rankCount` rank-pair
+// images (R = ID bits, G = coverage) of `outputWindow`'s extent; the output is the premultiplied
+// white coverage of the selected `ids` over `outputWindow` (the anchor source's data window) with
+// `displayWindow` and `pixelAspect` preserved. Bit-exact with the CPU reference.
+struct GpuSceneCryptomatteCommand final {
+    GpuSceneCommandIndex index = kInvalidGpuSceneCommand;
+    OperationIndex sourceOperation = OperationIndex::fromRaw(0);
+    GpuSceneCommandIndex input = kInvalidGpuSceneCommand;
+    std::string inputKey;
+    std::uint32_t rankCount = 0;
+    std::vector<std::uint32_t> ids;
+    render::ImageWindow outputWindow;
+    render::ImageWindow displayWindow;
+    core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
+    std::string semanticKey;
+};
+
 using GpuSceneCommand =
     std::variant<GpuSceneSolidCommand, GpuSceneTranslationCommand, GpuSceneCoverageSolidCommand,
                  GpuSceneUploadCommand, GpuSceneMergeCommand, GpuSceneCompositionOutputCommand,
                  GpuSceneAffineCommand, GpuSceneBlendCommand, GpuSceneOcioEffectCommand,
-                 GpuScenePointResampleCommand>;
+                 GpuScenePointResampleCommand, GpuSceneCryptomatteCommand>;
 
 // Canonical, construction-time semantic key builders. Producer code (the scene builder / graph
 // worker) must call these rather than hand-format a key, so two independent producers agree and a
@@ -516,6 +533,30 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
     gpu_scene_key_detail::appendSemanticDouble(key, horizontalScale);
     key.append("|sy=");
     gpu_scene_key_detail::appendSemanticDouble(key, verticalScale);
+    gpu_scene_key_detail::appendSemanticPixelAspect(key, pixelAspect);
+    key.append("|artifact=");
+    key.append(artifactDigest);
+    return key;
+}
+
+// Effective scene key for one CryptomatteCoverageV1 command: the input key, rank count, the selected
+// IDs in order, the output geometry and the artifact token.
+[[nodiscard]] inline std::string makeGpuSceneCryptomatteSemanticKey(
+    const std::string& inputKey, const std::uint32_t rankCount,
+    const std::vector<std::uint32_t>& ids, const render::ImageWindow& outputWindow,
+    const render::ImageWindow& displayWindow, const core::PixelAspectRatio& pixelAspect,
+    const std::string& artifactDigest) {
+    std::string key = "cryptomatte-coverage-v1|in=";
+    key.append(inputKey);
+    key.append("|ranks=");
+    key.append(std::to_string(rankCount));
+    key.append("|ids=");
+    for (const auto id : ids) {
+        key.append(std::to_string(id));
+        key.push_back(',');
+    }
+    gpu_scene_key_detail::appendSemanticWindow(key, outputWindow);
+    gpu_scene_key_detail::appendSemanticWindow(key, displayWindow);
     gpu_scene_key_detail::appendSemanticPixelAspect(key, pixelAspect);
     key.append("|artifact=");
     key.append(artifactDigest);

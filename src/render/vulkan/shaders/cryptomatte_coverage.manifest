@@ -1,0 +1,38 @@
+{
+  "schema": "bloom.gpu.shader.manifest.v1",
+  "generator": "tools/gpu-shaders compile/validate/embed recipe (reused, not reimplemented)",
+  "generatorRevision": 1,
+  "operation": "CryptomatteCoverageV1",
+  "entrypoint": "main",
+  "shader": {
+    "language": "GLSL_460",
+    "stage": "compute",
+    "sha256": "975fe9283fa50131f6426c45c2f7b2a8321c1abc5259ce0e0bba3f0ac313023f",
+    "spirvSha256": "9615f46f2d6bf232eed47584c8bf7366a35c8044f8dd30c591302c26362d652a",
+    "localSizeX": 256,
+    "localSizeY": 1,
+    "localSizeZ": 1
+  },
+  "bindings": [
+    {"set": 0, "binding": 0, "kind": "storage-image", "access": "readonly", "format": "rgba32f",
+     "role": "stacked-cryptomatte-rank-pairs (R = ID bits, G = coverage)"},
+    {"set": 0, "binding": 1, "kind": "storage-image", "access": "writeonly", "format": "rgba32f",
+     "role": "premultiplied-white-coverage-mask"},
+    {"set": 0, "binding": 2, "kind": "storage-buffer", "access": "readonly", "element": "uint",
+     "role": "selected-cryptomatte-ids", "layout": "ids[max(1, idCount)]"}
+  ],
+  "pushConstant": {
+    "byteCount": 16,
+    "fields": [
+      {"name": "outputWidth", "type": "uint32"},
+      {"name": "outputHeight", "type": "uint32"},
+      {"name": "rankCount", "type": "uint32"},
+      {"name": "idCount", "type": "uint32"}
+    ]
+  },
+  "contracts": {
+    "numeric": "bit-exact against the Cryptomatte CPU reference (src/runtime/cryptomatte.cpp): in rank order c = clamp(c + (ID bits selected ? coverage : 0), 0, 1) in binary32, then (c, c, c, c)",
+    "idIdentity": "IDs are compared as exact uint32 bits (floatBitsToUint); the host upload carries the source float bits unchanged",
+    "cpuFallback": "an invalid geometry, a device-limit or budget refusal, a foreign device, or a wrong thread fails closed with an explicit diagnostic; no silent CPU substitution"
+  }
+}

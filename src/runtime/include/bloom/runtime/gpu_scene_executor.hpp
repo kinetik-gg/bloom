@@ -142,6 +142,8 @@ struct GpuSceneExecutorCounters final {
     // One PointResampleV1 dispatch. A warm scene whose resample output is already cached runs zero
     // of these.
     std::uint64_t pointResampleDispatches = 0;
+    // #364: CryptomatteCoverageV1 dispatches (zero on a warm cached matte).
+    std::uint64_t cryptomatteDispatches = 0;
     // Bounded OCIO native-program cache: creations, warm reuses, evictions, and refusals.
     std::uint64_t ocioProgramCreations = 0;
     std::uint64_t ocioProgramReuses = 0;

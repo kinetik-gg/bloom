@@ -81,7 +81,8 @@ bool GpuSceneExecutor::Impl::hasUnretiredNative() const noexcept {
     const bool affineUnretired = affine != nullptr && affine->hasUnretiredSubmission();
     const bool blendUnretired = blend != nullptr && blend->hasUnretiredSubmission();
     const bool pointResampleUnretired =
-        pointResample != nullptr && pointResample->hasUnretiredSubmission();
+        (pointResample != nullptr && pointResample->hasUnretiredSubmission()) ||
+        (cryptomatteCoverage != nullptr && cryptomatteCoverage->hasUnretiredSubmission());
     const bool coverageUnretired =
         pathCoverage != nullptr && pathCoverage->hasUnretiredSubmission();
     return solidUnretired || compositeUnretired || uploadUnretired || affineUnretired ||
@@ -229,6 +230,8 @@ void GpuSceneExecutor::Impl::advanceDrain() noexcept {
         static_cast<void>(blend->poll());
     } else if (nativeKind == NativeKind::PointResample && pointResample != nullptr) {
         static_cast<void>(pointResample->poll());
+    } else if (nativeKind == NativeKind::CryptomatteCoverage && cryptomatteCoverage != nullptr) {
+        static_cast<void>(cryptomatteCoverage->poll());
     } else if (nativeKind == NativeKind::PathCoverage && pathCoverage != nullptr) {
         static_cast<void>(pathCoverage->poll());
     } else if (nativeKind == NativeKind::Ocio) {
@@ -403,6 +406,13 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
         }
         break;
     }
+    case GpuSceneExecutorStepKind::CryptomatteCoverage: {
+        const auto cryptomatteDiagnostic = startCryptomatteCoverageStep(step);
+        if (cryptomatteDiagnostic.code != GpuSceneExecutorDiagnosticCode::None) {
+            return cryptomatteDiagnostic;
+        }
+        break;
+    }
     case GpuSceneExecutorStepKind::PathCoverage: {
         // The native coverage producer is started from startCoveredStep, never as its own planned
         // step; a plan carrying it is malformed.
@@ -424,6 +434,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
         nativeKind = NativeKind::Blend;
     } else if (step.kind == GpuSceneExecutorStepKind::PointResample) {
         nativeKind = NativeKind::PointResample;
+    } else if (step.kind == GpuSceneExecutorStepKind::CryptomatteCoverage) {
+        nativeKind = NativeKind::CryptomatteCoverage;
     } else if (step.kind == GpuSceneExecutorStepKind::OcioEffect) {
         nativeKind = NativeKind::Ocio;
     } else {
@@ -458,6 +470,7 @@ GpuSceneExecutor::Impl::~Impl() {
     affine.reset();
     blend.reset();
     pointResample.reset();
+    cryptomatteCoverage.reset();
     solid.reset();
     composite.reset();
     // The producer is destroyed last: a consuming fill's release above has already drained or

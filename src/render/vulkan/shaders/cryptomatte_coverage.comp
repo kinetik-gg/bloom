@@ -1,0 +1,59 @@
+#version 460
+// Bloom CryptomatteCoverageV1 compute shader (#364). Offline-generated/embedded; do not edit at
+// runtime.
+//
+// Reproduces the Cryptomatte CPU reference (src/runtime/cryptomatte.cpp
+// accumulateCryptomatteCoverage) bit for bit. The source stacks the rank pairs of one layer
+// vertically: rank r occupies rows [r * outputHeight, (r + 1) * outputHeight), with R = the ID's
+// exact float bits and G = its coverage. For every output pixel, in rank order:
+//   c = 0
+//   c = clamp(c + (floatBitsToUint(rank.r) is a selected ID ? rank.g : 0), 0, 1)
+// and the output stores (c, c, c, c): the premultiplied white Mask (ADR 0028). Only bit
+// comparisons, one binary32 add per rank and a clamp occur, so no contraction or rounding differs
+// from the CPU.
+//
+// 2D FLATTENED DISPATCH, as PointResampleV1: the output pixel space is flattened row-major into
+// 256-wide workgroups; invocations past the pixel count return immediately.
+//
+// Binding 2 layout: uint ids[max(1, idCount)], the selected Cryptomatte IDs.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D bloom_crypto_ranks;
+layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D bloom_crypto_output;
+layout(set = 0, binding = 2, std430) readonly buffer BloomCryptoIds {
+    uint ids[];
+} bloom_crypto_ids;
+
+layout(push_constant) uniform BloomCryptoPushConstants {
+    uint outputWidth;
+    uint outputHeight;
+    uint rankCount;
+    uint idCount;
+} bloom_crypto_push;
+
+void main()
+{
+    uvec2 invocation = gl_GlobalInvocationID.xy;
+    uint linear = invocation.y * (gl_NumWorkGroups.x * 256u) + invocation.x;
+    uint total = bloom_crypto_push.outputWidth * bloom_crypto_push.outputHeight;
+    if (linear >= total) {
+        return;
+    }
+    uint column = linear % bloom_crypto_push.outputWidth;
+    uint row = linear / bloom_crypto_push.outputWidth;
+    precise float coverage = 0.0;
+    for (uint rank = 0u; rank < bloom_crypto_push.rankCount; ++rank) {
+        vec4 pair = imageLoad(bloom_crypto_ranks,
+                              ivec2(column, row + rank * bloom_crypto_push.outputHeight));
+        uint id = floatBitsToUint(pair.r);
+        bool selected = false;
+        for (uint index = 0u; index < bloom_crypto_push.idCount; ++index) {
+            if (bloom_crypto_ids.ids[index] == id) {
+                selected = true;
+            }
+        }
+        precise float sum = coverage + (selected ? pair.g : 0.0);
+        coverage = clamp(sum, 0.0, 1.0);
+    }
+    imageStore(bloom_crypto_output, ivec2(column, row), vec4(coverage));
+}

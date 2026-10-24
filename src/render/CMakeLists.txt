@@ -620,6 +620,86 @@ else()
         "point_resample.comp digest is still enforced.")
 endif()
 
+# --- Fixed CryptomatteCoverageV1 shader: source pin and regeneration check -----------------------------
+#
+# Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe. The checked-in
+# .comp is pinned here, the manifest must bind that source digest, and, when the locked
+# glslangValidator/spirv-val are present, configure recompiles it and confirms the SPIR-V digest
+# embedded in cryptomatte_coverage_spirv.inc. Runtime code never compiles or loads a shader.
+set(BLOOM_CRYPTOMATTE_COVERAGE_COMP
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/cryptomatte_coverage.comp")
+set(BLOOM_CRYPTOMATTE_COVERAGE_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/cryptomatte_coverage.manifest")
+set(BLOOM_CRYPTOMATTE_COVERAGE_INC
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/cryptomatte_coverage_spirv.inc")
+set(BLOOM_CRYPTOMATTE_COVERAGE_COMP_SHA256
+    "975fe9283fa50131f6426c45c2f7b2a8321c1abc5259ce0e0bba3f0ac313023f")
+set(BLOOM_CRYPTOMATTE_COVERAGE_SPV_SHA256
+    "9615f46f2d6bf232eed47584c8bf7366a35c8044f8dd30c591302c26362d652a")
+
+file(SHA256 "${BLOOM_CRYPTOMATTE_COVERAGE_COMP}" bloom_cryptomatte_coverage_comp_sha256)
+if(NOT bloom_cryptomatte_coverage_comp_sha256 STREQUAL BLOOM_CRYPTOMATTE_COVERAGE_COMP_SHA256)
+    message(FATAL_ERROR
+        "cryptomatte_coverage.comp SHA-256 mismatch: measured ${bloom_cryptomatte_coverage_comp_sha256}, "
+        "pinned ${BLOOM_CRYPTOMATTE_COVERAGE_COMP_SHA256}. Regenerate only through the tools/gpu-shaders "
+        "recipe and update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_CRYPTOMATTE_COVERAGE_MANIFEST}" bloom_cryptomatte_coverage_manifest_text)
+if(NOT bloom_cryptomatte_coverage_manifest_text MATCHES "${BLOOM_CRYPTOMATTE_COVERAGE_COMP_SHA256}")
+    message(FATAL_ERROR
+        "cryptomatte_coverage.manifest does not bind the pinned cryptomatte_coverage.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_cryptomatte_coverage_generated_spv
+        "${CMAKE_CURRENT_BINARY_DIR}/cryptomatte_coverage.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_CRYPTOMATTE_COVERAGE_COMP}" -o "${bloom_cryptomatte_coverage_generated_spv}"
+        RESULT_VARIABLE bloom_cryptomatte_coverage_glslang_result)
+    if(NOT bloom_cryptomatte_coverage_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile cryptomatte_coverage.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2
+                "${bloom_cryptomatte_coverage_generated_spv}"
+        RESULT_VARIABLE bloom_cryptomatte_coverage_spirv_val_result)
+    if(NOT bloom_cryptomatte_coverage_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated CryptomatteCoverageV1 SPIR-V.")
+    endif()
+    if(BLOOM_SPIRV_DIS)
+        set(bloom_cryptomatte_coverage_generated_spvasm
+            "${CMAKE_CURRENT_BINARY_DIR}/cryptomatte_coverage.generated.spvasm")
+        execute_process(
+            COMMAND "${BLOOM_SPIRV_DIS}" "${bloom_cryptomatte_coverage_generated_spv}" -o
+                    "${bloom_cryptomatte_coverage_generated_spvasm}"
+            RESULT_VARIABLE bloom_cryptomatte_coverage_spirv_dis_result)
+        if(NOT bloom_cryptomatte_coverage_spirv_dis_result EQUAL 0)
+            message(FATAL_ERROR "spirv-dis failed to disassemble the CryptomatteCoverageV1 SPIR-V.")
+        endif()
+        file(READ "${bloom_cryptomatte_coverage_generated_spvasm}" bloom_cryptomatte_coverage_spvasm_text)
+        if(bloom_cryptomatte_coverage_spvasm_text MATCHES "OpCapability Float64" OR
+           bloom_cryptomatte_coverage_spvasm_text MATCHES "OpCapability Int64" OR
+           bloom_cryptomatte_coverage_spvasm_text MATCHES "OpTypeFloat 64" OR
+           bloom_cryptomatte_coverage_spvasm_text MATCHES "OpTypeInt 64")
+            message(FATAL_ERROR
+                "the CryptomatteCoverageV1 SPIR-V declares a forbidden Float64/Int64 capability or "
+                "type; it must run on standard Float32 hardware without shaderFloat64.")
+        endif()
+    endif()
+    file(SHA256 "${bloom_cryptomatte_coverage_generated_spv}" bloom_cryptomatte_coverage_spv_sha256)
+    if(NOT bloom_cryptomatte_coverage_spv_sha256 STREQUAL BLOOM_CRYPTOMATTE_COVERAGE_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated CryptomatteCoverageV1 SPIR-V SHA-256 ${bloom_cryptomatte_coverage_spv_sha256} does "
+            "not match the embedded ${BLOOM_CRYPTOMATTE_COVERAGE_SPV_SHA256}; the checked-in .comp and "
+            "cryptomatte_coverage_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: cryptomatte_coverage.comp regenerated, SPIR-V-validated, and "
+        "capability-checked (${bloom_cryptomatte_coverage_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "cryptomatte_coverage.comp digest is still enforced.")
+endif()
+
 # --- Fixed BlendV1 shader: source pin and regeneration check -------------------------------------
 #
 # Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe. The checked-in
@@ -1098,6 +1178,7 @@ target_sources(
             include/bloom/render/ocio_gpu_program.hpp
             include/bloom/render/gpu_presentation_target.hpp
             include/bloom/render/gpu_point_resample.hpp
+            include/bloom/render/gpu_cryptomatte_coverage.hpp
             include/bloom/render/gpu_presentation_types.hpp
             include/bloom/render/gpu_process_readback.hpp
             include/bloom/render/gpu_resident_display.hpp
@@ -1171,6 +1252,9 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_point_resample.cpp
         vulkan/gpu_point_resample_private.hpp
         vulkan/gpu_point_resample_resources.cpp
+        vulkan/gpu_cryptomatte_coverage.cpp
+        vulkan/gpu_cryptomatte_coverage_private.hpp
+        vulkan/gpu_cryptomatte_coverage_resources.cpp
         vulkan/gpu_present_image.cpp
         vulkan/gpu_present_image_private.hpp
         vulkan/gpu_present_image_resources.cpp
@@ -1210,6 +1294,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/shaders/point_resample.comp
         vulkan/shaders/point_resample.manifest
         vulkan/shaders/point_resample_spirv.inc
+        vulkan/shaders/cryptomatte_coverage_spirv.inc
         vulkan/shaders/solid_covered.comp
         vulkan/shaders/solid_covered.manifest
         vulkan/shaders/solid_covered_spirv.inc
@@ -1240,6 +1325,7 @@ else()
                                      gpu_display_transfer_stub.cpp
                                      gpu_image_upload_stub.cpp gpu_neutral_display_stub.cpp
                                      gpu_point_resample_stub.cpp
+                                     gpu_cryptomatte_coverage_stub.cpp
                                      gpu_ocio_program_stub.cpp
                                      gpu_output_color_readback_stub.cpp
                                      gpu_present_image_stub.cpp gpu_presentation_target_stub.cpp
