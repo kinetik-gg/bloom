@@ -197,6 +197,38 @@ These are new compiled operations. Each is GPU-required under
 
 The document schema step for this record is minor 1.26 (timeline-masking 1.24, video-io 1.25).
 
+## Implementation notes (#363, 2026-10-24)
+
+These record how the implementation realises the decision where it differs in mechanism. Each is
+open to owner review; none changes a rendered or exported pixel the decision defines.
+
+- **Channel algebra compiles away.** Remove, Channel Copy and a Shuffle's channel output touch no
+  pixels, so they compile into a symbolic `CompiledChannelExpression` resolved against the probed
+  parts at evaluation, not into separate compiled operations. The one pixel operation is
+  `CompiledChannelShuffle`, which the GPU coverage contract requires; the Remove and Channel Copy
+  node fixtures run through it with native parity.
+- **GPU representation.** Instead of resident `rgba32f` lane groups, host preparation gathers the
+  mapped source channels into one raw RGBA upload (decode layout only: source samples, constants,
+  zero outside a channel's window), and the proxy PointResampleV1 gather and the Colour mapping's
+  OCIO pass run on the GPU, exactly as for an Image source. Only the four mapped channels are
+  decoded and uploaded.
+- **Shuffle controls.** The RGB triple shares one mode (`Colour` or `Raw`, default `Colour`); alpha
+  is never colour converted. `associated` (default on) says the mapped RGB is premultiplied by the
+  mapped alpha. A `layer` parameter names the Shuffle's channel output (`<layer>.R/G/B/A`).
+- **Names.** The Remove node is shown as "Select Channels" because it keeps or drops by pattern;
+  its type id is `bloom.channel-remove`.
+- **Caching.** Channel sets are not a separate cache entry: the Shuffle's raw gather is cached as
+  a GPU upload under the source decode identities and mapping, and its CPU result is memoised by
+  the evaluator's operation cache with the colour interpretation.
+- **Composition Output.** The `channels` input and `layers` parameter are optional, so the output
+  node keeps schema 1; `SetNodeParameterValue` binds an optional parameter on its first edit, which
+  also lets a migrated Image source v1 gain `part` and `layer`.
+- **Layered EXR.** Channel layers use the preset's compression and are placed untransformed on the
+  final data window in source pixel coordinates.
+- **Stills.** PNG and JPEG provide a channel set of their decoded R, G, B (and A) (owner,
+  2026-10-24).
+- **Migration.** The 1.26 step is chained from 1.24 until the video I/O 1.25 step is merged.
+
 ## Related
 
 - [`../architecture/evaluation-primitives.md`](../architecture/evaluation-primitives.md)

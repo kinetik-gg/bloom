@@ -8,6 +8,7 @@
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/media/audio/audio.hpp>
+#include <bloom/media/image.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -58,6 +59,11 @@ class AssetController final : public QObject {
     [[nodiscard]] QString inputColorSpaceDisplay(document::AssetId id) const;
     [[nodiscard]] QString inputColorSpaceWarning(document::AssetId id) const;
     void requestInputColorSpaces();
+    // ADR 0026: the part and layer pickers read the image probe through this worker (identity
+    // verified, header only). The asset record persists no part list; the result is session
+    // state keyed by the asset's content digest. changed() is emitted when it arrives.
+    void requestImageParts(document::AssetId id);
+    [[nodiscard]] const std::vector<media::ImagePartInfo>* imageParts(document::AssetId id) const;
     [[nodiscard]] const std::vector<color::OcioColorSpaceInfo>* inputColorSpaces() const noexcept;
     [[nodiscard]] QString inputColorCatalogDiagnostic() const;
     [[nodiscard]] std::shared_ptr<const media::audio::WaveformSummary>
@@ -141,6 +147,12 @@ class AssetController final : public QObject {
     runtime::TaskHandle<std::shared_ptr<Thumbnails>> preview_;
     runtime::TaskHandle<std::shared_ptr<InputColorCatalog>> inputColorCatalogTask_;
     std::shared_ptr<InputColorCatalog> inputColorCatalog_;
+    struct ImageParts final {
+        core::Sha256Digest digest;
+        std::vector<media::ImagePartInfo> parts;
+    };
+    std::map<document::AssetId, ImageParts> imageParts_;
+    std::map<document::AssetId, runtime::TaskHandle<std::shared_ptr<ImageParts>>> imagePartTasks_;
     std::optional<document::ColorSettings> inputColorCatalogRequestedSettings_;
     std::string inputColorCatalogRequestedWorking_;
     bool inputColorCatalogPending_ = false;

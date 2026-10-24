@@ -139,8 +139,9 @@ Absent providers produce `adapter.unavailable`.
 
 A preset version participates in analysis, semantic output identity, verification, and
 reproducibility.
-Adding half-float EXR, arbitrary channels, tiled or multipart EXR, non-square PNG, or video requires
-another declared preset rather than changing version 1 silently.
+Adding half-float RGBA EXR, tiled or multipart EXR, non-square PNG, or video requires another
+declared preset rather than changing version 1 silently. The layered channel-layer variant below
+(ADR 0026 §7) adds named channels beside the unchanged RGBA and folds them into the identity.
 
 A frame RANGE export needs no new preset, and adds none: it is one complete publication per frame
 through these same presets, each frame evaluated at its own exact time and approved through its own
@@ -759,6 +760,22 @@ including signed zero and finite negative/HDR values where the process contract 
 Version 1 does not claim arbitrary channels, subsampling, half precision, tiled, multipart, deep,
 display-referred, or ACES-container output. Unsupported source channels or semantics remain visible
 in the report and are never folded into RGBA implicitly.
+
+**Layered channel layers (ADR 0026 §7).** When the Composition Output's optional `channels` input is
+connected, the flat EXR also writes the selected channel layers beside RGBA in the same scanline
+part. The output's `layers` parameter names the layers (comma separated; empty writes every layer),
+and channels named `R`, `G`, `B` or `A` belong to the composited root and are never written as
+layers. Each layer channel keeps its name and source sample kind (`HALF`, `FLOAT` or `UINT`) and
+uses the preset's compression. The export attempt assembles the layers on the host at the codec
+boundary: the source samples of each selected channel are placed on the final data window, untransformed
+in source pixel coordinates, with zero outside the channel's own window; layer transforms, proxies
+and filters never apply to them. The export fails with a typed diagnostic when a layer source is
+unavailable. The channel list then joins the `channels` attribute: `A`, `B`, `G`, `R` stay `FLOAT`
+and every other entry must be exactly one expected layer channel of its expected type. Reopen
+verification compares every layer sample with what was written (float and uint bit for bit, half
+through the writer's float-to-half rounding) and appends the SHA-256 of the reopened layers (names,
+sample kinds and decoded bits) to the kind-2 semantic identity; a file without layers keeps the
+unchanged flat identity.
 
 Verification reopens the staged EXR and checks part count/type, channel names/types/sampling,
 data/display windows, pixel aspect, compression, line order, `colorInteropID`, chromaticities, and

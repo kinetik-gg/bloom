@@ -1639,6 +1639,15 @@ bool CompositionSession::appendParameterEdit(commands::Transaction& transaction,
     return true;
 }
 
+bool CompositionSession::setNodeParameterValue(const document::NodeId nodeId, std::string role,
+                                               document::ParameterValue value,
+                                               const QString& commandLabel) {
+    commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
+    transaction.emplace<commands::SetNodeParameterValue>(compositionId_, nodeId, std::move(role),
+                                                         std::move(value));
+    return executeTransaction(std::move(transaction)).succeeded();
+}
+
 bool CompositionSession::setParameterValue(const document::ParameterId parameterId,
                                            document::ParameterValue value,
                                            const QString& commandLabel) {

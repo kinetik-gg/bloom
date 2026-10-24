@@ -1077,3 +1077,41 @@ That harness and the required coverage gate must run on a device before claiming
 Gaussian Blur and Box Blur share the CPU/GPU kernel, explicit data-window halo and edge policy
 defined in [Image Filters](image-filters.md). Unlike pointwise colour kernels, they filter associated
 RGBA and may expand the data window. Preview and final rendering use the same production scene path.
+
+## Channel sets and Shuffle
+
+ADR 0026 advances compiled-plan semantics to **10** and CPU evaluator semantics to **11**. Existing
+plans evaluate unchanged; only their version-bearing identities change.
+
+- *Channel algebra compiles away.* An Image source's `channels` output, Remove (shown as "Select
+  Channels"), Channel Copy and a Shuffle's own `channels` output touch no pixels, so the compiler
+  folds them into a `CompiledChannelExpression`: the referenced sources (asset, start frame, loop,
+  part, input interpretation) and topologically ordered steps (Source, Remove by pattern with
+  `keep`, Copy by pattern where a copied channel replaces a same-named one, and Rename into
+  `<layer>.R/G/B/A`). Patterns are comma-separated names, layer names, `*`/`?` globs or `@role`
+  tokens (`color`, `alpha`, `luminance`, `depth`, `normal`, `motion`, `position`, `uv`, `id`,
+  `coverage`, `data`). An Image source whose colour `image` output feeds nothing compiles no image
+  operation.
+- *Shuffle is the pixel operation.* `CompiledChannelShuffle` holds the expression, four slots (a
+  resolved channel name or the constants `0` and `1`), a mode and `associated`. At evaluation the
+  expression is resolved against the identity-verified probes (host parameter resolution shared by
+  the CPU evaluator, GPU preparation, the Viewer listing and layered output). The gather reads only
+  the named channels of each contributing source into one RGBA image in the anchor source's frame
+  (the first slot reading a source): the data window is the union of the contributing channels'
+  windows, and a sample outside a channel's own window is an explicit zero. The process contract
+  then applies as for OpenEXR ingest: non-finite components become 0, alpha is clamped, zero-alpha
+  emission is dropped, and every repaired pixel is counted.
+- *Colour and Raw.* `Raw` places the mapped values in working-space RGB unchanged. `Colour` converts
+  the RGB triple from the input colour space of the red slot's source (resolved like an Image
+  source, including Auto from the part's chromaticities) to the working space. `associated` says
+  the mapped RGB is already premultiplied by the mapped alpha (OpenEXR); a Colour conversion
+  unpremultiplies before and premultiplies after it, and a straight mapping is premultiplied once.
+- *GPU.* Host preparation produces the same gather without colour conversion as a raw upload; the
+  proxy PointResampleV1 gather and, for a non-identity Colour mapping, the input-to-working OCIO
+  `ProcessEffect` are GPU commands, exactly as for an Image source. The raw upload is cached under
+  the gather identity (source decode identities, slots and `associated`); the CPU result key adds
+  the colour interpretation. The coverage gate carries Required Shuffle, Remove and Channel Copy
+  fixtures with native parity.
+- *Viewer inspection.* A Viewer inspection compiles a viewer-only plan that reaches only the
+  inspected ChannelSet and outputs a Raw, associated, alpha-1 Shuffle of one channel (grey) or three
+  (RGB). It never enters the composition's own plan, cache entries or any render or export.

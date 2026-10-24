@@ -174,9 +174,12 @@ propertiesRowVisibility(const std::string_view role, const std::string_view sche
     // Properties surface decides which declared values are meaningful to an artist.
     const bool technicalRole = role == "alpha-association" || role == "color-encoding" ||
                                role == "color-space" || role == "encoding";
+    // ADR 0026: part, layer and the output layer list have purpose-built pickers.
     const bool technicalSchema =
         schemaKey == "bloom.color.alpha-association" || schemaKey == "bloom.color.encoding" ||
-        schemaKey == "bloom.solid.alpha-association" || schemaKey == "bloom.solid.encoding";
+        schemaKey == "bloom.solid.alpha-association" || schemaKey == "bloom.solid.encoding" ||
+        schemaKey == "bloom.image.part" || schemaKey == "bloom.image.layer" ||
+        schemaKey == "bloom.composition-output.layers";
     return technicalRole || technicalSchema ? PropertiesRowVisibility::Hidden
                                             : PropertiesRowVisibility::Visible;
 }

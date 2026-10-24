@@ -1,3 +1,6 @@
+#include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/asset_controller.hpp>
+#include <bloom/document/channel_nodes.hpp>
 #include "asset_drop.hpp"
 #include "composition_editor_support.hpp"
 #include "node_editor_items.hpp"
@@ -19,7 +22,18 @@
 #include <tuple>
 
 namespace bloom::ui {
+namespace {
+[[nodiscard]] QString boundText(const CompositionSession& session, const document::NodeRecord& node,
+                                const std::string_view role) {
+    for (const auto& binding : node.parameters)
+        if (binding.role == role)
+            return session.constantStringValue(binding.parameterId).value_or(QString{});
+    return {};
+}
+} // namespace
+
 void PropertiesEditor::configureRegistryRows() {
+    awaitingImageParts_ = false;
     const auto* node = session_.selectedNode();
     if (const auto* layer = std::get_if<document::LayerId>(&session_.selection().primary))
         node = directSourceNode(session_, *layer);
@@ -128,6 +142,10 @@ void PropertiesEditor::configureRegistryRows() {
                     section->bodyLayout()->addWidget(row);
                 }
             }
+            if (node->typeId == document::kImageSourceNodeType)
+                addImageSelectionRows(*node, section);
+            if (node->typeId == document::kCompositionOutputNodeType)
+                addOutputLayerRow(*node, section);
             if (node->typeId == "bloom.audio-source") {
                 const document::AssetRecord* asset = nullptr;
                 for (const auto& binding : node->parameters) {
@@ -224,6 +242,12 @@ void PropertiesEditor::configureRegistryRows() {
                                    registryPanel_->property("hasValueOutputs").toBool());
     for (auto* row : registryRows_)
         row->refresh();
+    if (node != nullptr && node->typeId == document::kImageSourceNodeType)
+        populateImageSelectionRows(*node);
+    if (node != nullptr && node->typeId == document::kCompositionOutputNodeType &&
+        outputLayersField_ != nullptr && !outputLayersField_->hasFocus())
+        outputLayersField_->setText(
+            boundText(session_, *node, document::kCompositionOutputLayersParameterRole));
     if (auto* selector = findChild<kit::KDropdown*>("propertiesCompositionSource");
         selector && node && session_.composition()) {
         const QSignalBlocker blocker(selector);
@@ -266,4 +290,149 @@ void PropertiesEditor::configureRegistryRows() {
         }
     }
 }
+
+void PropertiesEditor::imagePartsMayHaveArrived() {
+    if (awaitingImageParts_)
+        configureRegistryRows();
+}
+
+// ADR 0026: the Image source's part and colour-layer pickers read the probe through the Assets
+// worker; a selection that no longer exists is shown as missing and diagnosed at evaluation. The
+// rows are created with the registry rows and repopulated in place on every configure.
+void PropertiesEditor::addImageSelectionRows(const document::NodeRecord& node,
+                                             kit::KSection* section) {
+    const auto addPicker = [&](const QString& name, const char* object) {
+        auto* label = kit::makePropertyRowLabel(name, section->body());
+        auto* picker = new kit::KDropdown(section->body());
+        picker->setObjectName(object);
+        auto* row = new kit::KPropertyRow(label, nullptr, {picker}, section->body());
+        row->setProperty("rowLabel", name);
+        section->bodyLayout()->addWidget(row);
+        return picker;
+    };
+    imagePartPicker_ = addPicker(tr("Part"), "propertiesImagePart");
+    imageLayerPicker_ = addPicker(tr("Layer"), "propertiesImageLayer");
+    const auto nodeId = node.id;
+    connect(imagePartPicker_, &kit::KDropdown::currentIndexChanged, this,
+            [this, nodeId](const int index) {
+                if (index < 0 || imagePartPicker_ == nullptr)
+                    return;
+                const auto value = imagePartPicker_->itemData(index).toString().toStdString();
+                // A new part starts on its root layer.
+                if (!session_.setNodeParameterValue(nodeId,
+                                                    std::string(document::kImagePartParameterRole),
+                                                    document::ParameterValue{value},
+                                                    tr("Choose Image Part")) ||
+                    !session_.setNodeParameterValue(
+                        nodeId, std::string(document::kImageLayerParameterRole),
+                        document::ParameterValue{std::string{}}, tr("Choose Image Layer")))
+                    configureRegistryRows();
+            });
+    connect(imageLayerPicker_, &kit::KDropdown::currentIndexChanged, this,
+            [this, nodeId](const int index) {
+                if (index < 0 || imageLayerPicker_ == nullptr)
+                    return;
+                if (!session_.setNodeParameterValue(
+                        nodeId, std::string(document::kImageLayerParameterRole),
+                        document::ParameterValue{
+                            imageLayerPicker_->itemData(index).toString().toStdString()},
+                        tr("Choose Image Layer")))
+                    configureRegistryRows();
+            });
+}
+
+void PropertiesEditor::populateImageSelectionRows(const document::NodeRecord& node) {
+    if (imagePartPicker_ == nullptr || imageLayerPicker_ == nullptr)
+        return;
+    auto* controller = session_.assetController();
+    const auto assetText = boundText(session_, node, "asset");
+    const auto assetId = document::AssetId::fromRaw(assetText.toULongLong());
+    const std::vector<media::ImagePartInfo>* parts =
+        controller != nullptr ? controller->imageParts(assetId) : nullptr;
+    awaitingImageParts_ = controller != nullptr && parts == nullptr && !assetText.isEmpty();
+    if (awaitingImageParts_) {
+        controller->requestImageParts(assetId);
+        // Repopulate once the Assets worker has read the parts.
+        connect(controller, &AssetController::changed, this,
+                &PropertiesEditor::imagePartsMayHaveArrived, Qt::UniqueConnection);
+    }
+    const auto currentPart = boundText(session_, node, document::kImagePartParameterRole);
+    const auto currentLayer = boundText(session_, node, document::kImageLayerParameterRole);
+    auto* partPicker = imagePartPicker_.data();
+    auto* layerPicker = imageLayerPicker_.data();
+    const QSignalBlocker partBlocker(partPicker);
+    const QSignalBlocker layerBlocker(layerPicker);
+    partPicker->clearItems();
+    layerPicker->clearItems();
+    partPicker->setToolTip({});
+    const media::ImagePartInfo* selectedPart = nullptr;
+    if (parts == nullptr || parts->empty()) {
+        partPicker->addItem(currentPart.isEmpty() ? tr("First part") : currentPart, currentPart);
+        layerPicker->addItem(currentLayer.isEmpty() ? tr("Root") : currentLayer, currentLayer);
+        partPicker->setToolTip(parts == nullptr ? tr("Reading the image parts…")
+                                                : tr("This image has no named parts"));
+        partPicker->setEnabled(false);
+        layerPicker->setEnabled(false);
+        return;
+    }
+    int partIndex = -1;
+    for (std::size_t index = 0; index < parts->size(); ++index) {
+        const auto& part = (*parts)[index];
+        const auto name = QString::fromStdString(part.name);
+        // The first unnamed part (every still and single-part EXR) is stored as "".
+        partPicker->addItem(name.isEmpty() ? tr("Image") : name, name);
+        if (name == currentPart || (currentPart.isEmpty() && index == 0)) {
+            partIndex = static_cast<int>(index);
+            selectedPart = &part;
+        }
+    }
+    if (partIndex < 0) {
+        partPicker->addItem(tr("%1 (missing)").arg(currentPart), currentPart);
+        partIndex = partPicker->count() - 1;
+    }
+    partPicker->setCurrentIndex(partIndex);
+    partPicker->setEnabled(parts->size() > 1 || partIndex >= static_cast<int>(parts->size()));
+    int layerIndex = -1;
+    if (selectedPart != nullptr)
+        for (const auto& layer : selectedPart->colourLayers) {
+            const auto name = QString::fromStdString(layer);
+            layerPicker->addItem(name.isEmpty() ? tr("Root") : name, name);
+            if (name == currentLayer)
+                layerIndex = layerPicker->count() - 1;
+        }
+    if (layerIndex < 0) {
+        layerPicker->addItem(currentLayer.isEmpty() ? tr("Root (no colour)")
+                                                    : tr("%1 (missing)").arg(currentLayer),
+                             currentLayer);
+        layerIndex = layerPicker->count() - 1;
+    }
+    layerPicker->setCurrentIndex(layerIndex);
+    layerPicker->setEnabled(true);
+}
+
+// ADR 0026 §7: the layers a layered OpenEXR writes from the Composition Output's channel set.
+void PropertiesEditor::addOutputLayerRow(const document::NodeRecord& node,
+                                         kit::KSection* section) {
+    const auto name = tr("Channel Layers");
+    auto* label = kit::makePropertyRowLabel(name, section->body());
+    auto* field = new kit::KLineEdit(section->body());
+    field->setObjectName("propertiesOutputChannelLayers");
+    field->setPlaceholderText(tr("Every layer"));
+    field->setToolTip(tr("Comma-separated layer names written beside RGBA by layered OpenEXR"));
+    auto* row = new kit::KPropertyRow(label, nullptr, {field}, section->body());
+    row->setProperty("rowLabel", name);
+    section->bodyLayout()->addWidget(row);
+    outputLayersField_ = field;
+    const auto nodeId = node.id;
+    connect(field, &QLineEdit::editingFinished, this, [this, nodeId] {
+        if (outputLayersField_ == nullptr)
+            return;
+        if (!session_.setNodeParameterValue(
+                nodeId, std::string(document::kCompositionOutputLayersParameterRole),
+                document::ParameterValue{outputLayersField_->text().trimmed().toStdString()},
+                tr("Set Channel Layers")))
+            configureRegistryRows();
+    });
+}
+
 } // namespace bloom::ui

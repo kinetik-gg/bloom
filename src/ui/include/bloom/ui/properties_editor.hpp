@@ -2,6 +2,7 @@
 
 // Complete, not forward-declared: bindCell() below binds a cell's own gesture signals, which needs
 // the type rather than just its name.
+#include <QPointer>
 #include <bloom/document/animation.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <cstdint>
@@ -31,6 +32,7 @@ namespace kit {
 class KButton;
 class KColorChip;
 class KDropdown;
+class KLineEdit;
 class KSection;
 class KSlider;
 class KSwitch;
@@ -59,6 +61,14 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     EditorChromeSpec chrome_;
     void rebuild();
     void configureRegistryRows();
+    void addImageSelectionRows(const document::NodeRecord& node, kit::KSection* section);
+    void addOutputLayerRow(const document::NodeRecord& node, kit::KSection* section);
+    void imagePartsMayHaveArrived();
+    void populateImageSelectionRows(const document::NodeRecord& node);
+    bool awaitingImageParts_ = false;
+    QPointer<kit::KDropdown> imagePartPicker_;
+    QPointer<kit::KDropdown> imageLayerPicker_;
+    QPointer<kit::KLineEdit> outputLayersField_;
     void configureUpstream();
     void configureDrivenRows();
     // Task DRIVE-1: this panel reads the session's resolved driven values rather than

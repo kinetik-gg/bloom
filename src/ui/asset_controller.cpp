@@ -585,6 +585,51 @@ void AssetController::requestInputColorSpaces() {
         emit changed();
     }
 }
+void AssetController::requestImageParts(const document::AssetId id) {
+    const auto* asset = session_.snapshot().project().findAsset(id);
+    if (asset == nullptr || imagePartTasks_.contains(id))
+        return;
+    if (const auto known = imageParts_.find(id);
+        known != imageParts_.end() && known->second.digest == asset->contentDigest)
+        return;
+    auto submission = scheduler_.submit<std::shared_ptr<ImageParts>>(
+        runtime::TaskRequest(
+            "Read image parts",
+            {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
+            runtime::TaskPriority::Visible, runtime::TaskExecutor::Cpu),
+        [locator = asset->locator, digest = asset->contentDigest,
+         base = baseDirectory()](runtime::TaskContext& context) {
+            using Result = runtime::TaskResult<std::shared_ptr<ImageParts>>;
+            if (context.isCancellationRequested())
+                return Result::cancelled();
+            const auto path = media::resolveImagePath(locator.path, locator.relinkHint, base);
+            auto probe = media::probeImage(path, [&context] {
+                return context.isCancellationRequested();
+            });
+            if (context.isCancellationRequested())
+                return Result::cancelled();
+            auto result = std::make_shared<ImageParts>();
+            result->digest = digest;
+            // A changed file is not listed: the pickers show the parts of the verified bytes.
+            if (probe.value && probe.value->contentDigest == digest)
+                result->parts = std::move(probe.value->parts);
+
+            return Result::succeeded(std::move(result));
+        });
+    if (submission.accepted()) {
+        imagePartTasks_.emplace(id, std::move(submission.handle));
+        bridge_.wake();
+    }
+}
+const std::vector<media::ImagePartInfo>*
+AssetController::imageParts(const document::AssetId id) const {
+    const auto found = imageParts_.find(id);
+    const auto* asset = session_.snapshot().project().findAsset(id);
+    return found != imageParts_.end() && asset != nullptr &&
+                   found->second.digest == asset->contentDigest
+               ? &found->second.parts
+               : nullptr;
+}
 std::filesystem::path AssetController::baseDirectory() const {
     const auto path = host_.displayPath();
     return path ? path->parent_path() : nativePath(QDir::currentPath());
@@ -1526,6 +1571,21 @@ void AssetController::emitImportFailures(const std::vector<runtime::TaskDiagnost
                         .arg(QString::fromStdString(issues.front().summary)));
 }
 void AssetController::poll() {
+    for (auto task = imagePartTasks_.begin(); task != imagePartTasks_.end();) {
+        auto result = task->second.tryTakeResult();
+        if (!result) {
+            ++task;
+            continue;
+        }
+        if (result->state() == runtime::TaskState::Succeeded && result->value() &&
+            *result->value())
+            imageParts_[task->first] = std::move(**result->value());
+        task = imagePartTasks_.erase(task);
+        emit changed();
+    }
+    // A probe that finished between the bridge wake and this poll is collected on the next one.
+    if (!imagePartTasks_.empty())
+        QTimer::singleShot(20, &bridge_, &TaskUiBridge::wake);
     if (inputColorCatalogPending_) {
         if (auto result = inputColorCatalogTask_.tryTakeResult()) {
             inputColorCatalogPending_ = false;

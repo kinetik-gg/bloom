@@ -358,6 +358,24 @@ void run() {
             "Properties resolves Auto input colour space and lists config spaces");
     auto* dimensions = properties.findChild<ui::kit::KLabel*>("propertiesImageDimensions");
     require(dimensions && dimensions->text() == QString::fromUtf8("32 × 16"), "source dimensions");
+    // ADR 0026: the part and layer pickers read the probe through the Assets worker.
+    ui::kit::KDropdown* layerPicker = nullptr;
+    QElapsedTimer partsTimer;
+    partsTimer.start();
+    while (partsTimer.elapsed() < 15000) {
+        QApplication::processEvents();
+        layerPicker = properties.findChild<ui::kit::KDropdown*>("propertiesImageLayer");
+        if (layerPicker != nullptr && layerPicker->isEnabled())
+            break;
+        QTest::qWait(10);
+    }
+    require(layerPicker && layerPicker->isEnabled() && layerPicker->count() == 1 &&
+                layerPicker->itemText(0) == "Root",
+            "the layer picker lists the still's root colour layer");
+    auto* partPicker = properties.findChild<ui::kit::KDropdown*>("propertiesImagePart");
+    require(partPicker && !partPicker->isEnabled() &&
+                partPicker->itemText(partPicker->currentIndex()) == "Image",
+            "a still has one part");
     ui::node_editor::NodeItem* card = nullptr;
     for (auto* item : view->scene()->items())
         if (auto* candidate = dynamic_cast<ui::node_editor::NodeItem*>(item);

@@ -512,6 +512,11 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool setParameterComponentValue(document::ParameterId parameterId,
                                                   document::AnimationComponent component,
                                                   double value);
+    // ADR 0026: sets a node parameter's constant, binding it first when the definition declares it
+    // optional and the node predates it (Image part/layer, the Composition Output layer list).
+    [[nodiscard]] bool setNodeParameterValue(document::NodeId nodeId, std::string role,
+                                             document::ParameterValue value,
+                                             const QString& commandLabel);
     [[nodiscard]] bool setParameterValue(document::ParameterId parameterId,
                                          document::ParameterValue value,
                                          const QString& commandLabel);

@@ -27,14 +27,38 @@ A missing or changed selected member produces transparent pixels and a warning; 
 ### OpenEXR image boundary
 
 EXR intake is deliberately narrower than the format. The in-process reader accepts version 2
-single-part scanline files and single-level tiled files with RGB, RGBA, Y, or YA channels, all
-half or all float, within the image limits above. It honors the data window, retains the display
-window offset in the Bloom image descriptor, defaults alpha to associated/premultiplied, and maps
-the optional chromaticities attribute to the linear color tag (or records the absent-metadata
-scene-linear assumption in the probe). Deep, multipart, multi-level tiled, unknown-channel,
-subsampled, mixed-type, malformed, and truncated files return typed diagnostics and never become
-project truth. EXR decode runs on a worker and uses the same disk-cache key and thumbnail path as
-PNG/JPEG.
+single-part and multipart files whose parts are scanline or single-level tiled, with any number of
+half, float or uint channels, within the image limits above. It honors each part's data window,
+retains the display window offset in the Bloom image descriptor, defaults alpha to
+associated/premultiplied, and maps each part's optional chromaticities attribute to the linear color
+tag (or records the absent-metadata scene-linear assumption in the probe). Deep, multi-level tiled,
+subsampled, malformed, and truncated files return typed diagnostics and never become project truth.
+EXR decode runs on a worker and uses the same disk-cache key and thumbnail path as PNG/JPEG.
+
+**Multi-channel images (ADR 0026, #363).**
+
+- *Probe.* `ImageProbe::parts` lists every part: name, view, scanline or tiled, data and display
+  windows, alpha association, colour tag, channels with their sample kind, the distinct layers
+  (everything before a channel name's last `.`; the root layer is empty) and the layers that carry
+  R/G/B or Y colour channels. PNG and JPEG probe as one unnamed part whose channels are R, G, B and,
+  when the file carries alpha, A. The asset record persists no part list.
+- *Colour selection.* `ImageInterpretation::part` (empty: the first part) and `layer` (empty: the
+  root layer) choose the colour image: the layer's `R/G/B[/A]` (or `Y[/A]`) channels go through the
+  unchanged colour path, while every other channel of the part is ignored by it. A missing part or
+  layer is a typed `PartNotFound` or `LayerNotFound`; a layer without colour channels
+  (`NoColourChannels`) gives no colour image. The decoded-image identity is `bloom-image-decode-4`,
+  and a non-default part or layer is part of the memory, raw-upload and disk keys.
+- *Channel sets.* `decodeImageChannels()` returns a `render::ChannelSetImage`: the named channels of
+  one part (all, or a selection in order) as planar Float32 over the shared data window, with the
+  part's string attributes (Cryptomatte manifests) as metadata and the asset's input colour space
+  recorded for the Colour channels. Values are source values: half widens exactly, uint keeps its
+  bit pattern, and nothing is converted, premultiplied, repaired or clamped, so negatives, NaN and
+  ID hashes survive. Admission charges every plane plus one bounded band and the metadata. Stills
+  expose their decoded R, G, B (and A) as straight Colour channels in [0, 1]; formats without an
+  immutable revision decoder report `UnsupportedChannelSetFormat`.
+- *Sequences.* An unreadable member never aborts a scan: it is reported (up to 32 frames by name,
+  then a count) and its frame becomes a gap that holds the preceding frame, as for the #373 batch
+  import policy.
 
 **OpenEXR ingest correctness (#362).**
 
