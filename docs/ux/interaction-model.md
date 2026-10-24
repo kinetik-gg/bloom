@@ -138,8 +138,9 @@ with circular handles, and Pen the clicked path, all mapped into the layer's con
 the inverse of its evaluated content-to-composition transform (a layer with no evaluated bounds at
 the playhead drops the gesture). With nothing selected, the tools behave as before. The selected
 mask draws its outline, anchors and handles and dashed feather bounds at expansion ± feather / 2;
-dragging an anchor or handle commits one path edit on release (a key at the playhead on the layer's
-own clock when the path is keyed), and clicking an outline with the Select tool selects that mask.
+dragging an anchor or handle previews live in the Viewer (a session-only override of the path, so
+the document never changes mid-drag) and commits one path edit on release (a key at the playhead on
+the layer's own clock when the path is keyed), and clicking an outline with the Select tool selects that mask.
 
 ## Assets
 

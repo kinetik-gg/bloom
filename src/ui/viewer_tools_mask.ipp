@@ -41,6 +41,7 @@ std::optional<ViewerEditor::MaskTarget> ViewerEditor::selectedMaskTarget() const
         return {};
     return MaskTarget{selection->layer,
                       selection->mask,
+                      mask->path,
                       *path,
                       *world,
                       session_.effectiveScalarValue(mask->feather).value_or(0.0),
@@ -70,10 +71,19 @@ bool ViewerEditor::addMaskFromPath(const MaskCreationTarget& target,
     return session_.addLayerMask(target.layer, masks::mappedPath(path, *target.toContent));
 }
 
+void ViewerEditor::endMaskPreview(const MaskDrag& drag) {
+    if (session_.isValueEditing(drag.target.pathParameter)) {
+        session_.cancelValueEdit();
+        previewController_.notifyScrubEnded();
+    }
+}
+
 void ViewerEditor::cancelMaskDrag() {
     if (!maskDrag_)
         return;
+    const auto drag = std::move(*maskDrag_);
     maskDrag_.reset();
+    endMaskPreview(drag);
     update();
 }
 
@@ -112,6 +122,10 @@ bool ViewerEditor::maskPress(QMouseEvent* event) {
                              event->position(),
                              i,
                              part});
+                // The Viewer renders each drag step from a session-only override of the path;
+                // the document changes once, on release.
+                if (session_.beginMaskPathEdit(target->pathParameter, target->path))
+                    previewController_.beginInteractiveScrub();
                 setFocus(Qt::MouseFocusReason);
                 update();
                 event->accept();
@@ -183,6 +197,8 @@ bool ViewerEditor::maskMove(QMouseEvent* event) {
         if (!event->modifiers().testFlag(Qt::AltModifier))
             opposite = toolValue(2 * toolPoint(anchor.point) - toolPoint(*handle));
     }
+    if (session_.isValueEditing(drag.target.pathParameter))
+        (void)session_.updateValueEdit(path);
     drag.target.path = std::move(path);
     update();
     event->accept();
@@ -194,6 +210,7 @@ void ViewerEditor::commitMaskDrag() {
         return;
     const auto drag = std::move(*maskDrag_);
     maskDrag_.reset();
+    endMaskPreview(drag);
     // A zero-delta gesture commits nothing; one drag is exactly one SetLayerMaskPath.
     if (drag.target.path != drag.base)
         (void)session_.commitMaskPath(drag.target.layer, drag.target.mask, drag.target.path);

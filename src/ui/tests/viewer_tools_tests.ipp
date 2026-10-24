@@ -585,10 +585,44 @@ void testMaskTools(Expectations& expectations) {
     toolReady(fixture, expectations);
     toolKey(fixture, Qt::Key_V);
     const auto beforeDrag = fixture.commands.size();
+    const auto revisionBeforeDrag = fixture.session.snapshot().revision();
     toolMouse(fixture, QEvent::MouseButtonPress, {50, 60});
     toolMouse(fixture, QEvent::MouseMove, {70, 80});
-    expectations.expect(fixture.commands.size() == beforeDrag,
-                        "a mask anchor drag publishes no history before release");
+    expectations.expect(fixture.commands.size() == beforeDrag &&
+                            fixture.session.snapshot().revision() == revisionBeforeDrag,
+                        "a mask anchor drag never changes the document before release");
+    {
+        // The live Viewer frame renders the drag from a session-only override of the mask path.
+        const auto overrides = fixture.session.valueEditOverrides();
+        expectations.expect(
+            overrides.size() == 1 && overrides.front().parameterId == mask.path &&
+                std::holds_alternative<document::PathValue>(overrides.front().value),
+            "a mask anchor drag previews through a typed Path override");
+        const auto alphaAt = [&](const std::vector<runtime::SnapshotParameterOverride>& values) {
+            const auto plan = fixture.pipeline.compiler.compile(
+                {fixture.document.snapshot(), fixture.session.compositionId(), values}, {});
+            if (!plan.plan)
+                return -1.0F;
+            const auto result = fixture.pipeline.evaluator.evaluate(
+                plan.plan,
+                {fixture.session.currentTime(), plan.plan->output(),
+                 runtime::CompositionFormatResolution{}, runtime::EvaluationQuality::Reference,
+                 runtime::EvaluationColorIntent::LinearRec709Scene, 32U << 20U},
+                {});
+            if (!result.frame())
+                return -1.0F;
+            const auto pixel = result.frame()->processImage().read(55, 65);
+            return pixel ? pixel.value()->alpha() : -1.0F;
+        };
+        expectations.expect(alphaAt({}) == 1.0F && alphaAt(overrides) == 0.0F,
+                            "the live preview shows the dragged outline while the document keeps "
+                            "the original");
+        expectations.expect(waitUntil([&] {
+                                return fixture.controller.state().frame &&
+                                       isReady(fixture.controller);
+                            }),
+                            "the Viewer preview settles during the drag");
+    }
     toolMouse(fixture, QEvent::MouseButtonRelease, {70, 80});
     expectations.expect(fixture.commands.size() == beforeDrag + 1,
                         "a mask anchor drag is exactly one transaction");

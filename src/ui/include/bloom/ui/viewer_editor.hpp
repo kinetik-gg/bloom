@@ -637,6 +637,7 @@ class ViewerEditor final : public QWidget,
     struct MaskTarget {
         document::LayerId layer;
         document::LayerMaskId mask;
+        document::ParameterId pathParameter;
         document::PathValue path;
         QTransform toWorld;
         double feather = 0.0;
@@ -664,6 +665,8 @@ class ViewerEditor final : public QWidget,
     bool maskMove(QMouseEvent* event);
     bool maskRelease(QMouseEvent* event);
     void cancelMaskDrag();
+    // Ends the drag's live session-only preview override, without touching the document.
+    void endMaskPreview(const MaskDrag& drag);
     void paintMaskTools(QPainter& painter) const;
     Tool tool_ = Tool::Select;
     QWidget* toolColumn_ = nullptr;

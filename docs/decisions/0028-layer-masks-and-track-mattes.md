@@ -191,8 +191,10 @@ matte command declares its composition `renderScope()`.
 
 - **Viewer.** With a layer selected, the Rectangle, Ellipse and Pen tools add a mask to that layer
   instead of creating a shape layer; with no layer selected they behave as before. The selected
-  mask draws its outline and anchors in layer space; dragging an anchor or handle commits one
-  `SetLayerMaskPath` on release. Dashed feather bounds are drawn at `expansion +/- feather / 2`.
+  mask draws its outline and anchors in layer space; dragging an anchor or handle renders live in
+  the Viewer from a session-only parameter override of the path (`beginMaskPathEdit`, accepted by
+  the snapshot compiler for a reachable layer's mask path, feather, expansion and opacity) and
+  commits one `SetLayerMaskPath` on release. The document never changes mid-drag. Dashed feather bounds are drawn at `expansion +/- feather / 2`.
 - **Timeline.** A layer row discloses a Masks group with one row per mask (name, mode, inverted) and
   key rows for its path, feather, expansion and opacity. A Track Matte column selects the source
   layer, the channel and the invert bit.

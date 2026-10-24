@@ -95,9 +95,12 @@ struct Fixture {
     void setScalar(const document::ParameterId id, const double value) {
         run<commands::SetParameterSource>(composition, id, document::ConstantValueSource{value});
     }
-    std::vector<render::Rgba32f> pixels(const core::RationalTime time = {}) {
+    std::vector<render::Rgba32f>
+    pixels(const core::RationalTime time = {},
+           std::vector<runtime::SnapshotParameterOverride> overrides = {}) {
         runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
-        const auto compiled = compiler.compile({document.snapshot(), composition}, {});
+        const auto compiled =
+            compiler.compile({document.snapshot(), composition, std::move(overrides)}, {});
         if (!compiled.plan) {
             for (const auto& diagnostic : compiled.diagnostics)
                 std::cerr << diagnostic.summary << ": " << diagnostic.detail << '\n';
@@ -203,6 +206,34 @@ void animatedPath() {
     expect(near(alphaAt(start, 6, 8), 0.0F) && near(alphaAt(middle, 6, 8), 1.0F) &&
                near(alphaAt(middle, 9, 8), 0.0F) && near(alphaAt(end, 10, 8), 1.0F),
            "a keyed mask path interpolates its anchors");
+}
+
+// The Viewer previews a mask drag through a session-only parameter override of the path: the
+// compiled frame shows the dragged outline (also over a keyed path) while the document is
+// untouched.
+void maskPathOverridePreview() {
+    Fixture fixture;
+    const auto layer = fixture.solid({1, 1, 1, 1});
+    const auto id = fixture.mask(layer, rectangle(0, 0, 4, 16));
+    const auto mask = fixture.boundary(layer).masks.front();
+    const auto path = mask.path;
+    const auto revision = fixture.document.snapshot().revision();
+    const auto dragged = fixture.pixels({}, {{revision, path, rectangle(0, 0, 12, 16)}});
+    expect(near(alphaAt(dragged, 10, 8), 1.0F),
+           "a mask path override previews the dragged outline");
+    expect(near(alphaAt(fixture.pixels(), 10, 8), 0.0F) &&
+               fixture.document.snapshot().revision() == revision,
+           "the override never changes the document");
+    fixture.run<commands::AnimateLayerMaskPath>(fixture.composition, layer, id, at(0));
+    const auto keyed = fixture.document.snapshot().revision();
+    const auto keyedDrag = fixture.pixels({}, {{keyed, path, rectangle(0, 0, 12, 16)}});
+    expect(near(alphaAt(keyedDrag, 10, 8), 1.0F), "an override previews a keyed mask path too");
+    const auto feather = fixture.pixels({}, {{keyed, mask.opacity, 0.5}});
+    expect(near(alphaAt(feather, 2, 8), 0.5F), "a mask scalar override previews too");
+    runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    const auto wrong = compiler.compile(
+        {fixture.document.snapshot(), fixture.composition, {{keyed, path, 3.0}}}, {});
+    expect(wrong.plan == nullptr, "a mask path override of the wrong kind is refused");
 }
 
 void trackMattes() {
@@ -312,6 +343,7 @@ int main() {
         rectangleMask();
         modesInvertExpansionFeather();
         animatedPath();
+        maskPathOverridePreview();
         trackMattes();
         maskNodeIntoImageMix();
     } catch (const std::exception& error) {

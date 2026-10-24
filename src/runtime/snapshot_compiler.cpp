@@ -2,8 +2,8 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 
 #include "plan_time_scopes.hpp"
-#include <bloom/runtime/layer_time_projection.hpp>
 #include "snapshot_compiler_support.hpp"
+#include <bloom/runtime/layer_time_projection.hpp>
 
 #include <bloom/document/animation.hpp>
 #include <bloom/document/graph.hpp>
@@ -712,6 +712,53 @@ class CompilePass final {
             reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
                    "Parameter override target does not exist",
                    "The target parameter is absent from the requested composition.");
+            return;
+        }
+
+        // ADR 0028: a mask's path, feather, expansion and opacity belong to its reachable layer,
+        // not to a node binding. The Viewer previews a mask drag through this same override.
+        std::optional<runtime::ParameterValueKind> maskKind;
+        for (const auto* node : reachableNodes_) {
+            const auto boundary = layerOutputs_.find(node->id);
+            if (boundary == layerOutputs_.end())
+                continue;
+            for (const auto& mask : boundary->second->masks) {
+                if (mask.path == parameterOverride.parameterId)
+                    maskKind = runtime::ParameterValueKind::Path;
+                else if (mask.feather == parameterOverride.parameterId ||
+                         mask.expansion == parameterOverride.parameterId ||
+                         mask.opacity == parameterOverride.parameterId)
+                    maskKind = runtime::ParameterValueKind::Float64;
+            }
+        }
+        if (maskKind) {
+            document::ParameterValue value =
+                std::visit([](const auto& entry) -> document::ParameterValue { return entry; },
+                           parameterOverride.value);
+            if (!hasValueKind(value, *maskKind)) {
+                reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
+                       "Parameter override type does not match its target",
+                       "Overrides require a compatible reachable parameter.");
+                return;
+            }
+            document::ParameterRecord replacement{parameter->id, parameter->schemaKey,
+                                                  document::ConstantValueSource{std::move(value)}};
+            document::ParameterStore validation;
+            if (!validation.insert(replacement) || !validation.validate().ok()) {
+                reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
+                       "Parameter override value is outside its schema domain",
+                       "Preview constants obey the same value domains as authored constants.");
+                return;
+            }
+            if (std::holds_alternative<document::DriverBindingSource>(parameter->source)) {
+                auto overrideSubject = diagnosticSubject;
+                addUnsupported(runtime::CompileDiagnosticCode::UnsupportedParameterOverride,
+                               std::move(overrideSubject),
+                               "Driven parameters cannot be overridden interactively",
+                               "Disconnect or explicitly transition the driver before editing.");
+                return;
+            }
+            overrides_.emplace(parameter->id, std::move(replacement));
             return;
         }
 

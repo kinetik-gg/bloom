@@ -156,6 +156,24 @@ bool CompositionSession::beginPathEdit(const document::ParameterId parameter) {
     return true;
 }
 
+bool CompositionSession::beginMaskPathEdit(const document::ParameterId parameterId,
+                                           document::PathValue base) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    cancelValueEdit();
+    cancelTransformInteraction();
+    const auto* current = composition();
+    const auto* parameter = current ? current->parameters().find(parameterId) : nullptr;
+    if (!parameter || current->parameterLocked(parameterId) || !base.isValid() ||
+        std::holds_alternative<document::DriverBindingSource>(parameter->source)) {
+        reportUnavailable(tr("This mask path is not available for editing"));
+        return false;
+    }
+    document::ParameterValue value = std::move(base);
+    valueEdit_.emplace(
+        ValueEdit{snapshot_.revision(), parameterId, currentTime_, std::nullopt, value, value});
+    return true;
+}
+
 bool CompositionSession::updatePathEdit(document::PathValue path,
                                         const document::Vec2d centreDelta) {
     if (!valueEdit_ || !valueEdit_->anchor || !std::isfinite(centreDelta.x) ||
@@ -205,16 +223,16 @@ bool CompositionSession::commitValueEdit() {
     bool result = edit.revision == snapshot_.revision() && edit.time == currentTime_;
     if (result && edit.value != edit.base) {
         const auto* parameter = composition()->parameters().find(edit.parameter);
-        const auto label = edit.text
-                               ? QStringLiteral("Edit Text")
-                               : parameter ? componentCommandLabel(*parameter,
-                                                                   QStringLiteral("Set Parameter"))
-                                           : QStringLiteral("Set Parameter");
+        const auto label = edit.text ? QStringLiteral("Edit Text")
+                           : parameter
+                               ? componentCommandLabel(*parameter, QStringLiteral("Set Parameter"))
+                               : QStringLiteral("Set Parameter");
         commands::Transaction transaction(label.toStdString(), edit.revision);
         if (edit.component && parameter &&
             std::holds_alternative<document::AnimationCurveSource>(parameter->source)) {
             transaction.emplace<commands::SetKeyframeAtTimeForParameterComponent>(
-                compositionId_, edit.parameter, *edit.component, keyTimeOf(edit.parameter, edit.time),
+                compositionId_, edit.parameter, *edit.component,
+                keyTimeOf(edit.parameter, edit.time),
                 *editedComponent(edit.value, *edit.component));
         } else {
             result = appendParameterEdit(transaction, edit.parameter, edit.time, edit.value);
