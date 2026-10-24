@@ -337,8 +337,8 @@ channelShufflePlan(const bloom::document::AssetRecord& asset, const LayerValues 
     const auto make = [](const bool withManifest) {
         std::filesystem::create_directories(gateDirectory());
         ImageFixture value;
-        value.path = gateDirectory() /
-                     (withManifest ? "cryptomatte_manifest.exr" : "cryptomatte_plain.exr");
+        value.path =
+            gateDirectory() / (withManifest ? "cryptomatte_manifest.exr" : "cryptomatte_plain.exr");
         bloom::cryptomatte_fixture::writeCryptomatteExr(value.path, withManifest);
         const auto probe = bloom::media::probeImage(value.path);
         if (!probe.value.has_value())
@@ -361,9 +361,9 @@ channelShufflePlan(const bloom::document::AssetRecord& asset, const LayerValues 
     return manifest ? withManifest : plain;
 }
 
-// Source -> Cryptomatte (CryptoObject, `mattes`) -> Layer Output. With `imageOutput` the layer reads
-// the node's Image output: the beauty (an Image source of the same file) x the matte through the
-// MultiplyAlpha combine the compiler emits; otherwise it reads the Mask output.
+// Source -> Cryptomatte (CryptoObject, `mattes`) -> Layer Output. With `imageOutput` the layer
+// reads the node's Image output: the beauty (an Image source of the same file) x the matte through
+// the MultiplyAlpha combine the compiler emits; otherwise it reads the Mask output.
 [[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
 cryptomattePlan(const bloom::document::AssetRecord& asset, const LayerValues layer,
                 const std::uint64_t idBase, std::vector<std::string> mattes,
@@ -375,8 +375,8 @@ cryptomattePlan(const bloom::document::AssetRecord& asset, const LayerValues lay
                        ParameterId::fromRaw(idBase + 4), ParameterId::fromRaw(idBase + 5)};
     bloom::runtime::CompiledCryptomatte cryptomatte;
     cryptomatte.sourceNodeId = NodeId::fromRaw(idBase + 20);
-    cryptomatte.channels.sources.push_back(
-        bloom::runtime::CompiledChannelSource{NodeId::fromRaw(idBase + 10), asset, 0, 0, 0, {}, {}});
+    cryptomatte.channels.sources.push_back(bloom::runtime::CompiledChannelSource{
+        NodeId::fromRaw(idBase + 10), asset, 0, 0, 0, {}, {}});
     bloom::runtime::CompiledChannelStep source;
     source.kind = bloom::runtime::CompiledChannelStepKind::Source;
     source.nodeId = NodeId::fromRaw(idBase + 10);
@@ -403,11 +403,11 @@ cryptomattePlan(const bloom::document::AssetRecord& asset, const LayerValues lay
                                         bloom::document::LayerId::fromRaw(idBase + 12), layerInput,
                                         ids, layer));
     const auto mergeIndex = OperationIndex::fromRaw(operations.size());
-    operations.emplace_back(CompiledMerge{
-        NodeId::fromRaw(idBase + 13),
-        std::vector<CompiledMergeInput>{
-            CompiledMergeInput{bloom::document::LayerSlotId::fromRaw(idBase + 14),
-                               bloom::document::LayerId::fromRaw(idBase + 12), layerIndex}}});
+    operations.emplace_back(
+        CompiledMerge{NodeId::fromRaw(idBase + 13),
+                      std::vector<CompiledMergeInput>{CompiledMergeInput{
+                          bloom::document::LayerSlotId::fromRaw(idBase + 14),
+                          bloom::document::LayerId::fromRaw(idBase + 12), layerIndex}}});
     const auto outputIndex = OperationIndex::fromRaw(operations.size());
     operations.emplace_back(CompiledCompositionOutput{NodeId::fromRaw(idBase + 15), mergeIndex});
     return publish(CompiledCompositionPlanDefinition{

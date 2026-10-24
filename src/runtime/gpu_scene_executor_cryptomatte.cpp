@@ -58,12 +58,14 @@ std::optional<render::GpuImage> GpuSceneExecutor::Impl::takeCryptomatteCoverageO
 
 bool GpuSceneExecutor::Impl::cryptomatteCoverageDeviceLost() const noexcept {
     return cryptomatteCoverage != nullptr &&
-           cryptomatteCoverage->diagnostic().code == render::GpuCryptomatteCoverageDiagnosticCode::DeviceLost;
+           cryptomatteCoverage->diagnostic().code ==
+               render::GpuCryptomatteCoverageDiagnosticCode::DeviceLost;
 }
 
 bool GpuSceneExecutor::Impl::cryptomatteCoverageCancelled() const noexcept {
     return cryptomatteCoverage != nullptr &&
-           cryptomatteCoverage->diagnostic().code == render::GpuCryptomatteCoverageDiagnosticCode::Cancelled;
+           cryptomatteCoverage->diagnostic().code ==
+               render::GpuCryptomatteCoverageDiagnosticCode::Cancelled;
 }
 
 void GpuSceneExecutor::Impl::cancelCryptomatteCoverage() noexcept {

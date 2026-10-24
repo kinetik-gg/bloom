@@ -25,9 +25,9 @@ using gpu_scene_executor_detail::makeDiagnostic;
 using gpu_scene_executor_detail::mapAffine;
 using gpu_scene_executor_detail::mapBlend;
 using gpu_scene_executor_detail::mapComposite;
+using gpu_scene_executor_detail::mapCryptomatteCoverage;
 using gpu_scene_executor_detail::mapOcio;
 using gpu_scene_executor_detail::mapPointResample;
-using gpu_scene_executor_detail::mapCryptomatteCoverage;
 using gpu_scene_executor_detail::mapSolid;
 using gpu_scene_executor_detail::mapUpload;
 using gpu_scene_executor_detail::NativePoll;
@@ -87,8 +87,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::finishNative(render::GpuImage
         : nativeKind == NativeKind::PointResample ? pointResample->lastJobAllocationBytes()
         : nativeKind == NativeKind::CryptomatteCoverage
             ? cryptomatteCoverage->lastJobAllocationBytes()
-        : nativeKind == NativeKind::Ocio          ? nativeOcioLastJobBytes
-                                                  : composite->lastJobAllocationBytes();
+        : nativeKind == NativeKind::Ocio ? nativeOcioLastJobBytes
+                                         : composite->lastJobAllocationBytes();
     nativeKind = NativeKind::None;
     nativeInFlight = false;
     if (!produced.isValid()) {
@@ -356,8 +356,9 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
         : nativeKind == NativeKind::Affine        ? affineDeviceLost(affine->diagnostic())
         : nativeKind == NativeKind::Blend         ? blendDeviceLost(blend->diagnostic())
         : nativeKind == NativeKind::PointResample ? pointResampleDeviceLost()
-        : nativeKind == NativeKind::CryptomatteCoverage ? cryptomatteCoverageDeviceLost()
-                                                  : compositeDeviceLost(composite->diagnostic());
+        : nativeKind == NativeKind::CryptomatteCoverage
+            ? cryptomatteCoverageDeviceLost()
+            : compositeDeviceLost(composite->diagnostic());
     if (deviceLostNow) {
         deviceLost = true;
         nativeInFlight = false;
@@ -374,8 +375,9 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
             : nativeKind == NativeKind::Affine        ? affineCancelled(affine->diagnostic())
             : nativeKind == NativeKind::Blend         ? blendCancelled(blend->diagnostic())
             : nativeKind == NativeKind::PointResample ? pointResampleCancelled()
-            : nativeKind == NativeKind::CryptomatteCoverage ? cryptomatteCoverageCancelled()
-                                                      : compositeCancelled(composite->diagnostic());
+            : nativeKind == NativeKind::CryptomatteCoverage
+                ? cryptomatteCoverageCancelled()
+                : compositeCancelled(composite->diagnostic());
         const bool statusRejected =
             nativeKind == NativeKind::Composite ? compositeStatusRejected(composite->diagnostic())
             : nativeKind == NativeKind::Affine  ? affineStatusRejected(affine->diagnostic())

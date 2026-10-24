@@ -30,10 +30,18 @@ std::atomic<bool> g_cryptomatteCoverageTeardownIncomplete{false};
 
 } // namespace
 
-void noteCryptomatteCoverageResourceSetCreated() noexcept { g_cryptomatteCoverageLiveSets.fetch_add(1); }
-void noteCryptomatteCoverageResourceSetFreed() noexcept { g_cryptomatteCoverageLiveSets.fetch_sub(1); }
-void noteCryptomatteCoverageQuarantine() noexcept { g_cryptomatteCoverageTeardownIncomplete.store(true); }
-bool cryptomatteCoverageTeardownIncomplete() noexcept { return g_cryptomatteCoverageTeardownIncomplete.load(); }
+void noteCryptomatteCoverageResourceSetCreated() noexcept {
+    g_cryptomatteCoverageLiveSets.fetch_add(1);
+}
+void noteCryptomatteCoverageResourceSetFreed() noexcept {
+    g_cryptomatteCoverageLiveSets.fetch_sub(1);
+}
+void noteCryptomatteCoverageQuarantine() noexcept {
+    g_cryptomatteCoverageTeardownIncomplete.store(true);
+}
+bool cryptomatteCoverageTeardownIncomplete() noexcept {
+    return g_cryptomatteCoverageTeardownIncomplete.load();
+}
 
 namespace cryptomatte_coverage_detail {
 
@@ -174,7 +182,9 @@ std::uint32_t cryptomatteCoverageLiveResidents() noexcept { return liveResidents
 
 std::uint32_t cryptomatteCoverageRetainedResidents() noexcept { return retainedResidents(); }
 
-std::uint32_t cryptomatteCoverageRetireRetainedForOwner() noexcept { return retireRetainedForOwner(); }
+std::uint32_t cryptomatteCoverageRetireRetainedForOwner() noexcept {
+    return retireRetainedForOwner();
+}
 
 } // namespace cryptomatte_coverage_detail
 
@@ -253,10 +263,10 @@ bool GpuCryptomatteCoverage::Impl::createPipelines() {
     std::string reason;
     if (!createCompositePipeline(*control, vulkan_detail::kCryptomatteCoverageSpirvCode,
                                  vulkan_detail::kCryptomatteCoverageSpirvByteCount, kBindings,
-                                 kCryptomatteCoverageBindingCount, kCryptomatteCoveragePushBytes, reason,
-                                 resources.pipeline)) {
-        createDiagnostic =
-            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::ShaderRejected, reason);
+                                 kCryptomatteCoverageBindingCount, kCryptomatteCoveragePushBytes,
+                                 reason, resources.pipeline)) {
+        createDiagnostic = cryptomatteCoverageDiagnostic(
+            GpuCryptomatteCoverageDiagnosticCode::ShaderRejected, reason);
         return false;
     }
 
@@ -273,9 +283,9 @@ bool GpuCryptomatteCoverage::Impl::createPipelines() {
     if (dispatcher->vkCreateDescriptorPool(
             rawDevice, reinterpret_cast<const VkDescriptorPoolCreateInfo*>(&poolInfo), nullptr,
             &rawPool) != VK_SUCCESS) {
-        createDiagnostic =
-            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::AllocationFailed,
-                                    "the cryptomatte-coverage descriptor pool could not be created");
+        createDiagnostic = cryptomatteCoverageDiagnostic(
+            GpuCryptomatteCoverageDiagnosticCode::AllocationFailed,
+            "the cryptomatte-coverage descriptor pool could not be created");
         return false;
     }
     resources.descriptorPool = vk::raii::DescriptorPool(control->device, rawPool);
@@ -288,9 +298,9 @@ bool GpuCryptomatteCoverage::Impl::createPipelines() {
     if (dispatcher->vkAllocateDescriptorSets(
             rawDevice, reinterpret_cast<const VkDescriptorSetAllocateInfo*>(&allocateInfo),
             &rawSet) != VK_SUCCESS) {
-        createDiagnostic =
-            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::AllocationFailed,
-                                    "the cryptomatte-coverage descriptor set could not be allocated");
+        createDiagnostic = cryptomatteCoverageDiagnostic(
+            GpuCryptomatteCoverageDiagnosticCode::AllocationFailed,
+            "the cryptomatte-coverage descriptor set could not be allocated");
         return false;
     }
     resources.descriptorSet =
@@ -303,9 +313,9 @@ bool GpuCryptomatteCoverage::Impl::createPipelines() {
     if (dispatcher->vkCreateCommandPool(
             rawDevice, reinterpret_cast<const VkCommandPoolCreateInfo*>(&commandPoolInfo), nullptr,
             &rawCommandPool) != VK_SUCCESS) {
-        createDiagnostic =
-            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::AllocationFailed,
-                                    "the cryptomatte-coverage command pool could not be created");
+        createDiagnostic = cryptomatteCoverageDiagnostic(
+            GpuCryptomatteCoverageDiagnosticCode::AllocationFailed,
+            "the cryptomatte-coverage command pool could not be created");
         return false;
     }
     resources.commandPool = vk::raii::CommandPool(control->device, rawCommandPool);
@@ -317,9 +327,9 @@ bool GpuCryptomatteCoverage::Impl::createPipelines() {
     if (dispatcher->vkAllocateCommandBuffers(
             rawDevice, reinterpret_cast<const VkCommandBufferAllocateInfo*>(&commandBufferInfo),
             &rawCommandBuffer) != VK_SUCCESS) {
-        createDiagnostic =
-            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::AllocationFailed,
-                                    "the cryptomatte-coverage command buffer could not be allocated");
+        createDiagnostic = cryptomatteCoverageDiagnostic(
+            GpuCryptomatteCoverageDiagnosticCode::AllocationFailed,
+            "the cryptomatte-coverage command buffer could not be allocated");
         return false;
     }
     resources.commandBuffer =
@@ -328,8 +338,9 @@ bool GpuCryptomatteCoverage::Impl::createPipelines() {
     VkFence rawFence = VK_NULL_HANDLE;
     if (dispatcher->vkCreateFence(rawDevice, reinterpret_cast<const VkFenceCreateInfo*>(&fenceInfo),
                                   nullptr, &rawFence) != VK_SUCCESS) {
-        createDiagnostic = cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::AllocationFailed,
-                                                   "the cryptomatte-coverage fence could not be created");
+        createDiagnostic =
+            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::AllocationFailed,
+                                          "the cryptomatte-coverage fence could not be created");
         return false;
     }
     resources.fence = vk::raii::Fence(control->device, rawFence);
@@ -337,12 +348,12 @@ bool GpuCryptomatteCoverage::Impl::createPipelines() {
 }
 
 bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImage>& source,
-                                       const ImageWindow outputWindow,
-                                       const ImageWindow displayWindow,
-                                       const core::PixelAspectRatio pixelAspect,
-                                       const std::uint32_t rankCount,
-                                       const std::span<const std::uint32_t> ids,
-                                       const std::uint64_t byteBudget) {
+                                             const ImageWindow outputWindow,
+                                             const ImageWindow displayWindow,
+                                             const core::PixelAspectRatio pixelAspect,
+                                             const std::uint32_t rankCount,
+                                             const std::span<const std::uint32_t> ids,
+                                             const std::uint64_t byteBudget) {
     const std::uint32_t outputWidth = outputWindow.extent().width();
     const std::uint32_t outputHeight = outputWindow.extent().height();
     const cryptomatte_coverage_detail::CryptomatteCoverageFault fault =
@@ -350,9 +361,10 @@ bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImag
             cryptomatte_coverage_detail::cryptomatteCoverageFault().load());
 
     if (fault == cryptomatte_coverage_detail::CryptomatteCoverageFault::FailJobAllocation) {
-        jobDiagnostic = cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::AllocationFailed,
-                                                "the cryptomatte-coverage job allocation was forced to "
-                                                "fail");
+        jobDiagnostic =
+            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::AllocationFailed,
+                                          "the cryptomatte-coverage job allocation was forced to "
+                                          "fail");
         return false;
     }
 
@@ -388,8 +400,9 @@ bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImag
     const auto dataWindow = ImageWindow::create(outputWindow.originX(), outputWindow.originY(),
                                                 outputWidth, outputHeight);
     if (!dataWindow) {
-        jobDiagnostic = cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::InvalidArgument,
-                                                "the cryptomatte-coverage output window is invalid");
+        jobDiagnostic =
+            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::InvalidArgument,
+                                          "the cryptomatte-coverage output window is invalid");
         return false;
     }
     auto resident = std::make_unique<GpuImageImpl>();
@@ -399,9 +412,9 @@ bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImag
     resident->pixelAspect = pixelAspect;
     resident->generation = control->generation;
     if (!createResidentImage(*control, outputWidth, outputHeight, *resident)) {
-        jobDiagnostic =
-            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::AllocationFailed,
-                                    "the cryptomatte-coverage output image could not be allocated");
+        jobDiagnostic = cryptomatteCoverageDiagnostic(
+            GpuCryptomatteCoverageDiagnosticCode::AllocationFailed,
+            "the cryptomatte-coverage output image could not be allocated");
         return false;
     }
     GpuImageImpl* const outputRaw = resident.get();
@@ -414,27 +427,30 @@ bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImag
     std::uint64_t peakActual = 0;
     if (compositeAddOverflows(outputActual, idsActual, retainedActual) ||
         compositeAddOverflows(retainedActual, resources.ids.stagingBytes, peakActual)) {
-        jobDiagnostic = cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::OverBudget,
-                                                "the cryptomatte-coverage allocation sizes overflow the "
-                                                "byte arithmetic");
+        jobDiagnostic =
+            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::OverBudget,
+                                          "the cryptomatte-coverage allocation sizes overflow the "
+                                          "byte arithmetic");
         return false;
     }
     if (outputActual > budgets.maxImageBytes) {
-        jobDiagnostic = cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::OverBudget,
-                                                "the actual output image exceeds maxImageBytes");
+        jobDiagnostic =
+            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::OverBudget,
+                                          "the actual output image exceeds maxImageBytes");
         return false;
     }
     if (idsActual > budgets.maxMetadataBytes) {
         jobDiagnostic =
             cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::OverBudget,
-                                    "the actual selection buffer exceeds maxMetadataBytes");
+                                          "the actual selection buffer exceeds maxMetadataBytes");
         return false;
     }
     if (retainedActual > byteBudget || peakActual > byteBudget) {
-        jobDiagnostic = cryptomatteCoverageDiagnostic(
-            GpuCryptomatteCoverageDiagnosticCode::OverBudget,
-            "the actual combined cryptomatte-coverage allocations or transient peak exceed the byte "
-            "budget");
+        jobDiagnostic =
+            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::OverBudget,
+                                          "the actual combined cryptomatte-coverage allocations or "
+                                          "transient peak exceed the byte "
+                                          "budget");
         return false;
     }
 
@@ -445,10 +461,10 @@ bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImag
     const std::uint64_t totalPixels =
         static_cast<std::uint64_t>(outputWidth) * static_cast<std::uint64_t>(outputHeight);
     if (totalPixels > std::numeric_limits<std::uint32_t>::max()) {
-        jobDiagnostic =
-            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::OverBudget,
-                                    "the cryptomatte-coverage pixel count exceeds the flattened "
-                                    "index range");
+        jobDiagnostic = cryptomatteCoverageDiagnostic(
+            GpuCryptomatteCoverageDiagnosticCode::OverBudget,
+            "the cryptomatte-coverage pixel count exceeds the flattened "
+            "index range");
         return false;
     }
     std::uint64_t effectiveMaxX = control->maxComputeWorkGroupCountX;
@@ -458,8 +474,8 @@ bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImag
         effectiveMaxX = std::min<std::uint64_t>(effectiveMaxX, forcedMaxX);
     }
     CryptomatteCoverageDispatch dispatch{};
-    if (!planCryptomatteCoverageDispatch(totalPixels, effectiveMaxX, kCryptomatteCoverageMinWorkGroupCountY,
-                                   dispatch)) {
+    if (!planCryptomatteCoverageDispatch(totalPixels, effectiveMaxX,
+                                         kCryptomatteCoverageMinWorkGroupCountY, dispatch)) {
         jobDiagnostic = cryptomatteCoverageDiagnostic(
             GpuCryptomatteCoverageDiagnosticCode::OverBudget,
             "the cryptomatte-coverage dispatch exceeds the device workgroup grid capacity");
@@ -513,9 +529,9 @@ bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImag
     if (dispatcher->vkBeginCommandBuffer(
             rawCommandBuffer, reinterpret_cast<const VkCommandBufferBeginInfo*>(&beginInfo)) !=
         VK_SUCCESS) {
-        jobDiagnostic =
-            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::DeviceUnavailable,
-                                    "the cryptomatte-coverage command buffer could not begin");
+        jobDiagnostic = cryptomatteCoverageDiagnostic(
+            GpuCryptomatteCoverageDiagnosticCode::DeviceUnavailable,
+            "the cryptomatte-coverage command buffer could not begin");
         return false;
     }
     resources.ids.recordInitialization(rawCommandBuffer);
@@ -555,13 +571,15 @@ bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImag
                                      nullptr, 1, &toRead);
 
     if (dispatcher->vkEndCommandBuffer(rawCommandBuffer) != VK_SUCCESS) {
-        jobDiagnostic = cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::DeviceUnavailable,
-                                                "the cryptomatte-coverage command buffer could not end");
+        jobDiagnostic =
+            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::DeviceUnavailable,
+                                          "the cryptomatte-coverage command buffer could not end");
         return false;
     }
     if (fault == cryptomatte_coverage_detail::CryptomatteCoverageFault::FailSubmit) {
-        jobDiagnostic = cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::DeviceUnavailable,
-                                                "the cryptomatte-coverage submit was forced to fail");
+        jobDiagnostic =
+            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::DeviceUnavailable,
+                                          "the cryptomatte-coverage submit was forced to fail");
         return false;
     }
     VkSubmitInfo submit{};
@@ -572,13 +590,15 @@ bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImag
         static_cast<VkQueue>(*control->computeQueue), 1, &submit, rawFence);
     if (submitted == VK_ERROR_DEVICE_LOST) {
         deviceLost = true;
-        jobDiagnostic = cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::DeviceLost,
-                                                "the device was lost during submission");
+        jobDiagnostic =
+            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::DeviceLost,
+                                          "the device was lost during submission");
         return false;
     }
     if (submitted != VK_SUCCESS) {
-        jobDiagnostic = cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::DeviceUnavailable,
-                                                "the cryptomatte-coverage dispatch could not submit");
+        jobDiagnostic =
+            cryptomatteCoverageDiagnostic(GpuCryptomatteCoverageDiagnosticCode::DeviceUnavailable,
+                                          "the cryptomatte-coverage dispatch could not submit");
         return false;
     }
     queueSubmitted = true;

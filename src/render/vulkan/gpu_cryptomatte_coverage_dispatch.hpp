@@ -23,10 +23,10 @@ struct CryptomatteCoverageDispatch final {
 // X workgroup count exceeds `maxGroupsX` is still dispatched (a 2D tail) instead of being rejected.
 // Returns false only when the pixel count exceeds the physical `maxGroupsX * maxGroupsY` grid
 // capacity or an input is zero; the caller treats that as an out-of-capacity refusal.
-[[nodiscard]] inline bool planCryptomatteCoverageDispatch(const std::uint64_t totalPixels,
-                                                    const std::uint64_t maxGroupsX,
-                                                    const std::uint64_t maxGroupsY,
-                                                    CryptomatteCoverageDispatch& out) noexcept {
+[[nodiscard]] inline bool
+planCryptomatteCoverageDispatch(const std::uint64_t totalPixels, const std::uint64_t maxGroupsX,
+                                const std::uint64_t maxGroupsY,
+                                CryptomatteCoverageDispatch& out) noexcept {
     if (totalPixels == 0 || maxGroupsX == 0 || maxGroupsY == 0) {
         return false;
     }

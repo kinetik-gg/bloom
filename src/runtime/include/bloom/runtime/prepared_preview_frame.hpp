@@ -344,10 +344,11 @@ class PreparedPreviewFrame final {
            std::shared_ptr<const ReferenceDisplayFrame> displayFrame,
            PreviewResolutionPolicy resolutionPolicy = PreviewResolutionPolicy::Auto,
            std::optional<ChannelInspection> channelInspection = std::nullopt) noexcept;
-    [[nodiscard]] static std::optional<PreparedPreviewFrame> createQualified(
-        std::uint64_t requestGeneration, std::shared_ptr<const QualifiedDisplayFrame> displayFrame,
-        PreviewResolutionPolicy resolutionPolicy = PreviewResolutionPolicy::Auto,
-        std::optional<ChannelInspection> channelInspection = std::nullopt) noexcept;
+    [[nodiscard]] static std::optional<PreparedPreviewFrame>
+    createQualified(std::uint64_t requestGeneration,
+                    std::shared_ptr<const QualifiedDisplayFrame> displayFrame,
+                    PreviewResolutionPolicy resolutionPolicy = PreviewResolutionPolicy::Auto,
+                    std::optional<ChannelInspection> channelInspection = std::nullopt) noexcept;
     // Re-stamps a retained display-only frame with the generation of the request it now answers.
     [[nodiscard]] static std::optional<PreparedPreviewFrame>
     createDisplayOnly(std::uint64_t requestGeneration,

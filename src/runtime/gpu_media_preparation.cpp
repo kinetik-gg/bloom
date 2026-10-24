@@ -1,6 +1,6 @@
+#include "gpu_media_preparation.hpp"
 #include "channel_shuffle.hpp"
 #include "cryptomatte.hpp"
-#include "gpu_media_preparation.hpp"
 
 #include "image_source.hpp"
 #include "input_color_context.hpp"
@@ -740,12 +740,12 @@ MediaUploadOutcome prepareChannelShuffleColorLeaf(
     return outcome;
 }
 
-MediaUploadOutcome prepareCryptomatteLeaf(
-    const CompiledCryptomatte& cryptomatte, const EvaluationRequest& request,
-    const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
-    const GpuSceneMediaContext& context, const std::uint64_t pixelBudget, const bool explicitBypass,
-    const bool planBypass, const CancellationToken& cancellation,
-    GpuSceneMediaStatistics& statistics) {
+MediaUploadOutcome
+prepareCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationRequest& request,
+                       const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
+                       const GpuSceneMediaContext& context, const std::uint64_t pixelBudget,
+                       const bool explicitBypass, const bool planBypass,
+                       const CancellationToken& cancellation, GpuSceneMediaStatistics& statistics) {
     ++statistics.imageSources;
     MediaUploadOutcome outcome;
     if (context.operationCache == nullptr) {

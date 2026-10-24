@@ -108,8 +108,8 @@ inline void writeCryptomatteExr(const std::filesystem::path& path, const bool ma
             const auto put = [&](const std::size_t rank, std::vector<float>& id,
                                  std::vector<float>& coverage) {
                 if (rank < entries.size()) {
-                    id[pixel] = std::bit_cast<float>(
-                        runtime::cryptomatteNameId(kObjects[static_cast<std::size_t>(entries[rank].first)]));
+                    id[pixel] = std::bit_cast<float>(runtime::cryptomatteNameId(
+                        kObjects[static_cast<std::size_t>(entries[rank].first)]));
                     coverage[pixel] = entries[rank].second;
                 }
             };

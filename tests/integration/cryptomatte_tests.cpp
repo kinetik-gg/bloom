@@ -1,6 +1,6 @@
-// #364 Cryptomatte on a real compiled document: a multi-rank Cryptomatte EXR generated in-test, with
-// and without a manifest, evaluated by the CPU reference through the Mask preview, the Image output
-// with and without an input image, and a muted node.
+// #364 Cryptomatte on a real compiled document: a multi-rank Cryptomatte EXR generated in-test,
+// with and without a manifest, evaluated by the CPU reference through the Mask preview, the Image
+// output with and without an input image, and a muted node.
 
 #include "cryptomatte_fixture_support.hpp"
 
@@ -66,8 +66,7 @@ struct Fixture {
         folder = std::filesystem::temp_directory_path() /
                  ("bloom-cryptomatte-" + name + "-" + std::to_string(random()));
         std::filesystem::create_directories(folder);
-        fixture::writeCryptomatteExr(folder / "crypto.exr", manifest, "CryptoObject",
-                                     manifestText);
+        fixture::writeCryptomatteExr(folder / "crypto.exr", manifest, "CryptoObject", manifestText);
         run<commands::ImportAssets>(std::vector{folder / "crypto.exr"}, folder);
         run<commands::AddImageLayer>(composition,
                                      document.snapshot().project().assets().front().id);
@@ -77,9 +76,10 @@ struct Fixture {
             if (node.typeId == document::kLayerOutputNodeType)
                 layer = node.id;
         }
-        cryptomatte = *run<commands::AddNode>(composition, std::string(document::kCryptomatteNodeType),
-                                              document::Vec2d{})
-                           .outputId<document::NodeId>(commands::kAddNodeOutput);
+        cryptomatte =
+            *run<commands::AddNode>(composition, std::string(document::kCryptomatteNodeType),
+                                    document::Vec2d{})
+                 .outputId<document::NodeId>(commands::kAddNodeOutput);
         connect(source, document::kImageSourceChannelsOutputPort, cryptomatte,
                 document::kChannelSetPort);
         connect(cryptomatte, document::kCryptomatteImageOutputPort, layer,
@@ -125,12 +125,14 @@ struct Fixture {
         }
         runtime::CpuCompositionEvaluator evaluator;
         evaluator.setAssetBaseDirectory(folder);
-        const auto result = evaluator.evaluate(
-            compiled.plan,
-            {{}, compiled.plan->output(), runtime::CompositionFormatResolution{},
-             runtime::EvaluationQuality::Reference,
-             runtime::EvaluationColorIntent::LinearRec709Scene, 1U << 24U},
-            {});
+        const auto result = evaluator.evaluate(compiled.plan,
+                                               {{},
+                                                compiled.plan->output(),
+                                                runtime::CompositionFormatResolution{},
+                                                runtime::EvaluationQuality::Reference,
+                                                runtime::EvaluationColorIntent::LinearRec709Scene,
+                                                1U << 24U},
+                                               {});
         if (!result.frame()) {
             for (const auto& diagnostic : result.diagnostics())
                 std::cerr << diagnostic.summary << ": " << diagnostic.detail << '\n';
@@ -207,7 +209,8 @@ void withoutManifest() {
                                            input->port == document::kCryptomatteImageInputPort;
                                 }),
            "the fixture leaves the Cryptomatte image input open");
-    expect(matches(f.frame(), {1, 3}), "without an input image the Image output is the white matte");
+    expect(matches(f.frame(), {1, 3}),
+           "without an input image the Image output is the white matte");
 }
 
 void malformedManifest() {
@@ -215,8 +218,7 @@ void malformedManifest() {
     f.setMattes({"cube"});
     const auto frame = f.matte();
     expect(matches(frame, {1}), "with a malformed manifest names still resolve through their hash");
-    expect(frame.warned("manifest is not a valid JSON object"),
-           "a malformed manifest is reported");
+    expect(frame.warned("manifest is not a valid JSON object"), "a malformed manifest is reported");
 }
 
 void imageInputAndMute() {
@@ -236,9 +238,9 @@ void imageInputAndMute() {
     expect(std::abs(muted.pixels[0].red() - 0.1F) < 1e-6F && muted.pixels[0].alpha() == 1.0F,
            "a muted Cryptomatte passes its image through");
     f.run<commands::SetNodeMuted>(f.composition, f.cryptomatte, false);
-    f.run<commands::SetNodeParameterValue>(
-        f.composition, f.cryptomatte, std::string(document::kCryptomatteLayerParameterRole),
-        document::ParameterValue{std::string("CryptoMaterial")});
+    f.run<commands::SetNodeParameterValue>(f.composition, f.cryptomatte,
+                                           std::string(document::kCryptomatteLayerParameterRole),
+                                           document::ParameterValue{std::string("CryptoMaterial")});
     const auto missing = f.frame();
     expect(missing.warned("no Cryptomatte layer named CryptoMaterial") &&
                missing.pixels[0].alpha() == 0.0F,

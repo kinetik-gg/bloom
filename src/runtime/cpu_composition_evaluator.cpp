@@ -1,12 +1,12 @@
-#include "cpu_composition_evaluator_support.hpp"
-#include "checker_image.hpp"
-#include "cpu_composition_resolution.hpp"
-#include "image_effect.hpp"
-#include "layer_mask_sampling.hpp"
-#include "gradient_source.hpp"
 #include "channel_shuffle.hpp"
+#include "checker_image.hpp"
+#include "cpu_composition_evaluator_support.hpp"
+#include "cpu_composition_resolution.hpp"
 #include "cryptomatte.hpp"
+#include "gradient_source.hpp"
+#include "image_effect.hpp"
 #include "image_source.hpp"
+#include "layer_mask_sampling.hpp"
 #include "layer_parent_transform.hpp"
 #include "operation_key.hpp"
 #include "resize_fit_geometry.hpp"
@@ -3147,7 +3147,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             if (!image.diagnostic.empty())
                                 imageWarnings.push_back({EvaluationDiagnosticCode::InvalidParameter,
                                                          DiagnosticSeverity::Warning,
-                                                         operationSubject, image.diagnostic, {}});
+                                                         operationSubject,
+                                                         image.diagnostic,
+                                                         {}});
                             bounds[index].local =
                                 detail::cryptomatteFrameBounds(*selectedCryptomatte)
                                     .value_or(detail::boundsForWindow(

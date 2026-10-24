@@ -238,7 +238,7 @@ int run(int argc, char** argv) {
     expect(zoomDropdown->width() >= zoomDropdown->minimumSizeHint().width(), zoomDropdown,
            "E21 zoom fits widest item plus chevron");
     const auto choices = tools->findChildren<kit::KIconToggle*>();
-    expect(choices.size() == 10, tools, "ten enabled tool choices");
+    expect(choices.size() == 11, tools, "eleven enabled tool choices");
     for (auto* choice : choices) {
         expect(choice->isEnabled(), choice, "viewer tools enabled");
         expect(choice->height() == kit::px(kit::Size::ToggleCell) && !choice->toolTip().isEmpty(),

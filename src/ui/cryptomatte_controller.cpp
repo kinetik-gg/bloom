@@ -106,7 +106,9 @@ std::vector<std::string> CryptomatteController::mattes(const document::NodeId no
     for (const auto& binding : record->parameters)
         if (binding.role == document::kCryptomatteMattesParameterRole)
             return runtime::splitCryptomatteMatteList(
-                session_.constantStringValue(binding.parameterId).value_or(QString{}).toStdString());
+                session_.constantStringValue(binding.parameterId)
+                    .value_or(QString{})
+                    .toStdString());
     return {};
 }
 
@@ -160,8 +162,7 @@ void CryptomatteController::poll() {
             ++task;
             continue;
         }
-        if (result->state() == runtime::TaskState::Succeeded && result->value() &&
-            *result->value())
+        if (result->state() == runtime::TaskState::Succeeded && result->value() && *result->value())
             listings_.insert_or_assign(task->first,
                                        Listing{task->second.revision, **result->value()});
         task = listingTasks_.erase(task);

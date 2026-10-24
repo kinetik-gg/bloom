@@ -2,22 +2,22 @@
 #define BLOOM_RENDER_VULKAN_GPU_CRYPTOMATTE_COVERAGE_PRIVATE_HPP
 
 // Private to src/render/vulkan. The bounded reservation and native resource set behind the
-// CryptomatteCoverageV1 producer. This mirrors the accepted GpuOutputColorReadback slot contract: exactly
-// one submission may be Reserved or Quarantined process-wide. A reservation is acquired BEFORE any
-// native allocation or submit; a proven retirement returns it to Free; an unproven retirement moves
-// the exact submission (device generation, source, ID buffer, output, pipeline, command
-// pool/buffer, fence) into the retained quarantine so only the genuine owner thread can later prove
-// retirement or observe device loss. No per-object unbounded growth: a foreign-thread destruction
-// retains the one occupied reservation instead of allocating a new one, and admission is refused
-// while it is occupied.
+// CryptomatteCoverageV1 producer. This mirrors the accepted GpuOutputColorReadback slot contract:
+// exactly one submission may be Reserved or Quarantined process-wide. A reservation is acquired
+// BEFORE any native allocation or submit; a proven retirement returns it to Free; an unproven
+// retirement moves the exact submission (device generation, source, ID buffer, output, pipeline,
+// command pool/buffer, fence) into the retained quarantine so only the genuine owner thread can
+// later prove retirement or observe device loss. No per-object unbounded growth: a foreign-thread
+// destruction retains the one occupied reservation instead of allocating a new one, and admission
+// is refused while it is occupied.
 
 #include <bloom/render/gpu_cryptomatte_coverage.hpp>
 
 #include "gpu_composite_private.hpp"
-#include "gpu_device_private.hpp"
-#include "gpu_image_private.hpp"
 #include "gpu_cryptomatte_coverage_dispatch.hpp"
 #include "gpu_cryptomatte_coverage_fault.hpp"
+#include "gpu_device_private.hpp"
+#include "gpu_image_private.hpp"
 #include "shaders/cryptomatte_coverage_spirv.inc"
 
 #include <atomic>
@@ -45,7 +45,8 @@ struct CryptomatteCoveragePush final {
 static_assert(sizeof(CryptomatteCoveragePush) == kCryptomatteCoveragePushBytes);
 
 [[nodiscard]] inline GpuCryptomatteCoverageDiagnostic
-cryptomatteCoverageDiagnostic(const GpuCryptomatteCoverageDiagnosticCode code, std::string message) {
+cryptomatteCoverageDiagnostic(const GpuCryptomatteCoverageDiagnosticCode code,
+                              std::string message) {
     return GpuCryptomatteCoverageDiagnostic{code, std::move(message)};
 }
 
@@ -85,8 +86,8 @@ enum class ReservationState : std::uint8_t {
     Quarantined,
 };
 
-// The exact native resource set of one CryptomatteCoverageV1 submission. Owned by the live Impl while
-// Reserved and by the slot while Quarantined.
+// The exact native resource set of one CryptomatteCoverageV1 submission. Owned by the live Impl
+// while Reserved and by the slot while Quarantined.
 struct ResourceSet final {
     std::shared_ptr<DeviceAllocatorState> deviceState;
     std::shared_ptr<const GpuImage> source;
@@ -178,8 +179,8 @@ inline bool retireQuarantinedLocked(Reservation& slot) noexcept {
 
 } // namespace cryptomatte_coverage_detail
 
-// The single job state machine behind GpuCryptomatteCoverage. Native per-job resources are created only
-// after the bounded reservation is acquired, so many pre-created instances hold no native
+// The single job state machine behind GpuCryptomatteCoverage. Native per-job resources are created
+// only after the bounded reservation is acquired, so many pre-created instances hold no native
 // resources.
 struct GpuCryptomatteCoverage::Impl final {
     Impl() = default;
@@ -209,9 +210,8 @@ struct GpuCryptomatteCoverage::Impl final {
     // owned by Impl for the caller to free).
     [[nodiscard]] bool launchJob(const std::shared_ptr<const GpuImage>& source,
                                  ImageWindow outputWindow, ImageWindow displayWindow,
-                                 core::PixelAspectRatio pixelAspect,
-                                 std::uint32_t rankCount, std::span<const std::uint32_t> ids,
-                                 std::uint64_t byteBudget);
+                                 core::PixelAspectRatio pixelAspect, std::uint32_t rankCount,
+                                 std::span<const std::uint32_t> ids, std::uint64_t byteBudget);
 
     std::thread::id owner;
     std::shared_ptr<cryptomatte_coverage_detail::DeviceAllocatorState> control;

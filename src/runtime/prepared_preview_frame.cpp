@@ -14,7 +14,7 @@ std::optional<PreparedPreviewFrame>
 PreparedPreviewFrame::create(const std::uint64_t requestGeneration,
                              std::shared_ptr<const ReferenceDisplayFrame> displayFrame,
                              const PreviewResolutionPolicy resolutionPolicy,
-    std::optional<ChannelInspection> channelInspection) noexcept {
+                             std::optional<ChannelInspection> channelInspection) noexcept {
     if (requestGeneration == 0 || displayFrame == nullptr ||
         displayFrame->processFrame() == nullptr ||
         displayFrame->identity().processFrame.plan == nullptr) {
@@ -53,7 +53,7 @@ std::optional<PreparedPreviewFrame>
 PreparedPreviewFrame::createQualified(const std::uint64_t requestGeneration,
                                       std::shared_ptr<const QualifiedDisplayFrame> displayFrame,
                                       const PreviewResolutionPolicy resolutionPolicy,
-    std::optional<ChannelInspection> channelInspection) noexcept {
+                                      std::optional<ChannelInspection> channelInspection) noexcept {
     if (requestGeneration == 0 || displayFrame == nullptr ||
         displayFrame->processFrame() == nullptr ||
         displayFrame->identity().processFrame.plan == nullptr) {

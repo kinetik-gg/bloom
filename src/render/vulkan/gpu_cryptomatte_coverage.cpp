@@ -17,16 +17,18 @@
 namespace bloom::render {
 namespace {
 
-constexpr std::uint64_t kCryptomatteCoverageDeadlineNanoseconds = 5ULL * 1000ULL * 1000ULL * 1000ULL;
+constexpr std::uint64_t kCryptomatteCoverageDeadlineNanoseconds =
+    5ULL * 1000ULL * 1000ULL * 1000ULL;
 
-[[nodiscard]] GpuCryptomatteCoverageDiagnostic makeDiagnostic(const GpuCryptomatteCoverageDiagnosticCode code,
-                                                        std::string message) {
+[[nodiscard]] GpuCryptomatteCoverageDiagnostic
+makeDiagnostic(const GpuCryptomatteCoverageDiagnosticCode code, std::string message) {
     return cryptomatteCoverageDiagnostic(code, std::move(message));
 }
 
 } // namespace
 
-void GpuCryptomatteCoverage::Impl::fail(const GpuCryptomatteCoverageDiagnosticCode code, std::string message) {
+void GpuCryptomatteCoverage::Impl::fail(const GpuCryptomatteCoverageDiagnosticCode code,
+                                        std::string message) {
     jobState = GpuCryptomatteCoverageJobState::Failure;
     jobDiagnostic = cryptomatteCoverageDiagnostic(code, std::move(message));
 }
@@ -37,7 +39,8 @@ void GpuCryptomatteCoverage::Impl::clearJob() {
     discardRequested.store(false);
 }
 
-GpuCryptomatteCoverage::GpuCryptomatteCoverage(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+GpuCryptomatteCoverage::GpuCryptomatteCoverage(std::unique_ptr<Impl> impl) noexcept
+    : impl_(std::move(impl)) {}
 GpuCryptomatteCoverage::GpuCryptomatteCoverage(GpuCryptomatteCoverage&& other) noexcept = default;
 GpuCryptomatteCoverage& GpuCryptomatteCoverage::operator=(GpuCryptomatteCoverage&& other) noexcept {
     if (this != &other) {
@@ -145,8 +148,8 @@ std::uint64_t GpuCryptomatteCoverage::lastJobAllocationBytes() const noexcept {
     return impl_ != nullptr ? impl_->lastJobBytes : 0;
 }
 
-GpuCryptomatteCoverageCreateResult GpuCryptomatteCoverage::create(GpuDevice& device,
-                                                      const GpuCryptomatteCoverageBudgets& budgets) {
+GpuCryptomatteCoverageCreateResult
+GpuCryptomatteCoverage::create(GpuDevice& device, const GpuCryptomatteCoverageBudgets& budgets) {
     if (budgets.maxImageBytes == 0 || budgets.maxMetadataBytes == 0) {
         return {nullptr, makeDiagnostic(GpuCryptomatteCoverageDiagnosticCode::InvalidArgument,
                                         "the cryptomatte-coverage budget is zero")};
@@ -156,9 +159,10 @@ GpuCryptomatteCoverageCreateResult GpuCryptomatteCoverage::create(GpuDevice& dev
                                         "the GPU device is not Ready")};
     }
     if (GpuRendererAccess::owner(device) != std::this_thread::get_id()) {
-        return {nullptr, makeDiagnostic(GpuCryptomatteCoverageDiagnosticCode::WrongThread,
-                                        "the cryptomatte-coverage instance must be created on the device "
-                                        "owner thread")};
+        return {nullptr,
+                makeDiagnostic(GpuCryptomatteCoverageDiagnosticCode::WrongThread,
+                               "the cryptomatte-coverage instance must be created on the device "
+                               "owner thread")};
     }
     auto control = GpuRendererAccess::state(device);
     if (control == nullptr) {
@@ -178,8 +182,9 @@ GpuCryptomatteCoverageCreateResult GpuCryptomatteCoverage::create(GpuDevice& dev
             GpuCryptomatteCoverageDiagnostic{}};
 }
 
-GpuCryptomatteCoverageDiagnostic GpuCryptomatteCoverage::begin(const GpuCryptomatteCoverageRequest& parameters,
-                                                   const std::uint64_t byteBudget) {
+GpuCryptomatteCoverageDiagnostic
+GpuCryptomatteCoverage::begin(const GpuCryptomatteCoverageRequest& parameters,
+                              const std::uint64_t byteBudget) {
     if (impl_ == nullptr) {
         return makeDiagnostic(GpuCryptomatteCoverageDiagnosticCode::DeviceUnavailable,
                               "the cryptomatte-coverage instance is not initialized");
@@ -274,8 +279,9 @@ GpuCryptomatteCoverageDiagnostic GpuCryptomatteCoverage::begin(const GpuCryptoma
     }
     CryptomatteCoverageDispatch dispatch{};
     if (!planCryptomatteCoverageDispatch(pixels, effectiveMaxX, 65535, dispatch)) {
-        return makeDiagnostic(GpuCryptomatteCoverageDiagnosticCode::OverBudget,
-                              "the Cryptomatte dispatch exceeds the device workgroup grid capacity");
+        return makeDiagnostic(
+            GpuCryptomatteCoverageDiagnosticCode::OverBudget,
+            "the Cryptomatte dispatch exceeds the device workgroup grid capacity");
     }
     if (!compositeImageBelongsTo(gpuImageImpl(*parameters.source), impl.control)) {
         return makeDiagnostic(GpuCryptomatteCoverageDiagnosticCode::InvalidArgument,
@@ -288,13 +294,15 @@ GpuCryptomatteCoverageDiagnostic GpuCryptomatteCoverage::begin(const GpuCryptoma
         std::lock_guard lock(cryptomatte_coverage_detail::reservationMutex());
         cryptomatte_coverage_detail::Reservation& slot = cryptomatte_coverage_detail::reservation();
         if (slot.state == cryptomatte_coverage_detail::ReservationState::Reserved) {
-            return makeDiagnostic(GpuCryptomatteCoverageDiagnosticCode::Busy,
-                                  "the cryptomatte-coverage reservation is held by a live submission");
+            return makeDiagnostic(
+                GpuCryptomatteCoverageDiagnosticCode::Busy,
+                "the cryptomatte-coverage reservation is held by a live submission");
         }
         if (slot.state == cryptomatte_coverage_detail::ReservationState::Quarantined) {
             if (slot.ownerThread != self) {
-                return makeDiagnostic(GpuCryptomatteCoverageDiagnosticCode::DeviceUnavailable,
-                                      "a foreign owner thread holds the cryptomatte-coverage quarantine");
+                return makeDiagnostic(
+                    GpuCryptomatteCoverageDiagnosticCode::DeviceUnavailable,
+                    "a foreign owner thread holds the cryptomatte-coverage quarantine");
             }
             if (!cryptomatte_coverage_detail::retireQuarantinedLocked(slot)) {
                 return makeDiagnostic(GpuCryptomatteCoverageDiagnosticCode::DeviceUnavailable,
@@ -361,10 +369,11 @@ GpuCryptomatteCoveragePollResult GpuCryptomatteCoverage::poll() {
     const auto fault = static_cast<cryptomatte_coverage_detail::CryptomatteCoverageFault>(
         cryptomatte_coverage_detail::cryptomatteCoverageFault().load());
     const VkFence rawFence = static_cast<VkFence>(*impl.resources.fence);
-    const VkResult status = fault == cryptomatte_coverage_detail::CryptomatteCoverageFault::ForceFenceTimeout
-                                ? VK_NOT_READY
-                                : impl.control->device.getDispatcher()->vkGetFenceStatus(
-                                      static_cast<VkDevice>(*impl.control->device), rawFence);
+    const VkResult status =
+        fault == cryptomatte_coverage_detail::CryptomatteCoverageFault::ForceFenceTimeout
+            ? VK_NOT_READY
+            : impl.control->device.getDispatcher()->vkGetFenceStatus(
+                  static_cast<VkDevice>(*impl.control->device), rawFence);
     // An injected diagnostic cannot justify freeing real pending driver resources. First prove
     // retirement using the genuine fence, then reject publication as device loss.
     if (fault == cryptomatte_coverage_detail::CryptomatteCoverageFault::ForceDeviceLost &&
@@ -373,14 +382,16 @@ GpuCryptomatteCoveragePollResult GpuCryptomatteCoverage::poll() {
         impl.queueSubmitted = false;
         impl.freeJobResources();
         impl.releaseClaim();
-        impl.fail(GpuCryptomatteCoverageDiagnosticCode::DeviceLost, "the device was lost while polling");
+        impl.fail(GpuCryptomatteCoverageDiagnosticCode::DeviceLost,
+                  "the device was lost while polling");
         return GpuCryptomatteCoveragePollResult::Failure;
     }
     if (status == VK_NOT_READY) {
         const bool deadlineExceeded =
             fault == cryptomatte_coverage_detail::CryptomatteCoverageFault::ForceFenceTimeout ||
             std::chrono::steady_clock::now() >=
-                impl.submittedAt + std::chrono::nanoseconds(kCryptomatteCoverageDeadlineNanoseconds);
+                impl.submittedAt +
+                    std::chrono::nanoseconds(kCryptomatteCoverageDeadlineNanoseconds);
         if (!deadlineExceeded) {
             return GpuCryptomatteCoveragePollResult::Pending;
         }
@@ -391,9 +402,10 @@ GpuCryptomatteCoveragePollResult GpuCryptomatteCoverage::poll() {
         }
         impl.fail(cancelled ? GpuCryptomatteCoverageDiagnosticCode::Cancelled
                             : GpuCryptomatteCoverageDiagnosticCode::NativeTimeout,
-                  cancelled ? "the cryptomatte-coverage job was cancelled; the submission is retained"
-                            : "the cryptomatte-coverage job did not retire within the deadline; the "
-                              "submission is retained");
+                  cancelled
+                      ? "the cryptomatte-coverage job was cancelled; the submission is retained"
+                      : "the cryptomatte-coverage job did not retire within the deadline; the "
+                        "submission is retained");
         return GpuCryptomatteCoveragePollResult::Failure;
     }
     if (status == VK_ERROR_DEVICE_LOST) {

@@ -94,18 +94,17 @@ struct Scene final {
         fixture::writeCryptomatteExr(folder / "crypto.exr", manifest);
         const auto composition = session.compositionId();
         run<commands::ImportAssets>(std::vector{folder / "crypto.exr"}, folder);
-        run<commands::AddImageLayer>(composition,
-                                     session.snapshot().project().assets().front().id);
+        run<commands::AddImageLayer>(composition, session.snapshot().project().assets().front().id);
         for (const auto& node : session.composition()->graph().nodes()) {
             if (node.typeId == document::kImageSourceNodeType)
                 source = node.id;
             if (node.typeId == document::kLayerOutputNodeType)
                 layer = node.id;
         }
-        cryptomatte = *run<commands::AddNode>(composition,
-                                              std::string(document::kCryptomatteNodeType),
-                                              document::Vec2d{})
-                           .outputId<document::NodeId>(commands::kAddNodeOutput);
+        cryptomatte =
+            *run<commands::AddNode>(composition, std::string(document::kCryptomatteNodeType),
+                                    document::Vec2d{})
+                 .outputId<document::NodeId>(commands::kAddNodeOutput);
         run<commands::ConnectPorts>(
             composition,
             document::OutputPortRef{source, std::string(document::kImageSourceChannelsOutputPort)},
@@ -141,8 +140,8 @@ struct Pipeline final {
 [[nodiscard]] ui::CryptomatteController::LayerProvider layerProvider(Pipeline& pipeline,
                                                                      std::filesystem::path base) {
     return [&pipeline, base](const document::Snapshot& snapshot,
-                             const document::CompositionId composition,
-                             const document::NodeId node, const core::RationalTime time,
+                             const document::CompositionId composition, const document::NodeId node,
+                             const core::RationalTime time,
                              const runtime::EvaluationColorIntent& colorIntent,
                              const runtime::CancellationToken& cancellation) {
         return runtime::listCryptomatteLayers(*pipeline.compiler, snapshot, composition, node, base,
@@ -152,14 +151,13 @@ struct Pipeline final {
 
 [[nodiscard]] ui::CryptomatteController::PickProvider pickProvider(Pipeline& pipeline,
                                                                    std::filesystem::path base) {
-    return [&pipeline, base](const document::Snapshot& snapshot,
-                             const document::CompositionId composition,
-                             const document::NodeId node, const core::RationalTime time,
-                             const runtime::EvaluationColorIntent& colorIntent,
-                             const std::int64_t x, const std::int64_t y,
-                             const runtime::CancellationToken& cancellation) {
-        return runtime::pickCryptomatte(*pipeline.compiler, snapshot, composition, node, base,
-                                        time, colorIntent, x, y, cancellation);
+    return [&pipeline,
+            base](const document::Snapshot& snapshot, const document::CompositionId composition,
+                  const document::NodeId node, const core::RationalTime time,
+                  const runtime::EvaluationColorIntent& colorIntent, const std::int64_t x,
+                  const std::int64_t y, const runtime::CancellationToken& cancellation) {
+        return runtime::pickCryptomatte(*pipeline.compiler, snapshot, composition, node, base, time,
+                                        colorIntent, x, y, cancellation);
     };
 }
 
@@ -268,8 +266,7 @@ void testPropertiesAndViewer() {
         expect(waitUntil([&] {
                    return preview.state().activity == ui::PreviewActivity::Ready &&
                           preview.state().frame != nullptr &&
-                          preview.state().frame->desiredIdentity().channelInspection ==
-                              inspection;
+                          preview.state().frame->desiredIdentity().channelInspection == inspection;
                }),
                "the matte preview renders for the inspection it was asked for");
     }
@@ -312,8 +309,7 @@ void testPropertiesAndViewer() {
     click(2.5, 1.5, Qt::ControlModifier);
     expect(controller.mattes(scene.cryptomatte) == std::vector<std::string>{"sky"},
            "Ctrl-click on an unselected object leaves the list unchanged");
-    expect(controller.lastPickMessage().contains("cube"),
-           "the pick reports the object it read");
+    expect(controller.lastPickMessage().contains("cube"), "the pick reports the object it read");
     // Pixel (1, 1) is empty: nothing is added.
     click(1.5, 1.5, Qt::NoModifier);
     expect(controller.mattes(scene.cryptomatte) == std::vector<std::string>{"sky"} &&
@@ -334,10 +330,11 @@ void testPropertiesAndViewer() {
     if (const auto frame = preview.state().frame; frame != nullptr && frame->hasProcessFrame()) {
         bool exact = true;
         for (std::size_t pixel = 0; pixel < fixture::kPixels.size(); ++pixel) {
-            const auto value = frame->processImage().read(
-                static_cast<std::int64_t>(pixel % fixture::kWidth),
-                static_cast<std::int64_t>(pixel / fixture::kWidth));
-            exact = exact && value && value.value()->alpha() == fixture::expectedCoverage(pixel, {0, 3});
+            const auto value =
+                frame->processImage().read(static_cast<std::int64_t>(pixel % fixture::kWidth),
+                                           static_cast<std::int64_t>(pixel / fixture::kWidth));
+            exact = exact && value &&
+                    value.value()->alpha() == fixture::expectedCoverage(pixel, {0, 3});
         }
         expect(exact, "the matte preview equals the sphere + sky coverage");
     }

@@ -77,8 +77,7 @@ listCryptomatteLayers(const SnapshotCompiler& compiler, const document::Snapshot
 CryptomattePick pickCryptomatte(const SnapshotCompiler& compiler,
                                 const document::Snapshot& snapshot,
                                 const document::CompositionId composition,
-                                const document::NodeId node,
-                                const std::filesystem::path& assetBase,
+                                const document::NodeId node, const std::filesystem::path& assetBase,
                                 const core::RationalTime time,
                                 const EvaluationColorIntent& colorIntent, const std::int64_t x,
                                 const std::int64_t y, const CancellationToken& cancellation) {
@@ -96,8 +95,8 @@ CryptomattePick pickCryptomatte(const SnapshotCompiler& compiler,
         pick.diagnostic = selection.cancelled ? "Cancelled" : selection.warning;
         return pick;
     }
-    const auto gather = detail::gatherCryptomatte(
-        selection, std::numeric_limits<std::size_t>::max(), cancellation);
+    const auto gather =
+        detail::gatherCryptomatte(selection, std::numeric_limits<std::size_t>::max(), cancellation);
     if (gather.ranks.empty()) {
         pick.diagnostic = gather.cancelled ? "Cancelled" : gather.diagnostic;
         return pick;

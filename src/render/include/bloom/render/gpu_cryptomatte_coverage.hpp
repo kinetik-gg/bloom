@@ -87,8 +87,8 @@ class GpuCryptomatteCoverage final {
     GpuCryptomatteCoverage& operator=(GpuCryptomatteCoverage&& other) noexcept;
     ~GpuCryptomatteCoverage();
 
-    // Builds the cached CryptomatteCoverageV1 pipeline, layout, descriptor set, command pool, and fence
-    // once, on the device owner thread. Wrong thread returns WrongThread.
+    // Builds the cached CryptomatteCoverageV1 pipeline, layout, descriptor set, command pool, and
+    // fence once, on the device owner thread. Wrong thread returns WrongThread.
     [[nodiscard]] static GpuCryptomatteCoverageCreateResult
     create(GpuDevice& device, const GpuCryptomatteCoverageBudgets& budgets = {});
 
@@ -100,8 +100,8 @@ class GpuCryptomatteCoverage final {
 
     // Validates geometry/rank count/device limits/budget, uploads the selected IDs, creates the
     // resident output image, and submits one dispatch. None when accepted.
-    [[nodiscard]] GpuCryptomatteCoverageDiagnostic begin(const GpuCryptomatteCoverageRequest& parameters,
-                                                   std::uint64_t byteBudget);
+    [[nodiscard]] GpuCryptomatteCoverageDiagnostic
+    begin(const GpuCryptomatteCoverageRequest& parameters, std::uint64_t byteBudget);
 
     // Non-blocking fence query. On Ready the resident output is published.
     [[nodiscard]] GpuCryptomatteCoveragePollResult poll();

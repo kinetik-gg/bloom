@@ -133,8 +133,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // image-node batch adds Exposure, Offset, Multiply, Invert, the two Combine nodes, Crop, Pad,
     // Multiply Alpha, Checker, Flip, Rotate 90, Resize, Fit, Gaussian and Box Blur, and Linear and
     // Radial Gradient: 30 structural/image definitions plus 100 value-library definitions. ADR 0028
-    // adds the Mask node; ADR 0026 adds Shuffle, Channel Copy and Remove.
-    expectations.expect(registry.definitions().size() == 134,
+    // adds the Mask node; ADR 0026 adds Shuffle, Channel Copy and Remove; #364 adds Cryptomatte.
+    expectations.expect(registry.definitions().size() == 135,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",

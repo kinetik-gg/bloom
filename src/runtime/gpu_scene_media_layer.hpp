@@ -246,9 +246,9 @@ template <typename Emit, typename ChargeRetained, typename ChargeTransient>
                                              ocioContext, pixelBudget, hScale, vScale,
                                              chargeRetained, cancellation, statistics, leaf);
     } else if (const auto* cryptomatte = std::get_if<CompiledCryptomatte>(&operation)) {
-        built = buildCryptomatteLeaf(*cryptomatte, request, plan, resolved, context, pixelBudget,
-                                     hScale, vScale, chargeRetained, cancellation, statistics,
-                                     leaf);
+        built =
+            buildCryptomatteLeaf(*cryptomatte, request, plan, resolved, context, pixelBudget,
+                                 hScale, vScale, chargeRetained, cancellation, statistics, leaf);
     } else {
         return GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::InternalInvariant,
                                    "a media leaf was requested for a non-media operation"};

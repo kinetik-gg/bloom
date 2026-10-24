@@ -156,11 +156,11 @@ cryptomattePlan(const bloom::document::AssetRecord& asset, std::vector<std::stri
                                         bloom::document::LayerId::fromRaw(idBase + 12), layerInput,
                                         ids, LayerValues{.position = {0.0, 0.0}}));
     const auto mergeIndex = OperationIndex::fromRaw(operations.size());
-    operations.emplace_back(CompiledMerge{
-        NodeId::fromRaw(idBase + 13),
-        std::vector<CompiledMergeInput>{
-            CompiledMergeInput{bloom::document::LayerSlotId::fromRaw(idBase + 14),
-                               bloom::document::LayerId::fromRaw(idBase + 12), layerIndex}}});
+    operations.emplace_back(
+        CompiledMerge{NodeId::fromRaw(idBase + 13),
+                      std::vector<CompiledMergeInput>{CompiledMergeInput{
+                          bloom::document::LayerSlotId::fromRaw(idBase + 14),
+                          bloom::document::LayerId::fromRaw(idBase + 12), layerIndex}}});
     const auto outputIndex = OperationIndex::fromRaw(operations.size());
     operations.emplace_back(CompiledCompositionOutput{NodeId::fromRaw(idBase + 15), mergeIndex});
     return publish(CompiledCompositionPlanDefinition{bloom::document::Revision::fromRaw(7),
@@ -296,8 +296,9 @@ void testSelectionEdit(Expectations& expectations, Harness& harness,
     auto oracleRequest = request(*floor, false);
     oracleRequest.bypassOperationCache = true;
     const auto frame = harness.evaluator.evaluate(floor, oracleRequest, {});
-    const auto readback =
-        floorRun.ready ? readbackResidentImage(*floorRun.image, kSceneBudget) : decltype(readbackResidentImage(*floorRun.image, kSceneBudget)){};
+    const auto readback = floorRun.ready
+                              ? readbackResidentImage(*floorRun.image, kSceneBudget)
+                              : decltype(readbackResidentImage(*floorRun.image, kSceneBudget)){};
     expectations.expect(frame.frame() != nullptr && readback.hasValue() &&
                             pixelsExact(readback.pixels, frame.frame()->processImage().pixels()),
                         "selection edit: the edited matte is bit-identical to the CPU oracle");
@@ -350,9 +351,9 @@ void testCancellationAndBudget(Expectations& expectations, Harness& harness,
     auto oracleRequest = request(*plan, false);
     oracleRequest.bypassOperationCache = true;
     const auto frame = harness.evaluator.evaluate(plan, oracleRequest, {});
-    const auto readback = rerun.ready ? readbackResidentImage(*rerun.image, kSceneBudget)
-                                      : decltype(readbackResidentImage(*rerun.image,
-                                                                       kSceneBudget)){};
+    const auto readback = rerun.ready
+                              ? readbackResidentImage(*rerun.image, kSceneBudget)
+                              : decltype(readbackResidentImage(*rerun.image, kSceneBudget)){};
     expectations.expect(rerun.ready && frame.frame() != nullptr && readback.hasValue() &&
                             pixelsExact(readback.pixels, frame.frame()->processImage().pixels()),
                         "native cancel: the executor retires and then renders the exact matte");
@@ -390,17 +391,16 @@ int main(const int argc, char** argv) {
             return 77;
         }
         Harness harness{*device.device, evaluator, directory};
-        const auto sky = bloom::runtime::formatCryptomatteRawId(
-            bloom::runtime::cryptomatteNameId("sky"));
+        const auto sky =
+            bloom::runtime::formatCryptomatteRawId(bloom::runtime::cryptomatteNameId("sky"));
         testParity(expectations, harness, manifest, {"cube", "floor"}, false, false, 93000,
                    "manifest names");
         testParity(expectations, harness, plain, {"cube", "floor", sky}, false, false, 93100,
                    "hash names and a raw ID without a manifest");
-        testParity(expectations, harness, manifest, {"sphere", "cube", "floor", "sky"}, false,
-                   true, 93200, "every object under a proxy");
+        testParity(expectations, harness, manifest, {"sphere", "cube", "floor", "sky"}, false, true,
+                   93200, "every object under a proxy");
         testParity(expectations, harness, manifest, {}, false, false, 93300, "empty selection");
-        testParity(expectations, harness, manifest, {"sphere"}, true, false, 93400,
-                   "Image output");
+        testParity(expectations, harness, manifest, {"sphere"}, true, false, 93400, "Image output");
         testSelectionEdit(expectations, harness, manifest);
         testCancellationAndBudget(expectations, harness, manifest);
         if (!expectations.ok()) {

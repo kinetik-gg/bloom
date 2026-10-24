@@ -36,20 +36,26 @@ selectChannelSetSources(const CompiledChannelExpression& expression, const core:
                         const std::size_t hostByteBudget, const bool allowRevisionInsertion) {
     ChannelSetSourceSelection result;
     for (const auto& source : expression.sources) {
-        const CompiledImageSource image{source.sourceNodeId, source.asset,     source.startFrame,
-                                        source.loopMode,     source.colorSpace, source.inputColorSpaceId,
-                                        false,               source.part,       {}};
-        auto selected = selectImageSource(image, time, rate, base, cancel, colorIntent,
-                                          revisionCache, revisionPolicy, hostByteBudget,
-                                          allowRevisionInsertion);
+        const CompiledImageSource image{source.sourceNodeId,
+                                        source.asset,
+                                        source.startFrame,
+                                        source.loopMode,
+                                        source.colorSpace,
+                                        source.inputColorSpaceId,
+                                        false,
+                                        source.part,
+                                        {}};
+        auto selected =
+            selectImageSource(image, time, rate, base, cancel, colorIntent, revisionCache,
+                              revisionPolicy, hostByteBudget, allowRevisionInsertion);
         if (selected.cancelled) {
             result.cancelled = true;
             return result;
         }
         result.budgetExceeded = result.budgetExceeded || selected.budgetExceeded;
         if (!selected.available && result.warning.empty())
-            result.warning = selected.warning.empty() ? "A channel source is unavailable"
-                                                      : selected.warning;
+            result.warning =
+                selected.warning.empty() ? "A channel source is unavailable" : selected.warning;
         const auto* part = partOf(selected, source.part);
         if (selected.available && part == nullptr && result.warning.empty())
             result.warning = "The selected OpenEXR part is not present: " + source.part;

@@ -1,9 +1,9 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
+#include <QSignalBlocker>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
-#include <QSignalBlocker>
 #include <bloom/ui/kit/dropdown.hpp>
 
 #include <limits>

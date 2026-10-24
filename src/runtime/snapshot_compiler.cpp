@@ -7,10 +7,10 @@
 
 #include <bloom/document/animation.hpp>
 #include <bloom/document/channel_nodes.hpp>
-#include <bloom/runtime/cryptomatte_matte_list.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/runtime/cryptomatte_matte_list.hpp>
 #include <bloom/runtime/curve_compilation.hpp>
 
 #include <algorithm>
@@ -347,8 +347,7 @@ class CompilePass final {
                     if (!consumesEdge(*node, *edge))
                         continue;
                     // A Viewer inspection plan needs only the inspected node's channel sets.
-                    if (request_.channelInspection &&
-                        nodeId == request_.channelInspection->node &&
+                    if (request_.channelInspection && nodeId == request_.channelInspection->node &&
                         !isChannelSetInput(*node, *edge))
                         continue;
                     reachableEdges.emplace(edge->id, edge);

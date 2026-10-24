@@ -26,29 +26,30 @@ template <class... Ts> Visit(Ts...) -> Visit<Ts...>;
 template <typename Function>
 void forEachScopedInput(const CompiledOperation& operation, const std::uint32_t clock,
                         const std::uint32_t contentClock, Function&& function) {
-    std::visit(Visit{[](const CompiledShape&) {}, [](const CompiledSolid&) {},
-                     [](const CompiledChecker&) {}, [](const CompiledText&) {},
-                     [](const CompiledImageSource&) {}, [](const CompiledVideoSource&) {},
-                     [](const CompiledCompositionSource&) {}, [](const CompiledChannelShuffle&) {},
-                     [](const CompiledCryptomatte&) {},
-                     [&](const CompiledImageEffect& effect) {
-                         function(effect.input, clock);
-                         if (effect.secondaryInput)
-                             function(*effect.secondaryInput, clock);
-                         if (effect.maskInput)
-                             function(*effect.maskInput, clock);
-                     },
-                     [&](const CompiledLayerOutput& layer) {
-                         function(layer.input, layer.time ? contentClock : clock);
-                         if (layer.parent)
-                             function(*layer.parent, clock);
-                     },
-                     [&](const CompiledMerge& merge) {
-                         for (const auto& entry : merge.entries)
-                             function(entry.input, clock);
-                     },
-                     [&](const CompiledCompositionOutput& output) { function(output.input, clock); }},
-               operation);
+    std::visit(
+        Visit{[](const CompiledShape&) {}, [](const CompiledSolid&) {},
+              [](const CompiledChecker&) {}, [](const CompiledText&) {},
+              [](const CompiledImageSource&) {}, [](const CompiledVideoSource&) {},
+              [](const CompiledCompositionSource&) {}, [](const CompiledChannelShuffle&) {},
+              [](const CompiledCryptomatte&) {},
+              [&](const CompiledImageEffect& effect) {
+                  function(effect.input, clock);
+                  if (effect.secondaryInput)
+                      function(*effect.secondaryInput, clock);
+                  if (effect.maskInput)
+                      function(*effect.maskInput, clock);
+              },
+              [&](const CompiledLayerOutput& layer) {
+                  function(layer.input, layer.time ? contentClock : clock);
+                  if (layer.parent)
+                      function(*layer.parent, clock);
+              },
+              [&](const CompiledMerge& merge) {
+                  for (const auto& entry : merge.entries)
+                      function(entry.input, clock);
+              },
+              [&](const CompiledCompositionOutput& output) { function(output.input, clock); }},
+        operation);
 }
 
 template <typename Function>

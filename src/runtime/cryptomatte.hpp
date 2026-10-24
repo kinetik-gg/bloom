@@ -12,8 +12,8 @@
 // exactly that order in Float32, so they are bit-identical.
 
 #include "channel_resolution.hpp"
-#include <bloom/runtime/cryptomatte_matte_list.hpp>
 #include "image_source.hpp"
+#include <bloom/runtime/cryptomatte_matte_list.hpp>
 
 #include <bloom/render/channel_set_image.hpp>
 #include <bloom/render/image.hpp>
@@ -47,12 +47,12 @@ struct CryptomatteManifest final {
 [[nodiscard]] CryptomatteManifest cryptomatteManifest(const render::ChannelMetadata& metadata,
                                                       std::string_view layer);
 // The name a manifest gives `id`, if any.
-[[nodiscard]] std::optional<std::string> cryptomatteManifestName(const CryptomatteManifest& manifest,
-                                                                 std::uint32_t id);
+[[nodiscard]] std::optional<std::string>
+cryptomatteManifestName(const CryptomatteManifest& manifest, std::uint32_t id);
 
 // Each matte entry's ID: a raw ID, a manifest name, or (absent from the manifest) the hashed name.
-[[nodiscard]] std::vector<std::uint32_t>
-resolveCryptomatteIds(std::span<const std::string> mattes, const CryptomatteManifest& manifest);
+[[nodiscard]] std::vector<std::uint32_t> resolveCryptomatteIds(std::span<const std::string> mattes,
+                                                               const CryptomatteManifest& manifest);
 
 // One (ID, coverage) rank pair, by resolved channel name.
 struct CryptomatteRank final {
@@ -61,8 +61,8 @@ struct CryptomatteRank final {
 };
 // The rank pairs of type `layer` among `channels`, in rank order (00 R/G, 00 B/A, 01 R/G, ...).
 // R/G/B/A, r/g/b/a and red/green/blue/alpha suffixes are accepted.
-[[nodiscard]] std::vector<CryptomatteRank> cryptomatteRanks(std::span<const ResolvedChannel> channels,
-                                                            std::string_view layer);
+[[nodiscard]] std::vector<CryptomatteRank>
+cryptomatteRanks(std::span<const ResolvedChannel> channels, std::string_view layer);
 // The Cryptomatte type names present among `channels` (layers `<name>NN` with rank pairs).
 [[nodiscard]] std::vector<std::string> cryptomatteLayers(std::span<const ResolvedChannel> channels);
 

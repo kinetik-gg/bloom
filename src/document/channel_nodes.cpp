@@ -37,7 +37,8 @@ NodeDefinition cryptomatteDefinition() {
     // The Cryptomatte layer type name (`CryptoObject`, `CryptoMaterial`, `CryptoAsset`, ...).
     node.parameters.push_back({std::string(kCryptomatteLayerParameterRole),
                                std::string(kCryptomatteLayerParameterSchemaKey),
-                               ParameterValueKind::String, true, false, std::string("CryptoObject")});
+                               ParameterValueKind::String, true, false,
+                               std::string("CryptoObject")});
     // The matte list: comma-separated names (a literal comma is written `\,`), or `<hex>` raw IDs.
     node.parameters.push_back({std::string(kCryptomatteMattesParameterRole),
                                std::string(kCryptomatteMattesParameterSchemaKey),

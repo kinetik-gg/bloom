@@ -240,8 +240,9 @@ requiredFamily(const bloom::runtime::PreparedGpuScene& scene) {
     bool hasAffine = false;
     bool hasCryptomatte = false;
     for (const auto& command : scene.commands()) {
-        hasCryptomatte = hasCryptomatte ||
-                         std::holds_alternative<bloom::runtime::GpuSceneCryptomatteCommand>(command);
+        hasCryptomatte =
+            hasCryptomatte ||
+            std::holds_alternative<bloom::runtime::GpuSceneCryptomatteCommand>(command);
         hasSolid =
             hasSolid || std::holds_alternative<bloom::runtime::GpuSceneSolidCommand>(command);
         hasCoverage = hasCoverage ||

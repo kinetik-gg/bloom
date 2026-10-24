@@ -1,9 +1,9 @@
 #pragma once
 
-// Test-only fault-injection seam for CryptomatteCoverageV1. The production atomics and accessors are
-// always defined; the setters are defined only in the test-only static library
-// bloom_render_cryptomatte_coverage_test_faults, which production targets never link, so a shipping build
-// cannot expose fault behavior.
+// Test-only fault-injection seam for CryptomatteCoverageV1. The production atomics and accessors
+// are always defined; the setters are defined only in the test-only static library
+// bloom_render_cryptomatte_coverage_test_faults, which production targets never link, so a shipping
+// build cannot expose fault behavior.
 
 #include <atomic>
 #include <cstdint>

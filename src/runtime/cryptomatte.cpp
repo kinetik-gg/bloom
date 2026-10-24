@@ -51,9 +51,8 @@ class ManifestReader final {
         return position_ == text_.size();
     }
     void skip() {
-        while (position_ < text_.size() &&
-               (text_[position_] == ' ' || text_[position_] == '\n' || text_[position_] == '\r' ||
-                text_[position_] == '\t'))
+        while (position_ < text_.size() && (text_[position_] == ' ' || text_[position_] == '\n' ||
+                                            text_[position_] == '\r' || text_[position_] == '\t'))
             ++position_;
     }
     bool take(const char expected) {
@@ -192,8 +191,8 @@ CryptomatteManifest cryptomatteManifest(const render::ChannelMetadata& metadata,
     const auto manifest = std::ranges::find_if(
         metadata, [&](const auto& entry) { return entry.first == key + "manifest"; });
     if (manifest == metadata.end()) {
-        if (std::ranges::any_of(metadata,
-                                [&](const auto& entry) { return entry.first == key + "manif_file"; }))
+        if (std::ranges::any_of(
+                metadata, [&](const auto& entry) { return entry.first == key + "manif_file"; }))
             result.diagnostic = "The Cryptomatte manifest is a sidecar file; names resolve by hash";
         return result;
     }
@@ -252,7 +251,8 @@ std::vector<CryptomatteRank> cryptomatteRanks(const std::span<const ResolvedChan
         const auto parsed = rankLayer(channel.descriptor.layer);
         if (!parsed || parsed->first != layer)
             continue;
-        const auto suffix = std::string_view(channel.name).substr(channel.descriptor.layer.size() + 1);
+        const auto suffix =
+            std::string_view(channel.name).substr(channel.descriptor.layer.size() + 1);
         const auto slot = rankSlot(suffix);
         if (!slot)
             continue;
@@ -299,16 +299,12 @@ float accumulateCryptomatteCoverage(const float previous, const float idBits, co
 
 namespace bloom::runtime::detail {
 
-CryptomatteSelection selectCryptomatte(const CompiledCryptomatte& cryptomatte,
-                                       const core::RationalTime time,
-                                       const document::FrameRate rate,
-                                       const std::filesystem::path& base,
-                                       const CancellationToken& cancel,
-                                       const EvaluationColorIntent& colorIntent,
-                                       OperationCache* revisionCache,
-                                       const MediaSourceRevisionPolicy revisionPolicy,
-                                       const std::size_t hostByteBudget,
-                                       const bool allowRevisionInsertion) {
+CryptomatteSelection
+selectCryptomatte(const CompiledCryptomatte& cryptomatte, const core::RationalTime time,
+                  const document::FrameRate rate, const std::filesystem::path& base,
+                  const CancellationToken& cancel, const EvaluationColorIntent& colorIntent,
+                  OperationCache* revisionCache, const MediaSourceRevisionPolicy revisionPolicy,
+                  const std::size_t hostByteBudget, const bool allowRevisionInsertion) {
     CryptomatteSelection result;
     result.layer = cryptomatte.layer;
     result.mattes = cryptomatte.mattes;
@@ -337,8 +333,8 @@ CryptomatteSelection selectCryptomatte(const CompiledCryptomatte& cryptomatte,
     }
     const auto& channels = result.channels.resolution.channels;
     const auto find = [&](const std::string& name) {
-        return std::ranges::find_if(channels,
-                                    [&](const ResolvedChannel& channel) { return channel.name == name; });
+        return std::ranges::find_if(
+            channels, [&](const ResolvedChannel& channel) { return channel.name == name; });
     };
     OperationKey gatherKey;
     gatherKey.add(std::string{"cryptomatte-ranks-v1"});
@@ -403,9 +399,9 @@ CryptomatteGather gatherCryptomatte(const CryptomatteSelection& selection, const
         result.manifest = cryptomatteManifest(sets[selection.anchor]->metadata(), selection.layer);
     result.ids = resolveCryptomatteIds(selection.mattes, result.manifest);
     const auto* anchorPart = selection.channels.parts[selection.anchor];
-    const auto display = render::ImageWindow::create(anchorPart->displayX, anchorPart->displayY,
-                                                     anchorPart->displayWidth,
-                                                     anchorPart->displayHeight);
+    const auto display =
+        render::ImageWindow::create(anchorPart->displayX, anchorPart->displayY,
+                                    anchorPart->displayWidth, anchorPart->displayHeight);
     std::optional<render::ImageWindow> union_;
     for (const auto& set : sets) {
         if (!set)
@@ -419,9 +415,9 @@ CryptomatteGather gatherCryptomatte(const CryptomatteSelection& selection, const
         const auto top = std::min(union_->originY(), window.originY());
         const auto right = std::max(union_->maxXExclusive(), window.maxXExclusive());
         const auto bottom = std::max(union_->maxYExclusive(), window.maxYExclusive());
-        const auto merged = render::ImageWindow::create(left, top,
-                                                        static_cast<std::uint64_t>(right - left),
-                                                        static_cast<std::uint64_t>(bottom - top));
+        const auto merged =
+            render::ImageWindow::create(left, top, static_cast<std::uint64_t>(right - left),
+                                        static_cast<std::uint64_t>(bottom - top));
         if (!merged) {
             result.diagnostic = "The Cryptomatte windows cannot be combined";
             return result;
@@ -432,8 +428,8 @@ CryptomatteGather gatherCryptomatte(const CryptomatteSelection& selection, const
         result.diagnostic = "The Cryptomatte frame is invalid";
         return result;
     }
-    const auto descriptor = render::Rgba32fImageDescriptor::create(*union_, *display.value(),
-                                                                   core::PixelAspectRatio::square());
+    const auto descriptor = render::Rgba32fImageDescriptor::create(
+        *union_, *display.value(), core::PixelAspectRatio::square());
     if (!descriptor) {
         result.diagnostic = "The Cryptomatte frame is invalid";
         return result;
@@ -488,14 +484,15 @@ CryptomatteGather gatherCryptomatte(const CryptomatteSelection& selection, const
         }
         const auto cost = frozen.value()->pixelStorageByteCost();
         remaining = cost < remaining ? remaining - cost : 0;
-        result.ranks.push_back(std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value())));
+        result.ranks.push_back(
+            std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value())));
     }
     return result;
 }
 
-media::ImageResult<render::Rgba32fImage>
-stackCryptomatteRanks(const CryptomatteGather& gather, const std::size_t budget,
-                      const CancellationToken& cancel) {
+media::ImageResult<render::Rgba32fImage> stackCryptomatteRanks(const CryptomatteGather& gather,
+                                                               const std::size_t budget,
+                                                               const CancellationToken& cancel) {
     if (gather.ranks.empty())
         return {{}, gather.diagnostic.empty() ? "The Cryptomatte has no ranks" : gather.diagnostic};
     const auto* first = gather.ranks.front()->descriptor();
@@ -512,7 +509,9 @@ stackCryptomatteRanks(const CryptomatteGather& gather, const std::size_t budget,
         return {{}, "The Cryptomatte rank stack is too large"};
     auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), budget);
     if (!builder)
-        return {{}, "The Cryptomatte ranks exceed the pixel storage budget", false,
+        return {{},
+                "The Cryptomatte ranks exceed the pixel storage budget",
+                false,
                 media::ImageDiagnosticCode::PixelBudgetExceeded};
     const auto width = static_cast<std::size_t>(window.extent().width());
     for (std::uint64_t rank = 0; rank < rankCount; ++rank) {
@@ -535,15 +534,17 @@ stackCryptomatteRanks(const CryptomatteGather& gather, const std::size_t budget,
     return {std::move(*frozen.value()), {}};
 }
 
-media::ImageResult<render::Rgba32fImage>
-cryptomatteCoverageImage(const CryptomatteGather& gather, const std::size_t budget,
-                         const CancellationToken& cancel) {
+media::ImageResult<render::Rgba32fImage> cryptomatteCoverageImage(const CryptomatteGather& gather,
+                                                                  const std::size_t budget,
+                                                                  const CancellationToken& cancel) {
     if (gather.ranks.empty())
         return {{}, gather.diagnostic.empty() ? "The Cryptomatte has no ranks" : gather.diagnostic};
     const auto* descriptor = gather.ranks.front()->descriptor();
     auto builder = render::Rgba32fImageBuilder::create(*descriptor, budget);
     if (!builder)
-        return {{}, "The Cryptomatte matte exceeds the pixel storage budget", false,
+        return {{},
+                "The Cryptomatte matte exceeds the pixel storage budget",
+                false,
                 media::ImageDiagnosticCode::PixelBudgetExceeded};
     const auto window = descriptor->dataWindow();
     const auto width = static_cast<std::size_t>(window.extent().width());
@@ -583,8 +584,8 @@ evaluateCryptomatte(const CryptomatteSelection& selection,
     auto coverage = cryptomatteCoverageImage(gather, budget, cancel);
     if (!coverage.value.has_value())
         return coverage;
-    auto resampled =
-        resampleDecodedImage(*coverage.value, composition, horizontalScale, verticalScale, budget, cancel);
+    auto resampled = resampleDecodedImage(*coverage.value, composition, horizontalScale,
+                                          verticalScale, budget, cancel);
     resampled.repairedPixels = gather.repairedPixels;
     // A successful matte carries the manifest's diagnostic (sidecar or malformed manifest).
     if (resampled.value.has_value())
@@ -592,7 +593,8 @@ evaluateCryptomatte(const CryptomatteSelection& selection,
     return resampled;
 }
 
-std::optional<ContentBounds> cryptomatteFrameBounds(const CryptomatteSelection& selection) noexcept {
+std::optional<ContentBounds>
+cryptomatteFrameBounds(const CryptomatteSelection& selection) noexcept {
     if (!selection.available || selection.anchor >= selection.channels.sources.size())
         return std::nullopt;
     return imageSourceFrameBounds(selection.channels.sources[selection.anchor]);

@@ -9,9 +9,9 @@
 
 #include <bloom/render/gpu_affine.hpp>
 #include <bloom/render/gpu_blend.hpp>
+#include <bloom/render/gpu_cryptomatte_coverage.hpp>
 #include <bloom/render/gpu_image_upload.hpp>
 #include <bloom/render/gpu_ocio_program.hpp>
-#include <bloom/render/gpu_cryptomatte_coverage.hpp>
 #include <bloom/render/gpu_point_resample.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 

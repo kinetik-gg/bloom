@@ -1,8 +1,3 @@
-#include <bloom/ui/kit/controls.hpp>
-#include <bloom/ui/asset_controller.hpp>
-#include <bloom/ui/cryptomatte_controller.hpp>
-#include <bloom/runtime/cryptomatte_matte_list.hpp>
-#include <bloom/document/channel_nodes.hpp>
 #include "asset_drop.hpp"
 #include "composition_editor_support.hpp"
 #include "node_editor_items.hpp"
@@ -13,9 +8,14 @@
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/runtime/cryptomatte_matte_list.hpp>
+#include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/cryptomatte_controller.hpp>
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <limits>
@@ -555,12 +555,12 @@ void PropertiesEditor::populateCryptomatteRows(const document::NodeRecord& node)
         child->hide();
         child->deleteLater();
     }
-    const auto mattes = controller != nullptr
-                            ? controller->mattes(node.id)
-                            : runtime::splitCryptomatteMatteList(
-                                  boundText(session_, node,
-                                            document::kCryptomatteMattesParameterRole)
-                                      .toStdString());
+    const auto mattes =
+        controller != nullptr
+            ? controller->mattes(node.id)
+            : runtime::splitCryptomatteMatteList(
+                  boundText(session_, node, document::kCryptomatteMattesParameterRole)
+                      .toStdString());
     const auto nodeId = node.id;
     const auto addRow = [&](const QString& text, QWidget* value) {
         auto* label = kit::makePropertyRowLabel(text, list);
@@ -568,10 +568,10 @@ void PropertiesEditor::populateCryptomatteRows(const document::NodeRecord& node)
         row->setProperty("rowLabel", text);
         list->layout()->addWidget(row);
     };
-    auto* count = new QLabel(mattes.empty() ? tr("None selected")
-                                            : tr("%n selected", nullptr,
-                                                 static_cast<int>(mattes.size())),
-                             list);
+    auto* count =
+        new kit::KLabel(mattes.empty() ? tr("None selected")
+                                  : tr("%n selected", nullptr, static_cast<int>(mattes.size())),
+                   list);
     count->setObjectName("propertiesCryptomatteCount");
     addRow(tr("Mattes"), count);
     for (std::size_t index = 0; index < mattes.size(); ++index) {

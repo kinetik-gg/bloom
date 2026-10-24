@@ -601,8 +601,8 @@ displayProofRunner(const bool customView) {
     const auto runAllCryptomatte = [runCryptomatte](const std::uint64_t idBase) {
         FixtureRun combined;
         combined.prepared = true;
-        const auto sky = bloom::runtime::formatCryptomatteRawId(
-            bloom::runtime::cryptomatteNameId("sky"));
+        const auto sky =
+            bloom::runtime::formatCryptomatteRawId(bloom::runtime::cryptomatteNameId("sky"));
         std::vector<FixtureRun> runs;
         runs.push_back(runCryptomatte(true, {"cube", "floor"}, false, idBase));
         runs.push_back(runCryptomatte(false, {"cube", "floor", sky}, false, idBase + 100));

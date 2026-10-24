@@ -581,10 +581,10 @@ struct CompiledCompositionOutput {
 };
 
 using CompiledOperation =
-    std::variant<CompiledSolid, CompiledChecker, CompiledText, CompiledImageSource, CompiledVideoSource,
-                 CompiledLayerOutput, CompiledMerge, CompiledCompositionOutput, CompiledShape,
-                 CompiledCompositionSource, CompiledImageEffect, CompiledChannelShuffle,
-                 CompiledCryptomatte>;
+    std::variant<CompiledSolid, CompiledChecker, CompiledText, CompiledImageSource,
+                 CompiledVideoSource, CompiledLayerOutput, CompiledMerge, CompiledCompositionOutput,
+                 CompiledShape, CompiledCompositionSource, CompiledImageEffect,
+                 CompiledChannelShuffle, CompiledCryptomatte>;
 
 // ADR 0024 time clocks. Clock 0 is the plan's own clock (the request time). A Layer clock maps its
 // parent clock through a layer's start time and speed; a Content clock (whose parent is that Layer

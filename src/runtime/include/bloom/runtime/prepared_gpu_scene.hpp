@@ -539,8 +539,8 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
     return key;
 }
 
-// Effective scene key for one CryptomatteCoverageV1 command: the input key, rank count, the selected
-// IDs in order, the output geometry and the artifact token.
+// Effective scene key for one CryptomatteCoverageV1 command: the input key, rank count, the
+// selected IDs in order, the output geometry and the artifact token.
 [[nodiscard]] inline std::string makeGpuSceneCryptomatteSemanticKey(
     const std::string& inputKey, const std::uint32_t rankCount,
     const std::vector<std::uint32_t>& ids, const render::ImageWindow& outputWindow,
