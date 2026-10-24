@@ -99,7 +99,7 @@ ChannelSetImage::create(const ImageWindow dataWindow, const ImageWindow displayW
                         const core::PixelAspectRatio pixelAspect,
                         std::vector<ChannelDescriptor> channels,
                         std::vector<std::vector<float>> planes, ChannelMetadata metadata,
-                        const std::size_t byteBudget) {
+                        const std::size_t byteBudget, std::string colourSpace) {
     if (channels.empty() || channels.size() != planes.size())
         return ImageResult<ChannelSetImage>::failure(
             ImageError::codeOnly(ImageErrorCode::InvalidParameter));
@@ -124,16 +124,17 @@ ChannelSetImage::create(const ImageWindow dataWindow, const ImageWindow displayW
             ImageError::pixelStorageBudgetExceeded(bytes, byteBudget));
     return ImageResult<ChannelSetImage>::success(
         ChannelSetImage(dataWindow, displayWindow, pixelAspect, std::move(channels),
-                        std::move(planes), std::move(metadata)));
+                        std::move(planes), std::move(metadata), std::move(colourSpace)));
 }
 
 ChannelSetImage::ChannelSetImage(const ImageWindow dataWindow, const ImageWindow displayWindow,
                                  const core::PixelAspectRatio pixelAspect,
                                  std::vector<ChannelDescriptor> channels,
                                  std::vector<std::vector<float>> planes,
-                                 ChannelMetadata metadata) noexcept
+                                 ChannelMetadata metadata, std::string colourSpace) noexcept
     : dataWindow_(dataWindow), displayWindow_(displayWindow), pixelAspect_(pixelAspect),
-      channels_(std::move(channels)), planes_(std::move(planes)), metadata_(std::move(metadata)) {}
+      channels_(std::move(channels)), planes_(std::move(planes)), metadata_(std::move(metadata)),
+      colourSpace_(std::move(colourSpace)) {}
 
 std::span<const float> ChannelSetImage::plane(const std::size_t index) const noexcept {
     return index < planes_.size() ? std::span<const float>(planes_[index])
@@ -155,7 +156,7 @@ std::size_t ChannelSetImage::byteCost() const noexcept {
         total += sizeof(ChannelDescriptor) + channel.name.capacity() + channel.layer.capacity();
     for (const auto& [key, value] : metadata_)
         total += key.capacity() + value.capacity();
-    return total;
+    return total + colourSpace_.capacity();
 }
 
 } // namespace bloom::render

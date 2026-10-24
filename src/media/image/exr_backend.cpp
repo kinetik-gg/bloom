@@ -944,7 +944,9 @@ decodeExrChannels(const std::span<const std::byte> bytes, const ImageChannelSele
         auto created = render::ChannelSetImage::create(
             *dataWindow.value(), *displayWindow.value(), core::PixelAspectRatio::square(),
             std::move(descriptors), std::move(planes), std::move(metadata),
-            std::numeric_limits<std::size_t>::max());
+            std::numeric_limits<std::size_t>::max(),
+            selection.inputColorSpaceId.empty() ? layout->colorSpaceTag
+                                                : selection.inputColorSpaceId);
         if (!created)
             return failure<Decoded>(ImageDiagnosticCode::DecodeFailed,
                                     "Channel set validation failed");

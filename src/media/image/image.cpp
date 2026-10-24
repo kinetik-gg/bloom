@@ -598,6 +598,105 @@ decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& inte
     return decoded;
 }
 
+// PNG/JPEG channel sets (owner decision for ADR 0026): the decoded R, G, B and, when the file
+// carries alpha, A as straight Colour channels in [0, 1], recorded with the asset's input colour
+// space. Grey files expose R = G = B.
+static ImageResult<std::shared_ptr<const render::ChannelSetImage>>
+decodeStillChannels(const ImageSourceRevision& revision, const ImageChannelSelection& selection,
+                    const CancelImageWork& cancel, const ImageProgress& progress,
+                    const std::size_t budget) {
+    try {
+        if (!selection.part.empty())
+            return {{}, "Still images have one part", false, ImageDiagnosticCode::PartNotFound};
+        detail::ImageInfo info;
+        if (!detail::imageInfo(revision.bytes(), info) || !validInfo(info))
+            return {{},
+                    "Invalid PNG/JPEG header or image dimensions",
+                    false,
+                    ImageDiagnosticCode::InvalidHeader};
+        const bool hasAlpha = info.channels == 2 || info.channels == 4;
+        std::vector<std::string> available{"R", "G", "B"};
+        if (hasAlpha)
+            available.emplace_back("A");
+        std::vector<std::size_t> picked;
+        if (selection.channels.empty()) {
+            for (std::size_t index = 0; index < available.size(); ++index)
+                picked.push_back(index);
+        } else {
+            for (const auto& name : selection.channels) {
+                const auto found = std::ranges::find(available, name);
+                if (found == available.end())
+                    return {{},
+                            "A selected channel is not present",
+                            false,
+                            ImageDiagnosticCode::ChannelNotFound};
+                const auto index = static_cast<std::size_t>(found - available.begin());
+                if (std::ranges::find(picked, index) != picked.end())
+                    return {{},
+                            "A channel is selected more than once",
+                            false,
+                            ImageDiagnosticCode::UnsupportedChannels};
+                picked.push_back(index);
+            }
+        }
+        const auto width = static_cast<std::uint64_t>(info.width);
+        const auto height = static_cast<std::uint64_t>(info.height);
+        std::uint64_t pixels = 0;
+        std::uint64_t planeBytes = 0;
+        std::uint64_t stagingBytes = 0;
+        if (!detail::checkedSizeProduct(width, height, pixels) ||
+            !detail::checkedSizeProduct(pixels, picked.size() * sizeof(float), planeBytes) ||
+            !detail::checkedSizeProduct(pixels, kPngJpegStagingBytesPerPixel, stagingBytes) ||
+            !detail::decodeWorkingSetFits(planeBytes, stagingBytes, 0U, budget))
+            return {{},
+                    "Decoded channel set exceeds the pixel working-set budget",
+                    false,
+                    ImageDiagnosticCode::PixelBudgetExceeded};
+        if (cancelled(cancel))
+            return {{}, {}, true, ImageDiagnosticCode::Cancelled};
+        if (progress)
+            progress(0, height);
+        // The parser's own admission covers final RGBA32F plus staging; hand it this request's
+        // whole remaining budget so a small selection is not refused by a larger ceiling.
+        const auto samples = detail::imageSamples(revision.bytes(), info, budget);
+        if (samples.empty())
+            return {{},
+                    "PNG/JPEG decode failed or exceeded the pixel budget",
+                    false,
+                    ImageDiagnosticCode::DecodeFailed};
+        if (cancelled(cancel))
+            return {{}, {}, true, ImageDiagnosticCode::Cancelled};
+        std::vector<std::vector<float>> planes(picked.size());
+        std::vector<render::ChannelDescriptor> descriptors;
+        for (std::size_t plane = 0; plane < picked.size(); ++plane) {
+            const auto component = picked[plane];
+            planes[plane].resize(static_cast<std::size_t>(pixels));
+            for (std::size_t pixel = 0; pixel < planes[plane].size(); ++pixel)
+                planes[plane][pixel] = static_cast<float>(samples[pixel * 4U + component]) / 65535.0F;
+            auto descriptor =
+                render::describeChannel(available[component], render::ChannelSampleKind::Float);
+            descriptors.push_back(std::move(descriptor));
+        }
+        if (progress)
+            progress(height, height);
+        const auto window = render::ImageWindow::create(0, 0, width, height);
+        if (!window)
+            return {{}, "Image window is invalid", false, ImageDiagnosticCode::InvalidDataWindow};
+        auto created = render::ChannelSetImage::create(
+            *window.value(), *window.value(), core::PixelAspectRatio::square(),
+            std::move(descriptors), std::move(planes), {}, std::numeric_limits<std::size_t>::max(),
+            selection.inputColorSpaceId.empty() ? revision.probe().colorSpaceTag
+                                                : selection.inputColorSpaceId);
+        if (!created)
+            return {{}, "Channel set validation failed", false, ImageDiagnosticCode::DecodeFailed};
+        return {std::make_shared<const render::ChannelSetImage>(std::move(*created.value())), {}};
+    } catch (const std::bad_alloc&) {
+        return {{}, "Channel set allocation failed", false, ImageDiagnosticCode::AllocationFailure};
+    } catch (const std::exception&) {
+        return {{}, "Channel set decode failed", false, ImageDiagnosticCode::DecodeFailed};
+    }
+}
+
 ImageResult<std::shared_ptr<const render::ChannelSetImage>>
 decodeImageChannels(const ImageSourceRevision& revision, const ImageChannelSelection& selection,
                     const CancelImageWork& cancel, const ImageProgress& progress,
@@ -606,9 +705,10 @@ decodeImageChannels(const ImageSourceRevision& revision, const ImageChannelSelec
         *statistics = {};
     if (cancelled(cancel))
         return {{}, {}, true, ImageDiagnosticCode::Cancelled};
-    if (revision.probe().format != ImageFormat::Exr)
+    const auto format = revision.probe().format;
+    if (format != ImageFormat::Exr && format != ImageFormat::Png && format != ImageFormat::Jpeg)
         return {{},
-                "Channel sets are available for OpenEXR sources",
+                "This image format has no channel-set decoder",
                 false,
                 ImageDiagnosticCode::UnsupportedChannelSetFormat};
     if (revision.retainedBytes() >= hostByteBudget)
@@ -617,8 +717,10 @@ decodeImageChannels(const ImageSourceRevision& revision, const ImageChannelSelec
                 false,
                 ImageDiagnosticCode::PixelBudgetExceeded};
     const detail::ImageWorkTimer timer(statistics ? &statistics->decodeNanoseconds : nullptr);
-    return detail::decodeExrChannels(revision.bytes(), selection, cancel, progress,
-                                     hostByteBudget - revision.retainedBytes());
+    const auto budget = hostByteBudget - revision.retainedBytes();
+    if (format == ImageFormat::Exr)
+        return detail::decodeExrChannels(revision.bytes(), selection, cancel, progress, budget);
+    return decodeStillChannels(revision, selection, cancel, progress, budget);
 }
 
 ImageResult<ImageProviderEncodeResponse> encodeImage(const ImageProviderEncodeRequest& request,

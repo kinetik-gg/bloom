@@ -15,6 +15,8 @@
 #include <bloom/media/image.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cstdlib>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -119,6 +121,26 @@ void writeLayered(const std::filesystem::path& path) {
         part.setFrameBuffer(frameBuffer);
         part.writeTiles(0, part.numXTiles() - 1, 0, part.numYTiles() - 1);
     }
+}
+
+// One RGBA8 pixel (128, 64, 32, 128), framed by the independent test chunk encoder.
+void writeRgbaPng(const std::filesystem::path& path) {
+    {
+        std::ofstream file(path, std::ios::binary);
+        const std::array<unsigned char, 8> signature{137, 80, 78, 71, 13, 10, 26, 10};
+        file.write(reinterpret_cast<const char*>(signature.data()), 8);
+    }
+    PngChunkBytes chunks(path);
+    chunks.insertChunk(chunks.endOffset(), "IHDR", {0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0});
+    const std::vector<unsigned char> raw{0, 128, 64, 32, 128};
+    auto size = compressBound(static_cast<uLong>(raw.size()));
+    std::vector<unsigned char> compressed(size);
+    if (compress2(compressed.data(), &size, raw.data(), static_cast<uLong>(raw.size()), 6) != Z_OK)
+        std::abort();
+    compressed.resize(size);
+    chunks.insertChunk(chunks.endOffset(), "IDAT", compressed);
+    chunks.insertChunk(chunks.endOffset(), "IEND", {});
+    chunks.save();
 }
 
 [[nodiscard]] media::ImageInterpretation select(std::string part, std::string layer) {
@@ -268,13 +290,57 @@ int main() {
                    static_cast<std::streamsize>(kGeneratedJpeg.size()));
     }
     const auto jpeg = media::captureImageSourceRevision(jpegPath, media::kMaxImageStorageBytes);
+    check.expect(jpeg.value.has_value(), "JPEG revision captures");
     if (jpeg.value) {
-        const auto refused = media::decodeImageChannels(**jpeg.value, {});
-        check.expect(!refused &&
-                         refused.code == media::ImageDiagnosticCode::UnsupportedChannelSetFormat,
-                     "non-EXR sources report the typed channel-set fallback");
-    } else {
-        check.expect(false, "JPEG revision captures");
+        const auto still = media::decodeImageChannels(**jpeg.value, {});
+        check.expect(still.value.has_value(), "a JPEG still provides a channel set");
+        if (still.value) {
+            const auto& set = **still.value;
+            check.expect(set.channels().size() == 3 && set.channels()[0].name == "R" &&
+                             set.channels()[0].role == bloom::render::ChannelRole::ColorR &&
+                             set.channels()[2].role == bloom::render::ChannelRole::ColorB &&
+                             set.channels()[1].encoding ==
+                                 bloom::render::ChannelValueEncoding::Colour,
+                         "JPEG channels are R, G, B colour channels without alpha");
+            check.expect(set.colourSpace() == (*jpeg.value)->probe().colorSpaceTag,
+                         "an uninterpreted still records its declared colour space");
+            check.expect(std::ranges::all_of(set.plane(0),
+                                             [](const float value) {
+                                                 return value >= 0.0F && value <= 1.0F;
+                                             }),
+                         "JPEG channel values are normalized source samples");
+        }
+        auto interpreted = media::ImageChannelSelection{};
+        interpreted.inputColorSpaceId = "sRGB - Texture";
+        const auto labelled = media::decodeImageChannels(**jpeg.value, interpreted);
+        check.expect(labelled.value && (*labelled.value)->colourSpace() == "sRGB - Texture",
+                     "the asset's input colour space is recorded on the channel set");
+        const auto alphaMissing =
+            media::decodeImageChannels(**jpeg.value, {.channels = {"A"}});
+        check.expect(!alphaMissing &&
+                         alphaMissing.code == media::ImageDiagnosticCode::ChannelNotFound,
+                     "a JPEG has no alpha channel");
+        const auto partMissing = media::decodeImageChannels(**jpeg.value, {.part = "beauty"});
+        check.expect(!partMissing && partMissing.code == media::ImageDiagnosticCode::PartNotFound,
+                     "a still has no named parts");
+    }
+    const auto pngPath = scratch.file("rgba.png");
+    writeRgbaPng(pngPath);
+    const auto png = media::captureImageSourceRevision(pngPath, media::kMaxImageStorageBytes);
+    check.expect(png.value.has_value(), "PNG revision captures");
+    if (png.value) {
+        const auto still = media::decodeImageChannels(**png.value, {});
+        check.expect(still.value && (*still.value)->channels().size() == 4 &&
+                         (*still.value)->channels()[3].role == bloom::render::ChannelRole::Alpha,
+                     "an RGBA PNG provides R, G, B and A");
+        if (still.value) {
+            const auto& set = **still.value;
+            check.expect(std::abs(set.plane(0)[0] - 128.0F / 255.0F) < 1.0e-6F &&
+                             std::abs(set.plane(1)[0] - 64.0F / 255.0F) < 1.0e-6F &&
+                             std::abs(set.plane(2)[0] - 32.0F / 255.0F) < 1.0e-6F &&
+                             std::abs(set.plane(3)[0] - 128.0F / 255.0F) < 1.0e-6F,
+                         "PNG channels are straight, unconverted source samples");
+        }
     }
     return check.failures() == 0 ? 0 : 1;
 }

@@ -126,8 +126,8 @@ bool imageInfo(const std::filesystem::path& path, ImageInfo& info) {
     std::ifstream stream(path, std::ios::binary);
     if (!stream)
         return false;
-    int channels = 0;
-    if (!stbi_info_from_callbacks(&kFileCallbacks, &stream, &info.width, &info.height, &channels))
+    if (!stbi_info_from_callbacks(&kFileCallbacks, &stream, &info.width, &info.height,
+                                  &info.channels))
         return false;
     stream.clear();
     stream.seekg(0);
@@ -136,8 +136,8 @@ bool imageInfo(const std::filesystem::path& path, ImageInfo& info) {
 }
 bool imageInfo(const std::span<const std::byte> bytes, ImageInfo& info) {
     ByteStream stream{bytes};
-    int channels = 0;
-    if (!stbi_info_from_callbacks(&kByteCallbacks, &stream, &info.width, &info.height, &channels))
+    if (!stbi_info_from_callbacks(&kByteCallbacks, &stream, &info.width, &info.height,
+                                  &info.channels))
         return false;
     stream.position = 0;
     info.sixteenBit = stbi_is_16_bit_from_callbacks(&kByteCallbacks, &stream) != 0;

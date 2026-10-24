@@ -11,6 +11,8 @@ struct ImageInfo {
     int width = 0;
     int height = 0;
     bool sixteenBit = false;
+    // Encoded components: 1 grey, 2 grey+alpha, 3 RGB, 4 RGBA.
+    int channels = 0;
 };
 
 // Request-scoped live parser-allocation ceiling for the calling thread. The stb callbacks enforce

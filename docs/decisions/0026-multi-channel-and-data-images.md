@@ -79,6 +79,11 @@ and migration for multi-channel images. It is a prerequisite for issue #364 (Cry
   bilinearly filtered.
 - **Colour channels inside a channel set** keep their source values plus their declared input
   colour space. They are converted only when an explicit operation asks for colour (§4).
+- **Still images.** PNG, JPEG and every other still with an immutable revision decoder also provide
+  the `channels` output (owner, 2026-10-24): their decoded `R`, `G`, `B` and, when the file carries
+  alpha, `A` as straight samples in [0, 1], with roles `ColorR/G/B` and `Alpha`, encoding `Colour`
+  and the asset's input colour space. Grey files expose `R = G = B`. The `channels` output therefore
+  behaves the same for every image source.
 - **Probe.** The probe enumerates parts (name, view, type, windows) and each part's channels and
   layers, and keeps per-part chromaticities. Multipart scanline and single-level tiled parts are
   supported.

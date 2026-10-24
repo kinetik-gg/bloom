@@ -219,11 +219,15 @@ decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& inte
 
 // ADR 0026 channel-set decode. `part` selects an OpenEXR part (empty: the first); `channels` names
 // the channels to decode in order (empty: every channel of the part). Values are source values:
-// never converted, premultiplied, repaired or clamped. Only OpenEXR sources carry channel sets;
-// other formats report UnsupportedChannelSetFormat.
+// never converted, premultiplied, repaired or clamped. PNG and JPEG stills expose their decoded
+// R, G, B (and A when present) as straight Colour channels in [0, 1]; formats without an immutable
+// revision decoder report UnsupportedChannelSetFormat.
 struct ImageChannelSelection final {
     std::string part{};
     std::vector<std::string> channels{};
+    // The input colour space recorded on the channel set for its Colour channels (the asset's
+    // interpretation); empty records the source's declared tag.
+    std::string inputColorSpaceId{};
     friend bool operator==(const ImageChannelSelection&, const ImageChannelSelection&) = default;
 };
 [[nodiscard]] ImageResult<std::shared_ptr<const render::ChannelSetImage>>

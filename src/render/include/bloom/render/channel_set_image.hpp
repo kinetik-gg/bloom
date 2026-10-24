@@ -72,7 +72,7 @@ class ChannelSetImage final {
     [[nodiscard]] static ImageResult<ChannelSetImage>
     create(ImageWindow dataWindow, ImageWindow displayWindow, core::PixelAspectRatio pixelAspect,
            std::vector<ChannelDescriptor> channels, std::vector<std::vector<float>> planes,
-           ChannelMetadata metadata, std::size_t byteBudget);
+           ChannelMetadata metadata, std::size_t byteBudget, std::string colourSpace = {});
 
     [[nodiscard]] ImageWindow dataWindow() const noexcept { return dataWindow_; }
     [[nodiscard]] ImageWindow displayWindow() const noexcept { return displayWindow_; }
@@ -83,19 +83,24 @@ class ChannelSetImage final {
     [[nodiscard]] std::span<const float> plane(std::size_t index) const noexcept;
     [[nodiscard]] std::optional<std::size_t> find(std::string_view name) const noexcept;
     [[nodiscard]] const ChannelMetadata& metadata() const noexcept { return metadata_; }
+    // The input colour space of the Colour-encoded channels (an OCIO colour space name or a Bloom
+    // source tag). Data channels never use it.
+    [[nodiscard]] const std::string& colourSpace() const noexcept { return colourSpace_; }
     // Plane bytes plus descriptor and metadata strings.
     [[nodiscard]] std::size_t byteCost() const noexcept;
 
   private:
     ChannelSetImage(ImageWindow dataWindow, ImageWindow displayWindow,
                     core::PixelAspectRatio pixelAspect, std::vector<ChannelDescriptor> channels,
-                    std::vector<std::vector<float>> planes, ChannelMetadata metadata) noexcept;
+                    std::vector<std::vector<float>> planes, ChannelMetadata metadata,
+                    std::string colourSpace) noexcept;
     ImageWindow dataWindow_;
     ImageWindow displayWindow_;
     core::PixelAspectRatio pixelAspect_;
     std::vector<ChannelDescriptor> channels_;
     std::vector<std::vector<float>> planes_;
     ChannelMetadata metadata_;
+    std::string colourSpace_;
 };
 
 } // namespace bloom::render
