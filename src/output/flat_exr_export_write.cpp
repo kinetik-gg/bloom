@@ -58,7 +58,7 @@ FlatExrExportWriterV1::run(const OutputAnalysisAttemptV1& attempt,
                                                     .completed = writeProgress.completedScanlines,
                                                     .total = writeProgress.totalScanlines});
         },
-        attempt.report()->exr().get());
+        attempt.report()->exr().get(), attempt.channelLayers().get());
     if (writeResult.status() == FlatExrWriteStatusV1::Cancelled) {
         return FlatExrExportWriteResultV1::cancelled();
     }
@@ -74,7 +74,8 @@ FlatExrExportWriterV1::run(const OutputAnalysisAttemptV1& attempt,
             detail::reportExportProgress(progress, {.stage = OutputExportStageV1::Verifying,
                                                     .completed = verifyProgress.completedScanlines,
                                                     .total = verifyProgress.totalScanlines});
-        });
+        },
+        attempt.channelLayers().get());
     if (verifyResult.status() == FlatExrVerifyStatusV1::Cancelled) {
         return FlatExrExportWriteResultV1::cancelled();
     }

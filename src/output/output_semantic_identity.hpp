@@ -52,6 +52,9 @@ struct FlatExrRgba32fSemanticMetadataV1 final {
     FlatExrCompressionV1 compression = FlatExrCompressionV1::Zip;
     std::uint32_t pixelAspectRatioBits;
     std::array<std::uint32_t, 8> chromaticityBits = kFlatExrRec709D65ChromaticitiesBitsV1;
+    // ADR 0026 §7: the digest of a layered file's reopened channel layers (names, sample kinds and
+    // decoded bits). Absent for the flat preset, whose identity is unchanged.
+    std::optional<core::Sha256Digest> channelLayersDigest = std::nullopt;
 };
 
 namespace detail {

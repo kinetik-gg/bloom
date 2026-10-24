@@ -402,10 +402,13 @@ preflightPng(const output::PngRgba8SrgbOutputSemanticIdentityInputV1& input) noe
     constexpr std::uint64_t fixedMetadataBytes = 8U * sizeof(std::int32_t) + sizeof(std::uint32_t) +
                                                  2U + 8U * sizeof(std::uint32_t) +
                                                  sizeof(std::uint64_t);
+    const auto layerDigestBytes =
+        verifiedProduct.metadata().channelLayersDigest ? std::uint64_t{32} : std::uint64_t{0};
     if (!preimageSize || !addChecked(*preimageSize, fixedMetadataBytes) ||
         !addTextSize(*preimageSize, workingColorSpaceId) ||
         !addTextSize(*preimageSize, output::kFlatExrRgba32fSemanticProfileV1) ||
-        !addChecked(*preimageSize, *payloadBytes)) {
+        !addChecked(*preimageSize, *payloadBytes) ||
+        !addChecked(*preimageSize, layerDigestBytes)) {
         return preflightFailure<ExrPreflight>(Error::HashInputTooLarge);
     }
     constexpr auto maximumHashBytes = std::numeric_limits<std::uint64_t>::max() / 8U;
@@ -561,6 +564,13 @@ hashExr(const output::FlatExrRgba32fLinRec709SceneOutputSemanticIdentityInputV1&
         reportProgress(progress,
                        {output::OutputSemanticIdentityProgressStageV1::HashingSemanticPayload,
                         pixelOffset, preflight.common.pixelCount});
+    }
+    if (metadata.channelLayersDigest) {
+        std::array<std::byte, 32> layerDigest{};
+        std::ranges::transform(metadata.channelLayersDigest->bytes(), layerDigest.begin(),
+                               [](const std::uint8_t value) { return std::byte{value}; });
+        if (!stream.exact(layerDigest))
+            return hashFailure(output::OutputSemanticIdentityErrorCodeV1::HashInputTooLarge);
     }
     if (stream.byteCount() != preflight.common.preimageBytes) {
         return hashFailure(output::OutputSemanticIdentityErrorCodeV1::InternalInvariant);

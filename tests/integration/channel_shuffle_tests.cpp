@@ -9,6 +9,7 @@
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/runtime/channel_inspection_listing.hpp>
+#include <bloom/runtime/channel_layers.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 
@@ -354,6 +355,41 @@ void viewerInspection() {
            "inspection never changes the composition's own plan or pixels");
 }
 
+void outputChannelLayers() {
+    Fixture fixture("output");
+    const auto& graph = fixture.document.snapshot().project().findComposition(fixture.composition)->graph();
+    const auto output = graph.compositionOutput()->nodeId;
+    fixture.connect(fixture.source, document::kImageSourceChannelsOutputPort, output,
+                    document::kCompositionOutputChannelsInputPort);
+    // A project's Composition Output predates the optional layer list: the first edit binds it.
+    fixture.run<commands::SetNodeParameterValue>(
+        fixture.composition, output, std::string(document::kCompositionOutputLayersParameterRole),
+        document::ParameterValue{std::string("depth")});
+    const auto plan = fixture.compile();
+    const auto created = render::ImageWindow::create(0, 0, kWidth, kHeight);
+    const auto window = *created.value();
+    const auto assembled = runtime::assembleOutputChannelLayers(
+        *plan, {}, fixture.folder, runtime::EvaluationColorIntent::LinearRec709Scene, window,
+        window, 1U << 24U, {});
+    expect(assembled.ok() && assembled.layers && assembled.layers->channels().size() == 1 &&
+               assembled.layers->channels()[0].name == "depth.Z" &&
+               assembled.layers->channels()[0].sampleKind == render::ChannelSampleKind::Float &&
+               near(assembled.layers->plane(0)[0], -0.5F) &&
+               std::isnan(assembled.layers->plane(0)[5]),
+           "the Composition Output's selected layers assemble as raw source channels");
+    fixture.run<commands::SetNodeParameterValue>(
+        fixture.composition, output, std::string(document::kCompositionOutputLayersParameterRole),
+        document::ParameterValue{std::string("")});
+    const auto all = runtime::assembleOutputChannelLayers(
+        *fixture.compile(), {}, fixture.folder, runtime::EvaluationColorIntent::LinearRec709Scene,
+        window, window, 1U << 24U, {});
+    expect(all.ok() && all.layers && all.layers->channels().size() == 4 &&
+               !all.layers->find("R") && all.layers->find("diffuse.G"),
+           "an empty selection writes every layer except the RGBA root");
+    expect(near(fixture.frame().pixels[0].red(), 0.25F),
+           "channel layers never change the composited image");
+}
+
 } // namespace
 
 int main() {
@@ -361,6 +397,7 @@ int main() {
         imageLayerSelection();
         shuffleChain();
         viewerInspection();
+        outputChannelLayers();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

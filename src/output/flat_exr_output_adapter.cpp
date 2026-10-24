@@ -30,6 +30,7 @@
 // test proves by independently decoding this writer's own output.
 #include <ImathBox.h>
 #include <ImathVec.h>
+#include <half.h>
 #include <ImfChannelList.h>
 #include <ImfChromaticities.h>
 #include <ImfChromaticitiesAttribute.h>
@@ -177,7 +178,8 @@ FlatExrWriteResultV1 FlatExrWriteResultV1::failed(const FlatExrWriteErrorCodeV1 
 FlatExrWriteResultV1 FlatExrRgba32fLinRec709SceneWriterV1::write(
     const runtime::ProcessFrame& frame, const std::filesystem::path& destination,
     const runtime::CancellationToken& cancellation, const FlatExrWriteProgressCallbackV1& progress,
-    const PreparedFlatExrOutputV1* output) const noexcept {
+    const PreparedFlatExrOutputV1* output,
+    const render::ChannelSetImage* channelLayers) const noexcept {
     if (output && !output->matches(frame.identity().colorIntent))
         return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination, false);
     const auto outputId = output
@@ -206,6 +208,8 @@ FlatExrWriteResultV1 FlatExrRgba32fLinRec709SceneWriterV1::write(
         return FlatExrWriteResultV1::cancelled(true);
     }
 
+    if (channelLayers != nullptr && channelLayers->dataWindow() != descriptor->dataWindow())
+        return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination, false);
     const auto pixels = image.pixels();
     const auto rowStrideBytes = descriptor->layout().rowStrideBytes;
     const auto height = descriptor->dataWindow().extent().height();
@@ -223,6 +227,55 @@ FlatExrWriteResultV1 FlatExrRgba32fLinRec709SceneWriterV1::write(
         header.channels().insert("G", Imf::Channel(Imf::FLOAT));
         header.channels().insert("B", Imf::Channel(Imf::FLOAT));
         header.channels().insert("A", Imf::Channel(Imf::FLOAT));
+        const auto layerType = [](const render::ChannelSampleKind kind) {
+            return kind == render::ChannelSampleKind::Half    ? Imf::HALF
+                   : kind == render::ChannelSampleKind::Uint ? Imf::UINT
+                                                             : Imf::FLOAT;
+        };
+        if (channelLayers != nullptr)
+            for (const auto& channel : channelLayers->channels())
+                header.channels().insert(channel.name, Imf::Channel(layerType(channel.sampleKind)));
+        // The layer planes are Float32 lanes over the whole data window. OpenEXR does not convert
+        // pixel types on write, so half layers are rounded into a half copy once; float and uint
+        // lanes (the latter carrying their 32-bit pattern) are written in place.
+        std::vector<std::vector<Imath::half>> halfLayers;
+        if (channelLayers != nullptr) {
+            halfLayers.resize(channelLayers->channels().size());
+            for (std::size_t index = 0; index < halfLayers.size(); ++index) {
+                if (channelLayers->channels()[index].sampleKind != render::ChannelSampleKind::Half)
+                    continue;
+                const auto plane = channelLayers->plane(index);
+                halfLayers[index].reserve(plane.size());
+                for (const auto value : plane)
+                    halfLayers[index].emplace_back(value);
+            }
+        }
+        const auto insertLayers = [&](Imf::FrameBuffer& target) {
+            if (channelLayers == nullptr)
+                return;
+            const auto width = static_cast<std::size_t>(descriptor->dataWindow().extent().width());
+            for (std::size_t index = 0; index < channelLayers->channels().size(); ++index) {
+                const auto& channel = channelLayers->channels()[index];
+                if (channel.sampleKind == render::ChannelSampleKind::Half) {
+                    target.insert(channel.name,
+                                  Imf::Slice::Make(Imf::HALF,
+                                                   reinterpret_cast<const char*>(
+                                                       halfLayers[index].data()),
+                                                   geometry->dataWindow, sizeof(Imath::half),
+                                                   width * sizeof(Imath::half)));
+                    continue;
+                }
+                const auto kind = channel.sampleKind == render::ChannelSampleKind::Uint
+                                      ? Imf::UINT
+                                      : Imf::FLOAT;
+                target.insert(channel.name,
+                              Imf::Slice::Make(kind,
+                                               reinterpret_cast<const char*>(
+                                                   channelLayers->plane(index).data()),
+                                               geometry->dataWindow, sizeof(float),
+                                               width * sizeof(float)));
+            }
+        };
 
         const auto chromaticities = detail::flatExrChromaticityBitsForWorkingColorSpaceV1(outputId);
         if (!chromaticities.has_value()) {
@@ -255,6 +308,7 @@ FlatExrWriteResultV1 FlatExrRgba32fLinRec709SceneWriterV1::write(
                                                  geometry->dataWindow, xStride, rowStrideBytes));
         frameBuffer.insert("A", Imf::Slice::Make(Imf::FLOAT, base + 3 * sizeof(float),
                                                  geometry->dataWindow, xStride, rowStrideBytes));
+        insertLayers(frameBuffer);
         outputFile.setFrameBuffer(frameBuffer);
 
         const auto rowsPerChunk = static_cast<std::uint32_t>(
@@ -295,6 +349,7 @@ FlatExrWriteResultV1 FlatExrRgba32fLinRec709SceneWriterV1::write(
                                              reinterpret_cast<const char*>(transformed.data()) +
                                                  c * sizeof(float),
                                              rowBox, xStride, rowStrideBytes));
+                    insertLayers(converted);
                     outputFile.setFrameBuffer(converted);
                     outputFile.writePixels(1);
                 }

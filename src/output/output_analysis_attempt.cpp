@@ -233,8 +233,20 @@ buildOutputAnalysisAttemptV1(OutputAnalysisAttemptBuildInputsV1 inputs,
     }
 
     const auto* descriptor = inputs.frame->processImage().descriptor();
-    const auto retainedBytes =
+    auto retainedBytes =
         checkedAttemptRetainedBytes(*descriptor, *inputs.report, inputs.display, inputs.gpuDisplay);
+    // ADR 0026: retained channel layers are charged with the attempt; only a flat EXR writes them.
+    if (inputs.channelLayers) {
+        if (preset != OutputPresetV1::FlatExrRgba32fLinRec709SceneV1 ||
+            inputs.channelLayers->dataWindow() != descriptor->dataWindow())
+            return OutputAnalysisAttemptBuildResultV1::failure(
+                OutputAnalysisAttemptErrorCodeV1::InvalidReport);
+        const auto layerBytes = inputs.channelLayers->byteCost();
+        if (retainedBytes && layerBytes > std::numeric_limits<std::uint64_t>::max() - *retainedBytes)
+            retainedBytes.reset();
+        else if (retainedBytes)
+            *retainedBytes += layerBytes;
+    }
     if (!retainedBytes.has_value()) {
         return OutputAnalysisAttemptBuildResultV1::failure(
             OutputAnalysisAttemptErrorCodeV1::ResourceReservationFailed);
@@ -259,6 +271,7 @@ buildOutputAnalysisAttemptV1(OutputAnalysisAttemptBuildInputsV1 inputs,
             std::move(inputs.frame), std::move(inputs.processIdentity), std::move(inputs.report),
             digest, preset, std::move(inputs.target), std::move(inputs.display),
             std::move(inputs.gpuDisplay), std::move(reservation)));
+        attempt->channelLayers_ = std::move(inputs.channelLayers);
         return OutputAnalysisAttemptBuildResultV1::success(std::move(attempt));
     } catch (const std::bad_alloc&) {
         return OutputAnalysisAttemptBuildResultV1::failure(
@@ -292,7 +305,8 @@ prepareFlatExrAttemptV1(const OutputAnalysisAttemptV1& source, FlatExrRgba32fOpt
              .display = {},
              .gpuDisplay = {},
              .processingPolicy = source.resources()->processingPolicy(),
-             .capacityRefresh = source.resources()->capacityRefresh()},
+             .capacityRefresh = source.resources()->capacityRefresh(),
+             .channelLayers = source.channelLayers()},
             ledger);
     } catch (...) {
         return OutputAnalysisAttemptBuildResultV1::failure(

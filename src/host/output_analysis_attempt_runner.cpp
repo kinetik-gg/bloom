@@ -3,6 +3,7 @@
 #include "output_analysis_attempt_color_private.hpp"
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/runtime/channel_layers.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
 
@@ -522,6 +523,26 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                         return runtime::TaskResult<BuildOutcomeV1>::cancelled();
                 }
 
+                // ADR 0026 §7: a layered OpenEXR writes the output's channel layers beside RGBA.
+                // They are source samples placed on the final data window at the codec boundary.
+                std::shared_ptr<const render::ChannelSetImage> channelLayers;
+                if (preset == output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1 && plan) {
+                    const auto* descriptor = evaluatedFrame->processImage().descriptor();
+                    auto assembled = runtime::assembleOutputChannelLayers(
+                        *plan, evaluation.time, assetBaseDirectory, evaluation.colorIntent,
+                        descriptor->dataWindow(), descriptor->displayWindow(),
+                        evaluation.pixelStorageByteLimit, context.cancellation());
+                    if (assembled.cancelled)
+                        return runtime::TaskResult<BuildOutcomeV1>::cancelled();
+                    if (!assembled.diagnostic.empty())
+                        return runtime::TaskResult<BuildOutcomeV1>::succeeded(
+                            {.succeeded = false,
+                             .failureKind = BuildFailureKindV1::Evaluation,
+                             .rawCode = static_cast<std::uint8_t>(
+                                 runtime::EvaluationDiagnosticCode::InvalidParameter)});
+                    channelLayers = std::move(assembled.layers);
+                }
+
                 auto buildResult = output::buildOutputAnalysisAttemptV1(
                     {.frame = evaluatedFrame,
                      .processIdentity = identityResult.identity(),
@@ -534,7 +555,8 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                          [provider = gpuProvider](const runtime::CancellationToken& cancellation) {
                              if (provider)
                                  provider->refreshProcessingCapacity(cancellation);
-                         }},
+                         },
+                     .channelLayers = std::move(channelLayers)},
                     *ledger);
                 if (!buildResult) {
                     return runtime::TaskResult<BuildOutcomeV1>::succeeded(

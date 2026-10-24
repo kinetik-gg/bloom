@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/render/channel_set_image.hpp>
 #include <bloom/core/sha256.hpp>
 #include <bloom/output/output_analysis.hpp>
 #include <bloom/output/process_frame_semantic_identity.hpp>
@@ -133,7 +134,8 @@ class FlatExrRgba32fLinRec709SceneReopenVerifierV1 final {
            const std::shared_ptr<const ProcessFrameSemanticIdentityV1>& processIdentity,
            const std::shared_ptr<const OutputAnalysisReportV1>& report,
            const runtime::CancellationToken& cancellation,
-           const FlatExrVerifyScanProgressCallbackV1& scanProgress = {}) const noexcept;
+           const FlatExrVerifyScanProgressCallbackV1& scanProgress = {},
+           const render::ChannelSetImage* expectedLayers = nullptr) const noexcept;
 };
 
 } // namespace bloom::output

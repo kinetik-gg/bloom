@@ -1,4 +1,5 @@
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/commands/operations.hpp>
 
 #include "node_operation_support.hpp"
 #include "render_footprint.hpp"
@@ -58,6 +59,39 @@ OperationResult checkAddNodeEligibility(const document::Project& project,
     if (nodeTypeId == document::kLayerOutputNodeType && !available.allocateLayer())
         return detail::exhaustedIds();
     return OperationResult::applied();
+}
+
+OperationResult SetNodeParameterValue::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(compositionId_);
+    auto* node = composition ? composition->graph().findNode(nodeId_) : nullptr;
+    if (node == nullptr)
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget, "Node does not exist");
+    if (const auto binding = std::ranges::find(node->parameters, role_,
+                                               &document::ParameterBinding::role);
+        binding != node->parameters.end())
+        return SetParameterSource(compositionId_, binding->parameterId,
+                                  document::ConstantValueSource{value_})
+            .apply(draft);
+    const auto* definition =
+        document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion);
+    const auto parameter =
+        definition == nullptr
+            ? definition->parameters.end()
+            : std::ranges::find(definition->parameters, role_, &document::ParameterDefinition::role);
+    if (definition == nullptr || parameter == definition->parameters.end() || parameter->required)
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                         "The node has no such optional parameter");
+    const auto parameterId = draft.ids().allocateParameter();
+    if (!parameterId)
+        return detail::exhaustedIds();
+    if (!composition->parameters().insert(
+            {*parameterId, parameter->schemaKey, document::ConstantValueSource{value_}}))
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "The value violates the parameter schema");
+    node->parameters.push_back({role_, *parameterId});
+    auto result = OperationResult::applied();
+    result.outputs.push_back({"parameter", *parameterId});
+    return result;
 }
 
 std::string_view AddNode::typeId() const noexcept { return "bloom.node.add"; }

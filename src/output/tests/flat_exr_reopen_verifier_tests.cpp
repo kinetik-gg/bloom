@@ -17,7 +17,11 @@
 #include <ImfOutputFile.h>
 
 #include <atomic>
+#include <bit>
+#include <limits>
+#include <bloom/render/channel_set_image.hpp>
 #include <chrono>
+#include <iostream>
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
@@ -92,6 +96,65 @@ void testRoundTrip(support::Expectations& expectations) {
                       "build's qualified zlib (not claimed as portable preset contract)");
         }
     }
+}
+
+// ADR 0026 §7: a layered file writes channel layers beside RGBA at their sample kinds; the reopen
+// verifier compares them (half through the writer's rounding) and folds them into the identity.
+void testChannelLayers(support::Expectations& expectations) {
+    const support::ScratchDirectory scratch("channel-layers");
+    auto source = support::prepareSource(support::roundTripFixture());
+    const auto* descriptor = source.frame->processImage().descriptor();
+    const auto samples = static_cast<std::size_t>(descriptor->dataWindow().extent().width()) *
+                         descriptor->dataWindow().extent().height();
+    const auto makeLayers = [&](const float depthBias) {
+        std::vector<float> depth(samples), diffuse(samples), id(samples);
+        for (std::size_t index = 0; index < samples; ++index) {
+            depth[index] = -1.5F + static_cast<float>(index) + depthBias;
+            diffuse[index] = 0.1F * static_cast<float>(index);
+            id[index] = std::bit_cast<float>(std::uint32_t{0xdeadbeefU} + static_cast<std::uint32_t>(index));
+        }
+        if (samples > 1)
+            depth[1] = std::numeric_limits<float>::quiet_NaN();
+        auto created = render::ChannelSetImage::create(
+            descriptor->dataWindow(), descriptor->displayWindow(), core::PixelAspectRatio::square(),
+            {render::describeChannel("depth.Z", render::ChannelSampleKind::Float),
+             render::describeChannel("diffuse.R", render::ChannelSampleKind::Half),
+             render::describeChannel("id", render::ChannelSampleKind::Uint)},
+            {std::move(depth), std::move(diffuse), std::move(id)}, {}, 1U << 20U);
+        if (!created)
+            std::abort();
+        return std::make_shared<const render::ChannelSetImage>(std::move(*created.value()));
+    };
+    const auto layers = makeLayers(0.0F);
+    const auto path = scratch.file("layered.exr");
+    const output::FlatExrRgba32fLinRec709SceneWriterV1 writer;
+    const auto written = writer.write(*source.frame, path, {}, {}, nullptr, layers.get());
+    expectations.expect(written.status() == output::FlatExrWriteStatusV1::Written,
+                        "a layered EXR writes");
+    const output::FlatExrRgba32fLinRec709SceneReopenVerifierV1 verifier;
+    const auto layered =
+        verifier.verify(path, source.processIdentity, source.report, {}, {}, layers.get());
+    expectations.expect(layered.status() == output::FlatExrVerifyStatusV1::Verified,
+                        "the reopened channel layers verify (float, half and uint)");
+    const auto flatPath = scratch.file("flat.exr");
+    if (writer.write(*source.frame, flatPath, {}).status() != output::FlatExrWriteStatusV1::Written)
+        std::abort();
+    const auto flat = verifier.verify(flatPath, source.processIdentity, source.report, {});
+    expectations.expect(flat.status() == output::FlatExrVerifyStatusV1::Verified &&
+                            layered.digest() != flat.digest(),
+                        "channel layers are part of the output semantic identity");
+    const auto other = makeLayers(1.0F);
+    const auto mismatch =
+        verifier.verify(path, source.processIdentity, source.report, {}, {}, other.get());
+    expectations.expect(mismatch.status() == output::FlatExrVerifyStatusV1::Failed &&
+                            mismatch.diagnostic().code ==
+                                output::FlatExrVerifyErrorCodeV1::SampleMismatch,
+                        "a channel layer that differs from what was written is refused");
+    const auto unexpected = verifier.verify(path, source.processIdentity, source.report, {});
+    expectations.expect(unexpected.status() == output::FlatExrVerifyStatusV1::Failed &&
+                            unexpected.diagnostic().code ==
+                                output::FlatExrVerifyErrorCodeV1::InvalidChannelList,
+                        "a flat verification refuses a file carrying extra channels");
 }
 
 void testHeaderConformanceRejectsForeignAttribute(support::Expectations& expectations) {
@@ -373,6 +436,7 @@ void testCancellationMidVerify(support::Expectations& expectations) {
 int main() {
     support::Expectations expectations;
     testRoundTrip(expectations);
+    testChannelLayers(expectations);
     testHeaderConformanceRejectsForeignAttribute(expectations);
     testWrongCompressionEnum(expectations);
     testRenamedChannel(expectations);

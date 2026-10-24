@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/render/channel_set_image.hpp>
 #include <bloom/render/final_pixel_storage.hpp>
 
 #include <bloom/color/display_processor_identity.hpp>
@@ -128,6 +129,9 @@ struct OutputAnalysisAttemptBuildInputsV1 final {
     // Worker-only refresh retained through a delayed approval. A host provider capture keeps its
     // sampler alive; injected roots can omit this and rely on their own asynchronous sampler.
     ExportCapacityRefreshV1 capacityRefresh = {};
+    // ADR 0026 §7: channel layers a layered OpenEXR writes beside RGBA, aligned to the process
+    // image's data window. Null for every other output.
+    std::shared_ptr<const render::ChannelSetImage> channelLayers = nullptr;
 };
 
 class [[nodiscard]] OutputAnalysisAttemptBuildResultV1 final {
@@ -200,6 +204,12 @@ class OutputAnalysisAttemptV1 final {
     }
     [[nodiscard]] const OutputAnalysisAttemptGpuDisplayV1& gpuDisplay() const&& = delete;
     [[nodiscard]] const OutputAnalysisAttemptTargetV1& target() const noexcept { return target_; }
+    [[nodiscard]] const std::shared_ptr<const render::ChannelSetImage>&
+    channelLayers() const& noexcept {
+        return channelLayers_;
+    }
+    [[nodiscard]] const std::shared_ptr<const render::ChannelSetImage>&
+    channelLayers() const&& = delete;
     [[nodiscard]] const std::shared_ptr<ExportResourceReservationV1>& resources() const& noexcept {
         return reservation_;
     }
@@ -230,6 +240,7 @@ class OutputAnalysisAttemptV1 final {
     OutputAnalysisAttemptTargetV1 target_;
     OutputAnalysisAttemptDisplayProductsV1 display_;
     OutputAnalysisAttemptGpuDisplayV1 gpuDisplay_;
+    std::shared_ptr<const render::ChannelSetImage> channelLayers_;
 };
 
 // The Analyzing stage's typed successor: computes the OutputAnalysisDigest (when approvable),

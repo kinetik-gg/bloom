@@ -74,6 +74,30 @@ class AddNode final : public Operation {
     const document::NodeDefinitionRegistry& registry_;
 };
 
+// Sets a node parameter's constant, first binding it when the definition declares it optional and
+// the node has no binding yet (an older node, or a definition that gained the parameter; ADR 0026
+// part/layer and the Composition Output layer list).
+class SetNodeParameterValue final : public Operation {
+  public:
+    SetNodeParameterValue(document::CompositionId compositionId, document::NodeId nodeId,
+                          std::string role, document::ParameterValue value)
+        : compositionId_(compositionId), nodeId_(nodeId), role_(std::move(role)),
+          value_(std::move(value)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.node.set-parameter-value";
+    }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
+        return compositionId_;
+    }
+
+  private:
+    document::CompositionId compositionId_;
+    document::NodeId nodeId_;
+    std::string role_;
+    document::ParameterValue value_;
+};
+
 class RemoveNodes final : public Operation {
   public:
     RemoveNodes(

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/output/flat_exr_options.hpp>
+#include <bloom/render/channel_set_image.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/evaluation.hpp>
 
@@ -79,6 +80,9 @@ class [[nodiscard]] FlatExrWriteResultV1 final {
     bool destinationRemoved_ = true;
 };
 
+// ADR 0026 §7: `channelLayers`, when present, are written as additional channels (half, float or
+// uint at their source sample kind) in the same scanline part; their data window must equal the
+// process image's. Without them the file is exactly the flat preset.
 // Writes `frame`'s retained process image as a version 1 flat OpenEXR
 // (`FlatExrRgba32fLinRec709SceneV1`, docs/architecture/frame-output.md) to `destination`.
 //
@@ -95,7 +99,8 @@ class FlatExrRgba32fLinRec709SceneWriterV1 final {
     write(const runtime::ProcessFrame& frame, const std::filesystem::path& destination,
           const runtime::CancellationToken& cancellation,
           const FlatExrWriteProgressCallbackV1& progress = {},
-          const PreparedFlatExrOutputV1* output = nullptr) const noexcept;
+          const PreparedFlatExrOutputV1* output = nullptr,
+          const render::ChannelSetImage* channelLayers = nullptr) const noexcept;
 };
 
 } // namespace bloom::output

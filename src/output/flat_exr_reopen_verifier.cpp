@@ -20,6 +20,7 @@
 // verifier ever exposing an OpenEXR/Imath type in a public header.
 #include <ImathBox.h>
 #include <ImathVec.h>
+#include <half.h>
 #include <ImfChannelList.h>
 #include <ImfChromaticities.h>
 #include <ImfChromaticitiesAttribute.h>
@@ -215,6 +216,39 @@ checkAttributeValues(const Imf::Header& header, const Imath::Box2i& expectedData
     return std::nullopt;
 }
 
+// ADR 0026 §7: the expected channel layers, by name, with their written OpenEXR pixel types.
+[[nodiscard]] std::optional<output::FlatExrVerifyDiagnosticV1>
+checkLayeredChannelList(const Imf::Header& header, const render::ChannelSetImage& layers) noexcept {
+    using output::FlatExrVerifyErrorCodeV1;
+    std::size_t rgba = 0;
+    std::size_t extra = 0;
+    for (auto it = header.channels().begin(); it != header.channels().end(); ++it) {
+        const std::string_view name = it.name();
+        const auto& channel = it.channel();
+        if (channel.xSampling != 1 || channel.ySampling != 1 || channel.pLinear)
+            return ::diag(FlatExrVerifyErrorCodeV1::InvalidChannelList, "channels");
+        if (name == "R" || name == "G" || name == "B" || name == "A") {
+            if (channel.type != Imf::FLOAT)
+                return ::diag(FlatExrVerifyErrorCodeV1::InvalidChannelList, "channels");
+            ++rgba;
+            continue;
+        }
+        const auto found = layers.find(name);
+        if (!found)
+            return ::diag(FlatExrVerifyErrorCodeV1::InvalidChannelList, "channels");
+        const auto kind = layers.channels()[*found].sampleKind;
+        const auto expected = kind == render::ChannelSampleKind::Half   ? Imf::HALF
+                              : kind == render::ChannelSampleKind::Uint ? Imf::UINT
+                                                                        : Imf::FLOAT;
+        if (channel.type != expected)
+            return ::diag(FlatExrVerifyErrorCodeV1::InvalidChannelList, "channels");
+        ++extra;
+    }
+    if (rgba != 4 || extra != layers.channels().size())
+        return ::diag(FlatExrVerifyErrorCodeV1::InvalidChannelList, "channels");
+    return std::nullopt;
+}
+
 [[nodiscard]] std::optional<output::FlatExrVerifyDiagnosticV1>
 checkChannelList(const Imf::Header& header) noexcept {
     using output::FlatExrVerifyErrorCodeV1;
@@ -286,7 +320,8 @@ FlatExrVerifyResultV1 FlatExrRgba32fLinRec709SceneReopenVerifierV1::verify(
     const std::shared_ptr<const ProcessFrameSemanticIdentityV1>& processIdentity,
     const std::shared_ptr<const OutputAnalysisReportV1>& report,
     const runtime::CancellationToken& cancellation,
-    const FlatExrVerifyScanProgressCallbackV1& scanProgress) const noexcept {
+    const FlatExrVerifyScanProgressCallbackV1& scanProgress,
+    const render::ChannelSetImage* expectedLayers) const noexcept {
     if (processIdentity == nullptr || report == nullptr) {
         return FlatExrVerifyResultV1::failed(
             ::diag(FlatExrVerifyErrorCodeV1::IdentityIssuanceFailed));
@@ -356,7 +391,9 @@ FlatExrVerifyResultV1 FlatExrRgba32fLinRec709SceneReopenVerifierV1::verify(
                 *expectedChromaticities, compression)) {
             return FlatExrVerifyResultV1::failed(*valueDiag);
         }
-        if (const auto channelDiag = ::checkChannelList(header)) {
+        if (const auto channelDiag = expectedLayers != nullptr
+                                         ? ::checkLayeredChannelList(header, *expectedLayers)
+                                         : ::checkChannelList(header)) {
             return FlatExrVerifyResultV1::failed(*channelDiag);
         }
         if (cancellation.isCancellationRequested()) {
@@ -463,6 +500,65 @@ FlatExrVerifyResultV1 FlatExrRgba32fLinRec709SceneReopenVerifierV1::verify(
             y = chunkEnd + 1;
         }
 
+        // ADR 0026 §7: reopen every channel layer and compare it with what was written (float and
+        // uint bit for bit; half through the same float-to-half rounding the writer applied).
+        std::optional<core::Sha256Digest> channelLayersDigest;
+        if (expectedLayers != nullptr) {
+            if (expectedLayers->dataWindow() != descriptor->dataWindow())
+                return FlatExrVerifyResultV1::failed(
+                    ::diag(FlatExrVerifyErrorCodeV1::InternalInvariant));
+            const auto samples = static_cast<std::size_t>(*pixelCount);
+            std::vector<std::vector<std::uint32_t>> decoded(expectedLayers->channels().size());
+            Imf::FrameBuffer layerBuffer;
+            for (std::size_t index = 0; index < decoded.size(); ++index) {
+                const auto& channel = expectedLayers->channels()[index];
+                decoded[index].assign(samples, 0U);
+                layerBuffer.insert(
+                    channel.name,
+                    Imf::Slice::Make(channel.sampleKind == render::ChannelSampleKind::Uint
+                                         ? Imf::UINT
+                                         : Imf::FLOAT,
+                                     reinterpret_cast<char*>(decoded[index].data()), dataBox,
+                                     sizeof(std::uint32_t),
+                                     sizeof(std::uint32_t) * static_cast<std::size_t>(width)));
+            }
+            input.setFrameBuffer(layerBuffer);
+            input.readPixels(dataBox.min.y, dataBox.max.y);
+            core::Sha256Hasher hasher;
+            const auto feed = [&hasher](const std::uint64_t value, const std::size_t bytes) {
+                std::array<std::byte, 8> encoded{};
+                for (std::size_t byte = 0; byte < bytes; ++byte)
+                    encoded[byte] = static_cast<std::byte>((value >> (8U * (bytes - 1 - byte))) &
+                                                           0xFFU);
+                return hasher.update(std::span(encoded).first(bytes));
+            };
+            bool hashed = feed(decoded.size(), 8);
+            for (std::size_t index = 0; index < decoded.size(); ++index) {
+                if (cancellation.isCancellationRequested())
+                    return FlatExrVerifyResultV1::cancelled();
+                const auto& channel = expectedLayers->channels()[index];
+                const auto expected = expectedLayers->plane(index);
+                for (std::size_t sample = 0; sample < samples; ++sample) {
+                    auto expectedBits = std::bit_cast<std::uint32_t>(expected[sample]);
+                    if (channel.sampleKind == render::ChannelSampleKind::Half)
+                        expectedBits = std::bit_cast<std::uint32_t>(
+                            static_cast<float>(Imath::half(expected[sample])));
+                    if (decoded[index][sample] != expectedBits)
+                        return FlatExrVerifyResultV1::failed(::diag(
+                            FlatExrVerifyErrorCodeV1::SampleMismatch, channel.name, std::nullopt));
+                }
+                hashed = hashed && feed(channel.name.size(), 8) &&
+                         hasher.update(std::as_bytes(std::span(channel.name))) &&
+                         feed(static_cast<std::uint8_t>(channel.sampleKind), 1);
+                for (const auto bits : decoded[index])
+                    hashed = hashed && feed(bits, 4);
+            }
+            if (!hashed)
+                return FlatExrVerifyResultV1::failed(
+                    ::diag(FlatExrVerifyErrorCodeV1::ResourceLimitExceeded));
+            channelLayersDigest = hasher.finalize();
+        }
+
         const FlatExrRgba32fSemanticMetadataV1 metadata{
             .dataWindow = {static_cast<std::int32_t>(dataBox.min.x),
                            static_cast<std::int32_t>(dataBox.min.y),
@@ -488,6 +584,7 @@ FlatExrVerifyResultV1 FlatExrRgba32fLinRec709SceneReopenVerifierV1::verify(
                         std::bit_cast<std::uint32_t>(chroma.white.y),
                     };
                 }(),
+            .channelLayersDigest = channelLayersDigest,
         };
 
         auto verifiedProduct =

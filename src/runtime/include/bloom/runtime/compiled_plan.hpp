@@ -559,6 +559,11 @@ struct CompiledMerge {
 struct CompiledCompositionOutput {
     document::NodeId sourceNodeId;
     OperationIndex input;
+    // ADR 0026 §7: the channel set connected to the output's `channels` input, written beside RGBA
+    // by layered OpenEXR, and the comma-separated layer names to write (empty: every layer).
+    // Neither affects the process image.
+    std::optional<CompiledChannelExpression> channelLayers{};
+    std::string layers{};
 
     friend bool operator==(const CompiledCompositionOutput&,
                            const CompiledCompositionOutput&) = default;

@@ -1674,7 +1674,23 @@ lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition&
         addTopologyFailure(node.id, "Validated Composition Output could not be lowered.");
         return std::nullopt;
     }
-    return runtime::CompiledCompositionOutput{node.id, *input};
+    runtime::CompiledCompositionOutput output{node.id, *input};
+    if (const auto* edge = fixedInputEdge(node.id, document::kCompositionOutputChannelsInputPort)) {
+        runtime::CompiledChannelExpression expression;
+        std::map<std::pair<document::NodeId, std::string>, std::uint32_t> memo;
+        const auto root = lowerChannelStep(edge->source, expression, memo, 0);
+        if (!root)
+            return std::nullopt;
+        if (*root + 1 != expression.steps.size()) {
+            auto copy = expression.steps[*root];
+            expression.steps.push_back(std::move(copy));
+        }
+        output.channelLayers = std::move(expression);
+        if (const auto* layers = parameterConstant<std::string>(
+                findParameterBinding(node, document::kCompositionOutputLayersParameterRole)))
+            output.layers = *layers;
+    }
+    return output;
 }
 
 // Task DRIVE-1. The value-graph output the parameter behind `binding` is driven by, or nothing.
