@@ -3,6 +3,7 @@
 // with none of them, and a 1.23 document carrying a 1.24 member is refused.
 
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
@@ -312,6 +313,43 @@ void anchorModesPersistAndMigrate() {
            "a pre-1.24 file carrying an anchor mode is refused");
 }
 
+// #376: a composition's timecode labelling (document 1.26) is written only when set, saves and
+// reopens exactly, and is refused in an older file.
+void compositionTimecodePersists() {
+    Fixture fixture;
+    expect(encode(fixture.document).find("\"timecode\"") == std::string::npos,
+           "the default timecode labelling is not written");
+    commands::Transaction transaction("Settings", fixture.document.snapshot().revision());
+    auto* composition = fixture.document.snapshot().project().findComposition(fixture.composition);
+    auto settings = commands::compositionSettingsOf(*composition);
+    settings.timecode = {*core::RationalTime::create(3601, 2), true};
+    transaction.emplace<commands::SetCompositionSettings>(fixture.composition, settings);
+    expect(fixture.commands.execute(std::move(transaction)).succeeded(), "the timecode is set");
+    const auto text = encode(fixture.document);
+    expect(text.find("\"timecode\"") != std::string::npos &&
+               text.find("\"dropFrame\": true") != std::string::npos,
+           "the timecode labelling is written");
+    const auto snapshot = fixture.document.snapshot();
+    const auto colour = document::makeBloomNeutralColorSettingsV1({});
+    auto archive = project::buildVerifiedSaveArchive(
+        {}, {.snapshot = &snapshot, .colorSettings = &colour}, {}, memory());
+    expect(static_cast<bool>(archive), "the archive with a timecode saves");
+    if (archive) {
+        auto result = project::openProjectArchive(archive.archive()->bytes(), {}, memory());
+        expect(result.outcome() == project::OpenArchiveOutcome::Opened, "and opens");
+        if (result.outcome() == project::OpenArchiveOutcome::Opened) {
+            auto opened = std::move(result).takeOpened();
+            const auto* reopened =
+                opened.document->snapshot().project().findComposition(fixture.composition);
+            expect(reopened != nullptr && reopened->timecode() == settings.timecode,
+                   "the start timecode and drop-frame flag reopen exactly");
+        }
+    }
+    auto older = text;
+    replaceOnce(older, "\"minor\": 26", "\"minor\": 25");
+    expect(!static_cast<bool>(decodeText(older)), "a pre-1.26 file carrying a timecode is refused");
+}
+
 } // namespace
 
 int main() {
@@ -319,6 +357,7 @@ int main() {
         roundTrip();
         olderDocumentsMigrateAndRefuseNewMembers();
         anchorModesPersistAndMigrate();
+        compositionTimecodePersists();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

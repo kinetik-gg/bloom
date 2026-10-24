@@ -1,7 +1,8 @@
 # Bloom Project Format
 
 The current document schema is 1.26. It advances the Image source node to v2 (optional `part` and
-`layer` parameters and a `channels` output; see "Channel Sets In Document 1.26") on top of the 1.25
+`layer` parameters and a `channels` output; see "Channel Sets In Document 1.26") and adds the
+optional composition `timecode` (see "Composition Timecode In Document 1.26") on top of the 1.25
 video stream field order and timecode type and the optional Video node audio stream selection (see
 "Video Stream Metadata In Document 1.25"), the 1.24
 optional layer masks and track matte on Layer Output boundaries, the Path animation curve kind and the optional `layerMask` allocator namespace (see
@@ -1502,6 +1503,23 @@ Document `1.26` persists the multi-channel nodes of
 The `1.25` → `1.26` DOM step rewrites only the node-record `schemaVersion` of `bloom.image-source`
 nodes from 1 to 2; the new parameters are optional, so no record is inserted and every edge and
 binding is copied unchanged.
+
+## Composition Timecode In Document 1.26
+
+A composition gains an optional `timecode` member after `workingColorSpaceId` (#376):
+
+| Member | Encoding |
+| --- | --- |
+| `timecode` | `{"start": <non-negative rational time>, "dropFrame": <boolean>}` |
+
+`start` is the timecode of composition time 0, stored as an exact time so it survives a frame-rate
+change; labels show it at the nearest frame of the composition rate. `dropFrame` asks for SMPTE
+drop-frame labels and is honoured only at 30000/1001 and 60000/1001; at any other rate the labels
+are non-drop and the stored flag is kept. Neither value changes frames, time, evaluation or output
+identity: they are timecode presentation owned by the composition. The member is written only when
+it differs from the default (start 0, non-drop), so a composition without it keeps its 1.25 bytes.
+The decoder reads it only at `1.26` or later, refuses a negative start as a domain violation, and
+preserves unknown trailing members like any composition attachment.
 
 ## Layer Masks In Document 1.24
 

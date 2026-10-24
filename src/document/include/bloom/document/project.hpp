@@ -134,6 +134,8 @@ class Composition final {
     void setBackgroundColor(core::Color4d color) noexcept { backgroundColor_ = color; }
     [[nodiscard]] SafeAreaSettings safeAreas() const noexcept { return safeAreas_; }
     void setSafeAreas(SafeAreaSettings settings) noexcept { safeAreas_ = settings; }
+    [[nodiscard]] CompositionTimecode timecode() const noexcept { return timecode_; }
+    void setTimecode(CompositionTimecode timecode) noexcept { timecode_ = timecode; }
     // A node is locked when a locked layer boundary depends on it through node inputs. Published
     // (frozen) content answers from a lock index built once at freeze time by one reverse BFS;
     // draft content builds the index per call, still linear in the graph (#357).
@@ -198,6 +200,7 @@ class Composition final {
     [[nodiscard]] static LockIndex buildLockIndex(const Content& authored);
     void freezeContent();
     std::optional<WorkArea> workArea_{};
+    CompositionTimecode timecode_{};
     std::optional<std::string> workingColorSpaceId_{};
     SafeAreaSettings safeAreas_{};
     core::Color4d backgroundColor_{0.0, 0.0, 0.0, 1.0};

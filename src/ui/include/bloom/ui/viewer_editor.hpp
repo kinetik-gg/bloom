@@ -830,6 +830,7 @@ class ViewerEditor final : public QWidget,
     QAction* viewerCompositionDuplicateAction_ = nullptr;
     QAction* viewerCompositionDeleteAction_ = nullptr;
     QAction* viewerCompositionRenameAction_ = nullptr;
+    QAction* viewerCompositionSettingsAction_ = nullptr;
     QAction* safeAreasAction_ = nullptr;
     QAction* centreCrossAction_ = nullptr;
     QAction* thirdsAction_ = nullptr;

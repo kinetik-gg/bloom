@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-10-23
+Updated: 2026-10-25
 
 ## Geometry and transform levels
 
@@ -1249,6 +1249,35 @@ bar. Upstream keys project through the same linear inverse and are marked as con
 remap or wrapping mode is active. Keyframe insertion at the playhead converts the session time
 forward to the parameter's clock and is refused where content is absent. Edit footprints are listed
 in [ADR 0024](../decisions/0024-layer-owned-time.md#8-projection-and-footprints).
+
+## Composition Settings Changes
+
+`SetCompositionSettings` (the Composition Settings dialog, and `bloom.composition.set-settings`
+through the operation registry) replaces a composition's name, format, duration, timecode,
+background, working colour space and safe areas as one undoable command. Its render footprint is the
+whole composition at every time, which also invalidates every composition that nests it. Settings
+equal to the current ones commit nothing, and an invalid value is refused with a plain reason before
+anything changes. Under [ADR 0024](../decisions/0024-layer-owned-time.md) time belongs to layers and
+is exact, so the edit rewrites no time:
+
+- **Frame rate.** Layer `startTime`, `inPoint`, `outPoint`, speed, remap, and every key keep their
+  exact rational seconds. A key that sat on a frame of the old rate keeps its time, so at the new
+  rate it may fall between frames; it is sampled where the new frame grid meets the curve, exactly
+  as any off-frame key is, and is never snapped or moved. Frame snapping in later gestures uses the
+  new rate. A nested composition is sampled at its own new rate by the mapping below, with the
+  parent's layers unchanged.
+- **Duration.** Layer and key times are unchanged; anything past the new end simply lies outside
+  `[0, duration)` and comes back if the duration grows again. A work area is clamped to the new
+  duration and cleared if nothing of it remains.
+- **Start timecode and drop-frame** change only labels (see the project format's composition
+  timecode); frames and times are untouched.
+- **Size.** The 3 × 3 resize anchor decides where existing layers sit: each unlocked, unparented
+  layer's position moves by `(newWidth - oldWidth) * column / 2` and
+  `(newHeight - oldHeight) * row / 2` (column and row 0, 1, 2 from top left), so centre keeps layers
+  centred and top left keeps them at the same offset from that corner. The shift is applied to the
+  constant, to every key of an animated position, and to its default; a driven position is left to
+  its driver. Parented layers follow their parent, and locked layers stay where they are, as every
+  command leaves locked layers untouched. Undo restores every moved value exactly.
 
 ## Composition Source Time Mapping
 

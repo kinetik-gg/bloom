@@ -427,6 +427,22 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256
+        },
+        "timecode": {
+          "type": "object",
+          "required": [
+            "start",
+            "dropFrame"
+          ],
+          "properties": {
+            "start": {
+              "$ref": "#/$defs/rationalTime"
+            },
+            "dropFrame": {
+              "type": "boolean"
+            }
+          },
+          "unevaluatedProperties": false
         }
       },
       "unevaluatedProperties": true

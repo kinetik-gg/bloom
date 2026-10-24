@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 namespace bloom::document {
 struct NodeRecord;
@@ -47,10 +48,21 @@ struct TimelineFrameContext final {
     document::FrameRate frameRate;
     core::RationalTime duration;
     std::uint64_t maxFrameIndexValue;
+    // How the composition labels its frames (start timecode, drop-frame). Display only.
+    document::CompositionTimecode labels{};
 };
 
 [[nodiscard]] std::optional<TimelineFrameContext>
 frameContextFor(const CompositionSession& session);
+
+// The working colour spaces a composition may choose in the project's colour configuration, as
+// display label and id; the first entry (an empty id) follows the project working space.
+struct WorkingColorSpaceChoice final {
+    QString label;
+    QString id;
+};
+[[nodiscard]] std::vector<WorkingColorSpaceChoice>
+workingColorSpaceChoices(const document::ColorSettings& settings);
 
 // Formats an exact RationalTime as seconds with EXACTLY 3 truncated decimal digits (millisecond
 // resolution), computed purely from the integer numerator/denominator -- never through

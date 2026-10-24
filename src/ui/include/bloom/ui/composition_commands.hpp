@@ -15,6 +15,11 @@ class CompositionSession;
 [[nodiscard]] std::optional<document::CompositionId>
 showNewCompositionDialog(CompositionSession& session, QWidget* parent = nullptr);
 
+// The shared New Composition / Composition Settings modal (#376) in settings mode: edits every
+// setting of `id` and commits one SetCompositionSettings. True when a change was committed.
+bool showCompositionSettingsDialog(CompositionSession& session, document::CompositionId id,
+                                   QWidget* parent = nullptr);
+
 [[nodiscard]] std::optional<document::CompositionId>
 duplicateComposition(CompositionSession& session, document::CompositionId source);
 

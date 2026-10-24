@@ -9,9 +9,11 @@
 #include <bloom/ui/kit/controls.hpp>
 
 #include <QApplication>
+#include <QDialog>
 #include <QLineEdit>
 #include <QMenu>
 #include <QPushButton>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 #include <QWidget>
@@ -171,12 +173,24 @@ int main(int argc, char** argv) {
         // The offscreen QPA plugin does not synthesize QTreeWidget's double-click signal
         // reliably. Invoke the same signal path used by the production itemDoubleClicked
         // connection so this test remains deterministic in the required headless gate.
+        // #376: double-click also opens that composition's Composition Settings modal.
+        bool settingsShown = false;
+        QTimer::singleShot(0, [&settingsShown] {
+            for (auto* widget : QApplication::topLevelWidgets())
+                if (widget->objectName() == QStringLiteral("compositionSettingsDialog") &&
+                    widget->isVisible()) {
+                    settingsShown = true;
+                    if (auto* dialog = qobject_cast<QDialog*>(widget))
+                        dialog->reject();
+                }
+        });
+        const auto expected = bloom::document::CompositionId::fromRaw(
+            visibleItem->data(0, Qt::UserRole + 1).toULongLong());
         tree->itemDoubleClicked(visibleItem, 0);
         QApplication::processEvents();
-        context.expect(session.compositionId() ==
-                           bloom::document::CompositionId::fromRaw(
-                               visibleItem->data(0, Qt::UserRole + 1).toULongLong()),
+        context.expect(session.compositionId() == expected,
                        "double-click opens the selected composition");
+        context.expect(settingsShown, "double-click opens its Composition Settings");
     }
 
     videoAssetRows(context);

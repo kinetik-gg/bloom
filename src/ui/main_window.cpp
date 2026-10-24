@@ -392,6 +392,16 @@ void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
             (void)compositionSession_.setComposition(*id);
         }
     });
+    // #376: the shared modal in settings mode. After Effects' Ctrl+K already splits layers here, so
+    // it takes Ctrl+Alt+K beside New Composition's Ctrl+Alt+N.
+    compositionSettingsAction_ = compositionMenu.addAction("Composition Settings…");
+    compositionSettingsAction_->setObjectName("compositionSettingsAction");
+    compositionSettingsAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_K));
+    compositionSettingsAction_->setShortcutContext(Qt::WindowShortcut);
+    connect(compositionSettingsAction_, &QAction::triggered, this, [this] {
+        (void)showCompositionSettingsDialog(compositionSession_,
+                                            compositionSession_.compositionId(), this);
+    });
     duplicateCompositionAction_ = compositionMenu.addAction("Duplicate Composition");
     duplicateCompositionAction_->setObjectName("compositionDuplicateAction");
     connect(duplicateCompositionAction_, &QAction::triggered, this, [this] {
@@ -456,6 +466,7 @@ void MainWindow::updateCompositionActions() {
     const bool hasComposition = compositionSession_.composition() != nullptr;
     duplicateCompositionAction_->setEnabled(hasComposition);
     renameCompositionAction_->setEnabled(hasComposition);
+    compositionSettingsAction_->setEnabled(hasComposition);
     // Deleting the final composition is allowed and returns to the blank, usable empty project.
     deleteCompositionAction_->setEnabled(hasComposition);
 }

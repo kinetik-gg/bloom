@@ -645,6 +645,8 @@ namespace {
         keys.push_back("backgroundColor");
     if (state.documentMinor >= 19 && node.findMember("workingColorSpaceId") != nullptr)
         keys.push_back("workingColorSpaceId");
+    if (state.documentMinor >= 26 && node.findMember("timecode") != nullptr)
+        keys.push_back("timecode");
     std::vector<const JsonValue*> members;
     // A composition is a collection element (identity: numeric CompositionId), and that identity
     // is one of its own known members (`id`) -- not yet decoded at this point -- so this closed
@@ -777,6 +779,31 @@ namespace {
                            joinPath(path, "workingColorSpaceId"));
                 return false;
             }
+        }
+    }
+    if (const auto* timecode = node.findMember("timecode");
+        timecode != nullptr && state.documentMinor >= 26) {
+        const AttachmentScope scope(state, "timecode");
+        const auto timecodePath = joinPath(path, "timecode");
+        constexpr std::array<std::string_view, 2> timecodeKeys{"start", "dropFrame"};
+        std::vector<const JsonValue*> parts;
+        if (!matchOrderedMembers(*timecode, timecodeKeys, true, state, timecodePath, parts))
+            return false;
+        {
+            const AttachmentScope startScope(state, "start");
+            if (!detail::decodeRationalTimeValue(*parts[0], state, joinPath(timecodePath, "start"),
+                                                 out.timecode.start))
+                return false;
+        }
+        const auto dropFrame = parts[1]->asBoolean();
+        if (parts[1]->kind() != JsonValueKind::Boolean || !dropFrame.has_value()) {
+            state.fail(DocumentDecodeError::WrongValueKind, joinPath(timecodePath, "dropFrame"));
+            return false;
+        }
+        out.timecode.dropFrame = *dropFrame;
+        if (!out.timecode.isValid()) {
+            state.fail(DocumentDecodeError::DomainViolation, joinPath(timecodePath, "start"));
+            return false;
         }
     }
     return true;
@@ -1195,9 +1222,8 @@ namespace {
         return false;
     if (state.documentMinor >= 18)
         ++nextMember;
-    if (hasLayerMask &&
-        !decodeAllocatorHighWaterMember(*members[nextMember], state, joinPath(path, "layerMask"),
-                                        out.layerMask))
+    if (hasLayerMask && !decodeAllocatorHighWaterMember(*members[nextMember], state,
+                                                        joinPath(path, "layerMask"), out.layerMask))
         return false;
     return decodeAllocatorHighWaterMember(*members[10], state, joinPath(path, "nodeGroup"),
                                           out.nodeGroup);

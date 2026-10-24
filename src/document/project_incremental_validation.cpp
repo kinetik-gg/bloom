@@ -111,7 +111,7 @@ bool Composition::sameShell(const Composition& other) const noexcept {
     return id_ == other.id_ && name_ == other.name_ && duration_ == other.duration_ &&
            format_ == other.format_ && workArea_ == other.workArea_ &&
            workingColorSpaceId_ == other.workingColorSpaceId_ && safeAreas_ == other.safeAreas_ &&
-           backgroundColor_ == other.backgroundColor_;
+           backgroundColor_ == other.backgroundColor_ && timecode_ == other.timecode_;
 }
 
 bool Project::sameRootRecordStorage(const Project& other) const noexcept {

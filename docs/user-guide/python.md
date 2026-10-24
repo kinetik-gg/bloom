@@ -100,6 +100,19 @@ bloom.ops.layer.add_solid(name="Red", color=[1, 0, 0, 1], position=(960, 540))
 bloom.ops.composition.set_duration(Fraction(3, 2))
 ```
 
+`bloom.ops.composition.set_settings` is the Composition Settings dialog as one undoable operation:
+pass only what changes. Frame rate and pixel aspect are exact numerator/denominator pairs, `duration`
+and `start` (the timecode of frame 0) are times, an empty `workingColorSpace` returns to the project
+space, and `anchor` (0 to 8, row by row from top left, default 4 for centre) decides where existing
+layers sit when the size changes. Layer and key times are never rewritten. Composition presets are
+per-user application settings of the desktop app and are not operations.
+
+```python
+bloom.ops.composition.set_settings(width=3840, height=2160, anchor=0)
+bloom.ops.composition.set_settings(frameRateNumerator=30000, frameRateDenominator=1001,
+                                   dropFrame=True, start=Fraction(3600))
+```
+
 Arguments that name what you are already looking at default from `bloom.context` when you omit
 them: `composition`, `time`, and `layer`/`selection` for operations that edit the selection. They
 stay keyword-only, so an explicit target always reads as one. The schema carries the same

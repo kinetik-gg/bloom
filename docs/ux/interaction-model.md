@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-10-23
+Updated: 2026-10-25
 
 ## Purpose
 
@@ -40,6 +40,8 @@ hosts reach with a modifier — bare letters belong to tools.
 | `Ctrl+O` | Open project |
 | `Ctrl+S` / `Ctrl+Shift+S` | Save / Save As |
 | `Ctrl+Q` | Quit |
+| `Ctrl+Alt+N` | New Composition… |
+| `Ctrl+Alt+K` | Composition Settings… for the active composition (After Effects' `Ctrl+K` splits layers here) |
 | `Space` | Play/pause immediately from cache in any panel; focused text entry keeps Space |
 | `Ctrl+Shift+Space` | RAM Preview: cache this composition's range, then play it |
 | `Esc` | Cancel the RAM preview being cached (bound only while one is) |
@@ -88,7 +90,7 @@ visible Viewer, the window makes no displayed qualification claim.
 | View → Safe Areas / Centre Cross / Thirds / Rulers / Pixel Grid | Toggles display-only guides; Safe Areas uses the active composition's stored percentages |
 | View → Safe Area Preset | Applies Broadcast, HD, Cinema, Social, or validated Custom percentages in one undoable composition edit |
 | Select → All / None / Invert | Selects, clears, or inverts the current composition's layer boundaries |
-| Composition menu / selector trailing menu | New, Duplicate, Rename, and Delete Composition; Duplicate, Rename, and Delete are disabled while no composition is active, and Delete may remove the final composition (returning to the blank project) |
+| Composition menu / selector trailing menu | New Composition, Composition Settings, Duplicate, Rename, and Delete Composition; Composition Settings, Duplicate, Rename, and Delete are disabled while no composition is active, and Delete may remove the final composition (returning to the blank project) |
 | `Ctrl+0` | Fit |
 | `Ctrl+1` | Actual size (100%) |
 | Middle drag | Pan |
@@ -166,14 +168,42 @@ panel menus or the composition context menu.
 | --- | --- |
 | Search field text | Filters the tree by composition name, case-insensitively |
 | View > Expand All / Collapse All | Expands or collapses the asset tree |
-| Add > New Composition… | Opens the name, size, exact frame-rate, and duration dialog, then adds one composition through the command path. Frame rate accepts a positive integer, exact decimal (so `29.97` is `2997/100`), or `numerator/denominator`; entered fraction components must fit signed 64-bit integers and the reduced rate components must each fit 32 bits. Presets include 24, 25, 30, 24000/1001, 30000/1001, and 60000/1001. Duration accepts whole Frames or positive decimal/rational Seconds. Switching units preserves the exact duration. Changing rate in Frames preserves the displayed integer frame count; changing rate in Seconds preserves the exact time. Values that cannot be represented by the document's rational types, including an inherited duration that cannot be shown as a whole frame count, show an inline error and disable Add |
+| Add > New Composition… | Opens the Composition dialog in create mode, then adds one composition through the command path (see "Composition Dialog" below) |
 | Add > New Folder | Disabled; tooltip: `Folders arrive with asset organisation` |
 | Select > All / None | Selects all visible rows or clears the selection |
-| Double-click a composition | Switches the shared `CompositionSession` to that composition |
-| Right-click a composition | Open, Rename (inline), Duplicate, or Delete |
-| Footer: New Composition | Opens the same new-composition dialog |
+| Double-click a composition | Switches the shared `CompositionSession` to that composition, then opens its Composition Settings |
+| Right-click a composition | Open, Composition Settings…, Rename (inline), Duplicate, or Delete |
+| Footer: New Composition | Opens the same dialog in create mode |
 | Footer: New Folder / Import | Disabled; Import tooltip: `Image and sequence import arrives with the media pipeline` |
 | Footer: Delete | Deletes the active composition through one undoable command; deleting the final composition returns to the blank project and undo restores it |
+
+### Composition Dialog
+
+New Composition and Composition Settings are one modal (#376) with a Basic section and a collapsed
+Advanced section. Create mode starts from the active composition's settings and commits
+`AddCompositionWithSettings` ("Add Composition"); settings mode edits one composition and commits
+`SetCompositionSettings` ("Composition Settings"). Each is exactly one undoable command, and
+unchanged settings commit nothing. Entry points: Composition menu (`Ctrl+Alt+N`, `Ctrl+Alt+K`), the
+Viewer composition menu, the Assets Add menu, footer and composition context menu, and double-click
+in Assets.
+
+| Control | Behaviour |
+| --- | --- |
+| Name | Required; an empty name disables OK with an inline reason |
+| Preset | Custom, the user's presets, then HD 1080p (1920 × 1080), HD 720p (1280 × 720), UHD 4K (3840 × 2160), DCI 2K (2048 × 1080), DCI 4K (4096 × 2160), Vertical 1080 × 1920 and Square 1080, all square pixels. Choosing a built-in sets size and pixel aspect only; choosing a user preset sets every value it holds. The field shows the first preset whose values equal the current ones (user presets first) and Custom otherwise, including while a value is invalid |
+| Save / Rename / Delete preset | Save names the current values as a user preset; Rename and Delete act on the selected user preset and are disabled on Custom and built-ins. Names are trimmed, at most 128 UTF-8 bytes and unique ignoring case. User presets are a per-user application setting, never project data |
+| Size and lock | Width and height in pixels; the link toggle keeps the aspect ratio while one is edited |
+| Pixel Aspect Ratio | Square, D1/DV NTSC (10/11) and widescreen (40/33), D1/DV PAL (59/54) and widescreen (118/81), HDV 1080 / DVCPRO HD 720 (4/3), DVCPRO HD 1080 (3/2), and Anamorphic 2:1; a stored ratio outside the list is shown as its own entry |
+| Frame Rate | A positive integer, exact decimal (`29.97` is `2997/100`), or `numerator/denominator`; entered components must fit signed 64-bit integers and the reduced rate's components 32 bits. Presets: Custom, 23.976 (24000/1001), 24, 25, 29.97 (30000/1001), 30, 48, 50, 59.94 (60000/1001), 60 |
+| Timecode: drop-frame labels | Enabled only at 30000/1001 and 60000/1001. It changes timecode labels to SMPTE drop-frame (`;` before the frames, two or four labels skipped each minute except every tenth) and never changes frames or time |
+| Start | The timecode of frame 0, entered in the duration unit; stored as an exact time and labelled at the nearest frame |
+| Duration and unit | Frames, Seconds (decimal or rational) or Timecode. Switching units re-displays the same exact duration; changing rate in Frames or Timecode keeps the frame count, in Seconds keeps the exact time |
+| Background Colour | The composition background `KColorChip` |
+| Advanced: Working Colour Space | Inherit (the project space) or a scene-linear space of the project's OCIO config |
+| Advanced: Resize Anchor | Settings mode only: a 3 × 3 grid choosing where existing layers sit when the size changes (default centre) |
+| Advanced: Action / Title Safe | The stored safe-area percentages; title safe may not exceed action safe |
+
+Invalid values disable OK and show one plain reason under the sections.
 
 ## Nodes
 

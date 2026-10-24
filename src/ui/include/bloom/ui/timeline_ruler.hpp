@@ -40,6 +40,8 @@ struct TimelineAxis final {
     double t0 = 0.0;
     double t1 = 0.0;
     int inset = 0;
+    // How the composition labels its frames (start timecode, drop-frame). Display only.
+    document::CompositionTimecode labels{};
 
     [[nodiscard]] int pixelSpan() const noexcept {
         return std::max(1, widthPixels - 1 - 2 * inset);
@@ -57,9 +59,21 @@ struct TimelineAxis final {
     [[nodiscard]] qreal pixelForTime(core::RationalTime time) const noexcept;
 };
 
-// Non-drop labels use the nearest nominal integer frame rate for HH:MM:SS:FF.
+// Labels a composition frame index. `labels` shifts it by the composition's start timecode (at
+// the nearest frame of the rate) in both formats. Non-drop timecode is HH:MM:SS:FF at the nearest
+// nominal integer rate; drop-frame (honoured at 30000/1001 and 60000/1001 only) is HH:MM:SS;FF and
+// skips frame numbers 0-1 (0-3 at 59.94) at every minute not divisible by ten.
 [[nodiscard]] QString formatTimelineFrameLabel(std::uint64_t frame, document::FrameRate rate,
-                                               bool timecode);
+                                               bool timecode,
+                                               const document::CompositionTimecode& labels = {});
+// The composition frame index a typed label names: a frame number, or a timecode with ':' or ';'
+// separators, both in the labels' numbering. nullopt for unparseable or pre-start text.
+[[nodiscard]] std::optional<std::uint64_t>
+parseTimelineFrameLabel(const QString& text, document::FrameRate rate, bool timecode,
+                        const document::CompositionTimecode& labels = {});
+// The frame number the composition's start timecode labels frame index 0 with.
+[[nodiscard]] std::int64_t timecodeStartFrame(document::FrameRate rate,
+                                              const document::CompositionTimecode& labels);
 
 // The timeline panel's shared row pitch (task T1): the AE-style layer rows, their lanes, and the
 // keyframe lanes underneath them all step by exactly this much, so the left column's rows, the

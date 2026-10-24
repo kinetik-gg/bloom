@@ -166,7 +166,7 @@ computeMajorTickLabels(const TimelineAxis& axis, const qreal labelAreaHeight, co
     std::vector<MajorTickLabel> labels;
     const QFontMetrics metrics(tickFont());
     const qreal widestLabelPixels = metrics.horizontalAdvance(
-        formatTimelineFrameLabel(axis.maxIndex, axis.frameRate, timecode));
+        formatTimelineFrameLabel(axis.maxIndex, axis.frameRate, timecode, axis.labels));
     const auto minorStep = minorTickStepFrames(axis);
     const auto majorStep = majorTickStepFrames(axis, widestLabelPixels, minorStep);
     for (std::uint64_t index = (axis.frameIndexForPixel(0) / majorStep) * majorStep;
@@ -182,7 +182,7 @@ computeMajorTickLabels(const TimelineAxis& axis, const qreal labelAreaHeight, co
         if (x < 0) {
             continue;
         }
-        const QString text = formatTimelineFrameLabel(index, axis.frameRate, timecode);
+        const QString text = formatTimelineFrameLabel(index, axis.frameRate, timecode, axis.labels);
         const qreal textWidth = metrics.horizontalAdvance(text);
         if (x - textWidth / 2 >= 0 && x + textWidth / 2 <= axis.widthPixels &&
             (labels.empty() ||
@@ -769,8 +769,9 @@ void TimelineRuler::paintEvent(QPaintEvent* event) {
         if (label.rect.intersects(
                 currentLabel.adjusted(-kMajorLabelGapPixels, 0, kMajorLabelGapPixels, 0)))
             continue;
-        painter.drawText(label.rect, Qt::AlignLeft | Qt::AlignVCenter,
-                         formatTimelineFrameLabel(label.index, axis->frameRate, timecodeLabels_));
+        painter.drawText(
+            label.rect, Qt::AlignLeft | Qt::AlignVCenter,
+            formatTimelineFrameLabel(label.index, axis->frameRate, timecodeLabels_, axis->labels));
     }
 
     for (const auto& segment : cachedFrameRects()) {
@@ -783,7 +784,8 @@ void TimelineRuler::paintEvent(QPaintEvent* event) {
     const auto frame =
         nearestFrameIndexForTime(axis->frameRate, axis->duration, session_.currentTime())
             .value_or(0);
-    const QString frameLabel = formatTimelineFrameLabel(frame, axis->frameRate, timecodeLabels_);
+    const QString frameLabel =
+        formatTimelineFrameLabel(frame, axis->frameRate, timecodeLabels_, axis->labels);
     painter.fillRect(currentLabel, kit::color(kit::Color::Surface));
     painter.setFont(tickFont());
     painter.setPen(kit::color(kit::Color::Foreground));
@@ -815,7 +817,7 @@ QRectF TimelineRuler::playheadLabelRect() const {
             .value_or(0);
     const QFontMetrics metrics(tickFont());
     const qreal extent = metrics.horizontalAdvance(
-        formatTimelineFrameLabel(frame, axis->frameRate, timecodeLabels_));
+        formatTimelineFrameLabel(frame, axis->frameRate, timecodeLabels_, axis->labels));
     const qreal x = axis->pixelForTime(session_.currentTime());
     return {x - extent / 2, 0, extent,
             static_cast<qreal>(height()) - 2 * kPlayheadMarkerHeight - kit::px(kit::Spacing::XXS)};

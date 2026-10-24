@@ -1,3 +1,4 @@
+#include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -2036,6 +2037,111 @@ OperationRegistry OperationRegistry::builtIn() {
                     *name, *compositionFormat, compositionFormat->frameRate(),
                     duration.value_or(core::RationalTime::fromInteger(48)),
                     background.value_or(core::Color4d{0.0, 0.0, 0.0, 1.0})),
+                std::nullopt);
+        });
+
+    // #376 Composition Settings: changes only the named settings, as one command. A size change
+    // keeps existing top-level layers pinned to `anchor` (0..8: row * 3 + column, 4 is the centre).
+    add("bloom.composition.set-settings",
+        {compositionArgument(), maybe("name", ValueKind::String, "Scene", "The new name."),
+         maybe("width", ValueKind::Integer, std::int64_t{1920}, "Pixel width."),
+         maybe("height", ValueKind::Integer, std::int64_t{1080}, "Pixel height."),
+         maybe("pixelAspectNumerator", ValueKind::Integer, std::int64_t{1},
+               "Pixel aspect numerator (with pixelAspectDenominator)."),
+         maybe("pixelAspectDenominator", ValueKind::Integer, std::int64_t{1},
+               "Pixel aspect denominator (with pixelAspectNumerator)."),
+         maybe("frameRateNumerator", ValueKind::Integer, std::int64_t{24},
+               "Frame-rate numerator (with frameRateDenominator)."),
+         maybe("frameRateDenominator", ValueKind::Integer, std::int64_t{1},
+               "Frame-rate denominator (with frameRateNumerator)."),
+         maybe("duration", ValueKind::Time, std::int64_t{10}, "Duration in seconds."),
+         maybe("start", ValueKind::Time, std::int64_t{0},
+               "The time composition time zero is labelled as, in seconds."),
+         maybe("dropFrame", ValueKind::Boolean, false,
+               "Drop-frame timecode labels (honoured at 29.97 and 59.94 fps)."),
+         maybe("background", ValueKind::Color4, core::Color4d{0.0, 0.0, 0.0, 1.0},
+               "Background colour."),
+         maybe("workingColorSpace", ValueKind::String, "ACEScg",
+               "Working colour space id; an empty string follows the project."),
+         maybe("actionSafe", ValueKind::Double, 0.9, "Action-safe fraction, 0..1."),
+         maybe("titleSafe", ValueKind::Double, 0.8, "Title-safe fraction, inside action safe."),
+         maybe("anchor", ValueKind::Integer, std::int64_t{4},
+               "Resize anchor 0..8 (row * 3 + column); 4 keeps content centred.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            commands::CompositionSettingsChange change;
+            change.name = text(args, op, "name", error, false);
+            const auto width = integer(args, op, "width", error, false);
+            const auto height = integer(args, op, "height", error, false);
+            const auto parNumerator = integer(args, op, "pixelAspectNumerator", error, false);
+            const auto parDenominator = integer(args, op, "pixelAspectDenominator", error, false);
+            const auto rateNumerator = integer(args, op, "frameRateNumerator", error, false);
+            const auto rateDenominator = integer(args, op, "frameRateDenominator", error, false);
+            change.duration = rational(args, op, "duration", error, false);
+            change.timecodeStart = rational(args, op, "start", error, false);
+            change.dropFrame = boolean(args, op, "dropFrame", error, false);
+            change.background = color4(args, op, "background", error, false);
+            change.workingColorSpaceId = text(args, op, "workingColorSpace", error, false);
+            const auto actionSafe = number(args, op, "actionSafe", error, false);
+            const auto titleSafe = number(args, op, "titleSafe", error, false);
+            const auto anchor = integer(args, op, "anchor", error, false);
+            if (!composition || error.diagnostic() != nullptr)
+                return error;
+            constexpr auto maximum = std::int64_t{std::numeric_limits<std::uint32_t>::max()};
+            const auto dimension = [&](const std::optional<std::int64_t> value, const char* name,
+                                       std::optional<std::uint32_t>& out) {
+                if (!value)
+                    return true;
+                if (*value < 1 ||
+                    *value > std::int64_t{document::CompositionFormat::kMaximumDimension}) {
+                    error = failure(op, name, "expects a whole number of pixels in 1..1048576");
+                    return false;
+                }
+                out = static_cast<std::uint32_t>(*value);
+                return true;
+            };
+            if (!dimension(width, "width", change.width) ||
+                !dimension(height, "height", change.height))
+                return error;
+            if (parNumerator.has_value() != parDenominator.has_value())
+                return failure(op, "pixelAspectNumerator",
+                               "needs both pixelAspectNumerator and pixelAspectDenominator");
+            if (parNumerator) {
+                const auto aspect = *parNumerator > 0 && *parDenominator > 0
+                                        ? core::PixelAspectRatio::create(
+                                              static_cast<std::uint64_t>(*parNumerator),
+                                              static_cast<std::uint64_t>(*parDenominator))
+                                        : std::nullopt;
+                if (!aspect)
+                    return failure(op, "pixelAspectNumerator", "expects a positive pixel aspect");
+                change.pixelAspect = *aspect;
+            }
+            if (rateNumerator.has_value() != rateDenominator.has_value())
+                return failure(op, "frameRateNumerator",
+                               "needs both frameRateNumerator and frameRateDenominator");
+            if (rateNumerator) {
+                const auto rate =
+                    *rateNumerator > 0 && *rateNumerator <= maximum && *rateDenominator > 0 &&
+                            *rateDenominator <= maximum
+                        ? document::FrameRate::create(static_cast<std::uint32_t>(*rateNumerator),
+                                                      static_cast<std::uint32_t>(*rateDenominator))
+                        : std::nullopt;
+                if (!rate)
+                    return failure(op, "frameRateNumerator",
+                                   "expects a frame rate with parts in 1..4294967295");
+                change.frameRate = *rate;
+            }
+            change.actionSafe = actionSafe;
+            change.titleSafe = titleSafe;
+            if (anchor && (*anchor < 0 || *anchor > 8))
+                return failure(op, "anchor", "expects 0..8 (row * 3 + column)");
+            const auto cell = anchor.value_or(4);
+            return OperationCreateResult(
+                std::make_unique<commands::UpdateCompositionSettings>(
+                    document::CompositionId::fromRaw(*composition), std::move(change),
+                    commands::ResizeAnchor{static_cast<std::uint8_t>(cell % 3),
+                                           static_cast<std::uint8_t>(cell / 3)}),
                 std::nullopt);
         });
 

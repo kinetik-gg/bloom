@@ -1,5 +1,5 @@
-#include <bloom/document/project.hpp>
 #include <bloom/document/layer_masks.hpp>
+#include <bloom/document/project.hpp>
 
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/render_reachability.hpp>
@@ -91,10 +91,10 @@ Composition::Composition(const CompositionId id, std::string name,
       editableContent_(std::make_unique<Content>(std::move(graph))) {}
 
 Composition::Composition(const Composition& other)
-    : workArea_(other.workArea_), workingColorSpaceId_(other.workingColorSpaceId_),
-      safeAreas_(other.safeAreas_), backgroundColor_(other.backgroundColor_), id_(other.id_),
-      name_(other.name_), duration_(other.duration_), format_(other.format_),
-      frozenContent_(other.frozenContent_) {
+    : workArea_(other.workArea_), timecode_(other.timecode_),
+      workingColorSpaceId_(other.workingColorSpaceId_), safeAreas_(other.safeAreas_),
+      backgroundColor_(other.backgroundColor_), id_(other.id_), name_(other.name_),
+      duration_(other.duration_), format_(other.format_), frozenContent_(other.frozenContent_) {
     if (other.editableContent_) {
         editableContent_ = std::make_unique<Content>(*other.editableContent_);
         editableContentCopies.fetch_add(1, std::memory_order_relaxed);
@@ -413,6 +413,10 @@ ValidationResult Composition::validate() const {
     if (duration_ <= core::RationalTime{}) {
         result.add(ValidationCode::InvalidValue, "duration",
                    "Composition duration must be greater than zero");
+    }
+    if (!timecode_.isValid()) {
+        result.add(ValidationCode::InvalidValue, "timecode.start",
+                   "Composition start timecode must not be negative");
     }
 
     if (workArea_ && (workArea_->start < core::RationalTime{} ||

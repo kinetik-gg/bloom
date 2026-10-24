@@ -263,6 +263,8 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
     composition.setWorkArea(source.workArea());
     composition.setSafeAreas(source.safeAreas());
     composition.setBackgroundColor(source.backgroundColor());
+    composition.setTimecode(source.timecode());
+    composition.setWorkingColorSpaceId(source.workingColorSpaceId());
     for (const auto& sourceParameter : source.parameters().records()) {
         auto parameter = sourceParameter;
         parameter.id = remap(ids->parameters, sourceParameter.id);
@@ -743,14 +745,14 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
                                            document::kImageLayerParameterSchemaKey, std::string{},
                                            "layerParameter"});
     }
-    auto added = addStructuredLayer(
-        draft, *composition, name, std::move(source),
-        {static_cast<double>(composition->format().width()) / 2.0,
-         static_cast<double>(composition->format().height()) / 2.0},
-        1.0,
-        {"layer", "slot", "imageNode", "layerOutputNode", "positionParameter", "anchorParameter",
-         "scaleParameter", "rotationParameter", "opacityParameter", "blendModeParameter",
-         "imageToLayerEdge", "layerToStackEdge"});
+    auto added = addStructuredLayer(draft, *composition, name, std::move(source),
+                                    {static_cast<double>(composition->format().width()) / 2.0,
+                                     static_cast<double>(composition->format().height()) / 2.0},
+                                    1.0,
+                                    {"layer", "slot", "imageNode", "layerOutputNode",
+                                     "positionParameter", "anchorParameter", "scaleParameter",
+                                     "rotationParameter", "opacityParameter", "blendModeParameter",
+                                     "imageToLayerEdge", "layerToStackEdge"});
     if (added.status != OperationStatus::Applied || asset->kind == document::AssetKind::Image)
         return added;
     // ADR 0024: timed media starts at its natural length (capped by the composition), with the

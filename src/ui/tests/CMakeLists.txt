@@ -1883,3 +1883,12 @@ add_executable(bloom_path_editing_test path_editing_tests.cpp)
 target_link_libraries(bloom_path_editing_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_path_editing_test)
 bloom_add_test(NAME bloom.ui.path-editing COMMAND bloom_path_editing_test LABELS ui unit TIMEOUT 60)
+
+# #376 Composition Settings: the shared create/settings modal, presets, timecode labels and the one
+# command each mode commits. BLOOM_SCREENSHOT_DIR also writes review screenshots.
+add_executable(bloom_composition_settings_dialog_test composition_settings_dialog_tests.cpp)
+target_include_directories(bloom_composition_settings_dialog_test PRIVATE ..)
+target_link_libraries(bloom_composition_settings_dialog_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_composition_settings_dialog_test)
+bloom_add_test(NAME bloom.ui.composition-settings COMMAND bloom_composition_settings_dialog_test
+               LABELS ui integration TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

@@ -10,25 +10,102 @@
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 
 namespace bloom::ui {
 
-QString formatTimelineFrameLabel(const std::uint64_t frame, const document::FrameRate rate,
-                                 const bool timecode) {
-    if (!timecode) {
-        return QString::number(frame);
-    }
+namespace {
+[[nodiscard]] std::uint64_t nominalRate(const document::FrameRate rate) noexcept {
     const auto numerator = static_cast<std::uint64_t>(rate.numerator());
     const auto denominator = static_cast<std::uint64_t>(rate.denominator());
-    const auto nominal = std::max<std::uint64_t>(1, (numerator + denominator / 2) / denominator);
-    const auto seconds = frame / nominal;
-    return QStringLiteral("%1:%2:%3:%4")
+    return std::max<std::uint64_t>(1, (numerator + denominator / 2) / denominator);
+}
+// Frame numbers skipped at each non-tenth minute: 2 at 29.97, 4 at 59.94, 0 when not drop-frame.
+[[nodiscard]] std::uint64_t droppedPerMinute(const document::FrameRate rate,
+                                             const document::CompositionTimecode& labels) noexcept {
+    return labels.dropFrame && document::hasDropFrameTimecode(rate) ? nominalRate(rate) / 15 : 0;
+}
+} // namespace
+
+std::int64_t timecodeStartFrame(const document::FrameRate rate,
+                                const document::CompositionTimecode& labels) {
+    if (labels.start <= core::RationalTime{})
+        return 0;
+    return static_cast<std::int64_t>(
+        std::llround(labels.start.toSeconds() * static_cast<double>(rate.numerator()) /
+                     static_cast<double>(rate.denominator())));
+}
+
+QString formatTimelineFrameLabel(const std::uint64_t frame, const document::FrameRate rate,
+                                 const bool timecode, const document::CompositionTimecode& labels) {
+    auto labelled = frame + static_cast<std::uint64_t>(timecodeStartFrame(rate, labels));
+    if (!timecode) {
+        return QString::number(labelled);
+    }
+    const auto nominal = nominalRate(rate);
+    const auto dropped = droppedPerMinute(rate, labels);
+    if (dropped != 0) {
+        // SMPTE drop-frame: every ten minutes hold 10 * 60 * nominal - 9 * dropped frames.
+        const auto perTenMinutes = nominal * 600 - dropped * 9;
+        const auto perMinute = nominal * 60 - dropped;
+        const auto tens = labelled / perTenMinutes;
+        const auto remainder = labelled % perTenMinutes;
+        labelled += dropped * 9 * tens;
+        if (remainder > dropped)
+            labelled += dropped * ((remainder - dropped) / perMinute);
+    }
+    const auto seconds = labelled / nominal;
+    return QStringLiteral("%1:%2:%3%4%5")
         .arg(seconds / 3600, 2, 10, QLatin1Char('0'))
         .arg((seconds / 60) % 60, 2, 10, QLatin1Char('0'))
         .arg(seconds % 60, 2, 10, QLatin1Char('0'))
-        .arg(frame % nominal, 2, 10, QLatin1Char('0'));
+        .arg(dropped != 0 ? QLatin1Char(';') : QLatin1Char(':'))
+        .arg(labelled % nominal, 2, 10, QLatin1Char('0'));
+}
+
+std::optional<std::uint64_t> parseTimelineFrameLabel(const QString& text,
+                                                     const document::FrameRate rate,
+                                                     const bool timecode,
+                                                     const document::CompositionTimecode& labels) {
+    const auto start = static_cast<std::uint64_t>(timecodeStartFrame(rate, labels));
+    const auto trimmed = text.trimmed();
+    bool numeric = false;
+    const auto plain = trimmed.toULongLong(&numeric);
+    std::optional<std::uint64_t> labelled;
+    if (numeric) {
+        labelled = plain;
+    } else if (timecode) {
+        auto normalized = trimmed;
+        normalized.replace(QLatin1Char(';'), QLatin1Char(':'));
+        const auto parts = normalized.split(QLatin1Char(':'));
+        if (parts.size() != 4)
+            return std::nullopt;
+        std::array<std::uint64_t, 4> values{};
+        for (int index = 0; index < 4; ++index) {
+            bool ok = false;
+            values[static_cast<std::size_t>(index)] = parts[index].toULongLong(&ok);
+            if (!ok)
+                return std::nullopt;
+        }
+        const auto nominal = nominalRate(rate);
+        if (values[1] >= 60 || values[2] >= 60 || values[3] >= nominal ||
+            values[0] >= std::numeric_limits<std::uint64_t>::max() / nominal / 3600 - 1)
+            return std::nullopt;
+        auto frame = ((values[0] * 3600 + values[1] * 60 + values[2]) * nominal) + values[3];
+        if (const auto dropped = droppedPerMinute(rate, labels); dropped != 0) {
+            const auto minutes = values[0] * 60 + values[1];
+            // A dropped label (frames 0..dropped-1 of a non-tenth minute) names no frame.
+            if (values[2] == 0 && values[3] < dropped && minutes % 10 != 0)
+                return std::nullopt;
+            frame -= dropped * (minutes - minutes / 10);
+        }
+        labelled = frame;
+    }
+    if (!labelled || *labelled < start)
+        return std::nullopt;
+    return *labelled - start;
 }
 
 std::optional<TimelineAxis> TimelineAxis::create(const document::Composition& composition,
@@ -39,7 +116,10 @@ std::optional<TimelineAxis> TimelineAxis::create(const document::Composition& co
     if (!maximum.has_value()) {
         return std::nullopt;
     }
-    return TimelineAxis{rate, duration, widthPixels, *maximum, 0.0, duration.toSeconds()};
+    return TimelineAxis{rate,        duration,
+                        widthPixels, *maximum,
+                        0.0,         duration.toSeconds(),
+                        0,           composition.timecode()};
 }
 
 void TimelineAxis::zoomToRange(const double start, const double end) noexcept {

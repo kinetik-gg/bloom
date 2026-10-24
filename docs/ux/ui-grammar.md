@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-18
+Updated: 2026-10-25
 
 Bloom's mechanical interface contract is owned here and implemented by `src/ui/kit`.
 [ADR 0021](../decisions/0021-ui-grammar.md) records its rationale and extension procedure.
@@ -624,8 +624,19 @@ connection intact. Video rows retain ordinary layer selection, expansion and pro
 Solo and range remain the same Layer semantics as other rows. An unavailable audio
 file shows the warning glyph and remains relinkable from Assets.
 
-New Composition and the composition Properties section expose a `KColorChip` Background Colour for
-the composition itself. The Viewer surround is chosen separately in the Viewer footer: Solid paints
+The Composition dialog (New Composition and Composition Settings, #376) is one `QDialog` at least
+`DialogTextWidth` wide, built only from kit controls: a **Basic** `KSection` and an **Advanced**
+`KSection` that starts collapsed, each with a two-column form of right-hand fields. Text entry uses
+`KLineEdit`, pixel and percentage values `KValueField`, choices `KDropdown`, the aspect lock a
+`KIconToggle` (`IconId::Link`), preset Save / Rename / Delete `KIconButton`s (`IconId::Add`,
+`Settings`, `Delete`), drop-frame a `KCheckBox` with its `KLabel`, and the resize anchor nine exclusive
+`KIconToggle`s (`IconId::Handle`) in a 3 × 3 grid. Opening Advanced grows the dialog to fit and
+closing it returns the height; spare height sits below the sections. One inline reason, in body
+text above the buttons, explains why OK is disabled. The interaction contract is in
+[interaction-model.md](interaction-model.md#composition-dialog).
+
+The Composition dialog and the composition Properties section expose a `KColorChip` Background
+Colour for the composition itself. The Viewer surround is chosen separately in the Viewer footer: Solid paints
 the panel Canvas token, Black and White paint literal values, and Checkerboard is the default so
 alpha behind the composition is always visible. The surround does not alter composition pixels, the
 authored Background Colour, or export alpha.

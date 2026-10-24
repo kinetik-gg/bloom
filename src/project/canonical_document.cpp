@@ -1777,6 +1777,18 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
             !state.ok(writer.stringValue(*workingColorSpaceId)))
             return false;
     }
+    // Document 1.26: written only when it differs from the default (start 0, non-drop).
+    if (const auto timecode = composition.timecode();
+        timecode != bloom::document::CompositionTimecode{}) {
+        const PathScope scope(state, "timecode");
+        if (!state.ok(writer.memberName("timecode")) || !state.ok(writer.beginObject()) ||
+            !state.ok(writer.memberName("start")) ||
+            !emitRational(state, timecode.start.numerator(), timecode.start.denominator()) ||
+            !state.ok(writer.memberName("dropFrame")) ||
+            !state.ok(writer.booleanValue(timecode.dropFrame)) || !emitRetainedTrailing(state) ||
+            !state.ok(writer.endObject()))
+            return false;
+    }
     if (!emitRetainedTrailing(state)) {
         return false;
     }

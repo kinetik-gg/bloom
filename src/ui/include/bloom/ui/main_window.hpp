@@ -206,6 +206,7 @@ class MainWindow final : public QMainWindow {
     QAction* newCompositionAction_ = nullptr;
     QAction* duplicateCompositionAction_ = nullptr;
     QAction* renameCompositionAction_ = nullptr;
+    QAction* compositionSettingsAction_ = nullptr;
     QAction* deleteCompositionAction_ = nullptr;
     QAction* viewFullScreenAction_ = nullptr;
     QAction* viewMaximizePanelAction_ = nullptr;

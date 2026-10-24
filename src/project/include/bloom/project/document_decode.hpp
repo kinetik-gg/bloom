@@ -144,6 +144,8 @@ struct DecodedComposition final {
     document::SafeAreaSettings safeAreas{};
     std::optional<document::WorkArea> workArea{};
     std::optional<std::string> workingColorSpaceId{};
+    // Document 1.26: how the composition labels its time. Absent means the default.
+    document::CompositionTimecode timecode{};
 
     friend bool operator==(const DecodedComposition&, const DecodedComposition&) = default;
 };

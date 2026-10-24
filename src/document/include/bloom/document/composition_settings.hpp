@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/core/rational_time.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -97,5 +98,23 @@ class CompositionFormat final {
     core::PixelAspectRatio pixelAspect_ = core::PixelAspectRatio::square();
     FrameRate frameRate_ = FrameRate::framesPerSecond24();
 };
+
+// How a composition labels its own time (document 1.26). Display only: neither value moves a layer,
+// a key or a frame. `start` is the time that composition time zero is labelled as (an exact,
+// non-negative time, so it survives a frame-rate change); `dropFrame` asks for SMPTE drop-frame
+// timecode, and is honoured only at the NTSC rates 30000/1001 and 60000/1001 (any other rate
+// labels non-drop, so a rate change never invalidates the setting).
+struct CompositionTimecode final {
+    core::RationalTime start{};
+    bool dropFrame = false;
+
+    [[nodiscard]] bool isValid() const noexcept { return start >= core::RationalTime{}; }
+    friend bool operator==(const CompositionTimecode&, const CompositionTimecode&) = default;
+};
+
+// The NTSC rates that have a drop-frame timecode: 30000/1001 and 60000/1001.
+[[nodiscard]] constexpr bool hasDropFrameTimecode(const FrameRate rate) noexcept {
+    return rate.denominator() == 1001 && (rate.numerator() == 30000 || rate.numerator() == 60000);
+}
 
 } // namespace bloom::document

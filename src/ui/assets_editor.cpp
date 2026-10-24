@@ -104,10 +104,15 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     layout->addWidget(tree_, 1);
 
     connect(search_, &QLineEdit::textChanged, this, &AssetsEditor::applyFilter);
+    // #376: double-clicking a composition opens it and its Composition Settings.
     connect(tree_, &QTreeWidget::itemDoubleClicked, this,
             [this](QTreeWidgetItem* item, const int column) {
                 if (column == 0) {
-                    openComposition(assets::compositionId(item));
+                    const auto id = assets::compositionId(item);
+                    if (!id.isValid())
+                        return;
+                    openComposition(id);
+                    (void)bloom::ui::showCompositionSettingsDialog(session_, id, this);
                 }
             });
     connect(tree_, &QTreeWidget::itemChanged, this,
@@ -246,6 +251,10 @@ void AssetsEditor::showContextMenu(const QPoint position) {
     auto* openAction = menu->addAction(tr("Open"));
     openAction->setObjectName(QStringLiteral("assetsOpenAction"));
     connect(openAction, &QAction::triggered, this, [this, id] { openComposition(id); });
+    auto* settingsAction = menu->addAction(tr("Composition Settings…"));
+    settingsAction->setObjectName(QStringLiteral("assetsCompositionSettingsAction"));
+    connect(settingsAction, &QAction::triggered, this,
+            [this, id] { (void)bloom::ui::showCompositionSettingsDialog(session_, id, this); });
     auto* renameAction = menu->addAction(tr("Rename"));
     renameAction->setObjectName(QStringLiteral("assetsRenameAction"));
     connect(renameAction, &QAction::triggered, this, [this] { beginRename(tree_->currentItem()); });

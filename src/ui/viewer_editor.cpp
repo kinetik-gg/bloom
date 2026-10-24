@@ -450,15 +450,18 @@ class ViewerTimecodeReadout final : public QWidget {
             const auto nearest =
                 nearestFrameIndexForTime(context->frameRate, context->duration, time);
             if (nearest.has_value()) {
-                frameText = timecodeFormat_
-                                ? formatTimelineFrameLabel(*nearest, context->frameRate, true)
-                                : QString::number(*nearest);
+                frameText = formatTimelineFrameLabel(*nearest, context->frameRate, timecodeFormat_,
+                                                     context->labels);
             }
         }
         label_->setText(frameText);
-        label_->setToolTip(timecodeFormat_
-                               ? ViewerEditor::tr("Non-drop timecode · exact composition time")
-                               : ViewerEditor::tr("Frame index · exact composition time"));
+        const bool dropFrame = context && context->labels.dropFrame &&
+                               document::hasDropFrameTimecode(context->frameRate);
+        label_->setToolTip(
+            timecodeFormat_
+                ? (dropFrame ? ViewerEditor::tr("Drop-frame timecode · exact composition time")
+                             : ViewerEditor::tr("Non-drop timecode · exact composition time"))
+                : ViewerEditor::tr("Frame index · exact composition time"));
     }
 
     [[nodiscard]] QSize sizeHint() const override {
@@ -507,9 +510,8 @@ class ViewerTimecodeReadout final : public QWidget {
         }
         const auto nearest =
             nearestFrameIndexForTime(context->frameRate, context->duration, session_.currentTime());
-        editor_->setText(timecodeFormat_ ? formatTimelineFrameLabel(nearest.value_or(0),
-                                                                    context->frameRate, true)
-                                         : QString::number(nearest.value_or(0)));
+        editor_->setText(formatTimelineFrameLabel(nearest.value_or(0), context->frameRate,
+                                                  timecodeFormat_, context->labels));
         stack_->setCurrentWidget(editor_);
         editor_->selectAll();
         editor_->setFocus(Qt::MouseFocusReason);
@@ -523,34 +525,16 @@ class ViewerTimecodeReadout final : public QWidget {
 
     void commitEdit() {
         const auto context = frameContextFor(session_);
-        bool parsed = false;
-        auto typed = editor_->text().toULongLong(&parsed);
-        const auto parts = editor_->text().split(':');
-        if (context && parts.size() == 4) {
-            bool valid = true;
-            std::array<qulonglong, 4> values{};
-            for (int index = 0; index < 4; ++index) {
-                bool partOk = false;
-                values[static_cast<std::size_t>(index)] = parts[index].toULongLong(&partOk);
-                valid = valid && partOk;
-            }
-            const auto numerator = static_cast<qulonglong>(context->frameRate.numerator());
-            const auto denominator = static_cast<qulonglong>(context->frameRate.denominator());
-            const auto nominal =
-                std::max<qulonglong>(1, (numerator + denominator / 2) / denominator);
-            parsed = valid &&
-                     values[0] < std::numeric_limits<qulonglong>::max() / nominal / 3600 - 1 &&
-                     values[1] < 60 && values[2] < 60 && values[3] < nominal;
-            if (parsed)
-                typed = ((values[0] * 3600 + values[1] * 60 + values[2]) * nominal) + values[3];
-        }
         cancelEdit();
-        if (!parsed || !context.has_value() || !seek_) {
-            // An unparseable entry reverts in silence: there is nothing to report that the
-            // unchanged readout does not already say.
+        // A frame number or timecode in the composition's own numbering (start timecode,
+        // drop-frame); an unparseable entry reverts in silence: there is nothing to report that
+        // the unchanged readout does not already say.
+        const auto typed = context ? parseTimelineFrameLabel(editor_->text(), context->frameRate,
+                                                             timecodeFormat_, context->labels)
+                                   : std::nullopt;
+        if (!typed || !seek_)
             return;
-        }
-        seek_(std::min<std::uint64_t>(typed, context->maxFrameIndexValue));
+        seek_(std::min<std::uint64_t>(*typed, context->maxFrameIndexValue));
     }
 
     CompositionSession& session_;
@@ -713,6 +697,12 @@ void ViewerEditor::buildHeader() {
             id.has_value()) {
             (void)session_.setComposition(*id);
         }
+    });
+    viewerCompositionSettingsAction_ = compositionMenu->addAction(tr("Composition Settings…"));
+    viewerCompositionSettingsAction_->setObjectName(
+        QStringLiteral("viewerCompositionSettingsAction"));
+    connect(viewerCompositionSettingsAction_, &QAction::triggered, this, [this] {
+        (void)showCompositionSettingsDialog(session_, session_.compositionId(), this);
     });
     viewerCompositionRenameAction_ = compositionMenu->addAction(tr("Rename Composition…"));
     viewerCompositionRenameAction_->setObjectName(QStringLiteral("viewerRenameCompositionAction"));
@@ -1000,6 +990,7 @@ void ViewerEditor::updateCompositionActions() {
     const bool hasComposition = composition != nullptr;
     viewerCompositionDuplicateAction_->setEnabled(hasComposition);
     viewerCompositionRenameAction_->setEnabled(hasComposition);
+    viewerCompositionSettingsAction_->setEnabled(hasComposition);
     // Deleting the final composition is allowed and returns to the blank, usable empty project.
     viewerCompositionDeleteAction_->setEnabled(hasComposition);
 }

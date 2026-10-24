@@ -159,6 +159,24 @@ class PythonApi(unittest.TestCase):
             with self.subTest(time=moment):
                 self.assertTrue(bloom.ops.composition.set_duration(moment)['succeeded'])
 
+    def test_composition_settings(self):
+        """#376: Composition Settings is one registry operation; omitted arguments keep their value."""
+        composition = bloom.context.composition
+        revision = bloom.data.snapshot()['revision']
+        result = bloom.ops.composition.set_settings(
+            name='Settings', width=1280, height=720, frameRateNumerator=30000,
+            frameRateDenominator=1001, dropFrame=True, anchor=0)
+        self.assertTrue(result['succeeded'])
+        self.assertEqual(bloom.data.snapshot()['revision'], revision + 1)
+        self.assertEqual((composition.name, composition.width, composition.height),
+                         ('Settings', 1280, 720))
+        self.assertEqual(composition.frame_rate, (30000, 1001))
+        with self.assertRaises(bloom.OperationError):
+            bloom.ops.composition.set_settings(actionSafe=80.0, titleSafe=90.0)
+        with self.assertRaises(bloom.OperationError):
+            bloom.ops.composition.set_settings(anchor=9)
+        self.assertEqual(bloom.data.snapshot()['revision'], revision + 1)
+
     def test_owner_first_minutes(self):
         """The three lines from the owner's first session in the Script editor."""
         # 1. No composition argument: the current composition is the default.

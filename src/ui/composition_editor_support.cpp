@@ -2,12 +2,18 @@
 
 #include <bloom/ui/timeline_frame_math.hpp>
 
+#include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/document/color_settings.hpp>
+
 #include <bloom/document/graph.hpp>
 
 #include <QChar>
+#include <QCoreApplication>
 
 #include <algorithm>
+#include <array>
 #include <string>
+#include <variant>
 
 namespace bloom::ui {
 namespace {
@@ -55,7 +61,26 @@ std::optional<TimelineFrameContext> frameContextFor(const CompositionSession& se
     if (!maxIndex.has_value()) {
         return std::nullopt;
     }
-    return TimelineFrameContext{frameRate, duration, *maxIndex};
+    return TimelineFrameContext{frameRate, duration, *maxIndex, composition->timecode()};
+}
+
+std::vector<WorkingColorSpaceChoice>
+workingColorSpaceChoices(const document::ColorSettings& settings) {
+    std::vector<WorkingColorSpaceChoice> choices{
+        {QCoreApplication::translate("bloom::ui", "Inherit"), QString{}}};
+    const auto* builtIn =
+        std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator);
+    const bool aces = builtIn != nullptr && builtIn->uri == color::kAcesCgV1ConfigUri;
+    const std::array<std::string_view, 5> spaces =
+        aces ? std::array<std::string_view, 5>{"ACEScg", "ACES2065-1", "Linear Rec.709 (sRGB)",
+                                               "Linear P3-D65", "Linear Rec.2020"}
+             : std::array<std::string_view, 5>{settings.processColorSpaceId, {}, {}, {}, {}};
+    for (const auto id : spaces)
+        if (!id.empty()) {
+            const auto text = QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size()));
+            choices.push_back({text, text});
+        }
+    return choices;
 }
 
 QString formatExactSeconds(const core::RationalTime time) {
