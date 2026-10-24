@@ -566,6 +566,7 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     case runtime::NodeLoweringKind::LayerStack:
     case runtime::NodeLoweringKind::CompositionOutput:
     case runtime::NodeLoweringKind::Unsupported:
+    case runtime::NodeLoweringKind::Mask:
         break;
     }
     return std::nullopt;

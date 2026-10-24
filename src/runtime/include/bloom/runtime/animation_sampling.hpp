@@ -75,4 +75,11 @@ sampleAnimationCurve(const document::Vec3AnimationCurve& curve, core::RationalTi
 sampleAnimationCurve(const document::Color4AnimationCurve& curve, core::RationalTime time,
                      core::Color4d fallback = {}) noexcept;
 
+// ADR 0028: a whole-value Path curve at `time`. Before the first key and after the last the
+// end key holds; inside a segment each anchor's point and handles interpolate by the segment's
+// eased factor (the scalar ease of a 0 -> 1 segment with the keys' handles). Keys whose anchor
+// count or closed flag differ hold the earlier key. A missing handle counts as its point.
+[[nodiscard]] std::optional<document::PathValue> samplePathCurve(const CompiledPathCurve& curve,
+                                                                 core::RationalTime time);
+
 } // namespace bloom::runtime

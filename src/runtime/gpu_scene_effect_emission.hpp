@@ -34,6 +34,7 @@
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
+#include "layer_mask_sampling.hpp"
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
@@ -365,6 +366,34 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                                                     result.consumedSecondShape)) {
             return error;
         }
+        // ADR 0028: Image Mix's Mask is a third resident input (the Mask node's masked canvas); an
+        // input with no image is a zero mask, as on the CPU reference.
+        auto maskMode = render::GpuImageCombineParameters::Mask::None;
+        GpuSceneCommandIndex maskCommand = kInvalidGpuSceneCommand;
+        std::string maskKey;
+        std::optional<render::ImageWindow> maskWindow;
+        if (effect.maskInput) {
+            const auto maskValue = effect.maskInput->value();
+            if (combine->mode != ImageCombineMode::Mix || maskValue >= plan.operations().size())
+                return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                            "Image combine mask is invalid");
+            if (!outputWindowOf[maskValue]) {
+                maskMode = render::GpuImageCombineParameters::Mask::Absent;
+            } else {
+                maskCommand = commandForOperation[maskValue];
+                maskKey = keyOf[maskValue];
+                if (maskCommand == kInvalidGpuSceneCommand)
+                    return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                                "Image Mix mask is not a resident image");
+                const auto maskDescriptor =
+                    gpuSceneCommandDescriptorOf(*ctx.commands, maskCommand, 0);
+                if (!maskDescriptor)
+                    return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                                "Image Mix mask descriptor is not derivable");
+                maskWindow = maskDescriptor->data;
+                maskMode = render::GpuImageCombineParameters::Mask::Present;
+            }
+        }
         const auto baseDescriptor = gpuSceneCommandDescriptorOf(*ctx.commands, baseCommand, 0);
         const auto secondDescriptor = gpuSceneCommandDescriptorOf(*ctx.commands, secondCommand, 0);
         if (!baseDescriptor || !secondDescriptor)
@@ -376,7 +405,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
             return error;
         const render::GpuImageCombineParameters parameters{
             static_cast<render::GpuImageCombineKind>(combine->mode), factor, selection->channel,
-            selection->invert, matteAbsent};
+            selection->invert, matteAbsent, maskMode};
         GpuSceneBlendCommand command{.sourceOperation = operationIndex,
                                      .source = secondCommand,
                                      .destination = baseCommand,
@@ -384,6 +413,9 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                                      .destinationKey = baseKey,
                                      .mode = core::BlendMode::Normal,
                                      .imageCombine = parameters,
+                                     .mask = maskCommand,
+                                     .maskKey = maskKey,
+                                     .maskWindow = maskWindow,
                                      .sourceWindow = secondDescriptor->data,
                                      .outputWindow = outputWindow,
                                      .pixelAspect = baseDescriptor->pixelAspect,
@@ -392,12 +424,13 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                                      .semanticKey = {}};
         command.semanticKey = makeGpuSceneBlendSemanticKey(
             secondKey, baseKey, command.mode, command.sourceWindow, command.outputWindow,
-            command.pixelAspect, command.artifactDigest, command.imageCombine);
+            command.pixelAspect, command.artifactDigest, command.imageCombine, command.maskKey,
+            command.maskWindow);
         result.command = emit(std::move(command));
         result.key = makeGpuSceneBlendSemanticKey(
             secondKey, baseKey, core::BlendMode::Normal, secondDescriptor->data, outputWindow,
             baseDescriptor->pixelAspect, std::string(render::gpuImageCombineShaderIdentity()),
-            parameters);
+            parameters, maskKey, maskWindow);
         result.window = outputWindow;
         // Mix can add pixels where only the second image has content; Set Alpha can assign
         // coverage to a transparent base pixel. Use the whole base data window as conservative
@@ -408,9 +441,10 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     }
     const auto* canvas = std::get_if<CanvasImageKernel>(&effect.kernel);
     const auto* blurKernel = std::get_if<SeparableBlurKernel>(&effect.kernel);
+    const auto* masksKernel = std::get_if<LayerMaskKernel>(&effect.kernel);
     std::optional<PreparedSeparableBlur> blur;
     if (cst == nullptr && file == nullptr && pointwise == nullptr && canvas == nullptr &&
-        blurKernel == nullptr) {
+        blurKernel == nullptr && masksKernel == nullptr) {
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                     "An image effect kernel is not supported");
     }
@@ -515,6 +549,27 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
             leg.blurEdge = static_cast<std::uint8_t>(blur->edge);
             legs.push_back(std::move(leg));
         }
+    } else if (masksKernel != nullptr) {
+        // ADR 0028: the CPU reference's prepared geometry, baked into one generated neighbourhood
+        // program that runs the same per-pixel coverage math on the resident input.
+        const auto time = timeForClock(ctx.frameResolved != nullptr ? *ctx.frameResolved : resolved,
+                                       request.time, plan.operationClock(operationIndex));
+        const auto prepared =
+            sampleLayerMasks(*masksKernel, plan, resolved, time, ctx.hScale, ctx.vScale);
+        if (!prepared)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Layer mask parameters are not evaluable");
+        if (prepared->masks.empty() || !outputWindowOf[inputValue])
+            return identity();
+        auto text = layerMaskProgramText(*prepared, outputWindowOf[inputValue]->originX(),
+                                         outputWindowOf[inputValue]->originY());
+        if (!text)
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                        "Layer mask geometry exceeds the GPU program limits");
+        GpuOcioTransformSpec leg;
+        leg.kind = GpuOcioTransformKind::LayerMask;
+        leg.maskProgram = std::move(*text);
+        legs.push_back(std::move(leg));
     } else if (pointwise != nullptr) {
         std::optional<double> amount;
         if (pointwise->amount.has_value()) {

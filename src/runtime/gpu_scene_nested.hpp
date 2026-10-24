@@ -175,6 +175,9 @@ inline void offsetNestedCommandReferences(GpuSceneCommand& command,
                 if (item.destination != kInvalidGpuSceneCommand) {
                     item.destination = static_cast<GpuSceneCommandIndex>(item.destination + base);
                 }
+                if (item.mask != kInvalidGpuSceneCommand) {
+                    item.mask = static_cast<GpuSceneCommandIndex>(item.mask + base);
+                }
             } else if constexpr (std::is_same_v<T, GpuSceneMergeCommand>) {
                 for (auto& foreground : item.foregrounds) {
                     if (foreground != kInvalidGpuSceneCommand) {

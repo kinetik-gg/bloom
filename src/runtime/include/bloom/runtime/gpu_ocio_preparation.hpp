@@ -47,6 +47,9 @@ enum class GpuOcioTransformKind : std::uint8_t {
     PointwiseAffine = 5,
     // Normalized host coefficients; native execution reads and writes resident premultiplied RGBA.
     SeparableBlur = 6,
+    // ADR 0028: layer-mask coverage. `maskProgram` is the generated neighbourhood program text
+    // (layerMaskProgramText); its bytes are the whole content identity.
+    LayerMask = 7,
 };
 
 struct GpuOcioTransformSpec final {
@@ -62,6 +65,8 @@ struct GpuOcioTransformSpec final {
     std::vector<float> blurWeights;
     bool blurVertical = false;
     std::uint8_t blurEdge = 0;
+    // LayerMask only.
+    std::string maskProgram;
     // FileTransform only. The shared, immutable LUT resource handle; the reservation keeps the
     // exact opened bytes alive for the whole extraction. Null is an InvalidRequest refusal.
     std::shared_ptr<const color::LutFile> lutFile;

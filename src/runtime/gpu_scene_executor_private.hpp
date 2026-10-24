@@ -76,6 +76,8 @@ struct GpuSceneExecutorStep final {
     GpuSceneCommandIndex input = kInvalidGpuSceneCommand;
     // Source-over destination. kInvalid means "the current image at `command`" (accumulator/base).
     GpuSceneCommandIndex destination = kInvalidGpuSceneCommand;
+    // ADR 0028: Image Mix's resident Mask (a Blend step's third input), or kInvalid.
+    GpuSceneCommandIndex mask = kInvalidGpuSceneCommand;
     // Semantic key to insert the completed image under. Empty for an intermediate accumulator step.
     std::string cacheKey;
     bool cacheOnComplete = false;

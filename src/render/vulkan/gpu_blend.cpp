@@ -65,6 +65,7 @@ void GpuBlend::Impl::clearJob() {
     residentImage.reset();
     retainedSource.reset();
     retainedDestination.reset();
+    retainedMask.reset();
     status.release();
     statusMapped = nullptr;
 }
@@ -186,6 +187,7 @@ GpuBlend::Impl::~Impl() {
     assert(residentSlot == kBlendNoResidentSlot);
     retainedSource.reset();
     retainedDestination.reset();
+    retainedMask.reset();
     residentImage.reset();
 }
 
@@ -309,6 +311,37 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
         return makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
                               "the image combine kind, channel or factor is invalid");
     }
+    const bool maskPresent = parameters.imageCombine &&
+                             parameters.imageCombine->mask == GpuImageCombineParameters::Mask::Present;
+    if (parameters.imageCombine &&
+        (static_cast<std::uint8_t>(parameters.imageCombine->mask) >
+             static_cast<std::uint8_t>(GpuImageCombineParameters::Mask::Absent) ||
+         (parameters.imageCombine->mask != GpuImageCombineParameters::Mask::None &&
+          parameters.imageCombine->kind != GpuImageCombineKind::Mix) ||
+         maskPresent != (parameters.mask != nullptr) ||
+         (maskPresent && (!parameters.mask->isValid() || !parameters.mask->dataWindow())))) {
+        return makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
+                              "the image combine mask does not match its mode");
+    }
+    std::int32_t maskOffsetX = 0;
+    std::int32_t maskOffsetY = 0;
+    std::uint32_t maskWidth = 0;
+    std::uint32_t maskHeight = 0;
+    if (maskPresent) {
+        const auto maskWindow = *parameters.mask->dataWindow();
+        maskWidth = maskWindow.extent().width();
+        maskHeight = maskWindow.extent().height();
+        if (maskWidth == 0 || maskHeight == 0 ||
+            !safeSourceOffset(destinationWindow->originX(), maskWindow.originX(), destWidth,
+                              maskWidth, maskOffsetX) ||
+            !safeSourceOffset(destinationWindow->originY(), maskWindow.originY(), destHeight,
+                              maskHeight, maskOffsetY))
+            return makeDiagnostic(GpuBlendDiagnosticCode::Unsupported,
+                                  "the mask extent is empty or too large for a safe offset");
+        if (!compositeImageBelongsTo(gpuImageImpl(*parameters.mask), impl.control))
+            return makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
+                                  "the image combine mask does not belong to this device");
+    }
     // Resolve the int32 shader offsets safely BEFORE any driver resource is created. A huge int64
     // origin difference is either represented exactly (overlap) or forced transparent (no overlap),
     // never narrowed and wrapped.
@@ -418,6 +451,7 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
     impl.residentImage = std::make_unique<GpuImage>(makeGpuImage(std::move(resident)));
     impl.retainedSource = parameters.source;
     impl.retainedDestination = parameters.destination;
+    impl.retainedMask = parameters.mask;
 
     const VkDevice rawDevice = static_cast<VkDevice>(*impl.control->device);
     const auto* dispatcher = impl.control->device.getDispatcher();
@@ -441,9 +475,17 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
     vk::DescriptorBufferInfo statusInfoWrite{};
     statusInfoWrite.buffer = impl.status.buffer;
     statusInfoWrite.range = VK_WHOLE_SIZE;
-    std::array<vk::WriteDescriptorSet, kBlendBindingCount> writes{};
+    // ImageCombineV1 owns its own five-binding set; binding 4 is the Mask, or the backdrop when no
+    // mask is read (maskMode 0 or 2 never reads it).
+    const vk::DescriptorSet targetSet =
+        parameters.imageCombine ? *impl.combineDescriptorSet : *impl.descriptorSet;
+    vk::DescriptorImageInfo maskInfo{};
+    maskInfo.imageView =
+        impl.retainedMask ? gpuImageImpl(*impl.retainedMask)->view : destRaw->view;
+    maskInfo.imageLayout = vk::ImageLayout::eGeneral;
+    std::array<vk::WriteDescriptorSet, kImageCombineBindingCount> writes{};
     writes[0] = vk::WriteDescriptorSet{};
-    writes[0].dstSet = *impl.descriptorSet;
+    writes[0].dstSet = targetSet;
     writes[0].dstBinding = 0;
     writes[0].descriptorCount = 1;
     writes[0].descriptorType = vk::DescriptorType::eStorageImage;
@@ -455,12 +497,16 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
     writes[2].dstBinding = 2;
     writes[2].pImageInfo = &outputInfo;
     writes[3] = vk::WriteDescriptorSet{};
-    writes[3].dstSet = *impl.descriptorSet;
+    writes[3].dstSet = targetSet;
     writes[3].dstBinding = 3;
     writes[3].descriptorCount = 1;
     writes[3].descriptorType = vk::DescriptorType::eStorageBuffer;
     writes[3].pBufferInfo = &statusInfoWrite;
-    dispatcher->vkUpdateDescriptorSets(rawDevice, static_cast<std::uint32_t>(writes.size()),
+    writes[4] = writes[0];
+    writes[4].dstBinding = 4;
+    writes[4].pImageInfo = &maskInfo;
+    const auto writeCount = parameters.imageCombine ? kImageCombineBindingCount : kBlendBindingCount;
+    dispatcher->vkUpdateDescriptorSets(rawDevice, writeCount,
                                        reinterpret_cast<const VkWriteDescriptorSet*>(writes.data()),
                                        0, nullptr);
 
@@ -490,7 +536,7 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
 
     impl.commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *selected.pipeline);
     impl.commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *selected.pipelineLayout,
-                                          0, {*impl.descriptorSet}, {});
+                                          0, {targetSet}, {});
     // An absent matte declares an empty source extent: the shader's window test then rejects every
     // tap, which is the CPU reference's transparent-black matte outside any data window.
     const bool matteAbsent = parameters.imageCombine && parameters.imageCombine->matteAbsent;
@@ -506,9 +552,15 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
     if (parameters.imageCombine) {
         // Bit 3 of the channel word selects the inverted coverage; bits 0-2 select the channel.
         const ImageCombinePush combined{
-            push, parameters.imageCombine->factor,
+            push,
+            parameters.imageCombine->factor,
             static_cast<std::uint32_t>(parameters.imageCombine->channel) |
-                (parameters.imageCombine->invert ? kImageCombineInvertBit : 0U)};
+                (parameters.imageCombine->invert ? kImageCombineInvertBit : 0U),
+            maskWidth,
+            maskHeight,
+            maskOffsetX,
+            maskOffsetY,
+            static_cast<std::uint32_t>(parameters.imageCombine->mask)};
         impl.commandBuffer.pushConstants(*selected.pipelineLayout, vk::ShaderStageFlagBits::eCompute,
                                          0, sizeof(ImageCombinePush), &combined);
     } else {

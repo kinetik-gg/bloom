@@ -242,6 +242,10 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::begin(std::shared_ptr<const Prepare
             static_cast<std::size_t>(step.destination) < impl.remainingUses.size()) {
             ++impl.remainingUses[step.destination];
         }
+        if (step.mask != kInvalidGpuSceneCommand &&
+            static_cast<std::size_t>(step.mask) < impl.remainingUses.size()) {
+            ++impl.remainingUses[step.mask];
+        }
     }
 
     // Conservative early guard: the peak live set can never be smaller than the largest single

@@ -36,7 +36,9 @@ namespace bloom::render {
 // BlendV1 bindings: source + backdrop + output storage images, then the error-flag storage buffer.
 inline constexpr std::uint32_t kBlendBindingCount = 4;
 inline constexpr std::uint32_t kBlendPushBytes = 28;
-inline constexpr std::uint32_t kImageCombinePushBytes = 36;
+inline constexpr std::uint32_t kImageCombinePushBytes = 56;
+// ImageCombineV1 adds Image Mix's mask storage image at binding 4 (ADR 0028).
+inline constexpr std::uint32_t kImageCombineBindingCount = 5;
 
 struct BlendPush final {
     std::uint32_t destWidth;
@@ -53,6 +55,11 @@ struct ImageCombinePush final {
     BlendPush blend;
     float factor;
     std::uint32_t channel;
+    std::uint32_t maskWidth;
+    std::uint32_t maskHeight;
+    std::int32_t maskOffsetX;
+    std::int32_t maskOffsetY;
+    std::uint32_t maskMode;
 };
 static_assert(sizeof(ImageCombinePush) == kImageCombinePushBytes);
 inline constexpr std::uint32_t kImageCombineInvertBit = 8U;
@@ -119,6 +126,7 @@ struct GpuBlend::Impl final {
     bool generalUsesF64 = false;
     vk::raii::DescriptorPool descriptorPool{nullptr};
     vk::raii::DescriptorSet descriptorSet{nullptr};
+    vk::raii::DescriptorSet combineDescriptorSet{nullptr};
     vk::raii::CommandPool commandPool{nullptr};
     vk::raii::CommandBuffer commandBuffer{nullptr};
     vk::raii::Fence fence{nullptr};
@@ -126,6 +134,7 @@ struct GpuBlend::Impl final {
     std::unique_ptr<GpuImage> residentImage;
     std::shared_ptr<const GpuImage> retainedSource;
     std::shared_ptr<const GpuImage> retainedDestination;
+    std::shared_ptr<const GpuImage> retainedMask;
     CompositeBuffer status;
     void* statusMapped = nullptr;
 

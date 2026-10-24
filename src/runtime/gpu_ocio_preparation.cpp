@@ -1,6 +1,7 @@
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
 
 #include "separable_image_effect.hpp"
+#include "layer_mask_coverage.hpp"
 #include <bloom/color/gpu_shader_compiler.hpp>
 #include <bloom/color/ocio_gpu_program.hpp>
 #include <bloom/runtime/gpu_ocio_wrapper.hpp>
@@ -64,6 +65,7 @@ void appendF64(std::vector<std::byte>& bytes, const double value) {
         appendF64(bytes, static_cast<double>(weight));
     appendU64(bytes, transform.blurVertical);
     appendU64(bytes, transform.blurEdge);
+    appendText(bytes, transform.maskProgram);
     // FileTransform content identity: the exact LUT content digest and format plus the requested
     // interpolation/direction and the process/working space ids.
     if (transform.lutFile != nullptr) {
@@ -258,6 +260,8 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
         case GpuOcioTransformKind::SeparableBlur:
             return detail::buildSeparableBlurProgram(transform.blurWeights, transform.blurVertical,
                                                      static_cast<BlurEdgeMode>(transform.blurEdge));
+        case GpuOcioTransformKind::LayerMask:
+            return detail::buildLayerMaskProgram(transform.maskProgram);
         case GpuOcioTransformKind::PointwiseAffine:
             return color::buildOcioGpuProgramForPointwiseAffine(
                 config, transform.affineScale, transform.affineOffset);

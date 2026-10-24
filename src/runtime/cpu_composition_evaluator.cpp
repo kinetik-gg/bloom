@@ -2,6 +2,7 @@
 #include "checker_image.hpp"
 #include "cpu_composition_resolution.hpp"
 #include "image_effect.hpp"
+#include "layer_mask_sampling.hpp"
 #include "gradient_source.hpp"
 #include "image_source.hpp"
 #include "layer_parent_transform.hpp"
@@ -340,7 +341,8 @@ enum class ScalarDomain : std::uint8_t {
                                                 const CompiledCompositionPlan& plan,
                                                 const std::size_t index,
                                                 EvaluationDiagnostic& failure) {
-    if (!parameter.id.isValid()) {
+    // ADR 0028: a compiler-synthesized constant names no document parameter.
+    if (!parameter.id.isValid() && !std::holds_alternative<double>(parameter.source)) {
         failure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
                              "Operation has an invalid parameter identity", {},
                              subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
@@ -361,7 +363,7 @@ enum class ScalarDomain : std::uint8_t {
                                                const CompiledCompositionPlan& plan,
                                                const std::size_t index,
                                                EvaluationDiagnostic& failure) {
-    if (!parameter.id.isValid()) {
+    if (!parameter.id.isValid() && !std::holds_alternative<core::Color4d>(parameter.source)) {
         failure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
                              "Operation has an invalid parameter identity", {},
                              subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
@@ -451,6 +453,18 @@ enum class ScalarDomain : std::uint8_t {
                                     hasValidScalarCurveReference(*combine->factor, plan, index,
                                                                  failure)));
                 }
+                if (effect.maskInput)
+                    validKernel = validKernel && effect.maskInput->value() < index &&
+                                  std::holds_alternative<ImageCombineKernel>(effect.kernel) &&
+                                  std::get<ImageCombineKernel>(effect.kernel).mode ==
+                                      ImageCombineMode::Mix;
+                if (const auto* masks = std::get_if<LayerMaskKernel>(&effect.kernel))
+                    for (const auto& mask : masks->masks)
+                        validKernel =
+                            validKernel &&
+                            hasValidScalarCurveReference(mask.feather, plan, index, failure) &&
+                            hasValidScalarCurveReference(mask.expansion, plan, index, failure) &&
+                            hasValidScalarCurveReference(mask.opacity, plan, index, failure);
                 if (const auto* discrete = std::get_if<DiscreteImageKernel>(&effect.kernel))
                     validKernel = discrete->quarterTurns <= 3;
                 if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel)) {
@@ -622,8 +636,8 @@ enum class ScalarDomain : std::uint8_t {
                             subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
                         return false;
                     }
-                    const auto* layer =
-                        std::get_if<CompiledLayerOutput>(&plan.operations()[entry.input.value()]);
+                    const auto* layer = std::get_if<CompiledLayerOutput>(
+                        &plan.operations()[mergeEntryLayerIndex(plan, entry.input).value()]);
                     if (entry.layerId.isValid() &&
                         (layer == nullptr || layer->layerId != entry.layerId)) {
                         failure = diagnostic(
@@ -873,7 +887,11 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
     const auto registerScalar = [&](const CompiledScalarParameter& parameter,
                                     const std::string_view field, const ScalarDomain domain,
                                     const EvaluationSubject& operationSubject) {
-        if (!registerParameter(parameter.id, operationSubject)) {
+        // ADR 0028: a compiler-synthesized constant (a track matte's unit factor, the Mask node's
+        // canvas size) names no document parameter; it is validated but claims no identity.
+        const bool synthesized =
+            !parameter.id.isValid() && std::holds_alternative<double>(parameter.source);
+        if (!synthesized && !registerParameter(parameter.id, operationSubject)) {
             return false;
         }
         if (const auto* constant = std::get_if<double>(&parameter.source)) {
@@ -974,7 +992,9 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
     const auto registerColor = [&](const CompiledColorParameter& parameter,
                                    const std::string_view field,
                                    const EvaluationSubject& operationSubject) {
-        if (!registerParameter(parameter.id, operationSubject)) {
+        const bool synthesized =
+            !parameter.id.isValid() && std::holds_alternative<core::Color4d>(parameter.source);
+        if (!synthesized && !registerParameter(parameter.id, operationSubject)) {
             return false;
         }
         if (const auto* constant = std::get_if<core::Color4d>(&parameter.source)) {
@@ -1142,6 +1162,15 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                         combine && combine->factor)
                         static_cast<void>(registerScalar(*combine->factor, "factor",
                                                          ScalarDomain::Unit, operationSubject));
+                    if (const auto* masks = std::get_if<LayerMaskKernel>(&effect.kernel))
+                        for (const auto& mask : masks->masks)
+                            if (!registerScalar(mask.feather, "feather", ScalarDomain::Unbounded,
+                                                operationSubject) ||
+                                !registerScalar(mask.expansion, "expansion",
+                                                ScalarDomain::Unbounded, operationSubject) ||
+                                !registerScalar(mask.opacity, "opacity", ScalarDomain::Unit,
+                                                operationSubject))
+                                break;
                 },
                 [](const CompiledImageSource&) {},
                 [](const CompiledVideoSource&) {},
@@ -2146,13 +2175,23 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     if (sampled)
                         pointwiseAmount = sampled->value;
                 }
+                std::shared_ptr<const detail::PreparedLayerMasks> layerMasks;
+                if (const auto* masks = std::get_if<LayerMaskKernel>(&effect->kernel)) {
+                    const auto maskTime =
+                        detail::timeForClock(frameResolved, request.time, plan->operationClock(
+                                                 OperationIndex::fromRaw(index)));
+                    layerMasks = detail::sampleLayerMasks(*masks, *plan, resolved, maskTime,
+                                                          resolved.horizontalScale,
+                                                          resolved.verticalScale);
+                }
                 preparedEffect =
                     request.bypassLookNodes && effect->look
                         ? detail::PreparedImageEffect{}
                         : imageEffectContext()->prepare(*effect, request.colorIntent, mediaBase,
                                                         cancellation, pointwiseAmount,
                                                         canvasMargins, resolved.horizontalScale,
-                                                        resolved.verticalScale, sampledChannel);
+                                                        resolved.verticalScale, sampledChannel,
+                                                        std::move(layerMasks));
                 if (preparedEffect->cancelled)
                     return EvaluationResult::cancelled();
                 if (preparedEffect->diagnostic &&
@@ -2876,7 +2915,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                         ? slots[effect.secondaryInput->value()].get()
                                         : nullptr,
                                     effectPixelBudget, cancellation, operationIndex, progress,
-                                    resolved.horizontalScale, resolved.verticalScale);
+                                    resolved.horizontalScale, resolved.verticalScale,
+                                    effect.maskInput
+                                        ? std::optional<const render::Rgba32fImage*>{
+                                              slots[effect.maskInput->value()].get()}
+                                        : std::nullopt);
                                 if (result.cancelled) {
                                     operationCancelled = true;
                                     return;
@@ -3599,8 +3642,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 // reroute can resolve to a Layer operation while remaining a plain
                                 // image input, so the slot identity also participates in this
                                 // choice.
+                                const auto layerIndex = mergeEntryLayerIndex(*plan, entry->input);
                                 const auto* layerOutput = std::get_if<CompiledLayerOutput>(
-                                    &plan->operations()[entry->input.value()]);
+                                    &plan->operations()[layerIndex.value()]);
                                 auto blendMode = core::BlendMode::Normal;
                                 if (layerOutput != nullptr && entry->layerId.isValid()) {
                                     // Task DRIVE-1: the mode may be driven, so it is READ here
@@ -3610,7 +3654,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     const auto resolvedMode = detail::resolveParameter(
                                         *layerOutput,
                                         detail::resolvedForClock(
-                                            frameResolved, plan->operationClock(entry->input)));
+                                            frameResolved, plan->operationClock(layerIndex)));
                                     if (!resolvedMode.has_value()) {
                                         auto modeSubject = operationSubject;
                                         modeSubject.parameterId = layerOutput->blendModeParameterId;

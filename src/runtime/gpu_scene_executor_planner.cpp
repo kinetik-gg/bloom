@@ -51,7 +51,7 @@ using gpu_scene_executor_detail::makeDiagnostic;
             blendCommand->imageCombine
                 ? std::string(render::gpuImageCombineShaderIdentity())
                 : actualBlendArtifactToken(*blend, blendCommand->mode),
-            blendCommand->imageCombine);
+            blendCommand->imageCombine, blendCommand->maskKey, blendCommand->maskWindow);
     }
     return effectiveCommandKey(command);
 }
@@ -286,6 +286,24 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
             plan.code != GpuSceneExecutorDiagnosticCode::None) {
             return plan;
         }
+        const bool masked =
+            blendCommand->imageCombine &&
+            blendCommand->imageCombine->mask == render::GpuImageCombineParameters::Mask::Present;
+        if (masked != (blendCommand->mask != kInvalidGpuSceneCommand)) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                  "a blend mask reference does not match its mode");
+        }
+        if (masked) {
+            if (const auto plan = planCommand(blendCommand->mask, color);
+                plan.code != GpuSceneExecutorDiagnosticCode::None)
+                return plan;
+            if (color[blendCommand->mask] != 2) {
+                color[index] = 2;
+                return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                      "a blend mask was not planned");
+            }
+        }
         if (color[blendCommand->source] != 2 || color[blendCommand->destination] != 2) {
             color[index] = 2;
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
@@ -302,6 +320,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.command = index;
         step.input = blendCommand->source;
         step.destination = blendCommand->destination;
+        step.mask = masked ? blendCommand->mask : kInvalidGpuSceneCommand;
         step.cacheKey = key;
         step.cacheOnComplete = true;
         step.outputWindow = blendCommand->outputWindow;

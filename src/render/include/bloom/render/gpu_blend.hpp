@@ -76,6 +76,10 @@ struct GpuImageCombineParameters final {
     // outside a present matte's data window; the dispatch binds the base image in the source slot
     // and declares an empty source extent, so no matte texel is ever read.
     bool matteAbsent = false;
+    // ADR 0028, Image Mix only: the per-pixel factor is factor * mask alpha. Present binds
+    // GpuBlendParameters::mask; Absent is a zero mask (an input that produced no image).
+    enum class Mask : std::uint8_t { None, Present, Absent };
+    Mask mask = Mask::None;
 };
 
 struct GpuBlendParameters final {
@@ -92,6 +96,8 @@ struct GpuBlendParameters final {
     // Dedicated flat-RGBA image operators use the same bounded two-input resident lifecycle.
     // The source is the second image/matte, and the destination is the base image.
     std::optional<GpuImageCombineParameters> imageCombine;
+    // ADR 0028: Image Mix's resident Mask when imageCombine->mask is Present.
+    std::shared_ptr<const GpuImage> mask{};
 };
 
 struct GpuBlendBudgets final {

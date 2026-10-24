@@ -34,6 +34,8 @@ void forEachScopedInput(const CompiledOperation& operation, const std::uint32_t 
                          function(effect.input, clock);
                          if (effect.secondaryInput)
                              function(*effect.secondaryInput, clock);
+                         if (effect.maskInput)
+                             function(*effect.maskInput, clock);
                      },
                      [&](const CompiledLayerOutput& layer) {
                          function(layer.input, layer.time ? contentClock : clock);
@@ -57,6 +59,8 @@ void remapInputs(CompiledOperation& operation, Function&& function) {
                          effect.input = function(effect.input, false);
                          if (effect.secondaryInput)
                              effect.secondaryInput = function(*effect.secondaryInput, false);
+                         if (effect.maskInput)
+                             effect.maskInput = function(*effect.maskInput, false);
                      },
                      [&](CompiledLayerOutput& layer) {
                          layer.input = function(layer.input, true);

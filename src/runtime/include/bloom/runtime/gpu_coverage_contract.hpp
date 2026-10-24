@@ -109,6 +109,7 @@ BLOOM_GPU_REQUIRED_EFFECT(CanvasImageKernel, "crop or pad canvas image effect ke
 BLOOM_GPU_REQUIRED_EFFECT(DiscreteImageKernel, "exact flip/quarter-turn image kernel");
 BLOOM_GPU_REQUIRED_EFFECT(ResizeFitKernel, "Resize/Fit bilinear kernel");
 BLOOM_GPU_REQUIRED_EFFECT(SeparableBlurKernel, "premultiplied separable neighborhood filter");
+BLOOM_GPU_REQUIRED_EFFECT(LayerMaskKernel, "layer mask coverage (ADR 0028)");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT
@@ -266,6 +267,19 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
         "feature.matte.absent", "absent matte is zero coverage on every route",
         GpuCoverageDisposition::Required,
         "src/render ImageCombineV1 native + image combine production scene preparation"});
+    // ADR 0028 masks and mattes.
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.mask.layer",
+        "layer mask rasterization, every mode, feather, expansion, invert, opacity, keyed path",
+        GpuCoverageDisposition::Required, "src/runtime layer mask production scene preparation"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.mask.value", "Mask node and Image Mix mask, including an absent mask",
+        GpuCoverageDisposition::Required,
+        "src/render ImageCombineV1 mask binding + image combine production scene preparation"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.matte.track", "track matte Alpha/Luma/inverted/absent through the Merge",
+        GpuCoverageDisposition::Required,
+        "src/runtime track matte production scene preparation"});
     out.push_back(GpuFeatureCoverageEntry{
         "feature.display.view_adjust", "custom viewer exposure/gamma adjust",
         GpuCoverageDisposition::Required, "src/runtime gpu_neutral_display qualification tests"});
@@ -402,6 +416,7 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     case NodeLoweringKind::LayerOutput:
     case NodeLoweringKind::LayerStack:
     case NodeLoweringKind::CompositionOutput:
+    case NodeLoweringKind::Mask:
         return true;
     case NodeLoweringKind::AudioSource:
     case NodeLoweringKind::Unsupported:
@@ -444,6 +459,7 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     case NodeLoweringKind::ImageSource:
         return "operation.CompiledImageSource";
     case NodeLoweringKind::ImageEffect:
+    case NodeLoweringKind::Mask: // a canvas Solid masked by a LayerMaskKernel effect
         return "operation.CompiledImageEffect";
     case NodeLoweringKind::VideoSource:
         return "operation.CompiledVideoSource";

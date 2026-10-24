@@ -458,4 +458,54 @@ sampleAnimationCurve(const document::Color4AnimationCurve& curve, core::Rational
     return sampleColor4(componentView(curve, fallback), time, nullptr);
 }
 
+std::optional<document::PathValue> samplePathCurve(const CompiledPathCurve& curve,
+                                                   const core::RationalTime time) {
+    const auto& keys = curve.keyframes;
+    if (keys.empty())
+        return std::nullopt;
+    if (time <= keys.front().time)
+        return keys.front().value;
+    if (time >= keys.back().time)
+        return keys.back().value;
+    std::size_t index = 0;
+    while (index + 1 < keys.size() && !(time < keys[index + 1].time))
+        ++index;
+    const auto& from = keys[index];
+    const auto& to = keys[index + 1];
+    if (from.outgoingInterpolation == CompiledKeyframeInterpolation::Hold ||
+        from.value.anchors.size() != to.value.anchors.size() ||
+        from.value.closed != to.value.closed)
+        return from.value;
+    // The factor is the scalar curve 0 -> 1 over the segment, so every ease and handle rule is the
+    // scalar sampler's own.
+    const CompiledScalarCurve progress{
+        curve.id,
+        {{from.id, from.time, 0.0, from.outgoingInterpolation, from.outgoingHandle,
+          from.incomingHandle},
+         {to.id, to.time, 1.0, CompiledKeyframeInterpolation::Linear, to.outgoingHandle,
+          to.incomingHandle}}};
+    const auto sampled = sampleAnimationCurve(progress, time);
+    if (!sampled || !sampled.value)
+        return std::nullopt;
+    const double u = *sampled.value;
+    const auto mix = [u](const document::Vec2d a, const document::Vec2d b) {
+        return document::Vec2d{a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u};
+    };
+    document::PathValue result;
+    result.closed = from.value.closed;
+    result.anchors.reserve(from.value.anchors.size());
+    for (std::size_t anchor = 0; anchor < from.value.anchors.size(); ++anchor) {
+        const auto& a = from.value.anchors[anchor];
+        const auto& b = to.value.anchors[anchor];
+        document::PathAnchor out;
+        out.point = mix(a.point, b.point);
+        if (a.inHandle || b.inHandle)
+            out.inHandle = mix(a.inHandle.value_or(a.point), b.inHandle.value_or(b.point));
+        if (a.outHandle || b.outHandle)
+            out.outHandle = mix(a.outHandle.value_or(a.point), b.outHandle.value_or(b.point));
+        result.anchors.push_back(out);
+    }
+    return result;
+}
+
 } // namespace bloom::runtime

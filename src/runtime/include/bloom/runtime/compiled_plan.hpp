@@ -290,9 +290,32 @@ struct SeparableBlurKernel final {
     BlurEdgeMode edge = BlurEdgeMode::Transparent;
     friend bool operator==(const SeparableBlurKernel&, const SeparableBlurKernel&) = default;
 };
+// ADR 0028 layer masks. A path parameter is a constant or an inline Path curve.
+struct CompiledPathParameter final {
+    document::ParameterId id;
+    std::variant<document::PathValue, CompiledPathCurve> source;
+    friend bool operator==(const CompiledPathParameter&, const CompiledPathParameter&) = default;
+};
+struct CompiledLayerMask final {
+    document::LayerMaskId id;
+    document::LayerMaskMode mode = document::LayerMaskMode::Add;
+    bool inverted = false;
+    CompiledPathParameter path;
+    CompiledScalarParameter feather;
+    CompiledScalarParameter expansion;
+    CompiledScalarParameter opacity;
+    friend bool operator==(const CompiledLayerMask&, const CompiledLayerMask&) = default;
+};
+// Multiplies the input, in premultiplied space, by the masks' accumulated coverage over the input's
+// own pixel space (the layer's content space). The data window is unchanged. Every math detail is
+// in docs/decisions/0028-layer-masks-and-track-mattes.md section 2.
+struct LayerMaskKernel final {
+    std::vector<CompiledLayerMask> masks;
+    friend bool operator==(const LayerMaskKernel&, const LayerMaskKernel&) = default;
+};
 using ImageEffectKernel = std::variant<IdentityImageKernel, CstKernel, FileTransformKernel,
                                        PointwiseImageKernel, ImageCombineKernel, CanvasImageKernel,
-                                       DiscreteImageKernel, ResizeFitKernel, SeparableBlurKernel>;
+                                       DiscreteImageKernel, ResizeFitKernel, SeparableBlurKernel, LayerMaskKernel>;
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
     OperationIndex input;
@@ -302,6 +325,12 @@ struct CompiledImageEffect final {
     // Second image/matte for flat RGBA combines. The base input owns the output data/display
     // windows; the second input is sampled by global pixel coordinate and clipped to those windows.
     std::optional<OperationIndex> secondaryInput{};
+    // ADR 0028: Image Mix's optional Mask (coverage in the alpha channel of the mask transport),
+    // sampled by global pixel coordinate; its per-pixel factor is factor * mask.
+    std::optional<OperationIndex> maskInput{};
+    // ADR 0028: this effect applies a track matte to the Layer Output at `input`; a Merge reads that
+    // layer's blend mode and clock through it (see mergeEntryLayerOutput).
+    bool trackMatte = false;
     friend bool operator==(const CompiledImageEffect&, const CompiledImageEffect&) = default;
 };
 
@@ -684,5 +713,16 @@ class CompiledCompositionPlan final {
     std::vector<std::uint32_t> operationClocks_;
     std::vector<std::uint32_t> placementClocks_;
 };
+
+// ADR 0028: the operation a Merge entry takes its layer blend mode and clock from -- the entry's
+// own input, or the Layer Output behind a track-matte effect.
+[[nodiscard]] inline OperationIndex mergeEntryLayerIndex(const CompiledCompositionPlan& plan,
+                                                         const OperationIndex input) noexcept {
+    if (input.value() < plan.operations().size())
+        if (const auto* effect = std::get_if<CompiledImageEffect>(&plan.operations()[input.value()]);
+            effect != nullptr && effect->trackMatte)
+            return effect->input;
+    return input;
+}
 
 } // namespace bloom::runtime

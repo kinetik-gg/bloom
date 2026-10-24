@@ -131,8 +131,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Layer Bounds value readout. MEDIA-3 adds Video; COLOR-3 adds CST and File Transform. The
     // image-node batch adds Exposure, Offset, Multiply, Invert, the two Combine nodes, Crop, Pad,
     // Multiply Alpha, Checker, Flip, Rotate 90, Resize, Fit, Gaussian and Box Blur, and Linear and
-    // Radial Gradient: 30 structural/image definitions plus 100 value-library definitions.
-    expectations.expect(registry.definitions().size() == 130,
+    // Radial Gradient: 30 structural/image definitions plus 100 value-library definitions. ADR 0028
+    // adds the Mask node.
+    expectations.expect(registry.definitions().size() == 131,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",

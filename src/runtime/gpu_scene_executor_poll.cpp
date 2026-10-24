@@ -133,6 +133,9 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::finishNative(render::GpuImage
     if (step.destination != kInvalidGpuSceneCommand) {
         consume(step.destination);
     }
+    if (step.mask != kInvalidGpuSceneCommand) {
+        consume(step.mask);
+    }
     if (liveBytes > requestBudget) {
         return makeDiagnostic(GpuSceneExecutorDiagnosticCode::OverBudget,
                               "the live pinned image bytes exceeded the request budget");

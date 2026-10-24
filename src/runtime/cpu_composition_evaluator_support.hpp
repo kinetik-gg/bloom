@@ -113,6 +113,8 @@ void forEachInput(const CompiledOperation& operation, Function&& function) {
                        function(effect.input);
                        if (effect.secondaryInput)
                            function(*effect.secondaryInput);
+                       if (effect.maskInput)
+                           function(*effect.maskInput);
                    },
                    [](const CompiledImageSource&) {},
                    [](const CompiledVideoSource&) {},

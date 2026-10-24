@@ -78,6 +78,26 @@ struct CompiledColor4Curve final {
     friend bool operator==(const CompiledColor4Curve&, const CompiledColor4Curve&) = default;
 };
 
+// ADR 0028: a whole-value Path curve. Kept inline in the operation that samples it (a mask
+// kernel), so it needs no plan-wide table or index.
+struct CompiledPathKeyframe final {
+    document::KeyframeId id;
+    core::RationalTime time;
+    document::PathValue value;
+    CompiledKeyframeInterpolation outgoingInterpolation = CompiledKeyframeInterpolation::Linear;
+    document::KeyframeHandle outgoingHandle{};
+    document::KeyframeHandle incomingHandle{};
+
+    friend bool operator==(const CompiledPathKeyframe&, const CompiledPathKeyframe&) = default;
+};
+
+struct CompiledPathCurve final {
+    document::AnimationCurveId id;
+    std::vector<CompiledPathKeyframe> keyframes;
+
+    friend bool operator==(const CompiledPathCurve&, const CompiledPathCurve&) = default;
+};
+
 class ScalarCurveIndex final {
   public:
     [[nodiscard]] static constexpr ScalarCurveIndex fromRaw(const std::size_t value) noexcept {

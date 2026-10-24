@@ -45,6 +45,13 @@ firstImageInput(const document::NodeRecord& node) const {
     return false;
 }
 
+// ADR 0028: a layer that is any layer's track matte contributes nothing to its Merge.
+[[nodiscard]] bool isMatteSource(const document::LayerId layer) const {
+    return std::ranges::any_of(composition_->graph().layerOutputs(), [&](const auto& boundary) {
+        return boundary.trackMatte && boundary.trackMatte->source == layer;
+    });
+}
+
 [[nodiscard]] bool consumesEdge(const document::NodeRecord& node,
                                 const document::EdgeRecord& edge) const {
     if (const auto* merge = composition_->graph().merge(node.id); merge && !merge->enabled())
@@ -57,7 +64,7 @@ firstImageInput(const document::NodeRecord& node) const {
     if (const auto* slot = std::get_if<document::LayerStackInputRef>(&edge.destination)) {
         const auto* stack = composition_->graph().merge(slot->stackNodeId);
         const auto* entry = stack ? stack->find(slot->slotId) : nullptr;
-        if (entry && mutedLayer(*entry))
+        if (entry && (mutedLayer(*entry) || isMatteSource(entry->layerId)))
             return false;
     }
     return true;

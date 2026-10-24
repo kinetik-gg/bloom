@@ -6,6 +6,8 @@ layout(set = 0, binding = 0, rgba32f) uniform readonly image2D bloom_source;
 layout(set = 0, binding = 1, rgba32f) uniform readonly image2D bloom_backdrop;
 layout(set = 0, binding = 2, rgba32f) uniform writeonly image2D bloom_output;
 layout(set = 0, binding = 3) buffer BloomImageCombineError { uint flags[]; } bloom_error;
+// ADR 0028: Image Mix's optional Mask, read from its alpha at the base pixel's global coordinate.
+layout(set = 0, binding = 4, rgba32f) uniform readonly image2D bloom_mask;
 
 layout(push_constant) uniform BloomImageCombinePush {
     uint destWidth;
@@ -17,6 +19,11 @@ layout(push_constant) uniform BloomImageCombinePush {
     uint mode;              // 8=Image Mix, 9=Set Alpha, 10=Multiply Alpha
     float factor;           // finite unit factor, validated by host
     uint channel;           // bits 0-2: 0=A, 1=R, 2=G, 3=B, 4=scene-linear luma; bit 3: invert
+    uint maskWidth;
+    uint maskHeight;
+    int maskOffsetX;
+    int maskOffsetY;
+    uint maskMode;          // 0=no mask, 1=mask image, 2=absent mask (zero coverage)
 } bloom_push;
 
 bool subnormal(float value) {
@@ -113,6 +120,15 @@ void main() {
     vec4 result = vec4(0.0);
     if (bloom_push.mode == 8u) {
         float t = bloom_push.factor;
+        if (bloom_push.maskMode != 0u) {
+            ivec2 maskLocal = destination + ivec2(bloom_push.maskOffsetX, bloom_push.maskOffsetY);
+            bool maskInside = bloom_push.maskMode == 1u && maskLocal.x >= 0 && maskLocal.y >= 0 &&
+                              maskLocal.x < int(bloom_push.maskWidth) &&
+                              maskLocal.y < int(bloom_push.maskHeight);
+            precise float masked = bloom_push.factor *
+                                   (maskInside ? imageLoad(bloom_mask, maskLocal).a : 0.0);
+            t = masked;
+        }
         if (needsSubnormalAlpha(mixComponent(a.a * 16777216.0, b.a * 16777216.0, t))) {
             atomicOr(bloom_error.flags[0], 4u);
             imageStore(bloom_output, destination, a);

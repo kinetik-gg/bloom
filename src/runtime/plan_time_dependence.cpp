@@ -67,7 +67,8 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                     return step.asset && step.asset->kind == document::AssetKind::Sequence;
                 else if constexpr (std::is_same_v<Step, CompiledImageEffect>) {
                     if (input(step.input) ||
-                        (step.secondaryInput && input(*step.secondaryInput)))
+                        (step.secondaryInput && input(*step.secondaryInput)) ||
+                        (step.maskInput && input(*step.maskInput)))
                         return true;
                     if (step.bypass)
                         return false;
@@ -80,6 +81,12 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                                driven(combine->drivenChannel);
                     if (const auto* blur = std::get_if<SeparableBlurKernel>(&step.kernel))
                         return parameter(blur->radius);
+                    if (const auto* masks = std::get_if<LayerMaskKernel>(&step.kernel))
+                        return std::ranges::any_of(masks->masks, [&](const auto& mask) {
+                            return std::holds_alternative<CompiledPathCurve>(mask.path.source) ||
+                                   parameter(mask.feather) || parameter(mask.expansion) ||
+                                   parameter(mask.opacity);
+                        });
                     return false;
                 } else if constexpr (std::is_same_v<Step, CompiledText>)
                     return parameter(step.color) || parameter(step.size) ||

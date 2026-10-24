@@ -7,8 +7,8 @@
   "shader": {
     "language": "GLSL_460",
     "stage": "compute",
-    "sha256": "985407d91d4ebd36cda47e2cb7e86b65e4338fce3f3cca846a90f52daa758ba6",
-    "spirvSha256": "b91f0141a303bc344c72aedc44e87404093b107b703c7b46600c0e1a4e09834a",
+    "sha256": "c966625307bfe292b60a57108b943293519b0bf3cca1a58167340ecdf5697717",
+    "spirvSha256": "16364cba6d17b4e7cdc5e676b46f627984e298fbde2452d69286b925bc43cac5",
     "localSizeX": 256,
     "localSizeY": 1,
     "localSizeZ": 1
@@ -17,11 +17,12 @@
     {"set": 0, "binding": 0, "kind": "storage-image", "access": "readonly", "format": "rgba32f", "role": "second-image-or-matte"},
     {"set": 0, "binding": 1, "kind": "storage-image", "access": "readonly", "format": "rgba32f", "role": "base-image"},
     {"set": 0, "binding": 2, "kind": "storage-image", "access": "writeonly", "format": "rgba32f", "role": "premultiplied-output"},
-    {"set": 0, "binding": 3, "kind": "storage-buffer", "access": "readwrite", "element": "uint", "role": "error-flag"}
+    {"set": 0, "binding": 3, "kind": "storage-buffer", "access": "readwrite", "element": "uint", "role": "error-flag"},
+    {"set": 0, "binding": 4, "kind": "storage-image", "access": "readonly", "format": "rgba32f", "role": "image-mix-mask"}
   ],
   "pushConstant": {
-    "byteCount": 36,
-    "fields": ["destWidth", "destHeight", "sourceWidth", "sourceHeight", "sourceOffsetX", "sourceOffsetY", "mode", "factor", "channel"]
+    "byteCount": 56,
+    "fields": ["destWidth", "destHeight", "sourceWidth", "sourceHeight", "sourceOffsetX", "sourceOffsetY", "mode", "factor", "channel", "maskWidth", "maskHeight", "maskOffsetX", "maskOffsetY", "maskMode"]
   },
   "contracts": {
     "alignment": "Second input sampled at the base image's global integer pixel coordinate; outside its data window is transparent black",
@@ -29,6 +30,7 @@
     "nonFinitePolicy": "input non-finite/subnormal or non-finite result sets a status flag; never publish a flagged image",
     "modes": "8 Image Mix; 9 Set Alpha; 10 Multiply Alpha",
     "channel": "bits 0-2 select A, R, G, B or scene-linear luma; bit 3 inverts the unit coverage",
-    "absentMatte": "an empty source extent makes every tap transparent black (zero coverage)"
+    "absentMatte": "an empty source extent makes every tap transparent black (zero coverage)",
+    "mask": "Image Mix only: maskMode 1 scales the factor by the mask alpha at the base pixel's global coordinate (zero outside its data window); 2 is an absent mask (zero); 0 ignores binding 4"
   }
 }

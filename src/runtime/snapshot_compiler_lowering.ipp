@@ -45,6 +45,18 @@
         }
     }
 
+    // ADR 0028: a track-matte target is lowered after its source layer.
+    for (const auto* node : reachableNodes_) {
+        const auto boundary = layerOutputs_.find(node->id);
+        if (boundary == layerOutputs_.end() || !boundary->second->trackMatte)
+            continue;
+        const auto* source = composition_->graph().findLayer(boundary->second->trackMatte->source);
+        if (source && indegree.contains(source->nodeId) && source->nodeId != node->id) {
+            outgoing[source->nodeId].push_back(node->id);
+            ++indegree[node->id];
+        }
+    }
+
     auto laterId = [](const document::NodeId left, const document::NodeId right) {
         return left.value() > right.value();
     };
@@ -112,7 +124,24 @@
                 reachableCurveIds.insert(source->curveId);
             }
         }
+        // ADR 0028: a reachable layer's masks own their parameters outside any node binding.
+        if (const auto boundary = layerOutputs_.find(node->id); boundary != layerOutputs_.end())
+            for (const auto& mask : boundary->second->masks)
+                for (const auto& [id, schema] : document::layerMaskParameters(mask)) {
+                    static_cast<void>(schema);
+                    const auto* parameter = findParameter(id);
+                    const auto* source =
+                        parameter == nullptr
+                            ? nullptr
+                            : std::get_if<document::AnimationCurveSource>(&parameter->source);
+                    if (source != nullptr)
+                        reachableCurveIds.insert(source->curveId);
+                }
     }
+    // Path curves are compiled inline into the mask kernel that samples them (ADR 0028).
+    std::erase_if(reachableCurveIds, [&](const document::AnimationCurveId id) {
+        return composition_->animationCurves().findPath(id) != nullptr;
+    });
 
     CompiledCurveTables tables;
     for (const auto& record : composition_->animationCurves().records()) {
@@ -163,6 +192,8 @@
                                 tables.vec3.back().defaultValue = *value;
                         }
                     }
+                } else if constexpr (std::is_same_v<Curve, document::PathAnimationCurve>) {
+                    // Unreachable: Path curves were removed from the reachable set above.
                 } else {
                     color4CurveIndices_.emplace(
                         curve.id, runtime::Color4CurveIndex::fromRaw(tables.color4.size()));
@@ -349,11 +380,90 @@ lower(const std::vector<document::NodeId>& order) {
             emptyParentInput = runtime::OperationIndex::fromRaw(operations.size());
             operations.emplace_back(runtime::CompiledMerge{nodeId, {}});
         }
+        // ADR 0028 layer masks: a mask effect on the layer's content, in content space, before
+        // the Layer Output transforms it.
+        std::optional<runtime::OperationIndex> maskedContent;
+        if (const auto boundary = layerOutputs_.find(nodeId);
+            boundary != layerOutputs_.end() && !boundary->second->masks.empty() &&
+            !emptyParentInput && !emptyImages_.contains(nodeId)) {
+            if (const auto content =
+                    findInputOperation(nodeId, document::kLayerOutputContentInputPort, indices)) {
+                auto kernel = lowerLayerMasks(*boundary->second);
+                if (!kernel)
+                    return {};
+                maskedContent = runtime::OperationIndex::fromRaw(operations.size());
+                operations.emplace_back(runtime::CompiledImageEffect{nodeId, *content,
+                                                                     std::move(*kernel)});
+            }
+        }
+        // ADR 0028 Mask node: an opaque white canvas, masked.
+        if (definition->second->lowering == runtime::NodeLoweringKind::Mask) {
+            auto kernel = lowerMaskNode(*node);
+            if (!kernel)
+                return {};
+            const auto canvas = runtime::OperationIndex::fromRaw(operations.size());
+            const auto& format = composition_->format();
+            operations.emplace_back(runtime::CompiledSolid{
+                nodeId,
+                runtime::CompiledColorParameter{document::ParameterId{},
+                                                core::Color4d{1.0, 1.0, 1.0, 1.0}},
+                runtime::CompiledScalarParameter{document::ParameterId{},
+                                                 static_cast<double>(format.width())},
+                runtime::CompiledScalarParameter{document::ParameterId{},
+                                                 static_cast<double>(format.height())}});
+            const auto index = runtime::OperationIndex::fromRaw(operations.size());
+            operations.emplace_back(
+                runtime::CompiledImageEffect{nodeId, canvas, std::move(*kernel)});
+            indices.emplace(nodeId, index);
+            continue;
+        }
+        // ADR 0028 track mattes: each matted entry of this Merge composites a Multiply Alpha of its
+        // Layer Output by its source layer's output; an absent source is a transparent matte.
+        if (definition->second->lowering == runtime::NodeLoweringKind::LayerStack) {
+            if (const auto* stack = composition_->graph().merge(nodeId); stack != nullptr)
+                for (const auto& entry : stack->entries()) {
+                    const auto* target = composition_->graph().findLayer(entry.layerId);
+                    if (target == nullptr || !target->trackMatte)
+                        continue;
+                    const auto targetIndex = indices.find(target->nodeId);
+                    if (targetIndex == indices.end())
+                        continue;
+                    const auto* source = composition_->graph().findLayer(target->trackMatte->source);
+                    std::optional<runtime::OperationIndex> matte;
+                    if (source != nullptr)
+                        if (const auto found = indices.find(source->nodeId); found != indices.end())
+                            matte = found->second;
+                    if (!matte) {
+                        matte = runtime::OperationIndex::fromRaw(operations.size());
+                        operations.emplace_back(runtime::CompiledMerge{target->nodeId, {}});
+                    }
+                    runtime::CompiledImageEffect effect{
+                        target->nodeId,
+                        targetIndex->second,
+                        runtime::ImageCombineKernel{
+                            runtime::ImageCombineMode::MultiplyAlpha,
+                            runtime::CompiledScalarParameter{document::ParameterId{}, 1.0},
+                            target->trackMatte->channel == document::TrackMatteChannel::Luma
+                                ? render::ImageCoverageChannel::Luma
+                                : render::ImageCoverageChannel::Alpha,
+                            std::nullopt, target->trackMatte->inverted},
+                        false,
+                        false,
+                        *matte};
+                    effect.trackMatte = true;
+                    trackMatteEntries_.insert_or_assign(
+                        target->nodeId, runtime::OperationIndex::fromRaw(operations.size()));
+                    operations.emplace_back(std::move(effect));
+                }
+        }
         auto operation = emptyParentInput ? lowerLayerOutput(*node, indices, emptyParentInput)
                                           : lowerNode(*node, *definition->second, indices);
         if (!operation.has_value()) {
             return {};
         }
+        if (maskedContent)
+            if (auto* layer = std::get_if<runtime::CompiledLayerOutput>(&*operation))
+                layer->input = *maskedContent;
         // Output always publishes a full composition image. A graph wired directly to a
         // source or Layer gets a derived Normal Merge, including empty/cropped Layer images.
         // Its zero slot ID is synthetic plan metadata, never a durable document slot.
@@ -597,6 +707,7 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
         return lowerCompositionOutput(node, indices);
     case NodeLoweringKind::Shape:
         return lowerShape(node);
+    case NodeLoweringKind::Mask: // lowered in the main loop: a canvas Solid then a mask effect
     case NodeLoweringKind::Unsupported:
     // A value lowering never reaches here: compileValueGraph() compiled it into the plan's value
     // operations, and lower()'s own loop skips it. Reaching this arm means the two passes disagree
@@ -778,8 +889,8 @@ lowerImageEffect(const document::NodeRecord& node,
                     false,
                     *second};
         } else if (mix) {
-            if (const auto factor = compiledScalarParameter(findParameterBinding(node, "factor")))
-                return runtime::CompiledImageEffect{
+            if (const auto factor = compiledScalarParameter(findParameterBinding(node, "factor"))) {
+                runtime::CompiledImageEffect effect{
                     node.id,
                     *input,
                     runtime::ImageCombineKernel{runtime::ImageCombineMode::Mix, *factor,
@@ -787,6 +898,16 @@ lowerImageEffect(const document::NodeRecord& node,
                     false,
                     false,
                     *second};
+                // ADR 0028: the optional Mask scales the factor per pixel.
+                if (fixedInputEdge(node.id, "mask") != nullptr) {
+                    effect.maskInput = findInputOperation(node.id, "mask", indices);
+                    if (!effect.maskInput) {
+                        addTopologyFailure(node.id, "Image Mix mask input could not be lowered.");
+                        return std::nullopt;
+                    }
+                }
+                return effect;
+            }
         } else {
             const auto* channelBinding = findParameterBinding(node, "channel");
             const auto* channel = parameterConstant<std::int64_t>(channelBinding);
@@ -1285,7 +1406,8 @@ lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition&
     entries.reserve(composition_->graph().merge(node.id)->entries().size());
     const auto slots = composition_->graph().merge(node.id)->entries();
     for (const auto& entry : slots) {
-        if ((isMuted(node.id) && entry.slotId != slots.front().slotId) || mutedLayer(entry))
+        if ((isMuted(node.id) && entry.slotId != slots.front().slotId) || mutedLayer(entry) ||
+            isMatteSource(entry.layerId))
             continue;
         if (cancelled()) {
             return std::nullopt;
@@ -1309,7 +1431,9 @@ lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition&
             addTopologyFailure(node.id, "Layer Stack input operation is unavailable.");
             return std::nullopt;
         }
-        entries.push_back({entry.slotId, entry.layerId, source->second});
+        const auto matted = trackMatteEntries_.find(edge->source.nodeId);
+        entries.push_back({entry.slotId, entry.layerId,
+                           matted == trackMatteEntries_.end() ? source->second : matted->second});
     }
     return runtime::CompiledMerge{node.id, std::move(entries)};
 }
@@ -1352,6 +1476,84 @@ parameterConstant(const document::ParameterBinding* binding) const noexcept {
 // No longer const: resolving a driver may SYNTHESIZE a promotion operation into the value graph,
 // and a widening that needs an operation is better compiled once here than hidden inside whoever
 // reads the value.
+// ADR 0028: a mask path is a constant PathValue or an inline compiled Path curve.
+[[nodiscard]] std::optional<runtime::CompiledPathParameter>
+compiledPathParameter(const document::ParameterId id) {
+    const auto* parameter = findParameter(id);
+    if (parameter == nullptr)
+        return std::nullopt;
+    if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
+        const auto* value = std::get_if<document::PathValue>(&constant->value);
+        return value == nullptr ? std::nullopt
+                                : std::optional(runtime::CompiledPathParameter{id, *value});
+    }
+    if (const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source)) {
+        if (const auto* curve = composition_->animationCurves().findPath(source->curveId))
+            return runtime::CompiledPathParameter{id, runtime::compileAnimationCurve(*curve)};
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<runtime::CompiledScalarParameter>
+compiledScalarParameterFor(const document::ParameterId id) {
+    const document::ParameterBinding binding{std::string{}, id};
+    return compiledScalarParameter(&binding);
+}
+
+// ADR 0028: one compiled mask from its four parameters.
+[[nodiscard]] std::optional<runtime::CompiledLayerMask>
+compiledLayerMask(const document::LayerMaskId id, const document::LayerMaskMode mode,
+                  const bool inverted, const document::ParameterId path,
+                  const document::ParameterId feather, const document::ParameterId expansion,
+                  const document::ParameterId opacity) {
+    auto compiledPath = compiledPathParameter(path);
+    auto compiledFeather = compiledScalarParameterFor(feather);
+    auto compiledExpansion = compiledScalarParameterFor(expansion);
+    auto compiledOpacity = compiledScalarParameterFor(opacity);
+    if (!compiledPath || !compiledFeather || !compiledExpansion || !compiledOpacity)
+        return std::nullopt;
+    return runtime::CompiledLayerMask{id,
+                                      mode,
+                                      inverted,
+                                      std::move(*compiledPath),
+                                      *compiledFeather,
+                                      *compiledExpansion,
+                                      *compiledOpacity};
+}
+
+[[nodiscard]] std::optional<runtime::LayerMaskKernel>
+lowerLayerMasks(const document::LayerOutputBoundary& boundary) {
+    runtime::LayerMaskKernel kernel;
+    for (const auto& mask : boundary.masks) {
+        auto compiled = compiledLayerMask(mask.id, mask.mode, mask.inverted, mask.path,
+                                          mask.feather, mask.expansion, mask.opacity);
+        if (!compiled) {
+            addTopologyFailure(boundary.nodeId, "Validated layer mask could not be lowered.");
+            return std::nullopt;
+        }
+        kernel.masks.push_back(std::move(*compiled));
+    }
+    return kernel;
+}
+
+// The Mask node: one Add mask over an opaque white canvas-sized input.
+[[nodiscard]] std::optional<runtime::LayerMaskKernel> lowerMaskNode(const document::NodeRecord& node) {
+    const auto binding = [&](const std::string_view role) {
+        const auto* found = findParameterBinding(node, role);
+        return found == nullptr ? document::ParameterId{} : found->parameterId;
+    };
+    const auto* inverted = parameterConstant<bool>(findParameterBinding(node, "inverted"));
+    auto compiled =
+        compiledLayerMask({}, document::LayerMaskMode::Add, inverted != nullptr && *inverted,
+                          binding("path"), binding("feather"), binding("expansion"),
+                          binding("opacity"));
+    if (!compiled) {
+        addTopologyFailure(node.id, "Mask node parameters could not be lowered.");
+        return std::nullopt;
+    }
+    return runtime::LayerMaskKernel{{std::move(*compiled)}};
+}
+
 [[nodiscard]] std::optional<runtime::CompiledScalarParameter>
 compiledScalarParameter(const document::ParameterBinding* binding) {
     if (binding == nullptr) {

@@ -121,6 +121,7 @@ class ValueUtilityReader final {
         return core::Color4d{};
     case document::SocketValueKind::Image:
     case document::SocketValueKind::Audio:
+    case document::SocketValueKind::Mask:
     case document::SocketValueKind::Scalar:
         break;
     }

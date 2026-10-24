@@ -73,10 +73,21 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
                                                 const std::optional<std::array<double, 4>> canvasMargins,
                                                 const double horizontalScale,
                                                 const double verticalScale,
-                                                const std::optional<std::int64_t> sampledChannel) {
+                                                const std::optional<std::int64_t> sampledChannel,
+                                                std::shared_ptr<const PreparedLayerMasks> layerMasks) {
     if (effect.bypass || std::holds_alternative<IdentityImageKernel>(effect.kernel))
         return {};
     PreparedImageEffect prepared;
+    if (std::holds_alternative<LayerMaskKernel>(effect.kernel)) {
+        if (!layerMasks) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
+                                          "Layer mask parameters are not evaluable");
+            return prepared;
+        }
+        prepared.cacheIdentity = layerMasks->identity;
+        prepared.masks = std::move(layerMasks);
+        return prepared;
+    }
     if (const auto* canvas = std::get_if<CanvasImageKernel>(&effect.kernel)) {
         if (!canvasMargins) {
             prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
@@ -275,7 +286,8 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                                    const CancellationToken& cancellation,
                                    const OperationIndex operation,
                                    const EvaluationProgressCallback& progress,
-                                   const double horizontalScale, const double verticalScale) {
+                                   const double horizontalScale, const double verticalScale,
+                                   const std::optional<const render::Rgba32fImage*> mask) {
     if (effect.discrete)
         return applyDiscreteImageEffect(*effect.discrete, input, pixelBudget, cancellation,
                                         operation, progress, horizontalScale, verticalScale);
@@ -430,6 +442,51 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
         return result;
     }
     const auto window = input.descriptor()->dataWindow();
+    if (effect.masks) {
+        // ADR 0028: the input times the accumulated mask coverage at each pixel centre, in the
+        // input's own (content) pixel space. The data window is unchanged.
+        const auto total = window.extent().height();
+        reportProgress(progress, {EvaluationProgressStage::Operation, operation, 0, total});
+        for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
+            if (cancellation.isCancellationRequested()) {
+                result.cancelled = true;
+                return result;
+            }
+            const auto sourceRow = view.value()->row(y);
+            auto targetRow = builder.value()->row(y);
+            if (!sourceRow || !targetRow) {
+                result.diagnostic = refusal(EvaluationDiagnosticCode::InternalInvariant,
+                                            "Layer mask row is unavailable");
+                return result;
+            }
+            const float centreY = static_cast<float>(y) + 0.5F;
+            for (std::size_t column = 0; column < sourceRow.value()->size(); ++column) {
+                const auto x = window.originX() + static_cast<std::int64_t>(column);
+                const float coverage =
+                    layerMaskCoverage(*effect.masks, static_cast<float>(x) + 0.5F, centreY);
+                const auto base = (*sourceRow.value())[column];
+                const auto pixel = render::Rgba32f::fromPremultiplied(
+                    base.red() * coverage, base.green() * coverage, base.blue() * coverage,
+                    base.alpha() * coverage);
+                if (!pixel) {
+                    result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                                "Layer mask produced an invalid pixel");
+                    return result;
+                }
+                (*targetRow.value())[column] = *pixel.value();
+            }
+            reportProgress(progress, {EvaluationProgressStage::Operation, operation,
+                                      static_cast<std::uint64_t>(y - window.originY() + 1), total});
+        }
+        auto frozen = std::move(*builder.value()).freeze();
+        if (!frozen) {
+            result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                        "Layer mask image validation failed");
+            return result;
+        }
+        result.image = std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
+        return result;
+    }
     if (effect.combine) {
         // #361: an absent second image (a matte Layer outside its range, an unconnected or empty
         // matte) is a transparent matte: every tap is transparent black, exactly as a tap outside
@@ -451,6 +508,25 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
             }
             secondView.emplace(*matteView.value());
             secondWindow = secondary->descriptor()->dataWindow();
+        }
+        // ADR 0028: Image Mix's optional Mask, read from its alpha; outside its data window the
+        // mask is zero.
+        std::optional<render::Rgba32fImageView> maskView;
+        std::optional<render::ImageWindow> maskWindow;
+        if (mask && *mask != nullptr) {
+            if ((*mask)->descriptor() == nullptr) {
+                result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                            "Image Mix mask is unavailable");
+                return result;
+            }
+            auto fetched = (*mask)->view();
+            if (!fetched) {
+                result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                            "Image Mix mask is invalid");
+                return result;
+            }
+            maskView.emplace(*fetched.value());
+            maskWindow = (*mask)->descriptor()->dataWindow();
         }
         const auto total = window.extent().height();
         reportProgress(progress, {EvaluationProgressStage::Operation, operation, 0, total});
@@ -477,6 +553,16 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                 }
                 secondRow = *fetched.value();
             }
+            std::optional<std::span<const render::Rgba32f>> maskRow;
+            if (maskWindow && y >= maskWindow->originY() && y < maskWindow->maxYExclusive()) {
+                const auto fetched = maskView->row(y);
+                if (!fetched) {
+                    result.diagnostic = refusal(EvaluationDiagnosticCode::InternalInvariant,
+                                                "Image Mix mask row is unavailable");
+                    return result;
+                }
+                maskRow = *fetched.value();
+            }
             for (std::size_t column = 0; column < sourceRow.value()->size(); ++column) {
                 if ((column & 4095U) == 0 && cancellation.isCancellationRequested()) {
                     result.cancelled = true;
@@ -494,8 +580,17 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                     pixel = render::setImageAlpha(
                         base, render::matteCoverage(matte, effect.combine->matte));
                 } else {
+                    // ADR 0028: the masked factor is one Float32 product, as on the GPU.
+                    const float maskCoverage =
+                        !mask ? 1.0F
+                        : maskRow && x >= maskWindow->originX() && x < maskWindow->maxXExclusive()
+                            ? (*maskRow)[static_cast<std::size_t>(x - maskWindow->originX())]
+                                  .alpha()
+                            : 0.0F;
                     const double weight = effect.combine->mode == ImageCombineMode::Mix
-                                              ? static_cast<double>(effect.combine->factor)
+                                              ? static_cast<double>(
+                                                    !mask ? effect.combine->factor
+                                                          : effect.combine->factor * maskCoverage)
                                               : static_cast<double>(render::matteCoverage(
                                                     matte, effect.combine->matte)) *
                                                     static_cast<double>(effect.combine->factor);

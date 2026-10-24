@@ -374,8 +374,14 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
                                   "a blend step is incomplete before dispatch");
         }
-        const render::GpuBlendParameters parameters{images[step.input], images[step.destination],
-                                                    step.blendMode, step.imageCombine};
+        render::GpuBlendParameters parameters{images[step.input], images[step.destination],
+                                              step.blendMode, step.imageCombine};
+        if (step.mask != kInvalidGpuSceneCommand) {
+            if (static_cast<std::size_t>(step.mask) >= images.size() || images[step.mask] == nullptr)
+                return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                      "a blend mask is incomplete before dispatch");
+            parameters.mask = images[step.mask];
+        }
         const auto native = blend->beginBlend(parameters, remaining);
         if (native.code != render::GpuBlendDiagnosticCode::None) {
             return diagnosticFromBlend(native);

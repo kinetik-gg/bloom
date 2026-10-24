@@ -105,6 +105,7 @@ target_sources(
         gpu_scene_media_layer.hpp
         gpu_prepared_upload_cache.cpp
         image_effect.cpp
+        layer_mask_coverage.cpp
         separable_image_effect.cpp
         image_effect.hpp
         discrete_image_effect.hpp

@@ -7,6 +7,7 @@
 
 #include <bloom/document/animation.hpp>
 #include <bloom/document/graph.hpp>
+#include <bloom/document/layer_masks.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/runtime/curve_compilation.hpp>
 
@@ -323,6 +324,15 @@ class CompilePass final {
                 if (parent)
                     pending.push_back(parent->nodeId);
             }
+            // ADR 0028: a reached matte target evaluates its source layer, which its own Merge
+            // hides (see consumesEdge) and whose enabled and solo state do not apply.
+            if (const auto boundary = layerOutputs_.find(nodeId);
+                boundary != layerOutputs_.end() && boundary->second->trackMatte) {
+                const auto* source =
+                    composition_->graph().findLayer(boundary->second->trackMatte->source);
+                if (source)
+                    pending.push_back(source->nodeId);
+            }
             if (const auto iterator = incoming.find(nodeId); iterator != incoming.end()) {
                 for (const auto* edge : iterator->second) {
                     if (cancelled()) {
@@ -594,7 +604,7 @@ class CompilePass final {
                 continue;
             }
             for (const auto& entry : graph.merge(node->id)->entries()) {
-                if (mutedLayer(entry))
+                if (mutedLayer(entry) || isMatteSource(entry.layerId))
                     continue;
                 if (cancelled()) {
                     return;
@@ -944,6 +954,8 @@ class CompilePass final {
     // Set Alpha / Multiply Alpha nodes whose optional matte is unconnected, mapped to the empty
     // transparent operation that stands in for it.
     std::unordered_map<document::NodeId, runtime::OperationIndex> unconnectedMattes_;
+    // ADR 0028: the track-matte effect a Merge entry composites in place of its Layer Output.
+    std::unordered_map<document::NodeId, runtime::OperationIndex> trackMatteEntries_;
     std::unordered_set<document::NodeId> transformParents_;
     runtime::CompiledPlanCache* planCache_ = nullptr;
     std::vector<std::shared_ptr<const runtime::CompiledCompositionPlan>> nestedPlans_;

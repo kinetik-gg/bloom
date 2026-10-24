@@ -19,6 +19,7 @@ void GpuBlend::Impl::resetPipelineResources() noexcept {
     fence = vk::raii::Fence{nullptr};
     commandBuffer = vk::raii::CommandBuffer{nullptr};
     commandPool = vk::raii::CommandPool{nullptr};
+    combineDescriptorSet = vk::raii::DescriptorSet{nullptr};
     descriptorSet = vk::raii::DescriptorSet{nullptr};
     descriptorPool = vk::raii::DescriptorPool{nullptr};
     pipelinePortable = CompositePipeline{};
@@ -56,9 +57,11 @@ bool GpuBlend::Impl::createPipeline() {
         createDiagnostic = blendDiagnostic(GpuBlendDiagnosticCode::ShaderRejected, reason);
         return false;
     }
+    constexpr bool kImageCombineBindings[kImageCombineBindingCount] = {true, true, true, false,
+                                                                       true};
     if (!createCompositePipeline(*control, vulkan_detail::kImageCombineSpirvCode,
-                                 vulkan_detail::kImageCombineSpirvByteCount, kBlendBindings,
-                                 kBlendBindingCount, kImageCombinePushBytes, reason,
+                                 vulkan_detail::kImageCombineSpirvByteCount, kImageCombineBindings,
+                                 kImageCombineBindingCount, kImageCombinePushBytes, reason,
                                  pipelineImageCombine)) {
         createDiagnostic = blendDiagnostic(GpuBlendDiagnosticCode::ShaderRejected, reason);
         return false;
@@ -87,11 +90,12 @@ bool GpuBlend::Impl::createPipeline() {
         }
     }
 
-    const std::array poolSizes{vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 3},
-                               vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 1}};
+    // One set for the blend kernels and one for ImageCombineV1's five bindings.
+    const std::array poolSizes{vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 7},
+                               vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 2}};
     vk::DescriptorPoolCreateInfo poolInfo{};
     poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
-    poolInfo.maxSets = 1;
+    poolInfo.maxSets = 2;
     poolInfo.poolSizeCount = static_cast<std::uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
     const VkDevice rawDevice = static_cast<VkDevice>(*control->device);
@@ -119,6 +123,17 @@ bool GpuBlend::Impl::createPipeline() {
         return false;
     }
     descriptorSet = vk::raii::DescriptorSet(control->device, rawSet, *descriptorPool);
+    const std::array combineLayouts{*pipelineImageCombine.descriptorSetLayout};
+    allocateInfo.pSetLayouts = combineLayouts.data();
+    VkDescriptorSet rawCombineSet = VK_NULL_HANDLE;
+    if (dispatcher->vkAllocateDescriptorSets(
+            rawDevice, reinterpret_cast<const VkDescriptorSetAllocateInfo*>(&allocateInfo),
+            &rawCombineSet) != VK_SUCCESS) {
+        createDiagnostic = blendDiagnostic(GpuBlendDiagnosticCode::AllocationFailed,
+                                           "the image combine descriptor set could not be allocated");
+        return false;
+    }
+    combineDescriptorSet = vk::raii::DescriptorSet(control->device, rawCombineSet, *descriptorPool);
 
     vk::CommandPoolCreateInfo commandPoolInfo{};
     commandPoolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;

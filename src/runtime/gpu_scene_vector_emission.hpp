@@ -401,12 +401,13 @@ emitMergeCommand(const CompiledMerge& stack, const CompiledCompositionPlan& plan
     bool allNormal = true;
     for (auto entry = stack.entries.rbegin(); entry != stack.entries.rend(); ++entry) {
         core::BlendMode mode = core::BlendMode::Normal;
+        const auto layerIndex = mergeEntryLayerIndex(plan, entry->input);
         if (const auto* layerOutput =
-                std::get_if<CompiledLayerOutput>(&plan.operations()[entry->input.value()]);
+                std::get_if<CompiledLayerOutput>(&plan.operations()[layerIndex.value()]);
             layerOutput != nullptr && entry->layerId.isValid()) {
             // ADR 0024: a retimed layer's driven mode is read on its own layer clock.
             const auto blend = resolveParameter(
-                *layerOutput, resolvedForClock(resolved, plan.operationClock(entry->input)));
+                *layerOutput, resolvedForClock(resolved, plan.operationClock(layerIndex)));
             if (!blend) {
                 return GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::InvalidPlan,
                                            "Layer blend mode could not be resolved"};

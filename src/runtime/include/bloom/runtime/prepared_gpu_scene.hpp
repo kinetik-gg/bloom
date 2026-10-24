@@ -295,6 +295,10 @@ struct GpuSceneBlendCommand final {
     std::string destinationKey;
     core::BlendMode mode = core::kDefaultBlendMode;
     std::optional<render::GpuImageCombineParameters> imageCombine{};
+    // ADR 0028: Image Mix's Mask input when imageCombine->mask is Present.
+    GpuSceneCommandIndex mask = kInvalidGpuSceneCommand;
+    std::string maskKey{};
+    std::optional<render::ImageWindow> maskWindow{};
     // The source data window and the output data window (== destination data window).
     render::ImageWindow sourceWindow;
     render::ImageWindow outputWindow;
@@ -457,7 +461,8 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
     const std::string& sourceKey, const std::string& destinationKey, const core::BlendMode mode,
     const render::ImageWindow& sourceWindow, const render::ImageWindow& outputWindow,
     const core::PixelAspectRatio& pixelAspect, const std::string& artifactDigest,
-    const std::optional<render::GpuImageCombineParameters>& imageCombine = {}) {
+    const std::optional<render::GpuImageCombineParameters>& imageCombine = {},
+    const std::string& maskKey = {}, const std::optional<render::ImageWindow>& maskWindow = {}) {
     std::string key = "blend-v1|src=";
     key.append(sourceKey);
     key.append("|dst=");
@@ -474,6 +479,15 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
             key.append("|invert");
         if (imageCombine->matteAbsent)
             key.append("|absent-matte");
+        // ADR 0028: Image Mix's mask, appended only when used.
+        if (imageCombine->mask != render::GpuImageCombineParameters::Mask::None) {
+            key.append("|mask=");
+            key.append(std::to_string(static_cast<unsigned>(imageCombine->mask)));
+            key.append("|mask-key=");
+            key.append(maskKey);
+            if (maskWindow)
+                gpu_scene_key_detail::appendSemanticWindow(key, *maskWindow);
+        }
         gpu_scene_key_detail::appendSemanticFloatBits(key, imageCombine->factor);
     }
     gpu_scene_key_detail::appendSemanticWindow(key, sourceWindow);

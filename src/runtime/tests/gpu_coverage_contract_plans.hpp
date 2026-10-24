@@ -496,4 +496,159 @@ struct NestedBranchReusePlans final {
                                   nestedParentPlan(childB, 9100, 103)};
 }
 
+// ADR 0028 mask axes. Every mode, invert, feather, expansion and opacity, and a curved anchor, over
+// the 6x5 solid's content space; `animated` keys the first path so the sampler runs too.
+[[nodiscard]] inline bloom::runtime::LayerMaskKernel layerMaskKernel(const std::uint64_t idBase,
+                                                                     const bool animated = false) {
+    using bloom::document::LayerMaskMode;
+    using bloom::document::PathAnchor;
+    using bloom::document::PathValue;
+    const auto rectangle = [](const double left, const double top, const double right,
+                              const double bottom) {
+        PathValue path;
+        path.closed = true;
+        path.anchors = {PathAnchor{Vec2d{left, top}, std::nullopt, std::nullopt},
+                        PathAnchor{Vec2d{right, top}, std::nullopt, Vec2d{right + 1.0, top + 1.0}},
+                        PathAnchor{Vec2d{right, bottom}, Vec2d{right + 0.5, bottom - 1.0},
+                                   std::nullopt},
+                        PathAnchor{Vec2d{left, bottom}, std::nullopt, std::nullopt}};
+        return path;
+    };
+    const auto mask = [&](const std::uint64_t offset, const LayerMaskMode mode,
+                          const bool inverted, PathValue path, const double feather,
+                          const double expansion, const double opacity) {
+        return bloom::runtime::CompiledLayerMask{
+            bloom::document::LayerMaskId::fromRaw(idBase + offset),
+            mode,
+            inverted,
+            {ParameterId::fromRaw(idBase + offset * 10), std::move(path)},
+            {ParameterId::fromRaw(idBase + offset * 10 + 1), feather},
+            {ParameterId::fromRaw(idBase + offset * 10 + 2), expansion},
+            {ParameterId::fromRaw(idBase + offset * 10 + 3), opacity}};
+    };
+    bloom::runtime::LayerMaskKernel kernel{
+        {mask(1, LayerMaskMode::Add, false, rectangle(0.5, 0.5, 5.0, 4.5), 1.5, 0.25, 0.9),
+         mask(2, LayerMaskMode::Subtract, true, rectangle(-1.0, -1.0, 4.0, 3.5), 0.0, -0.5, 1.0),
+         mask(3, LayerMaskMode::Intersect, false, rectangle(0.0, 0.0, 6.0, 5.0), 2.0, 0.0, 1.0),
+         mask(4, LayerMaskMode::Difference, false, rectangle(2.0, 1.0, 4.0, 3.0), 0.5, 0.0, 0.75),
+         mask(5, LayerMaskMode::None, false, rectangle(0.0, 0.0, 1.0, 1.0), 0.0, 0.0, 1.0)}};
+    if (animated) {
+        auto& first = kernel.masks.front().path;
+        const auto start = std::get<PathValue>(first.source);
+        auto end = start;
+        for (auto& anchor : end.anchors)
+            anchor.point.x += 0.75;
+        first.source = bloom::runtime::CompiledPathCurve{
+            bloom::document::AnimationCurveId::fromRaw(idBase + 90),
+            {{bloom::document::KeyframeId::fromRaw(idBase + 91), bloom::core::RationalTime{}, start,
+              bloom::runtime::CompiledKeyframeInterpolation::Linear},
+             {bloom::document::KeyframeId::fromRaw(idBase + 92),
+              bloom::core::RationalTime::fromInteger(2), end,
+              bloom::runtime::CompiledKeyframeInterpolation::Linear}}};
+    }
+    return kernel;
+}
+
+// ADR 0028 Mask value: Image Mix of the base solid and a second solid scaled by a Mask (a masked
+// opaque canvas). `absent` routes the Mask through a Layer trimmed out of range: a zero mask.
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+maskValuePlan(const std::uint64_t idBase, const bool absent) {
+    auto definition = imageCombinePlan(bloom::runtime::ImageCombineMode::Mix, idBase)
+                          ->copyDefinition();
+    auto first = definition.operations[0];
+    auto second = definition.operations[1];
+    auto combine = std::get<CompiledImageEffect>(definition.operations[2]);
+    auto layer = std::get<CompiledLayerOutput>(definition.operations[3]);
+    auto merge = std::get<CompiledMerge>(definition.operations[4]);
+    CompiledSolid canvas{NodeId::fromRaw(idBase + 50),
+                         {ParameterId::fromRaw(idBase + 51), Color4d{1.0, 1.0, 1.0, 1.0}},
+                         {ParameterId::fromRaw(idBase + 52), 16.0},
+                         {ParameterId::fromRaw(idBase + 53), 12.0}};
+    auto kernel = layerMaskKernel(idBase + 1000);
+    kernel.masks.resize(1);
+    CompiledImageEffect masked{NodeId::fromRaw(idBase + 50), OperationIndex::fromRaw(2),
+                               std::move(kernel), false, false};
+    // An absent Mask is a trimmed Layer over the canvas: it publishes no image, and no masked
+    // canvas is left unconsumed in the scene.
+    std::vector<CompiledOperation> operations{first, second, canvas};
+    if (!absent)
+        operations.push_back(masked);
+    auto maskIndex = OperationIndex::fromRaw(3);
+    if (absent) {
+        auto trimmed = layer;
+        trimmed.sourceNodeId = NodeId::fromRaw(idBase + 60);
+        trimmed.layerId = LayerId::fromRaw(idBase + 61);
+        trimmed.input = OperationIndex::fromRaw(2);
+        trimmed.inPoint = bloom::core::RationalTime::fromInteger(1000);
+        trimmed.position.id = ParameterId::fromRaw(idBase + 62);
+        trimmed.anchor.id = ParameterId::fromRaw(idBase + 63);
+        trimmed.scale.id = ParameterId::fromRaw(idBase + 64);
+        trimmed.rotation.id = ParameterId::fromRaw(idBase + 65);
+        trimmed.opacity.id = ParameterId::fromRaw(idBase + 66);
+        trimmed.blendModeParameterId = ParameterId::fromRaw(idBase + 67);
+        operations.push_back(trimmed);
+        maskIndex = OperationIndex::fromRaw(3);
+    }
+    combine.input = OperationIndex::fromRaw(0);
+    combine.secondaryInput = OperationIndex::fromRaw(1);
+    combine.maskInput = maskIndex;
+    const auto combineIndex = OperationIndex::fromRaw(operations.size());
+    operations.push_back(combine);
+    layer.input = combineIndex;
+    const auto layerIndex = OperationIndex::fromRaw(operations.size());
+    operations.push_back(layer);
+    merge.entries.front().input = layerIndex;
+    const auto mergeIndex = OperationIndex::fromRaw(operations.size());
+    operations.push_back(merge);
+    operations.push_back(CompiledCompositionOutput{NodeId::fromRaw(idBase + 6), mergeIndex});
+    definition.operations = std::move(operations);
+    definition.output = OperationIndex::fromRaw(definition.operations.size() - 1);
+    return publish(std::move(definition));
+}
+
+// ADR 0028 track matte: the target layer composited through a Multiply Alpha of the hidden source
+// layer's output (Alpha or Luma, optionally inverted). `absent` trims the source out of range.
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+trackMattePlan(const std::uint64_t idBase, const bloom::render::ImageCoverageChannel channel,
+               const bool invert, const bool absent) {
+    auto definition = basePlan()->copyDefinition();
+    auto targetSolid = std::get<CompiledSolid>(definition.operations[0]);
+    auto sourceSolid = targetSolid;
+    sourceSolid.sourceNodeId = NodeId::fromRaw(idBase + 1);
+    sourceSolid.color =
+        CompiledColorParameter{ParameterId::fromRaw(idBase + 2), Color4d{0.6, 0.3, 0.9, 0.8}};
+    sourceSolid.width = CompiledScalarParameter{ParameterId::fromRaw(idBase + 3), 4.0};
+    sourceSolid.height = CompiledScalarParameter{ParameterId::fromRaw(idBase + 4), 3.0};
+    auto target = std::get<CompiledLayerOutput>(definition.operations[1]);
+    target.input = OperationIndex::fromRaw(0);
+    auto source = target;
+    source.sourceNodeId = NodeId::fromRaw(idBase + 10);
+    source.layerId = LayerId::fromRaw(idBase + 11);
+    source.input = OperationIndex::fromRaw(1);
+    source.position = CompiledVec2Parameter{ParameterId::fromRaw(idBase + 12), Vec2d{5.0, 4.0}};
+    source.anchor.id = ParameterId::fromRaw(idBase + 13);
+    source.scale.id = ParameterId::fromRaw(idBase + 14);
+    source.rotation = CompiledScalarParameter{ParameterId::fromRaw(idBase + 15), 15.0};
+    source.opacity.id = ParameterId::fromRaw(idBase + 16);
+    source.blendModeParameterId = ParameterId::fromRaw(idBase + 17);
+    if (absent)
+        source.inPoint = bloom::core::RationalTime::fromInteger(1000);
+    CompiledImageEffect matte{
+        target.sourceNodeId, OperationIndex::fromRaw(2),
+        bloom::runtime::ImageCombineKernel{
+            bloom::runtime::ImageCombineMode::MultiplyAlpha,
+            CompiledScalarParameter{ParameterId::fromRaw(idBase + 18), 1.0}, channel, std::nullopt,
+            invert},
+        false, false, OperationIndex::fromRaw(3)};
+    matte.trackMatte = true;
+    auto merge = std::get<CompiledMerge>(definition.operations[4]);
+    merge.entries = {CompiledMergeInput{LayerSlotId::fromRaw(idBase + 20), target.layerId,
+                                        OperationIndex::fromRaw(4)}};
+    definition.operations = {targetSolid, sourceSolid, target, source, matte, merge,
+                             CompiledCompositionOutput{NodeId::fromRaw(idBase + 30),
+                                                       OperationIndex::fromRaw(5)}};
+    definition.output = OperationIndex::fromRaw(6);
+    return publish(std::move(definition));
+}
+
 } // namespace bloom::gpu_coverage_plans
