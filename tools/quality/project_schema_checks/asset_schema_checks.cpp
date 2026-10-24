@@ -81,4 +81,46 @@ void validateManifestSchemaV1_16(const json::Value& schema) {
     schema_detail::validateReferences(schema, schema);
     validateManifestSchemaV1_15(previousVersion(schema, true));
 }
+// Document 1.27 (#378): a composition may name the Assets folder that holds it. Removing that
+// optional member and the version must give back the 1.26 artifact exactly.
+namespace {
+json::Value previousVersionV1_27(const json::Value& schema, bool manifest) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    const std::string kind = manifest ? "manifest" : "document";
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-" + kind + ":1.27",
+                       "composition folder schema id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.27").at("properties").at("minor"),
+                 R"({"const":27})", "composition folder minor");
+    const auto& version =
+        manifest ? schema.at("$defs").at("document-1.0").at("properties").at("schemaVersion")
+                 : schema.at("properties").at("schemaVersion");
+    requireExact(version, R"({"$ref":"#/$defs/fixedVersion-1.27"})", "schema version");
+    auto previous = schema;
+    for (auto& member : previous.at("$defs").asObject())
+        if (member.first == "fixedVersion-1.27")
+            member.first = "fixedVersion-1.26";
+    previous.at("$defs").at("fixedVersion-1.26").at("properties").at("minor") =
+        json::parse(R"({"const":26})");
+    auto& previousRef =
+        manifest ? previous.at("$defs").at("document-1.0").at("properties").at("schemaVersion")
+                 : previous.at("properties").at("schemaVersion");
+    previousRef = json::parse(R"({"$ref":"#/$defs/fixedVersion-1.26"})");
+    previous.at("$id") =
+        json::Value(std::string("urn:kinetik:bloom:schema:project-" + kind + ":1.26"));
+    if (!manifest) {
+        auto& properties = previous.at("$defs").at("composition-1.0").at("properties");
+        requireExact(properties.at("folder"), R"({"$ref":"#/$defs/objectId"})",
+                     "composition folder reference");
+        erase(properties, "folder");
+    }
+    return previous;
+}
+} // namespace
+void validateDocumentSchemaV1_27(const json::Value& schema) {
+    validateDocumentSchemaV1_26(previousVersionV1_27(schema, false));
+}
+void validateManifestSchemaV1_27(const json::Value& schema) {
+    validateManifestSchemaV1_26(previousVersionV1_27(schema, true));
+}
 } // namespace bloom::quality

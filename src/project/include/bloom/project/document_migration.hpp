@@ -218,6 +218,10 @@ migrateVideoSourceMetadataV1_24(const JsonValue& root, std::pmr::memory_resource
 [[nodiscard]] MigrationStepOutcome migrateChannelSetsV1_25(const JsonValue& root,
                                                            std::pmr::memory_resource* resource,
                                                            std::pmr::vector<char>& output);
+// Composition folders (issue #378), document 1.26 -> 1.27: version-only.
+[[nodiscard]] MigrationStepOutcome
+migrateCompositionFoldersV1_26(const JsonValue& root, std::pmr::memory_resource* resource,
+                               std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -244,7 +248,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 22}, {1, 23}, migrateLayerTimeV1_22},
     MigrationStepDescriptor{{1, 23}, {1, 24}, migrateLayerMasksV1_23},
     MigrationStepDescriptor{{1, 24}, {1, 25}, migrateVideoSourceMetadataV1_24},
-    MigrationStepDescriptor{{1, 25}, {1, 26}, migrateChannelSetsV1_25}};
+    MigrationStepDescriptor{{1, 25}, {1, 26}, migrateChannelSetsV1_25},
+    MigrationStepDescriptor{{1, 26}, {1, 27}, migrateCompositionFoldersV1_26}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

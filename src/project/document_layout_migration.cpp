@@ -149,7 +149,8 @@ enum class Step {
     AssetInputColorSpace,
     LutAssets,
     ExternalFileLocators,
-    LayerMasks
+    LayerMasks,
+    CompositionFolders
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -161,6 +162,10 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
                (scope == Scope::HighestIssued && value.findMember("dataBlock"));
     // Layer masks (1.23 -> 1.24, ADR 0028) is version-only: every member it adds is optional.
     if (step == Step::LayerMasks)
+        return false;
+    // Composition folders (1.26 -> 1.27, #378) is version-only too: the composition `folder`
+    // member is optional and absent means the Assets root.
+    if (step == Step::CompositionFolders)
         return false;
     if (step == Step::Images) {
         return (scope == Scope::Project && value.findMember("assets")) ||
@@ -334,6 +339,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::AssetInputColorSpace ? "{\"major\":1,\"minor\":20}"
                            : step == Step::LutAssets            ? "{\"major\":1,\"minor\":21}"
                            : step == Step::LayerMasks           ? "{\"major\":1,\"minor\":24}"
+                           : step == Step::CompositionFolders   ? "{\"major\":1,\"minor\":27}"
                                                                 : "{\"major\":1,\"minor\":22}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
@@ -853,6 +859,13 @@ MigrationStepOutcome migrateLayerTimeV1_22(const JsonValue& root, std::pmr::memo
 MigrationStepOutcome migrateLayerMasksV1_23(const JsonValue& root, std::pmr::memory_resource*,
                                             Buffer& output) {
     if (!sourceVersionIs(root, "23") || !transform(root, Scope::Root, Step::LayerMasks, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateCompositionFoldersV1_26(const JsonValue& root,
+                                                    std::pmr::memory_resource*, Buffer& output) {
+    if (!sourceVersionIs(root, "26") ||
+        !transform(root, Scope::Root, Step::CompositionFolders, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

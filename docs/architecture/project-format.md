@@ -1,8 +1,10 @@
 # Bloom Project Format
 
-The current document schema is 1.26. It advances the Image source node to v2 (optional `part` and
-`layer` parameters and a `channels` output; see "Channel Sets In Document 1.26") and adds the
-optional composition `timecode` (see "Composition Timecode In Document 1.26") on top of the 1.25
+The current document schema is 1.27. It adds the optional composition `folder`, the Assets folder
+that holds a composition (see "Composition Folders In Document 1.27"), on top of the 1.26 Image
+source node v2 (optional `part` and `layer` parameters and a `channels` output; see "Channel Sets
+In Document 1.26") and optional composition `timecode` (see "Composition Timecode In Document
+1.26"), the 1.25
 video stream field order and timecode type and the optional Video node audio stream selection (see
 "Video Stream Metadata In Document 1.25"), the 1.24
 optional layer masks and track matte on Layer Output boundaries, the Path animation curve kind and the optional `layerMask` allocator namespace (see
@@ -1377,9 +1379,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.26`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.27`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-The current artifacts are `document-1.26.schema.json` and `manifest-1.26.schema.json`; the
+The current artifacts are `document-1.27.schema.json` and `manifest-1.27.schema.json`; the
 historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
@@ -1436,7 +1438,9 @@ when zero. Deletion and undo preserve this high-water mark, so identities are ne
 Project validation refuses folder cycles, dangling parent/asset folder references, duplicate
 folder identities and duplicate names among sibling folders. Sibling names compare exactly;
 case-insensitive search is a UI behavior. Folders are virtual project organization, with no
-filesystem directory creation or media relocation.
+filesystem directory creation or media relocation. Since 1.27 a folder may also hold compositions
+(see "Composition Folders In Document 1.27"); removing a folder moves its assets, compositions and
+child folders up to its parent.
 
 The asset array stays sorted by stable ID for canonical encoding. The panel orders each folder's
 assets by `(order, id)`, making equal imported positions deterministic. Move and reorder commands
@@ -1521,6 +1525,22 @@ it differs from the default (start 0, non-drop), so a composition without it kee
 The decoder reads it only at `1.26` or later, refuses a negative start as a domain violation, and
 preserves unknown trailing members like any composition attachment.
 
+## Composition Folders In Document 1.27
+
+A composition gains an optional `folder` member after `timecode` (#378):
+
+| Member | Encoding |
+| --- | --- |
+| `folder` | the canonical decimal-string `AssetFolderId` of the Assets folder holding the composition |
+
+Absence means the Assets root, and the writer omits it there, so a root composition keeps its 1.26
+bytes apart from the version. A folder reference is project organization only: it never changes
+evaluation, render identity or caches. Project validation refuses a composition whose folder does
+not exist, exactly as for an asset. Compositions carry no order within a folder; the Assets panel
+sorts them with assets by its columns. The decoder reads the member only at `1.27` or later and
+preserves unknown trailing members like any composition attachment. The `1.26` → `1.27` DOM step
+only advances the version, so every existing composition opens at the root.
+
 ## Layer Masks In Document 1.24
 
 Document `1.24` persists the masks, track mattes and Path curves of
@@ -1557,13 +1577,14 @@ advances the version: every new member is optional, so no record is inserted or 
 
 ## Video Assets In Document 1.17
 
-The current document and manifest schema artifacts are `document-1.26.schema.json` and
-`manifest-1.26.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
+The current document and manifest schema artifacts are `document-1.27.schema.json` and
+`manifest-1.27.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
 The 1.16 → 1.17 migration only advances the version; the 1.17 → 1.18 and 1.18 → 1.19 steps
 likewise preserve existing assets and pixels. Opening 1.15 first applies asset-organization
 defaults and the historical video and working-space steps, then the 1.19 → 1.20 input-id step,
-1.20 → 1.21 LUT step, 1.21 → 1.22 locator version step, 1.22 → 1.23 layer-time step and
-1.23 → 1.24 layer-mask version step.
+1.20 → 1.21 LUT step, 1.21 → 1.22 locator version step, 1.22 → 1.23 layer-time step,
+1.23 → 1.24 layer-mask version step, 1.24 → 1.25 video-metadata step, 1.25 → 1.26 channel-set step
+and 1.26 → 1.27 composition-folder version step.
 
 `AssetKind::Video` serializes as `"video"`. It retains the shared asset identity, locator,
 interpretation, dimensions and organization envelope, with a closed `video` member before

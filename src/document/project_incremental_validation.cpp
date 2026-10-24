@@ -111,7 +111,8 @@ bool Composition::sameShell(const Composition& other) const noexcept {
     return id_ == other.id_ && name_ == other.name_ && duration_ == other.duration_ &&
            format_ == other.format_ && workArea_ == other.workArea_ &&
            workingColorSpaceId_ == other.workingColorSpaceId_ && safeAreas_ == other.safeAreas_ &&
-           backgroundColor_ == other.backgroundColor_ && timecode_ == other.timecode_;
+           backgroundColor_ == other.backgroundColor_ && timecode_ == other.timecode_ &&
+           folder_ == other.folder_;
 }
 
 bool Project::sameRootRecordStorage(const Project& other) const noexcept {
@@ -170,6 +171,12 @@ bool Project::validatesAgainst(const Project& base) const {
         if (!root.ok())
             return notProven();
     }
+    // #378: a composition's folder must exist (folders are root records; a composition shell
+    // carries the reference).
+    if (rootChanged || !changed.empty())
+        for (const auto& composition : compositions_)
+            if (composition.folder() && !findAssetFolder(*composition.folder()))
+                return notProven();
 
     // Changed compositions: their own validation, then project-wide ID uniqueness against every
     // other changed composition and against the frozen indexes of the unchanged ones.

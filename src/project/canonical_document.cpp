@@ -1789,6 +1789,10 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
             !state.ok(writer.endObject()))
             return false;
     }
+    // Document 1.27 (#378): the Assets folder holding the composition; absent means the root.
+    if (const auto& folder = composition.folder();
+        folder && !emitNamedId(state, "folder", folder->value()))
+        return false;
     if (!emitRetainedTrailing(state)) {
         return false;
     }

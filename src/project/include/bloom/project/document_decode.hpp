@@ -146,6 +146,8 @@ struct DecodedComposition final {
     std::optional<std::string> workingColorSpaceId{};
     // Document 1.26: how the composition labels its time. Absent means the default.
     document::CompositionTimecode timecode{};
+    // Document 1.27 (#378): the Assets folder holding the composition. Absent means the root.
+    std::optional<document::AssetFolderId> folder{};
 
     friend bool operator==(const DecodedComposition&, const DecodedComposition&) = default;
 };

@@ -91,7 +91,7 @@ Composition::Composition(const CompositionId id, std::string name,
       editableContent_(std::make_unique<Content>(std::move(graph))) {}
 
 Composition::Composition(const Composition& other)
-    : workArea_(other.workArea_), timecode_(other.timecode_),
+    : workArea_(other.workArea_), timecode_(other.timecode_), folder_(other.folder_),
       workingColorSpaceId_(other.workingColorSpaceId_), safeAreas_(other.safeAreas_),
       backgroundColor_(other.backgroundColor_), id_(other.id_), name_(other.name_),
       duration_(other.duration_), format_(other.format_), frozenContent_(other.frozenContent_) {
@@ -666,6 +666,10 @@ void Project::validateRootRecords(ValidationResult& result) const {
             result.add(ValidationCode::MissingReference, "assets.folder",
                        "Asset folder does not exist");
     }
+    for (const auto& composition : compositions_)
+        if (composition.folder() && !findAssetFolder(*composition.folder()))
+            result.add(ValidationCode::MissingReference, "compositions.folder",
+                       "Composition folder does not exist");
     std::unordered_map<AssetFolderId, const AssetFolder*> folders;
     std::set<std::pair<std::optional<AssetFolderId>, std::string>> siblingNames;
     for (const auto& folder : assetFolders_.get()) {

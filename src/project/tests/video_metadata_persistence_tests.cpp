@@ -121,16 +121,16 @@ void migration() {
         auto text = encode(makeDocument(timecode, 0));
         // A 1.24 file has no field order or timecode type.
         text = replaceRegex(text, R"(,\s*"fieldOrder": \d+,\s*"timecodeType": \d+)", "");
-        text = replaceRegex(text, R"("minor": 26(\s*\}))", "\"minor\": 24$1");
+        text = replaceRegex(text, R"("minor": 27(\s*\}))", "\"minor\": 24$1");
         auto operation = memory();
         auto parsed = parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
         expect(static_cast<bool>(parsed), "1.24 video fixture parses");
         if (!parsed)
             continue;
-        const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 26},
+        const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 27},
                                                  kProductionDocumentMigrationSteps, {}, operation);
-        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 2,
-               "1.24 to the current schema runs the video-metadata and channel-set steps");
+        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 3,
+               "1.24 to the current schema runs the video-metadata, channel-set and folder steps");
         if (migrated.outcome() != MigrationOutcome::Migrated)
             continue;
         const auto decoded = decodeDocumentEnvelope(*migrated.migratedRoot());

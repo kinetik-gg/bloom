@@ -647,6 +647,8 @@ namespace {
         keys.push_back("workingColorSpaceId");
     if (state.documentMinor >= 26 && node.findMember("timecode") != nullptr)
         keys.push_back("timecode");
+    if (state.documentMinor >= 27 && node.findMember("folder") != nullptr)
+        keys.push_back("folder");
     std::vector<const JsonValue*> members;
     // A composition is a collection element (identity: numeric CompositionId), and that identity
     // is one of its own known members (`id`) -- not yet decoded at this point -- so this closed
@@ -805,6 +807,13 @@ namespace {
             state.fail(DocumentDecodeError::DomainViolation, joinPath(timecodePath, "start"));
             return false;
         }
+    }
+    if (const auto* folder = node.findMember("folder");
+        folder != nullptr && state.documentMinor >= 27) {
+        document::AssetFolderId folderId;
+        if (!decodeObjectId(*folder, state, joinPath(path, "folder"), folderId))
+            return false;
+        out.folder = folderId;
     }
     return true;
 }

@@ -166,24 +166,25 @@ void olderDocumentsMigrateAndRefuseNewMembers() {
                                                  document::FrameRate::framesPerSecond24()))
             .project};
     auto text = encode(plain);
-    replaceOnce(text, "\"minor\": 26", "\"minor\": 23");
+    replaceOnce(text, "\"minor\": 27", "\"minor\": 23");
     expect(static_cast<bool>(decodeText(text)), "a 1.23 document without masks decodes");
     auto operation = memory();
     auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
     if (parsed) {
         const auto migrated =
-            project::migrateDocumentDom(parsed.document()->root(), {1, 23}, {1, 26},
+            project::migrateDocumentDom(parsed.document()->root(), {1, 23}, {1, 27},
                                         project::kProductionDocumentMigrationSteps, {}, operation);
-        expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-                   migrated.stepsApplied() == 3 &&
-                   static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
-               "the 1.23 -> 1.24 mask, 1.24 -> 1.25 video-metadata and 1.25 -> 1.26 channel-set "
-               "steps only advance the version");
+        expect(
+            migrated.outcome() == project::MigrationOutcome::Migrated &&
+                migrated.stepsApplied() == 4 &&
+                static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
+            "the 1.23 -> 1.24 mask, 1.24 -> 1.25 video-metadata and 1.25 -> 1.26 channel-set and "
+            "1.26 -> 1.27 composition-folder steps only advance the version");
     }
 
     Fixture fixture;
     auto masked = encode(fixture.document);
-    replaceOnce(masked, "\"minor\": 26", "\"minor\": 23");
+    replaceOnce(masked, "\"minor\": 27", "\"minor\": 23");
     expect(!static_cast<bool>(decodeText(masked)), "a 1.23 document carrying masks is refused");
 }
 
@@ -308,7 +309,7 @@ void anchorModesPersistAndMigrate() {
                                          document::ShapeKind::Path, geometry);
     expect(shapedCommands.execute(std::move(add)).succeeded(), "a moded shape path is added");
     auto shapeText = encode(shaped);
-    replaceOnce(shapeText, "\"minor\": 26", "\"minor\": 23");
+    replaceOnce(shapeText, "\"minor\": 27", "\"minor\": 23");
     expect(!static_cast<bool>(decodeText(shapeText)),
            "a pre-1.24 file carrying an anchor mode is refused");
 }
@@ -346,7 +347,7 @@ void compositionTimecodePersists() {
         }
     }
     auto older = text;
-    replaceOnce(older, "\"minor\": 26", "\"minor\": 25");
+    replaceOnce(older, "\"minor\": 27", "\"minor\": 25");
     expect(!static_cast<bool>(decodeText(older)), "a pre-1.26 file carrying a timecode is refused");
 }
 
