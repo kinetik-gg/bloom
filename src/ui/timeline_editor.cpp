@@ -1640,18 +1640,7 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
             painter.drawLine(QPointF(x, 0), QPointF(x, height()));
         }
     }
-    // A drop in progress (#380): the insertion line continues the layer stack's, and the time
-    // marker shows where the new layers start.
-    if (dropRow_ >= 0)
-        painter.fillRect(QRect(0, rowTop(dropRow_), width(), kit::px(kit::Spacing::XXS)),
-                         kit::color(kit::Color::Accent));
-    if (dropTime_) {
-        if (const auto mapping = ruler_.axisForWidth(width())) {
-            const auto x = static_cast<int>(std::floor(mapping->pixelForTime(*dropTime_)));
-            painter.fillRect(QRect(x, 0, kit::px(kit::Spacing::XXS), height()),
-                             kit::color(kit::Color::Accent));
-        }
-    }
+
     const auto* composition = session_.composition();
     if (composition == nullptr) {
         return;
@@ -1668,11 +1657,40 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
 
 void TimelineLaneRegion::setDropMarker(const std::optional<core::RationalTime> time,
                                        const int row) {
-    if (dropTime_ == time && dropRow_ == row)
-        return;
     dropTime_ = time;
     dropRow_ = row;
-    update();
+    // Child widgets above the key lanes and graph rows, like the layer stack's insertion line, so
+    // expanded property rows never hide them.
+    const auto marker = [this](QWidget*& widget, const char* name) {
+        if (widget == nullptr) {
+            widget = new QWidget(this);
+            widget->setObjectName(QString::fromLatin1(name));
+            widget->setAttribute(Qt::WA_TransparentForMouseEvents);
+            widget->setAutoFillBackground(true);
+            auto palette = widget->palette();
+            palette.setColor(QPalette::Window, kit::color(kit::Color::Accent));
+            widget->setPalette(palette);
+        }
+        return widget;
+    };
+    const auto mapping = time ? ruler_.axisForWidth(width()) : std::nullopt;
+    if (mapping) {
+        auto* line = marker(dropTimeMarker_, "timelineDropTimeMarker");
+        line->setGeometry(static_cast<int>(std::floor(mapping->pixelForTime(*time))), 0,
+                          kit::px(kit::Spacing::XXS), height());
+        line->show();
+        line->raise();
+    } else if (dropTimeMarker_ != nullptr) {
+        dropTimeMarker_->hide();
+    }
+    if (row >= 0) {
+        auto* line = marker(dropRowLine_, "timelineDropRowLine");
+        line->setGeometry(0, rowTop(row), width(), kit::px(kit::Spacing::XXS));
+        line->show();
+        line->raise();
+    } else if (dropRowLine_ != nullptr) {
+        dropRowLine_->hide();
+    }
 }
 
 void TimelineLaneRegion::mousePressEvent(QMouseEvent* event) {

@@ -433,8 +433,8 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 Dropping footage (images, image sequences, video, audio) or compositions from Assets onto the
 Timeline creates layers in the active composition, as in After Effects (#380). While dragging, the
 layer stack shows the Accent insertion line (`timelineLayerInsertionIndicator`) above the row the
-layers will join and the lanes continue it; over the lanes an Accent time marker shows the frame
-where they will start. The marker snaps to the composition frame grid. Several items become several
+layers will join and the lanes continue it (`timelineDropRowLine`); over the lanes an Accent time
+marker (`timelineDropTimeMarker`) shows the frame where they will start. The marker snaps to the composition frame grid. Several items become several
 layers in the order they were selected in Assets, the first on top; they all start at the same
 frame, or, with Alt held at the drop, end to end, each starting where the previous one ends (a
 layer that would start after the composition ends starts on its last frame). A composition becomes

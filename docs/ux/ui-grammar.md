@@ -638,8 +638,9 @@ Dragging an image/sequence row to Nodes creates an Image source; dragging an Aud
 Audio source. Dropping media or compositions on the Timeline or the Viewer creates the matching
 wired Layers (interaction-model.md, "Layer drops"). During a Timeline drag the layer stack shows
 the `timelineLayerInsertionIndicator` Accent line (`Spacing::XXS` tall) above the row the layers
-will join, the lanes continue it, and over the lanes a `Spacing::XXS` wide Accent time marker shows
-the frame they will start on. Image source cards and
+will join, the lanes continue it (`timelineDropRowLine`), and over the lanes a `Spacing::XXS` wide
+Accent time marker (`timelineDropTimeMarker`) shows the frame they will start on. Both lane marks
+are child widgets raised above expanded property rows, so no row hides them. Image source cards and
 Properties use an Asset `KDropdown` listing the project's Image
 and Sequence assets by their display names, with the kind glyph and Image / Sequence [n]
 text. Selection commits the stable asset id through the shared parameter setter. A removed id

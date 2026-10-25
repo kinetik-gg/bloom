@@ -342,6 +342,11 @@ void timelineDrops(Fixture& fixture) {
            "the Timeline accepts the drag over the lanes");
     expect(lanes->dropMarkerTimeForTest() == frame(30) && lanes->dropMarkerRowForTest() == 0,
            "the time marker snaps to frame 30 at the top row");
+    auto* marker = lanes->findChild<QWidget*>("timelineDropTimeMarker");
+    auto* rowLine = lanes->findChild<QWidget*>("timelineDropRowLine");
+    expect(marker != nullptr && marker->isVisible() && rowLine != nullptr && rowLine->isVisible() &&
+               std::abs(marker->x() - static_cast<int>(axis->pixelForTime(frame(30)))) <= 1,
+           "the lanes show the time marker at frame 30 and the row line");
     expect(sendDrag(timeline, QEvent::Drop, lanePoint, *mime, Qt::AltModifier),
            "Alt-drop two items over the lanes");
     layers = fixture.stack();
@@ -380,7 +385,7 @@ void timelineDrops(Fixture& fixture) {
     QDragLeaveEvent leave;
     QApplication::sendEvent(&timeline, &leave);
     expect(!indicator->isVisible() && lanes->dropMarkerRowForTest() == -1 &&
-               !lanes->dropMarkerTimeForTest(),
+               !lanes->dropMarkerTimeForTest() && !marker->isVisible() && !rowLine->isVisible(),
            "leaving hides the insertion line and the time marker");
 }
 

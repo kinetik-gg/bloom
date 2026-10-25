@@ -326,8 +326,9 @@ class TimelineLaneRegion final : public QWidget {
     void setGraphEditorEnabled(bool enabled);
     [[nodiscard]] bool graphEditorEnabled() const noexcept { return graphEditor_; }
     [[nodiscard]] TimelineGraphView* graphViewForTest() const noexcept { return graphView_; }
-    // A drop from Assets or the file manager (#380): the time marker where the layer would start
-    // and the insertion line above `row` (-1: none). nullopt time hides the marker.
+    // A drop from Assets or the file manager (#380): the Accent time marker
+    // (`timelineDropTimeMarker`) where the layers would start and the insertion line
+    // (`timelineDropRowLine`) above `row` (-1: none). nullopt time hides the marker.
     void setDropMarker(std::optional<core::RationalTime> time, int row);
     [[nodiscard]] std::optional<core::RationalTime> dropMarkerTimeForTest() const noexcept {
         return dropTime_;
@@ -389,6 +390,8 @@ class TimelineLaneRegion final : public QWidget {
     std::optional<core::RationalTime> guide_{};
     std::optional<core::RationalTime> dropTime_{};
     int dropRow_ = -1;
+    QWidget* dropTimeMarker_ = nullptr;
+    QWidget* dropRowLine_ = nullptr;
     bool keyframesVisible_ = true;
     bool snapping_ = true;
     bool graphEditor_ = false;
