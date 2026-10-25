@@ -190,9 +190,6 @@ void cancelKeepsWhatFinished(const QTemporaryDir& directory) {
     require(dialog->headingText() == QStringLiteral("Cancelling…") &&
                 !dialog->cancelButton()->isEnabled(),
             "Cancel acknowledges at once while the worker reaches a safe point");
-    if (const auto capture = qEnvironmentVariable("BLOOM_IMPORT_CAPTURE_DIR"); !capture.isEmpty())
-        require(dialog->grab().save(QDir(capture).filePath("import-cancelling.png")),
-                "cancelling capture");
     require(harness.controller.importProgress().stopping, "the controller records the stop");
     harness.gate->release();
     require(waitUntil([&] { return !harness.controller.busy(); }), "cancelled import finishes");
@@ -270,9 +267,6 @@ void summaryAndThreshold(const QTemporaryDir& directory) {
                 reasons[1].startsWith(QStringLiteral("The LUT")) &&
                 reasons[2] == QStringLiteral("Already in the project"),
             "each skipped file has its plain reason, with no internal identifier");
-    if (const auto capture = qEnvironmentVariable("BLOOM_IMPORT_CAPTURE_DIR"); !capture.isEmpty())
-        require(dialog->grab().save(QDir(capture).filePath("import-summary-skipped.png")),
-                "summary capture");
     require(dialog->closeButton()->isVisible() && !dialog->cancelButton()->isVisible(),
             "the summary offers Close");
     QTest::mouseClick(dialog->closeButton(), Qt::LeftButton);
@@ -317,17 +311,10 @@ void folderAndSequenceIntoSelectedFolder(const QTemporaryDir& directory) {
     require(folder.has_value(), "selected folder fixture");
     harness.controller.setImportFolder(folder);
 
-    std::size_t total = 0;
     harness.holdAt(1);
     harness.controller.importFiles({directory.filePath("shoot")});
     require(waitUntil([&] { return harness.gate->reached(); }), "folder import reaches item 2");
-    total = harness.controller.importProgress().total;
-    if (const auto capture = qEnvironmentVariable("BLOOM_IMPORT_CAPTURE_DIR"); !capture.isEmpty()) {
-        require(waitUntil([&] { return harness.visibleDialog() != nullptr; }), "capture dialog");
-        QTest::qWait(2 * static_cast<int>(ui::ImportProgressPresenter::kRefreshInterval.count()));
-        require(harness.visibleDialog()->grab().save(QDir(capture).filePath("import-progress.png")),
-                "progress capture");
-    }
+    const auto total = harness.controller.importProgress().total;
     harness.gate->release();
     require(waitUntil([&] { return !harness.controller.busy(); }), "folder import finishes");
     require(total == 2, "a folder with a still and a three-frame sequence is two items");
