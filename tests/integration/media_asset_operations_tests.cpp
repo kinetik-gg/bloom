@@ -95,12 +95,68 @@ bool mixedBatchImport() {
         refused.failures().size() != 2 ||
         refused.diagnostic().find("2 files could not be imported") == std::string::npos)
         return false;
-    // Cancellation still refuses the whole batch, even after a successful file.
+    // Cancellation keeps what finished (#377): stopping while the second item is prepared keeps
+    // the first, abandons the rest without reporting them as faults, and still applies.
     bool stop = false;
+    std::vector<bloom::commands::ImportProgress> reports;
     const bloom::commands::ImportAssets cancelled(
         paths, directory, [&] { return stop; },
-        [&](const std::uint64_t done, std::uint64_t) { stop = done >= 1; });
-    return cancelled.prepared().empty() && cancelled.diagnostic() == "Image import cancelled";
+        [&](const bloom::commands::ImportProgress& state) {
+            reports.push_back(state);
+            stop = stop || (state.completed >= 1 && !state.current.empty());
+        });
+    if (!cancelled.cancelled() || cancelled.prepared().size() != 1 ||
+        !cancelled.failures().empty() || cancelled.notImported() != 3 ||
+        !cancelled.diagnostic().empty() || reports.size() < 2 || reports.front().total != 4 ||
+        reports.front().current != first)
+        return false;
+    // Cancelling before anything was prepared refuses the batch.
+    const bloom::commands::ImportAssets refusedCancel(paths, directory, [] { return true; });
+    return refusedCancel.cancelled() && refusedCancel.prepared().empty() &&
+           refusedCancel.notImported() == 4 && refusedCancel.diagnostic() == "Import cancelled";
+}
+
+// A chosen folder contributes the media files below it, sorted and without hidden entries; a
+// folder with no media is reported as one skipped item with a plain reason.
+bool folderImport() {
+    const auto directory =
+        std::filesystem::temp_directory_path() /
+        ("bloom-folder-import-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    struct RemoveDirectory final {
+        std::filesystem::path path;
+        ~RemoveDirectory() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    } cleanup{directory};
+    const auto footage = directory / "Footage";
+    const auto empty = directory / "Notes";
+    std::filesystem::create_directories(footage / "Sub");
+    std::filesystem::create_directories(footage / ".cache");
+    std::filesystem::create_directories(empty);
+    if (!writeWav(footage / "b.wav", 4800) || !writeWav(footage / "Sub" / "a.wav", 4800) ||
+        !writeWav(footage / ".hidden.wav", 4800) || !writeWav(footage / ".cache" / "c.wav", 4800))
+        return false;
+    {
+        std::ofstream notes(footage / "readme.txt");
+        notes << "not media";
+        std::ofstream other(empty / "readme.txt");
+        other << "not media";
+    }
+    std::size_t total = 0;
+    const bloom::commands::ImportAssets imported(
+        {footage, empty, footage / "b.wav"}, directory, {},
+        [&](const bloom::commands::ImportProgress& state) { total = state.total; });
+    if (!imported.diagnostic().empty() || imported.prepared().size() != 2 || total != 2 ||
+        imported.failures().size() != 1 || imported.failures().front().path != empty ||
+        imported.failures().front().diagnostic !=
+            "The folder holds no media files Bloom can import")
+        return false;
+    // Sorted: Footage/Sub/a.wav before Footage/b.wav (directory order is not portable).
+    const auto& first = imported.prepared().front().locator.path;
+    return first.ends_with("Sub/a.wav") && bloom::commands::isImportableMediaFile("X.EXR") &&
+           !bloom::commands::isImportableMediaFile("readme.txt");
 }
 
 bool audioImportCancellationAndRecovery() {
@@ -121,15 +177,15 @@ bool audioImportCancellationAndRecovery() {
     std::size_t probeChecks = 0;
     const bloom::commands::ImportAssets stoppedProbe({path}, path.parent_path(),
                                                      [&] { return ++probeChecks >= 2; });
-    if (!stoppedProbe.prepared().empty() ||
-        stoppedProbe.diagnostic() != "Audio import failed: Audio operation was cancelled")
+    if (!stoppedProbe.prepared().empty() || !stoppedProbe.cancelled() ||
+        !stoppedProbe.failures().empty() || stoppedProbe.diagnostic() != "Import cancelled")
         return false;
 
     std::size_t digestChecks = 0;
     const bloom::commands::ImportAssets stoppedDigest({path}, path.parent_path(),
                                                       [&] { return ++digestChecks > 100; });
-    if (digestChecks <= 100 || !stoppedDigest.prepared().empty() ||
-        stoppedDigest.diagnostic() != "Audio import failed: Audio operation was cancelled")
+    if (digestChecks <= 100 || !stoppedDigest.prepared().empty() || !stoppedDigest.cancelled() ||
+        stoppedDigest.diagnostic() != "Import cancelled")
         return false;
 
     const bloom::commands::ImportAssets recovered({path}, path.parent_path());
@@ -209,5 +265,7 @@ int main() {
         return 16;
     if (!mixedBatchImport())
         return 17;
+    if (!folderImport())
+        return 18;
     return 0;
 }

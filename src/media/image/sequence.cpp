@@ -50,6 +50,26 @@ std::optional<NumberedName> numberedName(const std::filesystem::path& path) {
                         static_cast<std::uint32_t>(digits.size()), frame};
 }
 } // namespace
+std::optional<std::string> sequenceKey(const std::filesystem::path& path) {
+    const auto name = numberedName(path);
+    if (!name)
+        return std::nullopt;
+    auto directory = path.parent_path();
+    if (directory.empty())
+        directory = ".";
+    std::error_code error;
+    auto absolute = std::filesystem::absolute(directory, error);
+    if (error)
+        absolute = directory;
+    const auto folder = absolute.lexically_normal().generic_u8string();
+    std::string key(reinterpret_cast<const char*>(folder.data()), folder.size());
+    // NUL cannot occur in a path or file name, so the parts cannot run into each other.
+    for (const auto* part : {&name->prefix, &name->suffix, &name->extension}) {
+        key.push_back('\0');
+        key += *part;
+    }
+    return key;
+}
 ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
                                            const CancelImageWork& cancel,
                                            const ImageProgress& progress) {

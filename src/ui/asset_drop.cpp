@@ -1,8 +1,10 @@
 #include "asset_drop.hpp"
+#include "network_share_paths.hpp"
 #include "node_editor_add.hpp"
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QGraphicsView>
+#include <QMimeData>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/ui/asset_controller.hpp>
@@ -172,7 +174,37 @@ class AssetDropTarget final : public QObject {
             event->type() != QEvent::Drop)
             return false;
         auto* drop = static_cast<QDropEvent*>(event);
-        if (drop->mimeData()->hasFormat(kCompositionMimeType)) {
+        const auto* mime = drop->mimeData();
+        if (mime->hasUrls() && !mime->hasFormat(kAssetMimeType) &&
+            !mime->hasFormat(kCompositionMimeType)) {
+            // Files and folders from a file manager import into the selected Assets folder with
+            // the same import progress and summary as Assets itself (#377); no layer is added.
+            QStringList files;
+            QStringList unresolvedShares;
+            for (const auto& url : mime->urls()) {
+                if (auto local = localPathForUrl(url)) {
+                    files.push_back(*local);
+                    continue;
+                }
+                if (auto label = smbShareLabel(url); label && !unresolvedShares.contains(*label))
+                    unresolvedShares.push_back(*label);
+            }
+            auto* controller = session_.assetController();
+            if (controller == nullptr || (files.isEmpty() && unresolvedShares.isEmpty())) {
+                drop->ignore();
+                return true;
+            }
+            if (event->type() == QEvent::Drop) {
+                if (!files.isEmpty())
+                    controller->importFiles(files);
+                for (const auto& label : unresolvedShares)
+                    emit session_.commandRejected(
+                        QObject::tr("Connect to %1 in your file manager first").arg(label));
+            }
+            drop->acceptProposedAction();
+            return true;
+        }
+        if (mime->hasFormat(kCompositionMimeType)) {
             const auto id = compositionFromMime(*drop->mimeData(), session_);
             if (!id.isValid()) {
                 drop->ignore();

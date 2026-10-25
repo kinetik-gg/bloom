@@ -1680,7 +1680,7 @@ OperationRegistry OperationRegistry::builtIn() {
 
     add("bloom.asset.import",
         {need("paths", ValueKind::Array, ValueArray{Value("footage/plate.exr")},
-              "Absolute or project-relative media paths to import."),
+              "Absolute or project-relative media files or folders to import."),
          need("projectDirectory", ValueKind::String, ".",
               "The project directory the locators are made relative to."),
          maybe("folder", ValueKind::Id, StableId{1},

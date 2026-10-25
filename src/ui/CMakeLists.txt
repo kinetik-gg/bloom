@@ -392,6 +392,8 @@ target_sources(
         cryptomatte_controller.cpp
         asset_drop.cpp
         asset_drop.hpp
+        import_progress_dialog.cpp
+        import_progress_dialog.hpp
         network_share_paths.cpp
         network_share_paths.hpp
         media_disk_cache_settings.cpp

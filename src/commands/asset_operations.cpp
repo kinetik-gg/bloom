@@ -159,189 +159,314 @@ OperationResult EnsureFontAsset::apply(document::Draft& draft) const {
     return OperationResult::applied({{"asset", *id}});
 }
 
+namespace {
+constexpr std::size_t kMaxImportItems = 100000;
+std::string lowerExtension(const std::filesystem::path& path) {
+    auto extension = path.extension().string();
+    std::ranges::transform(extension, extension.begin(), [](const unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+    });
+    return extension;
+}
+bool isImageExtension(const std::string& extension) {
+    return extension == ".png" || extension == ".jpg" || extension == ".jpeg" ||
+           extension == ".exr" || extension == ".tif" || extension == ".tiff";
+}
+// The artist's words for a LUT the reader refused; the reader's own names are identifiers.
+std::string lutRefusal(const color::LutError error) {
+    switch (error) {
+    case color::LutError::MissingFile:
+        return "The LUT file is missing";
+    case color::LutError::UnsupportedFormat:
+        return "This LUT format is not supported";
+    case color::LutError::FileTooLarge:
+    case color::LutError::EdgeTooLarge:
+        return "The LUT is larger than Bloom supports";
+    case color::LutError::MalformedFile:
+    case color::LutError::InvalidPixel:
+        return "The LUT file is damaged or malformed";
+    case color::LutError::ChangedFile:
+        return "The LUT file changed while it was being read";
+    case color::LutError::HelperMemoryLimit:
+        return "The LUT needs more memory than Bloom allows for reading it";
+    case color::LutError::HelperDeadline:
+        return "Reading the LUT took too long";
+    case color::LutError::TransformBuildFailed:
+        return "The LUT could not be turned into a colour transform";
+    default:
+        return "The LUT reader stopped unexpectedly";
+    }
+}
+struct PreparedItem final {
+    enum class Outcome : std::uint8_t { Prepared, Failed, Interrupted };
+    Outcome outcome = Outcome::Failed;
+    document::AssetRecord asset;
+    std::string diagnostic;
+    std::optional<media::provider::Unavailable> media;
+    [[nodiscard]] static PreparedItem prepared(document::AssetRecord asset) {
+        return {Outcome::Prepared, std::move(asset), {}, {}};
+    }
+    [[nodiscard]] static PreparedItem
+    failed(std::string diagnostic, std::optional<media::provider::Unavailable> media = {}) {
+        return {Outcome::Failed, {}, std::move(diagnostic), std::move(media)};
+    }
+    [[nodiscard]] static PreparedItem interrupted() { return {Outcome::Interrupted, {}, {}, {}}; }
+};
+// Probes, hashes and (for numbered images) scans one item. Nothing it prepares is visible to the
+// batch until it returns Prepared, so an interrupted item leaves no partial record behind.
+PreparedItem prepareItem(const std::filesystem::path& path,
+                         const std::filesystem::path& projectDirectory,
+                         const std::function<bool()>& cancel,
+                         const std::function<void(std::uint64_t)>& frames) {
+    const auto extension = lowerExtension(path);
+    if (color::isLutExtension(path)) {
+        const auto lut = color::readLutFile(path, cancel);
+        if (lut.error == color::LutError::HelperCancelled)
+            return PreparedItem::interrupted();
+        if (lut.error != color::LutError::None)
+            return PreparedItem::failed(lutRefusal(lut.error));
+        document::AssetRecord asset;
+        asset.kind = document::AssetKind::Lut;
+        asset.locator = locator(path, projectDirectory);
+        asset.contentDigest = lut.digest;
+        return PreparedItem::prepared(std::move(asset));
+    }
+    if (media::video::isVideoExtension(path)) {
+        media::video::VideoDecodeSession session(path);
+        const auto probed = session.probe(cancel);
+        const auto* probe = std::get_if<media::provider::ProbeResult>(&probed);
+        if (!probe) {
+            const auto& unavailable = std::get<media::provider::Unavailable>(probed);
+            if (unavailable.reason == media::provider::Error::Cancelled)
+                return PreparedItem::interrupted();
+            return PreparedItem::failed(unavailable.detail, unavailable);
+        }
+        auto metadata = assetMetadata(*probe);
+        auto* asset = std::get_if<document::AssetRecord>(&metadata);
+        if (!asset) {
+            const auto& unavailable = std::get<media::provider::Unavailable>(metadata);
+            if (unavailable.reason == media::provider::Error::Cancelled)
+                return PreparedItem::interrupted();
+            return PreparedItem::failed(unavailable.detail, unavailable);
+        }
+        asset->locator = locator(path, projectDirectory);
+        return PreparedItem::prepared(std::move(*asset));
+    }
+    if (extension == ".wav" || extension == ".mp3") {
+        const auto probe = media::audio::probeAudio(path, {}, cancel);
+        if (!probe.value())
+            return PreparedItem::failed("Audio import failed: " +
+                                        media::audio::describeAudioError(*probe.error()));
+        document::AssetRecord asset;
+        asset.kind = document::AssetKind::Audio;
+        asset.locator = locator(path, projectDirectory);
+        const auto digest = digestFile(path, cancel);
+        if (!digest.value())
+            return PreparedItem::failed("Audio import failed: " +
+                                        media::audio::describeAudioError(*digest.error()));
+        asset.contentDigest = *digest.value();
+        asset.rate = probe.value()->rate;
+        asset.channels = probe.value()->channels;
+        asset.frames = probe.value()->frames;
+        asset.duration = probe.value()->duration;
+        return PreparedItem::prepared(std::move(asset));
+    }
+    const auto probe = media::probeImage(path, cancel);
+    if (!probe.value.has_value()) {
+        if (probe.cancelled)
+            return PreparedItem::interrupted();
+        return PreparedItem::failed(probe.diagnostic);
+    }
+    auto sequence = media::scanSequence(path, cancel, [&](std::uint64_t found, std::uint64_t) {
+        if (frames)
+            frames(found);
+    });
+    if (!sequence.value.has_value()) {
+        if (sequence.cancelled)
+            return PreparedItem::interrupted();
+        return PreparedItem::failed(sequence.diagnostic);
+    }
+    document::AssetRecord asset;
+    asset.locator = locator(path, projectDirectory);
+    asset.contentDigest = probe.value->contentDigest;
+    asset.width = probe.value->width;
+    asset.height = probe.value->height;
+    // New imports keep the legacy interpretation at Auto.  The probe's format,
+    // bit-depth, and EXR chromaticities are metadata for the config-managed resolver;
+    // copying its compatibility enum here would turn a fresh automatic import into an
+    // authored legacy override and would bypass the EXR chromaticity rules.
+    asset.interpretation.colorSpace = document::AssetColorSpace::Auto;
+    asset.interpretation.alphaAssociation =
+        probe.value->alphaAssociation == media::ImageAlphaAssociation::Premultiplied
+            ? document::AssetAlphaAssociation::Premultiplied
+            : document::AssetAlphaAssociation::Straight;
+    if (sequence.value->members.size() > 1) {
+        asset.kind = document::AssetKind::Sequence;
+        const auto& scan = *sequence.value;
+        asset.manifest.pattern = scan.pattern;
+        asset.manifest.padding = scan.padding;
+        asset.manifest.first = scan.first;
+        asset.manifest.last = scan.last;
+        asset.manifest.gaps = scan.gaps;
+        core::Sha256Hasher hasher;
+        for (const auto& member : scan.members) {
+            asset.manifest.members.push_back(
+                {member.frame, locator(member.path, projectDirectory), member.contentDigest});
+            const auto frame = std::to_string(member.frame) + ":";
+            const auto digest = member.contentDigest.toLowercaseHex();
+            if (!hasher.update(std::as_bytes(std::span(frame))) ||
+                !hasher.update(std::as_bytes(std::span(digest))))
+                return PreparedItem::failed("Sequence digest failed");
+        }
+        asset.contentDigest = hasher.finalize();
+        asset.locator = asset.manifest.members.front().locator;
+    }
+    return PreparedItem::prepared(std::move(asset));
+}
+} // namespace
+bool isImportableMediaFile(const std::filesystem::path& path) {
+    const auto extension = lowerExtension(path);
+    return isImageExtension(extension) || extension == ".wav" || extension == ".mp3" ||
+           media::video::isVideoExtension(path) || color::isLutExtension(path);
+}
 ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
                            const std::filesystem::path& projectDirectory,
                            const std::function<bool()>& cancel,
-                           const std::function<void(std::uint64_t, std::uint64_t)>& progress) {
-    // One failing file never aborts the batch: it is recorded with its own diagnostic and the
-    // remaining files import. Only cancellation or an unusable request refuses the whole batch.
-    const auto failFile = [this](const std::filesystem::path& path, std::string diagnostic,
-                                 std::optional<media::provider::Unavailable> media = {}) {
-        failures_.push_back({path, std::move(diagnostic), std::move(media)});
+                           const ImportProgressCallback& progress) {
+    const auto stopRequested = [&] {
+        if (!cancel)
+            return false;
+        try {
+            return cancel();
+        } catch (...) {
+            return true;
+        }
     };
-    const auto cancelImport = [this] {
-        diagnostic_ = "Image import cancelled";
-        assets_.clear();
+    const auto report = [&](std::size_t completed, std::size_t total,
+                            const std::filesystem::path& current, std::uint64_t frames = 0) {
+        if (!progress)
+            return;
+        ImportProgress state;
+        state.completed = completed;
+        state.total = total;
+        state.current = current;
+        state.sequenceFrames = frames;
+        progress(state);
     };
-    if (paths.size() > 100000) {
+    const auto refuseCancelled = [this] {
+        diagnostic_ = "Import cancelled";
+        cancelled_ = true;
+    };
+    if (paths.size() > kMaxImportItems) {
         diagnostic_ = "Too many files selected";
         return;
     }
-    std::set<std::filesystem::path> admitted;
+    // Items: chosen files in order, each chosen folder replaced by the media files below it
+    // (sorted, hidden entries skipped), duplicates dropped, and the members of one image sequence
+    // collapsed to the first of them -- scanning that one finds the rest.
+    std::vector<std::filesystem::path> items;
+    std::set<std::filesystem::path> seen;
+    std::set<std::string> sequences;
+    const auto admit = [&](const std::filesystem::path& path) {
+        std::error_code error;
+        auto normal = std::filesystem::absolute(path, error);
+        normal = (error ? path : normal).lexically_normal();
+        if (!seen.insert(normal).second)
+            return;
+        if (const auto key = media::sequenceKey(path); key && !sequences.insert(*key).second)
+            return;
+        items.push_back(path);
+    };
     for (const auto& path : paths) {
-        try {
-            if (admitted.contains(std::filesystem::absolute(path).lexically_normal()))
-                continue;
-            if (cancel && cancel()) {
-                cancelImport();
+        std::error_code error;
+        if (!std::filesystem::is_directory(path, error)) {
+            admit(path);
+            continue;
+        }
+        report(0, 0, path);
+        std::vector<std::filesystem::path> found;
+        std::filesystem::recursive_directory_iterator walk(
+            path, std::filesystem::directory_options::skip_permission_denied, error);
+        for (const std::filesystem::recursive_directory_iterator end; !error && walk != end;
+             walk.increment(error)) {
+            if (stopRequested()) {
+                refuseCancelled();
                 return;
             }
-            auto extension = path.extension().string();
-            std::ranges::transform(extension, extension.begin(), [](const unsigned char value) {
-                return static_cast<char>(std::tolower(value));
-            });
-            if (color::isLutExtension(path)) {
-                const auto lut = color::readLutFile(path, cancel);
-                if (lut.error != color::LutError::None) {
-                    failFile(path,
-                             "LUT import refused: " + std::string(color::lutErrorName(lut.error)));
-                    continue;
-                }
-                document::AssetRecord asset;
-                asset.kind = document::AssetKind::Lut;
-                asset.locator = locator(path, projectDirectory);
-                asset.contentDigest = lut.digest;
-                assets_.push_back(std::move(asset));
-                admitted.insert(std::filesystem::absolute(path).lexically_normal());
-                if (progress)
-                    progress(assets_.size() + failures_.size(), paths.size());
+            // An entry that cannot be inspected (a broken link) is passed over, not a folder error.
+            std::error_code entryError;
+            const auto name = walk->path().filename().native();
+            if (!name.empty() && name.front() == '.') {
+                if (walk->is_directory(entryError))
+                    walk.disable_recursion_pending();
                 continue;
             }
-            if (media::video::isVideoExtension(path)) {
-                media::video::VideoDecodeSession session(path);
-                const auto probed = session.probe(cancel);
-                const auto* probe = std::get_if<media::provider::ProbeResult>(&probed);
-                if (!probe) {
-                    const auto& unavailable = std::get<media::provider::Unavailable>(probed);
-                    if (unavailable.reason == media::provider::Error::Cancelled) {
-                        cancelImport();
-                        return;
-                    }
-                    failFile(path, unavailable.detail, unavailable);
-                    continue;
-                }
-                auto metadata = assetMetadata(*probe);
-                auto* asset = std::get_if<document::AssetRecord>(&metadata);
-                if (!asset) {
-                    const auto& unavailable = std::get<media::provider::Unavailable>(metadata);
-                    if (unavailable.reason == media::provider::Error::Cancelled) {
-                        cancelImport();
-                        return;
-                    }
-                    failFile(path, unavailable.detail, unavailable);
-                    continue;
-                }
-                asset->locator = locator(path, projectDirectory);
-                assets_.push_back(std::move(*asset));
-                admitted.insert(std::filesystem::absolute(path).lexically_normal());
-                if (progress)
-                    progress(assets_.size() + failures_.size(), paths.size());
-                continue;
+            if (walk->is_regular_file(entryError) && isImportableMediaFile(walk->path()))
+                found.push_back(walk->path());
+            if (found.size() > kMaxImportItems) {
+                diagnostic_ = "Too many files selected";
+                return;
             }
-            if (extension == ".wav" || extension == ".mp3") {
-                const auto probe = media::audio::probeAudio(path, {}, cancel);
-                if (!probe.value()) {
-                    failFile(path, "Audio import failed: " +
-                                       media::audio::describeAudioError(*probe.error()));
-                    continue;
-                }
-                document::AssetRecord asset;
-                asset.kind = document::AssetKind::Audio;
-                asset.locator = locator(path, projectDirectory);
-                const auto digest = digestFile(path, cancel);
-                if (!digest.value()) {
-                    failFile(path, "Audio import failed: " +
-                                       media::audio::describeAudioError(*digest.error()));
-                    continue;
-                }
-                asset.contentDigest = *digest.value();
-                asset.rate = probe.value()->rate;
-                asset.channels = probe.value()->channels;
-                asset.frames = probe.value()->frames;
-                asset.duration = probe.value()->duration;
-                assets_.push_back(std::move(asset));
-                admitted.insert(std::filesystem::absolute(path).lexically_normal());
-                if (progress)
-                    progress(assets_.size() + failures_.size(), paths.size());
-                continue;
-            }
-            const auto probe = media::probeImage(path, cancel);
-            if (!probe.value.has_value()) {
-                if (probe.cancelled) {
-                    cancelImport();
-                    return;
-                }
-                failFile(path, probe.diagnostic);
-                continue;
-            }
-            auto sequence = media::scanSequence(path, cancel, progress);
-            if (!sequence.value.has_value()) {
-                if (sequence.cancelled) {
-                    cancelImport();
-                    return;
-                }
-                failFile(path, sequence.diagnostic);
-                continue;
-            }
-            document::AssetRecord asset;
-            asset.locator = locator(path, projectDirectory);
-            asset.contentDigest = probe.value->contentDigest;
-            asset.width = probe.value->width;
-            asset.height = probe.value->height;
-            // New imports keep the legacy interpretation at Auto.  The probe's format,
-            // bit-depth, and EXR chromaticities are metadata for the config-managed resolver;
-            // copying its compatibility enum here would turn a fresh automatic import into an
-            // authored legacy override and would bypass the EXR chromaticity rules.
-            asset.interpretation.colorSpace = document::AssetColorSpace::Auto;
-            asset.interpretation.alphaAssociation =
-                probe.value->alphaAssociation == media::ImageAlphaAssociation::Premultiplied
-                    ? document::AssetAlphaAssociation::Premultiplied
-                    : document::AssetAlphaAssociation::Straight;
-            if (sequence.value->members.size() > 1) {
-                asset.kind = document::AssetKind::Sequence;
-                const auto& scan = *sequence.value;
-                asset.manifest.pattern = scan.pattern;
-                asset.manifest.padding = scan.padding;
-                asset.manifest.first = scan.first;
-                asset.manifest.last = scan.last;
-                asset.manifest.gaps = scan.gaps;
-                core::Sha256Hasher hasher;
-                bool digested = true;
-                for (const auto& member : scan.members) {
-                    asset.manifest.members.push_back({member.frame,
-                                                      locator(member.path, projectDirectory),
-                                                      member.contentDigest});
-                    const auto frame = std::to_string(member.frame) + ":";
-                    const auto digest = member.contentDigest.toLowercaseHex();
-                    if (!hasher.update(std::as_bytes(std::span(frame))) ||
-                        !hasher.update(std::as_bytes(std::span(digest)))) {
-                        digested = false;
-                        break;
-                    }
-                }
-                if (!digested) {
-                    failFile(path, "Sequence digest failed");
-                    continue;
-                }
-                for (const auto& member : scan.members)
-                    admitted.insert(std::filesystem::absolute(member.path).lexically_normal());
-                asset.contentDigest = hasher.finalize();
-                asset.locator = asset.manifest.members.front().locator;
-            } else
-                admitted.insert(std::filesystem::absolute(path).lexically_normal());
-            assets_.push_back(std::move(asset));
-            if (progress)
-                progress(assets_.size() + failures_.size(), paths.size());
-        } catch (const std::exception& error) {
-            failFile(path, error.what());
+        }
+        if (error) {
+            failures_.push_back({path, "The folder could not be read", {}});
+            continue;
+        }
+        if (found.empty()) {
+            failures_.push_back({path, "The folder holds no media files Bloom can import", {}});
+            continue;
+        }
+        std::ranges::sort(found);
+        for (const auto& file : found)
+            admit(file);
+        if (items.size() > kMaxImportItems) {
+            diagnostic_ = "Too many files selected";
+            return;
         }
     }
-    // A cancelled batch never commits a partial result.
-    if (!assets_.empty() && cancel && cancel()) {
-        cancelImport();
-        return;
+    // One failing item never aborts the batch: it is recorded with its own diagnostic and the
+    // remaining items import. Cancellation keeps every item already prepared.
+    const auto total = items.size();
+    for (std::size_t index = 0; index < total; ++index) {
+        const auto& path = items[index];
+        if (stopRequested()) {
+            cancelled_ = true;
+            notImported_ = total - index;
+            break;
+        }
+        report(index, total, path);
+        if (stopRequested()) {
+            cancelled_ = true;
+            notImported_ = total - index;
+            break;
+        }
+        PreparedItem item;
+        try {
+            item = prepareItem(path, projectDirectory, stopRequested,
+                               [&](std::uint64_t found) { report(index, total, path, found); });
+        } catch (const std::exception& error) {
+            item = PreparedItem::failed(error.what());
+        }
+        // A failure that coincides with cancellation is the cancellation reaching the file's
+        // reader (an audio probe reports it as an error), not a fault of the file.
+        if (item.outcome == PreparedItem::Outcome::Interrupted ||
+            (item.outcome == PreparedItem::Outcome::Failed && stopRequested())) {
+            cancelled_ = true;
+            notImported_ = total - index;
+            break;
+        }
+        if (item.outcome == PreparedItem::Outcome::Failed)
+            failures_.push_back({path, std::move(item.diagnostic), std::move(item.media)});
+        else
+            assets_.push_back(std::move(item.asset));
     }
-    if (assets_.empty() && !failures_.empty()) {
+    if (!cancelled_)
+        report(total, total, {});
+    if (!assets_.empty())
+        return;
+    if (cancelled_) {
+        refuseCancelled();
+    } else if (!failures_.empty()) {
         // Nothing importable: the batch is refused with the (first) per-file reason.
         mediaDiagnostic_ = failures_.front().media;
         diagnostic_ = failures_.size() == 1 ? failures_.front().diagnostic

@@ -849,8 +849,14 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
         emit diagnostic(tr("Media import requires an idle, editable project"));
         return;
     }
-    if (busy_ || paths.empty())
+    if (paths.empty())
         return;
+    if (busy_) {
+        if (!relinkId.isValid())
+            emit diagnostic(tr("Another import is still running; import these files when it "
+                               "finishes"));
+        return;
+    }
     std::vector<std::filesystem::path> files;
     for (const auto& path : paths)
         files.push_back(nativePath(path));
@@ -858,22 +864,18 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
     base_ = session_.snapshot();
     const bool relinkFont = relinkId.isValid() && base_->project().findAsset(relinkId) != nullptr &&
                             base_->project().findAsset(relinkId)->kind == document::AssetKind::Font;
+    // A batch import shares its progress, per-item outcome and the artist's stop request (#377).
+    auto shared = relinkId.isValid() ? nullptr : std::make_shared<ImportShared>();
     auto submission = scheduler_.submit<OperationHandle>(
         runtime::TaskRequest(
             "Import media",
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
-        [files = std::move(files), directory, relinkId, relinkFont,
-         folder](runtime::TaskContext& context) {
+        [files = std::move(files), directory, relinkId, relinkFont, folder, shared,
+         hook = importItemHook_](runtime::TaskContext& context) {
             auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
             std::vector<runtime::TaskDiagnostic> warnings;
             auto cancel = [&] { return context.isCancellationRequested(); };
-            auto progress = [&](std::uint64_t done, std::uint64_t total) {
-                context.reportProgress({.phase = "Importing media",
-                                        .subphase = "Probing and scanning",
-                                        .completed = done,
-                                        .total = total});
-            };
             if (relinkFont) {
                 const auto catalogue = platform::FontCatalogueProvider{}.enumerate(cancel);
                 const auto found = std::ranges::find_if(
@@ -892,10 +894,45 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
                 *result = std::make_unique<commands::RelinkAsset>(relinkId, files.front(),
                                                                   directory, cancel);
             else {
+                {
+                    const std::lock_guard lock(shared->mutex);
+                    shared->workerThread = std::this_thread::get_id();
+                }
+                // The application's cancel discards the import; the artist's stop keeps what
+                // finished (ImportAssets keeps every prepared item when either stops it).
+                const auto stop = [&] {
+                    return context.isCancellationRequested() ||
+                           shared->stop.load(std::memory_order_acquire);
+                };
+                const auto progress = [&](const commands::ImportProgress& state) {
+                    {
+                        const std::lock_guard lock(shared->mutex);
+                        shared->progress = state;
+                    }
+                    const auto name = state.current.filename().u8string();
+                    context.reportProgress(
+                        {.phase = "Importing media",
+                         .subphase = std::string(name.begin(), name.end()),
+                         .completed = state.completed,
+                         .total = state.total == 0 ? std::nullopt
+                                                   : std::optional<std::uint64_t>(state.total)});
+                    if (hook && state.total > 0 && !state.current.empty() &&
+                        state.sequenceFrames == 0)
+                        hook(state.completed);
+                };
                 auto prepared =
-                    std::make_unique<commands::ImportAssets>(files, directory, cancel, progress);
+                    std::make_unique<commands::ImportAssets>(files, directory, stop, progress);
                 prepared->setFolder(folder);
+                {
+                    const std::lock_guard lock(shared->mutex);
+                    shared->failures = prepared->failures();
+                    shared->cancelled = prepared->cancelled();
+                    shared->notImported = prepared->notImported();
+                }
                 if (context.isCancellationRequested())
+                    return runtime::TaskResult<OperationHandle>::cancelled();
+                // Stopped before anything finished: nothing to add, and not a failure.
+                if (prepared->cancelled() && prepared->prepared().empty())
                     return runtime::TaskResult<OperationHandle>::cancelled();
                 if (!prepared->diagnostic().empty()) {
                     // Nothing importable: report every file's own reason, not only the first.
@@ -937,9 +974,30 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
         return;
     }
     import_ = std::move(submission.handle);
+    importShared_ = std::move(shared);
     busy_ = true;
     bridge_.wake();
     emit activityChanged();
+    if (importShared_)
+        emit importStarted();
+}
+AssetController::ImportProgressState AssetController::importProgress() const {
+    ImportProgressState state;
+    if (!importShared_)
+        return state;
+    const std::lock_guard lock(importShared_->mutex);
+    state.completed = importShared_->progress.completed;
+    state.total = importShared_->progress.total;
+    state.current =
+        QString::fromStdU16String(importShared_->progress.current.filename().u16string());
+    state.sequenceFrames = importShared_->progress.sequenceFrames;
+    state.stopping = importShared_->stop.load(std::memory_order_acquire);
+    state.workerThread = importShared_->workerThread;
+    return state;
+}
+void AssetController::stopImport() {
+    if (importShared_ && busy_)
+        importShared_->stop.store(true, std::memory_order_release);
 }
 void AssetController::refresh() {
     // The picker requests its catalogue lazily. Once requested, a composition working-space edit
@@ -1707,6 +1765,80 @@ void AssetController::emitImportFailures(const std::vector<runtime::TaskDiagnost
                         .arg(issues.size())
                         .arg(QString::fromStdString(issues.front().summary)));
 }
+void AssetController::finishImport(runtime::TaskResult<OperationHandle>& result) {
+    const auto shared = std::exchange(importShared_, nullptr);
+    ImportReport report;
+    const auto skip = [&](const std::filesystem::path& path, const QString& reason) {
+        report.skipped.push_back({QString::fromStdU16String(path.filename().u16string()), reason});
+    };
+    bool stoppedByArtist = false;
+    if (shared) {
+        const std::lock_guard lock(shared->mutex);
+        for (const auto& failure : shared->failures)
+            skip(failure.path, QString::fromStdString(failure.diagnostic));
+        report.cancelled = shared->cancelled;
+        report.notImported = shared->notImported;
+        stoppedByArtist = shared->stop.load(std::memory_order_acquire);
+    }
+    if (result.state() == runtime::TaskState::Succeeded && result.value().has_value() &&
+        *result.value()) {
+        if (!host_.liveDocumentAndStack().first || !base_ ||
+            base_->project().id() != session_.snapshot().project().id() ||
+            base_->revision() != session_.snapshot().revision()) {
+            emit diagnostic(tr("Project changed during import; import the files again"));
+            report.failure = tr("The project changed during the import, so nothing was added. "
+                                "Import the files again.");
+        } else {
+            std::vector<std::string> preparedPaths;
+            std::vector<std::filesystem::path> preparedFiles;
+            if (const auto* import =
+                    dynamic_cast<const commands::ImportAssets*>((*result.value())->get())) {
+                for (const auto& asset : import->prepared()) {
+                    preparedPaths.push_back(asset.locator.path);
+                    preparedFiles.push_back(
+                        asset.kind == document::AssetKind::Sequence &&
+                                !asset.manifest.members.empty()
+                            ? std::filesystem::path(asset.manifest.pattern)
+                            : std::filesystem::path(std::u8string(
+                                  reinterpret_cast<const char8_t*>(asset.locator.path.data()),
+                                  asset.locator.path.size())));
+                }
+            }
+            // Successful files commit as one undoable transaction; every skipped file is
+            // reported with its own diagnostic.
+            commands::Transaction transaction("Import Assets", base_->revision());
+            if (transaction.add(std::move(**result.value()))) {
+                const auto executed = session_.executeTransaction(std::move(transaction));
+                std::vector<std::string> added;
+                for (const auto& output : executed.outputs)
+                    if (const auto* id = std::get_if<document::AssetId>(&output.output.id);
+                        id && output.output.name == "asset")
+                        if (const auto* asset = session_.snapshot().project().findAsset(*id))
+                            added.push_back(asset->locator.path);
+                report.imported = added.size();
+                // A file the project already holds (same file, same bytes) is not added twice.
+                for (std::size_t index = 0; index < preparedPaths.size(); ++index)
+                    if (std::ranges::find(added, preparedPaths[index]) == added.end())
+                        skip(preparedFiles[index], tr("Already in the project"));
+            }
+            emitImportFailures(result.diagnostics());
+        }
+    } else if (result.state() == runtime::TaskState::Failed) {
+        emitImportFailures(result.diagnostics());
+        if (report.skipped.empty() && !result.diagnostics().empty())
+            report.failure = QString::fromStdString(result.diagnostics().front().summary);
+    } else if (result.state() == runtime::TaskState::Cancelled) {
+        if (stoppedByArtist) {
+            report.cancelled = true;
+        } else {
+            report.discarded = true;
+            if (shared)
+                emit diagnostic(tr("The import was stopped before anything was added"));
+        }
+    }
+    if (shared)
+        emit importFinished(report);
+}
 void AssetController::poll() {
     for (auto task = imagePartTasks_.begin(); task != imagePartTasks_.end();) {
         auto result = task->second.tryTakeResult();
@@ -1750,23 +1882,7 @@ void AssetController::poll() {
         if (result) {
             busy_ = false;
             emit activityChanged();
-            if (result->state() == runtime::TaskState::Succeeded && result->value().has_value() &&
-                *result->value()) {
-                if (!host_.liveDocumentAndStack().first || !base_ ||
-                    base_->project().id() != session_.snapshot().project().id() ||
-                    base_->revision() != session_.snapshot().revision()) {
-                    emit diagnostic(tr("Project changed during import; import the files again"));
-                } else {
-                    // Successful files commit as one undoable transaction; every skipped file is
-                    // reported with its own diagnostic.
-                    commands::Transaction transaction("Import Assets", base_->revision());
-                    if (transaction.add(std::move(**result->value())))
-                        static_cast<void>(session_.executeTransaction(std::move(transaction)));
-                    emitImportFailures(result->diagnostics());
-                }
-            }
-            if (result->state() == runtime::TaskState::Failed)
-                emitImportFailures(result->diagnostics());
+            finishImport(*result);
             base_.reset();
             if (!pendingReloads_.empty()) {
                 const auto next = pendingReloads_.front();

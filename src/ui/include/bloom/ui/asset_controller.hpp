@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QStringList>
 #include <QTimer>
+#include <atomic>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/document/document.hpp>
@@ -14,9 +15,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <thread>
 
 class QWidget;
 namespace bloom::media::cache {
@@ -39,6 +43,35 @@ struct AudioProcessingAdmission final {
 class AssetController final : public QObject {
     Q_OBJECT
   public:
+    // One item a batch import skipped, with its plain reason (#373).
+    struct ImportSkip final {
+        QString file;
+        QString reason;
+    };
+    // How a batch import ended (#377). Imported items were committed as one undoable transaction.
+    struct ImportReport final {
+        std::size_t imported = 0;
+        std::vector<ImportSkip> skipped;
+        // Items never finished because the artist cancelled, including the one in progress.
+        std::size_t notImported = 0;
+        bool cancelled = false;
+        // The import stopped for the application (closing the project or quitting); nothing
+        // was added and no summary is due.
+        bool discarded = false;
+        // Why nothing at all was added when no single file is to blame; empty otherwise.
+        QString failure;
+    };
+    // Where the running batch import stands, read from the import worker's latest report.
+    struct ImportProgressState final {
+        std::size_t completed = 0;
+        // Zero while chosen folders are still being searched.
+        std::size_t total = 0;
+        QString current;
+        std::uint64_t sequenceFrames = 0;
+        bool stopping = false;
+        // The thread preparing the import, so tests can prove it is not the interface thread.
+        std::optional<std::thread::id> workerThread;
+    };
     // `mediaDiskCache` is the same content-addressed disk cache the runtime evaluator consults
     // (docs/architecture/media-io.md "Disk cache"): proxy/thumbnail decodes go through it too, so
     // an asset the evaluator already decoded to disk never re-decodes here, and vice versa. Null
@@ -72,6 +105,16 @@ class AssetController final : public QObject {
     [[nodiscard]] std::filesystem::path sourcePath(document::AssetId id) const;
     void remove(document::AssetId id);
     [[nodiscard]] bool busy() const noexcept { return busy_; }
+    // True while a batch import (not a relink or reload) is being prepared.
+    [[nodiscard]] bool importing() const noexcept { return busy_ && importShared_ != nullptr; }
+    [[nodiscard]] ImportProgressState importProgress() const;
+    // Cancel from the import dialog: the worker stops at its next safe point and the items
+    // already prepared are still imported, as one undoable step. cancel() discards instead.
+    void stopImport();
+    // Test seam: runs on the import worker before each item is prepared, with its index.
+    void setImportItemHookForTesting(std::function<void(std::size_t)> hook) {
+        importItemHook_ = std::move(hook);
+    }
     [[nodiscard]] bool missing(document::AssetId id) const;
     // Present but not displayable as it is (empty when fine or missing); see Preview::problem.
     [[nodiscard]] QString problem(document::AssetId id) const;
@@ -121,9 +164,22 @@ class AssetController final : public QObject {
     void nodeThumbnailsChanged();
     void activityChanged();
     void diagnostic(QString message);
+    void importStarted();
+    void importFinished(const bloom::ui::AssetController::ImportReport& report);
 
   private:
     using OperationHandle = std::shared_ptr<std::unique_ptr<commands::Operation>>;
+    // Shared between a batch import's worker and this controller: the worker's latest progress
+    // and final per-item outcome, and the artist's stop request.
+    struct ImportShared final {
+        mutable std::mutex mutex;
+        commands::ImportProgress progress;
+        std::optional<std::thread::id> workerThread;
+        std::vector<commands::ImportFailure> failures;
+        std::size_t notImported = 0;
+        bool cancelled = false;
+        std::atomic<bool> stop{false};
+    };
     struct Preview {
         QImage image;
         std::string key;
@@ -174,10 +230,13 @@ class AssetController final : public QObject {
     void poll();
     // One status notice for an import job's diagnostics; the Jobs panel keeps each one.
     void emitImportFailures(const std::vector<runtime::TaskDiagnostic>& issues);
+    void finishImport(runtime::TaskResult<OperationHandle>& result);
     CompositionSession& session_;
     std::optional<document::AssetFolderId> importFolder_;
     // Reload Footage requests waiting for the import worker, run one after another.
     std::deque<document::AssetId> pendingReloads_;
+    std::shared_ptr<ImportShared> importShared_;
+    std::function<void(std::size_t)> importItemHook_;
     ProjectHost& host_;
     runtime::TaskScheduler& scheduler_;
     TaskUiBridge& bridge_;

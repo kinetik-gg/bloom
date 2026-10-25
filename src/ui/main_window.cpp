@@ -1,3 +1,4 @@
+#include "import_progress_dialog.hpp"
 #include "preferences_window.hpp"
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -123,6 +124,12 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                 });
     }
     updatePurgeActions();
+    // Every batch import shows its progress and outcome over this window (#377).
+    if (auto* assets = compositionSession_.assetController()) {
+        auto* importProgress = new ImportProgressPresenter(*assets, *this);
+        connect(importProgress, &ImportProgressPresenter::notice, this,
+                [this](const QString& message) { statusStrip_->showTransientMessage(message); });
+    }
 
     connect(&projectHost_, &ProjectHost::dirtyStateChanged, this, &MainWindow::updateWindowTitle);
     connect(&projectHost_, &ProjectHost::sessionReplaced, this, &MainWindow::updateWindowTitle);

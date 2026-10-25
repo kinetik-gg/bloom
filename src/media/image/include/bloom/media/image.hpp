@@ -330,4 +330,9 @@ encodeImage(const ImageProviderEncodeRequest& request, const ImageProvider* prov
 [[nodiscard]] ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
                                                          const CancelImageWork& cancel = {},
                                                          const ImageProgress& progress = {});
+// What every numbered member of one image sequence shares: its directory and the name around the
+// frame number. Two paths with the same key are members of one sequence, so scanSequence() of
+// either finds the other. Nullopt for a name without a frame number or a format that never
+// sequences.
+[[nodiscard]] std::optional<std::string> sequenceKey(const std::filesystem::path& path);
 } // namespace bloom::media

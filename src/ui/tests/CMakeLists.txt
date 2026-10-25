@@ -1300,6 +1300,18 @@ target_link_libraries(bloom_assets_organization_test PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_assets_organization_test)
 bloom_add_test(NAME bloom.ui.asset-organization COMMAND bloom_assets_organization_test LABELS unit ui)
 
+add_executable(bloom_import_progress_test import_progress_tests.cpp)
+target_include_directories(bloom_import_progress_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_import_progress_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_import_progress_test)
+bloom_add_test(
+    NAME bloom.ui.import-progress
+    COMMAND bloom_import_progress_test
+    LABELS unit ui media
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 add_executable(bloom_network_share_paths_test network_share_paths_tests.cpp)
 target_include_directories(bloom_network_share_paths_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_network_share_paths_test PRIVATE bloom_ui Qt6::Test)

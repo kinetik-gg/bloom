@@ -179,20 +179,40 @@ class RelinkFontAsset final : public Operation {
     document::AssetRecord replacement_;
 };
 
-// Construct on an import worker: preparation probes, hashes and scans. apply only copies the
-// prepared records into a draft, so publishing the command never performs media I/O.
 // One file a batch import could not admit, with its own reason. The rest of the batch imports.
 struct ImportFailure final {
     std::filesystem::path path;
     std::string diagnostic;
     std::optional<media::provider::Unavailable> media;
 };
+// Where a batch import stands. It is reported on the import worker before each item and once when
+// the batch is finished. An item is one chosen file, or one image sequence however many of its
+// members were chosen; a chosen folder contributes the items found inside it.
+struct ImportProgress final {
+    std::size_t completed = 0;
+    // Zero while chosen folders are still being searched.
+    std::size_t total = 0;
+    // The item being prepared, or the folder being searched; empty once the batch is finished.
+    std::filesystem::path current;
+    // Members found so far while the current item is scanned as an image sequence.
+    std::uint64_t sequenceFrames = 0;
+};
+using ImportProgressCallback = std::function<void(const ImportProgress&)>;
+// The file types a chosen folder contributes: images, image-sequence members, video, audio and
+// LUTs, by extension and ignoring case. A file chosen on its own is always tried.
+[[nodiscard]] bool isImportableMediaFile(const std::filesystem::path& path);
+// Construct on an import worker: preparation searches folders, probes, hashes and scans. apply only
+// copies the prepared records into a draft, so publishing the command never performs media I/O.
+//
+// Cancellation (#377) stops at the next safe point: the item in progress is abandoned and every
+// item already prepared is kept, so a cancelled batch still applies what finished. Only a batch
+// with nothing prepared is refused.
 class ImportAssets final : public Operation {
   public:
     ImportAssets(const std::vector<std::filesystem::path>& paths,
                  const std::filesystem::path& projectDirectory,
                  const std::function<bool()>& cancel = {},
-                 const std::function<void(std::uint64_t, std::uint64_t)>& progress = {});
+                 const ImportProgressCallback& progress = {});
     [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.asset.import"; }
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
     // The Assets folder the new assets land in, after its existing assets (#378). A folder removed
@@ -204,10 +224,14 @@ class ImportAssets final : public Operation {
     [[nodiscard]] const std::vector<document::AssetRecord>& prepared() const noexcept {
         return assets_;
     }
-    // Non-empty only when the whole batch is refused: cancellation, an unusable request, or no
-    // importable file (then it names the first per-file failure).
+    // Non-empty only when the whole batch is refused: cancellation before anything was prepared,
+    // an unusable request, or no importable file (then it names the first per-file failure).
     [[nodiscard]] const std::string& diagnostic() const noexcept { return diagnostic_; }
     [[nodiscard]] const std::vector<ImportFailure>& failures() const noexcept { return failures_; }
+    // True when cancellation stopped the batch before its last item.
+    [[nodiscard]] bool cancelled() const noexcept { return cancelled_; }
+    // Items a cancelled batch never finished, including the one it abandoned.
+    [[nodiscard]] std::size_t notImported() const noexcept { return notImported_; }
     [[nodiscard]] const std::optional<media::provider::Unavailable>&
     mediaDiagnostic() const noexcept {
         return mediaDiagnostic_;
@@ -219,6 +243,8 @@ class ImportAssets final : public Operation {
     std::vector<ImportFailure> failures_;
     std::string diagnostic_;
     std::optional<media::provider::Unavailable> mediaDiagnostic_;
+    std::size_t notImported_ = 0;
+    bool cancelled_ = false;
 };
 class RelinkAsset final : public Operation {
   public:
