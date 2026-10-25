@@ -169,6 +169,18 @@ std::vector<LayerDropItem> layerDropItems(const QMimeData& mime,
 }
 
 namespace {
+// As in After Effects, the new layers end up selected (a session change, not a document edit),
+// the uppermost one primary, so Properties shows it at once.
+void selectDroppedLayers(CompositionSession& session, const commands::CommandResult& result) {
+    std::vector<document::LayerId> layers;
+    for (const auto& output : result.outputs)
+        if (output.output.name == "layer")
+            if (const auto* id = std::get_if<document::LayerId>(&output.output.id))
+                layers.push_back(*id);
+    for (auto it = layers.rbegin(); it != layers.rend(); ++it)
+        session.selectLayer(*it, it != layers.rbegin());
+}
+
 class LayerDropTarget final : public QObject {
   public:
     LayerDropTarget(QObject& target, CompositionSession& session, LayerDropHooks hooks)
@@ -210,10 +222,12 @@ class LayerDropTarget final : public QObject {
                                               session_.snapshot().revision());
             transaction.emplace<AddDroppedLayers>(session_.compositionId(), items,
                                                   placement(hit, drop->modifiers()));
-            if (!session_.executeTransaction(std::move(transaction)).succeeded()) {
+            const auto result = session_.executeTransaction(std::move(transaction));
+            if (!result.succeeded()) {
                 drop->ignore();
                 return true;
             }
+            selectDroppedLayers(session_, result);
             drop->acceptProposedAction();
             return true;
         }
@@ -265,8 +279,10 @@ class LayerDropTarget final : public QObject {
                     commands::Transaction transaction(layerDropLabel(items),
                                                       session->snapshot().revision());
                     transaction.emplace<AddDroppedLayers>(composition, items, place);
-                    if (!session->executeTransaction(std::move(transaction)).succeeded())
+                    const auto result = session->executeTransaction(std::move(transaction));
+                    if (!result.succeeded())
                         return QObject::tr("No layers were added");
+                    selectDroppedLayers(*session, result);
                     return items.size() == 1 ? QObject::tr("Added 1 layer")
                                              : QObject::tr("Added %1 layers").arg(items.size());
                 };

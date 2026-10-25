@@ -442,7 +442,9 @@ a nested composition layer; the active composition itself, fonts and LUTs are no
 layer keeps its media's own length up to the composition's duration (layer-owned time, ADR 0024,
 exactly as the add-layer commands set it): a sequence its frame count, a video or a nested
 composition its duration, a still the composition's duration from its start. The whole drop is one undoable step, built from the ordinary add-layer commands and the
-Timeline's own move. Files dropped from a file manager are imported first through the import
+Timeline's own move. The new layers are then selected, the uppermost primary, so Properties shows
+it at once; the selection is session state, not part of the undoable edit. Files dropped from a file
+manager are imported first through the import
 progress modal ([ADR 0029](../decisions/0029-import-progress-and-cancellation.md)); once the import
 commits, their layers are added at the place they were dropped as a second undoable step, and the
 status bar (or the import summary) says how many layers were added

@@ -38,7 +38,10 @@ items at once, optionally end to end. The owner asked for the same behaviour.
    layers inside the import transaction was rejected: the import is prepared on a worker against a
    snapshot, while layer placement depends on the composition the artist is looking at when the
    import finishes.
-5. **Indicators.** The layer stack reuses the reorder insertion line; the lanes paint the same
+5. **Selection.** After a drop (and after a file drop's follow-up) the new layers are selected,
+   the uppermost primary, as in After Effects. This is a session selection change, not part of
+   the transaction.
+6. **Indicators.** The layer stack reuses the reorder insertion line; the lanes paint the same
    line and an Accent time marker. Both are session-only presentation.
 
 ## Consequences

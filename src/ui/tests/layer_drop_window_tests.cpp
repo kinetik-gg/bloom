@@ -294,7 +294,11 @@ int run(int argc, char** argv) {
     require(first->inPoint == frame(48) && first->outPoint == frame(72) &&
                 second->inPoint == frame(72) && second->outPoint == frame(84),
             "the sequenced layers run end to end from frame 48");
-    session.selectLayer(layers[0].layerId);
+    // The drop selected its three layers, the uppermost primary, so Properties shows it.
+    const auto* primary = std::get_if<document::LayerId>(&session.selection().primary);
+    require(primary != nullptr && *primary == layers[0].layerId &&
+                session.selectedNodes().size() == 3,
+            "the dropped layers are selected");
     QApplication::processEvents();
     capture(QStringLiteral("05-multi-item-drop"), *window);
     require(session.undo() && session.composition()->graph().layerStack().entries().size() == 2,

@@ -125,7 +125,7 @@ first on top, and all start together. Hold **Alt** when you drop to place them o
 instead, each starting where the previous one ends. A composition becomes a nested composition
 layer. Every layer keeps the length of its media, up to the length of the composition: a sequence
 lasts its frames, a video or a nested composition its duration. One **Undo** removes the whole
-drop.
+drop. The new layers are selected afterwards, so their properties show straight away.
 
 Dropping items on the Viewer adds them on top at the playhead, centred in the composition. Files
 dragged from your file manager onto the Timeline or the Viewer are imported first, with the usual

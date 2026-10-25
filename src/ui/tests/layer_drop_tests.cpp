@@ -46,6 +46,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -179,6 +180,16 @@ struct Fixture final {
         return session.executeTransaction(std::move(transaction)).succeeded();
     }
 };
+
+// The drop selected exactly `layers`, the first one primary (a session change, not an edit).
+bool selected(const Fixture& fixture, const std::vector<document::LayerId>& layers) {
+    const auto* primary = std::get_if<document::LayerId>(&fixture.session.selection().primary);
+    std::set<document::NodeId> nodes;
+    for (const auto layer : layers)
+        nodes.insert(fixture.layer(layer).nodeId);
+    return !layers.empty() && primary != nullptr && *primary == layers.front() &&
+           fixture.session.selectedNodes() == nodes;
+}
 
 // The nested composition a layer reads, through its image input.
 document::CompositionId nestedSourceOf(const document::Composition& composition,
@@ -357,6 +368,8 @@ void timelineDrops(Fixture& fixture) {
         expect(first.inPoint == frame(30) && first.outPoint == frame(36) &&
                    second.inPoint == frame(36) && second.outPoint == frame(48),
                "in selection order (shotB then shotA), end to end from frame 30");
+        expect(selected(fixture, {layers[0], layers[1]}),
+               "both new layers are selected after the drop, the uppermost primary");
     }
     expect(session.undo() && fixture.stack() == solids, "the Alt drop is one undo step");
 
@@ -424,6 +437,7 @@ void fileDropImportsThenAddsLayers(Fixture& fixture) {
     expect(layers.size() == solids.size() + 1 && fixture.layer(layers[0]).inPoint == frame(40),
            "a layer for it starts at the dropped frame, on top");
     expect(followUp == "Added 1 layer", "the import report says what the drop added");
+    expect(selected(fixture, {layers[0]}), "the layer the file drop added is selected");
     expect(session.undo() && fixture.stack() == solids &&
                session.snapshot().project().assets().size() == assetsBefore + 1,
            "the first undo removes the layer and keeps the import");
@@ -453,6 +467,7 @@ void viewerDrop(Fixture& fixture) {
     expect(layers.size() == before.size() + 2 && fixture.layer(layers[0]).inPoint == frame(20) &&
                fixture.layer(layers[1]).inPoint == frame(20),
            "the layers go on top at the playhead");
+    expect(selected(fixture, {layers[0], layers[1]}), "the Viewer drop selects its new layers");
     const auto& composition = fixture.composition();
     for (std::size_t index = 0; index < 2 && index < layers.size(); ++index) {
         const auto* node = composition.graph().findNode(fixture.layer(layers[index]).nodeId);
