@@ -1,5 +1,6 @@
 #include "asset_data_thumbnail.hpp"
 #include "asset_thumbnail_display.hpp"
+#include "colour_space_names.hpp"
 #include "network_share_paths.hpp"
 #include <QDir>
 #include <QFileDialog>
@@ -695,7 +696,7 @@ QImage AssetController::nodeThumbnail(document::NodeId id) const {
 QString AssetController::inputColorSpaceDisplay(const document::AssetId id) const {
     const auto found = previews_.find(id);
     if (found != previews_.end() && !found->second.inputColorSpaceName.empty()) {
-        const auto name = QString::fromStdString(found->second.inputColorSpaceName);
+        const auto name = colourSpaceDisplayName(found->second.inputColorSpaceName);
         if (found->second.inputColorSpaceAutomatic && found->second.inputColorSpaceAssumed)
             return tr("Auto (assumed: %1)").arg(name);
         return found->second.inputColorSpaceAutomatic ? tr("Auto (resolved: %1)").arg(name) : name;
@@ -704,7 +705,7 @@ QString AssetController::inputColorSpaceDisplay(const document::AssetId id) cons
     if (!asset)
         return {};
     if (!asset->interpretation.inputColorSpaceId.empty())
-        return QString::fromStdString(asset->interpretation.inputColorSpaceId);
+        return colourSpaceDisplayName(asset->interpretation.inputColorSpaceId);
     switch (asset->interpretation.colorSpace) {
     case document::AssetColorSpace::Raw:
         return tr("Raw data (no colour conversion)");
@@ -716,6 +717,16 @@ QString AssetController::inputColorSpaceDisplay(const document::AssetId id) cons
         return tr("Auto (from media tags)");
     }
     return {};
+}
+QString AssetController::inputColorSpaceName(const document::AssetId id) const {
+    const auto found = previews_.find(id);
+    return found == previews_.end() || found->second.inputColorSpaceName.empty()
+               ? QString{}
+               : colourSpaceDisplayName(found->second.inputColorSpaceName);
+}
+bool AssetController::inputColorSpaceAutomatic(const document::AssetId id) const {
+    const auto found = previews_.find(id);
+    return found != previews_.end() && found->second.inputColorSpaceAutomatic;
 }
 bool AssetController::inputColorSpaceAssumed(const document::AssetId id) const {
     const auto found = previews_.find(id);

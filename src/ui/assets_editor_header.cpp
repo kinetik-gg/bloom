@@ -2,6 +2,7 @@
 // of the After Effects Project panel. It reads the project and the asset controller's published
 // state only; thumbnails are decoded by the controller's worker.
 #include "assets_editor_internal.hpp"
+#include "colour_space_names.hpp"
 #include <QHBoxLayout>
 #include <QPixmap>
 #include <QTreeWidget>
@@ -11,6 +12,7 @@
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/composition_thumbnail_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/thumbnail.hpp>
 
@@ -85,21 +87,23 @@ void AssetsEditor::refreshSelectionHeader() {
         switch (asset->kind) {
         case document::AssetKind::Video:
             if (const auto rate = videoFrameRate(*asset))
-                timing = tr("Δ %1, %2 fps")
-                             .arg(timecodeText(asset->duration, *rate), frameRateText(*rate));
+                timing = tr("%1, %2 fps")
+                             .arg(durationText(framesAt(asset->duration, *rate), *rate),
+                                  frameRateText(*rate));
             else
-                timing = tr("Δ %1 s").arg(asset->duration.toSeconds(), 0, 'f', 2);
+                timing = tr("%1 s").arg(asset->duration.toSeconds(), 0, 'f', 2);
             break;
         case document::AssetKind::Audio:
-            timing = tr("Δ %1 s").arg(asset->duration.toSeconds(), 0, 'f', 2);
+            timing = tr("%1 s").arg(asset->duration.toSeconds(), 0, 'f', 2);
             if (asset->rate > 0)
                 timing += tr(" · %1 Hz · %2 ch").arg(asset->rate).arg(asset->channels);
             break;
-        case document::AssetKind::Sequence:
-            timing = asset->manifest.members.size() == 1
-                         ? tr("1 frame")
-                         : tr("%1 frames").arg(asset->manifest.members.size());
+        case document::AssetKind::Sequence: {
+            const auto rate = sequenceRate(session_.composition());
+            timing = tr("%1, %2 fps")
+                         .arg(durationText(sequenceFrames(*asset), rate), frameRateText(rate));
             break;
+        }
         default:
             break;
         }
@@ -114,20 +118,26 @@ void AssetsEditor::refreshSelectionHeader() {
         else if (controller && controller->dataOnly(asset->id))
             colour = tr("Data channels only — use its Channels output");
         else if (pictures) {
-            auto input = controller ? controller->inputColorSpaceDisplay(asset->id) : QString{};
+            // The plain name of the space, then the alpha, then the colour note once (#380).
+            auto input = controller ? controller->inputColorSpaceName(asset->id) : QString{};
+            if (input.isEmpty())
+                input = controller ? controller->inputColorSpaceDisplay(asset->id) : QString{};
+            else if (controller->inputColorSpaceAutomatic(asset->id) &&
+                     !controller->inputColorSpaceAssumed(asset->id))
+                input = tr("%1 (from the file)").arg(input);
             if (input.isEmpty())
                 input = asset->interpretation.inputColorSpaceId.empty()
                             ? tr("Automatic")
-                            : QString::fromStdString(asset->interpretation.inputColorSpaceId);
+                            : colourSpaceDisplayName(asset->interpretation.inputColorSpaceId);
             colour = tr("Colour: %1").arg(input);
-            if (const auto warning =
-                    controller ? controller->inputColorSpaceWarning(asset->id) : QString{};
-                !warning.isEmpty())
-                colour += QStringLiteral(" — ") + warning;
             colour += asset->interpretation.alphaAssociation ==
                               document::AssetAlphaAssociation::Premultiplied
                           ? tr(" · Premultiplied alpha")
                           : tr(" · Straight alpha");
+            if (const auto warning =
+                    controller ? controller->inputColorSpaceWarning(asset->id) : QString{};
+                !warning.isEmpty())
+                colour += QStringLiteral(" · ") + warning;
         }
         usage = usageText(assetUsage(project, asset->id));
         if (controller && !controller->missing(asset->id))
@@ -144,10 +154,16 @@ void AssetsEditor::refreshSelectionHeader() {
         glyph = kit::IconId::Composition;
         tint = kit::Color::DataComposition;
         kind = tr("Composition · %1 × %2").arg(format.width()).arg(format.height());
-        timing = tr("Δ %1, %2 fps")
-                     .arg(timecodeText(composition->duration(), format.frameRate()),
+        timing = tr("%1, %2 fps")
+                     .arg(durationText(framesAt(composition->duration(), format.frameRate()),
+                                       format.frameRate()),
                           frameRateText(format.frameRate()));
         usage = usageText(compositionUsage(project, composition->id()));
+        // A rendered frame of the composition, prepared on a worker (#380); the kind glyph
+        // stands in until the first one arrives.
+        if (auto* thumbnails = session_.compositionThumbnails())
+            if (const auto image = thumbnails->thumbnail(composition->id()); !image.isNull())
+                picture = QPixmap::fromImage(image);
     } else if (const auto folder = folderId(item)) {
         const auto* record = project.findAssetFolder(*folder);
         name = record ? QString::fromStdString(record->name) : QString{};

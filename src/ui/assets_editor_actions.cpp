@@ -1,6 +1,6 @@
 #include "asset_input_picker_guard.hpp"
 #include "assets_editor_internal.hpp"
-#include <QDesktopServices>
+#include "reveal_in_file_manager.hpp"
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QHBoxLayout>
@@ -9,7 +9,6 @@
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QTreeWidgetItemIterator>
-#include <QUrl>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <bloom/commands/asset_operations.hpp>
@@ -443,11 +442,8 @@ void AssetsEditor::removeSelected() {
 void AssetsEditor::revealInFileManager(const document::AssetId id) {
     const auto* controller = session_.assetController();
     const auto path = controller ? controller->sourcePath(id) : std::filesystem::path{};
-    if (path.empty())
-        return;
-    // Opening the containing folder is the behaviour every platform's file manager supports.
-    QDesktopServices::openUrl(
-        QUrl::fromLocalFile(QString::fromStdU16String(path.parent_path().u16string())));
+    // Selects the file where the platform's file manager can, else opens its folder (#380).
+    ui::revealInFileManager(path, this);
 }
 void AssetsEditor::newCompositionFromSelection() {
     const auto snapshot = session_.snapshot();

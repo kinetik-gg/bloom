@@ -1879,6 +1879,14 @@ target_include_directories(bloom_ui_timeline_key_projection_test PRIVATE ..)
 bloom_enable_warnings(bloom_ui_timeline_key_projection_test)
 bloom_add_test(NAME bloom.ui.timeline-key-projection COMMAND bloom_ui_timeline_key_projection_test LABELS ui unit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# #380: the Assets header's composition frames, prepared on a worker and kept per revision.
+add_executable(bloom_ui_composition_thumbnail_test composition_thumbnail_tests.cpp)
+target_link_libraries(bloom_ui_composition_thumbnail_test PRIVATE bloom_ui)
+target_include_directories(bloom_ui_composition_thumbnail_test PRIVATE ..)
+bloom_enable_warnings(bloom_ui_composition_thumbnail_test)
+bloom_add_test(NAME bloom.ui.composition-thumbnail COMMAND bloom_ui_composition_thumbnail_test
+    LABELS ui integration TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+
 add_executable(bloom_ui_timeline_layer_timing_test timeline_layer_timing_gesture_tests.cpp)
 target_link_libraries(bloom_ui_timeline_layer_timing_test PRIVATE bloom_ui)
 target_include_directories(bloom_ui_timeline_layer_timing_test PRIVATE ..)

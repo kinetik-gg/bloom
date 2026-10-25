@@ -53,6 +53,7 @@ struct Vec2d;
 namespace bloom::ui {
 class AssetController;
 class CryptomatteController;
+class CompositionThumbnailController;
 
 // A selected keyframe (issue #84; docs/architecture/animation-and-time.md: "Keyframe selection
 // stores the stable KeyframeId; row index and screen position are presentation details"). curveId
@@ -202,6 +203,12 @@ class CompositionSession final : public QObject {
     }
     [[nodiscard]] CryptomatteController* cryptomatteController() const noexcept {
         return cryptomatteController_;
+    }
+    void setCompositionThumbnails(CompositionThumbnailController* controller) noexcept {
+        compositionThumbnails_ = controller;
+    }
+    [[nodiscard]] CompositionThumbnailController* compositionThumbnails() const noexcept {
+        return compositionThumbnails_;
     }
 
     CompositionSession(document::Document& document, commands::CommandStack& commandStack,
@@ -738,6 +745,7 @@ class CompositionSession final : public QObject {
 
     AssetController* assetController_ = nullptr;
     CryptomatteController* cryptomatteController_ = nullptr;
+    CompositionThumbnailController* compositionThumbnails_ = nullptr;
 
     void attachCommandObserver();
     [[nodiscard]] bool execute(commands::Transaction&& transaction);

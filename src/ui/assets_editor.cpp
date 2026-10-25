@@ -17,6 +17,7 @@
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/composition_thumbnail_controller.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <memory>
@@ -124,13 +125,19 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
         refreshRows();
         refreshSelectionHeader();
     });
-    connect(&session_, &CompositionSession::compositionChanged, this,
-            &AssetsEditor::updateSelection);
+    connect(&session_, &CompositionSession::compositionChanged, this, [this] {
+        updateSelection();
+        refreshRows();
+        refreshSelectionHeader();
+    });
     if (auto* controller = session_.assetController())
         connect(controller, &AssetController::changed, this, [this] {
             refreshRows();
             refreshSelectionHeader();
         });
+    if (auto* thumbnails = session_.compositionThumbnails())
+        connect(thumbnails, &CompositionThumbnailController::changed, this,
+                &AssetsEditor::refreshSelectionHeader);
     buildHeaderMenus();
     buildFooter();
     rebuild();

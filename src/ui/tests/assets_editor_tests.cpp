@@ -1,5 +1,7 @@
 #include "assets_editor_internal.hpp"
+#include "colour_space_names.hpp"
 #include "editor_chrome_test_support.hpp"
+#include "reveal_in_file_manager.hpp"
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -15,10 +17,12 @@
 #include <QApplication>
 #include <QDialog>
 #include <QHeaderView>
+#include <QImage>
 #include <QLineEdit>
 #include <QMenu>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
 #include <QTreeWidget>
@@ -26,6 +30,7 @@
 #include <QWidget>
 
 #include <cstdio>
+#include <filesystem>
 #include <utility>
 
 namespace {
@@ -114,8 +119,8 @@ void videoAssetRows(TestContext& context) {
         context.expect(item->text(assets::TypeColumn) == "Video", "Type column names the kind");
         context.expect(item->text(assets::SizeColumn) == QStringLiteral("64 × 48"),
                        "Size column shows the frame size");
-        context.expect(item->text(assets::DurationColumn) == "0:00:02:00",
-                       "Duration column shows After Effects timecode at the clip rate");
+        context.expect(item->text(assets::DurationColumn) == "0:00:02:00 (48 frames)",
+                       "Duration column shows timecode at the clip rate with the frame count");
         context.expect(item->text(assets::FrameRateColumn) == "24", "Frame Rate column");
         context.expect(item->text(assets::LocationColumn) == "Video fixture.mov",
                        "File Location column shows the locator");
@@ -153,8 +158,8 @@ void videoAssetRows(TestContext& context) {
                    "selection header thumbnail cell is the 72-pixel cell and never blank");
     context.expect(label("assetsSelectionName") == "Video fixture", "header names the item");
     context.expect(label("assetsSelectionKind") ==
-                       QStringLiteral("Video · 64 × 48 · Δ 0:00:02:00, 24 fps"),
-                   "header states kind, size, duration and rate");
+                       QStringLiteral("Video · 64 × 48 · 0:00:02:00 (48 frames), 24 fps"),
+                   "header states kind, size, duration (one format, no delta) and rate");
     context.expect(label("assetsSelectionUsage") == "Used once in 1 composition",
                    "header counts the layer that uses the clip");
 }
@@ -307,6 +312,115 @@ void contextMenus(TestContext& context) {
                    "New Composition from Selection opens a clip-sized composition with its layer");
 }
 
+// #380: video, sequences and compositions share one duration format, timecode at the item's rate
+// with its frame count, in the Duration column and the selection header. A sequence plays one
+// member per composition frame, so it is timed at the active composition's rate.
+void durationFormat(TestContext& context) {
+    QTemporaryDir directory;
+    context.expect(directory.isValid(), "temporary sequence directory");
+    QImage frame(64, 48, QImage::Format_RGBA8888);
+    frame.fill(Qt::gray);
+    std::vector<std::filesystem::path> paths;
+    for (int index = 1; index <= 24; ++index) {
+        const auto path =
+            directory.filePath(QStringLiteral("shot_%1.png").arg(index, 4, 10, QLatin1Char('0')));
+        context.expect(frame.save(path), "write sequence member");
+        if (index == 1)
+            paths.emplace_back(path.toStdString());
+    }
+    auto seed = document::makeNewProject("Durations", "Main", core::RationalTime::fromInteger(2));
+    document::Document document(std::move(seed.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, seed.initialCompositionId);
+    commands::Transaction import("Import", session.snapshot().revision());
+    import.emplace<commands::ImportAssets>(paths, directory.path().toStdString());
+    context.expect(session.executeTransaction(std::move(import)).succeeded(),
+                   "the sequence imports");
+    ui::AssetsEditor editor(session);
+    auto* tree = editor.findChild<QTreeWidget*>("assetsTree");
+    if (tree == nullptr || session.snapshot().project().assets().empty()) {
+        context.expect(false, "sequence fixture");
+        return;
+    }
+    const auto name = QString::fromStdString(session.snapshot().project().assets().front().name);
+    auto* sequence = findText(*tree, name);
+    auto* composition = findText(*tree, "Main");
+    context.expect(sequence != nullptr &&
+                       sequence->text(assets::DurationColumn) == "0:00:01:00 (24 frames)",
+                   "a 24-frame sequence in a 24 fps composition lasts 0:00:01:00 (24 frames)");
+    context.expect(composition != nullptr &&
+                       composition->text(assets::DurationColumn) == "0:00:02:00 (48 frames)",
+                   "a composition uses the same duration format");
+    const auto label = [&](const char* object) {
+        auto* found = editor.findChild<ui::kit::KLabel*>(QString::fromLatin1(object));
+        return found ? found->toolTip() : QString{};
+    };
+    tree->setCurrentItem(sequence);
+    QApplication::processEvents();
+    context.expect(label("assetsSelectionKind") ==
+                       QStringLiteral("Sequence · 64 × 48 · 0:00:01:00 (24 frames), 24 fps"),
+                   "the header times a sequence like a video");
+    tree->setCurrentItem(findText(*tree, "Main"));
+    QApplication::processEvents();
+    context.expect(label("assetsSelectionKind") ==
+                       QStringLiteral("Composition · 1920 × 1080 · 0:00:02:00 (48 frames), 24 fps"),
+                   "the header times a composition the same way");
+    // A 25 fps composition becomes active: the sequence now lasts 24 frames at 25 fps.
+    commands::Transaction other("Add composition", session.snapshot().revision());
+    other.emplace<commands::AddComposition>(
+        "PAL",
+        *document::CompositionFormat::create(720, 576, core::PixelAspectRatio::square(),
+                                             *document::FrameRate::create(25, 1)),
+        core::RationalTime::fromInteger(2));
+    const auto added = session.executeTransaction(std::move(other));
+    const auto pal = added.outputId<document::CompositionId>(commands::kAddCompositionOutput);
+    context.expect(pal && session.setComposition(*pal), "switch to the 25 fps composition");
+    QApplication::processEvents();
+    sequence = findText(*tree, name);
+    context.expect(sequence != nullptr &&
+                       sequence->text(assets::DurationColumn) == "0:00:00:24 (24 frames)",
+                   "the sequence follows the active composition's rate");
+    context.expect(assets::durationText(1, document::FrameRate::framesPerSecond24()) ==
+                       "0:00:00:01 (1 frame)",
+                   "one frame reads in the singular");
+}
+
+// #380: Bloom Neutral's interchange identifiers read as plain names; other configs' own names
+// are already written for people.
+void colourSpaceNames(TestContext& context) {
+    context.expect(ui::colourSpaceDisplayName("lin_rec709_scene") == "Linear Rec.709",
+                   "lin_rec709_scene reads as Linear Rec.709");
+    context.expect(ui::colourSpaceDisplayName("srgb_rec709_display") == "sRGB",
+                   "srgb_rec709_display reads as sRGB");
+    context.expect(ui::colourSpaceDisplayName("Rec.709 Camera (Bloom)") == "Rec.709 video",
+                   "the synthesized camera space reads as Rec.709 video");
+    context.expect(ui::colourSpaceDisplayName("ACEScg") == "ACEScg" &&
+                       ui::colourSpaceDisplayName("sRGB - Texture") == "sRGB - Texture",
+                   "another config's names are shown as it spells them");
+}
+
+// #380: Reveal in File Manager selects the file where the platform allows it.
+void revealPlans(TestContext& context) {
+    using ui::RevealPlan;
+    using ui::RevealPlatform;
+    const std::filesystem::path file = "/media/shots/plate 01.mov";
+    const auto linux = ui::revealPlan(RevealPlatform::Linux, file);
+    context.expect(linux.kind == RevealPlan::Kind::ShowItems &&
+                       linux.uris == QStringList{"file:///media/shots/plate%2001.mov"} &&
+                       linux.folder == "/media/shots",
+                   "Linux asks FileManager1.ShowItems for the file URI, with the folder to fall "
+                   "back to");
+    const auto mac = ui::revealPlan(RevealPlatform::MacOS, file);
+    context.expect(mac.kind == RevealPlan::Kind::Process && mac.program == "open" &&
+                       mac.arguments == QStringList{"-R", "/media/shots/plate 01.mov"} &&
+                       mac.folder == "/media/shots",
+                   "macOS runs open -R on the file");
+    const auto windows = ui::revealPlan(RevealPlatform::Windows, "C:/Media/Shots/plate 01.mov");
+    context.expect(windows.kind == RevealPlan::Kind::Process && windows.program == "explorer.exe" &&
+                       windows.nativeArguments == R"(/select,"C:\Media\Shots\plate 01.mov")" &&
+                       windows.folder == "C:/Media/Shots",
+                   "Windows runs explorer /select, with the quoted native path");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -417,5 +531,8 @@ int main(int argc, char** argv) {
     videoAssetRows(context);
     sortingAndColumns(context);
     contextMenus(context);
+    durationFormat(context);
+    colourSpaceNames(context);
+    revealPlans(context);
     return context.ok ? 0 : 1;
 }

@@ -33,6 +33,7 @@
 #include <bloom/ui/composition_preview_gpu_scene_stage.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/composition_thumbnail_controller.hpp>
 #include <bloom/ui/cryptomatte_controller.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
@@ -426,6 +427,10 @@ int main(int argc, char* argv[]) try {
     bloom::ui::RamPreviewController ramPreviewController(
         compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline,
         nullptr, gpuPreviewDisplaySubmitter);
+    // #380: the Assets header's composition frames, prepared on a worker by the same pipeline.
+    bloom::ui::CompositionThumbnailController compositionThumbnails(
+        compositionSession, taskScheduler, taskUiBridge, previewPipeline,
+        previewController.effectivePixelStorageByteLimit());
     // The application-lifetime GPU final-render provider is created HERE, once, before the
     // shutdown coordinator that will own its retirement ordering, so it outlives every coordinator
     // callback and every export attempt. It reuses the same app-relative bundled loader the
@@ -478,6 +483,9 @@ int main(int argc, char* argv[]) try {
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
                      &cryptomatteController, &bloom::ui::CryptomatteController::cancel);
+    QObject::connect(&shutdownCoordinator,
+                     &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
+                     &compositionThumbnails, &bloom::ui::CompositionThumbnailController::cancel);
     // Pre-host retirement is installed below once the window exists. The early setup path
     // has no Viewer pins, but still stops the producer before closing the host owner.
     shutdownCoordinator.setPackedHostRetirement(

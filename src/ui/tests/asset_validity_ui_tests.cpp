@@ -6,24 +6,29 @@
 #include "cryptomatte_fixture_support.hpp"
 
 #include <QApplication>
+#include <QElapsedTimer>
+#include <QImage>
 #include <QProcess>
 #include <QStandardPaths>
-#include <QElapsedTimer>
 #include <QStringList>
 #include <QTest>
+#include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
+#include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/asset.hpp>
 #include <bloom/document/composition_settings.hpp>
-#include <bloom/commands/asset_operations.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/input_color_context.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/asset_controller.hpp>
+#include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/window_status_bar.hpp>
@@ -104,6 +109,9 @@ struct Outcome final {
     std::string colourNote;
     std::string inputDisplay;
     bool assumed = false;
+    // The Assets selection header's facts line and colour line for the asset (#380).
+    std::string headerKind;
+    std::string headerColour;
     // After choosing the config's Rec.709 video space (the fix the problem names).
     bool thumbnailAfterChoice = false;
 };
@@ -132,6 +140,21 @@ Outcome importAndInspect(const std::filesystem::path& path, const bool chooseRec
     outcome.colourNote = harness.controller->inputColorSpaceWarning(asset.id).toStdString();
     outcome.inputDisplay = harness.controller->inputColorSpaceDisplay(asset.id).toStdString();
     outcome.assumed = harness.controller->inputColorSpaceAssumed(asset.id);
+    {
+        // The selection header reads the same controller state the tree does.
+        ui::AssetsEditor editor(harness.session);
+        auto* tree = editor.findChild<QTreeWidget*>("assetsTree");
+        for (QTreeWidgetItemIterator it(tree); tree && *it; ++it)
+            if ((*it)->text(0) == QString::fromStdString(asset.name))
+                tree->setCurrentItem(*it);
+        QCoreApplication::processEvents();
+        const auto line = [&](const char* name) {
+            auto* label = editor.findChild<ui::kit::KLabel*>(name);
+            return label ? label->toolTip().toStdString() : std::string{};
+        };
+        outcome.headerKind = line("assetsSelectionKind");
+        outcome.headerColour = line("assetsSelectionColour");
+    }
     if (chooseRec709) {
         const auto config = runtime::detail::resolveInputColorConfig(harness.session.colorIntent());
         if (config && !config->rec709VideoColorSpaceId().empty()) {
@@ -244,6 +267,18 @@ int main(int argc, char** argv) {
                "a Cryptomatte-only EXR sequence is data-only with an ID-colour thumbnail");
         expect(crypto.kind == std::to_string(static_cast<int>(document::AssetKind::Sequence)),
                "a Cryptomatte-only EXR sequence is classified as a sequence");
+        // #380: an sRGB PNG's header colour line reads "sRGB", never the config identifier.
+        {
+            QImage image(16, 16, QImage::Format_RGB32);
+            image.fill(Qt::darkCyan);
+            const auto png = folder / "plain.png";
+            image.save(QString::fromStdString(png.string()));
+            const auto still = importAndInspect(png);
+            report("png still", still);
+            expect(still.headerColour.starts_with("Colour: sRGB (from the file)") &&
+                       still.headerColour.find("srgb_rec709_display") == std::string::npos,
+                   "a PNG header names its colour space sRGB, got " + still.headerColour);
+        }
         // Untagged video (owner decision 2026-10-24): Auto no longer refuses. It assumes the size
         // convention (Rec.709 for HD, Rec.601 for SD), shows a thumbnail and the visible note
         // naming the fix, and its audio still decodes; choosing Rec.709 explicitly still works.
@@ -257,6 +292,24 @@ int main(int argc, char** argv) {
                    label + ": the assumption is a visible note naming its fix");
             expect(video.inputDisplay.rfind("Auto (assumed: ", 0) == 0,
                    label + ": the input colour display says the space was assumed");
+            // #380: the header names the space plainly and states the assumption once.
+            const auto count = [&](const std::string& part) {
+                std::size_t found = 0;
+                for (auto at = video.headerColour.find(part); at != std::string::npos;
+                     at = video.headerColour.find(part, at + part.size()))
+                    ++found;
+                return found;
+            };
+            expect(video.headerColour.starts_with("Colour: ") && count("lin_rec709_scene") == 0 &&
+                       count("srgb_rec709_display") == 0 && count("(Bloom)") == 0,
+                   label + ": the header shows a plain colour-space name, got " +
+                       video.headerColour);
+            expect(count("Colour tags missing") == 1 && count("assumed") == 1,
+                   label + ": the header shows the assumed-colour note once");
+            expect(video.headerKind.find(" frames), ") != std::string::npos &&
+                       video.headerKind.find("Δ") == std::string::npos,
+                   label + ": the header shows the duration as timecode with frames, got " +
+                       video.headerKind);
             if (hasAudio)
                 expect(video.audio.empty(), label + ": its audio decodes");
             expect(video.thumbnailAfterChoice,

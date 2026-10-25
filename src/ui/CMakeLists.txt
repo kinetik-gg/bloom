@@ -390,8 +390,12 @@ target_sources(
         asset_data_thumbnail.cpp
         asset_data_thumbnail.hpp
         cryptomatte_controller.cpp
+        composition_thumbnail_controller.cpp
+        colour_space_names.hpp
         asset_drop.cpp
         asset_drop.hpp
+        reveal_in_file_manager.cpp
+        reveal_in_file_manager.hpp
         import_progress_dialog.cpp
         import_progress_dialog.hpp
         network_share_paths.cpp
@@ -511,6 +515,7 @@ target_sources(
             include/bloom/ui/assets_editor.hpp
             include/bloom/ui/asset_controller.hpp
             include/bloom/ui/cryptomatte_controller.hpp
+            include/bloom/ui/composition_thumbnail_controller.hpp
             include/bloom/ui/media_disk_cache_settings.hpp
             include/bloom/ui/node_editor.hpp
             include/bloom/ui/node_layout_arrange.hpp
@@ -571,6 +576,16 @@ target_link_libraries(
 )
 target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler bloom_media_image bloom_media_cache)
 bloom_enable_warnings(bloom_ui)
+
+# Reveal in File Manager selects the file through the freedesktop.org FileManager1 D-Bus interface
+# on Linux. Without Qt D-Bus the same source opens the containing folder, its supported fallback.
+if(UNIX AND NOT APPLE)
+    find_package(Qt6 6.8 QUIET COMPONENTS DBus)
+    if(TARGET Qt6::DBus)
+        target_link_libraries(bloom_ui PRIVATE Qt6::DBus)
+        target_compile_definitions(bloom_ui PRIVATE BLOOM_UI_HAS_QTDBUS=1)
+    endif()
+endif()
 
 # ViewerGpuPresenter is the only src/ui translation unit that adopts the borrowed VkInstance through
 # Qt's public QVulkanInstance (whose header includes <vulkan/vulkan.h>) and creates a

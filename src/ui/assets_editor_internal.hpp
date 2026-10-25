@@ -13,6 +13,7 @@
 #include <vector>
 
 namespace bloom::document {
+class Composition;
 class Project;
 struct AssetRecord;
 } // namespace bloom::document
@@ -77,6 +78,16 @@ struct Usage final {
 [[nodiscard]] std::optional<document::FrameRate> videoFrameRate(const document::AssetRecord& asset);
 // After Effects style H:MM:SS:FF at `rate` (frames counted with the rate rounded up, as AE does).
 [[nodiscard]] QString timecodeText(core::RationalTime time, document::FrameRate rate);
+[[nodiscard]] QString timecodeForFrames(std::uint64_t frames, document::FrameRate rate);
+// The whole frames `time` spans at `rate`, counted down as the timecode counts them.
+[[nodiscard]] std::uint64_t framesAt(core::RationalTime time, document::FrameRate rate);
+// One duration format (#380) for video, sequences and compositions: the timecode at the item's
+// rate with its frame count, "0:00:02:00 (48 frames)".
+[[nodiscard]] QString durationText(std::uint64_t frames, document::FrameRate rate);
+// A sequence plays one member per composition frame, so it is timed at the active composition's
+// rate (the default composition rate when none is open) over its whole numbered range.
+[[nodiscard]] document::FrameRate sequenceRate(const document::Composition* active);
+[[nodiscard]] std::uint64_t sequenceFrames(const document::AssetRecord& asset);
 [[nodiscard]] QString assetKindText(const document::AssetRecord& asset);
 [[nodiscard]] QString assetLocationText(const document::AssetRecord& asset);
 [[nodiscard]] kit::IconId assetKindIcon(const document::AssetRecord& asset);

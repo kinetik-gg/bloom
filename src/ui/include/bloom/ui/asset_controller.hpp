@@ -134,6 +134,11 @@ class AssetController final : public QObject {
     [[nodiscard]] QImage nodeThumbnail(document::NodeId id) const;
     [[nodiscard]] QString inputColorSpaceDisplay(document::AssetId id) const;
     [[nodiscard]] QString inputColorSpaceWarning(document::AssetId id) const;
+    // The resolved input colour space by its plain name ("Linear Rec.709", "sRGB", or the
+    // config's own name), with nothing added; empty until the worker has resolved it.
+    [[nodiscard]] QString inputColorSpaceName(document::AssetId id) const;
+    // True when Auto chose the space from the media tags (or assumed it).
+    [[nodiscard]] bool inputColorSpaceAutomatic(document::AssetId id) const;
     // True when Auto resolved an untagged or partly tagged video by the size convention; the
     // warning is then the visible "Colour tags missing — assumed …" note.
     [[nodiscard]] bool inputColorSpaceAssumed(document::AssetId id) const;

@@ -43,18 +43,39 @@ std::optional<document::FrameRate> videoFrameRate(const document::AssetRecord& a
                 static_cast<std::uint32_t>(stream.framePeriod.numerator()));
     return std::nullopt;
 }
-QString timecodeText(const core::RationalTime time, const document::FrameRate rate) {
+std::uint64_t framesAt(const core::RationalTime time, const document::FrameRate rate) {
     const auto seconds = std::max(0.0, time.toSeconds());
+    return static_cast<std::uint64_t>(
+        std::floor(seconds * rate.numerator() / rate.denominator() + 1e-9));
+}
+QString timecodeForFrames(const std::uint64_t frames, const document::FrameRate rate) {
     const auto fps = static_cast<std::uint64_t>(
         std::ceil(static_cast<double>(rate.numerator()) / rate.denominator()));
-    const auto frames = static_cast<std::uint64_t>(
-        std::floor(seconds * rate.numerator() / rate.denominator() + 1e-9));
     const auto perHour = fps * 3600;
     return QStringLiteral("%1:%2:%3:%4")
         .arg(frames / perHour)
         .arg((frames / (fps * 60)) % 60, 2, 10, QLatin1Char('0'))
         .arg((frames / fps) % 60, 2, 10, QLatin1Char('0'))
         .arg(frames % fps, 2, 10, QLatin1Char('0'));
+}
+QString timecodeText(const core::RationalTime time, const document::FrameRate rate) {
+    return timecodeForFrames(framesAt(time, rate), rate);
+}
+QString durationText(const std::uint64_t frames, const document::FrameRate rate) {
+    return frames == 1
+               ? QObject::tr("%1 (1 frame)").arg(timecodeForFrames(frames, rate))
+               : QObject::tr("%1 (%2 frames)").arg(timecodeForFrames(frames, rate)).arg(frames);
+}
+document::FrameRate sequenceRate(const document::Composition* active) {
+    return active != nullptr ? active->format().frameRate()
+                             : document::CompositionFormat{}.frameRate();
+}
+std::uint64_t sequenceFrames(const document::AssetRecord& asset) {
+    if (asset.manifest.last >= asset.manifest.first && !asset.manifest.members.empty())
+        return static_cast<std::uint64_t>(static_cast<std::int64_t>(asset.manifest.last) -
+                                          static_cast<std::int64_t>(asset.manifest.first)) +
+               1;
+    return asset.manifest.members.size();
 }
 QString assetKindText(const document::AssetRecord& asset) {
     const auto extension = asset.locator.path.substr(asset.locator.path.find_last_of('.') + 1);
@@ -205,6 +226,11 @@ QString AssetsEditor::rowSignature() const {
         number(composition.format().frameRate().denominator());
         time(composition.duration());
     }
+    // Sequences are timed at the active composition's rate.
+    if (std::ranges::any_of(project.assets(), [](const auto& asset) {
+            return asset.kind == document::AssetKind::Sequence;
+        }))
+        number(session_.compositionId().value());
     signature += QChar(0x1e);
     for (const auto& folder : project.assetFolders()) {
         number(folder.id.value());
@@ -310,8 +336,10 @@ void AssetsEditor::rebuild() {
         item->setText(NameColumn, QString::fromStdString(composition.name()));
         setColumn(item, TypeColumn, tr("Composition"));
         setSize(item, format.width(), format.height());
-        setColumn(item, DurationColumn, timecodeText(composition.duration(), format.frameRate()),
-                  composition.duration().toSeconds());
+        setColumn(
+            item, DurationColumn,
+            durationText(framesAt(composition.duration(), format.frameRate()), format.frameRate()),
+            composition.duration().toSeconds());
         setColumn(item, FrameRateColumn, frameRateText(format.frameRate()),
                   static_cast<double>(format.frameRate().numerator()) /
                       format.frameRate().denominator());
@@ -337,7 +365,8 @@ void AssetsEditor::rebuild() {
         if (video) {
             const auto rate = videoFrameRate(asset);
             setColumn(item, DurationColumn,
-                      rate ? timecodeText(asset.duration, *rate) : audioDuration(asset.duration),
+                      rate ? durationText(framesAt(asset.duration, *rate), *rate)
+                           : audioDuration(asset.duration),
                       asset.duration.toSeconds());
             if (rate)
                 setColumn(item, FrameRateColumn, frameRateText(*rate),
@@ -345,11 +374,12 @@ void AssetsEditor::rebuild() {
         } else if (audio)
             setColumn(item, DurationColumn, audioDuration(asset.duration),
                       asset.duration.toSeconds());
-        else if (sequence)
-            setColumn(item, DurationColumn,
-                      asset.manifest.members.size() == 1
-                          ? tr("1 frame")
-                          : tr("%1 frames").arg(asset.manifest.members.size()));
+        else if (sequence) {
+            const auto rate = sequenceRate(session_.composition());
+            const auto frames = sequenceFrames(asset);
+            setColumn(item, DurationColumn, durationText(frames, rate),
+                      static_cast<double>(frames) * rate.denominator() / rate.numerator());
+        }
         QStringList tags;
         for (const auto& tag : asset.tags)
             tags.push_back(QString::fromStdString(tag));
