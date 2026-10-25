@@ -265,7 +265,8 @@ int main(int argc, char** argv) {
             for (int index = 0; index < tree->topLevelItemCount(); ++index) {
                 const auto* item = tree->topLevelItem(index);
                 if (item->text(0).contains("SC_"))
-                    rowsOk = rowsOk && item->text(1) == "Sequence" && item->text(3) == "2 frames" &&
+                    rowsOk = rowsOk && item->text(1) == "Sequence" &&
+                             item->text(3).endsWith(QStringLiteral(" (2 frames)")) &&
                              item->data(0, Qt::UserRole + 8).toString().isEmpty() &&
                              !item->toolTip(0).contains("Missing") &&
                              !item->toolTip(0).contains("Replace Footage");
