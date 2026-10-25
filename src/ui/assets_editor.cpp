@@ -76,7 +76,9 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     const int column = kit::px(kit::Size::DropdownWidth);
     tree_->setColumnWidth(NameColumn, column * 2);
     tree_->setColumnWidth(LocationColumn, column * 2);
-    for (const auto index : {TypeColumn, SizeColumn, DurationColumn, FrameRateColumn, TagsColumn})
+    // Duration carries the frame count beside the timecode (#380).
+    tree_->setColumnWidth(DurationColumn, column * 2);
+    for (const auto index : {TypeColumn, SizeColumn, FrameRateColumn, TagsColumn})
         tree_->setColumnWidth(index, column);
     header->setSectionHidden(TagsColumn, true);
     tree_->sortByColumn(NameColumn, Qt::AscendingOrder);
