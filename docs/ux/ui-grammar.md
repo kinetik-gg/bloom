@@ -683,9 +683,11 @@ spare height sits below the sections. The interaction contract is in
 **Import Progress Dialog.** Every batch import (#377,
 [ADR 0029](../decisions/0029-import-progress-and-cancellation.md)) shows one application-modal
 `QDialog` titled `Import`, at least `DialogTextWidth` wide, built only from kit parts with `Spacing::M`
-margins and `Spacing::S` between rows. While importing it shows a `KLabel` heading (`Importing 3 of
-12`, `Finding files…`, `Cancelling…`), the item in progress as an elided `UiSmall` `KLabel` in
-`Muted` ink, a full-width `KProgressBar`, and a Secondary `KButton` Cancel at the right. It appears
+margins and `Spacing::S` between rows. While importing it shows an elided `KLabel` heading (`Finding frames…`, `Finding files…`,
+`Importing SC020_SH070_image · sequence`, `Importing 2 of 5: plate.png`, `Cancelling…`), an elided
+`UiSmall` `KLabel` detail in `Muted` ink (`SC020_SH070_image · 522 found`, `Reading frame 120 of
+522`, `Reading file`), a full-width `KProgressBar` (busy while finding, then filled by work units),
+and a Secondary `KButton` Cancel at the right. It appears
 only after `ImportProgressPresenter::kShowDelay` (300 ms) and refreshes every 50 ms from the
 worker's latest report. The summary replaces those rows with the heading (`Import finished`,
 `Import cancelled`, `Nothing was imported`), a counts `KLabel` joined by ` · `, an optional wrapped
@@ -694,9 +696,10 @@ tall: each row is the file name in `Ui` above its reason in wrapped `UiSmall` `M
 `Spacing::S` apart. The one action is a Primary `KButton` Close, which also takes Return.
 
 `KProgressBar` is read-only and never takes focus: a `Field` track with fully rounded ends,
-`ProgressTrack` tall, filled with `Accent` from the start to completed / total. With no total it is
-indeterminate and a third-width `Accent` segment sweeps across the track and back over 1.6 s, held
-centred when motion is reduced. Disabled, the fill fades to `kDisabledOpacity`.
+`ProgressTrack` tall, filled with `Accent` from the start to completed / total. **Busy mode**
+(`setBusy()`, or no total) is for work whose size is not known yet: a third-width `Accent` segment
+sweeps across the track and back over 1.6 s, held centred when motion is reduced. A busy bar is
+never an empty, static track, and a determinate bar is used only once the total is known. Disabled, the fill fades to `kDisabledOpacity`.
 
 Automation names: `importProgressDialog`, `importProgressHeading`, `importProgressFile`,
 `importProgressBar`, `importCancelButton`, `importSummaryCounts`, `importSummaryNote`,

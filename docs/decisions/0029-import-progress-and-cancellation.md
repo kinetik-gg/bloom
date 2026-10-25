@@ -17,11 +17,16 @@ modal that ends with a clear result.
 1. **One import mechanism.** Every batch import the Assets controller prepares (File > Import,
    Add > Import…, the Assets footer, file and folder drops on Assets, Timeline and Nodes) still runs
    as one `ImportAssets` preparation on the blocking-I/O task executor. The worker publishes its
-   progress (items done, item total, the item in progress, frames found while a sequence is scanned)
-   to the controller and to the job's `TaskProgress`; the dialog only reads it. Nothing heavy runs on
+   progress to the controller and to the job's `TaskProgress`; the dialog only reads it. Nothing heavy runs on
    the interface thread.
-2. **Items.** Progress counts items: a chosen file, or one image sequence however many of its members
-   were chosen. A chosen folder contributes the media files below it (images, sequence members,
+2. **Items and work.** An item is a chosen file, or one image sequence however many of its members
+   were chosen. Progress is measured in work, not items: one unit per sequence member (each is read
+   and hashed, the slow part) and one per other item, summed across the batch, so the bar moves
+   through a single long sequence. A first **finding** phase searches chosen folders and lists each
+   sequence's members without opening them, reporting what it found over a busy bar; the **reading**
+   phase then probes and hashes against the known total ("Reading frame 120 of 522"). The heading
+   names the item and adds "n of N" only when several were chosen. (Amended after owner review: the
+   first version counted items, so one long sequence sat at 0 of 1 until it finished.) A chosen folder contributes the media files below it (images, sequence members,
    video, audio and LUTs by extension, ignoring case, sorted, hidden entries skipped); numbered
    members collapse to one sequence item before any probing. A folder with no media is one skipped
    item with a plain reason. Folders expand in the commands layer, so Python, CLI and MCP imports

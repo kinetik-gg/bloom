@@ -201,10 +201,19 @@ file.
 Every import from the rows above (and a dropped folder, which contributes the media files below it)
 shows the import progress modal (#377, [ADR 0029](../decisions/0029-import-progress-and-cancellation.md)).
 It appears after 300 ms, so a quicker import shows nothing; until then window input is held back, so
-the import blocks the window from its start. The modal blocks the application and shows the overall
-bar, `Importing 3 of 12` (a sequence counts once), the file in progress (`Pulse.0001.png · 120
-frames found` while a sequence is scanned, `Looking in <folder>` while a folder is searched) and
-Cancel. The preparation runs on the import worker throughout.
+the import blocks the window from its start. The modal blocks the application and shows a heading,
+a detail line, the bar and Cancel. The preparation runs on the import worker throughout, in two
+phases:
+
+- **Finding**, while chosen folders are searched and each sequence's members are listed (no file is
+  opened, and the amount of work is not known yet): `Finding frames…` with
+  `SC020_SH070_image · 522 found`, or `Finding files…` with `Looking in <folder> · 12 found`, over a
+  busy bar.
+- **Reading**, against a known total: the heading names the item (`Importing SC020_SH070_image ·
+  sequence`, or `Importing plate.png`) and adds `2 of 5:` only when several items were chosen; the
+  detail reads `Reading frame 120 of 522` for a sequence or `Reading file` otherwise. The bar fills by
+  work, one unit per sequence frame (each is read and hashed) and one per other item, summed across
+  the items, so it moves through a single long sequence and never goes back.
 
 | Gesture or control | Action |
 | --- | --- |

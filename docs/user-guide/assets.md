@@ -27,12 +27,17 @@ identities, so organizing them preserves the nodes and layers that already use t
 
 ### Import progress
 
-An import that takes longer than a moment shows its progress: a bar, which file it is on
-("Importing 3 of 12"), and the file's name. An image sequence counts as one file, however many of
-its frames you chose. Bloom waits 300 milliseconds before showing it, so a quick import does not
-flash a window at you. The rest of Bloom waits while the import runs.
+An import that takes longer than a moment shows its progress. First Bloom finds what to import:
+it searches folders you dropped and counts the frames of each image sequence ("Finding frames…
+522 found"), with a moving bar because it does not know the total yet. Then it reads each file and
+the bar fills: a sequence shows "Reading frame 120 of 522", and its name with "· sequence"
+("Importing SC020_SH070_image · sequence"). An image sequence is one item however many of its
+frames you chose, but every frame counts towards the bar, so a long sequence moves it steadily.
+When you import several items the heading also says which one it is on ("Importing 2 of 5: …").
+Bloom waits 300 milliseconds before showing the window, so a quick import does not flash it at you.
+The rest of Bloom waits while the import runs.
 
-Choose **Cancel** (or press Escape) to stop. Bloom finishes at the next safe point: the file it was
+Choose **Cancel** (or press Escape) to stop, while finding or while reading. Bloom finishes at the next safe point: the file it was
 reading is left out, and everything imported before you cancelled is kept. One **Undo** removes
 what was kept.
 
