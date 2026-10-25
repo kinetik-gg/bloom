@@ -83,7 +83,9 @@ void CompositionThumbnailController::request(const document::CompositionId compo
     }
     const auto* record = snapshot.project().findComposition(composition);
     const auto extent = record ? thumbnailExtent(record->format()) : std::nullopt;
-    if (!preparation_ || !extent || bridge_.isShuttingDown())
+    // The worker keeps its own copy of the colour intent's strings.
+    const auto colorIntent = runtime::captureEvaluationColorIntent(session_.colorIntent());
+    if (!preparation_ || !extent || !colorIntent || bridge_.isShuttingDown())
         return;
     // The composition's start, at a proxy extent, through the same preparation the Viewer's
     // analysis uses; the display transform is the session's default view.
@@ -94,7 +96,7 @@ void CompositionThumbnailController::request(const document::CompositionId compo
     identity.requestGeneration = submissions_ + 1;
     identity.time = core::RationalTime{};
     identity.resolution = runtime::ProxyResolution{*extent};
-    identity.colorIntent = session_.colorIntent();
+    identity.colorIntent = *colorIntent;
     runtime::TaskRequest request("Prepare composition thumbnail",
                                  {.kind = runtime::TaskOwnerKind::PanelRequest,
                                   .id = runtime::TaskOwnerId::fromRaw(composition.value())},
