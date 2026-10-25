@@ -46,6 +46,7 @@ class TimelineGraphView;
 class TimelineLayerStack;
 class TimelineRuler;
 class TimelineWorkAreaRow;
+struct LayerDropHit;
 
 // One row of the timeline's layer stack, resolved once per rebuild from the snapshot and then read
 // by both halves of the row (task T1). The left layer-stack column and the right lane region are
@@ -151,6 +152,10 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider, public
     void setGraphEditorEnabled(bool enabled);
     void showEvent(QShowEvent* event) override;
     void updateScrollRange();
+    // #380: where an Assets or file drop at `position` lands (timeline_layer_drop.cpp): a row in
+    // the layer stack, a row and a time over the lanes, otherwise on top at the playhead.
+    [[nodiscard]] LayerDropHit layerDropHit(QPoint position) const;
+    void indicateLayerDrop(const std::optional<LayerDropHit>& hit);
 
     std::set<document::LayerId> expandedLayers_;
     std::set<document::ParameterId> expandedParameters_;
@@ -237,6 +242,10 @@ class TimelineLayerStack final : public kit::KListSurface {
     // doubles as the test seam for the honesty tooltips (the precedent being
     // TimelineRuler::majorTickLabelRectsForTest()).
     [[nodiscard]] QString toolTipAt(QPoint position) const;
+    // The layer row a drop or reorder at `y` inserts above (rowCount(): below the last layer).
+    [[nodiscard]] int insertionRowAt(int y) const noexcept;
+    // The Accent insertion line (`timelineLayerInsertionIndicator`) above `row`; -1 hides it.
+    void showInsertionIndicator(int row);
 
   Q_SIGNALS:
     // Emitted whenever this column's own viewport height changes, so the editor can re-derive the
@@ -317,6 +326,13 @@ class TimelineLaneRegion final : public QWidget {
     void setGraphEditorEnabled(bool enabled);
     [[nodiscard]] bool graphEditorEnabled() const noexcept { return graphEditor_; }
     [[nodiscard]] TimelineGraphView* graphViewForTest() const noexcept { return graphView_; }
+    // A drop from Assets or the file manager (#380): the time marker where the layer would start
+    // and the insertion line above `row` (-1: none). nullopt time hides the marker.
+    void setDropMarker(std::optional<core::RationalTime> time, int row);
+    [[nodiscard]] std::optional<core::RationalTime> dropMarkerTimeForTest() const noexcept {
+        return dropTime_;
+    }
+    [[nodiscard]] int dropMarkerRowForTest() const noexcept { return dropRow_; }
 
     // #358 work counters: playback moves only the playhead strips, and a collapsed layer's key
     // summary is computed once per document state rather than once per paint.
@@ -371,6 +387,8 @@ class TimelineLaneRegion final : public QWidget {
     };
     std::optional<RangeDrag> drag_{};
     std::optional<core::RationalTime> guide_{};
+    std::optional<core::RationalTime> dropTime_{};
+    int dropRow_ = -1;
     bool keyframesVisible_ = true;
     bool snapping_ = true;
     bool graphEditor_ = false;

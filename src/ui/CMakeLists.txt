@@ -394,6 +394,8 @@ target_sources(
         colour_space_names.hpp
         asset_drop.cpp
         asset_drop.hpp
+        layer_drop.cpp
+        layer_drop.hpp
         reveal_in_file_manager.cpp
         reveal_in_file_manager.hpp
         import_progress_dialog.cpp
@@ -448,6 +450,7 @@ target_sources(
         timeline_mask_rows.cpp
         timeline_matte_cell.cpp
         timeline_editor_menus.cpp
+        timeline_layer_drop.cpp
         timeline_frame_math.cpp
         timeline_ruler.cpp
         timeline_graph_math.cpp

@@ -800,8 +800,12 @@ void AssetController::requestImport(QWidget* parent) {
 }
 void AssetController::importFiles(const QStringList& paths) { importFiles(paths, importFolder_); }
 void AssetController::importFiles(const QStringList& paths,
-                                  const std::optional<document::AssetFolderId> folder) {
+                                  const std::optional<document::AssetFolderId> folder,
+                                  ImportFollowUp followUp) {
     prepare(paths, {}, folder);
+    // Kept only for the batch import that just started (not when it was refused).
+    if (importing() && !importFollowUp_)
+        importFollowUp_ = std::move(followUp);
 }
 void AssetController::relink(document::AssetId id, QWidget* parent) {
     if (!host_.canSave())
@@ -1784,6 +1788,7 @@ void AssetController::emitImportFailures(const std::vector<runtime::TaskDiagnost
 }
 void AssetController::finishImport(runtime::TaskResult<OperationHandle>& result) {
     const auto shared = std::exchange(importShared_, nullptr);
+    auto followUp = std::exchange(importFollowUp_, {});
     ImportReport report;
     const auto skip = [&](const std::filesystem::path& path, const QString& reason) {
         report.skipped.push_back({QString::fromStdU16String(path.filename().u16string()), reason});
@@ -1837,6 +1842,14 @@ void AssetController::finishImport(runtime::TaskResult<OperationHandle>& result)
                 for (std::size_t index = 0; index < preparedPaths.size(); ++index)
                     if (std::ranges::find(added, preparedPaths[index]) == added.end())
                         skip(preparedFiles[index], tr("Already in the project"));
+                // In import order, whether just added or already held.
+                const auto& project = session_.snapshot().project();
+                for (const auto& path : preparedPaths)
+                    if (const auto held =
+                            std::ranges::find(project.assets(), path,
+                                              [](const auto& asset) { return asset.locator.path; });
+                        held != project.assets().end())
+                        report.assets.push_back(held->id);
             }
             emitImportFailures(result.diagnostics());
         }
@@ -1853,6 +1866,8 @@ void AssetController::finishImport(runtime::TaskResult<OperationHandle>& result)
                 emit diagnostic(tr("The import was stopped before anything was added"));
         }
     }
+    if (followUp && !report.assets.empty())
+        report.followUp = followUp(report.assets);
     if (shared)
         emit importFinished(report);
 }

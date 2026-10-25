@@ -1,4 +1,5 @@
 #include "asset_drop.hpp"
+#include "layer_drop.hpp"
 #include "node_editor_items.hpp"
 #include <QSignalBlocker>
 #include <bloom/ui/asset_controller.hpp>
@@ -856,14 +857,24 @@ void TimelineLayerStack::mouseMoveEvent(QMouseEvent* event) {
         (event->position().toPoint() - dragStart_).manhattanLength() <
             QApplication::startDragDistance())
         return;
-    insertionRow_ = std::clamp(
-        (static_cast<int>(event->position().y()) + scrollOffset_ + kTimelineRowHeight / 2) /
-            kTimelineRowHeight,
-        0, rowCount());
-    while (insertionRow_ < rowCount() &&
-           entries_[static_cast<std::size_t>(insertionRow_)].rowKind !=
-               TimelineLayerEntry::Kind::Layer)
-        ++insertionRow_;
+    insertionRow_ = insertionRowAt(static_cast<int>(event->position().y()));
+    showInsertionIndicator(insertionRow_);
+    event->accept();
+}
+int TimelineLayerStack::insertionRowAt(const int y) const noexcept {
+    auto row = std::clamp((y + scrollOffset_ + kTimelineRowHeight / 2) / kTimelineRowHeight, 0,
+                          rowCount());
+    while (row < rowCount() &&
+           entries_[static_cast<std::size_t>(row)].rowKind != TimelineLayerEntry::Kind::Layer)
+        ++row;
+    return row;
+}
+void TimelineLayerStack::showInsertionIndicator(const int row) {
+    if (row < 0) {
+        if (insertion_)
+            insertion_->hide();
+        return;
+    }
     if (!insertion_) {
         insertion_ = new QWidget(this);
         insertion_->setObjectName("timelineLayerInsertionIndicator");
@@ -873,10 +884,9 @@ void TimelineLayerStack::mouseMoveEvent(QMouseEvent* event) {
         palette.setColor(QPalette::Window, kit::color(kit::Color::Accent));
         insertion_->setPalette(palette);
     }
-    insertion_->setGeometry(0, rowTop(insertionRow_), width(), kit::px(kit::Spacing::XXS));
+    insertion_->setGeometry(0, rowTop(row), width(), kit::px(kit::Spacing::XXS));
     insertion_->show();
     insertion_->raise();
-    event->accept();
 }
 void TimelineLayerStack::mouseReleaseEvent(QMouseEvent* event) {
     if (event->button() != Qt::LeftButton)
@@ -1630,6 +1640,18 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
             painter.drawLine(QPointF(x, 0), QPointF(x, height()));
         }
     }
+    // A drop in progress (#380): the insertion line continues the layer stack's, and the time
+    // marker shows where the new layers start.
+    if (dropRow_ >= 0)
+        painter.fillRect(QRect(0, rowTop(dropRow_), width(), kit::px(kit::Spacing::XXS)),
+                         kit::color(kit::Color::Accent));
+    if (dropTime_) {
+        if (const auto mapping = ruler_.axisForWidth(width())) {
+            const auto x = static_cast<int>(std::floor(mapping->pixelForTime(*dropTime_)));
+            painter.fillRect(QRect(x, 0, kit::px(kit::Spacing::XXS), height()),
+                             kit::color(kit::Color::Accent));
+        }
+    }
     const auto* composition = session_.composition();
     if (composition == nullptr) {
         return;
@@ -1642,6 +1664,15 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
     // continuous line down all of them and moving it never touches a layout.
     paintPlayheadLine(painter, *axis, session_.currentTime(), height());
     paintedPlayheadX_ = static_cast<int>(std::floor(axis->pixelForTime(session_.currentTime())));
+}
+
+void TimelineLaneRegion::setDropMarker(const std::optional<core::RationalTime> time,
+                                       const int row) {
+    if (dropTime_ == time && dropRow_ == row)
+        return;
+    dropTime_ = time;
+    dropRow_ = row;
+    update();
 }
 
 void TimelineLaneRegion::mousePressEvent(QMouseEvent* event) {
@@ -1871,7 +1902,11 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
                                CompositionPreviewController& previewController, QWidget* parent)
     : QWidget(parent), session_(session) {
     setObjectName("timelineEditor");
-    installAssetDropTarget(*this, session_);
+    // Assets items and files dropped here become layers (#380).
+    installLayerDropTarget(
+        *this, session_,
+        {.hit = [this](const QPoint position) { return layerDropHit(position); },
+         .indicate = [this](const std::optional<LayerDropHit>& hit) { indicateLayerDrop(hit); }});
     setAccessibleName(tr("Layers timeline"));
 
     auto* layout = new QVBoxLayout(this);

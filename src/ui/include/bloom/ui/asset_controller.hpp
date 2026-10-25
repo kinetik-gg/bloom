@@ -60,7 +60,16 @@ class AssetController final : public QObject {
         bool discarded = false;
         // Why nothing at all was added when no single file is to blame; empty otherwise.
         QString failure;
+        // Every asset the committed items resolved to, in import order: the ones just added
+        // and the ones the project already held.
+        std::vector<document::AssetId> assets;
+        // What the import's follow-up did with them ("Added 2 layers"), for the status line and
+        // the summary; empty when there was none.
+        QString followUp;
     };
+    // Runs once the import has committed, with ImportReport::assets, as its own undoable step
+    // (a drop on the Timeline adds layers). Returns a plain sentence for the report, or nothing.
+    using ImportFollowUp = std::function<QString(const std::vector<document::AssetId>&)>;
     // Where the running batch import stands, read from the import worker's latest report (see
     // commands::ImportProgress: items, work units, and the sequence member being read).
     struct ImportProgressState final {
@@ -94,8 +103,9 @@ class AssetController final : public QObject {
     void requestImport(QWidget* parent = nullptr);
     // Imports into the current import folder (see setImportFolder).
     void importFiles(const QStringList& paths);
-    // Imports into `folder`; nullopt is the Assets root.
-    void importFiles(const QStringList& paths, std::optional<document::AssetFolderId> folder);
+    // Imports into `folder`; nullopt is the Assets root. `followUp` runs after the commit.
+    void importFiles(const QStringList& paths, std::optional<document::AssetFolderId> folder,
+                     ImportFollowUp followUp = {});
     // Session state (#378): the Assets folder an import lands in when no drop target names one.
     // The Assets panel keeps it on the selected folder, or the folder of the selected item.
     void setImportFolder(std::optional<document::AssetFolderId> folder) noexcept {
@@ -250,6 +260,7 @@ class AssetController final : public QObject {
     // Reload Footage requests waiting for the import worker, run one after another.
     std::deque<document::AssetId> pendingReloads_;
     std::shared_ptr<ImportShared> importShared_;
+    ImportFollowUp importFollowUp_;
     std::function<void(const commands::ImportProgress&)> importProgressHook_;
     ProjectHost& host_;
     runtime::TaskScheduler& scheduler_;

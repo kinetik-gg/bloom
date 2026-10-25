@@ -211,6 +211,10 @@ void ImportProgressDialog::showSummary(const AssetController::ImportReport& repo
         note = tr("What was imported before you cancelled was kept. One Undo removes it.");
     else if (report.cancelled)
         note = tr("You cancelled before anything was imported.");
+    // What happened next, such as the layers a Timeline drop added.
+    if (!report.followUp.isEmpty())
+        note = note.isEmpty() ? report.followUp + QLatin1Char('.')
+                              : note + QLatin1Char(' ') + report.followUp + QLatin1Char('.');
     note_->setText(note);
     note_->setVisible(!note.isEmpty());
 
@@ -363,9 +367,13 @@ void ImportProgressPresenter::finished(const AssetController::ImportReport& repo
     if (!summary) {
         if (dialog_)
             dialog_->dismiss();
-        if (!report.discarded)
-            emit notice(report.imported == 1 ? tr("Imported 1 asset")
-                                             : tr("Imported %1 assets").arg(report.imported));
+        if (!report.discarded) {
+            auto text = report.imported == 1 ? tr("Imported 1 asset")
+                                             : tr("Imported %1 assets").arg(report.imported);
+            if (!report.followUp.isEmpty())
+                text += QStringLiteral(" · ") + report.followUp;
+            emit notice(text);
+        }
         return;
     }
     auto* dialog = dialog_ ? dialog_.data() : ensureDialog();

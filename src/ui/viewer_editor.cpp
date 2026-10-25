@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "composition_editor_support.hpp"
+#include "layer_drop.hpp"
 #include "layer_mask_support.hpp"
 #include "viewer_editor_text_layout.hpp"
 #include "viewer_tool_geometry.hpp"
@@ -71,6 +72,7 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QWheelEvent>
+#include <QWindow>
 #include <bloom/render/path_raster.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/value_field.hpp>
@@ -1531,6 +1533,8 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
       ramPreview_(ramPreview) {
     setObjectName("viewerEditor");
     setAccessibleName(tr("Composition viewer"));
+    // Assets items dropped on the Viewer become layers at the playhead, centred (#380).
+    installLayerDropTarget(*this, session_);
     auto* tools = new kit::KToolColumn(this);
     toolColumn_ = tools;
     tools->setObjectName("viewerToolColumn");

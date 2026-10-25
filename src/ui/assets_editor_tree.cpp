@@ -224,7 +224,18 @@ QMimeData* AssetTree::mimeData(const QList<QTreeWidgetItem*>& items) const {
             ids += ":f" + QByteArray::number(static_cast<qulonglong>(folder->value()));
         }
     }
-    // Timeline, Viewer and Nodes read the first asset, or the first composition when no asset.
+    // Timeline and Viewer drops make a layer of every asset and composition, in the order they
+    // were selected (`items` is the selection order); Nodes reads the first asset, or the first
+    // composition when no asset.
+    std::vector<std::variant<document::AssetId, document::CompositionId>> layerItems;
+    for (const auto* item : items) {
+        if (const auto asset = assetId(item); asset.isValid())
+            layerItems.emplace_back(asset);
+        else if (const auto composition = compositionId(item); composition.isValid())
+            layerItems.emplace_back(composition);
+    }
+    if (const auto payload = layerItemsMimePayload(session_, layerItems); !payload.isEmpty())
+        mime->setData(kLayerItemsMimeType, payload);
     if (firstAsset.isValid())
         mime->setData(kAssetMimeType, assetMimePayload(session_, firstAsset));
     else if (firstComposition.isValid())

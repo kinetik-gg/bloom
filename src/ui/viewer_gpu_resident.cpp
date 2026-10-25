@@ -205,6 +205,10 @@ QWidget* ViewerGpuResidentController::container() const noexcept {
     return impl_->presenter != nullptr ? impl_->presenter->container() : nullptr;
 }
 
+QWindow* ViewerGpuResidentController::window() const noexcept {
+    return impl_->presenter != nullptr ? impl_->presenter->window() : nullptr;
+}
+
 bool ViewerGpuResidentController::requestTargetResize(const std::uint32_t deviceWidth,
                                                       const std::uint32_t deviceHeight) {
     if (impl_->presenter == nullptr || deviceWidth == 0U || deviceHeight == 0U) {

@@ -1879,6 +1879,14 @@ target_include_directories(bloom_ui_timeline_key_projection_test PRIVATE ..)
 bloom_enable_warnings(bloom_ui_timeline_key_projection_test)
 bloom_add_test(NAME bloom.ui.timeline-key-projection COMMAND bloom_ui_timeline_key_projection_test LABELS ui unit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# #380: Assets and file drops on the Timeline and the Viewer create layers, as in After Effects.
+add_executable(bloom_ui_layer_drop_test layer_drop_tests.cpp)
+target_link_libraries(bloom_ui_layer_drop_test PRIVATE bloom_ui bloom_commands)
+target_include_directories(bloom_ui_layer_drop_test PRIVATE ..)
+bloom_enable_warnings(bloom_ui_layer_drop_test)
+bloom_add_test(NAME bloom.ui.layer-drop COMMAND bloom_ui_layer_drop_test LABELS ui integration
+    TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+
 # #380: the Assets header's composition frames, prepared on a worker and kept per revision.
 add_executable(bloom_ui_composition_thumbnail_test composition_thumbnail_tests.cpp)
 target_link_libraries(bloom_ui_composition_thumbnail_test PRIVATE bloom_ui)

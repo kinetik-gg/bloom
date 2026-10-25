@@ -1,4 +1,5 @@
 #include "asset_drop.hpp"
+#include "layer_drop.hpp"
 #include "network_share_paths.hpp"
 #include "node_editor_add.hpp"
 #include <QDragEnterEvent>
@@ -37,6 +38,51 @@ document::CompositionId compositionFromMime(const QMimeData& mime,
     const auto id = document::CompositionId::fromRaw(raw);
     return valid && session.snapshot().project().findComposition(id) ? id
                                                                      : document::CompositionId{};
+}
+QByteArray layerItemsMimePayload(
+    const CompositionSession& session,
+    const std::vector<std::variant<document::AssetId, document::CompositionId>>& items) {
+    const auto* controller = session.assetController();
+    if (!controller || !controller->acceptsEdits() || items.empty())
+        return {};
+    auto payload =
+        controller->dragToken() + ':' +
+        QByteArray::number(static_cast<qulonglong>(session.snapshot().revision().value()));
+    for (const auto& item : items) {
+        if (const auto* asset = std::get_if<document::AssetId>(&item))
+            payload += ":a" + QByteArray::number(static_cast<qulonglong>(asset->value()));
+        else
+            payload += ":c" + QByteArray::number(static_cast<qulonglong>(
+                                  std::get<document::CompositionId>(item).value()));
+    }
+    return payload;
+}
+std::vector<std::variant<document::AssetId, document::CompositionId>>
+layerItemsFromMime(const QMimeData& mime, const CompositionSession& session) {
+    const auto* controller = session.assetController();
+    const auto data = mime.data(kLayerItemsMimeType);
+    const auto parts = data.split(':');
+    if (!controller || parts.size() < 3 || parts[0] != controller->dragToken() ||
+        parts[1] !=
+            QByteArray::number(static_cast<qulonglong>(session.snapshot().revision().value())))
+        return {};
+    const auto& project = session.snapshot().project();
+    std::vector<std::variant<document::AssetId, document::CompositionId>> items;
+    for (qsizetype index = 2; index < parts.size(); ++index) {
+        const auto& part = parts[index];
+        bool ok = false;
+        const auto raw = part.size() > 1 ? part.mid(1).toULongLong(&ok) : 0;
+        if (!ok)
+            return {};
+        if (part.front() == 'a' && project.findAsset(document::AssetId::fromRaw(raw)))
+            items.emplace_back(document::AssetId::fromRaw(raw));
+        else if (part.front() == 'c' &&
+                 project.findComposition(document::CompositionId::fromRaw(raw)))
+            items.emplace_back(document::CompositionId::fromRaw(raw));
+        else
+            return {};
+    }
+    return items;
 }
 document::CompositionId compositionSourceId(const document::Composition& composition,
                                             const document::NodeRecord& node) {
@@ -162,7 +208,7 @@ class AddAudioNode final : public commands::Operation {
 };
 class AssetDropTarget final : public QObject {
   public:
-    AssetDropTarget(QWidget& widget, CompositionSession& session, QGraphicsView* view)
+    AssetDropTarget(QWidget& widget, CompositionSession& session, QGraphicsView& view)
         : QObject(&widget), session_(session), view_(view) {
         widget.setAcceptDrops(true);
         widget.installEventFilter(this);
@@ -178,7 +224,7 @@ class AssetDropTarget final : public QObject {
         if (mime->hasUrls() && !mime->hasFormat(kAssetMimeType) &&
             !mime->hasFormat(kCompositionMimeType)) {
             // Files and folders from a file manager import into the selected Assets folder with
-            // the same import progress and summary as Assets itself (#377); no layer is added.
+            // the same import progress and summary as Assets itself (#377); no node is added.
             QStringList files;
             QStringList unresolvedShares;
             for (const auto& url : mime->urls()) {
@@ -211,14 +257,11 @@ class AssetDropTarget final : public QObject {
                 return true;
             }
             if (event->type() == QEvent::Drop) {
-                const auto point =
-                    view_ ? view_->mapToScene(drop->position().toPoint()) : QPointF{};
-                commands::Transaction transaction(view_ ? "Add Composition Source"
-                                                        : "Add Composition Layer",
+                const auto point = view_.mapToScene(drop->position().toPoint());
+                commands::Transaction transaction("Add Composition Source",
                                                   session_.snapshot().revision());
                 transaction.emplace<node_editor::AddCompositionSource>(
-                    session_.compositionId(), id, document::Vec2d{point.x(), point.y()},
-                    view_ == nullptr);
+                    session_.compositionId(), id, document::Vec2d{point.x(), point.y()});
                 if (!session_.executeTransaction(std::move(transaction)).succeeded()) {
                     drop->ignore();
                     return true;
@@ -237,25 +280,17 @@ class AssetDropTarget final : public QObject {
             const auto* asset = session_.snapshot().project().findAsset(id);
             const bool audio = asset != nullptr && asset->kind == document::AssetKind::Audio;
             const bool video = asset != nullptr && asset->kind == document::AssetKind::Video;
-            commands::Transaction transaction(view_ ? (audio   ? "Add Audio Source"
-                                                       : video ? "Add Video Source"
-                                                               : "Add Image Source")
-                                                    : (audio   ? "Add Audio Layer"
-                                                       : video ? "Add Video Layer"
-                                                               : "Add Image Layer"),
+            commands::Transaction transaction(audio   ? "Add Audio Source"
+                                              : video ? "Add Video Source"
+                                                      : "Add Image Source",
                                               session_.snapshot().revision());
-            if (view_) {
-                const auto point = view_->mapToScene(drop->position().toPoint());
-                if (audio)
-                    transaction.emplace<AddAudioNode>(session_.compositionId(), id,
-                                                      document::Vec2d{point.x(), point.y()});
-                else
-                    transaction.emplace<AddImageNode>(session_.compositionId(), id,
-                                                      document::Vec2d{point.x(), point.y()});
-            } else if (audio)
-                transaction.emplace<commands::AddAudioLayer>(session_.compositionId(), id);
+            const auto point = view_.mapToScene(drop->position().toPoint());
+            if (audio)
+                transaction.emplace<AddAudioNode>(session_.compositionId(), id,
+                                                  document::Vec2d{point.x(), point.y()});
             else
-                transaction.emplace<commands::AddImageLayer>(session_.compositionId(), id);
+                transaction.emplace<AddImageNode>(session_.compositionId(), id,
+                                                  document::Vec2d{point.x(), point.y()});
             static_cast<void>(session_.executeTransaction(std::move(transaction)));
         }
         drop->acceptProposedAction();
@@ -264,10 +299,13 @@ class AssetDropTarget final : public QObject {
 
   private:
     CompositionSession& session_;
-    QGraphicsView* view_;
+    QGraphicsView& view_;
 };
 } // namespace
 void installAssetDropTarget(QWidget& widget, CompositionSession& session, QGraphicsView* view) {
-    new AssetDropTarget(widget, session, view);
+    if (view == nullptr)
+        installLayerDropTarget(widget, session);
+    else
+        new AssetDropTarget(widget, session, *view);
 }
 } // namespace bloom::ui

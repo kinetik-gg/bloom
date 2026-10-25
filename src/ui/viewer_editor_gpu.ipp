@@ -365,6 +365,11 @@ void ViewerEditor::updateGpuResidentPresentationBody() {
             gpuContainer_ = container;
             gpuContainer_->setFocusPolicy(Qt::StrongFocus);
             gpuContainer_->setMouseTracking(true);
+            // The native window takes drags over the image itself; Assets drops still make
+            // layers (#380).
+            installLayerDropTarget(*gpuContainer_, session_);
+            if (QWindow* window = gpuResident_->window(); window != nullptr)
+                installLayerDropTarget(*window, session_);
         }
         const QRect target = contentRect().toRect();
         if (gpuContainer_->geometry() != target) {

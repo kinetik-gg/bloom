@@ -120,6 +120,8 @@ class AssetTree final : public QTreeWidget {
     dropFolder(QPoint position) const;
     // Delete or Backspace on the focused tree.
     std::function<void()> deleteRequested;
+    // Test seam: the payload a drag of the current selection carries, as startDrag builds it.
+    [[nodiscard]] QMimeData* selectionMimeDataForTest() const { return mimeData(selectedItems()); }
 
   protected:
     bool event(QEvent* event) override;

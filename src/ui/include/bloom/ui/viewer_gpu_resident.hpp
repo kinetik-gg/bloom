@@ -195,6 +195,8 @@ class ViewerGpuResidentController final {
     // Unsupported. The host (ViewerEditor) parents it and keeps it until a
     // genuinely safe mutation.
     [[nodiscard]] QWidget* container() const noexcept;
+    // The presenter's embedded native window, which receives pointer and drag events itself.
+    [[nodiscard]] QWindow* window() const noexcept;
 
     // Presents `frame` if it is the resident arm and the controller is usable.
     // Returns false when the caller must keep its CPU paint (not configured,
