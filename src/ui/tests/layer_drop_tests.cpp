@@ -443,26 +443,30 @@ void viewerDrop(Fixture& fixture) {
     const auto before = fixture.stack();
     auto mime = assetsDrag(
         assets,
-        {QString::fromStdString(session.snapshot().project().findAsset(fixture.still)->name)});
+        {QString::fromStdString(session.snapshot().project().findAsset(fixture.still)->name),
+         QStringLiteral("Nested")});
     const QPoint centre(viewer.width() / 2, viewer.height() / 2);
     expect(sendDrag(viewer, QEvent::DragEnter, centre, *mime) &&
                sendDrag(viewer, QEvent::Drop, centre, *mime),
            "the Viewer accepts an Assets drop");
     const auto layers = fixture.stack();
-    expect(layers.size() == before.size() + 1 && fixture.layer(layers[0]).inPoint == frame(20),
-           "the layer goes on top at the playhead");
+    expect(layers.size() == before.size() + 2 && fixture.layer(layers[0]).inPoint == frame(20) &&
+               fixture.layer(layers[1]).inPoint == frame(20),
+           "the layers go on top at the playhead");
     const auto& composition = fixture.composition();
-    const auto* node = composition.graph().findNode(fixture.layer(layers[0]).nodeId);
-    std::optional<document::Vec2d> position;
-    for (const auto& binding : node ? node->parameters : decltype(node->parameters){})
-        if (binding.role == document::kPositionParameterRole)
-            if (const auto* parameter = composition.parameters().find(binding.parameterId))
-                if (const auto* constant =
-                        std::get_if<document::ConstantValueSource>(&parameter->source))
-                    if (const auto* value = std::get_if<document::Vec2d>(&constant->value))
-                        position = *value;
-    expect(position && position->x == 160.0 && position->y == 90.0,
-           "the layer is centred in the composition");
+    for (std::size_t index = 0; index < 2 && index < layers.size(); ++index) {
+        const auto* node = composition.graph().findNode(fixture.layer(layers[index]).nodeId);
+        std::optional<document::Vec2d> position;
+        for (const auto& binding : node ? node->parameters : decltype(node->parameters){})
+            if (binding.role == document::kPositionParameterRole)
+                if (const auto* parameter = composition.parameters().find(binding.parameterId))
+                    if (const auto* constant =
+                            std::get_if<document::ConstantValueSource>(&parameter->source))
+                        if (const auto* value = std::get_if<document::Vec2d>(&constant->value))
+                            position = *value;
+        expect(position && position->x == 160.0 && position->y == 90.0,
+               "each layer (footage and nested composition) is centred in the composition");
+    }
     expect(session.undo() && fixture.stack() == before, "the Viewer drop is one undo step");
 }
 } // namespace
