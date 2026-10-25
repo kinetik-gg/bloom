@@ -327,6 +327,8 @@ decodeImage(const std::filesystem::path& path, const ImageInterpretation& interp
             const ImageProvider* provider = nullptr);
 [[nodiscard]] ImageResult<ImageProviderEncodeResponse>
 encodeImage(const ImageProviderEncodeRequest& request, const ImageProvider* provider = nullptr);
+// Lists the members of `path`'s sequence (no file is opened), then reads and hashes each one.
+// `progress` reports the listing as (found, 0) and the reading as (read, members).
 [[nodiscard]] ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
                                                          const CancelImageWork& cancel = {},
                                                          const ImageProgress& progress = {});
@@ -335,4 +337,9 @@ encodeImage(const ImageProviderEncodeRequest& request, const ImageProvider* prov
 // either finds the other. Nullopt for a name without a frame number or a format that never
 // sequences.
 [[nodiscard]] std::optional<std::string> sequenceKey(const std::filesystem::path& path);
+// How many members scanSequence() would read for `path`, by listing its directory only: 1 for a
+// name without a frame number. `progress` reports (found, 0). Nullopt when cancelled.
+[[nodiscard]] std::optional<std::uint64_t> countSequenceMembers(const std::filesystem::path& path,
+                                                                const CancelImageWork& cancel = {},
+                                                                const ImageProgress& progress = {});
 } // namespace bloom::media

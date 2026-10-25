@@ -7,6 +7,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace bloom::media {
 namespace {
@@ -49,7 +50,72 @@ std::optional<NumberedName> numberedName(const std::filesystem::path& path) {
     return NumberedName{stem.substr(0, begin), stem.substr(end), lowered,
                         static_cast<std::uint32_t>(digits.size()), frame};
 }
+struct ListedMembers {
+    std::vector<std::pair<std::int64_t, std::filesystem::path>> members;
+    std::string diagnostic;
+    bool mixedPadding = false;
+    bool cancelled = false;
+};
+// Every directory entry numbered like `name`, without opening any of them. `progress` gets the
+// running count with a zero total: the total is what this pass discovers.
+ListedMembers listMembers(const std::filesystem::path& path, const NumberedName& name,
+                          const CancelImageWork& cancel, const ImageProgress& progress) {
+    ListedMembers listed;
+    std::error_code error;
+    auto directory = path.parent_path();
+    if (directory.empty())
+        directory = ".";
+    std::filesystem::directory_iterator iterator(directory, error);
+    if (error) {
+        listed.diagnostic = "Sequence directory is unreadable";
+        return listed;
+    }
+    for (const auto end = std::filesystem::directory_iterator{}; iterator != end;
+         iterator.increment(error)) {
+        if (error) {
+            listed.diagnostic = "Sequence directory enumeration failed";
+            return listed;
+        }
+        if (cancel && cancel()) {
+            listed.cancelled = true;
+            return listed;
+        }
+        const auto candidate = numberedName(iterator->path());
+        if (!candidate || candidate->prefix != name.prefix || candidate->suffix != name.suffix ||
+            candidate->extension != name.extension)
+            continue;
+        if (listed.members.size() >= kMaxSequenceEntries) {
+            listed.diagnostic = "Sequence exceeds 100000 matching members";
+            return listed;
+        }
+        // Mixed padding stays in the sequence: the number is what identifies a frame, the
+        // padding is only how it was written. It is reported once so the artist knows.
+        listed.mixedPadding = listed.mixedPadding || candidate->padding != name.padding;
+        listed.members.emplace_back(candidate->frame, iterator->path());
+        if (progress)
+            progress(listed.members.size(), 0);
+    }
+    if (error)
+        listed.diagnostic = "Sequence directory enumeration failed";
+    return listed;
+}
 } // namespace
+std::optional<std::uint64_t> countSequenceMembers(const std::filesystem::path& path,
+                                                  const CancelImageWork& cancel,
+                                                  const ImageProgress& progress) {
+    try {
+        const auto name = numberedName(path);
+        if (!name)
+            return std::uint64_t{1};
+        const auto listed = listMembers(path, *name, cancel, progress);
+        if (listed.cancelled)
+            return std::nullopt;
+        // A refused listing still counts as one item; reading reports why.
+        return std::max<std::uint64_t>(1, listed.diagnostic.empty() ? listed.members.size() : 1);
+    } catch (const std::exception&) {
+        return std::uint64_t{1};
+    }
+}
 std::optional<std::string> sequenceKey(const std::filesystem::path& path) {
     const auto name = numberedName(path);
     if (!name)
@@ -81,53 +147,39 @@ ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
         manifest.padding = name->padding;
         manifest.pattern =
             name->prefix + std::string(name->padding, '#') + name->suffix + name->extension;
-        std::error_code error;
-        auto directory = path.parent_path();
-        if (directory.empty())
-            directory = ".";
-        std::filesystem::directory_iterator iterator(directory, error);
-        if (error)
-            return {{}, "Sequence directory is unreadable"};
-        std::size_t count = 0;
-        bool mixedPadding = false;
+        // Pass 1 lists the members (directory entries only); pass 2 reads and hashes each one,
+        // which is the slow part, so progress can report a known total while it runs.
+        auto listed = listMembers(path, *name, cancel, progress);
+        if (listed.cancelled)
+            return {{}, {}, true};
+        if (!listed.diagnostic.empty())
+            return {{}, std::move(listed.diagnostic)};
+        if (listed.mixedPadding)
+            manifest.diagnostics.emplace_back("Sequence mixes frame-number padding");
+        const auto total = static_cast<std::uint64_t>(listed.members.size());
+        std::uint64_t read = 0;
+        if (progress)
+            progress(read, total);
         std::size_t failedMembers = 0;
-        for (const auto end = std::filesystem::directory_iterator{}; iterator != end;
-             iterator.increment(error)) {
-            if (error)
-                return {{}, "Sequence directory enumeration failed"};
+        for (const auto& [frame, member] : listed.members) {
             if (cancel && cancel())
                 return {{}, {}, true};
-            const auto candidate = numberedName(iterator->path());
-            if (!candidate || candidate->prefix != name->prefix ||
-                candidate->suffix != name->suffix || candidate->extension != name->extension)
-                continue;
-            if (++count > kMaxSequenceEntries)
-                return {{}, "Sequence exceeds 100000 matching members"};
-            // Mixed padding stays in the sequence: the number is what identifies a frame, the
-            // padding is only how it was written. It is reported once so the artist knows.
-            if (candidate->padding != name->padding && !mixedPadding) {
-                mixedPadding = true;
-                manifest.diagnostics.emplace_back("Sequence mixes frame-number padding");
-            }
-            const auto probe = probeImage(iterator->path(), cancel);
+            const auto probe = probeImage(member, cancel);
             if (!probe.value.has_value()) {
                 if (probe.cancelled || (cancel && cancel()))
                     return {{}, {}, true};
                 // ADR 0026 / #373 batch policy: one unreadable member never aborts the sequence.
                 // It is reported and its frame becomes a gap that holds the preceding frame.
                 if (++failedMembers <= kMaxReportedMemberFailures)
-                    manifest.diagnostics.push_back("Frame " + std::to_string(candidate->frame) +
-                                                   " is unreadable and is treated as a gap: " +
-                                                   probe.diagnostic);
-                continue;
+                    manifest.diagnostics.push_back(
+                        "Frame " + std::to_string(frame) +
+                        " is unreadable and is treated as a gap: " + probe.diagnostic);
+            } else {
+                manifest.members.push_back({frame, member, probe.value->contentDigest});
             }
-            manifest.members.push_back(
-                {candidate->frame, iterator->path(), probe.value->contentDigest});
             if (progress)
-                progress(count, 0);
+                progress(++read, total);
         }
-        if (error)
-            return {{}, "Sequence directory enumeration failed"};
         std::ranges::sort(manifest.members, {}, &SequenceMember::frame);
         if (manifest.members.empty())
             return {{}, "Selected sequence member is missing"};
