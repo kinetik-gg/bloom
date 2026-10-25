@@ -190,6 +190,9 @@ enum class Size : int {
     DialogTextWidth = 520,
     DialogWideWidth = 700,
     DiagnosticHeight = 140,
+    // The KProgressBar track (#377): thicker than the 4-pixel slider track so a bar with no
+    // handle still reads at a glance.
+    ProgressTrack = 6,
     HeaderRow = 32,
     FooterRow = 32,
     ListRow = 32,

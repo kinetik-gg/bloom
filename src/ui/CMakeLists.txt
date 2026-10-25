@@ -33,6 +33,7 @@ target_sources(
         kit/surfaces.cpp
         kit/controls.cpp
         kit/row.cpp
+        kit/progress_bar.cpp
         kit/radio_group.cpp
         kit/range_selector.cpp
         kit/slider.cpp
@@ -66,6 +67,7 @@ target_sources(
             include/bloom/ui/kit/thumbnail.hpp
             include/bloom/ui/kit/controls.hpp
             include/bloom/ui/kit/row.hpp
+            include/bloom/ui/kit/progress_bar.hpp
             include/bloom/ui/kit/radio_group.hpp
             include/bloom/ui/kit/range_selector.hpp
             include/bloom/ui/kit/slider.hpp

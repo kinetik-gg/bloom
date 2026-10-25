@@ -1,3 +1,4 @@
+#include <bloom/ui/kit/progress_bar.hpp>
 #include <bloom/ui/kit/range_selector.hpp>
 #include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/theme.hpp>
@@ -240,6 +241,32 @@ void testDraggingARangeHandleGrabsTheNearerOne(Expectations& expectations) {
     expectations.expect(upperChanged.count() == 0, "the untouched handle reported nothing at all");
 }
 
+// KProgressBar (#377): a determinate fill tracks completed / total; a zero total is
+// indeterminate and shows a segment; it never takes focus.
+void testTheProgressBarFillsWhatItWasGiven(Expectations& expectations) {
+    kit::KProgressBar bar;
+    bar.resize(300, kit::px(kit::Size::ProgressTrack));
+    expectations.expect(bar.height() == kit::px(kit::Size::ProgressTrack) &&
+                            bar.focusPolicy() == Qt::NoFocus,
+                        "the bar is ProgressTrack tall and never takes focus");
+    bar.setProgress(1, 4);
+    expectations.expect(!bar.indeterminate() && std::abs(bar.fraction() - 0.25) < 1e-9,
+                        "one of four is a quarter");
+    expectations.expect(std::abs(bar.fillRect().width() - bar.trackRect().width() * 0.25) < 1e-9,
+                        "the fill covers a quarter of the track");
+    bar.setProgress(9, 4);
+    expectations.expect(bar.completed() == 4 && std::abs(bar.fraction() - 1.0) < 1e-9,
+                        "completed is clamped to the total");
+    bar.setProgress(0, 0);
+    expectations.expect(bar.indeterminate() && bar.fraction() == 0.0,
+                        "a zero total is indeterminate");
+    const auto segment = bar.fillRect();
+    expectations.expect(segment.width() > 0.0 && segment.width() < bar.trackRect().width() &&
+                            segment.left() >= bar.trackRect().left() &&
+                            segment.right() <= bar.trackRect().right() + 1e-9,
+                        "an indeterminate bar shows a segment inside the track");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -254,5 +281,6 @@ int main(int argc, char** argv) {
     testTheRangeHandlesNeverCross(expectations);
     testTheRangeSpanAndHandleGeometry(expectations);
     testDraggingARangeHandleGrabsTheNearerOne(expectations);
+    testTheProgressBarFillsWhatItWasGiven(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
