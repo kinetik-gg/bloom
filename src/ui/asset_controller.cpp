@@ -802,9 +802,10 @@ void AssetController::importFiles(const QStringList& paths) { importFiles(paths,
 void AssetController::importFiles(const QStringList& paths,
                                   const std::optional<document::AssetFolderId> folder,
                                   ImportFollowUp followUp) {
+    const auto running = importShared_;
     prepare(paths, {}, folder);
-    // Kept only for the batch import that just started (not when it was refused).
-    if (importing() && !importFollowUp_)
+    // Kept only for the batch import this call started, never one already running.
+    if (importShared_ != nullptr && importShared_ != running)
         importFollowUp_ = std::move(followUp);
 }
 void AssetController::relink(document::AssetId id, QWidget* parent) {
