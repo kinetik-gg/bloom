@@ -98,6 +98,8 @@ visible Viewer, the window makes no displayed qualification claim.
 | `Esc` | Confirm whatever is in flight and return to Select: a gizmo move/rotate/scale/anchor drag, a region of interest, a creation, a text edit or a path/mask anchor edit (see below); Undo discards |
 | `Left` / `Right` | Step one frame |
 | `Home` / `End` | Go to start / end |
+| Drop Assets items onto the Viewer | Makes a layer of each, on top, starting at the playhead and centred in the composition, as one undoable step; Alt sequences them end to end (see "Layer drops" under Timeline) |
+| Drop files onto the Viewer | Imports them (the import progress modal), then makes layers of them the same way as one more undoable step |
 
 The transport lives in the Viewer footer: go to start, step back, play/pause, step forward, go to
 end, a loop toggle, and RAM Preview. **The keys are unchanged.** `Space`, `Ctrl+Shift+Space`, `Esc`,
@@ -183,9 +185,11 @@ search or inline rename field.
 | Double-click a composition | Switches the shared `CompositionSession` to that composition, as in After Effects; it opens no dialog. Double-clicking a folder expands it |
 | Click a Tags cell | Filters by the asset's first tag |
 | Drag rows onto a folder, onto a row, or onto empty space | Moves the dragged assets, compositions and folders into that folder, the row's folder, or the root, as one undoable step; a folder never moves into itself or a subfolder |
-| Drag rows to Timeline, Viewer or Nodes | Adds the first asset (or composition when no asset is dragged) as before |
+| Drag rows to Timeline or Viewer | Makes a layer of every dragged footage item and composition, in the order they were selected (see "Layer drops" under Timeline) |
+| Drag rows to Nodes | Adds the first asset (or composition when no asset is dragged) as a source node |
 | Drop files or folders onto Assets | Imports them into the folder under the pointer, or the root on empty space |
-| Drop files or folders onto Timeline or Nodes | Imports them into the selected Assets folder; no layer is added |
+| Drop files or folders onto Timeline or Viewer | Imports them into the selected Assets folder, then makes layers of what was imported |
+| Drop files or folders onto Nodes | Imports them into the selected Assets folder; no node is added |
 | Right-click an asset | New Composition from Selection, Input Colour…, Replace Footage…, Reload Footage, Reveal in File Manager, Rename, Edit Tags…, Delete, then New Folder, New Composition…, Import… |
 | Right-click a composition | Open, Composition Settings…, Rename, Duplicate, Delete, then the same three |
 | Right-click a folder | Rename, Delete, then the same three; empty space offers only the three |
@@ -195,8 +199,10 @@ footage item, with a video's frame rate and duration, a sequence's frame count o
 duration (the active composition supplies anything the footage does not state). It holds a layer
 for every selected image, sequence, video or audio asset, the first on top, is filed in the clicked
 item's folder, opens, and is one undo step. Reload Footage probes the asset's own file again on the
-import worker, as a relink to the same path. Reveal in File Manager opens the folder holding the
-file.
+import worker, as a relink to the same path. Reveal in File Manager shows the file selected in the
+platform's file manager: on Linux through the freedesktop.org `FileManager1.ShowItems` D-Bus call,
+on macOS with `open -R`, on Windows with `explorer /select,`. Where no file manager answers (or Qt
+D-Bus is unavailable) it opens the folder holding the file instead.
 
 Every import from the rows above (and a dropped folder, which contributes the media files below it)
 shows the import progress modal (#377, [ADR 0029](../decisions/0029-import-progress-and-cancellation.md)).
@@ -416,6 +422,31 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | `Ctrl++` / `Ctrl+-` | Timeline View → Zoom In / Zoom Out about the visible center |
 | `Ctrl+A` / `Ctrl+Shift+A` | Timeline Select → Select All / Deselect All (shared layer-boundary selection) |
 | `Delete` / `Backspace` with layer stack or lanes focused | Timeline Edit → Delete Layer, through `RemoveNodes` on the selected layers' Layer nodes |
+| Drop Assets items onto the layer stack | Inserts a layer for each at the row under the pointer, starting at the playhead |
+| Drop Assets items onto the lanes | Inserts them at the row under the pointer, starting at the frame under the pointer |
+| Drop Assets items elsewhere in the Timeline | Adds them on top, starting at the playhead |
+| `Alt` held at the drop | Sequences several items end to end (After Effects' Sequence Layers) instead of starting them together |
+| Drop files or folders onto the Timeline | Imports them (the import progress modal), then makes layers of what was imported at the same place, as one more undoable step |
+
+### Layer drops
+
+Dropping footage (images, image sequences, video, audio) or compositions from Assets onto the
+Timeline creates layers in the active composition, as in After Effects (#380). While dragging, the
+layer stack shows the Accent insertion line (`timelineLayerInsertionIndicator`) above the row the
+layers will join and the lanes continue it; over the lanes an Accent time marker shows the frame
+where they will start. The marker snaps to the composition frame grid. Several items become several
+layers in the order they were selected in Assets, the first on top; they all start at the same
+frame, or, with Alt held at the drop, end to end, each starting where the previous one ends (a
+layer that would start after the composition ends starts on its last frame). A composition becomes
+a nested composition layer; the active composition itself, fonts and LUTs are not accepted. Each
+layer keeps its media's own length up to the composition's duration (layer-owned time, ADR 0024,
+exactly as the add-layer commands set it): a sequence its frame count, a video or a nested
+composition its duration, a still the composition's duration from its start. The whole drop is one undoable step, built from the ordinary add-layer commands and the
+Timeline's own move. Files dropped from a file manager are imported first through the import
+progress modal ([ADR 0029](../decisions/0029-import-progress-and-cancellation.md)); once the import
+commits, their layers are added at the place they were dropped as a second undoable step, and the
+status bar (or the import summary) says how many layers were added
+([ADR 0030](../decisions/0030-layer-drops.md)). Dropping on the Nodes canvas is unchanged.
 
 The visible header offers **Add** (Solid, Text and shapes), **View**, and **Select**, in that order.
 Edit remains available in the overflow menu and reuses the application's Undo/Redo actions and

@@ -59,4 +59,5 @@ modal that ends with a clear result.
   is refused with `Import cancelled`.
 - The kit gains `KProgressBar` and the `Size::ProgressTrack` token.
 - Dropping files on Timeline or Nodes imports them into the selected Assets folder; it does not add
-  layers.
+  layers. (Amended by [ADR 0030](0030-layer-drops.md): a drop on the Timeline or the Viewer then
+  adds layers for what was imported, as a second undoable step; a Nodes drop still only imports.)

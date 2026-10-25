@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-10-23
+Updated: 2026-10-25
 
 ## Geometry and transform levels
 
@@ -173,8 +173,10 @@ Desktop playback applies these mappings to each sample on the mixer worker befor
 leaf clip sample. Nested layers sum with their level, mute and solo controls; a composition with
 no audio contributes silence. Cycle-rejected drafts cannot publish an audio mix.
 
-Dragging a composition from Assets onto Nodes creates one source. Dropping it onto Timeline creates
-the source, a Layer and one Merge slot carrying both image and audio, in one undoable transaction.
+Dragging a composition from Assets onto Nodes creates one source. Dropping it onto Timeline (or the
+Viewer) creates the source, a Layer and one Merge slot carrying both image and audio, in one
+undoable transaction, then stacks and times it where it was dropped
+([ADR 0030](../decisions/0030-layer-drops.md)).
 The Layer is placed beside its Merge and the source beside the Layer using the common free-space
 placement rule. Its initial range is the nested duration, capped by the containing composition.
 The nested content remains one timeline bar. Under layer-owned time the new Layer's
@@ -1207,9 +1209,11 @@ changed files yield transparent output plus a diagnostic, with bounded decode ca
 content, selected member and interpretation. The image keeps a content-sized data window and
 author-space bounds, with the composition as display window and the request's proxy resolution.
 
-Dropping an asset onto Nodes creates only the source. Dropping onto Timeline runs `AddImageLayer`:
-source → Layer → a new ordered Merge slot, with the existing composition output retained. The
-same command creates all IDs and connections in one undoable transaction. Removing an asset
+Dropping an asset onto Nodes creates only the source. Dropping onto Timeline or the Viewer runs
+`AddImageLayer` (or `AddAudioLayer`) inside `AddDroppedLayers`: source → Layer → a new ordered Merge
+slot, with the existing composition output retained, then `MoveLayerBefore` and `SetLayerTiming`
+place the layer at the dropped row and frame ([ADR 0030](../decisions/0030-layer-drops.md)). The
+same commands create all IDs and connections in one undoable transaction, one per drop. Removing an asset
 leaves graph references intact so the artist can identify and relink the missing source.
 
 ## Audio Sources And Layers

@@ -9,9 +9,16 @@ folders always stay at the top. Drag a header divider to resize a column or a he
 Right-click the header, or open **View > Columns**, to choose which columns show. Bloom remembers
 your columns for the next session.
 
-Select an item to see it at the top of the panel: a thumbnail (or the item's symbol), its size,
-duration and frame rate, how its colour is interpreted (including the note when Bloom had to assume
-the colour of an untagged video), its alpha, and how often it is used in compositions.
+Select an item to see it at the top of the panel: a thumbnail (for a composition, a small render
+of its first frame; the item's symbol until a picture is ready), its size, duration and frame
+rate, how its colour is interpreted, its alpha, and how often it is used in compositions. The
+colour space has its plain name, such as **sRGB** or **Linear Rec.709**, and when Bloom had to
+assume the colour of an untagged video the note saying so appears once, at the end of the line.
+
+Durations of video, image sequences and compositions read the same way: timecode at the item's
+frame rate followed by the number of frames, such as `0:00:02:00 (48 frames)`. An image sequence
+plays one image per composition frame, so it is timed at the frame rate of the composition you have
+open.
 
 The **Data** group at the bottom lists authored non-media blocks with their kind, provenance
 summary and digest. Missing media shows a warning symbol instead of its type symbol; hover over it
@@ -20,8 +27,9 @@ for the reason.
 Import media with **File > Import**, **Add > Import…**, the footer's **Import** button, or by
 dropping files or folders onto the panel. Imports land in the selected folder (or the folder of the
 selected item); a drop lands in the folder you drop on, or at the top level on empty space. Files
-and folders dropped on the Timeline or Nodes are imported into the selected folder too (they are not
-placed as layers). Dropping a folder imports every image, image sequence, video, audio file and LUT
+and folders dropped on the Timeline or the Viewer are imported into the selected folder too and then
+placed as layers (see "Adding layers by dragging" below); dropped on Nodes they are only imported.
+Dropping a folder imports every image, image sequence, video, audio file and LUT
 inside it and its subfolders; other files and hidden files are left out. Imports keep stable
 identities, so organizing them preserves the nodes and layers that already use them.
 
@@ -73,7 +81,8 @@ together; one **Undo** reverses the whole move. A folder cannot be moved into it
 Right-click an item for the commands that apply to it:
 
 - **Media:** New Composition from Selection, Input Colour… (how its colours are interpreted),
-  Replace Footage…, Reload Footage, Reveal in File Manager, Rename, Edit Tags…, Delete.
+  Replace Footage…, Reload Footage, Reveal in File Manager (shows the file selected in your file
+  manager, or opens its folder where that is not possible), Rename, Edit Tags…, Delete.
 - **Compositions:** Open, Composition Settings…, Rename, Duplicate, Delete.
 - **Folders:** Rename, Delete.
 
@@ -101,18 +110,37 @@ Type a name or tag in Search to narrow the list. Use **tag:hero** to match only 
 “hero”; names alone will not match that query. Searches ignore letter case. Matching items keep
 their folders visible, and clearing Search restores your previous folder expansion.
 
+## Adding layers by dragging
+
+Drag footage or compositions from Assets onto the Timeline to add them to the open composition, as
+in After Effects:
+
+- Drop on the layer list to insert the layers at that position; they start at the playhead.
+- Drop over the time area to start them at the frame under the pointer, inserted at the row under
+  it. A line shows the row and a marker shows the frame while you drag.
+- Drop anywhere else in the Timeline to add them on top, starting at the playhead.
+
+Select several items to add several layers; they are stacked in the order you selected them, the
+first on top, and all start together. Hold **Alt** when you drop to place them one after another
+instead, each starting where the previous one ends. A composition becomes a nested composition
+layer. Every layer keeps the length of its media, up to the length of the composition: a sequence
+lasts its frames, a video or a nested composition its duration. One **Undo** removes the whole
+drop.
+
+Dropping items on the Viewer adds them on top at the playhead, centred in the composition. Files
+dragged from your file manager onto the Timeline or the Viewer are imported first, with the usual
+import progress, and then added as layers where you dropped them; the status bar says how many
+layers were added, and one **Undo** removes the layers while a second removes the import.
+
 ## Using organized media
 
 Dragging an image or sequence to Nodes creates an image source; dragging audio creates an audio
-source. Dropping media on Timeline creates the matching layer. Cards, Properties asset selectors
-and imported default Timeline labels show the asset's display name. A layer name you author
-separately remains independent.
+source. Cards, Properties asset selectors and imported default Timeline labels show the asset's
+display name. A layer name you author separately remains independent.
 
 Compositions sit in the tree with your media and can be filed in folders. Double-click one to
-open it. Dragging a
-composition onto Nodes creates a Composition source. Connect its image or audio output as needed.
-Drop it onto Timeline to create one nested layer, initially as long as the source composition
-(up to the containing composition's duration). This is one undoable edit.
+open it. Dragging a composition onto Nodes creates a Composition source. Connect its image or audio
+output as needed.
 
 Select the source or its layer to choose the referenced composition in Properties. **Open** switches
 to that composition so you can edit its contents. Changes appear wherever it is used. **Time Offset**
@@ -134,7 +162,8 @@ transport-stream file. Bloom probes the file in its media worker and lists it as
 its size, duration and frame rate. A malformed or unsupported file produces a diagnostic. Native video
 providers for macOS and Windows are not available yet.
 
-Drag the asset into the Timeline to create a Video source and Layer at the normal Arrange position.
+Drag the asset into the Timeline to create a Video source and Layer at the normal Arrange position,
+as long as the video and starting where you drop it.
 The Layer carries image and, when present, audio connections. Its node card shows the first frame;
 a video with audio also supplies a waveform. Properties exposes Asset, Start Frame, Loop Mode and
 legacy Colour Space plus **Input colour space**. Input colour space is Auto by default and is

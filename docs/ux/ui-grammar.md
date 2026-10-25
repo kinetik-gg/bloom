@@ -557,8 +557,11 @@ per-kind label colour (the Timeline bar colours): Composition (`cube`, DataCompo
 (`folder`, Label 3), Image or EXR (`image`, DataImage), Sequence (`images`, DataSequence), Video
 (`film-slate`, DataImage), Audio (`music-notes`, DataAudio), Font (`text-t`, DataClip) and LUT
 (`sliders-horizontal`, muted). Type names the kind; Size is `W × H`;
-Duration is After Effects timecode `H:MM:SS:FF` at the item's rate, `N frames` for a sequence and
-seconds for audio; Frame Rate is a composition's or video's rate. A missing or unshowable source
+Duration has one format for video, image sequences and compositions (#380): After Effects timecode
+`H:MM:SS:FF` at the item's rate followed by the frame count, `0:00:02:00 (48 frames)` (`(1 frame)`
+in the singular). A sequence plays one member per composition frame, so it is timed at the active
+composition's rate (24 fps with none open) over its whole numbered range. Audio shows seconds.
+Frame Rate is a composition's or video's rate. A missing or unshowable source
 replaces the Name glyph with the warning glyph in Warn ink, and an untagged video whose colour was
 assumed shows the Info glyph in muted ink; the tooltip states the reason, the input colour space and
 the colour note. A data-only image has no mark.
@@ -572,10 +575,25 @@ navigation; expansion and selection survive project projections, and filtering t
 matching ancestors.
 
 The selection header pairs a `KThumbnail` (the controller's worker thumbnail, including
-Cryptomatte ID colours and the first data channel of a data-only image, or the kind glyph when
-there is no picture, never a blank cell) with four Control-height `KLabel` lines: the name; kind,
-size, duration and rate; colour interpretation with the assumed-colour note and alpha; and usage
-(`Used 3 times in 2 compositions`, `Not used`). The lines keep their height when empty, so the tree
+Cryptomatte ID colours and the first data channel of a data-only image; for a composition a frame
+rendered by the composition preview pipeline; or the kind glyph when there is no picture yet, never
+a blank cell) with four Control-height `KLabel` lines: the name; kind, size, duration and rate
+(`Video · 1920 × 1080 · 0:00:02:00 (48 frames), 24 fps`); colour; and usage
+(`Used 3 times in 2 compositions`, `Not used`). The colour line names the input colour space by its
+plain name, then the alpha, then the colour note once:
+`Colour: Linear Rec.709 · Straight alpha · Colour tags missing — assumed Rec.709. Change in Assets →
+Input Colour`. Bloom Neutral's interchange identifiers read as plain names (`lin_rec709_scene` is
+**Linear Rec.709**, `srgb_rec709_display` **sRGB**, the synthesized Rec.709 camera space **Rec.709
+video**); another config's spaces show the names the config gives them. A space Auto read from the
+file's own tags adds `(from the file)`; an assumed one is explained by the note alone.
+
+A composition's header frame is its first frame, prepared on a worker by the same compile,
+evaluate and display-transform pipeline the Viewer's analysis uses, at a proxy no larger than
+144 device pixels on its longest edge (twice the cell, for a device pixel ratio of two). The
+`CompositionThumbnailController` keeps the newest frame per composition with the document revision
+it was prepared from (at most 64 compositions), prepares a revision once (a frame that cannot be
+prepared is not retried until an edit), shows the previous frame while an edit is prepared and
+cancels on shutdown. Nothing is evaluated or decoded on the interface thread. The lines keep their height when empty, so the tree
 never moves with the selection. Usage counts nodes whose asset, font, LUT or
 composition reference names the item.
 
@@ -583,8 +601,9 @@ Context menus follow After Effects. An asset: New Composition from Selection, In
 (interpret footage), Replace Footage…, Reload Footage, Reveal in File Manager, Rename, Edit Tags…,
 Delete. A composition: Open, Composition Settings…, Rename, Duplicate, Delete. A folder: Rename,
 Delete. Each ends with New Folder, New Composition… and Import…, which is the whole menu on empty
-space. Reveal opens the folder holding the file, the behaviour every platform's file manager
-supports. Deleting unused items is immediate; deleting a used item, or a folder that holds items,
+space. Reveal selects the file in the platform's file manager (freedesktop.org
+`FileManager1.ShowItems` on Linux, `open -R` on macOS, `explorer /select,` on Windows) and opens the
+folder holding it where that is not available; one helper chooses the command per platform. Deleting unused items is immediate; deleting a used item, or a folder that holds items,
 first asks in a warning box that names the usage, and for folders offers Delete Folders Only (the
 contents move up) or Delete with Contents. Every delete is one transaction and one undo step.
 
@@ -599,12 +618,14 @@ tags. Unmatched ancestors remain visible only when a descendant matches. Interna
 compositions and folders together onto a folder row, into the folder of the row under the pointer,
 or to the root on empty space; a folder never moves into itself or a subfolder. Rows are sorted, so
 a drop names a folder, never a position. The internal selection MIME coexists with
-`application/x-bloom-asset` (the first asset) or `application/x-bloom-composition` (the first
-composition when no asset is dragged), retaining Timeline, Viewer and Nodes drops. Internal drags
+`application/x-bloom-layer-items` (every asset and composition in selection order, for Timeline and
+Viewer layer drops) and `application/x-bloom-asset` (the first asset) or
+`application/x-bloom-composition` (the first composition when no asset is dragged) for Nodes. Internal drags
 are tied to the originating tree and snapshot; a changed or replaced project refuses a stale drag.
 
-File > Import, footer Import, Add > Import…, and file or folder drops onto Assets, Timeline and Nodes
-all prepare one worker import transaction, shown by the import progress dialog below. Imports land in the selected folder (a selected folder, or the folder of the selected
+File > Import, footer Import, Add > Import…, and file or folder drops onto Assets, Timeline, Viewer
+and Nodes all prepare one worker import transaction, shown by the import progress dialog below; a
+Timeline or Viewer drop then adds layers for what was imported. Imports land in the selected folder (a selected folder, or the folder of the selected
 item); a drop lands in the folder under the pointer, or at the root on empty space.
 A drop onto Assets also accepts an `smb://` URL a file manager hands Bloom for a mounted network
 share, resolving it through the same GVFS mount the file manager used; an `smb://` URL naming a
@@ -614,7 +635,11 @@ manager first" through the status bar's transient-message cell rather than dropp
 Import, Relink, Open Project, Save Project As and Export Frame file dialogs list every mounted
 network share in their sidebar alongside the platform's own entries.
 Dragging an image/sequence row to Nodes creates an Image source; dragging an Audio row creates an
-Audio source. Dropping media on Timeline creates the matching wired Layer. Image source cards and
+Audio source. Dropping media or compositions on the Timeline or the Viewer creates the matching
+wired Layers (interaction-model.md, "Layer drops"). During a Timeline drag the layer stack shows
+the `timelineLayerInsertionIndicator` Accent line (`Spacing::XXS` tall) above the row the layers
+will join, the lanes continue it, and over the lanes a `Spacing::XXS` wide Accent time marker shows
+the frame they will start on. Image source cards and
 Properties use an Asset `KDropdown` listing the project's Image
 and Sequence assets by their display names, with the kind glyph and Image / Sequence [n]
 text. Selection commits the stable asset id through the shared parameter setter. A removed id
