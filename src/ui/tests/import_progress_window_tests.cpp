@@ -177,10 +177,11 @@ int run(int argc, char** argv) {
     QTest::keyClick(dialog, Qt::Key_Escape);
     require(waitUntil([&] { return visibleDialog(fixture) == nullptr; }), "Escape closes it");
 
-    // A folder dropped on the Timeline that imports everything: the dialog closes on its own
-    // and the status bar reports the outcome.
+    // A folder dropped on the Timeline that imports everything: the dialog closes on its own,
+    // the imported files become layers (#380) and the status bar reports both.
     auto* timeline = fixture.window->findChild<ui::TimelineEditor*>();
     require(timeline != nullptr, "timeline");
+    const auto layersBefore = fixture.session.composition()->graph().layerOutputs().size();
     QMimeData mime;
     mime.setUrls({QUrl::fromLocalFile(file("More"))});
     holdAt(0);
@@ -197,9 +198,11 @@ int run(int argc, char** argv) {
     require(waitUntil([&] { return !assets.busy() && visibleDialog(fixture) == nullptr; }),
             "an import that added everything closes its dialog");
     require(assetCount() == 4, "both dropped files import");
+    require(fixture.session.composition()->graph().layerOutputs().size() == layersBefore + 2,
+            "the dropped files become layers once the import commits");
     require(fixture.window->statusStrip()->messageTextForTest() ==
-                QStringLiteral("Imported 2 assets"),
-            "the status bar reports the successful import");
+                QStringLiteral("Imported 2 assets · Added 2 layers"),
+            "the status bar reports the import and the layers it added");
     capture(QStringLiteral("05-import-success-status"), *fixture.window);
 
     // One long sequence: discovery with a busy bar, then reading frame by frame.

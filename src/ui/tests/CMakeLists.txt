@@ -1887,6 +1887,22 @@ bloom_enable_warnings(bloom_ui_layer_drop_test)
 bloom_add_test(NAME bloom.ui.layer-drop COMMAND bloom_ui_layer_drop_test LABELS ui integration
     TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 
+# #380 in the whole window: the Assets header for a video and a composition, and Timeline drags
+# from Assets (row insertion, time marker, a sequenced multi-item drop).
+add_executable(bloom_ui_layer_drop_window_test layer_drop_window_tests.cpp)
+target_include_directories(bloom_ui_layer_drop_window_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_ui_layer_drop_window_test PRIVATE bloom_ui bloom_runtime_compiler
+    bloom_commands Qt6::Test)
+target_compile_definitions(bloom_ui_layer_drop_window_test PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_ui_layer_drop_window_test)
+add_test(NAME bloom.ui.layer-drop-window COMMAND bloom_ui_layer_drop_window_test
+    --media-fixtures "${PROJECT_BINARY_DIR}/apps/bloom-media-worker/fixtures")
+set_tests_properties(bloom.ui.layer-drop-window PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1"
+    FIXTURES_REQUIRED media3
+    LABELS "ui;media;integration" TIMEOUT 180)
+
 # #380: the Assets header's composition frames, prepared on a worker and kept per revision.
 add_executable(bloom_ui_composition_thumbnail_test composition_thumbnail_tests.cpp)
 target_link_libraries(bloom_ui_composition_thumbnail_test PRIVATE bloom_ui)
