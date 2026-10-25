@@ -18,14 +18,32 @@ summary and digest. Missing media shows a warning symbol instead of its type sym
 for the reason.
 
 Import media with **File > Import**, **Add > Import…**, the footer's **Import** button, or by
-dropping files onto the panel. Imports land in the selected folder (or the folder of the selected
-item); a drop lands in the folder you drop on, or at the top level on empty space. Imports keep
-stable identities, so organizing them preserves the nodes and layers that already use them.
+dropping files or folders onto the panel. Imports land in the selected folder (or the folder of the
+selected item); a drop lands in the folder you drop on, or at the top level on empty space. Files
+and folders dropped on the Timeline or Nodes are imported into the selected folder too (they are not
+placed as layers). Dropping a folder imports every image, image sequence, video, audio file and LUT
+inside it and its subfolders; other files and hidden files are left out. Imports keep stable
+identities, so organizing them preserves the nodes and layers that already use them.
 
-When you import several files at once, one unreadable or unsupported file does not stop the rest.
-Every valid file is added in a single step that one **Undo** reverses. Each skipped file gets its
-own reason: the status bar names the first one, and the import job in **Jobs** lists them all.
-Cancelling an import adds nothing.
+### Import progress
+
+An import that takes longer than a moment shows its progress: a bar, which file it is on
+("Importing 3 of 12"), and the file's name. An image sequence counts as one file, however many of
+its frames you chose. Bloom waits 300 milliseconds before showing it, so a quick import does not
+flash a window at you. The rest of Bloom waits while the import runs.
+
+Choose **Cancel** (or press Escape) to stop. Bloom finishes at the next safe point: the file it was
+reading is left out, and everything imported before you cancelled is kept. One **Undo** removes
+what was kept.
+
+When an import adds everything, the window closes and the status bar says how many assets were
+imported. If anything was skipped or you cancelled, the window shows a summary instead, such as
+"Imported 10 · Skipped 2", with every skipped file and the reason it was skipped. A file that is
+already in the project is listed as skipped too. Choose **Close** or press Return when you have read
+it. The import job in **Jobs** keeps the same reasons.
+
+One unreadable or unsupported file never stops the rest: every valid file is added in a single step
+that one **Undo** reverses.
 
 ## Folders and names
 

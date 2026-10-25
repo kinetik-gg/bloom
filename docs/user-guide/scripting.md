@@ -20,7 +20,9 @@ Malformed arguments, unknown IDs, stale revisions, and command rejection produce
 and a non-zero exit status. An operation that succeeds but reports an issue -- for example a file
 an import skipped while importing the rest -- prints `warning[bloom-cli.operation-warning]` and
 keeps the zero exit status; Python and MCP results carry the same issue as a diagnostic with code
-`bloom.scripting.operation-warning` and `severity` `warning`. The run starts from a new in-memory session; use `new` or the facade's
+`bloom.scripting.operation-warning` and `severity` `warning`. `bloom.asset.import` also accepts a
+folder, which contributes the media files below it, exactly as a folder dropped on Assets does;
+scripted imports never show the import progress dialog. The run starts from a new in-memory session; use `new` or the facade's
 Save As operation when a durable project is required.
 
 `render` selects the first composition when no project is supplied. A frame writes `frame.png` or

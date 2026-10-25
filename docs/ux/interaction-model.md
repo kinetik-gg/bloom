@@ -184,7 +184,8 @@ search or inline rename field.
 | Click a Tags cell | Filters by the asset's first tag |
 | Drag rows onto a folder, onto a row, or onto empty space | Moves the dragged assets, compositions and folders into that folder, the row's folder, or the root, as one undoable step; a folder never moves into itself or a subfolder |
 | Drag rows to Timeline, Viewer or Nodes | Adds the first asset (or composition when no asset is dragged) as before |
-| Drop files onto Assets | Imports them into the folder under the pointer, or the root on empty space |
+| Drop files or folders onto Assets | Imports them into the folder under the pointer, or the root on empty space |
+| Drop files or folders onto Timeline or Nodes | Imports them into the selected Assets folder; no layer is added |
 | Right-click an asset | New Composition from Selection, Input Colour…, Replace Footage…, Reload Footage, Reveal in File Manager, Rename, Edit Tags…, Delete, then New Folder, New Composition…, Import… |
 | Right-click a composition | Open, Composition Settings…, Rename, Duplicate, Delete, then the same three |
 | Right-click a folder | Rename, Delete, then the same three; empty space offers only the three |
@@ -196,6 +197,26 @@ for every selected image, sequence, video or audio asset, the first on top, is f
 item's folder, opens, and is one undo step. Reload Footage probes the asset's own file again on the
 import worker, as a relink to the same path. Reveal in File Manager opens the folder holding the
 file.
+
+Every import from the rows above (and a dropped folder, which contributes the media files below it)
+shows the import progress modal (#377, [ADR 0029](../decisions/0029-import-progress-and-cancellation.md)).
+It appears after 300 ms, so a quicker import shows nothing; until then window input is held back, so
+the import blocks the window from its start. The modal blocks the application and shows the overall
+bar, `Importing 3 of 12` (a sequence counts once), the file in progress (`Pulse.0001.png · 120
+frames found` while a sequence is scanned, `Looking in <folder>` while a folder is searched) and
+Cancel. The preparation runs on the import worker throughout.
+
+| Gesture or control | Action |
+| --- | --- |
+| Cancel, Escape, closing the modal | Stops at the next safe point: the file in progress is abandoned, everything already imported is kept as one undoable step. The heading reads `Cancelling…` until the worker stops |
+| Return, Escape or Close on the summary | Closes it |
+
+An import that added everything closes the modal and shows `Imported N assets` in the status bar.
+Otherwise the modal becomes a summary: `Import finished`, `Import cancelled` or `Nothing was
+imported`; the counts (`Imported 10 · Skipped 2 · Not imported 9`); a note when something was kept
+after Cancel (one Undo removes it) or why nothing was added; and each skipped file with its plain
+reason, including files the project already holds. A quick import that skipped anything shows the
+summary at once. The status bar still names the first skipped file and Jobs keeps every reason.
 
 Deleting unused items or empty folders is immediate. Deleting an item that is used, or a folder that
 holds items, opens a warning first: one used item names how often and in how many compositions it is

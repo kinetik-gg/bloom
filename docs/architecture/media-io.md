@@ -2,7 +2,7 @@
 
 Status: working research
 
-Updated: 2026-10-23
+Updated: 2026-10-25
 
 ## v0 implemented boundary
 
@@ -490,8 +490,12 @@ They do not run independent “quick” probes that can disagree with the Asset 
 Audio assets are imported by the same worker transaction as images. A batch import records each
 file that fails probing, hashing or scanning as an `ImportFailure` (path and diagnostic) and keeps
 going; the remaining files publish as one undoable `ImportAssets` transaction, and each failure is
-attached to the import job as a warning diagnostic and to the operation result as an issue. Only
-cancellation, an over-large request, or a batch with no importable file refuses the whole import. `probeAudio` supplies the
+attached to the import job as a warning diagnostic and to the operation result as an issue.
+Cancellation keeps every file already prepared and abandons the one in progress (#377,
+[ADR 0029](../decisions/0029-import-progress-and-cancellation.md)); only cancellation before anything
+was prepared, an over-large request, or a batch with no importable file refuses the whole import. A
+chosen folder contributes the media files below it, and the numbered members of one sequence are
+prepared once. `probeAudio` supplies the
 persisted rate, channel count, frame count and exact duration; `decodeAudio` and `waveformSummary`
 run only on the blocking-I/O worker. The UI publishes a bounded waveform summary for Assets, the
 timeline bar and the audio source node card. Painting reads the immutable summary and never opens or

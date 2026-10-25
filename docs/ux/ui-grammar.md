@@ -24,7 +24,8 @@ This contract supersedes conflicting component metrics in [Visual Language](visu
 Every interactive control is a kit class: `KDropdown`, `KMenuButton`, `KButton`,
 `KIconButton`, `KIconToggle`, `KCheckBox`, `KSwitch`, `KValueField`, `KSlider`,
 `KSearchField`, `KLineEdit`, `KSection`, or `KColorSwatch`. Text uses TypeRole-bound `KLabel`.
-A read-only picture uses `KThumbnail`: the `ImageThumbnail` square on `SurfaceSunken`, showing a
+Read-only progress uses `KProgressBar` (see "Import Progress Dialog" below). A read-only picture
+uses `KThumbnail`: the `ImageThumbnail` square on `SurfaceSunken`, showing a
 worker-decoded proxy or a glyph fitted without changing its aspect ratio; it never loads anything.
 The panel switcher is the icon variant of **KDropdown**, with the same height, styling,
 interaction and popup. Menus are created only through `kit::makeMenu`.
@@ -363,6 +364,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `PropertyLabelCompact` | 64 | Timeline property label |
 | `DialogTextWidth / DiagnosticHeight` | 520 / 140 | Read-only explanation / job diagnostics |
 | `DialogWideWidth` | 700 | Minimum width of a settings dialog with Basic and Advanced sections (Composition dialog) |
+| `ProgressTrack` | 6 | `KProgressBar` track height |
 | `SplitHandle` | 6 | Draggable divider hit zone (`KSplitHandle`); paints a `TimelineSeparator`-width hairline centered in it |
 
 `kKeyDiamondRadius` is 4.5 and `kNodeCanvasHalfExtent` is 262144 logical pixels. Ratios,
@@ -601,8 +603,8 @@ a drop names a folder, never a position. The internal selection MIME coexists wi
 composition when no asset is dragged), retaining Timeline, Viewer and Nodes drops. Internal drags
 are tied to the originating tree and snapshot; a changed or replaced project refuses a stale drag.
 
-File > Import, footer Import, Add > Import… and file drops onto Assets all prepare one worker import
-transaction. Imports land in the selected folder (a selected folder, or the folder of the selected
+File > Import, footer Import, Add > Import…, and file or folder drops onto Assets, Timeline and Nodes
+all prepare one worker import transaction, shown by the import progress dialog below. Imports land in the selected folder (a selected folder, or the folder of the selected
 item); a drop lands in the folder under the pointer, or at the root on empty space.
 A drop onto Assets also accepts an `smb://` URL a file manager hands Bloom for a mounted network
 share, resolving it through the same GVFS mount the file manager used; an `smb://` URL naming a
@@ -677,6 +679,29 @@ is a `KCheckBox` with its `KLabel`; Background Colour is a `KColorChip` at its o
 `KAnchorGrid` itself. Opening Advanced grows the dialog to fit and closing it returns the height;
 spare height sits below the sections. The interaction contract is in
 [interaction-model.md](interaction-model.md#composition-dialog).
+
+**Import Progress Dialog.** Every batch import (#377,
+[ADR 0029](../decisions/0029-import-progress-and-cancellation.md)) shows one application-modal
+`QDialog` titled `Import`, at least `DialogTextWidth` wide, built only from kit parts with `Spacing::M`
+margins and `Spacing::S` between rows. While importing it shows a `KLabel` heading (`Importing 3 of
+12`, `Finding files…`, `Cancelling…`), the item in progress as an elided `UiSmall` `KLabel` in
+`Muted` ink, a full-width `KProgressBar`, and a Secondary `KButton` Cancel at the right. It appears
+only after `ImportProgressPresenter::kShowDelay` (300 ms) and refreshes every 50 ms from the
+worker's latest report. The summary replaces those rows with the heading (`Import finished`,
+`Import cancelled`, `Nothing was imported`), a counts `KLabel` joined by ` · `, an optional wrapped
+`UiSmall` `Muted` note, and the skipped files in a frameless scroll area at most `DiagnosticHeight`
+tall: each row is the file name in `Ui` above its reason in wrapped `UiSmall` `Muted`, rows
+`Spacing::S` apart. The one action is a Primary `KButton` Close, which also takes Return.
+
+`KProgressBar` is read-only and never takes focus: a `Field` track with fully rounded ends,
+`ProgressTrack` tall, filled with `Accent` from the start to completed / total. With no total it is
+indeterminate and a third-width `Accent` segment sweeps across the track and back over 1.6 s, held
+centred when motion is reduced. Disabled, the fill fades to `kDisabledOpacity`.
+
+Automation names: `importProgressDialog`, `importProgressHeading`, `importProgressFile`,
+`importProgressBar`, `importCancelButton`, `importSummaryCounts`, `importSummaryNote`,
+`importSkippedList`, `importSkippedFile`, `importSkippedReason` and `importCloseButton`; the bar's
+own object name is `kProgressBar`.
 
 **Inline field reasons.** A form that refuses a value keeps its accept button disabled and shows one
 plain reason directly under the offending field: a word-wrapped `KLabel` in `UiSmall` with
