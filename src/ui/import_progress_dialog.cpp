@@ -24,6 +24,26 @@ void setInk(QWidget& widget, const kit::Color ink) {
     widget.setPalette(palette);
 }
 
+// A sequence named by its first member, without the frame number: "SC020_SH070_image_0001.png"
+// reads "SC020_SH070_image" (the separator before the number goes with it).
+QString sequenceName(const QString& file) {
+    const auto dot = file.lastIndexOf(QLatin1Char('.'));
+    const QString stem = dot > 0 ? file.left(dot) : file;
+    auto end = stem.size();
+    while (end > 0 && !stem.at(end - 1).isDigit())
+        --end;
+    auto begin = end;
+    while (begin > 0 && stem.at(begin - 1).isDigit())
+        --begin;
+    if (begin == end)
+        return stem;
+    QString prefix = stem.left(begin);
+    while (!prefix.isEmpty() && QStringLiteral("._- ").contains(prefix.back()))
+        prefix.chop(1);
+    const QString name = prefix + stem.mid(end);
+    return name.isEmpty() ? stem : name;
+}
+
 // Holds back pointer, wheel, key and drop input while an import runs and its dialog is not shown
 // yet, so the import blocks the window from its first moment without a dialog flashing up.
 class InputHold final : public QObject {
@@ -118,36 +138,54 @@ ImportProgressDialog::ImportProgressDialog(QWidget* parent) : QDialog(parent) {
 void ImportProgressDialog::showProgress(const AssetController::ImportProgressState& state) {
     if (summarizing_)
         return;
-    if (state.stopping) {
-        heading_->setText(tr("Cancelling…"));
-        cancel_->setEnabled(false);
-    } else if (state.total == 0) {
-        heading_->setText(tr("Finding files…"));
-    } else {
-        heading_->setText(tr("Importing %1 of %2")
-                              .arg(std::min(state.completed + 1, state.total))
-                              .arg(state.total));
-    }
+    QString heading;
     QString detail;
-    if (state.total == 0 && !state.current.isEmpty())
-        detail = tr("Looking in %1").arg(state.current);
-    else if (state.sequenceFrames > 0)
-        detail = tr("%1 · %2 frames found").arg(state.current).arg(state.sequenceFrames);
-    else
-        detail = state.current;
+    if (state.finding) {
+        // The work total is not known yet: say what is being searched and how much was found.
+        if (state.findingFrames) {
+            heading = tr("Finding frames…");
+            detail = tr("%1 · %2 found").arg(sequenceName(state.current)).arg(state.found);
+        } else {
+            heading = tr("Finding files…");
+            detail = state.found > 0
+                         ? tr("Looking in %1 · %2 found").arg(state.current).arg(state.found)
+                         : tr("Looking in %1").arg(state.current);
+        }
+        bar_->setBusy();
+    } else if (!state.current.isEmpty()) {
+        const auto item =
+            state.frames > 0 ? tr("%1 · sequence").arg(sequenceName(state.current)) : state.current;
+        heading = state.total > 1 ? tr("Importing %1 of %2: %3")
+                                        .arg(std::min(state.completed + 1, state.total))
+                                        .arg(state.total)
+                                        .arg(item)
+                                  : tr("Importing %1").arg(item);
+        detail = state.frames > 0 ? tr("Reading frame %1 of %2")
+                                        .arg(std::min(state.framesRead + 1, state.frames))
+                                        .arg(state.frames)
+                                  : tr("Reading file");
+        bar_->setProgress(state.workDone, state.workTotal);
+    } else {
+        bar_->setProgress(state.workDone, state.workTotal);
+        return;
+    }
+    if (state.stopping) {
+        heading = tr("Cancelling…");
+        cancel_->setEnabled(false);
+    }
+    heading_->setElidedText(heading);
     detailFull_ = detail;
     detail_->setElidedText(detail);
-    bar_->setProgress(state.completed, state.total);
 }
 
 void ImportProgressDialog::showSummary(const AssetController::ImportReport& report) {
     summarizing_ = true;
     const bool refused = !report.failure.isEmpty();
     if (refused || report.imported == 0)
-        heading_->setText(report.cancelled && !refused ? tr("Import cancelled")
-                                                       : tr("Nothing was imported"));
+        heading_->setElidedText(report.cancelled && !refused ? tr("Import cancelled")
+                                                             : tr("Nothing was imported"));
     else
-        heading_->setText(report.cancelled ? tr("Import cancelled") : tr("Import finished"));
+        heading_->setElidedText(report.cancelled ? tr("Import cancelled") : tr("Import finished"));
     QStringList parts;
     parts << tr("Imported %1").arg(refused ? 0 : report.imported);
     if (!report.skipped.empty())
@@ -196,7 +234,9 @@ void ImportProgressDialog::showSummary(const AssetController::ImportReport& repo
     adjustSize();
 }
 
-QString ImportProgressDialog::headingText() const { return heading_->text(); }
+QString ImportProgressDialog::headingText() const {
+    return heading_->toolTip().isEmpty() ? heading_->text() : heading_->toolTip();
+}
 
 QString ImportProgressDialog::detailText() const {
     return summarizing_ ? counts_->text() : detailFull_;
@@ -211,7 +251,7 @@ void ImportProgressDialog::requestStop() {
     if (summarizing_)
         return;
     cancel_->setEnabled(false);
-    heading_->setText(tr("Cancelling…"));
+    heading_->setElidedText(tr("Cancelling…"));
     emit stopRequested();
 }
 

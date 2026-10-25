@@ -872,7 +872,7 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
         [files = std::move(files), directory, relinkId, relinkFont, folder, shared,
-         hook = importItemHook_](runtime::TaskContext& context) {
+         hook = importProgressHook_](runtime::TaskContext& context) {
             auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
             std::vector<runtime::TaskDiagnostic> warnings;
             auto cancel = [&] { return context.isCancellationRequested(); };
@@ -910,15 +910,15 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
                         shared->progress = state;
                     }
                     const auto name = state.current.filename().u8string();
+                    const bool finding = state.phase == commands::ImportProgress::Phase::Finding;
                     context.reportProgress(
-                        {.phase = "Importing media",
+                        {.phase = finding ? "Finding media" : "Importing media",
                          .subphase = std::string(name.begin(), name.end()),
-                         .completed = state.completed,
-                         .total = state.total == 0 ? std::nullopt
-                                                   : std::optional<std::uint64_t>(state.total)});
-                    if (hook && state.total > 0 && !state.current.empty() &&
-                        state.sequenceFrames == 0)
-                        hook(state.completed);
+                         .completed = finding ? state.found : state.workDone,
+                         .total = finding ? std::nullopt
+                                          : std::optional<std::uint64_t>(state.workTotal)});
+                    if (hook)
+                        hook(state);
                 };
                 auto prepared =
                     std::make_unique<commands::ImportAssets>(files, directory, stop, progress);
@@ -986,11 +986,17 @@ AssetController::ImportProgressState AssetController::importProgress() const {
     if (!importShared_)
         return state;
     const std::lock_guard lock(importShared_->mutex);
-    state.completed = importShared_->progress.completed;
-    state.total = importShared_->progress.total;
-    state.current =
-        QString::fromStdU16String(importShared_->progress.current.filename().u16string());
-    state.sequenceFrames = importShared_->progress.sequenceFrames;
+    const auto& progress = importShared_->progress;
+    state.finding = progress.phase == commands::ImportProgress::Phase::Finding;
+    state.completed = progress.completed;
+    state.total = progress.total;
+    state.workDone = progress.workDone;
+    state.workTotal = progress.workTotal;
+    state.current = QString::fromStdU16String(progress.current.filename().u16string());
+    state.found = progress.found;
+    state.findingFrames = progress.findingFrames;
+    state.framesRead = progress.framesRead;
+    state.frames = progress.frames;
     state.stopping = importShared_->stop.load(std::memory_order_acquire);
     state.workerThread = importShared_->workerThread;
     return state;

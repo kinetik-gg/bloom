@@ -39,8 +39,7 @@ void KProgressBar::setProgress(const std::uint64_t completed, const std::uint64_
         return;
     completed_ = clamped;
     total_ = total;
-    setAccessibleDescription(total_ == 0 ? tr("Working")
-                                         : tr("%1 of %2").arg(completed_).arg(total_));
+    setAccessibleDescription(total_ == 0 ? tr("Busy") : tr("%1 of %2").arg(completed_).arg(total_));
     updateSweep();
     update();
 }
@@ -49,6 +48,10 @@ double KProgressBar::fraction() const noexcept {
     if (total_ == 0)
         return 0.0;
     return static_cast<double>(completed_) / static_cast<double>(total_);
+}
+
+bool KProgressBar::sweeping() const noexcept {
+    return animation_.state() == QAbstractAnimation::Running;
 }
 
 QRectF KProgressBar::trackRect() const { return QRectF(rect()); }

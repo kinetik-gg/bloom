@@ -217,7 +217,7 @@ struct PreparedItem final {
 PreparedItem prepareItem(const std::filesystem::path& path,
                          const std::filesystem::path& projectDirectory,
                          const std::function<bool()>& cancel,
-                         const std::function<void(std::uint64_t)>& frames) {
+                         const std::function<void(std::uint64_t, std::uint64_t)>& frames) {
     const auto extension = lowerExtension(path);
     if (color::isLutExtension(path)) {
         const auto lut = color::readLutFile(path, cancel);
@@ -277,9 +277,9 @@ PreparedItem prepareItem(const std::filesystem::path& path,
             return PreparedItem::interrupted();
         return PreparedItem::failed(probe.diagnostic);
     }
-    auto sequence = media::scanSequence(path, cancel, [&](std::uint64_t found, std::uint64_t) {
+    auto sequence = media::scanSequence(path, cancel, [&](std::uint64_t done, std::uint64_t of) {
         if (frames)
-            frames(found);
+            frames(done, of);
     });
     if (!sequence.value.has_value()) {
         if (sequence.cancelled)
@@ -342,15 +342,14 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
             return true;
         }
     };
-    const auto report = [&](std::size_t completed, std::size_t total,
-                            const std::filesystem::path& current, std::uint64_t frames = 0) {
+    const auto finding = [&](const std::filesystem::path& current, std::uint64_t found,
+                             bool frames) {
         if (!progress)
             return;
         ImportProgress state;
-        state.completed = completed;
-        state.total = total;
         state.current = current;
-        state.sequenceFrames = frames;
+        state.found = found;
+        state.findingFrames = frames;
         progress(state);
     };
     const auto refuseCancelled = [this] {
@@ -383,7 +382,7 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
             admit(path);
             continue;
         }
-        report(0, 0, path);
+        finding(path, 0, false);
         std::vector<std::filesystem::path> found;
         std::filesystem::recursive_directory_iterator walk(
             path, std::filesystem::directory_options::skip_permission_denied, error);
@@ -401,8 +400,10 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
                     walk.disable_recursion_pending();
                 continue;
             }
-            if (walk->is_regular_file(entryError) && isImportableMediaFile(walk->path()))
+            if (walk->is_regular_file(entryError) && isImportableMediaFile(walk->path())) {
                 found.push_back(walk->path());
+                finding(path, found.size(), false);
+            }
             if (found.size() > kMaxImportItems) {
                 diagnostic_ = "Too many files selected";
                 return;
@@ -424,17 +425,56 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
             return;
         }
     }
+    // The work total: one unit per item, and a sequence's member count in place of its one,
+    // found by listing its directory before anything is read.
+    const auto total = items.size();
+    std::vector<std::uint64_t> weights(total, 1);
+    for (std::size_t index = 0; index < total; ++index) {
+        if (!media::sequenceKey(items[index]))
+            continue;
+        finding(items[index], 0, true);
+        const auto counted = media::countSequenceMembers(
+            items[index], stopRequested,
+            [&](std::uint64_t found, std::uint64_t) { finding(items[index], found, true); });
+        if (!counted) {
+            refuseCancelled();
+            notImported_ = total;
+            return;
+        }
+        weights[index] = std::max<std::uint64_t>(1, *counted);
+    }
+    std::uint64_t workTotal = 0;
+    for (const auto weight : weights)
+        workTotal += weight;
+    std::uint64_t workBase = 0;
+    const auto reading = [&](std::size_t index, std::uint64_t done, std::uint64_t framesRead,
+                             std::uint64_t frames) {
+        if (!progress)
+            return;
+        ImportProgress state;
+        state.phase = ImportProgress::Phase::Reading;
+        state.completed = index;
+        state.total = total;
+        state.workDone = done;
+        state.workTotal = workTotal;
+        if (index < total)
+            state.current = items[index];
+        state.framesRead = framesRead;
+        state.frames = frames;
+        progress(state);
+    };
     // One failing item never aborts the batch: it is recorded with its own diagnostic and the
     // remaining items import. Cancellation keeps every item already prepared.
-    const auto total = items.size();
     for (std::size_t index = 0; index < total; ++index) {
         const auto& path = items[index];
+        const auto weight = weights[index];
+        const auto sequenceFrames = weight > 1 ? weight : 0;
         if (stopRequested()) {
             cancelled_ = true;
             notImported_ = total - index;
             break;
         }
-        report(index, total, path);
+        reading(index, workBase, 0, sequenceFrames);
         if (stopRequested()) {
             cancelled_ = true;
             notImported_ = total - index;
@@ -443,7 +483,13 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
         PreparedItem item;
         try {
             item = prepareItem(path, projectDirectory, stopRequested,
-                               [&](std::uint64_t found) { report(index, total, path, found); });
+                               [&](std::uint64_t read, std::uint64_t of) {
+                                   // The listing pass inside the scan reports no total.
+                                   if (of == 0 || sequenceFrames == 0)
+                                       return;
+                                   const auto share = std::min(weight, read * weight / of);
+                                   reading(index, workBase + share, std::min(read, of), of);
+                               });
         } catch (const std::exception& error) {
             item = PreparedItem::failed(error.what());
         }
@@ -459,9 +505,10 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
             failures_.push_back({path, std::move(item.diagnostic), std::move(item.media)});
         else
             assets_.push_back(std::move(item.asset));
+        workBase += weight;
     }
     if (!cancelled_)
-        report(total, total, {});
+        reading(total, workTotal, 0, 0);
     if (!assets_.empty())
         return;
     if (cancelled_) {

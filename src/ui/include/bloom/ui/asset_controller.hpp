@@ -61,13 +61,21 @@ class AssetController final : public QObject {
         // Why nothing at all was added when no single file is to blame; empty otherwise.
         QString failure;
     };
-    // Where the running batch import stands, read from the import worker's latest report.
+    // Where the running batch import stands, read from the import worker's latest report (see
+    // commands::ImportProgress: items, work units, and the sequence member being read).
     struct ImportProgressState final {
+        // Searching folders or listing sequence members: the work total is not known yet.
+        bool finding = true;
         std::size_t completed = 0;
-        // Zero while chosen folders are still being searched.
         std::size_t total = 0;
+        std::uint64_t workDone = 0;
+        std::uint64_t workTotal = 0;
+        // The current file's name (or folder's, while finding).
         QString current;
-        std::uint64_t sequenceFrames = 0;
+        std::uint64_t found = 0;
+        bool findingFrames = false;
+        std::uint64_t framesRead = 0;
+        std::uint64_t frames = 0;
         bool stopping = false;
         // The thread preparing the import, so tests can prove it is not the interface thread.
         std::optional<std::thread::id> workerThread;
@@ -111,9 +119,10 @@ class AssetController final : public QObject {
     // Cancel from the import dialog: the worker stops at its next safe point and the items
     // already prepared are still imported, as one undoable step. cancel() discards instead.
     void stopImport();
-    // Test seam: runs on the import worker before each item is prepared, with its index.
-    void setImportItemHookForTesting(std::function<void(std::size_t)> hook) {
-        importItemHook_ = std::move(hook);
+    // Test seam: runs on the import worker after each progress report, with that report.
+    void
+    setImportProgressHookForTesting(std::function<void(const commands::ImportProgress&)> hook) {
+        importProgressHook_ = std::move(hook);
     }
     [[nodiscard]] bool missing(document::AssetId id) const;
     // Present but not displayable as it is (empty when fine or missing); see Preview::problem.
@@ -236,7 +245,7 @@ class AssetController final : public QObject {
     // Reload Footage requests waiting for the import worker, run one after another.
     std::deque<document::AssetId> pendingReloads_;
     std::shared_ptr<ImportShared> importShared_;
-    std::function<void(std::size_t)> importItemHook_;
+    std::function<void(const commands::ImportProgress&)> importProgressHook_;
     ProjectHost& host_;
     runtime::TaskScheduler& scheduler_;
     TaskUiBridge& bridge_;

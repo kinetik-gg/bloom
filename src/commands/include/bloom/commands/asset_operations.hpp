@@ -185,17 +185,32 @@ struct ImportFailure final {
     std::string diagnostic;
     std::optional<media::provider::Unavailable> media;
 };
-// Where a batch import stands. It is reported on the import worker before each item and once when
-// the batch is finished. An item is one chosen file, or one image sequence however many of its
-// members were chosen; a chosen folder contributes the items found inside it.
+// Where a batch import stands, reported on the import worker (#377). An item is one chosen file,
+// or one image sequence however many of its members were chosen; a chosen folder contributes the
+// items found inside it. Progress is measured in work: one unit per sequence member (each is read
+// and hashed, the slow part) and one per other item, so a long sequence moves the bar too.
 struct ImportProgress final {
+    enum class Phase : std::uint8_t {
+        // Searching chosen folders and listing sequence members; the work total is not known.
+        Finding,
+        // Probing, reading and hashing items against a known work total.
+        Reading,
+    };
+    Phase phase = Phase::Finding;
     std::size_t completed = 0;
-    // Zero while chosen folders are still being searched.
+    // Items in the batch; zero while finding.
     std::size_t total = 0;
-    // The item being prepared, or the folder being searched; empty once the batch is finished.
+    std::uint64_t workDone = 0;
+    // Zero while finding.
+    std::uint64_t workTotal = 0;
+    // The folder or sequence being searched, or the item being read; empty once finished.
     std::filesystem::path current;
-    // Members found so far while the current item is scanned as an image sequence.
-    std::uint64_t sequenceFrames = 0;
+    // Finding: files (in a folder) or frames (of a sequence) found so far in `current`.
+    std::uint64_t found = 0;
+    bool findingFrames = false;
+    // Reading a sequence: members read so far, of `frames`. Both zero for any other item.
+    std::uint64_t framesRead = 0;
+    std::uint64_t frames = 0;
 };
 using ImportProgressCallback = std::function<void(const ImportProgress&)>;
 // The file types a chosen folder contributes: images, image-sequence members, video, audio and

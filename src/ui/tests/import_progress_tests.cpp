@@ -6,6 +6,7 @@
 #include "asset_drop.hpp"
 #include "assets_editor_internal.hpp"
 #include "import_progress_dialog.hpp"
+#include "import_progress_test_support.hpp"
 
 #include <QApplication>
 #include <QDir>
@@ -36,6 +37,7 @@
 #include <condition_variable>
 #include <iostream>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 #include <thread>
 
@@ -64,37 +66,6 @@ void writeText(const QString& path, const QByteArray& bytes) {
     require(file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size(), "write fixture");
 }
 
-// Holds the import worker before one item until the test releases it.
-class Gate final {
-  public:
-    explicit Gate(const std::size_t at) : at_(at) {}
-    ~Gate() { release(); }
-    void operator()(const std::size_t index) {
-        if (index != at_)
-            return;
-        std::unique_lock lock(mutex_);
-        reached_ = true;
-        changed_.notify_all();
-        changed_.wait(lock, [this] { return released_; });
-    }
-    [[nodiscard]] bool reached() {
-        const std::lock_guard lock(mutex_);
-        return reached_;
-    }
-    void release() {
-        const std::lock_guard lock(mutex_);
-        released_ = true;
-        changed_.notify_all();
-    }
-
-  private:
-    std::size_t at_;
-    std::mutex mutex_;
-    std::condition_variable changed_;
-    bool reached_ = false;
-    bool released_ = false;
-};
-
 struct Harness final {
     runtime::TaskScheduler scheduler;
     ui::ProjectHost host{scheduler};
@@ -106,7 +77,7 @@ struct Harness final {
     ui::kit::KLineEdit* field = new ui::kit::KLineEdit(&window);
     ui::ImportProgressPresenter* presenter = new ui::ImportProgressPresenter(controller, window);
     QStringList notices;
-    std::shared_ptr<Gate> gate;
+    std::shared_ptr<ui::test::ImportGate> gate;
 
     Harness() {
         window.setWindowTitle(QStringLiteral("Bloom"));
@@ -118,14 +89,16 @@ struct Harness final {
     ~Harness() {
         if (gate)
             gate->release();
-        controller.setImportItemHookForTesting({});
+        controller.setImportProgressHookForTesting({});
         waitUntil([this] { return !controller.busy(); });
         if (auto* dialog = presenter->dialog())
             dialog->dismiss();
     }
-    void holdAt(const std::size_t index) {
-        gate = std::make_shared<Gate>(index);
-        controller.setImportItemHookForTesting([held = gate](std::size_t at) { (*held)(at); });
+    void holdAt(const std::size_t index) { holdWhen(ui::test::itemStart(index)); }
+    void holdWhen(ui::test::ImportReportPredicate at) {
+        gate = std::make_shared<ui::test::ImportGate>(std::move(at));
+        controller.setImportProgressHookForTesting(
+            [held = gate](const commands::ImportProgress& state) { (*held)(state); });
     }
     [[nodiscard]] std::size_t assetCount() const {
         return session.snapshot().project().assets().size();
@@ -154,9 +127,10 @@ void progressAdvancesAndStaysOffTheInterfaceThread(const QTemporaryDir& director
     auto* dialog = harness.visibleDialog();
     require(dialog->isModal() && dialog->windowModality() == Qt::ApplicationModal,
             "the import dialog blocks the window");
-    require(waitUntil([&] { return dialog->headingText() == QStringLiteral("Importing 2 of 3"); }),
-            "the dialog counts the item in progress");
-    require(dialog->detailText() == QStringLiteral("b.png"), "the dialog names the current file");
+    require(waitUntil(
+                [&] { return dialog->headingText() == QStringLiteral("Importing 2 of 3: b.png"); }),
+            "the dialog counts and names the item in progress");
+    require(dialog->detailText() == QStringLiteral("Reading file"), "a still reads as one file");
     require(dialog->progressBar()->completed() == 1 && dialog->progressBar()->total() == 3,
             "the bar shows one of three items done");
     require(dialog->cancelButton()->isVisible() && dialog->cancelButton()->isEnabled(),
@@ -345,6 +319,110 @@ void folderAndSequenceIntoSelectedFolder(const QTemporaryDir& directory) {
             "one sequence asset");
 }
 
+// Reading reports never move backwards, keep one work total, and end at 100%.
+void requireMonotonicWork(const std::vector<commands::ImportProgress>& log,
+                          const std::uint64_t workTotal) {
+    using Phase = commands::ImportProgress::Phase;
+    bool reading = false;
+    std::uint64_t last = 0;
+    for (const auto& state : log) {
+        if (state.phase == Phase::Finding) {
+            require(!reading, "nothing is found after reading starts");
+            continue;
+        }
+        reading = true;
+        require(state.workTotal == workTotal, "the work total stays fixed while reading");
+        require(state.workDone >= last && state.workDone <= workTotal, "the bar never goes back");
+        last = state.workDone;
+    }
+    require(reading && last == workTotal, "the worker reports 100% before the import commits");
+}
+
+// One long sequence is one item but many units of work: its frames are found first, with a busy
+// bar, then read against a known total, so the bar moves inside the single item.
+void longSequenceMovesTheBar(const QTemporaryDir& directory) {
+    using Phase = commands::ImportProgress::Phase;
+    Harness harness;
+    constexpr int frames = 40;
+    QDir(directory.path()).mkpath("long");
+    for (int frame = 1; frame <= frames; ++frame)
+        writePng(directory.filePath(
+                     QStringLiteral("long/SC020_SH070_image_%1.png").arg(frame, 4, 10, QChar('0'))),
+                 QColor(frame * 5, 40, 90));
+    const auto first = directory.filePath("long/SC020_SH070_image_0001.png");
+
+    // Discovery: the member count is not known yet.
+    harness.holdWhen([](const commands::ImportProgress& state) {
+        return state.phase == Phase::Finding && state.findingFrames && state.found == 25;
+    });
+    harness.controller.importFiles({first});
+    require(waitUntil([&] { return harness.gate->reached() && harness.visibleDialog(); }),
+            "discovery is held with the dialog shown");
+    auto* dialog = harness.visibleDialog();
+    require(waitUntil([&] { return dialog->headingText() == QStringLiteral("Finding frames…"); }),
+            "discovery says it is finding frames");
+    require(dialog->detailText() == QStringLiteral("SC020_SH070_image · 25 found"),
+            "discovery names the sequence and counts what it found");
+    require(dialog->progressBar()->busy() && dialog->progressBar()->sweeping(),
+            "the bar is busy and animating while the total is unknown");
+    harness.gate->release();
+    require(waitUntil([&] { return !harness.controller.busy(); }), "sequence import finishes");
+    require(harness.assetCount() == 1, "the sequence imports");
+    const auto log = harness.gate->log();
+    requireMonotonicWork(log, frames);
+    std::set<std::uint64_t> steps;
+    for (const auto& state : log)
+        if (state.phase == Phase::Reading)
+            steps.insert(state.workDone);
+    require(steps.size() == frames + 1, "every frame read moves the bar");
+    require(harness.session.undo() && harness.assetCount() == 0, "undo the sequence");
+
+    // Reading: held mid-sequence with a known total.
+    harness.holdWhen([](const commands::ImportProgress& state) {
+        return state.phase == Phase::Reading && state.frames == frames && state.framesRead == 20;
+    });
+    harness.controller.importFiles({first});
+    require(waitUntil([&] { return harness.gate->reached() && harness.visibleDialog(); }),
+            "reading is held mid-sequence");
+    dialog = harness.visibleDialog();
+    require(
+        waitUntil([&] { return dialog->detailText() == QStringLiteral("Reading frame 21 of 40"); }),
+        "the dialog says which frame it is reading");
+    require(dialog->headingText() == QStringLiteral("Importing SC020_SH070_image · sequence"),
+            "a single item is named without a count");
+    require(!dialog->progressBar()->busy() && dialog->progressBar()->completed() == 20 &&
+                dialog->progressBar()->total() == frames,
+            "the bar is half full inside the one sequence");
+    require(harness.assetCount() == 0, "nothing commits mid-sequence");
+    harness.gate->release();
+    require(waitUntil([&] { return !harness.controller.busy(); }), "second import finishes");
+    requireMonotonicWork(harness.gate->log(), frames);
+}
+
+// Work is summed across items: two stills and a ten-frame sequence are twelve units.
+void mixedItemsWeighByWork(const QTemporaryDir& directory) {
+    Harness harness;
+    QDir(directory.path()).mkpath("mixed");
+    writePng(directory.filePath("mixed/a.png"));
+    writePng(directory.filePath("mixed/b.png"));
+    for (int frame = 1; frame <= 10; ++frame)
+        writePng(
+            directory.filePath(QStringLiteral("mixed/Seq_%1.png").arg(frame, 4, 10, QChar('0'))));
+    harness.holdAt(2);
+    harness.controller.importFiles({directory.filePath("mixed/a.png"),
+                                    directory.filePath("mixed/Seq_0001.png"),
+                                    directory.filePath("mixed/b.png")});
+    require(waitUntil([&] { return harness.gate->reached(); }), "held at the last still");
+    const auto state = harness.controller.importProgress();
+    require(!state.finding && state.total == 3 && state.completed == 2 && state.workTotal == 12 &&
+                state.workDone == 11,
+            "a still and a ten-frame sequence are eleven of twelve units");
+    harness.gate->release();
+    require(waitUntil([&] { return !harness.controller.busy(); }), "mixed import finishes");
+    require(harness.assetCount() == 3, "both stills and the sequence import");
+    requireMonotonicWork(harness.gate->log(), 12);
+}
+
 bool sendDrop(QWidget& target, const QMimeData& mime, const QPoint position) {
     QDragEnterEvent enter(position, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(&target, &enter);
@@ -441,6 +519,8 @@ int main(int argc, char** argv) {
         inputIsHeldDuringTheThreshold(directory);
         folderAndSequenceIntoSelectedFolder(directory);
         dropsImportWithProgress(directory);
+        longSequenceMovesTheBar(directory);
+        mixedItemsWeighByWork(directory);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

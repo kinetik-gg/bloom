@@ -5,6 +5,7 @@
 // destination path to capture the whole screen, window titles included.
 
 #include "import_progress_dialog.hpp"
+#include "import_progress_test_support.hpp"
 #include "window_fixture.hpp"
 
 #include <QDir>
@@ -49,36 +50,6 @@ void writePng(const QString& path, const QColor& colour) {
     painter.end();
     require(image.save(path), "generate PNG fixture");
 }
-
-class Gate final {
-  public:
-    explicit Gate(const std::size_t at) : at_(at) {}
-    ~Gate() { release(); }
-    void operator()(const std::size_t index) {
-        if (index != at_)
-            return;
-        std::unique_lock lock(mutex_);
-        reached_ = true;
-        changed_.notify_all();
-        changed_.wait(lock, [this] { return released_; });
-    }
-    [[nodiscard]] bool reached() {
-        const std::lock_guard lock(mutex_);
-        return reached_;
-    }
-    void release() {
-        const std::lock_guard lock(mutex_);
-        released_ = true;
-        changed_.notify_all();
-    }
-
-  private:
-    std::size_t at_;
-    std::mutex mutex_;
-    std::condition_variable changed_;
-    bool reached_ = false;
-    bool released_ = false;
-};
 
 class Capture final {
   public:
@@ -141,13 +112,15 @@ int run(int argc, char** argv) {
     QTest::qWait(200);
     auto& assets = *fixture.assets;
     const auto capture = Capture{};
-    std::shared_ptr<Gate> gate;
-    const auto holdAt = [&](const std::size_t index) {
-        gate = std::make_shared<Gate>(index);
-        assets.setImportItemHookForTesting([held = gate](std::size_t at) { (*held)(at); });
+    std::shared_ptr<ui::test::ImportGate> gate;
+    const auto holdWhen = [&](ui::test::ImportReportPredicate at) {
+        gate = std::make_shared<ui::test::ImportGate>(std::move(at));
+        assets.setImportProgressHookForTesting(
+            [held = gate](const commands::ImportProgress& state) { (*held)(state); });
     };
+    const auto holdAt = [&](const std::size_t index) { holdWhen(ui::test::itemStart(index)); };
     struct Release final {
-        std::shared_ptr<Gate>& gate;
+        std::shared_ptr<ui::test::ImportGate>& gate;
         ~Release() {
             if (gate)
                 gate->release();
@@ -167,8 +140,11 @@ int run(int argc, char** argv) {
     auto* dialog = visibleDialog(fixture);
     require(dialog->parentWidget() == fixture.window.get() && dialog->isModal(),
             "the dialog is modal over the main window");
-    require(waitUntil([&] { return dialog->headingText() == QStringLiteral("Importing 3 of 4"); }),
-            "progress over the main window");
+    require(waitUntil([&] {
+                return dialog->headingText() ==
+                       QStringLiteral("Importing 3 of 4: Pulse · sequence");
+            }),
+            "progress over the main window names the sequence");
     capture(QStringLiteral("01-import-progress"), *dialog);
 
     // Cancel: acknowledged at once, then the cancelled summary.
@@ -225,7 +201,44 @@ int run(int argc, char** argv) {
                 QStringLiteral("Imported 2 assets"),
             "the status bar reports the successful import");
     capture(QStringLiteral("05-import-success-status"), *fixture.window);
-    assets.setImportItemHookForTesting({});
+
+    // One long sequence: discovery with a busy bar, then reading frame by frame.
+    using Phase = commands::ImportProgress::Phase;
+    QDir(directory.path()).mkpath(QStringLiteral("Shot"));
+    constexpr int shotFrames = 60;
+    for (int frame = 1; frame <= shotFrames; ++frame)
+        writePng(
+            file(QStringLiteral("Shot/SC020_SH070_image_%1.png").arg(frame, 4, 10, QChar('0'))),
+            QColor(30 + frame * 3, 70, 120));
+    const auto shot = file("Shot/SC020_SH070_image_0001.png");
+    holdWhen([](const commands::ImportProgress& state) {
+        return state.phase == Phase::Finding && state.findingFrames && state.found == 37;
+    });
+    assets.importFiles({shot});
+    require(waitUntil([&] { return gate->reached() && visibleDialog(fixture) != nullptr; }),
+            "discovery dialog");
+    dialog = visibleDialog(fixture);
+    require(waitUntil([&] { return dialog->headingText() == QStringLiteral("Finding frames…"); }),
+            "discovery over the main window");
+    capture(QStringLiteral("06-import-finding-frames"), *dialog);
+    gate->release();
+    require(waitUntil([&] { return !assets.busy(); }), "sequence import finishes");
+    require(fixture.session.undo(), "undo the sequence");
+    holdWhen([](const commands::ImportProgress& state) {
+        return state.phase == Phase::Reading && state.frames == shotFrames &&
+               state.framesRead == 24;
+    });
+    assets.importFiles({shot});
+    require(waitUntil([&] { return gate->reached() && visibleDialog(fixture) != nullptr; }),
+            "reading dialog");
+    dialog = visibleDialog(fixture);
+    require(
+        waitUntil([&] { return dialog->detailText() == QStringLiteral("Reading frame 25 of 60"); }),
+        "reading a sequence over the main window");
+    capture(QStringLiteral("07-import-reading-sequence"), *dialog);
+    gate->release();
+    require(waitUntil([&] { return !assets.busy(); }), "second sequence import finishes");
+    assets.setImportProgressHookForTesting({});
     return 0;
 }
 } // namespace
