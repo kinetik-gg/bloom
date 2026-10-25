@@ -34,6 +34,8 @@ the bar fills: a sequence shows "Reading frame 120 of 522", and its name with "�
 ("Importing SC020_SH070_image · sequence"). An image sequence is one item however many of its
 frames you chose, but every frame counts towards the bar, so a long sequence moves it steadily.
 When you import several items the heading also says which one it is on ("Importing 2 of 5: …").
+A single large file, such as a big still or a video, is read in one go, so while it is read the bar
+moves back and forth to show Bloom is working.
 Bloom waits 300 milliseconds before showing the window, so a quick import does not flash it at you.
 The rest of Bloom waits while the import runs.
 

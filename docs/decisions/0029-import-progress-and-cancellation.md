@@ -25,7 +25,9 @@ modal that ends with a clear result.
    through a single long sequence. A first **finding** phase searches chosen folders and lists each
    sequence's members without opening them, reporting what it found over a busy bar; the **reading**
    phase then probes and hashes against the known total ("Reading frame 120 of 522"). The heading
-   names the item and adds "n of N" only when several were chosen. (Amended after owner review: the
+   names the item and adds "n of N" only when several were chosen. A file read as one unit has no
+   measurable progress of its own, so the bar is busy while it is read if nothing has finished yet,
+   or once the same file has been read for 400 ms; the determinate values stay monotonic. (Amended after owner review: the
    first version counted items, so one long sequence sat at 0 of 1 until it finished.) A chosen folder contributes the media files below it (images, sequence members,
    video, audio and LUTs by extension, ignoring case, sorted, hidden entries skipped); numbered
    members collapse to one sequence item before any probing. A folder with no media is one skipped

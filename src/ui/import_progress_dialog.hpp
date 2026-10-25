@@ -8,11 +8,13 @@
 #include <bloom/ui/asset_controller.hpp>
 
 #include <QDialog>
+#include <QElapsedTimer>
 #include <QPointer>
 #include <QTimer>
 
 #include <chrono>
 #include <memory>
+#include <utility>
 
 class QVBoxLayout;
 class QWidget;
@@ -28,6 +30,11 @@ class ImportProgressDialog final : public QDialog {
     Q_OBJECT
 
   public:
+    // A file read as one unit (a still, a video, audio, a LUT) has no measurable progress of its
+    // own. The bar is busy while such a file is read and nothing in the batch has finished yet, or
+    // once the same file has been read for this long; a batch of quick files stays determinate.
+    static constexpr std::chrono::milliseconds kItemBusyAfter{400};
+
     explicit ImportProgressDialog(QWidget* parent = nullptr);
 
     void showProgress(const AssetController::ImportProgressState& state);
@@ -67,6 +74,9 @@ class ImportProgressDialog final : public QDialog {
     kit::KButton* cancel_ = nullptr;
     kit::KButton* close_ = nullptr;
     QString detailFull_;
+    // The item the last report was reading, and since when, for kItemBusyAfter.
+    std::pair<std::size_t, QString> readingItem_;
+    QElapsedTimer readingSince_;
     bool summarizing_ = false;
     bool dismissing_ = false;
 };

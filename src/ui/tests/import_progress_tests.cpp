@@ -133,6 +133,12 @@ void progressAdvancesAndStaysOffTheInterfaceThread(const QTemporaryDir& director
     require(dialog->detailText() == QStringLiteral("Reading file"), "a still reads as one file");
     require(dialog->progressBar()->completed() == 1 && dialog->progressBar()->total() == 3,
             "the bar shows one of three items done");
+    // A file read as one unit has no progress of its own: held long enough, the bar turns busy
+    // rather than sitting still.
+    require(waitUntil([&] { return dialog->progressBar()->busy(); },
+                      2 * static_cast<int>(ui::ImportProgressDialog::kItemBusyAfter.count()) + 500),
+            "a long single-unit file turns the bar busy");
+    require(dialog->progressBar()->sweeping(), "the busy bar animates");
     require(dialog->cancelButton()->isVisible() && dialog->cancelButton()->isEnabled(),
             "Cancel is offered while importing");
     const auto progress = harness.controller.importProgress();
@@ -399,6 +405,35 @@ void longSequenceMovesTheBar(const QTemporaryDir& directory) {
     requireMonotonicWork(harness.gate->log(), frames);
 }
 
+// One large file read as a single unit (no frames to count) never shows an empty, static bar:
+// the bar is busy and sweeping for as long as the file is read.
+void singleLargeFileShowsBusy(const QTemporaryDir& directory) {
+    Harness harness;
+    QDir(directory.path()).mkpath("large");
+    QImage image(2048, 2048, QImage::Format_RGBA8888);
+    image.fill(QColor(30, 60, 90));
+    require(image.save(directory.filePath("large/Matte_painting.png")), "large still fixture");
+    harness.holdAt(0);
+    harness.controller.importFiles({directory.filePath("large/Matte_painting.png")});
+    require(waitUntil([&] { return harness.gate->reached() && harness.visibleDialog(); }),
+            "the large file is held while it is read");
+    auto* dialog = harness.visibleDialog();
+    require(waitUntil([&] {
+                return dialog->headingText() == QStringLiteral("Importing Matte_painting.png");
+            }),
+            "the dialog names the large file");
+    require(dialog->detailText() == QStringLiteral("Reading file"), "it reads as one file");
+    for (int sample = 0; sample < 10; ++sample) {
+        require(dialog->progressBar()->busy() && dialog->progressBar()->sweeping(),
+                "an unmeasured single-unit read keeps the bar busy and sweeping");
+        QTest::qWait(static_cast<int>(ui::ImportProgressPresenter::kRefreshInterval.count()));
+    }
+    harness.gate->release();
+    require(waitUntil([&] { return !harness.controller.busy(); }), "the large file imports");
+    require(harness.assetCount() == 1, "one asset");
+    requireMonotonicWork(harness.gate->log(), 1);
+}
+
 // Work is summed across items: two stills and a ten-frame sequence are twelve units.
 void mixedItemsWeighByWork(const QTemporaryDir& directory) {
     Harness harness;
@@ -521,6 +556,7 @@ int main(int argc, char** argv) {
         dropsImportWithProgress(directory);
         longSequenceMovesTheBar(directory);
         mixedItemsWeighByWork(directory);
+        singleLargeFileShowsBusy(directory);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

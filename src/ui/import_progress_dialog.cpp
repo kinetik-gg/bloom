@@ -164,7 +164,18 @@ void ImportProgressDialog::showProgress(const AssetController::ImportProgressSta
                                         .arg(std::min(state.framesRead + 1, state.frames))
                                         .arg(state.frames)
                                   : tr("Reading file");
-        bar_->setProgress(state.workDone, state.workTotal);
+        const std::pair reading{state.completed, state.current};
+        if (reading != readingItem_ || !readingSince_.isValid()) {
+            readingItem_ = reading;
+            readingSince_.start();
+        }
+        const bool unmeasured =
+            state.frames == 0 &&
+            (state.workDone == 0 || readingSince_.elapsed() >= kItemBusyAfter.count());
+        if (unmeasured)
+            bar_->setBusy();
+        else
+            bar_->setProgress(state.workDone, state.workTotal);
     } else {
         bar_->setProgress(state.workDone, state.workTotal);
         return;

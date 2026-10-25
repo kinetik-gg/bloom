@@ -686,7 +686,9 @@ spare height sits below the sections. The interaction contract is in
 margins and `Spacing::S` between rows. While importing it shows an elided `KLabel` heading (`Finding frames…`, `Finding files…`,
 `Importing SC020_SH070_image · sequence`, `Importing 2 of 5: plate.png`, `Cancelling…`), an elided
 `UiSmall` `KLabel` detail in `Muted` ink (`SC020_SH070_image · 522 found`, `Reading frame 120 of
-522`, `Reading file`), a full-width `KProgressBar` (busy while finding, then filled by work units),
+522`, `Reading file`), a full-width `KProgressBar` (busy while finding, then filled by work units;
+busy again while a single-unit file is read with nothing finished yet, or for longer than
+`ImportProgressDialog::kItemBusyAfter`, 400 ms),
 and a Secondary `KButton` Cancel at the right. It appears
 only after `ImportProgressPresenter::kShowDelay` (300 ms) and refreshes every 50 ms from the
 worker's latest report. The summary replaces those rows with the heading (`Import finished`,

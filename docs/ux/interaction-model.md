@@ -213,7 +213,10 @@ phases:
   sequence`, or `Importing plate.png`) and adds `2 of 5:` only when several items were chosen; the
   detail reads `Reading frame 120 of 522` for a sequence or `Reading file` otherwise. The bar fills by
   work, one unit per sequence frame (each is read and hashed) and one per other item, summed across
-  the items, so it moves through a single long sequence and never goes back.
+  the items, so it moves through a single long sequence and never goes back. A file read as one
+  unit (a still, video, audio file or LUT) has no progress of its own: the bar is busy while it is
+  read if nothing has finished yet (a lone large file), or once the same file has been read for
+  400 ms, so a batch of quick files stays determinate and a long file never leaves it still.
 
 | Gesture or control | Action |
 | --- | --- |
