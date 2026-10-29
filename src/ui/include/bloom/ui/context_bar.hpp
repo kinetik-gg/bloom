@@ -55,7 +55,6 @@ class ContextBar final : public QWidget {
 
   protected:
     void keyPressEvent(QKeyEvent* event) override;
-    void paintEvent(QPaintEvent* event) override;
 
   private:
     void buildTools();

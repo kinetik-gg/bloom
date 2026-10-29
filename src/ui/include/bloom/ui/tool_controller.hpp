@@ -60,13 +60,16 @@ struct ViewerToolInfo {
 // P and T. Escape is not a tool key here; the Viewer gives it its confirming meaning.
 [[nodiscard]] std::optional<ViewerTool> toolForKey(int key) noexcept;
 
+// The shape schema's default stroke, in composition pixels.
+inline constexpr double kShapeStrokeDefault = 2.0;
+
 // The style a newly drawn shape starts with: the schema defaults until the artist changes them.
 struct NewShapeStyle {
     bool fillEnabled = true;
     core::Color4d fillColor{1.0, 1.0, 1.0, 1.0};
     bool strokeEnabled = false;
     core::Color4d strokeColor{0.0, 0.0, 0.0, 1.0};
-    double strokeWidth = 2.0;
+    double strokeWidth = kShapeStrokeDefault;
     friend bool operator==(const NewShapeStyle&, const NewShapeStyle&) = default;
 };
 [[nodiscard]] commands::ShapeLayerStyle shapeLayerStyle(const NewShapeStyle& style);

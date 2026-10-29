@@ -7,6 +7,7 @@
 #include <QCoreApplication>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QStyle>
@@ -325,6 +326,27 @@ void KIconToggle::paintEvent(QPaintEvent*) {
     const QPointF origin(std::round((width() - size.width()) * dpr / 2) / dpr,
                          std::round((height() - size.height()) * dpr / 2) / dpr);
     painter.drawPixmap(origin, glyph);
+    // A slot that holds more choices behind a press and hold (the context bar's shape slot) carries
+    // a small corner mark in the glyph's ink.
+    if (property("flyoutMark").toBool()) {
+        const QRectF body = controlBody(*this);
+        const qreal leg = px(Spacing::XS) + px(Spacing::ControlInset);
+        const QPointF corner = body.bottomRight() - QPointF(px(Spacing::ControlInset),
+                                                            px(Spacing::ControlInset));
+        QPainterPath mark;
+        mark.moveTo(corner);
+        mark.lineTo(corner - QPointF(leg, 0));
+        mark.lineTo(corner - QPointF(0, leg));
+        mark.closeSubpath();
+        painter.setRenderHint(QPainter::Antialiasing);
+        const auto ink = buttonColors(ButtonKind::Secondary,
+                                      isChecked() ? State::Selected
+                                      : isEnabled() ? State::Normal
+                                                    : State::Disabled,
+                                      false)
+                             .ink;
+        painter.fillPath(mark, ink);
+    }
 }
 KLabel::KLabel(QWidget* parent) : KLabel(QString{}, parent) {}
 KLabel::KLabel(const QString& text, QWidget* parent, TypeRole role) : QLabel(text, parent) {

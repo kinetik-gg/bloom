@@ -82,6 +82,8 @@ class KIconButton : public QToolButton {
   private:
     bool hovered_ = false;
 };
+// A checkable icon button. Its "flyoutMark" property draws a small corner mark: the slot holds more
+// choices behind a press and hold or a right-click (the context bar's shape slot).
 class KIconToggle final : public KIconButton {
     Q_OBJECT
   public:

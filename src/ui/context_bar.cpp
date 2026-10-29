@@ -8,6 +8,7 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/painting.hpp>
+#include <bloom/ui/kit/surfaces.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/layer_alignment_actions.hpp>
 #include <bloom/ui/viewer_editor.hpp>
@@ -15,10 +16,9 @@
 #include <QAction>
 #include <QContextMenuEvent>
 #include <QHBoxLayout>
+#include <QVBoxLayout>
 #include <QKeyEvent>
 #include <QMenu>
-#include <QPainter>
-#include <QPainterPath>
 #include <QSignalBlocker>
 #include <QWidgetAction>
 
@@ -63,31 +63,6 @@ QString toolObjectName(const ViewerTool tool) {
            QString::fromLatin1(stem.data(), static_cast<qsizetype>(stem.size()));
 }
 
-// The small corner mark that says the shape slot holds more tools (press and hold, or right-click).
-class FlyoutMark final : public QWidget {
-  public:
-    explicit FlyoutMark(QWidget* slot) : QWidget(slot) {
-        setAttribute(Qt::WA_TransparentForMouseEvents);
-        const int box = kit::px(kit::Spacing::S);
-        setFixedSize(box, box);
-        move(slot->width() - box - kit::px(kit::Spacing::ControlInset),
-             slot->height() - box - kit::px(kit::Spacing::ControlInset));
-    }
-
-  protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-        QPainterPath mark;
-        mark.moveTo(width(), 0);
-        mark.lineTo(width(), height());
-        mark.lineTo(0, height());
-        mark.closeSubpath();
-        painter.fillPath(mark, kit::color(parentWidget()->isEnabled() ? kit::Color::Muted
-                                                                      : kit::Color::Faint));
-    }
-};
-
 QWidget* group(QWidget* parent, const QString& name) {
     auto* widget = new QWidget(parent);
     widget->setObjectName(name);
@@ -107,10 +82,6 @@ ContextBar::ContextBar(CompositionSession& session, CompositionPreviewController
     setAccessibleName(tr("Context bar"));
     setFixedHeight(kit::px(kit::Size::ContextBarHeight));
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    setAutoFillBackground(true);
-    auto colors = palette();
-    colors.setColor(QPalette::Window, kit::color(kit::Color::Surface));
-    setPalette(colors);
 
     buildTools();
     EditorChromeRowSpec spec;
@@ -174,12 +145,24 @@ ContextBar::ContextBar(CompositionSession& session, CompositionPreviewController
                                            alignment_->action(A::AlignVerticalMiddle),
                                            alignment_->action(A::AlignBottom)}));
 
-    row_ = EditorArea::buildChromeRow(spec, this);
-    auto* layout = new QHBoxLayout(this);
+    // A Surface strip holding the row inside ChromePadding, and one Border hairline separating the
+    // bar from the workspace below it (inside the bottom padding).
+    auto* strip = new kit::KSurface(this, kit::Color::Surface);
+    row_ = EditorArea::buildChromeRow(spec, strip);
+    auto* rowLayout = new QHBoxLayout(strip);
     const int padding = kit::px(kit::Spacing::ChromePadding);
-    layout->setContentsMargins(padding, padding, padding, padding);
+    rowLayout->setContentsMargins(padding, padding, padding,
+                                  padding - kit::px(kit::Size::Hairline));
+    rowLayout->setSpacing(0);
+    rowLayout->addWidget(row_);
+    auto* hairline = new kit::KSurface(this, kit::Color::Border);
+    hairline->setObjectName(QStringLiteral("contextBarHairline"));
+    hairline->setFixedHeight(kit::px(kit::Size::Hairline));
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
-    layout->addWidget(row_);
+    layout->addWidget(strip);
+    layout->addWidget(hairline);
     if (auto* overflow = row_->findChild<QToolButton*>(spec.overflowButtonName))
         overflow->setFocusPolicy(Qt::NoFocus);
 
@@ -254,7 +237,7 @@ void ContextBar::buildTools() {
         session_.tools().setTool(session_.tools().lastShapeTool());
         refreshTools();
     });
-    (void)new FlyoutMark(shapeSlot_);
+    shapeSlot_->setProperty("flyoutMark", true);
     layout->addWidget(shapeSlot_);
     addTool(ViewerTool::Line);
     addTool(ViewerTool::Pen);
@@ -393,16 +376,6 @@ void ContextBar::keyPressEvent(QKeyEvent* event) {
             return;
         }
     QWidget::keyPressEvent(event);
-}
-
-void ContextBar::paintEvent(QPaintEvent* event) {
-    QWidget::paintEvent(event);
-    // One hairline separates the bar from the workspace below it.
-    QPainter painter(this);
-    painter.fillRect(kit::snappedToDevicePixels(
-                         painter, QRectF(0, height() - kit::px(kit::Size::Hairline), width(),
-                                         kit::px(kit::Size::Hairline))),
-                     kit::color(kit::Color::Border));
 }
 
 } // namespace bloom::ui
