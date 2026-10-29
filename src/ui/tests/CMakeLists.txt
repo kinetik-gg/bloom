@@ -1228,6 +1228,14 @@ endif()
 # The maximized Viewer at a small and a large size, with and without a composition: captures for
 # review, plus the check that no hosted header or footer control lies outside its row.
 # The popup chin check: holds one dropdown popup or menu open for a compositor screenshot.
+# Lane C review captures of every dialog (a tool, not a test): bloom_dialog_capture <dir> <1|1.5>.
+add_executable(bloom_dialog_capture dialog_capture.cpp)
+target_include_directories(bloom_dialog_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_dialog_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_dialog_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_dialog_capture)
+
 add_executable(bloom_popup_capture popup_capture.cpp)
 target_link_libraries(bloom_popup_capture PRIVATE bloom_ui_kit)
 bloom_enable_warnings(bloom_popup_capture)
