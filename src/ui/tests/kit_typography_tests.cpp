@@ -20,6 +20,7 @@
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/jobs_editor.hpp>
+#include <bloom/ui/kit/dialog_prompts.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/dropdown_popup.hpp>
 #include <bloom/ui/kit/fonts.hpp>
@@ -32,6 +33,7 @@
 #include <QApplication>
 #include <QDialog>
 #include <QDirIterator>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFontDatabase>
 #include <QFontInfo>
@@ -53,6 +55,7 @@
 #include <functional>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <set>
 
 namespace {
@@ -303,8 +306,9 @@ class Audit {
     int observations_ = 0;
 };
 
-// Runs `open` (which blocks in a modal exec()) and audits the modal surface it shows, then
-// dismisses it.
+// Runs `open` and audits the modal surface it shows, then dismisses it. `open` may block in a
+// modal exec() or return at once with a window-modal kit dialog shown asynchronously; the poll
+// keeps running until the modal appears either way.
 void auditModal(Audit& audit, const QString& name, const std::function<void()>& open) {
     bool seen = false;
     QTimer poll;
@@ -323,6 +327,10 @@ void auditModal(Audit& audit, const QString& name, const std::function<void()>& 
     });
     poll.start();
     open();
+    QElapsedTimer waited;
+    waited.start();
+    while (!seen && waited.elapsed() < 3000)
+        QApplication::processEvents(QEventLoop::AllEvents, 10);
     poll.stop();
     audit.expect(seen, (name + QStringLiteral(" opened for the audit")).toStdString());
 }
@@ -335,7 +343,7 @@ QTreeWidgetItem* findRow(QTreeWidget& tree, const QString& text) {
 }
 
 // The main window's own Assets panel with two imported stills, one filed in a folder; its context
-// menu and the modals it opens (Edit Tags, Input Colour, the stock QMessageBox delete
+// menu and the modals it opens (Edit Tags, Input Colour, the kit delete
 // confirmation).
 void auditAssets(Audit& audit, ui::test::WindowFixture& fixture, const QString& capture) {
     QTemporaryDir directory;
@@ -408,9 +416,9 @@ void auditAssets(Audit& audit, ui::test::WindowFixture& fixture, const QString& 
             QStringLiteral("Edit Tags"));
     viaMenu(QStringLiteral("Plate"), QStringLiteral("assetsInputColorAction"),
             QStringLiteral("Input Colour"));
-    // Deleting a folder that holds items asks first, through a stock QMessageBox.
+    // Deleting a folder that holds items asks first, through a kit confirmation.
     viaMenu(QStringLiteral("Plates"), QStringLiteral("assetsDeleteAction"),
-            QStringLiteral("Delete confirmation (QMessageBox)"));
+            QStringLiteral("Delete confirmation"));
 }
 
 void auditWindowPopups(Audit& audit, ui::MainWindow& window) {
@@ -448,17 +456,17 @@ void auditWindowPopups(Audit& audit, ui::MainWindow& window) {
 }
 
 void auditDialogs(Audit& audit, ui::test::WindowFixture& fixture) {
-    ui::PreferencesWindow preferences(ui::ApplicationPreferences{});
+    ui::PreferencesWindow preferences(*fixture.window, ui::ApplicationPreferences{});
     preferences.show();
     audit.surface(QStringLiteral("Preferences"), preferences);
     preferences.hide();
 
-    ui::LicensesWindow licenses;
+    ui::LicensesWindow licenses(*fixture.window);
     licenses.show();
     audit.surface(QStringLiteral("Licenses"), licenses);
     licenses.hide();
 
-    ui::ImportProgressDialog progress(fixture.window.get());
+    ui::ImportProgressDialog progress(*fixture.window);
     progress.show();
     audit.surface(QStringLiteral("Import progress"), progress);
     progress.dismiss();
@@ -471,6 +479,14 @@ void auditDialogs(Audit& audit, ui::test::WindowFixture& fixture) {
     audit.surface(QStringLiteral("QMessageBox"), box);
     box.hide();
 
+    ui::kit::KConfirmSpec confirmSpec;
+    confirmSpec.title = QStringLiteral("Delete");
+    confirmSpec.heading = QStringLiteral("Delete the selected items?");
+    std::unique_ptr<ui::kit::KDialog> confirm(ui::kit::buildConfirm(*fixture.window, confirmSpec));
+    confirm->show();
+    audit.surface(QStringLiteral("Kit confirm"), *confirm);
+    confirm->hide();
+
     ui::TaskMonitorModel tasks(fixture.bridge);
     ui::JobsEditor jobs(tasks);
     jobs.resize(480, 240);
@@ -482,10 +498,14 @@ void auditDialogs(Audit& audit, ui::test::WindowFixture& fixture) {
 
     auditModal(audit, QStringLiteral("Composition Settings"), [&] {
         (void)ui::showCompositionSettingsDialog(fixture.session, fixture.session.compositionId(),
-                                                fixture.window.get());
+                                                *fixture.window);
     });
     auditModal(audit, QStringLiteral("Export"),
-               [] { (void)ui::compositionExportDialog(47, 48000); });
+               [&] {
+                   ui::CompositionExportDialogOptions options;
+                   options.maximumFrame = 47;
+                   (void)ui::compositionExportDialog(*fixture.window, options);
+               });
 }
 
 int run(int argc, char** argv) {
