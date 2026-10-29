@@ -35,8 +35,8 @@ nb::dict failure(const OperationDiagnostic& diagnostic) {
     return row;
 }
 
-constexpr std::array<const char*, 6> kContextSources{"",     "project", "composition",
-                                                     "time", "layer",   "selection"};
+constexpr std::array<const char*, 7> kContextSources{"",      "project",   "composition", "time",
+                                                     "layer", "selection", "layers"};
 
 } // namespace
 
@@ -91,9 +91,9 @@ nb::dict NativeHost::snapshot() const {
 }
 
 OperationContext NativeHost::operationContext() const {
+    OperationContext context;
     if (contextProvider) {
         const auto live = contextProvider();
-        OperationContext context;
         context.project = live.project;
         if (live.composition != 0) {
             context.composition = live.composition;
@@ -104,9 +104,20 @@ OperationContext NativeHost::operationContext() const {
             context.layers =
                 selectedLayers(facade_->query.snapshot(), *context.composition, context.selection);
         }
-        return context;
+        context.layerGeometry = session_->layerGeometryProvider();
+    } else {
+        context = session_->operationContext();
     }
-    return session_->operationContext();
+    // ADR 0031: align and distribute evaluate one frame; other Python threads keep running.
+    if (context.layerGeometry) {
+        context.layerGeometry =
+            [measure = std::move(context.layerGeometry)](const document::CompositionId composition,
+                                                         const core::RationalTime time) {
+                const nb::gil_scoped_release release;
+                return measure(composition, time);
+            };
+    }
+    return context;
 }
 
 nb::dict NativeHost::context() const {

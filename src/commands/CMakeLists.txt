@@ -14,6 +14,7 @@ target_sources(
         layer_time_operations.cpp
         layer_mask_operations.cpp
         composition_settings_operations.cpp
+        layer_alignment_operations.cpp
         video_source_operations.cpp
         node_duplication.cpp
         node_group_operations.cpp
@@ -37,6 +38,7 @@ target_sources(
             include/bloom/commands/layer_time_operations.hpp
             include/bloom/commands/layer_mask_operations.hpp
             include/bloom/commands/composition_settings_operations.hpp
+            include/bloom/commands/layer_alignment_operations.hpp
             include/bloom/commands/video_source_operations.hpp
             include/bloom/commands/result.hpp
             include/bloom/commands/transaction.hpp

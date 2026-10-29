@@ -10,6 +10,7 @@ target_sources(
         frame_export_publication_naming.cpp
         frame_range_runner.cpp
         gpu_export_provider.cpp
+        layer_alignment.cpp
         sequence_export_runner.cpp
         output_analysis_attempt_runner.cpp
         output_analysis_attempt_color_private.cpp
@@ -32,6 +33,7 @@ target_sources(
             include/bloom/host/frame_range_runner.hpp
             include/bloom/host/gpu_export_provider.hpp
             include/bloom/host/gpu_export_tool_package.hpp
+            include/bloom/host/layer_alignment.hpp
             include/bloom/host/sequence_export_runner.hpp
             include/bloom/host/font_catalogue.hpp
             include/bloom/host/output_analysis_attempt_runner.hpp

@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-08-25
+Updated: 2026-10-30
 
 ## Objective
 
@@ -163,7 +163,8 @@ The complete contract and game-engine pipeline fitness test are defined in
 - UI signals are adapted into typed application commands.
 - Every editor area hosts a replaceable panel implementation; editor type and layout are session
   state.
-- The menu bar is the only fixed application surface.
+- The menu bar and the contextual tool bar under it are the only fixed application surfaces
+  ([ADR 0031](../decisions/0031-contextual-tool-bar.md)).
 - Long-running decode, evaluation, render, import, export, media scan, and proxy work never runs on
   the UI thread.
 - A widget torn down with `setParent(nullptr)` + `deleteLater()` is not destroyed synchronously: it

@@ -101,6 +101,7 @@ target_sources(
         animation_sampling.cpp
         cpu_composition_evaluator.cpp
         cpu_composition_resolution.hpp
+        layer_bounds_query.cpp
         cpu_gpu_scene_preparation.cpp
         gpu_processing_phase_policy.cpp
         gpu_scene_nested.cpp
@@ -204,6 +205,7 @@ target_sources(
             include/bloom/runtime/video_source_report.hpp
             include/bloom/runtime/cpu_composition_evaluator.hpp
             include/bloom/runtime/evaluation.hpp
+            include/bloom/runtime/layer_bounds_query.hpp
             include/bloom/runtime/gpu_neutral_display_qualification.hpp
             include/bloom/runtime/gpu_coverage_contract.hpp
             include/bloom/runtime/gpu_resident_preview_qualification.hpp

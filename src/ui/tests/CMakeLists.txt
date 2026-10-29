@@ -2010,3 +2010,10 @@ target_link_libraries(bloom_composition_settings_dialog_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_composition_settings_dialog_test)
 bloom_add_test(NAME bloom.ui.composition-settings COMMAND bloom_composition_settings_dialog_test
                LABELS ui integration TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# ADR 0031: the delivered preview frame's layer bounds equal the headless CPU reference query's.
+add_executable(bloom_layer_alignment_parity_test layer_alignment_parity_tests.cpp)
+target_link_libraries(bloom_layer_alignment_parity_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_layer_alignment_parity_test)
+bloom_add_test(NAME bloom.ui.layer-alignment-parity COMMAND bloom_layer_alignment_parity_test
+               LABELS ui integration TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

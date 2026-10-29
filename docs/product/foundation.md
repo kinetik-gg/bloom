@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-08-25
+Updated: 2026-10-30
 
 ## Product Identity
 
@@ -21,8 +21,9 @@ remain part of the broader direction but are not commitments for the first imple
   VFX desktop software.
 - Use established open standards and reference libraries when they cover Bloom's pipeline needs;
   do not create incompatible substitutes for color, image, timeline, or effect interchange.
-- Make all workspace content replaceable editor panels. The menu bar is the only fixed application
-  surface.
+- Make all workspace content replaceable editor panels. The menu bar and the contextual tool bar
+  under it are the only fixed application surfaces
+  ([ADR 0031](../decisions/0031-contextual-tool-bar.md)).
 - Use Phosphor Icons for interface iconography, Inter for interface typography, and
   Geist Mono for monospaced interface text through native, pinned assets.
 - Keep every potentially heavy operation off the UI thread and expose its progress, cancellation,

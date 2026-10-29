@@ -4,6 +4,8 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/scripting/operation_registry.hpp>
 
+#include "operation_values.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -21,11 +23,7 @@ namespace {
 
 [[nodiscard]] OperationCreateResult failure(const std::string& operationId, std::string argument,
                                             std::string message) {
-    return OperationCreateResult(nullptr,
-                                 OperationDiagnostic{.code = "bloom.scripting.invalid-argument",
-                                                     .operationId = operationId,
-                                                     .argument = std::move(argument),
-                                                     .message = std::move(message)});
+    return detail::argumentFailure(operationId, std::move(argument), std::move(message));
 }
 
 [[nodiscard]] const Value* findArgument(const Arguments& arguments, const std::string& name) {
@@ -38,54 +36,10 @@ namespace {
 // OperationRegistry::create prefixes the operation and argument and appends a runnable example.
 // ---------------------------------------------------------------------------------------------
 
-[[nodiscard]] std::optional<double> numericOf(const Value& value) {
-    if (const auto* result = std::get_if<double>(&value.storage)) {
-        return *result;
-    }
-    if (const auto* result = std::get_if<std::int64_t>(&value.storage)) {
-        return static_cast<double>(*result);
-    }
-    return std::nullopt;
-}
-
-[[nodiscard]] std::optional<std::int64_t> integerOf(const Value& value) {
-    if (const auto* result = std::get_if<std::int64_t>(&value.storage)) {
-        return *result;
-    }
-    if (const auto* result = std::get_if<StableId>(&value.storage)) {
-        return static_cast<std::int64_t>(result->value);
-    }
-    if (const auto* result = std::get_if<double>(&value.storage);
-        result != nullptr && std::isfinite(*result) && std::floor(*result) == *result) {
-        return static_cast<std::int64_t>(*result);
-    }
-    return std::nullopt;
-}
-
-[[nodiscard]] std::optional<std::uint64_t> idOf(const Value& value) {
-    const auto number = integerOf(value);
-    return number.has_value() && *number > 0 ? std::optional(static_cast<std::uint64_t>(*number))
-                                             : std::nullopt;
-}
-
-[[nodiscard]] std::optional<core::RationalTime> rationalOf(const Value& value) {
-    if (const auto* whole = std::get_if<std::int64_t>(&value.storage)) {
-        return core::RationalTime::fromInteger(*whole);
-    }
-    if (const auto* real = std::get_if<double>(&value.storage);
-        real != nullptr && std::isfinite(*real) && std::floor(*real) == *real) {
-        return core::RationalTime::fromInteger(static_cast<std::int64_t>(*real));
-    }
-    if (const auto* array = std::get_if<ValueArray>(&value.storage);
-        array != nullptr && array->size() == 2) {
-        const auto numerator = integerOf((*array)[0]);
-        const auto denominator = integerOf((*array)[1]);
-        if (numerator.has_value() && denominator.has_value()) {
-            return core::RationalTime::create(*numerator, *denominator);
-        }
-    }
-    return std::nullopt;
-}
+using detail::idOf;
+using detail::integerOf;
+using detail::numericOf;
+using detail::rationalOf;
 
 [[nodiscard]] std::optional<document::Vec2d> vec2Of(const Value& value) {
     if (const auto* result = std::get_if<document::Vec2d>(&value.storage)) {
@@ -1077,6 +1031,17 @@ std::vector<std::string> applyContextDefaults(const OperationSchema& schema, Arg
                 ValueArray entries;
                 entries.reserve(context.selection.size());
                 for (const auto identity : context.selection) {
+                    entries.emplace_back(StableId{identity});
+                }
+                arguments.emplace(argument.name, Value(std::move(entries)));
+                filled.push_back(argument.name);
+            }
+            break;
+        case ContextSource::Layers:
+            if (!context.layers.empty()) {
+                ValueArray entries;
+                entries.reserve(context.layers.size());
+                for (const auto identity : context.layers) {
                     entries.emplace_back(StableId{identity});
                 }
                 arguments.emplace(argument.name, Value(std::move(entries)));
@@ -3410,6 +3375,8 @@ OperationRegistry OperationRegistry::builtIn() {
                                          std::nullopt);
         });
 
+    detail::addLayerAlignmentOperations(all);
+
     std::ranges::sort(
         all, {}, [](const OperationDescriptor& descriptor) { return descriptor.schema.typeId; });
     return registry;
@@ -3423,6 +3390,20 @@ const OperationDescriptor* OperationRegistry::find(const std::string_view typeId
 
 OperationCreateResult OperationRegistry::create(const std::string_view typeId,
                                                 const Arguments& arguments) const {
+    return createWith(typeId, arguments, nullptr);
+}
+
+OperationCreateResult OperationRegistry::create(const std::string_view typeId, Arguments arguments,
+                                                const OperationContext& context) const {
+    if (const auto* descriptor = find(typeId); descriptor != nullptr) {
+        static_cast<void>(applyContextDefaults(descriptor->schema, arguments, context));
+    }
+    return createWith(typeId, arguments, &context);
+}
+
+OperationCreateResult OperationRegistry::createWith(const std::string_view typeId,
+                                                    const Arguments& arguments,
+                                                    const OperationContext* context) const {
     const auto* descriptor = find(typeId);
     if (descriptor == nullptr) {
         return OperationCreateResult(
@@ -3437,15 +3418,11 @@ OperationCreateResult OperationRegistry::create(const std::string_view typeId,
                             failure(descriptor->schema.typeId, argument.name, "is required"));
         }
     }
-    return decorate(descriptor->schema, descriptor->factory(descriptor->schema.typeId, arguments));
-}
-
-OperationCreateResult OperationRegistry::create(const std::string_view typeId, Arguments arguments,
-                                                const OperationContext& context) const {
-    if (const auto* descriptor = find(typeId); descriptor != nullptr) {
-        static_cast<void>(applyContextDefaults(descriptor->schema, arguments, context));
+    if (context != nullptr && descriptor->contextualFactory) {
+        return decorate(descriptor->schema, descriptor->contextualFactory(descriptor->schema.typeId,
+                                                                          arguments, *context));
     }
-    return create(typeId, arguments);
+    return decorate(descriptor->schema, descriptor->factory(descriptor->schema.typeId, arguments));
 }
 
 } // namespace bloom::scripting
