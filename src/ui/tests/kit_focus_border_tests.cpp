@@ -93,7 +93,9 @@ void pinTheFourPoints(Widget& widget, const std::string& what, Expectations& exp
     sendLeave(widget);
     widget.setFocus(Qt::TabFocusReason);
     QCoreApplication::processEvents();
-    expectations.expect(widget.hasFocus(), what + " can take keyboard focus at all");
+    // A KValueField that Tab reaches opens its editor, a child that then holds the focus.
+    expectations.expect(widget.hasFocus() || widget.isAncestorOf(QApplication::focusWidget()),
+                        what + " can take keyboard focus at all");
     expectations.expect(widget.borderToken() == kit::Color::Accent,
                         what + " takes Accent when focused");
 

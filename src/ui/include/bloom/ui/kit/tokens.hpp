@@ -294,6 +294,12 @@ enum class Size : int {
     PropertiesSwatchHeight = 26,
     PropertiesAnchorDot = 8,
     PropertiesStepperWidth = 12,
+    // Lane B (value field): the pointer target of each stepper half, wider than its 12 px glyph
+    // column so a chevron is not a pinpoint; the widest an in-field label column grows before it
+    // elides; and how far from the screen edge a scrub wraps the pointer.
+    StepperHitWidth = 20,
+    ValueFieldLabelColumn = 72,
+    ScrubWrapMargin = 8,
     // Kit control internals. Each is the control's own design measurement, named here so no kit
     // painter carries a private pixel constant.
     SliderTrack = 4,
@@ -425,6 +431,13 @@ inline constexpr qreal kSelectionWashOpacity = 0.24;
 // moves this fraction of the range, and Shift/Page moves kCoarseStepMultiple times as far.
 inline constexpr double kKeyStepFraction = 0.01;
 inline constexpr double kCoarseStepMultiple = 10.0;
+
+// Lane B (value field): a held stepper waits kAutoRepeatDelayMs before repeating every
+// kAutoRepeatIntervalMs, and a burst of wheel steps on one field is one edit until the wheel has
+// been still for kWheelGestureIdleMs.
+inline constexpr int kAutoRepeatDelayMs = 400;
+inline constexpr int kAutoRepeatIntervalMs = 60;
+inline constexpr int kWheelGestureIdleMs = 400;
 
 // Canvas overlays: the dim over a layer bar outside its source range, a marquee's fill, and a
 // drag ghost (the dragged thing's outline while it is in the hand).
