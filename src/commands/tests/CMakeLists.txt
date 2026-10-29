@@ -105,3 +105,9 @@ target_link_libraries(bloom_commands_layer_mask_test PRIVATE bloom_commands)
 bloom_enable_warnings(bloom_commands_layer_mask_test)
 bloom_add_test(NAME bloom.commands.layer-masks COMMAND bloom_commands_layer_mask_test
                LABELS commands unit)
+
+add_executable(bloom_commands_layer_alignment_test layer_alignment_operations_tests.cpp)
+target_link_libraries(bloom_commands_layer_alignment_test PRIVATE bloom_commands)
+bloom_enable_warnings(bloom_commands_layer_alignment_test)
+bloom_add_test(NAME bloom.commands.layer-alignment COMMAND bloom_commands_layer_alignment_test
+               LABELS commands unit TIMEOUT 30)
