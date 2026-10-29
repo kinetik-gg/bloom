@@ -141,7 +141,7 @@ rules only for widgets whose look comes from a `[bloomKeyboardFocus]` sheet rule
 ### Controls, editor surfaces and layout
 
 The [UI grammar](ui-grammar.md) owns the complete control vocabulary, spacing and size grid,
-shared rows, declared headers/footers, viewer tool column, node cards, status line and default
+shared rows, declared headers/footers, the context bar, node cards, status line and default
 workspace proportions. Implement these through the kit rather than duplicating component
 measurements here. The [workspace layout contract](../architecture/workspace-layout.md) owns
 persistence and migration. The existing application menu bar and native window frame remain.
