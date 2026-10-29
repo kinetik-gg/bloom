@@ -1114,11 +1114,12 @@ QString ProjectHost::videoColourDefaultNotice(const host::SessionOpenResult& res
                                                 runtime::detail::assetUsesSdrVideoColourDefault);
     if (affected == 0)
         return {};
-    return tr("This project was saved by an earlier version of Bloom. Video without an explicit "
-              "input colour is now shown as video players show it (Rec.709 or Rec.601 decoded "
-              "with the sRGB transfer), so %n video asset(s) look less pale than before. Choose "
-              "an input colour in Assets → Input Colour to change it.",
-              nullptr, static_cast<int>(affected));
+    const auto videos = affected == 1 ? tr("1 video") : tr("%1 videos").arg(affected);
+    return tr("This project was saved by an earlier version of Bloom. Video without a chosen input "
+              "colour now looks the way video players show it, so it is less pale than before. "
+              "This affects %1 in this project. To interpret a video differently, choose its "
+              "input colour in Assets → Input Colour.")
+        .arg(videos);
 }
 
 void ProjectHost::handleOpenResult(
